@@ -50,10 +50,12 @@ describe("browser download log", () => {
   };
   const asDownload = (fake: ReturnType<typeof item>) =>
     fake as unknown as DownloadItem;
+  /** Nothing reaches the agent meanwhile. */
+  const waiting = new AbortController().signal;
 
   it("waits for a download a click starts late, then for it to finish", async () => {
     const log = new DownloadLog();
-    const pending = log.take(5000);
+    const pending = log.take(5000, waiting);
     const report = item("report.csv");
     setTimeout(() => log.add(asDownload(report)), 50);
     setTimeout(() => report.finish("completed"), 100);
@@ -68,18 +70,31 @@ describe("browser download log", () => {
       ],
     });
     // Nothing new and nothing unfinished: a read without a wait says so.
-    expect((await log.take(0)).downloads).toHaveLength(1);
+    expect((await log.take(0, waiting)).downloads).toHaveLength(1);
   });
 
   it("waits for one it last saw unfinished, and gives up at the timeout", async () => {
     const log = new DownloadLog();
     const big = item("big.zip");
     log.add(asDownload(big));
-    expect((await log.take(0)).downloads[0]?.state).toBe("progressing");
+    expect((await log.take(0, waiting)).downloads[0]?.state).toBe(
+      "progressing",
+    );
     setTimeout(() => big.finish("interrupted"), 50);
-    expect((await log.take(5000)).downloads[0]?.state).toBe("interrupted");
+    expect((await log.take(5000, waiting)).downloads[0]?.state).toBe(
+      "interrupted",
+    );
     const started = Date.now();
-    expect((await log.take(100)).downloads).toHaveLength(1);
+    expect((await log.take(100, waiting)).downloads).toHaveLength(1);
     expect(Date.now() - started).toBeGreaterThanOrEqual(90);
+  });
+
+  it("stops waiting when something reaches the agent (ADR 0264)", async () => {
+    const log = new DownloadLog();
+    const stop = new AbortController();
+    const started = Date.now();
+    setTimeout(() => stop.abort(), 50);
+    expect(await log.take(60_000, stop.signal)).toEqual({ downloads: [] });
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

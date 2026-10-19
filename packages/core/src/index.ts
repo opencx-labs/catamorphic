@@ -769,7 +769,10 @@ export {
   SNAPSHOT_TURNS,
   type TranscriptMessage,
 } from "./services/sessions/session-reads.js";
-export { CONTINUATION_PROMPT } from "./services/sessions/turn-engine.js";
+export {
+  CONTINUATION_PROMPT,
+  steeredTurnId,
+} from "./services/sessions/turn-engine.js";
 export {
   humanizeSkillName,
   type ProjectSkill,

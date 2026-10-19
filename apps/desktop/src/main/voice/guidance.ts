@@ -39,6 +39,33 @@ export function voicePlaceContext(place: {
   ];
 }
 
+/**
+ * Where the person is, for the assistant (ADR 0265): the project in front
+ * of the window they were last in. The assistant's chat lives in one
+ * project wherever the person goes, so its own place says nothing about
+ * what "this" is. Names are the person's to choose, so they come as
+ * observed data.
+ */
+export function personPlaceContext(place: {
+  name: string | null;
+  folder: string | null;
+  /** The project this chat is kept in. */
+  home: boolean;
+  /** Where they were as they started saying their latest message. */
+  spoken: boolean;
+}): TurnContextFragment[] {
+  const names = [`Project: ${oneLine(place.name ?? "Untitled project", 120)}`];
+  if (place.folder) names.push(`Folder: ${oneLine(place.folder, 400)}`);
+  return [
+    {
+      source: "assistant",
+      trust: "host",
+      text: `${place.spoken ? "As the person started saying their latest message, they were" : "The person is"} in Work's window for the project named in the person place context, or last in it before another app. "This", "here" and questions that name nothing are about that project and what its window shows, which the workspace context describes. Your tools that look at tabs, pages and the browser act in that window; workspace_overview and read_tab look at another project's window when you name the project.${place.home ? "" : " This chat is kept in another project, which says nothing about what they are working on now."}`,
+    },
+    { source: "person_place", trust: "observed", text: names.join("\n") },
+  ];
+}
+
 function oneLine(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
@@ -49,6 +76,6 @@ export const ASSISTANT_INSTRUCTIONS = `You are the person's assistant in Work, r
 
 You can do things yourself with your tools. start_session hands a piece of work to a session that runs in the background, on the person's own agent or on an agent they name; it can reach the person through you, and its result comes back to you here. While it works, what it writes along the way reaches you as notes you can pass on in your own words, or keep to yourself when there is nothing worth saying yet. When a session you follow asks the person something or waits for their approval, you hear it right away, and the person may hear of it only from you; answer_question passes on an answer they give you.
 
-list_sessions, read_session, message_session and stop_session reach the person's chats in all their projects, including the ones they started themselves, and follow_session brings you a chat's notes the same way, with its answer each time it finishes. This chat is kept in one project, so your context names a project and a folder: that is where this chat lives, not necessarily what the person is working on.
+list_sessions, read_session, message_session and stop_session reach the person's chats in all their projects, including the ones they started themselves, and follow_session brings you a chat's notes the same way, with its answer each time it finishes. This chat is kept in one project, so your context names a project and a folder: that is where this chat lives, not what the person is working on. Each turn's person place context names the project whose window they are in.
 
 A message that starts with a session's title and a colon comes from that session, not from the person.`;

@@ -86,6 +86,11 @@ export {
   resolveMcpServers,
 } from "./coding-agent/types.js";
 export {
+  STOPPED_WAITING_NOTE,
+  type WaitOutcome,
+  waitUntil,
+} from "./coding-agent/wait.js";
+export {
   type WarmSession,
   WarmSessions,
   type WarmSessionsOptions,

@@ -1,6 +1,6 @@
 # 0263 — A theme can put a picture behind the sidebars and the chat
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 
 ## Context

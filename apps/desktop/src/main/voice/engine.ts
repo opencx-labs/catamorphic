@@ -5,7 +5,11 @@ import {
   type VoiceId,
   type VoiceWorkerEvent,
 } from "../../shared/voice.js";
-import { isEcho, meaningfulUtterance } from "./speech-text.js";
+import {
+  isAcknowledgement,
+  isEcho,
+  meaningfulUtterance,
+} from "./speech-text.js";
 
 /**
  * Audio kept from before detection fires, which lags speech onset: about
@@ -64,6 +68,12 @@ export interface Hearing {
    */
   sureOfWords: number;
   /**
+   * The same for dictation, which writes what it hears for the person to
+   * fix: a name or an identifier the recognizer half knows is still worth
+   * writing, where a message to an agent is not.
+   */
+  sureOfDictation: number;
+  /**
    * How alike a stretch's voice must be to the person's (cosine of
    * ERes2Net embeddings) to be theirs.
    */
@@ -79,21 +89,45 @@ export interface Hearing {
    * person's level to stop it; null holds it to `nearDb` alone.
    */
   bargeInDb: number | null;
+  /**
+   * Speech under way this long while the agent speaks, past the
+   * detector's own onset, pauses it (ADR 0265)...
+   */
+  pauseSeconds: number;
+  /**
+   * ...when it comes within this many dB of the person's level so far;
+   * null holds it to `bargeInDb`...
+   */
+  pauseDb: number | null;
+  /**
+   * ...and, once voice knows the person's voice, is at least this alike to
+   * it so far, asked as it could pause and again at a second; null pauses
+   * for any voice.
+   */
+  pauseAlike: number | null;
 }
 
 /**
  * Measured on the speech benchmark (ADR 0236): a far talker 12 dB under
  * the person no longer reaches the chat or draws out their turns, and a
- * quiet or soft-spoken person is heard as before.
+ * quiet or soft-spoken person is heard as before. Talking over the agent
+ * pauses it 0.64 s after the person starts, 39 times in 40; a talker 6 dB
+ * under them pauses it twice in four and a half minutes, against 19
+ * without asking whose voice it is. Words are dropped under -0.25, from
+ * -0.35, at no cost to the person; -0.2 cost them words (ADR 0265).
  */
 export const HEARING: Hearing = {
   nearDb: 8,
   gateDb: 10,
   gateHoldSeconds: 0.25,
-  sureOfWords: -0.35,
+  sureOfWords: -0.25,
+  sureOfDictation: -0.35,
   sameVoice: 0.3,
   nearerDb: 4,
   bargeInDb: 4,
+  pauseSeconds: 0.3,
+  pauseDb: null,
+  pauseAlike: 0.2,
 };
 
 /** Voice activity at 16 kHz, fed one fixed-size window at a time. */
@@ -177,7 +211,9 @@ interface Stretch {
  * words that are not an echo of the agent stop it if it is speaking, and
  * become the next utterance. Echo cancellation should keep the agent from
  * hearing itself; the echo check keeps it from answering itself when it
- * does.
+ * does. The person talking over the agent pauses it as they start (ADR
+ * 0265): their words stop it for good, and anything else (its own voice
+ * coming back, noise, someone else) lets it carry on where it paused.
  *
  * Only the person is heard (ADR 0236): the nearest voice that keeps
  * talking. Voice learns their voice and how loud they speak from what they
@@ -252,6 +288,17 @@ export class VoiceEngine {
    */
   private speechPowers: number[] = [];
   private speechSoFar: number | null = null;
+  /**
+   * The stretch of speech that paused the agent's voice, while it is
+   * paused (ADR 0265); null while it plays as it was.
+   */
+  private pausedFor: number | null = null;
+  /** The last stretch that paused the agent: one pause per stretch. */
+  private overheard = 0;
+  /** Whether the paused stretch's voice was checked as it went on. */
+  private pauseChecked = false;
+  /** How often a stretch's voice was asked about before it could pause. */
+  private voiceAsks = { segment: 0, times: 0 };
   private readonly silence: Float32Array;
 
   constructor(
@@ -326,6 +373,7 @@ export class VoiceEngine {
 
   /** Learn the voice print from the next few seconds of speech. */
   learn(): void {
+    this.resumeSpeech();
     this.learning = [];
   }
 
@@ -342,6 +390,8 @@ export class VoiceEngine {
     this.held = false;
     this.utterance = [];
     this.learning = null;
+    // What it was saying is still said.
+    this.resumeSpeech();
     this.audio({ type: "close-microphone" });
   }
 
@@ -383,6 +433,7 @@ export class VoiceEngine {
     this.speechPowers = [];
     this.speechSoFar = null;
     this.parts.activity.reset();
+    this.resumeSpeech();
   }
 
   /** The worker let this voice go: nothing it still recognizes is said. */
@@ -398,6 +449,8 @@ export class VoiceEngine {
    */
   audioReplaced(): void {
     this.drainedSeq = this.sentSeq;
+    // The new page plays what it is sent, paused or not.
+    this.pausedFor = null;
     this.settlePlayback();
     if (!this.listening) this.audio({ type: "close-microphone" });
   }
@@ -415,6 +468,7 @@ export class VoiceEngine {
     this.inSpeech = false;
     this.utterance = [];
     this.parts.activity.reset();
+    this.resumeSpeech();
   }
 
   /**
@@ -444,7 +498,7 @@ export class VoiceEngine {
       if (this.audible) {
         this.stopSpeaking();
         this.emit({ type: "barge-in" });
-      }
+      } else this.resumeSpeech();
       if (!this.inSpeech) this.beginSpeech();
       this.parts.activity.reset();
       return;
@@ -485,6 +539,7 @@ export class VoiceEngine {
       ...this.queue.splice(0).map((utterance) => utterance.id),
     ];
     this.current = null;
+    this.pausedFor = null;
     this.generation += 1;
     this.sentSeq += 1;
     this.drainedSeq = this.sentSeq;
@@ -517,7 +572,93 @@ export class VoiceEngine {
       // the person's turn when it carries on after them.
       activity.accept(this.near(level) ? this.window : this.silence);
       this.afterWindow();
+      this.overhear();
     }
+  }
+
+  /**
+   * The person talking over the agent pauses its voice as they start (ADR
+   * 0265), rather than once they finish: speech under way for a moment,
+   * about as loud as they speak, while the agent is heard. What the
+   * stretch turns out to be decides the rest: the person's words stop the
+   * agent for good, and anything else lets it carry on where it paused.
+   * Long enough to tell whose voice it is, someone else's lets it carry on
+   * at once.
+   */
+  private overhear(): void {
+    if (!this.inSpeech || this.dictation || this.learning) return;
+    const seconds = this.speechSeconds();
+    if (this.pausedFor === this.segment) {
+      if (this.pauseChecked || seconds < VOICE_MIN_SECONDS) return;
+      this.pauseChecked = true;
+      try {
+        const stretch = this.stretchOf(concat(this.utterance), seconds);
+        if (this.whose(stretch, { speaking: true }) === "someone else")
+          this.resumeSpeech();
+      } catch {
+        // Judged whole once it ends, which reports a failure.
+      }
+      return;
+    }
+    if (
+      this.overheard === this.segment ||
+      this.pausedFor !== null ||
+      !this.audible ||
+      seconds < this.hearing.pauseSeconds
+    )
+      return;
+    const person = this.person;
+    const { pauseDb, bargeInDb, nearDb } = this.hearing;
+    const margin = pauseDb ?? bargeInDb ?? nearDb;
+    if (
+      person &&
+      person.level !== null &&
+      margin !== null &&
+      percentile(this.speechPowers, 0.9) < person.level - margin
+    )
+      return;
+    if (!this.likeThePerson(seconds)) return;
+    this.overheard = this.segment;
+    this.pausedFor = this.segment;
+    // Paused once it was long enough to tell whose: told already.
+    this.pauseChecked = seconds >= VOICE_MIN_SECONDS;
+    this.audio({ type: "pause" });
+  }
+
+  /**
+   * Whether the speech under way may be the person's, by its voice so far
+   * when voice knows theirs: asked as it could pause, and once more when
+   * it is long enough to tell. Another voice pauses nothing.
+   */
+  private likeThePerson(seconds: number): boolean {
+    const { pauseAlike } = this.hearing;
+    const voice = this.person?.voice;
+    if (!voice || pauseAlike === null || !this.parts.voiceprint) return true;
+    const times =
+      this.voiceAsks.segment === this.segment ? this.voiceAsks.times : 0;
+    if (times >= 2 || (times === 1 && seconds < VOICE_MIN_SECONDS))
+      return false;
+    this.voiceAsks = { segment: this.segment, times: times + 1 };
+    try {
+      const samples = concat(this.utterance);
+      // Long enough to tell, the stretch is judged as it will be once it
+      // ends, so a pause is never undone a moment later.
+      if (seconds >= VOICE_MIN_SECONDS)
+        return (
+          this.whose(this.stretchOf(samples, seconds), { speaking: true }) ===
+          "person"
+        );
+      return cosine(this.parts.voiceprint(samples), voice) >= pauseAlike;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The agent's voice carries on where the person's speech paused it. */
+  private resumeSpeech(): void {
+    if (this.pausedFor === null) return;
+    this.pausedFor = null;
+    this.audio({ type: "resume" });
   }
 
   /**
@@ -546,7 +687,7 @@ export class VoiceEngine {
     this.speechPowers = [];
     this.speechSoFar = null;
     this.utterance = [...this.preroll];
-    this.emit({ type: "speech-start" });
+    this.emit({ type: "speech-start", segment: this.segment });
   }
 
   /**
@@ -572,7 +713,7 @@ export class VoiceEngine {
           this.listening &&
           this.dictation &&
           text.trim() &&
-          confidence >= this.hearing.sureOfWords
+          confidence >= this.hearing.sureOfDictation
         )
           this.emit({
             type: "dictation",
@@ -691,9 +832,14 @@ export class VoiceEngine {
     }
     const heard = this.stretchOf(samples, speech);
     const speaking = this.audible;
+    // Not the person's words: what this stretch paused carries on.
+    const carryOn = () => {
+      if (this.pausedFor === segment) this.resumeSpeech();
+    };
     const whose = pressed ? "person" : this.whose(heard, { speaking });
     if (whose === "someone else") {
       if (this.dictation) dictated("");
+      carryOn();
       this.emit({ type: "ignored" });
       return;
     }
@@ -703,7 +849,11 @@ export class VoiceEngine {
     // Words made of noise are no words: the keys held say someone spoke.
     const words =
       meaningfulUtterance(text) &&
-      (pressed || recognized.confidence >= this.hearing.sureOfWords);
+      (pressed ||
+        recognized.confidence >=
+          (this.dictation
+            ? this.hearing.sureOfDictation
+            : this.hearing.sureOfWords));
     if (this.dictation) {
       if (words) this.heardFrom(heard, { pressed });
       dictated(words ? text : "");
@@ -712,7 +862,11 @@ export class VoiceEngine {
     }
     // The agent may have started talking while this was recognized.
     const talking = speaking || this.audible;
-    if (!words || (talking && isEcho(text, this.recent))) {
+    // "Yeah" while it talks says go on: it neither stops nor answers it.
+    // The keys held say the person means it.
+    const goOn = talking && !pressed && isAcknowledgement(text);
+    if (!words || goOn || (talking && isEcho(text, this.recent))) {
+      carryOn();
       if (pressed) this.emit({ type: "unheard" });
       return;
     }
@@ -720,8 +874,8 @@ export class VoiceEngine {
     if (talking) {
       this.stopSpeaking();
       this.emit({ type: "barge-in" });
-    }
-    this.emit({ type: "utterance", text });
+    } else carryOn();
+    this.emit({ type: "utterance", text, segment });
   }
 
   /** Speech while learning: the agent's own voice is never learned. */
@@ -905,6 +1059,9 @@ export class VoiceEngine {
     if (this.synthesizing || this.drainedSeq < this.sentSeq) return;
     for (const id of this.playing.splice(0))
       this.emit({ type: "spoken", id, interrupted: false });
+    // Its last words ended as the person began: nothing is left to hold,
+    // and what it says next must play.
+    if (!this.audible) this.resumeSpeech();
   }
 
   private remember(text: string): void {

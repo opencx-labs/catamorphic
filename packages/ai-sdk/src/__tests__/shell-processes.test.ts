@@ -6,6 +6,7 @@ import {
   type ExecOpts,
   type ExecResult,
   type SandboxProvider,
+  STOPPED_WAITING_NOTE,
   shellSandboxProcesses,
 } from "@catamorphic/sandbox";
 import type { Tool } from "ai";
@@ -85,6 +86,9 @@ function alive(pid: number): boolean {
     return false;
   }
 }
+
+/** Nothing reaches the agent while its tools wait. */
+const waiting = new AbortController().signal;
 
 async function call(tools: Record<string, Tool>, name: string, input: unknown) {
   const execute = tools[name]?.execute;
@@ -168,6 +172,35 @@ describe("runShell over sandbox processes (ADR 0174)", () => {
 });
 
 describe("background command tools", () => {
+  it("stops waiting when a message is steered in, and says so (ADR 0264)", async () => {
+    const provider = sandbox({ ceilingMs: 30_000 });
+    const steered = new AbortController();
+    const tools = shellTools({
+      provider,
+      sandboxId: "box",
+      root: () => root,
+      state: { cwd: root },
+      budgetSeconds: 30,
+      stopWaiting: () => steered.signal,
+    });
+    const started = await call(tools, "run_background_command", {
+      command: "sleep 30",
+      description: "Wait a while",
+    });
+    setTimeout(() => steered.abort(), 200);
+    const begun = Date.now();
+    const read = await call(tools, "read_background_output", {
+      id: started.id,
+      wait_seconds: 25,
+    });
+    expect(read).toMatchObject({
+      status: "running",
+      note: STOPPED_WAITING_NOTE,
+    });
+    expect(Date.now() - begun).toBeLessThan(10_000);
+    await call(tools, "stop_background_command", { id: started.id });
+  }, 30_000);
+
   it("start, wait for a line, read since the last read, and stop", async () => {
     const provider = sandbox({ ceilingMs: 30_000 });
     const state: ShellState = { cwd: root };
@@ -177,6 +210,7 @@ describe("background command tools", () => {
       root: () => root,
       state,
       budgetSeconds: 30,
+      stopWaiting: () => waiting,
     });
     expect(Object.keys(tools).sort()).toEqual([
       "bash",
@@ -229,6 +263,7 @@ describe("background command tools", () => {
       root: () => project,
       state,
       budgetSeconds: 30,
+      stopWaiting: () => waiting,
       envFiles: [
         "../.work-session/env/gateway.sh",
         "../.work-session/env/secrets.sh",
@@ -269,6 +304,7 @@ describe("background command tools", () => {
       sandboxId: "box",
       root: () => root,
       state: {},
+      stopWaiting: () => waiting,
     });
     const started = await call(tools, "run_background_command", {
       command: "echo building; sleep 4; echo failed >&2; exit 2",
@@ -295,6 +331,7 @@ describe("background command tools", () => {
       sandboxId: "box",
       root: () => root,
       state: {},
+      stopWaiting: () => waiting,
     });
     expect(Object.keys(tools)).toEqual(["bash"]);
     expect(tools.bash?.description).toContain("when it is available");

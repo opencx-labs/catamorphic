@@ -21,8 +21,9 @@ import type {
 } from "./agent-definitions-service.js";
 import type { ConnectionRequirement } from "./connection-types.js";
 
-/** What a host hook knows about the turn it serves. */
-export interface AgentTurnContext extends ExtraToolContext {
+/** What a host hook knows about the turn it serves (no call to stop waiting). */
+export interface AgentTurnContext
+  extends Omit<ExtraToolContext, "stopWaiting"> {
   /** The turn the hook serves. */
   turnId: string;
 }

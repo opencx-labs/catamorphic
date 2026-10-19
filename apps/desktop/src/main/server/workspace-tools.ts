@@ -8,7 +8,11 @@ import {
   sessionMetadataToolWrite,
   setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
-import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
+import {
+  agentToolResult,
+  type ExtraTool,
+  type ExtraToolContext,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 import {
   CHAT_ICON_COLOR_IDS,
@@ -94,6 +98,16 @@ export interface GitBridge {
   ): Promise<{ url: string; number: number; branch: string }>;
 }
 
+/** How a message reaches another chat's agent (ADR 0240, ADR 0250). */
+const SESSION_MESSAGE_MODES = [
+  "steer",
+  "message_only",
+  "queue",
+  "interrupt",
+] as const;
+export type SessionMessageMode = (typeof SESSION_MESSAGE_MODES)[number];
+const sessionMessageMode = z.enum(SESSION_MESSAGE_MODES);
+
 export interface SessionCoordinationBridge {
   list(projectId: string, sessionId: string): Promise<unknown[]>;
   read(
@@ -109,7 +123,7 @@ export interface SessionCoordinationBridge {
     ownSessionId: string,
     peerSessionId: string,
     content: string,
-    mode: "message_only" | "queue" | "interrupt",
+    mode: SessionMessageMode,
   ): Promise<unknown>;
   spawn(
     projectId: string,
@@ -126,7 +140,11 @@ export interface SessionCoordinationBridge {
   waitForSubsessions(
     projectId: string,
     sessionId: string,
-    input: { sessionIds?: string[]; timeoutMs?: number },
+    input: {
+      sessionIds?: string[];
+      timeoutMs?: number;
+      stopWaiting: AbortSignal;
+    },
   ): Promise<unknown[]>;
   interruptSubsession(
     projectId: string,
@@ -191,15 +209,45 @@ export interface CheckoutBridge {
   ): Promise<{ path: string; kind?: string; branch?: string | null }>;
 }
 
+/**
+ * What the person saw as they started saying their latest message to a
+ * chat by voice (ADR 0265): taken then, since the screen often changes
+ * while they talk and once they finish.
+ */
+export interface VoiceSight {
+  /** When they started saying it (epoch ms). */
+  at: number;
+  /** What they said. */
+  said: string;
+  /** When its words were heard and went to the chat (epoch ms). */
+  heardAt: number;
+  /**
+   * The turns that read the message, once the chat took it: those are the
+   * turns this sight describes (ADR 0265).
+   */
+  turnIds?: string[];
+  /** The project in front of the Work window they were in. */
+  projectId: string | null;
+  /** The app in front, when it was not Work (ADR 0236). */
+  app: Promise<{ app: string; window: string | null } | null>;
+  /** Work's screen as a turn's workspace context describes it. */
+  screen: Promise<string | null>;
+  /** A picture of what they saw, when Work could take one. */
+  picture: Promise<{
+    toPNG(): Buffer;
+    getSize(): { width: number; height: number };
+  } | null>;
+}
+
 /** Voice on this desktop (ADR 0216), wired once voice first starts. */
 export interface VoiceControl {
   /** Whether the person is talking with this chat by voice now. */
   talking(sessionId: string): boolean;
   /**
-   * Where the person was when they last spoke to this chat, when that was
-   * another app than Work (ADR 0236).
+   * What the person saw as they started saying their latest message to
+   * this chat by voice, for a while after (ADR 0265).
    */
-  where(sessionId: string): { app: string; window: string | null } | null;
+  sight(sessionId: string): VoiceSight | null;
   /**
    * The chat's agent stops listening: the person is no longer heard, and
    * voice turns off once the chat's turn is over and said. False when
@@ -299,6 +347,9 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   // A voice conversation's agent ends it when the person's own
   // instructions say so; it must be in reach mid-conversation (ADR 0216).
   stop_listening: { ...presentation, eager: true },
+  // What was on screen as the person spoke (ADR 0265): discovered by a
+  // chat, eager for the assistant, which is talked to by voice most.
+  screen_when_spoken: read,
   write_terminal: write,
   sync_project: write,
   create_pull_request: write,
@@ -372,13 +423,11 @@ export function buildWorkspaceToolkit(
     {
       name: "send_project_session_message",
       description:
-        "Send a message to another session in this project. Use message_only for context that should not start work, queue to queue work, or interrupt only when the other agent must change course immediately.",
+        "Send a message to another session in this project. steer (the default) reaches the other agent at its next step while it works, or starts a turn when it is idle: use it for a question, a decision or anything it must see now. message_only is context that should not start work. queue is work for after its current turn ends, however long that is. interrupt stops what it is doing, only when it must change course at once. A message to your parent session reaches it as steer even if you choose queue.",
       parameters: {
         session_id: z.string().min(1).describe("Target session id"),
         message: z.string().min(1).describe("Message to send"),
-        delivery_mode: z
-          .enum(["message_only", "queue", "interrupt"])
-          .default("message_only"),
+        delivery_mode: sessionMessageMode.default("steer"),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -390,7 +439,7 @@ export function buildWorkspaceToolkit(
           ctx.sessionId,
           String(input.session_id),
           String(input.message),
-          input.delivery_mode as "message_only" | "queue" | "interrupt",
+          sessionMessageMode.parse(input.delivery_mode ?? "steer"),
         );
       },
     },
@@ -457,6 +506,7 @@ export function buildWorkspaceToolkit(
               ? { sessionIds: input.session_ids as string[] }
               : {}),
             timeoutMs: Number(input.timeout_ms),
+            stopWaiting: ctx.stopWaiting,
           },
         );
         return children.length > 0
@@ -943,6 +993,7 @@ export function buildWorkspaceToolkit(
           action.type === "upload" && ctx.workingDirectory
             ? { ...action, workingDirectory: ctx.workingDirectory }
             : action,
+          ctx.stopWaiting,
         );
       },
     },
@@ -1006,6 +1057,7 @@ export function buildWorkspaceToolkit(
         bridge.readBackgroundCommand({
           sessionId: ctx.sessionId ?? "",
           id: String(input.id),
+          stopWaiting: ctx.stopWaiting,
           ...(typeof input.wait_seconds === "number"
             ? { waitMs: input.wait_seconds * 1000 }
             : {}),
@@ -1096,6 +1148,44 @@ export function buildWorkspaceToolkit(
         ctx.sessionId && voice?.stopListening(ctx.sessionId)
           ? "Stopped listening. Voice turns off once this turn's replies are read aloud."
           : "Voice is not on in this chat.",
+    },
+    {
+      name: "screen_when_spoken",
+      description:
+        "What was on the person's screen as they started saying their latest message by voice: a picture, and where they were. It has likely changed since.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        const sight = ctx.sessionId ? voice?.sight(ctx.sessionId) : null;
+        if (!sight)
+          return "The person has not said anything to this chat by voice lately.";
+        const [app, picture] = await Promise.all([sight.app, sight.picture]);
+        const facts = {
+          said: sight.said,
+          seconds_ago: Math.round((Date.now() - sight.at) / 1000),
+          in: app ? `${app.app}${app.window ? `: ${app.window}` : ""}` : "Work",
+          ...(picture
+            ? {}
+            : {
+                picture: app
+                  ? "None: Work can picture another app only once the person allows Work to record the screen (System Settings, Privacy & Security, Screen & System Audio Recording)."
+                  : "None could be taken.",
+              }),
+        };
+        return agentToolResult({
+          content: [
+            { type: "text", text: JSON.stringify(facts) },
+            ...(picture
+              ? [
+                  {
+                    type: "image" as const,
+                    mimeType: "image/png" as const,
+                    data: picture.toPNG().toString("base64"),
+                  },
+                ]
+              : []),
+          ],
+        });
+      },
     },
     {
       name: "write_terminal",

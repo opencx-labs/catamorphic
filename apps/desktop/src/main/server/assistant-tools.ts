@@ -21,7 +21,7 @@ export interface AssistantAccess {
     sessionId: string,
     input: {
       content: string;
-      mode: "queue" | "interrupt";
+      mode: "steer" | "queue" | "interrupt";
       author: SessionMessageAuthor;
       /** The project of the author's chat, which may be another one. */
       authorProjectId: string;
@@ -100,7 +100,7 @@ ${input.request}
 
 The relay is short and may be slightly off. For what the person actually said, read the assistant's chat, session ${input.assistantSessionId} in this project, with read_project_session.
 
-The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode queue), starting with "${input.title}:". It may be read aloud to them, where a sentence or two of plain words comes across best. Their answer comes back here; keep going on whatever does not depend on it.
+The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode steer), starting with "${input.title}:". It may be read aloud to them, where a sentence or two of plain words comes across best. Their answer comes back here; keep going on whatever does not depend on it.
 
 Your final reply goes back to the assistant, which passes it on to the person: a sentence or two up front that sum it up are what it will use.`;
 }
@@ -379,17 +379,21 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
     {
       name: "message_session",
       description:
-        "Send a chat a message for the person, queued as its next turn; interrupt only when it must change course right now. Its agent reads it as your message, not the person's: approvals and answers that need the person stay theirs to give in that chat.",
+        "Send a chat a message for the person. steer (the default) reaches its agent at its next step while it works, or starts a turn when it is idle. queue is work for after its current turn ends, however long that is. interrupt stops what it is doing, only when it must change course right now. Its agent reads it as your message, not the person's: approvals and answers that need the person stay theirs to give in that chat.",
       parameters: {
         session_id: z.string().min(1).describe("From list_sessions"),
         message: z.string().min(1),
-        delivery_mode: z.enum(["queue", "interrupt"]).default("queue"),
+        delivery_mode: z.enum(["steer", "queue", "interrupt"]).default("steer"),
       },
       execute: async (input, context) => {
         const { projectId } = await locate(context, String(input.session_id));
         await access.deliver(projectId, String(input.session_id), {
           content: String(input.message),
-          mode: input.delivery_mode === "interrupt" ? "interrupt" : "queue",
+          mode:
+            input.delivery_mode === "interrupt" ||
+            input.delivery_mode === "queue"
+              ? input.delivery_mode
+              : "steer",
           author: await author(context),
           authorProjectId: context.projectId,
         });

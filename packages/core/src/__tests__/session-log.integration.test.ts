@@ -20,7 +20,12 @@ import { EchoAdapter } from "@catamorphic/agent-runner";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import { ATTACHMENT_MARKER, type SandboxProvider } from "@catamorphic/sandbox";
+import {
+  ATTACHMENT_MARKER,
+  type SandboxProvider,
+  STOPPED_WAITING_NOTE,
+  waitUntil,
+} from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -418,6 +423,30 @@ describe("session log", () => {
         },
       },
     };
+    // A host tool that waits the way Work's do (ADR 0264): until its minute
+    // is up, or something reaches the agent.
+    const waiter: RegisteredCodingAgent = {
+      ...echo,
+      id: "waiter",
+      harness: {
+        placement: "host",
+        adapter: new EchoAdapter(),
+        hostTools: [
+          {
+            name: "wait_a_while",
+            description: "Waits up to a minute",
+            parameters: {},
+            execute: async (_input, context) => ({
+              waited: await waitUntil({
+                ready: () => false,
+                timeoutMs: 60_000,
+                stopWaiting: context.stopWaiting,
+              }),
+            }),
+          },
+        ],
+      },
+    };
     makeService = (wakeups) =>
       new AgentSessionsService(db, {
         hostId: "session-log-host",
@@ -445,6 +474,7 @@ describe("session log", () => {
               blocked,
               recording,
               hesitant,
+              waiter,
             ].find((agent) => agent.id === id),
           list: () => [
             echo,
@@ -857,6 +887,54 @@ describe("session log", () => {
       idempotencyKey: `tests:${sessionId}:${key}`,
     });
   }
+
+  it("ends a host tool's wait when a task notification reaches the turn (ADR 0264)", async () => {
+    const project = await projects.create(identity, { name: "Waiting" });
+    const { id: sessionId } = await sessions.create(identity, project.id, {
+      agentId: "waiter",
+    });
+    const projectId = project.id;
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[tool wait_a_while {}]]",
+    });
+    const toolCall = async () =>
+      (await folded(projectId, sessionId)).items.find(
+        (item) => item.kind === "tool_call",
+      );
+    await vi.waitFor(
+      async () => expect((await toolCall())?.status).toBe("in_progress"),
+      { timeout: 10_000 },
+    );
+    await notifyTests(projectId, sessionId, "waiting");
+    // Well inside the tool's minute: the notification ended its wait, and
+    // the agent read it at its next step, in the same turn.
+    await vi.waitFor(
+      async () => {
+        const state = await folded(projectId, sessionId);
+        expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+          "completed",
+        ]);
+        const call = await toolCall();
+        const said =
+          call?.kind === "tool_call"
+            ? JSON.stringify(call.result)
+            : "no tool call";
+        expect(said).toContain("stopped");
+        expect(said).toContain(
+          JSON.stringify(STOPPED_WAITING_NOTE).slice(1, -1),
+        );
+        const reply = state.items.find(
+          (item) => item.kind === "assistant_message",
+        );
+        expect(reply?.kind === "assistant_message" && reply.text).toContain(
+          "Run the tests finished (waiting)",
+        );
+      },
+      { timeout: 15_000 },
+    );
+  });
 
   it("keeps a steered message unread until the agent reaches its next step", async () => {
     const { projectId, sessionId } = await chat("Unread steer");

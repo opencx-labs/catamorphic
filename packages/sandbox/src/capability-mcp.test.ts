@@ -86,7 +86,7 @@ describe("capability transport", () => {
     if (!tool) throw new Error("No invocation tool");
     await tool.execute(
       { name: "host.read", input: {}, requestId: "once" },
-      { projectId: "project" },
+      { projectId: "project", stopWaiting: abort.signal },
     );
     expect(invoke).toHaveBeenCalledWith({
       name: "host.read",
@@ -95,20 +95,26 @@ describe("capability transport", () => {
       signal: abort.signal,
     });
     // A request id is optional: it only marks a retry of one operation.
-    await tool.execute({ name: "host.read" }, { projectId: "project" });
+    await tool.execute(
+      { name: "host.read" },
+      { projectId: "project", stopWaiting: abort.signal },
+    );
     expect(invoke).toHaveBeenLastCalledWith({
       name: "host.read",
       input: {},
       signal: abort.signal,
     });
     expect(() =>
-      tool.execute({ input: {} }, { projectId: "project" }),
+      tool.execute(
+        { input: {} },
+        { projectId: "project", stopWaiting: abort.signal },
+      ),
     ).toThrow();
     // A field beside input is refused rather than dropped.
     expect(() =>
       tool.execute(
         { name: "host.read", key: "browser:1" },
-        { projectId: "project" },
+        { projectId: "project", stopWaiting: abort.signal },
       ),
     ).toThrow(/key/);
   });

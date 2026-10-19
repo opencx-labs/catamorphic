@@ -7,7 +7,7 @@ import {
   type VoicePortMessage,
 } from "../../shared/voice.js";
 import captureWorklet from "./capture-worklet.ts?worker&url";
-import { LEVEL_FRAME_MS, speechLevels } from "./speech-levels.js";
+import { Speaker } from "./speaker.js";
 
 /**
  * The audio page (ADR 0216): a hidden window that is the voice agent's
@@ -61,8 +61,9 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   current = {
     close: () => {
       port.onmessage = null;
-      port.close();
+      // The bars hear that what it scheduled will not play.
       speaker.close();
+      port.close();
       void microphone.then((close) => close?.());
     },
   };
@@ -191,77 +192,4 @@ function isPortMessage(value: unknown): value is VoicePortMessage {
     "microphone" in value &&
     (value.microphone === null || typeof value.microphone === "string")
   );
-}
-
-/**
- * Clips played back to back, reporting when they have all ended: straight
- * to the output device, from a context at the clips' own rate (Kokoro's
- * 24 kHz), which Chromium resamples once for the device. Never through a
- * MediaStream: Chromium re-times MediaStream playback against the output
- * clock by resampling it between 0.9x and 1.1x, so a reply's pitch drifted
- * as it played.
- */
-class Speaker {
-  private context: AudioContext | null = null;
-  private readonly sources = new Set<AudioBufferSourceNode>();
-  private playhead = 0;
-  private lastSeq = 0;
-
-  constructor(private readonly port: MessagePort) {}
-
-  receive(
-    message: Exclude<VoiceAudioDown, { type: "close-microphone" }>,
-  ): void {
-    if (message.type === "play") this.play(message);
-    else this.flush(message.seq);
-  }
-
-  private play(message: Extract<VoiceAudioDown, { type: "play" }>): void {
-    this.context ??= new AudioContext({ sampleRate: message.sampleRate });
-    const context = this.context;
-    void context.resume();
-    const buffer = context.createBuffer(
-      1,
-      message.samples.length,
-      message.sampleRate,
-    );
-    buffer.getChannelData(0).set(message.samples);
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(context.destination);
-    const at = Math.max(context.currentTime + 0.03, this.playhead);
-    source.start(at);
-    post(this.port, {
-      type: "levels",
-      at:
-        Date.now() + (at - context.currentTime + context.outputLatency) * 1000,
-      frameMs: LEVEL_FRAME_MS,
-      levels: speechLevels(message.samples, message.sampleRate),
-    });
-    this.playhead = at + buffer.duration;
-    this.lastSeq = message.seq;
-    this.sources.add(source);
-    source.onended = () => {
-      this.sources.delete(source);
-      if (this.sources.size === 0)
-        post(this.port, { type: "drained", seq: this.lastSeq });
-    };
-  }
-
-  /** Voice is over: nothing more plays, and the output goes. */
-  close(): void {
-    this.flush(this.lastSeq);
-    void this.context?.close();
-    this.context = null;
-  }
-
-  private flush(seq: number): void {
-    for (const source of this.sources) {
-      source.onended = null;
-      source.stop();
-    }
-    this.sources.clear();
-    this.playhead = 0;
-    this.lastSeq = seq;
-  }
 }

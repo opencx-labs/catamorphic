@@ -36,6 +36,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
+import { hungUp } from "../hung-up.js";
 import {
   AgentCatalogSchema,
   AgentSessionArchiveConfirmationSchema,
@@ -907,7 +908,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             resolveIdentity(request),
             request.params.projectId,
             request.params.sessionId,
-            request.body,
+            // A caller that went away has stopped waiting.
+            { ...request.body, stopWaiting: hungUp(reply) },
           ),
         );
       } catch (error) {

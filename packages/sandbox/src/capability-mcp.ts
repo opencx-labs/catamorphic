@@ -52,7 +52,11 @@ export async function capabilityMcpResponse(args: {
         );
         if (!tool) throw new Error("Unknown capability gateway tool");
         try {
-          const value = await tool.execute(input.arguments, { projectId: "" });
+          const value = await tool.execute(input.arguments, {
+            projectId: "",
+            // Over MCP nothing tells it of its turn: it waits while asked.
+            stopWaiting: args.signal ?? new AbortController().signal,
+          });
           return extraToolResult(value);
         } catch (error) {
           return {

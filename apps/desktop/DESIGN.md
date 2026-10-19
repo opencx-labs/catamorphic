@@ -699,12 +699,18 @@ and one component (`source-section.tsx`) draws every list.
   `light-dark()` values in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
 - The active theme lives in `<userData>/profiles/<id>/theme.json`
-  (`{ selection, overrides, fonts? }`) — profile-local, file-watched, agent-editable.
+  (`{ selection, overrides, fonts?, backgrounds? }`) — profile-local, file-watched, agent-editable.
   `selection: "system"` resolves to the Work Light or Dark preset and
   follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
+- `backgrounds.left`, `.right` and `.chat` put an https picture behind a
+  sidebar or the chat (ADR 0263). It stays visible at its `position` and
+  fades into the surface's own color away from it, so the surface stays
+  readable; opacity, blur and pixelation are data with fixed ranges, never
+  CSS. The surface isolates a stacking context and the picture fades in once
+  loaded.
 - The Work Light and Dark presets in `theme.ts` and the paired
   `light-dark()` values in `styles.css` must stay identical. `:root` follows
   the operating system for the pre-JS first paint.
@@ -3390,3 +3396,26 @@ starts two frames on, after the frame that swapped the answer in, so a
 slow commit never shows it as a jump. The answer message the session may
 record after it is the same card and does not enter again. See
 `docs/chat-state.md` (Agent questions).
+
+### 2026-10-19: Voice yields as the person starts talking; the assistant knows where they are
+
+Talking over the agent used to change nothing until the person finished:
+the agent's voice ran on through their whole sentence. Now it goes quiet
+about two thirds of a second after they start, paused where it was. Their
+words then stop it for good and reach the agent; a cough, its own voice
+coming back through the speakers, or someone else in the room lets it
+carry on from where it paused, and the bars pick up its voice again. A
+"yeah" or "okay" said while it talks is listening, not a turn: it carries
+on, and nothing is sent. What the person says reaches an agent at work at
+its next step, as a typed message does by default.
+
+The assistant answered about the wrong pull request: its chat is kept in
+one project, and it looked at that project's window, not the one the
+person was in. Now it is told the project in front of the window the
+person is in, sees that window, and its tools look there, or at another
+project's window it names. As the person starts speaking, Work keeps what
+was on their screen, since it often changes by the time they finish: the
+turn describes the screen as it was then, and the agent can load a
+picture of it when it needs one. Work pictures its own window when Work
+is in front, and from another app the screen, once the person has
+allowed Work to record it. See ADR 0265.

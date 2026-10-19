@@ -228,7 +228,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199) |
 | [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Accepted (amends 0198) |
 | [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
-| [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217; amended by 0236) |
+| [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217; amended by 0236, 0265) |
 | [0217](0217-only-people-write-user-messages.md) | Only people write user messages: inbound messages and task notifications | Accepted (amends 0074, 0155, 0197, 0216; delivery fields typed by 0219) |
 | [0218](0218-one-chat-timeline.md) | One chat timeline: the registry, installed as copies | Accepted |
 | [0219](0219-typed-deliveries.md) | Deliveries are typed: no free-form input metadata, mailbox inputs or actions | Accepted (amends 0090, 0199, 0217) |
@@ -248,7 +248,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |
 | [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226) |
 | [0235](0235-pages-find-chromes-window-chrome.md) | Pages find Chrome's `window.chrome`; a daily check watches Google's sign-in | Accepted (amends 0150, 0203) |
-| [0236](0236-voice-hears-the-person-and-dictates-anywhere.md) | Voice hears the person, dictates anywhere, and its keys tap or hold | Accepted (amends 0216) |
+| [0236](0236-voice-hears-the-person-and-dictates-anywhere.md) | Voice hears the person, dictates anywhere, and its keys tap or hold | Accepted (amends 0216; amended by 0265) |
 | [0237](0237-lists-fade-where-they-continue.md) | Lists fade where they continue: one overflow hint, the sidebar thumb a section's choice | Accepted (refines 0218, 0234; amended by 0248) |
 | [0238](0238-one-ring-per-list-and-sidebar-focus.md) | One ring per list; an opened sidebar focuses what is in front | Accepted (amends 0168) |
 | [0239](0239-chips-are-a-source.md) | A chat's chips are a source, and agents attach chips by metadata | Accepted (builds on 0226, 0234) |
@@ -260,6 +260,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md) | A person names a chat from its menu, and it keeps the name | Accepted (amends 0202) |
 | [0248](0248-sidebar-thumbs-take-lanes.md) | Sidebar thumbs take lanes, hidden at rest: the sidebar's own on its edge, a section's one lane in | Accepted (amends 0237) |
 | [0249](0249-a-window-coming-back-reads-only-what-it-missed.md) | A window coming back reads only what it missed: no refetch on focus, one catch-up for a hidden window | Accepted (refines 0229) |
+| [0250](0250-a-message-from-another-agent-reaches-a-working-agent.md) | A message from another agent reaches a working agent at its next step; a subagent's always reaches its parent | Accepted (extends 0240) |
 | [0255](0255-acp-agents-run-on-the-work-server.md) | ACP agents run on the Work server, their model through the gateway on loopback | Accepted (builds on 0180, 0198, 0241; amends 0212) |
 | [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261) |
 | [0257](0257-setup-has-its-own-network.md) | Setup has its own network: the base checkout alone, widened for a while, narrow before the session's work arrives | Accepted (amends 0208) |
@@ -268,4 +269,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
 | [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Accepted (refines 0059, 0160; amends 0256) |
 | [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181) |
-| [0263](0263-theme-pictures-behind-sidebars-and-chat.md) | A theme can put a picture behind the sidebars and the chat | Proposed |
+| [0263](0263-theme-pictures-behind-sidebars-and-chat.md) | A theme can put a picture behind the sidebars and the chat | Accepted |
+| [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
+| [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person, and keeps what they saw as they spoke | Accepted (amends 0216, 0236) |

@@ -1,4 +1,4 @@
-import { VOICE_BARS } from "../../shared/voice.js";
+import { VOICE_BARS, type VoiceLevels } from "../../shared/voice.js";
 
 export const LEVEL_FRAME_MS = 20;
 /**
@@ -19,6 +19,24 @@ const FULL_PERCENTILE = 0.9;
 const MAX_LIFT = 4;
 /** Frames this far below the loudest are silence, and rest at 0. */
 const SILENT = 1e-3;
+
+/**
+ * The clips the speaking animation follows, once another arrives: those
+ * heard already go, and a reset forgets the rest.
+ */
+export function scheduleLevels(
+  clips: readonly VoiceLevels[],
+  next: VoiceLevels,
+  now: number,
+): VoiceLevels[] {
+  const kept = next.reset
+    ? []
+    : clips.filter(
+        (clip) =>
+          clip.at + (clip.levels.length / VOICE_BARS) * clip.frameMs > now,
+      );
+  return next.levels.length > 0 ? [...kept, next] : kept;
+}
 
 /**
  * Per frame, how loud each band of a clip is, from 0 to 1: a band-pass

@@ -994,6 +994,17 @@ export class DesktopWorkspaces {
     return this.activeProjects.get(window.webContents.id) ?? null;
   }
 
+  /**
+   * Where the person is (ADR 0265): the project in front of the profile's
+   * workspace window they were last in, whichever window the dock floats
+   * over or wherever its chat lives.
+   */
+  personProject(profileId: string): string | null {
+    const window = this.lastWindows.get(profileId);
+    if (!window || window.isDestroyed()) return null;
+    return this.activeProject(window);
+  }
+
   /** Whether a profile's dock floats detached now, as the person left it. */
   dockDetached(profileId: string): boolean {
     return this.detached(profileId);

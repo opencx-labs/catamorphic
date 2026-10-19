@@ -46,7 +46,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | Operations | Projection and purpose |
 |---|---|
 | `workspace_overview`, `read_tab`, `open_surface`, `update_todo_list` | Eager, bounded workspace context, reading what is on screen, and visible handoff/progress |
-| `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing |
+| `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing; a message steers by default (read at the other agent's next step, or a turn when it is idle), and a subagent's to its parent always does (ADR 0250) |
 | `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
 | `interrupt_subsession` | Deferred, stops a direct child |
 | `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0226) |
@@ -138,6 +138,15 @@ file) used to mean a sleep loop that held the turn, or a workflow whose isolated
 checkout could not see the person's files or localhost. `watch_command` runs a
 check where the agent's commands run and wakes the chat like a background command.
 Its schema costs about 1.3 KB; the eager budget rose to 8.3 KB.
+
+## A wait ends when something reaches the agent (ADR 0264)
+
+A notification or message steered into a turn is read at the harness's next
+step, which a waiting tool holds back. Every host tool call therefore gets
+`stopWaiting`, fired when the engine hands the harness a steer, interrupt or
+stop. `read_background_output`, `wait_for_subsessions` and the browser's
+`downloads` and `wait_for` wait with `waitUntil` and return early, and core
+adds one note to the result saying why.
 
 
 ## Seeing Work itself (ADR 0195)
