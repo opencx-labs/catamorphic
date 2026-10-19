@@ -7,6 +7,8 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 120_000,
     hookTimeout: 120_000,
-    retry: 1,
+    // Tests share one app and backend in order. A retry runs against what
+    // the failed attempt left behind, and hid three flakes for weeks.
+    retry: 0,
   },
 });
