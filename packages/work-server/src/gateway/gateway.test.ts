@@ -74,7 +74,7 @@ describe("gateway configuration", () => {
             api: "openai",
             baseUrl: "https://openrouter.ai/api/v1",
             override: {
-              provider: { only: ["together"], allow_fallbacks: false },
+              provider: { only: ["provider-a"], allow_fallbacks: false },
               models: null,
             },
             paths: ["/chat/completions", "/models"],
@@ -92,7 +92,7 @@ describe("gateway configuration", () => {
     });
     const [pinned, plain] = gatewayProviders(config);
     expect(pinned?.model?.override).toEqual({
-      provider: { only: ["together"], allow_fallbacks: false },
+      provider: { only: ["provider-a"], allow_fallbacks: false },
       models: null,
     });
     expect(pinned?.model?.paths).toEqual(["/chat/completions", "/models"]);

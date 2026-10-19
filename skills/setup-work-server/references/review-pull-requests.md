@@ -119,7 +119,7 @@ demand](cluster-deployment.md#machines-on-demand)):
    a `hetzner-cloud` server type (`"review": { "platform": "hetzner-cloud",
    "serverType": "cpx42", "location": "nbg1", "image": "ubuntu-24.04",
    "sandbox": "container" }`) or a `custom` class your server's provisioner
-   creates (an EC2 launch template, for example). Its machines run the
+   creates on your cloud. Its machines run the
    [install script](cluster-deployment.md#the-install-script), which
    installs Docker and gVisor and starts the worker on the container
    backend, even where KVM would give microVMs.

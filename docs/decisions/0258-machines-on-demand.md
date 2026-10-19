@@ -77,8 +77,8 @@ opaque `options` object that `create` receives unread, with the rule name
 and, for a machine made for waiting work, that work's resources and
 capabilities. Work never calls `create` twice with one enrollment code, so
 `create` is idempotent per code: `enrollment.idempotencyKey`, a hash of the
-code, is the platform's token (an EC2 `ClientToken`), never the name, which
-a later machine of the rule reuses (EC2 keeps a token for a day). `destroy`
+code, is the platform's idempotency token, never the name, which a later
+machine of the rule reuses (a cloud may keep a token for a day). `destroy`
 removes the machine its ref names and every machine with its name, and
 answers `{ done }`: Work asks again on later passes and forgets the machine
 only once it is done, so a destroy right after an uncertain create leaves

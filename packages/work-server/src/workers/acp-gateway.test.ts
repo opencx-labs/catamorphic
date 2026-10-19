@@ -141,7 +141,7 @@ beforeAll(async () => {
           // US providers with zero data retention, whatever an agent asks.
           override: {
             provider: {
-              only: ["together", "parasail"],
+              only: ["provider-a", "provider-b"],
               allow_fallbacks: false,
               data_collection: "deny",
             },
@@ -317,7 +317,7 @@ describe("an ACP agent on a worker, with its model through the gateway", () => {
     // The provider saw the organization's key, the definition's model, and
     // the providers the gateway pinned, not anything the agent chose.
     expect(answer.content).toBe(
-      'Model said (200): routed to ["together","parasail"]',
+      'Model said (200): routed to ["provider-a","provider-b"]',
     );
     expect(upstreamCalls).toHaveLength(1);
     const call = upstreamCalls[0];
@@ -326,7 +326,7 @@ describe("an ACP agent on a worker, with its model through the gateway", () => {
       model: "deepseek/v4-flash",
       user: `project:${projectId}`,
       provider: {
-        only: ["together", "parasail"],
+        only: ["provider-a", "provider-b"],
         allow_fallbacks: false,
         data_collection: "deny",
       },

@@ -322,7 +322,7 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   code is withdrawn and the next pass tries again; after any other error the
   code waits for the machine to enroll. Work never calls `create` twice with
   one code, so make it idempotent per code: pass `enrollment.idempotencyKey`
-  (a hash of the code) as the platform's token, an EC2 `ClientToken` say,
+  (a hash of the code) as the platform's idempotency token,
   never the name, which a later machine of the rule reuses. A server with
   the hook and no classes file treats every class as custom.
 

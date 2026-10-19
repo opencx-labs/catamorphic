@@ -20,7 +20,7 @@ export interface ModelConnectionOptions {
   /**
    * Top-level body fields set on every request, each replacing whatever the
    * caller sent (`null` removes the field), after the host's rewrites
-   * (ADR 0256). `{ "provider": { "only": ["together"], "allow_fallbacks":
+   * (ADR 0256). `{ "provider": { "only": ["provider-a"], "allow_fallbacks":
    * false } }` keeps OpenRouter on the providers named.
    */
   override?: Readonly<Record<string, Json>>;

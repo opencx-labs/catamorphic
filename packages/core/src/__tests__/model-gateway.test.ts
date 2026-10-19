@@ -897,7 +897,7 @@ describe("model request rewrites (ADR 0256)", () => {
     name: "pin providers",
     rewrite: ({ body }) => ({
       ...body,
-      provider: { only: ["together"], allow_fallbacks: false },
+      provider: { only: ["provider-a"], allow_fallbacks: false },
     }),
   };
   const sent = (call: { body: Uint8Array | undefined } | undefined) =>
@@ -936,7 +936,7 @@ describe("model request rewrites (ADR 0256)", () => {
     expect(text.match(/"provider"/g)).toHaveLength(1);
     expect(sent(upstreamCalls[0])).toEqual({
       model: "m",
-      provider: { only: ["together"], allow_fallbacks: false },
+      provider: { only: ["provider-a"], allow_fallbacks: false },
     });
     expect(upstreamCalls[0]?.headers.get("content-type")).toBe(
       "application/json",
@@ -981,14 +981,14 @@ describe("model request rewrites (ADR 0256)", () => {
           }),
         },
       ],
-      override: { provider: { only: ["together"] }, user: null },
+      override: { provider: { only: ["provider-a"] }, user: null },
     });
     const response = await gateway.handle(chat('{"model":"m"}'));
     await bodyText(response);
     expect(sent(upstreamCalls[0])).toEqual({
       model: "m",
       trail: ["first", "second"],
-      provider: { only: ["together"] },
+      provider: { only: ["provider-a"] },
     });
   });
 
@@ -1013,7 +1013,7 @@ describe("model request rewrites (ADR 0256)", () => {
     const plain = harness({
       api: "openai",
       policy: { allow: ["deepseek/*"] },
-      override: { provider: { only: ["together"] } },
+      override: { provider: { only: ["provider-a"] } },
     });
     for (const body of [
       '{"model":"deepseek/v4-flash","models":["meta-llama/llama-5"]}',

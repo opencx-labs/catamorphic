@@ -19,7 +19,7 @@ describe("model connections (ADRs 0180, 0256)", () => {
 
   it("carries the fields it sets on every request and the paths it serves", () => {
     const override = {
-      provider: { only: ["together"], allow_fallbacks: false },
+      provider: { only: ["provider-a"], allow_fallbacks: false },
       models: null,
     };
     const paths = ["/chat/completions", "/models"];

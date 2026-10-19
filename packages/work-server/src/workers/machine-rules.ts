@@ -167,7 +167,7 @@ export function demandOf(rule: {
  *
  * Work never calls `create` twice with one enrollment code, so `create` is
  * idempotent per code: use `enrollment.idempotencyKey`, a hash of the code,
- * as the platform's token (an EC2 `ClientToken`), never the name, which a
+ * as the platform's idempotency token, never the name, which a
  * later machine of the same rule reuses once this one is gone. `destroy`
  * removes the machine `ref` names and every machine named `name` (a create
  * that failed uncertainly may have made one with no recorded ref), and

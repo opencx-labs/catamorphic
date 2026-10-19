@@ -32,7 +32,7 @@ another base URL, declare the kind in `WORK_GATEWAY_CONFIG` first:
   "api": "openai", "baseUrl": "https://openrouter.ai/api/v1",
   "paths": ["/chat/completions", "/models"],
   "override": {
-    "provider": { "only": ["together", "parasail"], "allow_fallbacks": false,
+    "provider": { "only": ["<provider slug>"], "allow_fallbacks": false,
                   "data_collection": "deny" },
     "models": null, "route": null, "preset": null, "plugins": null } }
 ```
