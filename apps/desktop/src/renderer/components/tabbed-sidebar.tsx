@@ -29,6 +29,7 @@ import { lucideIcon } from "../lib/lucide-icon.js";
 import { motionMs } from "../lib/motion.js";
 import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
+import { ThemeBackdrop } from "../lib/theme.js";
 import { useDraggingTab } from "../lib/use-dragging-tab.js";
 import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { Collapsible } from "./collapsible.js";
@@ -638,6 +639,7 @@ export function TabbedSidebar({
         className={`sidebar-inner ${overlay ? "rounded-r-xl shadow-xl" : ""}`}
         style={{ width: layout.width }}
       >
+        <ThemeBackdrop surface={side} />
         {header}
         {(showStrip || stripFolding) && (
           // One strip element while it opens, shows and folds; folding, it
