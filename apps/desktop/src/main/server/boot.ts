@@ -333,6 +333,9 @@ export async function startEmbeddedServer(
         sessionId: string,
       ) => Promise<ProjectSessionContext[]>)
     | undefined;
+  let projectNameResolver:
+    | ((projectId: string) => Promise<string | undefined>)
+    | undefined;
   let requiresIsolatedCheckout: (
     projectId: string,
     sessionId: string,
@@ -489,6 +492,8 @@ export async function startEmbeddedServer(
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
     // read from the project's folder; secrets resolve through core.
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
+    projectName: (projectId) =>
+      projectNameResolver?.(projectId) ?? Promise.resolve(undefined),
     projectSecret: (projectId, name) =>
       projectSecretResolver?.(projectId, name) ?? Promise.resolve(undefined),
     hostSkills: () => hostSkillsRuntime,
@@ -876,6 +881,8 @@ export async function startEmbeddedServer(
       peerSessionIds,
     });
   };
+  projectNameResolver = async (projectId) =>
+    (await catamorphic.core.projects.get(desktopIdentity, projectId)).name;
   sessionPeersResolver = async (projectId, sessionId) => {
     const peers =
       (await catamorphic.core.agentSessions?.listPeers(

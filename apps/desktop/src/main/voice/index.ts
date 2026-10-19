@@ -51,7 +51,9 @@ import {
   voiceChatOf,
 } from "./conversation.js";
 import { VoiceModelStore } from "./models.js";
-import { type FrontPlace, SystemKeys } from "./system-keys.js";
+import { type Sight, SpokenSights, sightFor, takePicture } from "./sight.js";
+import { isStopCommand } from "./speech-text.js";
+import { SystemKeys } from "./system-keys.js";
 import { createVoiceBubble, voiceBubbleDragSchema } from "./voice-bubble.js";
 import { listenForVoiceKeys } from "./voice-keys.js";
 
@@ -72,6 +74,10 @@ const HELD_IDLE_MS = 4_000;
 const WARM_MS = 15 * 60_000;
 /** Dictation turned off writes what it still hears for at most this long. */
 const FINISH_MS = 4_000;
+/** Speech starting again this soon was seen as the stretch before it. */
+const SIGHT_REUSE_MS = 1_000;
+/** Sights of stretches whose words are not heard yet, at most. */
+const SIGHTS_KEPT = 4;
 
 const identity = {
   tenantId: DESKTOP_TENANT_ID,
@@ -181,8 +187,11 @@ interface ActiveVoice {
   early: VoiceWorkerEvent[];
   /** The conversation reading what the person has not heard, if any. */
   catchingUp: VoiceConversation | null;
-  /** Where the person was when they last spoke, when not in Work. */
-  place: FrontPlace | null;
+  /**
+   * What the person saw as each stretch of their speech began (ADR 0265),
+   * by the stretch's number, until its words are heard.
+   */
+  sights: Map<number, Sight>;
   /**
    * The window of Work's whose assistant and colours the bubble shows:
    * the last one the person was in, or the one they picked in its menu.
@@ -515,9 +524,12 @@ export function registerVoiceSupport(deps: {
   const talking = (sessionId: string) =>
     !active?.ending && active?.conversation?.ref.sessionId === sessionId;
 
-  /** Where the person was when they last spoke to this chat, out of Work. */
-  const where = (sessionId: string) =>
-    talking(sessionId) ? (active?.place ?? null) : null;
+  /**
+   * What the person saw as they started saying their latest message to
+   * each chat (ADR 0265), whether or not voice is still on.
+   */
+  const spoken = new SpokenSights();
+  const sight = (sessionId: string) => spoken.get(sessionId);
 
   /**
    * A chat's agent stops listening (its stop_listening tool): the person
@@ -671,7 +683,7 @@ export function registerVoiceSupport(deps: {
   ) => {
     const profileId = voice.profileId;
     // Here the server is up: its agents hear of voice and can end it.
-    state.current?.agentRegistry.setVoice({ talking, where, stopListening });
+    state.current?.agentRegistry.setVoice({ talking, sight, stopListening });
     send(voice, { type: "dictation", enabled: resolved === null });
     if (!resolved) {
       voice.dictating = { stretches: new Map(), typedInApp: 0 };
@@ -694,12 +706,12 @@ export function registerVoiceSupport(deps: {
             (await sessions.get(identity, target.projectId, target.sessionId))
               .snapshot,
           ),
-        send: async (target, text) => {
+        send: async (target, { text, dispatch }) => {
           const receipt = await sessions.command(
             identity,
             target.projectId,
             target.sessionId,
-            { type: "send", commandId: randomUUID(), text },
+            { type: "send", commandId: randomUUID(), text, dispatch },
           );
           if (receipt.status === "rejected")
             throw new Error(
@@ -805,6 +817,7 @@ export function registerVoiceSupport(deps: {
     switch (event.type) {
       case "speech-start":
         voice.hearing = true;
+        see(voice, event.segment);
         break;
       case "speech-end":
         voice.hearing = false;
@@ -814,7 +827,12 @@ export function registerVoiceSupport(deps: {
           if (!connected(voice) || voice.catchingUp) voice.early.push(event);
           return;
         }
-        void heard(voice, voice.conversation, event.text);
+        void heard(
+          voice,
+          voice.conversation,
+          event.text,
+          sightFor(voice.sights, event.segment),
+        );
         break;
       case "dictation":
         if (!voice.dictating) {
@@ -881,17 +899,66 @@ export function registerVoiceSupport(deps: {
   };
 
   /**
-   * What the person said goes to the chat, with where they were when they
-   * said it when that is another app than Work (ADR 0236): its name and
-   * its window's, never what is in it.
+   * What the person sees as they start talking (ADR 0265), taken now since
+   * the screen often changes while they talk and once they finish: the
+   * project in front of the Work window they are in, Work's screen for the
+   * chat voice talks with, the app in front when it is not Work (its name
+   * and its window's, ADR 0236), and a picture. Dictation keeps nothing:
+   * no chat hears of it.
+   */
+  const see = (voice: ActiveVoice, segment: number) => {
+    if (voice.dictating || voice.live.dictation || voice.live.learning) return;
+    const latest = [...voice.sights.values()].at(-1);
+    if (latest && Date.now() - latest.at < SIGHT_REUSE_MS) {
+      voice.sights.set(segment, latest);
+      return;
+    }
+    const inWork = workInFront();
+    const focused = BrowserWindow.getFocusedWindow();
+    const window =
+      focused && ofProfile(focused, voice.profileId)
+        ? focused
+        : windowFor(voice.profileId);
+    const projectId = windowProject(window, voice.profileId);
+    const target = voice.live.target;
+    const chat = target?.kind === "chat" ? target : null;
+    const screenOf = chat?.projectId ?? projectId;
+    const registry = state.current?.agentRegistry;
+    voice.sights.set(segment, {
+      at: Date.now(),
+      projectId,
+      app:
+        !inWork && systemKeys?.running
+          ? systemKeys.front()
+          : Promise.resolve(null),
+      screen:
+        screenOf && registry
+          ? registry
+              .screenNow(
+                screenOf,
+                voice.conversation?.ref.sessionId ?? chat?.sessionId,
+              )
+              .catch(() => null)
+          : Promise.resolve(null),
+      picture: takePicture(window, inWork).catch(() => null),
+    });
+    // Speech that never became words leaves its sight behind: a few at most.
+    for (const taken of [...voice.sights.keys()].slice(0, -SIGHTS_KEPT))
+      voice.sights.delete(taken);
+  };
+
+  /**
+   * What the person said goes to the chat, with what they saw as they
+   * started saying it, kept for its turn before the chat reads it.
    */
   const heard = async (
     voice: ActiveVoice,
     conversation: VoiceConversation,
     text: string,
+    seen: Sight | null,
   ) => {
-    voice.place =
-      !workInFront() && systemKeys?.running ? await systemKeys.front() : null;
+    if (seen && !isStopCommand(text))
+      spoken.set(conversation.ref.sessionId, { ...seen, said: text });
     if (active !== voice || voice.conversation !== conversation) return;
     await conversation.heard(text);
   };
@@ -1070,7 +1137,7 @@ export function registerVoiceSupport(deps: {
       handsFree: options.handsFree,
       early: [],
       catchingUp: null,
-      place: null,
+      sights: new Map(),
       window: options.window ?? windowFor(profileId)?.id ?? null,
       windowPicked: options.window !== undefined,
       idle: undefined,
@@ -1804,6 +1871,7 @@ export function registerVoiceSupport(deps: {
   return {
     dispose: async () => {
       disposed = true;
+      spoken.clear();
       app.off("browser-window-created", onWindowCreated);
       app.off("browser-window-created", onKeysWindow);
       app.off("browser-window-focus", refreshBubble);

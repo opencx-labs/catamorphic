@@ -1,6 +1,6 @@
 # 0236 — Voice hears the person, dictates anywhere, and its keys tap or hold
 
-- **Status:** Accepted
+- **Status:** Accepted; talking over the agent and where the person was amended by [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md)
 - **Date:** 2026-10-16
 - **Amends:** 0216 (voice)
 

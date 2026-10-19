@@ -160,6 +160,20 @@ describe("the assistant's session tools", () => {
     expect(assistant.interrupted).toEqual(["p2/build"]);
   });
 
+  it("passes the person's words on to a working chat at its next step", async () => {
+    const assistant = harness({
+      p1: [],
+      p2: [chat("build", { running: true })],
+    });
+    await assistant.call("message_session", {
+      session_id: "build",
+      message: "Use the release branch",
+    });
+    expect(assistant.delivered).toEqual([
+      expect.objectContaining({ sessionId: "build", mode: "steer" }),
+    ]);
+  });
+
   it("starts work with a brief that leads back to the assistant", async () => {
     const assistant = harness({ p1: [] });
     await assistant.call("start_session", {
@@ -181,7 +195,7 @@ describe("the assistant's session tools", () => {
     expect(start?.task).toContain("Tidy the docs folder");
     expect(start?.task).toContain(`read_project_session`);
     expect(start?.task).toContain(
-      `send_project_session_message (session_id ${ASSISTANT}, delivery_mode queue)`,
+      `send_project_session_message (session_id ${ASSISTANT}, delivery_mode steer)`,
     );
     expect(start?.task).toContain('"Tidy the docs:"');
   });

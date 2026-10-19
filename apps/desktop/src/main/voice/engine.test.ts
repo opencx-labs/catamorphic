@@ -63,6 +63,13 @@ function scripted(transcripts: string[]) {
   return { parts, synthesized, made };
 }
 
+/** What the engine told the audio page, besides what to play. */
+function controls(voice: { audio: VoiceAudioDown[] }) {
+  return voice.audio
+    .map((message) => message.type)
+    .filter((type) => type !== "play");
+}
+
 function harness(
   transcripts: string[] = [],
   adjust: (parts: SpeechParts) => void = () => {},
@@ -107,13 +114,14 @@ describe("VoiceEngine", () => {
   it("hears an utterance once the speech ends", async () => {
     const voice = harness(["list my sessions"]);
     voice.frame(0.5, 3);
-    expect(voice.events).toEqual([{ type: "speech-start" }]);
+    expect(voice.events).toEqual([{ type: "speech-start", segment: 1 }]);
     voice.frame(0);
     await voice.settle();
+    // The words say which stretch of speech they were said in.
     expect(voice.events).toEqual([
-      { type: "speech-start" },
+      { type: "speech-start", segment: 1 },
       { type: "speech-end" },
-      { type: "utterance", text: "list my sessions" },
+      { type: "utterance", text: "list my sessions", segment: 1 },
     ]);
   });
 
@@ -159,10 +167,12 @@ describe("VoiceEngine", () => {
     const voice = harness(["wait, use the other branch"]);
     voice.engine.speak("reply", "Here is a long answer about the build.");
     await voice.settle();
-    voice.frame(0.5, 3);
+    voice.frame(0.5, 40);
     await voice.settle();
-    // Talking alone changes nothing: no word is heard until it ends.
+    // Talking pauses it; no word is heard until they finish.
+    expect(voice.audio.map((message) => message.type)).toContain("pause");
     expect(voice.events).not.toContainEqual({ type: "barge-in" });
+    expect(voice.audio.some((message) => message.type === "flush")).toBe(false);
     voice.frame(0);
     await voice.settle();
     expect(voice.events).toContainEqual({ type: "barge-in" });
@@ -175,6 +185,7 @@ describe("VoiceEngine", () => {
     expect(voice.events.at(-1)).toEqual({
       type: "utterance",
       text: "wait, use the other branch",
+      segment: expect.any(Number),
     });
   });
 
@@ -188,6 +199,120 @@ describe("VoiceEngine", () => {
     expect(voice.events.map((event) => event.type)).not.toContain("utterance");
     expect(voice.events.map((event) => event.type)).not.toContain("barge-in");
     expect(voice.audio.some((message) => message.type === "flush")).toBe(false);
+  });
+
+  it("pauses as the person starts talking over it, not at the first sound", async () => {
+    const voice = harness(["wait"]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    // A fifth of a second: a cough, a click, the start of a word.
+    voice.frame(0.5, 20);
+    expect(voice.audio.map((message) => message.type)).not.toContain("pause");
+    voice.frame(0.5, 15);
+    expect(voice.audio.filter((message) => message.type === "pause")).toEqual([
+      { type: "pause" },
+    ]);
+    // Once a stretch.
+    voice.frame(0.5, 100);
+    expect(
+      voice.audio.filter((message) => message.type === "pause"),
+    ).toHaveLength(1);
+  });
+
+  it("carries on where it paused when it heard its own voice", async () => {
+    const voice = harness(["answer about the build"]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    expect(voice.events.map((event) => event.type)).not.toContain("barge-in");
+    expect(voice.engine.audible).toBe(true);
+  });
+
+  it('talks on through a listener\'s "yeah", which it neither stops for nor answers', async () => {
+    const voice = harness(["Yeah.", "Yeah, open it."]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    expect(voice.events.map((event) => event.type)).not.toContain("utterance");
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({
+      type: "utterance",
+      text: "Yeah, open it.",
+      segment: 2,
+    });
+  });
+
+  it('hears a "yeah" as an answer when the agent is quiet, or the keys are held', async () => {
+    const voice = harness(["Yeah.", "Okay."]);
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.engine.hold(true);
+    voice.frame(0.5, 40);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(
+      voice.events.flatMap((event) =>
+        event.type === "utterance" ? [event.text] : [],
+      ),
+    ).toEqual(["Yeah.", "Okay."]);
+  });
+
+  it("carries on where it paused when the sound made no words", async () => {
+    const voice = harness([], (parts) => {
+      parts.recognize = async () => ({ text: "Okay, so.", confidence: -0.8 });
+    });
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    expect(voice.audio.map((message) => message.type).slice(-2)).toEqual([
+      "pause",
+      "resume",
+    ]);
+    expect(voice.events.map((event) => event.type)).not.toContain("utterance");
+  });
+
+  it("pauses again for the next stretch once it carried on", async () => {
+    const voice = harness(["answer about the build", "stop there"]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause", "resume", "pause", "flush"]);
+    expect(voice.events.at(-1)).toEqual({
+      type: "utterance",
+      text: "stop there",
+      segment: expect.any(Number),
+    });
+  });
+
+  it("says what it was saying when it stops listening while paused", async () => {
+    const voice = harness();
+    voice.engine.speak("reply", "Goodbye for now.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.engine.stopListening();
+    expect(voice.audio.map((message) => message.type).slice(-3)).toEqual([
+      "pause",
+      "resume",
+      "close-microphone",
+    ]);
   });
 
   it("makes no more of a reply once told to stop", async () => {
@@ -262,18 +387,55 @@ describe("VoiceEngine voice print", () => {
     expect(voice.events.at(-1)).toEqual({
       type: "utterance",
       text: "it is not a man for my phone",
+      segment: expect.any(Number),
     });
   });
 
-  it("does not stop for someone else talking over it", async () => {
+  it("does not even pause for someone else talking over it", async () => {
     const voice = harness(["what is on tonight"]);
     voice.engine.setVoiceprint([1, 0]);
     voice.engine.speak("reply", "Here is a long answer about the build.");
     await voice.settle();
-    talk(voice, 0.3, 2);
+    voice.frame(0.3, 200);
+    voice.frame(0);
     await voice.settle();
+    expect(controls(voice)).toEqual([]);
     expect(voice.events).not.toContainEqual({ type: "barge-in" });
     expect(voice.engine.audible).toBe(true);
+  });
+
+  it("pauses for the person's voice, and stops once their words end", async () => {
+    const voice = harness(["wait, the other branch"]);
+    voice.engine.setVoiceprint([1, 0]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    expect(controls(voice)).toEqual(["pause"]);
+    voice.frame(0);
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause", "flush"]);
+    expect(voice.events).toContainEqual({ type: "barge-in" });
+  });
+
+  it("asks whose voice it is again once a second tells, and pauses then", async () => {
+    let asked = 0;
+    const voice = harness(["wait, the other branch"], (parts) => {
+      // Too little of it to tell at first; at a second, clearly theirs.
+      parts.voiceprint = (samples) => {
+        asked += 1;
+        return samples.length / 16_000 < 0.9 ? [0, 1] : [1, 0];
+      };
+    });
+    voice.engine.setVoiceprint([1, 0]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 60);
+    expect(controls(voice)).toEqual([]);
+    voice.frame(0.5, 60);
+    expect(controls(voice)).toEqual(["pause"]);
+    voice.frame(0.5, 100);
+    // Asked twice before pausing, once as it went on: no more.
+    expect(asked).toBe(3);
   });
 
   it("lets speech too short to check through", async () => {
@@ -281,7 +443,11 @@ describe("VoiceEngine voice print", () => {
     voice.engine.setVoiceprint([1, 0]);
     talk(voice, 0.3, 0.5);
     await voice.settle();
-    expect(voice.events.at(-1)).toEqual({ type: "utterance", text: "stop" });
+    expect(voice.events.at(-1)).toEqual({
+      type: "utterance",
+      text: "stop",
+      segment: expect.any(Number),
+    });
   });
 
   it("keeps listening after a stretch of speech fails", async () => {
@@ -305,6 +471,7 @@ describe("VoiceEngine voice print", () => {
     expect(voice.events.at(-1)).toEqual({
       type: "utterance",
       text: "list my sessions",
+      segment: expect.any(Number),
     });
   });
 });
@@ -467,6 +634,8 @@ describe("VoiceEngine hears the person, not the room", () => {
     await voice.settle();
     talk(voice, 0.3, 1.5);
     await voice.settle();
+    // 4.4 dB under the person: not even paused.
+    expect(voice.audio.map((message) => message.type)).not.toContain("pause");
     expect(voice.events).not.toContainEqual({ type: "barge-in" });
     expect(voice.engine.audible).toBe(true);
     talk(voice, 0.45, 1.5);
@@ -527,13 +696,19 @@ describe("VoiceEngine held keys", () => {
     expect(voice.events).toEqual([]);
     voice.engine.hold(true);
     voice.frame(0.5, 20);
-    expect(voice.events).toEqual([{ type: "speech-start" }]);
+    expect(voice.events).toEqual([
+      { type: "speech-start", segment: expect.any(Number) },
+    ]);
     voice.engine.hold(false);
     await voice.settle();
     expect(voice.events).toEqual([
-      { type: "speech-start" },
+      { type: "speech-start", segment: expect.any(Number) },
       { type: "speech-end" },
-      { type: "utterance", text: "list my sessions" },
+      {
+        type: "utterance",
+        text: "list my sessions",
+        segment: expect.any(Number),
+      },
     ]);
   });
 
@@ -552,6 +727,7 @@ describe("VoiceEngine held keys", () => {
     expect(voice.events.at(-1)).toEqual({
       type: "utterance",
       text: "open the docs",
+      segment: expect.any(Number),
     });
     expect(
       voice.events.filter((event) => event.type === "unheard"),
@@ -592,6 +768,7 @@ describe("VoiceEngine held keys", () => {
     expect(voice.events.at(-1)).toEqual({
       type: "utterance",
       text: "what is on tonight",
+      segment: expect.any(Number),
     });
   });
 
@@ -609,7 +786,7 @@ describe("VoiceEngine held keys", () => {
     voice.drain();
     expect(voice.events).toEqual([
       { type: "speaking", id: "bye" },
-      { type: "speech-start" },
+      { type: "speech-start", segment: expect.any(Number) },
       { type: "speech-end" },
       { type: "spoken", id: "bye", interrupted: false },
     ]);
@@ -686,7 +863,11 @@ describe("VoiceEngine held keys", () => {
     voice.engine.hold(false);
     await voice.settle();
     expect(voice.events.filter((event) => event.type === "utterance")).toEqual([
-      { type: "utterance", text: "use the release branch" },
+      {
+        type: "utterance",
+        text: "use the release branch",
+        segment: expect.any(Number),
+      },
     ]);
     // Detection starts afresh: nothing from before the keys comes back.
     voice.frame(0);

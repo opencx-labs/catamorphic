@@ -67,7 +67,10 @@ export function voiceChatOf(snapshot: SessionSnapshot): VoiceChat {
 /** A chat's session operations, bound to the desktop's identity. */
 interface VoiceSessions {
   get(ref: VoiceSessionRef): Promise<VoiceChat>;
-  send(ref: VoiceSessionRef, text: string): Promise<void>;
+  send(
+    ref: VoiceSessionRef,
+    message: { text: string; dispatch: "steer" },
+  ): Promise<void>;
   interrupt(ref: VoiceSessionRef): Promise<void>;
 }
 
@@ -188,7 +191,9 @@ export class VoiceConversation {
     this.deps.speech.cue();
     this.setBusy(true);
     try {
-      await this.deps.sessions.send(this.ref, text);
+      // Said to an agent at work, it reaches it at its next step (ADR
+      // 0240), as speaking to it would, whatever the chat's composer does.
+      await this.deps.sessions.send(this.ref, { text, dispatch: "steer" });
     } catch (cause) {
       this.setBusy(false);
       this.deps.onError(

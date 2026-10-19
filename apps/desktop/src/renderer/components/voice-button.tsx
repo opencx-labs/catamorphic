@@ -202,6 +202,10 @@ const CROSSFADE_MS = 120;
 const RISE_MS = 35;
 const FALL_MS = 110;
 
+function clipEnded(clip: VoiceLevels, now: number): boolean {
+  return clip.at + (clip.levels.length / VOICE_BARS) * clip.frameMs <= now;
+}
+
 /**
  * The agent working, then its voice as it is heard. From when the person
  * has been heard until the agent's first sentence plays, the bars are dots
@@ -213,13 +217,25 @@ const FALL_MS = 110;
  */
 function VoiceBars({ shown }: { shown: boolean }) {
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
+  // Kept while the bars are hidden: a voice the person paused by talking
+  // over it (ADR 0265) carries on with clips it scheduled before.
+  const scheduled = useRef<VoiceLevels[]>([]);
+  useEffect(
+    () =>
+      desktopApi.onVoiceLevels((levels) => {
+        const clips = scheduled.current;
+        const now = Date.now();
+        while (clips[0] && clipEnded(clips[0], now)) clips.shift();
+        // A clip shown again after a pause starts before the ones it moved.
+        while ((clips.at(-1)?.at ?? Number.NEGATIVE_INFINITY) >= levels.at)
+          clips.pop();
+        clips.push(levels);
+      }),
+    [],
+  );
   useEffect(() => {
     if (!shown) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const scheduled: VoiceLevels[] = [];
-    const unsubscribe = desktopApi.onVoiceLevels((levels) =>
-      scheduled.push(levels),
-    );
     const drawn = Array.from({ length: VOICE_BARS }, () => 0);
     // 0 while the agent works, 1 while it is heard, eased in between.
     let heard = 0;
@@ -231,10 +247,9 @@ function VoiceBars({ shown }: { shown: boolean }) {
       const dt = Math.min(100, time - last);
       last = time;
       const now = Date.now();
-      const ended = (clip: VoiceLevels) =>
-        clip.at + (clip.levels.length / VOICE_BARS) * clip.frameMs <= now;
-      while (scheduled[0] && ended(scheduled[0])) scheduled.shift();
-      const clip = scheduled[0] && scheduled[0].at <= now ? scheduled[0] : null;
+      const clips = scheduled.current;
+      while (clips[0] && clipEnded(clips[0], now)) clips.shift();
+      const clip = clips[0] && clips[0].at <= now ? clips[0] : null;
       const offset = clip
         ? Math.floor((now - clip.at) / clip.frameMs) * VOICE_BARS
         : 0;
@@ -254,10 +269,7 @@ function VoiceBars({ shown }: { shown: boolean }) {
       frame = requestAnimationFrame(draw);
     };
     frame = requestAnimationFrame(draw);
-    return () => {
-      unsubscribe();
-      cancelAnimationFrame(frame);
-    };
+    return () => cancelAnimationFrame(frame);
   }, [shown]);
   return (
     <span

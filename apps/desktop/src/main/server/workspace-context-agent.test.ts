@@ -207,6 +207,53 @@ describe("screen context", () => {
   });
 });
 
+describe("where the person is", () => {
+  it("describes the screen as the person started speaking, not as it is now", async () => {
+    const context = renderTurnContext(
+      await workspaceTurnContext({
+        bridge: bridgeWith({ tabs: [{ ...workSite, title: "Changed since" }] }),
+        projectId: "project",
+        sessionId: "mine",
+        spoken: {
+          at: Date.now() - 6_000,
+          screen: Promise.resolve(
+            'The person is looking at: web page "Pull request #3419"',
+          ),
+        },
+      }),
+    );
+    expect(context).toContain(
+      "As the person started saying their latest message, 6 seconds before this turn",
+    );
+    expect(context).toContain("Pull request #3419");
+    expect(context).not.toContain("Changed since");
+  });
+
+  it("shows the assistant the window the person is in, not its chat's project", async () => {
+    const asked: string[] = [];
+    const bridge = {
+      ...bridgeWith({ tabs: [workSite] }),
+      overview: async (projectId: string) => {
+        asked.push(projectId);
+        return { tabs: [workSite] };
+      },
+    } as WorkspaceBridge;
+    const facts: string[] = [];
+    await workspaceTurnContext({
+      bridge,
+      projectId: "assistant-home",
+      personProjectId: "catamorphic",
+      sessionId: "assistant",
+      desktopFacts: (projectId) => {
+        facts.push(projectId);
+        return {};
+      },
+    });
+    expect(asked).toEqual(["catamorphic"]);
+    expect(facts).toEqual(["catamorphic"]);
+  });
+});
+
 describe("desktop facts and peers", () => {
   it("adds private-file placement and settings errors as host facts, refreshed each turn", async () => {
     let errors: string[] = ["theme.json: Unexpected token"];

@@ -829,6 +829,10 @@ app.whenReady().then(async () => {
     // profiles' sessions) carry this run's token to the embedded API, which
     // refuses web pages without it.
     allowDesktopWindowsApi({ url: server.url, token: server.apiToken });
+    // The assistant sees the window the person is in (ADR 0265).
+    server.agentRegistry.setPersonPlace(
+      (profileId) => desktopWorkspaces?.personProject(profileId) ?? null,
+    );
     const telemetrySettings = cachedProjectTelemetrySettings();
     telemetry.configureProjects({
       resolve: (projectId) =>

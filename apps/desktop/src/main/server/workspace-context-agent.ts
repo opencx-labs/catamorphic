@@ -116,29 +116,39 @@ export async function workspaceTurnContext({
   coordination,
   desktopFacts,
   projectId,
+  personProjectId,
+  spoken,
   sessionId,
 }: WorkspaceContextOptions & {
   projectId: string;
+  /**
+   * The project whose window the person is in, when the chat's own is no
+   * place of theirs (the assistant, ADR 0265): its screen and facts are
+   * the turn's.
+   */
+  personProjectId?: string;
+  /**
+   * The screen as the person started saying their latest message by voice
+   * (ADR 0265), in place of the screen now: it often changes while they
+   * talk and once they finish.
+   */
+  spoken?: { at: number; screen: Promise<string | null> };
   sessionId: string;
 }): Promise<TurnContextFragment[]> {
   const fragments: TurnContextFragment[] = [];
-  try {
-    const overview = await bridge.overview(projectId);
-    const screen = describeScreen(overview, sessionId);
-    if (screen) {
-      const look = await glanceAt(bridge, projectId, screen.focus);
-      fragments.push({
-        source: "workspace",
-        trust: "observed",
-        text: formatScreen(screen, look),
-      });
-    }
-  } catch {
-    // No window has the project open; the turn runs without a screen.
-  }
+  const where = personProjectId ?? projectId;
+  const screen = spoken
+    ? await within(spoken.screen, SPOKEN_SCREEN_WAIT_MS)
+    : await workspaceScreen({ bridge, projectId: where, sessionId });
+  if (screen)
+    fragments.push({
+      source: "workspace",
+      trust: "observed",
+      text: spoken ? `${spokenScreenLead(spoken.at)}\n${screen}` : screen,
+    });
   const desktop: string[] = [];
   try {
-    const facts = desktopFacts?.(projectId);
+    const facts = desktopFacts?.(where);
     if (facts?.personalFilesDirectory) {
       desktop.push(
         `New documents the person asks for are private by default: save them in ${facts.personalFilesDirectory} unless they choose another folder.`,
@@ -200,6 +210,51 @@ export async function workspaceTurnContext({
     // Coordination context is advisory.
   }
   return fragments;
+}
+
+/**
+ * Work's screen for a chat, as its turns describe it (ADR 0152): what the
+ * person looks at, a look inside it, where the chat sits, the other tabs.
+ * Null when no window shows the project.
+ */
+export async function workspaceScreen({
+  bridge,
+  projectId,
+  sessionId,
+}: {
+  bridge: WorkspaceBridge;
+  projectId: string;
+  sessionId?: string;
+}): Promise<string | null> {
+  try {
+    const overview = await bridge.overview(projectId);
+    const screen = describeScreen(overview, sessionId);
+    if (!screen) return null;
+    const look = await glanceAt(bridge, projectId, screen.focus);
+    return formatScreen(screen, look);
+  } catch {
+    // No window has the project open; the turn runs without a screen.
+    return null;
+  }
+}
+
+/** A screen taken as speech started is long ready by its turn. */
+const SPOKEN_SCREEN_WAIT_MS = 1_500;
+
+function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise.catch(() => null),
+    new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), ms).unref?.(),
+    ),
+  ]);
+}
+
+function spokenScreenLead(at: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  const ago =
+    seconds < 90 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+  return `As the person started saying their latest message, ${ago} before this turn, Work showed this. screen_when_spoken has a picture of their screen then; workspace_overview and read_tab show it now.`;
 }
 
 /**

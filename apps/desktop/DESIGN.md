@@ -3390,3 +3390,26 @@ starts two frames on, after the frame that swapped the answer in, so a
 slow commit never shows it as a jump. The answer message the session may
 record after it is the same card and does not enter again. See
 `docs/chat-state.md` (Agent questions).
+
+### 2026-10-19: Voice yields as the person starts talking; the assistant knows where they are
+
+Talking over the agent used to change nothing until the person finished:
+the agent's voice ran on through their whole sentence. Now it goes quiet
+about two thirds of a second after they start, paused where it was. Their
+words then stop it for good and reach the agent; a cough, its own voice
+coming back through the speakers, or someone else in the room lets it
+carry on from where it paused, and the bars pick up its voice again. A
+"yeah" or "okay" said while it talks is listening, not a turn: it carries
+on, and nothing is sent. What the person says reaches an agent at work at
+its next step, as a typed message does.
+
+The assistant answered about the wrong pull request: its chat is kept in
+one project, and it looked at that project's window, not the one the
+person was in. Now it is told the project in front of the window the
+person is in, sees that window, and its tools look there, or at another
+project's window it names. As the person starts speaking, Work keeps what
+was on their screen, since it often changes by the time they finish: the
+turn describes the screen as it was then, and the agent can load a
+picture of it when it needs one. Work pictures its own window, or the
+whole screen when the person has already allowed Work to record it. See
+ADR 0265.

@@ -453,3 +453,110 @@ describe("a sign-in that can still refresh (ADR 0228)", () => {
     }
   });
 });
+
+describe("the assistant sees where the person is (ADR 0265)", () => {
+  const assistantOf = () => {
+    const asked: string[] = [];
+    const registry = registryWith(claudeAgent, {
+      workspaceBridge: {
+        overview: async (projectId: string) => {
+          asked.push(projectId);
+          return {
+            tabs: [
+              {
+                key: `browser:${projectId}`,
+                kind: "browser",
+                active: true,
+                title: `${projectId} pull request`,
+              },
+            ],
+          };
+        },
+        glanceBrowser: async () => ({}),
+        backgroundCommands: () => [],
+      },
+      projectName: async (projectId: string) => projectId,
+      projectRootPath: (projectId: string) => `/work/${projectId}`,
+    });
+    const { harness } = hostOf(registry, "work-assistant:claude");
+    const context = async () =>
+      (
+        (await harness.context?.({
+          projectId: "opencx",
+          sessionId: "assistant",
+          turnId: "turn",
+        })) ?? []
+      )
+        .map((fragment) => fragment.text)
+        .join("\n");
+    return { registry, asked, context };
+  };
+
+  it("names the project in front of the person's window, and shows that window", async () => {
+    const { registry, asked, context } = assistantOf();
+    registry.setPersonPlace(() => "catamorphic");
+    const text = await context();
+    expect(text).toContain("Project: catamorphic\nFolder: /work/catamorphic");
+    expect(text).toContain("This chat is kept in another project");
+    expect(text).toContain("catamorphic pull request");
+    expect(text).not.toContain("opencx pull request");
+    expect(asked).toEqual(["catamorphic"]);
+  });
+
+  it("by voice, sees where they were and what was on screen as they started speaking", async () => {
+    const { registry, asked, context } = assistantOf();
+    registry.setPersonPlace(() => "website");
+    registry.setVoice({
+      talking: () => true,
+      sight: () => ({
+        at: Date.now() - 3_000,
+        said: "why is this PR not merged",
+        projectId: "catamorphic",
+        app: Promise.resolve(null),
+        screen: Promise.resolve(
+          'The person is looking at: web page "Pull request #267"',
+        ),
+        picture: Promise.resolve(null),
+      }),
+      stopListening: () => false,
+    });
+    const text = await context();
+    expect(text).toContain("As the person started saying their latest message");
+    expect(text).toContain("Project: catamorphic");
+    expect(text).toContain("Pull request #267");
+    expect(text).not.toContain("website");
+    expect(asked).toEqual([]);
+  });
+
+  it("is the only agent whose screen follows the person", async () => {
+    const registry = registryWith(claudeAgent, {
+      workspaceBridge: {
+        overview: async (projectId: string) => ({
+          tabs: [
+            {
+              key: "browser:x",
+              kind: "browser",
+              active: true,
+              title: projectId,
+            },
+          ],
+        }),
+        glanceBrowser: async () => ({}),
+        backgroundCommands: () => [],
+      },
+    });
+    registry.setPersonPlace(() => "catamorphic");
+    const { harness } = hostOf(registry, "claude");
+    const text = (
+      (await harness.context?.({
+        projectId: "opencx",
+        sessionId: "chat",
+        turnId: "turn",
+      })) ?? []
+    )
+      .map((fragment) => fragment.text)
+      .join("\n");
+    expect(text).toContain('"opencx"');
+    expect(text).not.toContain("Project:");
+  });
+});

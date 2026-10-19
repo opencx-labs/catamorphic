@@ -66,13 +66,16 @@ import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import {
   ASSISTANT_INSTRUCTIONS,
+  personPlaceContext,
   VOICE_CONTEXT,
   voicePlaceContext,
 } from "../voice/guidance.js";
 import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
+  ASSISTANT_EAGER,
   assistantDelegation,
   assistantHostTools,
+  inThePersonsWindow,
   withoutReplacedTools,
 } from "./assistant-agent.js";
 import { buildAiSdkAdapter } from "./coding-agent.js";
@@ -90,6 +93,7 @@ import { signInDebugLog } from "./sign-in-diagnostics.js";
 import {
   type ProjectSessionContext,
   workspaceInstructions,
+  workspaceScreen,
   workspaceTurnContext,
 } from "./workspace-context-agent.js";
 import {
@@ -167,6 +171,8 @@ export interface DesktopAgentRegistryDeps {
    * synchronously, because the registry contract is synchronous.
    */
   projectRootPath?: (projectId: string) => string | undefined;
+  /** A project's name, for telling the assistant where the person is. */
+  projectName?: (projectId: string) => Promise<string | undefined>;
   /**
    * Resolve a project secret's value (ADR 0033) for project agents with
    * `credentials.source: "secret"` — core's SecretsService under the
@@ -286,6 +292,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /** The assistant's tools over the person's chats (ADR 0216). */
   private assistantTools: ExtraTool[] = [];
   private voice: VoiceControl | null = null;
+  /** Where the person is, by profile (ADR 0265); late-bound. */
+  private personProject: (profileId: string) => string | null = () => null;
   private readonly harnessComponents: HarnessComponentStore;
   private readonly mcp: DesktopAgentMcp;
   /**
@@ -1017,7 +1025,18 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const workspace = this.workspaceTools(config, "native") ?? [];
     const served = {
       hostTools: assistant
-        ? assistantHostTools(workspace, this.assistantTools)
+        ? assistantHostTools(
+            inThePersonsWindow(
+              [
+                ...workspace,
+                ...(this.workspaceTools(config, "native", true) ?? []).filter(
+                  (tool) => !tool.eager && ASSISTANT_EAGER.has(tool.name),
+                ),
+              ],
+              this.personsWindows(profileId),
+            ),
+            this.assistantTools,
+          )
         : workspace,
       toolPolicies: () => live().policies,
       toolAnnotations: () => live().annotations,
@@ -1405,42 +1424,118 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       instructions: assistant
         ? `${instructions}\n\n${ASSISTANT_INSTRUCTIONS}`
         : instructions,
-      context: async (turn: AgentTurnContext) => [
-        ...(turn.sessionId && this.voice?.talking(turn.sessionId)
-          ? [VOICE_CONTEXT, ...voicePlace(this.voice.where(turn.sessionId))]
-          : []),
-        ...(turn.sessionId
-          ? await workspaceTurnContext({
-              bridge,
-              projectId: turn.projectId,
-              sessionId: turn.sessionId,
-              coordination: {
-                strategy,
-                peers: (projectId, sessionId) =>
-                  this.deps.sessionPeers?.(projectId, sessionId) ??
-                  Promise.resolve([]),
-                checkoutNotice: (projectId, sessionId) =>
-                  this.deps.checkoutNotice?.(projectId, sessionId) ??
-                  Promise.resolve(null),
-              },
-              desktopFacts: (projectId) => {
-                const settings = this.settingsContext(projectId, config);
-                return {
-                  ...("personalFilesDirectory" in settings &&
-                  settings.personalFilesDirectory
-                    ? {
-                        personalFilesDirectory: settings.personalFilesDirectory,
-                      }
-                    : {}),
-                  ...("errors" in settings && settings.errors?.length
-                    ? { settingsErrors: settings.errors }
-                    : {}),
-                };
-              },
-            })
-          : []),
-      ],
+      context: async (turn: AgentTurnContext) => {
+        // Talking by voice, the turn sees what the person saw as they
+        // started saying their latest message; the assistant sees the
+        // window they are in, wherever its own chat lives (ADR 0265).
+        const talking =
+          !!turn.sessionId && !!this.voice?.talking(turn.sessionId);
+        const sight =
+          talking && turn.sessionId ? this.voice?.sight(turn.sessionId) : null;
+        const place = assistant
+          ? sight
+            ? sight.projectId
+            : this.personProject(profileId)
+          : null;
+        return [
+          ...(talking
+            ? [
+                VOICE_CONTEXT,
+                ...voicePlace(sight ? await sight.app.catch(() => null) : null),
+              ]
+            : []),
+          ...(place
+            ? await this.personPlace(place, turn.projectId, Boolean(sight))
+            : []),
+          ...(turn.sessionId
+            ? await workspaceTurnContext({
+                bridge,
+                projectId: turn.projectId,
+                ...(place ? { personProjectId: place } : {}),
+                ...(sight ? { spoken: sight } : {}),
+                sessionId: turn.sessionId,
+                coordination: {
+                  strategy,
+                  // Its chat's project is no place of the person's, and it
+                  // reaches every project's chats with its own tools.
+                  peers: (projectId, sessionId) =>
+                    assistant
+                      ? Promise.resolve([])
+                      : (this.deps.sessionPeers?.(projectId, sessionId) ??
+                        Promise.resolve([])),
+                  checkoutNotice: (projectId, sessionId) =>
+                    this.deps.checkoutNotice?.(projectId, sessionId) ??
+                    Promise.resolve(null),
+                },
+                desktopFacts: (projectId) => {
+                  const settings = this.settingsContext(projectId, config);
+                  return {
+                    ...("personalFilesDirectory" in settings &&
+                    settings.personalFilesDirectory
+                      ? {
+                          personalFilesDirectory:
+                            settings.personalFilesDirectory,
+                        }
+                      : {}),
+                    ...("errors" in settings && settings.errors?.length
+                      ? { settingsErrors: settings.errors }
+                      : {}),
+                  };
+                },
+              })
+            : []),
+        ];
+      },
     };
+  }
+
+  /**
+   * The windows the assistant looks at (ADR 0265): the one the person is
+   * in, or one of the profile's projects by name.
+   */
+  private personsWindows(profileId: string) {
+    return {
+      personProject: () => this.personProject(profileId),
+      projectNamed: async (name: string) => {
+        const wanted = name.trim().toLowerCase();
+        for (const projectId of this.deps.profiles.get(profileId)?.projectIds ??
+          []) {
+          const found = await this.deps
+            .projectName?.(projectId)
+            .catch(() => undefined);
+          if (projectId === name || found?.trim().toLowerCase() === wanted)
+            return projectId;
+        }
+        return null;
+      },
+    };
+  }
+
+  /** The project the person is in, named for the assistant (ADR 0265). */
+  private async personPlace(projectId: string, home: string, spoken: boolean) {
+    const name = await this.deps
+      .projectName?.(projectId)
+      .catch(() => undefined);
+    return personPlaceContext({
+      name: name ?? null,
+      folder: this.deps.projectRootPath?.(projectId) ?? null,
+      home: projectId === home,
+      spoken,
+    });
+  }
+
+  /**
+   * Work's screen for a chat as its turns describe it, now: voice keeps
+   * it as the person starts speaking (ADR 0265).
+   */
+  screenNow(projectId: string, sessionId?: string): Promise<string | null> {
+    const bridge = this.deps.workspaceBridge;
+    if (!bridge) return Promise.resolve(null);
+    return workspaceScreen({
+      bridge,
+      projectId,
+      ...(sessionId ? { sessionId } : {}),
+    });
   }
 
   /**
@@ -1617,6 +1712,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.workspaceToolkit?.setVoiceControl(voice);
   }
 
+  /**
+   * Late-bound: where the person is (ADR 0265), the project in front of
+   * the window they were last in. The assistant's chat lives in one
+   * project; what it sees on screen, and the tools that look there,
+   * follow the person.
+   */
+  setPersonPlace(personProject: (profileId: string) => string | null): void {
+    this.personProject = personProject;
+  }
+
   /** Live policy/configuration, shared by direct and discovered projections. */
   capabilitySurface(id: string) {
     const found = this.configFor(id);
@@ -1628,7 +1733,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       revision: JSON.stringify([id, config.sandboxing, profileId, "native"]),
       // The assistant discovers neither Work's project-only chat tools nor
       // subsessions: its own session tools take their place (ADR 0216).
-      tools: parseAssistantAgentId(id) ? withoutReplacedTools(tools) : tools,
+      // Its window tools act where the person is (ADR 0265).
+      tools: parseAssistantAgentId(id)
+        ? inThePersonsWindow(
+            withoutReplacedTools(tools),
+            this.personsWindows(profileId),
+          )
+        : tools,
       readOnly: config.sandboxing === "contained",
       profileId,
       mcp: this.mcp.live({ config, profileId }),

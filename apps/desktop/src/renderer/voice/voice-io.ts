@@ -199,27 +199,46 @@ function isPortMessage(value: unknown): value is VoicePortMessage {
  * 24 kHz), which Chromium resamples once for the device. Never through a
  * MediaStream: Chromium re-times MediaStream playback against the output
  * clock by resampling it between 0.9x and 1.1x, so a reply's pitch drifted
- * as it played.
+ * as it played. Paused while the person talks over the agent (ADR 0265),
+ * the context's clock stops, so everything scheduled carries on from
+ * where it was.
  */
 class Speaker {
   private context: AudioContext | null = null;
-  private readonly sources = new Set<AudioBufferSourceNode>();
+  /** Each clip scheduled, with when it starts and how it sounds. */
+  private readonly sources = new Map<
+    AudioBufferSourceNode,
+    { at: number; levels: number[] }
+  >();
   private playhead = 0;
   private lastSeq = 0;
+  private paused = false;
 
   constructor(private readonly port: MessagePort) {}
 
   receive(
     message: Exclude<VoiceAudioDown, { type: "close-microphone" }>,
   ): void {
-    if (message.type === "play") this.play(message);
-    else this.flush(message.seq);
+    switch (message.type) {
+      case "play":
+        this.play(message);
+        return;
+      case "flush":
+        this.flush(message.seq);
+        return;
+      case "pause":
+        this.pause();
+        return;
+      case "resume":
+        this.resume();
+        return;
+    }
   }
 
   private play(message: Extract<VoiceAudioDown, { type: "play" }>): void {
     this.context ??= new AudioContext({ sampleRate: message.sampleRate });
     const context = this.context;
-    void context.resume();
+    if (!this.paused) void context.resume();
     const buffer = context.createBuffer(
       1,
       message.samples.length,
@@ -231,21 +250,47 @@ class Speaker {
     source.connect(context.destination);
     const at = Math.max(context.currentTime + 0.03, this.playhead);
     source.start(at);
-    post(this.port, {
-      type: "levels",
-      at:
-        Date.now() + (at - context.currentTime + context.outputLatency) * 1000,
-      frameMs: LEVEL_FRAME_MS,
-      levels: speechLevels(message.samples, message.sampleRate),
-    });
+    const levels = speechLevels(message.samples, message.sampleRate);
+    if (!this.paused) this.showLevels(context, at, levels);
     this.playhead = at + buffer.duration;
     this.lastSeq = message.seq;
-    this.sources.add(source);
+    this.sources.set(source, { at, levels });
     source.onended = () => {
       this.sources.delete(source);
       if (this.sources.size === 0)
         post(this.port, { type: "drained", seq: this.lastSeq });
     };
+  }
+
+  /** How a clip sounds, against the time it is heard. */
+  private showLevels(context: AudioContext, at: number, levels: number[]) {
+    post(this.port, {
+      type: "levels",
+      at:
+        Date.now() + (at - context.currentTime + context.outputLatency) * 1000,
+      frameMs: LEVEL_FRAME_MS,
+      levels,
+    });
+  }
+
+  private pause(): void {
+    if (this.paused) return;
+    this.paused = true;
+    void this.context?.suspend();
+  }
+
+  private resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    const context = this.context;
+    if (!context) return;
+    void context.resume().then(() => {
+      // Paused again meanwhile: shown once it carries on.
+      if (this.paused || this.context !== context) return;
+      // The pause moved every clip later: the animation follows them anew.
+      for (const { at, levels } of this.sources.values())
+        this.showLevels(context, at, levels);
+    });
   }
 
   /** Voice is over: nothing more plays, and the output goes. */
@@ -256,12 +301,13 @@ class Speaker {
   }
 
   private flush(seq: number): void {
-    for (const source of this.sources) {
+    for (const source of this.sources.keys()) {
       source.onended = null;
       source.stop();
     }
     this.sources.clear();
     this.playhead = 0;
     this.lastSeq = seq;
+    this.paused = false;
   }
 }

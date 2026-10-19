@@ -33,14 +33,16 @@ function harness(initial: VoiceChat, heardThrough?: string) {
   let current = initial;
   const spoken: string[] = [];
   const sent: string[] = [];
+  const dispatched: string[] = [];
   const calls: string[] = [];
   const busy: boolean[] = [];
   const heard: string[] = [];
   const conversation = new VoiceConversation(ref, {
     sessions: {
       get: async () => current,
-      send: async (_ref, text) => {
+      send: async (_ref, { text, dispatch }) => {
         sent.push(text);
+        dispatched.push(dispatch);
       },
       interrupt: async () => {
         calls.push("interrupt");
@@ -60,6 +62,7 @@ function harness(initial: VoiceChat, heardThrough?: string) {
     conversation,
     spoken,
     sent,
+    dispatched,
     calls,
     busy,
     heard,
@@ -183,6 +186,16 @@ describe("VoiceConversation", () => {
     await voice.conversation.heard("start a session to fix the build");
     expect(voice.sent).toEqual(["start a session to fix the build"]);
     expect(voice.calls).toEqual(["cue"]);
+    voice.conversation.stop();
+  });
+
+  it("reaches an agent at work at its next step, not after its turn", async () => {
+    vi.useFakeTimers();
+    const voice = harness(detail([], { busy: true }));
+    await voice.conversation.start();
+    await voice.conversation.heard("what PR do you mean");
+    expect(voice.sent).toEqual(["what PR do you mean"]);
+    expect(voice.dispatched).toEqual(["steer"]);
     voice.conversation.stop();
   });
 

@@ -80,6 +80,19 @@ export function isEcho(transcript: string, recentlySpoken: string): boolean {
   return matched / heard.length >= 0.8;
 }
 
+/**
+ * Saying "yeah" or "okay" while someone talks says go on (ADR 0265): a
+ * listener's acknowledgement, not a turn of their own. Answers that carry
+ * a decision ("yes", "no") are not among them.
+ */
+const ACKNOWLEDGEMENTS =
+  /^((yeah|yep|yup|okay|ok|right|sure|alright|all right|cool|nice|great|true|exactly|totally|uh huh|mhm|mm hmm|i see|got it|makes sense|fair enough)\s?){1,3}$/;
+
+/** A listener's acknowledgement alone, which says go on. */
+export function isAcknowledgement(transcript: string): boolean {
+  return ACKNOWLEDGEMENTS.test(words(transcript).join(" "));
+}
+
 /** A short spoken command to stop the agent, not a message for it. */
 export function isStopCommand(transcript: string): boolean {
   const said = words(transcript).join(" ");
