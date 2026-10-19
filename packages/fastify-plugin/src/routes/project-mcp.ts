@@ -207,7 +207,13 @@ export function registerProjectMcpRoutes(
           if (gatewayTool) {
             try {
               return toolValue(
-                await gatewayTool.execute(args, { projectId, sessionId }),
+                await gatewayTool.execute(args, {
+                  projectId,
+                  sessionId,
+                  // An MCP call hears nothing of its turn: it waits while
+                  // asked (ADR 0264).
+                  stopWaiting: abort.signal,
+                }),
               );
             } catch (error) {
               return toolError(

@@ -88,6 +88,9 @@ afterEach(() => {
   ipcMain.removeAllListeners();
 });
 
+/** Nothing reaches the agent while the driver acts. */
+const waiting = new AbortController().signal;
+
 describe("browser driver and page dialogs", () => {
   it("clears pointers without waiting on a page that waits on its dialog", async () => {
     const guest = new Guest();
@@ -110,7 +113,10 @@ describe("browser driver and page dialogs", () => {
       () => {},
       async () => {},
     );
-    const acting = driver.act({ type: "fill", uid: "field", text: "secret" });
+    const acting = driver.act(
+      { type: "fill", uid: "field", text: "secret" },
+      waiting,
+    );
     // Focusing the field (the driver's "prepare") made the page alert.
     await flush();
     expect(guest.waiting).toHaveLength(1);
@@ -146,22 +152,27 @@ describe("browser driver and page dialogs", () => {
       reload: false,
     });
     await expect(
-      driver.act({ type: "press", key: "Enter" }),
+      driver.act({ type: "press", key: "Enter" }, waiting),
     ).resolves.toMatchObject({ dialog: { kind: "beforeunload" } });
     expect(pageDialogs()?.current(guest.id)?.kind).toBe("beforeunload");
     // Shown now: the agent's next press answers it as the person would.
-    await expect(driver.act({ type: "press", key: "Escape" })).resolves.toEqual(
-      { ok: true, answered: "beforeunload", accepted: false },
-    );
+    await expect(
+      driver.act({ type: "press", key: "Escape" }, waiting),
+    ).resolves.toEqual({ ok: true, answered: "beforeunload", accepted: false });
     expect(pageDialogs()?.has(guest.id)).toBe(false);
 
     // Going elsewhere does not cancel a dialog it never saw either.
     openDialog(guest.id);
     await expect(
-      driver.act({ type: "navigate", url: "https://example.com/next" }),
+      driver.act(
+        { type: "navigate", url: "https://example.com/next" },
+        waiting,
+      ),
     ).resolves.toMatchObject({ dialog: { kind: "alert" } });
     expect(pageDialogs()?.current(guest.id)?.kind).toBe("alert");
-    await expect(driver.act({ type: "press", key: "Enter" })).resolves.toEqual({
+    await expect(
+      driver.act({ type: "press", key: "Enter" }, waiting),
+    ).resolves.toEqual({
       ok: true,
       answered: "alert",
       accepted: true,
@@ -170,7 +181,7 @@ describe("browser driver and page dialogs", () => {
     // One dialog seen does not let it answer the next one unseen.
     openDialog(guest.id);
     await expect(
-      driver.act({ type: "fill", uid: "dialog", text: "x" }),
+      driver.act({ type: "fill", uid: "dialog", text: "x" }, waiting),
     ).resolves.toMatchObject({ dialog: { kind: "alert" } });
     expect(pageDialogs()?.has(guest.id)).toBe(true);
   });

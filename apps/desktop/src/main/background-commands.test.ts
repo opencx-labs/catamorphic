@@ -136,6 +136,9 @@ function setup() {
   return { fake, commands, snapshots, wakes };
 }
 
+/** Nothing reaches the agent while it reads. */
+const waiting = new AbortController().signal;
+
 const until = async (check: () => boolean, ms = 2_000) => {
   const deadline = Date.now() + ms;
   while (!check() && Date.now() < deadline)
@@ -209,14 +212,26 @@ describe("BackgroundCommands", () => {
     });
     expect(fake.killed).toEqual(["t1"]);
     // The agent still reads what it had not read yet, once.
-    expect(await commands.read({ sessionId: "chat", id: "t1" })).toEqual({
+    expect(
+      await commands.read({
+        sessionId: "chat",
+        id: "t1",
+        stopWaiting: waiting,
+      }),
+    ).toEqual({
       status: "finished",
       exitCode: 1,
       output: "error: missing module\n",
     });
-    expect((await commands.read({ sessionId: "chat", id: "t1" })).output).toBe(
-      "",
-    );
+    expect(
+      (
+        await commands.read({
+          sessionId: "chat",
+          id: "t1",
+          stopWaiting: waiting,
+        })
+      ).output,
+    ).toBe("");
     // Ending its terminal is not the person closing it.
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(wakes).toHaveLength(1);
@@ -239,10 +254,51 @@ describe("BackgroundCommands", () => {
       fake.finish("t1", 0);
     }, 100);
     expect(
-      await commands.read({ sessionId: "chat", id: "t1", waitMs: 5_000 }),
+      await commands.read({
+        sessionId: "chat",
+        id: "t1",
+        waitMs: 5_000,
+        stopWaiting: waiting,
+      }),
     ).toEqual({ status: "finished", exitCode: 0, output: "done\n" });
     expect(fake.killed).toEqual(["t1"]);
     expect(wakes).toEqual([]);
+    commands.dispose();
+  });
+
+  it("stops a blocking read the moment something reaches the agent (ADR 0264)", async () => {
+    const { fake, commands } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "bun run check",
+      description: "Run the merge gate",
+    });
+    await until(() => fake.written.length > 0);
+    await started;
+    const notified = new AbortController();
+    setTimeout(() => notified.abort(), 100);
+    const begun = Date.now();
+    expect(
+      await commands.read({
+        sessionId: "chat",
+        id: "t1",
+        waitMs: 600_000,
+        stopWaiting: notified.signal,
+      }),
+    ).toMatchObject({ status: "running", output: "" });
+    expect(Date.now() - begun).toBeLessThan(2_000);
+    // What it prints next is still the agent's to read.
+    fake.print("t1", "phase 1 passed\n");
+    expect(
+      (
+        await commands.read({
+          sessionId: "chat",
+          id: "t1",
+          stopWaiting: waiting,
+        })
+      ).output,
+    ).toBe("phase 1 passed\n");
     commands.dispose();
   });
 
@@ -259,12 +315,24 @@ describe("BackgroundCommands", () => {
     await started;
 
     fake.print("t1", "listening…\n");
-    expect((await commands.read({ sessionId: "chat", id: "t1" })).output).toBe(
-      "listening…\n",
-    );
-    expect((await commands.read({ sessionId: "chat", id: "t1" })).output).toBe(
-      "",
-    );
+    expect(
+      (
+        await commands.read({
+          sessionId: "chat",
+          id: "t1",
+          stopWaiting: waiting,
+        })
+      ).output,
+    ).toBe("listening…\n");
+    expect(
+      (
+        await commands.read({
+          sessionId: "chat",
+          id: "t1",
+          stopWaiting: waiting,
+        })
+      ).output,
+    ).toBe("");
 
     fake.print("t1", "ready on port 3000\n");
     await until(() => wakes.length > 0);
@@ -273,20 +341,27 @@ describe("BackgroundCommands", () => {
     expect(wakes[0]?.detail).toContain("still running");
 
     expect(
-      (await commands.read({ sessionId: "chat", id: "t1" })).output,
+      (
+        await commands.read({
+          sessionId: "chat",
+          id: "t1",
+          stopWaiting: waiting,
+        })
+      ).output,
     ).toContain("ready on port 3000");
     // A blocking read returns as soon as something new arrives.
     setTimeout(() => fake.print("t1", "GET / 200\n"), 100);
     const waited = await commands.read({
       sessionId: "chat",
       id: "t1",
+      stopWaiting: waiting,
       waitMs: 5_000,
     });
     expect(waited.output).toContain("GET / 200");
 
     // Other chats cannot reach it.
     await expect(
-      commands.read({ sessionId: "other", id: "t1" }),
+      commands.read({ sessionId: "other", id: "t1", stopWaiting: waiting }),
     ).rejects.toThrow("No background command");
     commands.dispose();
   }, 10_000);
@@ -336,7 +411,13 @@ describe("BackgroundCommands", () => {
     });
     expect(fake.written.at(-1)?.data).toBe("\u0003");
     expect(fake.killed).toEqual(["t1"]);
-    expect(await commands.read({ sessionId: "chat", id: "t1" })).toMatchObject({
+    expect(
+      await commands.read({
+        sessionId: "chat",
+        id: "t1",
+        stopWaiting: waiting,
+      }),
+    ).toMatchObject({
       status: "stopped",
       output: "",
     });
@@ -446,6 +527,7 @@ describe("BackgroundCommands", () => {
     const read = await commands.read({
       sessionId: "chat",
       id: "t1",
+      stopWaiting: waiting,
       waitMs: 5_000,
     });
     expect(read.output).toContain("tick 1");
@@ -470,6 +552,7 @@ describe("BackgroundCommands", () => {
     const waited = await commands.read({
       sessionId: "chat",
       id: "t1",
+      stopWaiting: waiting,
       waitMs: 5_000,
       waitFor: "ready on port \\d+",
     });
@@ -479,7 +562,12 @@ describe("BackgroundCommands", () => {
     });
     expect(waited.output).toContain("compiling…");
     await expect(
-      commands.read({ sessionId: "chat", id: "t1", waitFor: "(" }),
+      commands.read({
+        sessionId: "chat",
+        id: "t1",
+        waitFor: "(",
+        stopWaiting: waiting,
+      }),
     ).rejects.toThrow("wait_for is not a valid regular expression");
     commands.dispose();
   });

@@ -136,7 +136,11 @@ export interface SessionCoordinationBridge {
   waitForSubsessions(
     projectId: string,
     sessionId: string,
-    input: { sessionIds?: string[]; timeoutMs?: number },
+    input: {
+      sessionIds?: string[];
+      timeoutMs?: number;
+      stopWaiting: AbortSignal;
+    },
   ): Promise<unknown[]>;
   interruptSubsession(
     projectId: string,
@@ -465,6 +469,7 @@ export function buildWorkspaceToolkit(
               ? { sessionIds: input.session_ids as string[] }
               : {}),
             timeoutMs: Number(input.timeout_ms),
+            stopWaiting: ctx.stopWaiting,
           },
         );
         return children.length > 0
@@ -951,6 +956,7 @@ export function buildWorkspaceToolkit(
           action.type === "upload" && ctx.workingDirectory
             ? { ...action, workingDirectory: ctx.workingDirectory }
             : action,
+          ctx.stopWaiting,
         );
       },
     },
@@ -1014,6 +1020,7 @@ export function buildWorkspaceToolkit(
         bridge.readBackgroundCommand({
           sessionId: ctx.sessionId ?? "",
           id: String(input.id),
+          stopWaiting: ctx.stopWaiting,
           ...(typeof input.wait_seconds === "number"
             ? { waitMs: input.wait_seconds * 1000 }
             : {}),

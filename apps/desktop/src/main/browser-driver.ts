@@ -791,6 +791,7 @@ export class BrowserDriver {
       BrowserAction,
       { type: "console" | "network" | "downloads" }
     >,
+    stopWaiting: AbortSignal,
   ): Promise<unknown> {
     if (this.guest.isDestroyed())
       return Promise.reject(new Error("Browser tab was closed."));
@@ -808,18 +809,19 @@ export class BrowserDriver {
           return Promise.reject(
             new Error("timeoutMs must be between 0 and 600000."),
           );
-        return downloadLogOf(this.guest).take(timeout);
+        return downloadLogOf(this.guest).take(timeout, stopWaiting);
       }
     }
   }
 
-  act(action: BrowserAction): Promise<unknown> {
+  /** `stopWaiting` ends a wait (downloads, wait_for) early (ADR 0264). */
+  act(action: BrowserAction, stopWaiting: AbortSignal): Promise<unknown> {
     if (
       action.type === "console" ||
       action.type === "network" ||
       action.type === "downloads"
     )
-      return this.inspect(action);
+      return this.inspect(action, stopWaiting);
     // A page waiting on its dialog takes keys and text there, not in the
     // page; going somewhere else is the one other thing it allows.
     const waiting = this.openDialog();
@@ -836,7 +838,9 @@ export class BrowserDriver {
       // address bar does; a page holding on with beforeunload asks again.
       if (open) pageDialogs()?.cancel(this.guest.id);
       this.watch();
-      return this.untilDialog((live) => this.perform(action, live));
+      return this.untilDialog((live) =>
+        this.perform(action, live, stopWaiting),
+      );
     });
   }
 
@@ -847,6 +851,7 @@ export class BrowserDriver {
     >,
     /** Throws once the page opened a dialog and the action was given up. */
     live: () => void,
+    stopWaiting: AbortSignal,
   ): Promise<unknown> {
     try {
       switch (action.type) {
@@ -968,7 +973,7 @@ export class BrowserDriver {
               .parse(await this.evaluate("read"));
             if (page.text.includes(action.text)) return { found: true };
             await delay(Math.min(100, Math.max(0, deadline - Date.now())));
-          } while (Date.now() < deadline);
+          } while (Date.now() < deadline && !stopWaiting.aborted);
           return { found: false };
         }
       }

@@ -191,6 +191,8 @@ export interface TurnEngineHost {
     turn: Turn;
     name: string;
     input: JsonValue;
+    /** Fires when the agent should stop waiting (ADR 0264). */
+    stopWaiting: AbortSignal;
   }): Promise<HostToolResult>;
   finalize(input: {
     identity: Identity;
@@ -259,6 +261,12 @@ interface LocalTurn {
   handingBack: boolean;
   /** Its attempt ended and it finalizes: it settles here, never handed back. */
   finalizing: boolean;
+  /**
+   * Host calls in flight stop waiting when this fires (ADR 0264): the
+   * harness was handed something it reads only once they return, or told
+   * to stop. Replaced as it fires, for the calls after.
+   */
+  waits: AbortController;
   /** Host call results sent and not acknowledged yet, by frame id: sent again. */
   results: Map<string, RunnerCommandFrame>;
   resultsSentAt: number;
@@ -292,6 +300,10 @@ function runnerWrite(
  * already, so they are not kept twice.
  */
 const APPLIED_APPEND: HostCall = { kind: "native_state.append", entries: [] };
+
+/** Commands that leave the agent something to read or stop its step. */
+const STOPS_WAITING: ReadonlySet<RunnerCommandFrame["command"]["kind"]> =
+  new Set(["steer", "interrupt", "stop"]);
 
 /** A restart for messages the stopped attempt read after all: it goes on. */
 const STEER_RESTART_CONTINUE =
@@ -469,6 +481,7 @@ export class TurnEngine {
       ...(refusal ? { refusal } : {}),
       abort: new AbortController(),
       wake: () => wake(),
+      waits: new AbortController(),
       handingBack: false,
       finalizing: false,
       results: new Map(),
@@ -1662,6 +1675,13 @@ export class TurnEngine {
         await queue.markCommands({ ids: moot, status: "dropped" });
       if (frames.length === 0) return;
       await channel?.send(frames);
+      // A steer is read at the harness's next step, which a waiting host
+      // tool holds back, and a stop ends the step: either way, the agent's
+      // waits end now (ADR 0264).
+      if (frames.some((frame) => STOPS_WAITING.has(frame.command.kind))) {
+        local.waits.abort();
+        local.waits = new AbortController();
+      }
       await queue.markCommands({
         ids: commands
           .filter(
@@ -2557,6 +2577,10 @@ export class TurnEngine {
             turn: ctx.turn,
             name: call.name,
             input: call.input,
+            stopWaiting: AbortSignal.any([
+              local.abort.signal,
+              local.waits.signal,
+            ]),
           });
           result = answer as unknown as JsonValue;
         }

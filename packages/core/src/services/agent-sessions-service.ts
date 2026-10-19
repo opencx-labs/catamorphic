@@ -88,6 +88,7 @@ import {
   type SandboxModelGateway,
   type SandboxProvider,
   type SignInHarness,
+  STOPPED_WAITING_NOTE,
   serverKeyOf,
   signInCapability,
   signInHomePath,
@@ -95,6 +96,7 @@ import {
   stagePluginDocs,
   type ToolPermission,
   type TurnContextFragment,
+  waitUntil,
   withMarkerCount,
 } from "@catamorphic/sandbox";
 import {
@@ -4930,6 +4932,7 @@ export class AgentSessionsService {
     turn: Turn;
     name: string;
     input: JsonValue;
+    stopWaiting: AbortSignal;
   }): Promise<HostToolResult> {
     const agent = await this.resolveAgent(
       input.session.agent_id,
@@ -4958,8 +4961,19 @@ export class AgentSessionsService {
         tenantId: input.identity.tenantId,
         externalUserId: input.identity.externalUserId,
       },
+      stopWaiting: input.stopWaiting,
     });
-    return hostToolResult(extraToolResult(result));
+    const answer = hostToolResult(extraToolResult(result));
+    // Said once, for every tool: why a wait came back early (ADR 0264).
+    return input.stopWaiting.aborted
+      ? {
+          ...answer,
+          content: [
+            ...answer.content,
+            { type: "text", text: STOPPED_WAITING_NOTE },
+          ],
+        }
+      : answer;
   }
 
   private async reattachRunner(input: {
@@ -9038,18 +9052,21 @@ export class AgentSessionsService {
   }
 
   /**
-   * Wait until one of the selected children settles, or the timeout. With
-   * no selection, the children running now: one that settled earlier is no
-   * news. Each settled result also reaches the parent as a message.
+   * Wait until one of the selected children settles, the timeout, or
+   * something reaches the waiting agent (ADR 0264). With no selection, the
+   * children running now: one that settled earlier is no news. Each settled
+   * result also reaches the parent as a message, which ends the wait too.
    */
   async waitForSubsessions(
     identity: Identity,
     projectId: string,
     sourceSessionId: string,
-    input: { sessionIds?: string[]; timeoutMs?: number } = {},
+    input: {
+      sessionIds?: string[];
+      timeoutMs?: number;
+      stopWaiting: AbortSignal;
+    },
   ): Promise<AgentSubsession[]> {
-    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000);
-    const deadline = Date.now() + timeoutMs;
     const children = await this.listSubsessions(
       identity,
       projectId,
@@ -9064,16 +9081,20 @@ export class AgentSessionsService {
       ).map((child) => child.session.id),
     );
     let selected = children.filter((child) => watched.has(child.session.id));
-    while (
-      selected.length > 0 &&
-      selected.every((child) => child.status === "running") &&
-      Date.now() < deadline
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      selected = (
-        await this.listSubsessions(identity, projectId, sourceSessionId)
-      ).filter((child) => watched.has(child.session.id));
-    }
+    const done = () =>
+      selected.length === 0 ||
+      selected.some((child) => child.status !== "running");
+    if (done()) return selected;
+    await waitUntil({
+      ready: async () => {
+        selected = (
+          await this.listSubsessions(identity, projectId, sourceSessionId)
+        ).filter((child) => watched.has(child.session.id));
+        return done();
+      },
+      timeoutMs: Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000),
+      stopWaiting: input.stopWaiting,
+    });
     return selected;
   }
 

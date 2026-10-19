@@ -2,6 +2,7 @@ import type {
   NotifiedTask,
   TaskNotificationStatus,
 } from "@catamorphic/agent-protocol";
+import { waitUntil } from "@catamorphic/sandbox";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
 import type { AgentTerminals } from "./terminal.js";
 
@@ -218,13 +219,15 @@ export class BackgroundCommands {
    * New output since the agent's last read. With `waitMs`, blocks until the
    * command finishes or prints something new, whichever comes first; with
    * `waitFor` too, until it prints a line matching that pattern (the same
-   * contract as sandbox background commands, ADR 0174).
+   * contract as sandbox background commands, ADR 0174). Something reaching
+   * the agent ends any wait (`stopWaiting`, ADR 0264).
    */
   async read(input: {
     sessionId: string;
     id: string;
     waitMs?: number;
     waitFor?: string;
+    stopWaiting: AbortSignal;
   }): Promise<{
     status: BackgroundCommandView["status"];
     exitCode: number | null;
@@ -235,8 +238,6 @@ export class BackgroundCommands {
     const waitFor = input.waitFor
       ? outputPattern(input.waitFor, "wait_for")
       : undefined;
-    const deadline =
-      Date.now() + Math.min(Math.max(input.waitMs ?? 0, 0), READ_MAX_WAIT_MS);
     const { terminals } = this.deps;
     let scanned = tracked.readOffset;
     let matched: string | undefined;
@@ -258,10 +259,14 @@ export class BackgroundCommands {
     };
     tracked.reading++;
     try {
-      while (Date.now() < deadline && waiting()) {
-        await sleep(250);
-        this.observe(tracked, { wake: false });
-      }
+      await waitUntil({
+        ready: () => {
+          this.observe(tracked, { wake: false });
+          return !waiting();
+        },
+        timeoutMs: Math.min(Math.max(input.waitMs ?? 0, 0), READ_MAX_WAIT_MS),
+        stopWaiting: input.stopWaiting,
+      });
       // The agent is watching: an end it sees here needs no wake message.
       this.observe(tracked, { wake: false });
       return {

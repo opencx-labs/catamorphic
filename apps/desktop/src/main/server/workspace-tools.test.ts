@@ -18,6 +18,7 @@ import {
 const context: ExtraToolContext = {
   projectId: "project",
   sessionId: "session",
+  stopWaiting: new AbortController().signal,
 };
 
 describe("workspace coordination tools", () => {
@@ -120,7 +121,10 @@ describe("workspace coordination tools", () => {
     });
     await open?.execute(target, context);
     await open?.execute(target, { ...context, sessionId: "other" });
-    await open?.execute(target, { projectId: "project" });
+    await open?.execute(target, {
+      projectId: "project",
+      stopWaiting: context.stopWaiting,
+    });
     expect(asked).toEqual([
       { session: "session", voice: false },
       { session: "session", voice: true },
@@ -309,7 +313,17 @@ describe("workspace coordination tools", () => {
         },
       ],
       ["list", "project", "session"],
-      ["wait", "project", "session", { sessionIds: ["child"], timeoutMs: 25 }],
+      [
+        "wait",
+        "project",
+        "session",
+        {
+          sessionIds: ["child"],
+          timeoutMs: 25,
+          // The turn's own: what reaches the agent ends the wait (ADR 0264).
+          stopWaiting: context.stopWaiting,
+        },
+      ],
       ["interrupt", "project", "session", "child"],
       ["attention", "project", "session"],
     ]);

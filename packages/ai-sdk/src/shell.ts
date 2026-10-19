@@ -4,6 +4,7 @@ import {
   followProcess,
   type SandboxProcessProvider,
   type SandboxProvider,
+  STOPPED_WAITING_NOTE,
 } from "@catamorphic/sandbox";
 import { type Tool, tool } from "ai";
 import { z } from "zod";
@@ -237,6 +238,11 @@ export interface ShellToolContext {
    * folder or absolute: every command loads each that exists first.
    */
   envFiles?: readonly string[];
+  /**
+   * Fires when the agent should stop waiting (ADR 0264): a message was
+   * steered into its turn. Read at each call: it is replaced as it fires.
+   */
+  stopWaiting(): AbortSignal;
 }
 
 type BackgroundStatus = "running" | "finished" | "stopped";
@@ -358,7 +364,7 @@ export function shellTools(context: ShellToolContext): Record<string, Tool> {
       },
     }),
     read_background_output: tool({
-      description: `Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. Pass wait_seconds to block until it prints something new or finishes, when you have nothing else to do meanwhile. Add wait_for, a regular expression, to keep waiting until an output line matches (e.g. 'ready on|listening|error'); matched returns that line. Waits last at most ${budgetSeconds}s; wait again for work that takes longer.`,
+      description: `Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. Pass wait_seconds to block until it prints something new or finishes, when you have nothing else to do meanwhile. Add wait_for, a regular expression, to keep waiting until an output line matches (e.g. 'ready on|listening|error'); matched returns that line. Waits last at most ${budgetSeconds}s, and end early when a message reaches you; wait again for work that takes longer.`,
       inputSchema: z.object({
         id: z.string().describe("The id run_background_command returned"),
         wait_seconds: z
@@ -386,13 +392,18 @@ export function shellTools(context: ShellToolContext): Record<string, Tool> {
           timeoutMs: (wait_seconds ?? 0) * 1_000,
           until,
           outputLimit: SHELL_OUTPUT_LIMIT,
-          ...(abortSignal ? { signal: abortSignal } : {}),
+          signal: abortSignal
+            ? AbortSignal.any([abortSignal, context.stopWaiting()])
+            : context.stopWaiting(),
         });
         entry.cursor = followed.cursor;
         return {
           ...report(followed),
           ...(followed.matched !== undefined
             ? { matched: followed.matched }
+            : {}),
+          ...(followed.aborted && !abortSignal?.aborted
+            ? { note: STOPPED_WAITING_NOTE }
             : {}),
         };
       },
