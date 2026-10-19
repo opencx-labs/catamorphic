@@ -149,6 +149,15 @@ in the panel header. Answers render in history as the questions and what was
 picked or written, pills in place: from the resolved request, or a later
 answer message's `answer`. Agents close questions a reply settled with `close_questions`.
 
+A response shows the moment it is sent, as a sent message does:
+`useAgentChat` reads its request as answered with it until the session's own
+request moves on, and a refused one asks again. The answer takes the
+question's place in the conversation in the same frame, and enters once
+(the answer message that may follow is the same card). The desktop keeps the
+answered panel as it was, inert at once, while it closes
+(`components/closing-collapsible.tsx`), starting two frames on so the
+frame that swapped the answer in never shows its close as a jump.
+
 Attachment preparation shows on the composer's attach button. Never add a row
 above the composer for transient state: it moves the dock and any open question.
 

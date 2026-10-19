@@ -76,6 +76,7 @@ import {
   isAttachedChipId,
   workChips,
 } from "../lib/chips.js";
+import { useClosingItems } from "../lib/closing-items.js";
 import {
   filesFrom,
   isComposerTransfer,
@@ -114,12 +115,14 @@ import { ActivityText } from "./catamorphic/activity-text.js";
 import { ApprovalCard } from "./catamorphic/approval-card.js";
 import { stepToolName } from "./catamorphic/chat-steps.js";
 import {
+  answerSentHere,
   ChatTimeline,
   type ChatTimelineProps,
 } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatFolder } from "./chat-folder.js";
 import { ChipRail, type ChipRailHandle } from "./chip-rail.js";
+import { ClosingCollapsible } from "./closing-collapsible.js";
 import { ContextPill } from "./context-pill";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
@@ -784,6 +787,7 @@ function ChatDockContent({
   const questionRequests = chat.requests.filter(
     (request) => request.kind === "question" && request.questions,
   );
+  const shownQuestions = useClosingItems(questionRequests);
   const otherRequests = chat.requests.filter(
     (request) => request.kind !== "question",
   );
@@ -3279,28 +3283,33 @@ function ChatDockContent({
                   onOpenUrl={(url) => onLinkClick?.(url, "tab")}
                 />
               ))}
-              {questionRequests.map(
-                (request) =>
+              {/* Answered (or dismissed), a question reads as answered at
+                  once: its panel closes as it was while the answer takes
+                  its place in the conversation, and one whose answer is
+                  refused opens again. */}
+              {shownQuestions.map(
+                ({ item: request, present }) =>
                   request.questions && (
-                    <AgentQuestionPanel
-                      key={request.id}
-                      questions={request.questions}
-                      blocking={request.blocking}
-                      onSubmit={(response) => respond(request.id, response)}
-                      onAnswerFiles={addFilesTo}
-                      onDismiss={() =>
-                        respond(request.id, {
-                          kind: "question",
-                          answers: [QUESTIONS_DISMISSED_MESSAGE],
-                        })
-                      }
-                      // A file still attaching to an answer goes with it.
-                      disabled={
-                        !expanded ||
-                        responding.has(request.id) ||
-                        pendingTransfers > 0
-                      }
-                    />
+                    <ClosingCollapsible key={request.id} open={present}>
+                      <AgentQuestionPanel
+                        questions={request.questions}
+                        blocking={request.blocking}
+                        onSubmit={(response) => {
+                          answerSentHere(request.id);
+                          respond(request.id, response);
+                        }}
+                        onAnswerFiles={addFilesTo}
+                        onDismiss={() =>
+                          respond(request.id, {
+                            kind: "question",
+                            answers: [QUESTIONS_DISMISSED_MESSAGE],
+                          })
+                        }
+                        // A file still attaching to an answer goes with it.
+                        // A closing panel is inert, not dimmed.
+                        disabled={!expanded || pendingTransfers > 0}
+                      />
+                    </ClosingCollapsible>
                   ),
               )}
             </div>

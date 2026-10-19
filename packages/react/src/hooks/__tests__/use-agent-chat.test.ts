@@ -6,7 +6,9 @@ import { renderHookWithProviders } from "../../test/render.js";
 import { server } from "../../test/server.js";
 import {
   PROJECT_ID,
+  question,
   reply,
+  requestItem,
   SESSION_ID,
   sessionDetail,
   snapshot,
@@ -464,6 +466,66 @@ describe("useAgentChat commands", () => {
     expect(result.current.error?.message).toBe(
       "That request was already answered or withdrawn.",
     );
+  });
+
+  it("shows an answer the moment it is sent, and asks again when it is refused", async () => {
+    serveSession(
+      snapshot({
+        sequence: 4,
+        turns: [turn("t1", 1, { status: "running" })],
+        items: [
+          userMessage("t1:input", 1, "t1", "Lay it out"),
+          requestItem("ask", 2, "t1", "q1"),
+        ],
+        requests: [question("q1")],
+      }),
+    );
+    let refuse: (() => void) | undefined;
+    server.use(
+      http.post(apiUrl(`${BASE}/commands`), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        await new Promise<void>((resolve) => {
+          refuse = resolve;
+        });
+        return HttpResponse.json({
+          commandId: body.commandId,
+          status: "rejected",
+          sequence: 5,
+          result: null,
+          error: { code: "unavailable", message: "The agent went away." },
+        });
+      }),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.requests).toHaveLength(1));
+    const kinds = () =>
+      result.current.timeline.flatMap((group) =>
+        group.entries.map((entry) => entry.kind),
+      );
+    let answered: Promise<boolean> | undefined;
+    act(() => {
+      answered = result.current.respond("q1", {
+        kind: "question",
+        answers: ["Grid"],
+      });
+    });
+    // Before the session has it: the question is answered, its answer in
+    // the conversation where it stood.
+    expect(result.current.requests).toEqual([]);
+    expect(kinds()).toEqual(["input", "answer"]);
+    await waitFor(() => expect(refuse).toBeDefined());
+    await act(async () => {
+      refuse?.();
+      await answered;
+    });
+    expect(await answered).toBe(false);
+    expect(result.current.requests.map((request) => request.id)).toEqual([
+      "q1",
+    ]);
+    expect(kinds()).toEqual(["input", "steps"]);
+    expect(result.current.error?.message).toBe("The agent went away.");
   });
 
   it("sends queue, retry and rollback commands for the turns it names", async () => {

@@ -2261,13 +2261,32 @@ function sameAgentMessage(
   );
 }
 
+/**
+ * Requests whose answer has shown. An answer shows the moment it is sent
+ * (where its question stood) and may then move to the message the session
+ * records for it: that card is the same answer, and does not enter again.
+ */
+const shownAnswers = new Set<string>();
+
+/**
+ * An answer its person is sending from this window: it takes its
+ * question's place in the conversation as it is, without rising in, while
+ * the panel it was given in closes. Call it before responding.
+ */
+export function answerSentHere(requestId: string): void {
+  shownAnswers.add(requestId);
+}
+
 /** Answered questions: each question with what was picked. */
 function AnswerCard({
   entry,
 }: {
   entry: Extract<TimelineEntry, { kind: "answer" }>;
 }) {
-  const enterClasses = useEntered();
+  const enterClasses = useEntered(shownAnswers.has(entry.requestId));
+  useEffect(() => {
+    shownAnswers.add(entry.requestId);
+  }, [entry.requestId]);
   if (entry.dismissed)
     return (
       <div
