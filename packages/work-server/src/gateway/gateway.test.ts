@@ -63,45 +63,12 @@ describe("gateway configuration", () => {
     ).toThrow("guards");
   });
 
-  it("pins a model connection's request fields and paths from the file (ADR 0256)", () => {
-    const config = gatewayConfigFromFile({
-      path: write({
-        connections: [
-          {
-            type: "model",
-            kind: "openrouter",
-            displayName: "OpenRouter",
-            api: "openai",
-            baseUrl: "https://openrouter.ai/api/v1",
-            override: {
-              provider: { only: ["provider-a"], allow_fallbacks: false },
-              models: null,
-            },
-            paths: ["/chat/completions", "/models"],
-          },
-          {
-            type: "model",
-            kind: "local",
-            displayName: "Local model",
-            api: "openai",
-            baseUrl: "https://models.internal.test/v1",
-          },
-        ],
-      }),
-      env: {},
-    });
-    const [pinned, plain] = gatewayProviders(config);
-    expect(pinned?.model?.override).toEqual({
-      provider: { only: ["provider-a"], allow_fallbacks: false },
-      models: null,
-    });
-    expect(pinned?.model?.paths).toEqual(["/chat/completions", "/models"]);
-    expect(plain?.model?.override).toBeUndefined();
-    // An override names fields, and paths are plain prefixes.
+  it("refuses a model entry that tries to change requests: that is code in the server's own image (ADR 0262)", () => {
+    // A file that names what requests carry would pin nothing if it were
+    // read and ignored, so it does not load.
     for (const entry of [
-      { override: { "": 1 } },
-      { paths: ["chat/completions"] },
-      { paths: ["/presets/../chat"] },
+      { override: { provider: { only: ["provider-a"] } } },
+      { paths: ["/chat/completions"] },
     ])
       expect(() =>
         gatewayConfigFromFile({
@@ -112,6 +79,7 @@ describe("gateway configuration", () => {
                 kind: "openrouter",
                 displayName: "OpenRouter",
                 api: "openai",
+                baseUrl: "https://openrouter.ai/api/v1",
                 ...entry,
               },
             ],

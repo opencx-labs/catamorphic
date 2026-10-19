@@ -46,6 +46,11 @@ export {
   GoogleWorkspaceDirectory,
 } from "./identity/google-directory.js";
 export {
+  lanAddresses,
+  type MdnsResponder,
+  startMdnsResponder,
+} from "./mdns.js";
+export {
   createWorkServer,
   SERVER_TENANT_ID,
   type WorkServer,
