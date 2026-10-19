@@ -878,6 +878,7 @@ function SourceRow({
       keepDescription={(row.description?.length ?? 0) <= 8}
       badges={row.badges}
       progress={row.progress}
+      trend={row.trend}
       signal={row.signal}
       active={active}
       resource={Boolean(row.url)}

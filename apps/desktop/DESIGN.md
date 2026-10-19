@@ -723,6 +723,27 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-19: Resources shows what Work runs, by who it runs for
+
+Activity Monitor lists Work as a dozen `node`, `bun`, `claude` and `Work
+Helper` rows. Work knows which chat, terminal, browser tab or sidebar
+module each process is for, so `work:resources` (ADR 0263) lists them
+that way: a Total row, Work itself, then each owner, its processes nested
+under it. It is a list like any other, added to a sidebar with
+`{ id: "resources", source: "work:resources" }`, and in no default layout.
+
+Rows gained a `trend`: a reading's recent history as a 36px line with a
+soft area under it, in the accent, the current reading beside it in
+tabular figures, a fixed width so the column lines up down the list.
+Memory is the row's description, kept whole. A short history starts at
+the right edge and grows leftward, so a line never stretches to fill. A
+reading near one full core takes the warning tone; nothing else colors it.
+End is the row's hover button, as every row action is: it ends a process
+Work started and what it started, and an owner's End or Close goes
+through the owner (a tab closes, a terminal ends). Work's own processes
+offer nothing to end. Nothing samples unless a section showing the list
+is on screen.
+
 ### 2026-10-18: The Mac app's icon is drawn as designed; the palette's input grows in place and its arrows move the caret; a terminal opens blank; each question takes its own answer
 
 The installed app's icon looked worse than the dev app's. macOS 26 draws an

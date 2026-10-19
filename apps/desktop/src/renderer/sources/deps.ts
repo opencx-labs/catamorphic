@@ -29,6 +29,15 @@ export interface WorkSourceHost {
   reorderTab: (key: string, beforeKey: string | null) => void;
   sessionAction: (sessionId: string, action: ChatSessionAction) => void;
   openTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
+  /**
+   * The tab in this window a page's or terminal's processes belong to
+   * (ADR 0263); undefined when it is another window's, or no tab's.
+   */
+  resourceTab: (
+    owner:
+      | { kind: "page"; webContentsId: number }
+      | { kind: "terminal"; terminalId: string },
+  ) => string | undefined;
 }
 
 export interface WorkSourceDeps {

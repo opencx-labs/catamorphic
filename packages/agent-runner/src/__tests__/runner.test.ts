@@ -579,6 +579,26 @@ describe("the session's environment file (ADR 0206)", () => {
     expect(said()).toContain("OWN=the host's");
   });
 
+  it("names the attempt's session in the harness's environment (ADR 0263)", async () => {
+    const { runner, frames, said, answer } = withFiles({});
+    runner.handle({
+      id: "start",
+      command: {
+        kind: "start",
+        attempt: attempt("[[env CATAMORPHIC_SESSION_ID]]", {
+          env: { CATAMORPHIC_SESSION_ID: "not the host's to choose" },
+        }),
+      },
+    });
+    const deadline = Date.now() + 5_000;
+    while (!frames.some((frame) => frame.type === "exit")) {
+      if (Date.now() > deadline) throw new Error("The attempt never finished");
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(said()).toContain("CATAMORPHIC_SESSION_ID=session");
+  });
+
   it("points BASH_ENV at the last file present", async () => {
     const gateway = "/workspace/.work-session/env/gateway.sh";
     const { runner, frames, said, answer } = withFiles({

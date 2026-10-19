@@ -15,6 +15,7 @@ Keep this page and that guide in step.
 | The contract (rows, `work`, effects) | `src/shared/sidebar.ts`, `src/shared/sidebar-source.ts` |
 | A module's Bun process and its `work` calls | `src/main/sidebar-source-runtime.ts`, `-worker.ts`, `-ipc.ts` |
 | Work's lists | `src/renderer/sources/*` (registry, one file per family) |
+| `work:resources`: what Work runs, sampled in the main process (ADR 0263) | `src/main/resource-monitor.ts`, `process-owners.ts`, `src/renderer/sources/processes.ts` |
 | The one list renderer | `src/renderer/components/source-section.tsx` |
 | A section's chrome, header actions, app and note sections | `src/renderer/components/sidebar-navigation.tsx` |
 
@@ -41,7 +42,8 @@ Rows are one shape for everyone: `id`, `label`, `url` (any workspace target:
 a page, a chat, `workflow:`, `app:`, `run:`, `file:`, an open tab's key,
 `command:<id>`), `icon` (a Lucide name, `<chat icon>:<color>`, or an image
 address), `description`, `badges` (strings or `{ label, icon }`), `signal`
-(`working`, `attention`, `unread`), `progress`, `preview`, `collapsed`,
+(`working`, `attention`, `unread`), `progress`, `trend` (a sparkline:
+`{ values, label?, tone? }`, ADR 0263), `preview`, `collapsed`,
 `menu`/`contextMenu`/`actions`, and `data` (the record behind the row, for code
 that reads it). A row opens its `url`; it is active when that target is in front,
 drags as that target, and gets Work's inspector for it (a chat's live details).

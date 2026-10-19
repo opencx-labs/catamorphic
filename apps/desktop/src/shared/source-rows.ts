@@ -11,6 +11,7 @@ import {
   type SidebarPreview,
   type SidebarPreviewMetadata,
   type SidebarSignal,
+  type SidebarTrend,
   SOURCE_ACTION_PATTERN,
 } from "./sidebar.js";
 import type { SidebarSourceItem } from "./sidebar-source.js";
@@ -167,6 +168,24 @@ function sanitizeBadges(raw: unknown): (string | SidebarBadge)[] | undefined {
     .slice(0, 4);
 }
 
+/** At most 60 readings, each clamped to 0 through 1. */
+function sanitizeTrend(raw: unknown): SidebarTrend | undefined {
+  if (!isRecord(raw) || !Array.isArray(raw.values)) return undefined;
+  const values = raw.values
+    .filter(
+      (value): value is number =>
+        typeof value === "number" && Number.isFinite(value),
+    )
+    .slice(-60)
+    .map((value) => Math.max(0, Math.min(1, value)));
+  if (values.length === 0) return undefined;
+  return {
+    values,
+    ...(typeof raw.label === "string" ? { label: raw.label.slice(0, 16) } : {}),
+    ...(isSidebarTone(raw.tone) ? { tone: raw.tone } : {}),
+  };
+}
+
 const asSignal = (value: unknown): SidebarSignal | undefined =>
   value === "working" || value === "attention" || value === "unread"
     ? value
@@ -192,6 +211,7 @@ export function sanitizePresentation(
       typeof record.progress === "number" && Number.isFinite(record.progress)
         ? Math.max(0, Math.min(1, record.progress))
         : undefined,
+    trend: sanitizeTrend(record.trend),
     signal: asSignal(record.signal),
     open: asOpenMode(record.open),
     menu: sanitizeMenu(record.menu),

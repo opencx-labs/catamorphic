@@ -32,6 +32,7 @@
           "feedback.enabled=false"
         ],
         "env": {
+          "CATAMORPHIC_SESSION_ID": "session-1",
           "WORK_MODEL_KEY_FILE": "{{root}}/model-key",
           "CODEX_HOME": "{{root}}/state/codex-home"
         }

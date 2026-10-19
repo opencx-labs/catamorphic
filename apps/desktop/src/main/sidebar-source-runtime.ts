@@ -7,6 +7,7 @@ import type {
   SidebarSourceCapabilities,
   SidebarSourceRequest,
 } from "../shared/sidebar-source.js";
+import { registerProcessOwner } from "./process-owners.js";
 
 const responseSchema = z.object({
   id: z.string().optional(),
@@ -139,6 +140,11 @@ export class SidebarSourceRuntime {
   }
   private attach(child: ChildProcess, started: (error?: Error) => void) {
     child.stdin?.on("error", () => {});
+    // Resources lists the worker under its module (ADR 0263).
+    const unregister = registerProcessOwner(child.pid, {
+      kind: "module",
+      modulePath: path.relative(this.opts.projectRoot, this.opts.modulePath),
+    });
     const output = child.stdio[3];
     if (!output || !("readable" in output)) {
       const error = new Error("Missing sidebar source output.");
@@ -243,6 +249,7 @@ export class SidebarSourceRuntime {
       if (this.child === child) this.stop(error, true);
     });
     child.once("exit", () => {
+      unregister();
       lines.close();
       const error = new Error(
         stderr.trim() || "Sidebar source stopped. Retry to reload it.",

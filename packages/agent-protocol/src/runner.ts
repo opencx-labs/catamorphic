@@ -27,6 +27,14 @@ import type {
 /** Bumped on any incompatible change to frames, commands or {@link AttemptStart}. */
 export const RUNNER_PROTOCOL_VERSION = 1;
 
+/**
+ * The session an attempt's harness process works for, in its environment
+ * (ADR 0263): the runner adds it, and a harness hands its environment to
+ * what it runs, so a host can tell which chat a process belongs to. A
+ * label only; nothing authorizes on it.
+ */
+export const SESSION_ID_ENV = "CATAMORPHIC_SESSION_ID";
+
 export {
   formatEnvFile,
   parseEnvFile,

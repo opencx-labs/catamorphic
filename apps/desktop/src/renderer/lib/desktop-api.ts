@@ -93,6 +93,7 @@ import type {
   CodexSignInStatus,
   RemoteMachine,
 } from "../../shared/remote-machines.js";
+import type { ResourceSnapshot } from "../../shared/resources.js";
 import type {
   ScreenShareAnswer,
   ScreenShareKind,
@@ -1575,6 +1576,8 @@ export interface CatamorphicDesktopApi {
     rows: number,
   ) => Promise<void>;
   terminalKill: (sessionId: string) => Promise<void>;
+  resourcesRead: () => Promise<ResourceSnapshot>;
+  resourcesEnd: (pid: number) => Promise<void>;
   terminalBuffer: (
     sessionId: string,
   ) => Promise<{ buffer: string; running: boolean } | null>;
