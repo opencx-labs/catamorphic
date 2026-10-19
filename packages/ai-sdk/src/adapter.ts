@@ -217,6 +217,11 @@ class AiSdkAttempt {
   private readonly failure = new AbortController();
   private failureCause: unknown;
   private readonly steers: SteerInput[] = [];
+  /**
+   * The built-in tools' waits end when this fires (ADR 0264): a steer is
+   * read only at the next step, after they return. Replaced as it fires.
+   */
+  private waits = new AbortController();
   private accepting = true;
   /** An item was reported: a retry would repeat visible work. */
   private workStarted = false;
@@ -269,6 +274,8 @@ class AiSdkAttempt {
       steer: async (input) => {
         if (!this.accepting || this.abort.signal.aborted) return false;
         this.steers.push(input);
+        this.waits.abort();
+        this.waits = new AbortController();
         return true;
       },
       interrupt: () => this.abort.abort(),
@@ -579,6 +586,7 @@ class AiSdkAttempt {
             ? { budgetSeconds: sandbox.commandBudgetSeconds }
             : {}),
           ...(sandbox.envFiles ? { envFiles: sandbox.envFiles } : {}),
+          stopWaiting: () => this.waits.signal,
         }),
       );
     sets.push(

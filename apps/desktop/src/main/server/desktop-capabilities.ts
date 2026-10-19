@@ -100,12 +100,15 @@ export function desktopCapabilitySource(deps: {
             ),
             outputSchema: z.unknown(),
             authorize: () => true,
-            execute: async (_invocation, input) => {
+            execute: async (invocation, input) => {
               const value = await tool.execute(input, {
                 projectId: context.projectId,
                 sessionId: context.sessionId,
                 caller: context.identity,
                 workingDirectory: await deps.workingDirectory(context),
+                // The waiting tools are eager, served beside the gateway
+                // with their turn's signal; one here waits while it is asked.
+                stopWaiting: invocation.signal ?? new AbortController().signal,
               });
               return JSON.parse(JSON.stringify(value ?? null));
             },

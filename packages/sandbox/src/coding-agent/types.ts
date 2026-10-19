@@ -196,6 +196,14 @@ export interface ExtraToolContext {
   workingDirectory?: string;
   /** Who the session serves. */
   caller?: SessionCaller;
+  /**
+   * Fires when the agent should stop waiting (ADR 0264): something reached
+   * its turn that it reads only once this call returns (a message steered
+   * in, a task notification), or the turn is stopping. A tool that waits
+   * ends its wait and returns what it has (`waitUntil` waits this way); a tool
+   * doing work carries on, since this is never a cancellation.
+   */
+  stopWaiting: AbortSignal;
 }
 
 /**

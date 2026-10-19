@@ -1324,6 +1324,7 @@ describe("agent session coordination", () => {
       // in this same turn.
       await sessions.waitForSubsessions(identity, project.id, parent.id, {
         timeoutMs: 10_000,
+        stopWaiting: new AbortController().signal,
       });
       await vi.waitFor(
         () =>
@@ -1461,7 +1462,7 @@ describe("agent session coordination", () => {
         identity,
         project.id,
         parent.id,
-        { timeoutMs: 600 },
+        { timeoutMs: 600, stopWaiting: new AbortController().signal },
       );
       expect(Date.now() - started).toBeGreaterThanOrEqual(500);
       expect(waited.map((child) => [child.session.id, child.status])).toEqual([

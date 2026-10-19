@@ -6,11 +6,12 @@ import {
   SealedRemoteOperationSchema,
 } from "@catamorphic/core";
 import { ExecutorPublicKeySchema } from "@catamorphic/sandbox";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
+import { hungUp } from "../hung-up.js";
 import { ErrorSchema, ProjectIdParamsSchema } from "../schemas.js";
 
 const Lease = z.object({ id: z.string().uuid(), token: z.string().uuid() });
@@ -247,16 +248,4 @@ export function registerClientRunnerRoutes(
       return { ok: true };
     },
   );
-}
-
-/**
- * Aborts when the runner hangs up before the answer is sent, so a long poll
- * nobody waits for any more takes nothing.
- */
-function hungUp(reply: FastifyReply): AbortSignal {
-  const controller = new AbortController();
-  reply.raw.once("close", () => {
-    if (!reply.raw.writableFinished) controller.abort();
-  });
-  return controller.signal;
 }

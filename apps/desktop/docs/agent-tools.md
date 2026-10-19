@@ -139,6 +139,15 @@ checkout could not see the person's files or localhost. `watch_command` runs a
 check where the agent's commands run and wakes the chat like a background command.
 Its schema costs about 1.3 KB; the eager budget rose to 8.3 KB.
 
+## A wait ends when something reaches the agent (ADR 0264)
+
+A notification or message steered into a turn is read at the harness's next
+step, which a waiting tool holds back. Every host tool call therefore gets
+`stopWaiting`, fired when the engine hands the harness a steer, interrupt or
+stop. `read_background_output`, `wait_for_subsessions` and the browser's
+`downloads` and `wait_for` wait with `waitUntil` and return early, and core
+adds one note to the result saying why.
+
 
 ## Seeing Work itself (ADR 0195)
 

@@ -74,7 +74,11 @@ function harness(
   const tools = Object.fromEntries(
     assistantTools(access).map((tool) => [tool.name, tool]),
   );
-  const context = { projectId: "p1", sessionId: ASSISTANT };
+  const context = {
+    projectId: "p1",
+    sessionId: ASSISTANT,
+    stopWaiting: new AbortController().signal,
+  };
   const call = (name: string, input: Record<string, unknown> = {}) => {
     const tool = tools[name];
     if (!tool) throw new Error(`no ${name}`);

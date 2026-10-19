@@ -1,3 +1,4 @@
+import { waitUntil } from "@catamorphic/sandbox";
 import type { DownloadItem, WebContents } from "electron";
 
 /** What a page printed to its console, as an agent reads it. */
@@ -67,7 +68,6 @@ export class DownloadLog {
   private read = 0;
   /** The last read saw a download still in progress. */
   private unfinished = false;
-  private waiters = new Set<() => void>();
 
   add(item: DownloadItem): void {
     const entry: DownloadEntry = {
@@ -82,7 +82,6 @@ export class DownloadLog {
       entry.path = item.getSavePath() || entry.path;
       entry.receivedBytes = item.getReceivedBytes();
       entry.totalBytes = item.getTotalBytes();
-      this.notify();
     };
     item.on("updated", (_event, state) => {
       update();
@@ -91,44 +90,35 @@ export class DownloadLog {
     item.once("done", (_event, state) => {
       update();
       entry.state = state;
-      this.notify();
     });
     this.entries.push(entry);
     this.added += 1;
     if (this.entries.length > DOWNLOADS_KEPT) this.entries.shift();
-    this.notify();
   }
 
   /**
    * Every download the tab knows, newest last. With a timeout, waits until
    * there is news (one newer than the last read, since a click's download
    * may take a while to start, or one the last read saw unfinished) and
-   * none is still in progress.
+   * none is still in progress, or something reaches the agent (ADR 0264).
    */
-  async take(timeoutMs: number): Promise<{ downloads: DownloadEntry[] }> {
-    const deadline = Date.now() + timeoutMs;
-    const settled = () =>
-      (this.added > this.read || this.unfinished) &&
-      this.entries.every((entry) => entry.state !== "progressing");
-    while (!settled() && Date.now() < deadline)
-      await new Promise<void>((resolve) => {
-        const done = () => {
-          clearTimeout(timer);
-          this.waiters.delete(done);
-          resolve();
-        };
-        const timer = setTimeout(done, Math.max(0, deadline - Date.now()));
-        this.waiters.add(done);
-      });
+  async take(
+    timeoutMs: number,
+    stopWaiting: AbortSignal,
+  ): Promise<{ downloads: DownloadEntry[] }> {
+    await waitUntil({
+      ready: () =>
+        (this.added > this.read || this.unfinished) &&
+        this.entries.every((entry) => entry.state !== "progressing"),
+      timeoutMs,
+      stopWaiting,
+      pollMs: 100,
+    });
     this.read = this.added;
     this.unfinished = this.entries.some(
       (entry) => entry.state === "progressing",
     );
     return { downloads: this.entries.map((entry) => ({ ...entry })) };
-  }
-
-  private notify(): void {
-    for (const waiter of [...this.waiters]) waiter();
   }
 }
 

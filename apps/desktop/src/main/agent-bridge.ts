@@ -88,6 +88,8 @@ export interface WorkspaceBridge {
     holder: TurnHolder,
     key: string,
     action: BrowserAction,
+    /** Ends a wait the action makes early (ADR 0264). */
+    stopWaiting: AbortSignal,
   ): Promise<unknown>;
   /**
    * Start a long-running command in its own background agent terminal
@@ -109,12 +111,16 @@ export interface WorkspaceBridge {
     exitCode: number | null;
     output: string;
   }>;
-  /** New output since the last read; `waitMs` blocks for news or the end. */
+  /**
+   * New output since the last read; `waitMs` blocks for news, the end, or
+   * something reaching the agent (`stopWaiting`, ADR 0264).
+   */
   readBackgroundCommand(input: {
     sessionId: string;
     id: string;
     waitMs?: number;
     waitFor?: string;
+    stopWaiting: AbortSignal;
   }): Promise<{
     status: BackgroundCommandView["status"];
     exitCode: number | null;
@@ -715,9 +721,9 @@ export function registerAgentBridge(
       return (await driverFor(projectId, key)).snapshot(format);
     },
 
-    async browserAct(projectId, holder, key, action) {
+    async browserAct(projectId, holder, key, action, stopWaiting) {
       await holdBrowser({ projectId, holder, key });
-      return (await driverFor(projectId, key)).act(action);
+      return (await driverFor(projectId, key)).act(action, stopWaiting);
     },
 
     startBackgroundCommand: (input) => background.start(input),
