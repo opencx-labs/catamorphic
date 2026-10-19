@@ -15,6 +15,7 @@ import {
   type TestPostgresDriver,
   withDisposablePostgres,
 } from "./test-postgres.js";
+import { repositoryNodePath } from "./tool-runtime.js";
 
 class RecordingPostgresDriver implements TestPostgresDriver {
   readonly events: string[] = [];
@@ -164,7 +165,7 @@ describe("test process orchestration", () => {
     expect(testRunCommands({ rootPath: "/repo", cliArguments: [] })).toEqual([
       {
         label: "root orchestration tests",
-        command: "/repo/node_modules/node/bin/node",
+        command: repositoryNodePath({ rootPath: "/repo" }),
         args: [
           "/repo/node_modules/vitest/vitest.mjs",
           "run",
@@ -177,7 +178,7 @@ describe("test process orchestration", () => {
       },
       {
         label: "workspace tests",
-        command: "/repo/node_modules/node/bin/node",
+        command: repositoryNodePath({ rootPath: "/repo" }),
         args: [
           "/repo/node_modules/turbo/bin/turbo",
           "run",
@@ -198,7 +199,7 @@ describe("test process orchestration", () => {
       cliArguments: [],
     });
     const rawGraph = execFileSync(
-      path.join(repositoryRoot, "node_modules", "node", "bin", "node"),
+      repositoryNodePath({ rootPath: repositoryRoot }),
       [
         path.join(repositoryRoot, "node_modules", "turbo", "bin", "turbo"),
         "run",

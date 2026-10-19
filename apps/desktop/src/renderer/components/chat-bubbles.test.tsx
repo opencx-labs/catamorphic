@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
@@ -300,5 +300,84 @@ describe("ChatBubbles fold", () => {
     render({ folded: false });
     expect(arrows()?.getAttribute("aria-expanded")).toBe("true");
     expect(document.activeElement).toBe(arrows());
+  });
+});
+
+describe("ChatBubbles side", () => {
+  // jsdom has no media queries; the strip asks for reduced motion as it moves.
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("mirrors for its side by moving its controls, never drawing them anew", () => {
+    const mounts = vi.fn();
+    function Downloads() {
+      useEffect(() => mounts(), []);
+      return <button type="button" aria-label="Downloads" />;
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const render = (side: "left" | "right") =>
+      act(() => {
+        root.render(
+          <ChatBubbles
+            side={side}
+            entries={[{ localId: "a", mode: "min" }]}
+            labels={{ a: "Launch plan" }}
+            icons={{}}
+            forks={{}}
+            signals={{}}
+            unread={{}}
+            attention={{}}
+            menus={{}}
+            collapsed
+            onFoldedChange={() => {}}
+            onToggle={() => {}}
+            onClose={() => {}}
+            onMenuAction={() => {}}
+            onNewChat={() => {}}
+            voice={<button type="button" aria-label="Voice" />}
+            trailing={<Downloads />}
+          />,
+        );
+      });
+    const controls = () =>
+      ["Expand chat bubbles", "Downloads", "Voice", "New chat"].map((label) =>
+        container.querySelector(`button[aria-label="${label}"]`),
+      );
+    /** The labels of those controls, in the order the strip draws them. */
+    const order = () =>
+      [...container.querySelectorAll("[data-dock-rail] button[aria-label]")]
+        .map((button) => button.getAttribute("aria-label"))
+        .filter((label) =>
+          ["Expand chat bubbles", "Downloads", "Voice"].includes(label ?? ""),
+        );
+    render("right");
+    const drawn = controls();
+    expect(drawn.every(Boolean)).toBe(true);
+    const same = () => {
+      const now = controls();
+      for (const [index, control] of drawn.entries())
+        expect(now[index]).toBe(control);
+    };
+    expect(order()).toEqual(["Downloads", "Voice", "Expand chat bubbles"]);
+    render("left");
+    expect(order()).toEqual(["Expand chat bubbles", "Voice", "Downloads"]);
+    same();
+    render("right");
+    expect(order()).toEqual(["Downloads", "Voice", "Expand chat bubbles"]);
+    same();
+    expect(mounts).toHaveBeenCalledTimes(1);
   });
 });

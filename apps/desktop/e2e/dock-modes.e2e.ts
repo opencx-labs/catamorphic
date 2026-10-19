@@ -313,10 +313,16 @@ describe("dock modes", () => {
       { label: "expanded when the window is focused again" },
     );
     // Let this turn end before the next test starts its own timed command,
-    // so the two do not queue behind each other.
+    // so the two do not queue behind each other. The dock window also draws
+    // the end (its spinners fading out) before it hides: a window hidden in
+    // the frames between the end arriving and those fades starting never
+    // starts them, and the next test, showing it again, waits on them
+    // forever.
     await dockWait(
-      `return !frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
-      { label: "turn finished", timeoutMs: 40_000 },
+      `return !frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,') &&
+         !frontDock().getAnimations({ subtree: true }).some((animation) =>
+           animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      { label: "turn finished and drawn", timeoutMs: 40_000 },
     );
     await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
     await runWait(`return !!composer();`, { label: "chat back in the window" });
@@ -339,7 +345,15 @@ describe("dock modes", () => {
     ).catch(async (error: unknown) => {
       // Say what is still moving (or that no chat arrived), so a stall
       // here points at its cause.
-      const state = await dockRun(`return {
+      const state = await dockRun(`return new Promise((resolve) => {
+        // Whether the window still draws: animation frames in half a second.
+        let frames = 0;
+        let counting = true;
+        const tick = () => { frames += 1; if (counting) requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+        setTimeout(() => { counting = false; resolve(frames); }, 500);
+      }).then((frames) => ({
+        frames,
         visibility: document.visibilityState,
         composer: !!composer(),
         sections: $$('section[aria-label]').map((el) => ({ inert: el.inert, composer: !!el.querySelector('[data-composer-input]') })),
@@ -349,9 +363,12 @@ describe("dock modes", () => {
             name: animation.transitionProperty ?? animation.animationName ?? animation.id,
             target: animation.effect?.target?.getAttribute?.('class')?.slice(0, 80),
             time: animation.currentTime,
+            // Never started (pending, no start time) or started and stuck.
+            pending: animation.pending,
+            start: animation.startTime,
             iterations: animation.effect?.getTiming().iterations,
           })),
-      };`);
+      }));`);
       throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
     });
     const bounds = async () => ({

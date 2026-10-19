@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { CollectionChange } from "@catamorphic/app";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -8,6 +9,7 @@ import type {
   SidebarSurface,
 } from "../../shared/sidebar.js";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
+import { TAB_DRAG_TYPE } from "../lib/tab-drag.js";
 import { capabilitiesOf, type SectionSource } from "../sources/contract.js";
 import {
   SidebarContribution,
@@ -380,6 +382,47 @@ describe("every list draws one way (ADR 0234)", () => {
       expect(
         view.node.querySelector('[role="tree"]')?.textContent,
       ).not.toContain("Docs");
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("keeps an empty list's place to drop while the list is read again", async () => {
+    let publish:
+      | ((change: CollectionChange<SidebarSourceItem>) => void)
+      | undefined;
+    const source = memorySource([], {
+      drop: async () => {},
+      subscribe: (next) => {
+        publish = next;
+        return () => {};
+      },
+    });
+    const view = await mount({ source });
+    const place = () => view.node.querySelector('[data-drop-zone="things"]');
+    try {
+      expect(place()).toBeNull();
+      await act(async () => {
+        const start = new Event("dragstart", { bubbles: true });
+        Object.assign(start, {
+          dataTransfer: { types: [TAB_DRAG_TYPE], getData: () => "" },
+        });
+        document.dispatchEvent(start);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(place()).toBeTruthy();
+      // Shown for the drag, a section reads its list again: the place
+      // stays under the pointer while the read is out.
+      const reads: Array<() => void> = [];
+      source.load = () =>
+        new Promise((resolve) => {
+          reads.push(() => resolve({ items: [] }));
+        });
+      await act(async () => publish?.({ type: "invalidate" }));
+      expect(reads).toHaveLength(1);
+      expect(place()).toBeTruthy();
+      await act(async () => reads[0]?.());
+      expect(place()).toBeTruthy();
     } finally {
       await view.cleanup();
     }

@@ -89,6 +89,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-validation
@@ -120,6 +122,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-workspace-${{ matrix.shard }}
@@ -148,6 +152,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-pwa
@@ -186,6 +192,8 @@ jobs:
           CATAMORPHIC_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.total }}
         run: bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
       - uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: always()
         with:
           name: desktop-linux-${{ matrix.shard }}
@@ -198,6 +206,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-desktop-linux-${{ matrix.shard }}
@@ -239,6 +249,8 @@ jobs:
           defaults write com.apple.universalaccess reduceTransparency -bool false
           bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
       - uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: always()
         with:
           name: desktop-macos-${{ matrix.shard }}
@@ -251,6 +263,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-desktop-macos-${{ matrix.shard }}

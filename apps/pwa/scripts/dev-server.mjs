@@ -381,11 +381,14 @@ function readSteers(session, turnId) {
   return read;
 }
 
-/** One step of work, which a person's steer_now ends early. */
+/** One step of work, which a person's steer_now or interrupt ends early. */
 function step(session, turnId, ms) {
   return new Promise((resolve) => {
     // Asked to read now before this step began: it ends at once.
     if (session.readNow.delete(turnId)) return resolve();
+    // Interrupted before this step began (as it started, say): there is no
+    // step to end, and the turns queued behind it must not wait it out.
+    if (settled(session, turnId)) return resolve();
     const timer = setTimeout(done, ms);
     function done() {
       clearTimeout(timer);
@@ -502,6 +505,8 @@ async function runTurn(session, turnId) {
     retryAt: null,
   });
   await sleep(300);
+  // Interrupted as it started: it does nothing more.
+  if (settled(session, turnId)) return;
   if (!session.row.title) {
     emit(session, {
       type: "session.changed",

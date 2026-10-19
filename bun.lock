@@ -8,10 +8,15 @@
         "@biomejs/biome": "^2.5.7",
         "@types/bun": "1.4.3",
         "@types/node": "^26.1.1",
-        "node": "24.13.0",
         "turbo": "2.10.10",
         "typescript": "^7.0.2",
         "vitest": "^4.1.11",
+      },
+      "optionalDependencies": {
+        "node-bin-darwin-arm64": "24.13.0",
+        "node-darwin-x64": "24.13.0",
+        "node-linux-arm64": "24.13.0",
+        "node-linux-x64": "24.13.0",
       },
     },
     "apps/desktop": {
@@ -771,9 +776,6 @@
       },
     },
   },
-  "trustedDependencies": [
-    "node",
-  ],
   "overrides": {
     "@xmldom/xmldom": "^0.8.15",
     "dompurify": "^3.4.17",
@@ -2597,17 +2599,21 @@
 
     "negotiator": ["negotiator@1.0.0", "", {}, "sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg=="],
 
-    "node": ["node@24.13.0", "", { "dependencies": { "node-bin-setup": "^1.0.0" }, "bin": { "node": "bin/node" } }, "sha512-aXcbTE5VzQS/AqA6bBBpkgsGswYAi5Mt5tfi1GgXU75bsbJEOtd2TuPi38paNLtwaGaCOFaSzkVN4T9U0Rg0vg=="],
-
     "node-abi": ["node-abi@4.37.0", "", { "dependencies": { "semver": "^7.6.3" } }, "sha512-O9XXMXLeRHQtvh43NCah3y9N1K69tecOmu8Y5p2ay4iXvtpbQr0VaroJF9EmRVp3vkdoj3qn4IFfX+ZYtC94fw=="],
 
     "node-api-version": ["node-api-version@0.2.1", "", { "dependencies": { "semver": "^7.3.5" } }, "sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q=="],
 
-    "node-bin-setup": ["node-bin-setup@1.1.4", "", {}, "sha512-vWNHOne0ZUavArqPP5LJta50+S8R261Fr5SvGul37HbEDcowvLjwdvd0ZeSr0r2lTSrPxl6okq9QUw8BFGiAxA=="],
+    "node-bin-darwin-arm64": ["node-bin-darwin-arm64@24.13.0", "", { "os": "darwin", "cpu": "arm64", "bin": { "node": "bin/node" } }, "sha512-W3h+6nfX6aBrczeVTpBagWwz44rYmPodDpDAWwrC4YyCOLnk8Bacl+9vx90aCt5HOBGPd9lOTyoNEYmEPOIffw=="],
+
+    "node-darwin-x64": ["node-darwin-x64@24.13.0", "", { "os": "darwin", "cpu": "x64", "bin": { "node": "bin/node" } }, "sha512-gr/ABsXAwgwf53X5RebojkjUtjU/HAHic8unX/KwjQmA4i2FyNzeLedC47yVdJv3wrB/jPYN/dVPCS5ZwQSUFg=="],
 
     "node-gyp": ["node-gyp@12.4.0", "", { "dependencies": { "env-paths": "^2.2.0", "exponential-backoff": "^3.1.1", "graceful-fs": "^4.2.6", "nopt": "^9.0.0", "proc-log": "^6.0.0", "semver": "^7.3.5", "tar": "^7.5.4", "tinyglobby": "^0.2.12", "undici": "^6.25.0", "which": "^6.0.0" }, "bin": { "node-gyp": "bin/node-gyp.js" } }, "sha512-OMcPNvqTCFUnNaBlmdgq+lfNqY7gTiSmNRDjY3uAXRyudeKZEZxu3CLtjMQrx4zZxCX2b/mpNqTtwuCJgXhHkw=="],
 
     "node-int64": ["node-int64@0.4.0", "", {}, "sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw=="],
+
+    "node-linux-arm64": ["node-linux-arm64@24.13.0", "", { "os": "linux", "cpu": "arm64", "bin": { "node": "bin/node" } }, "sha512-b4XV161VOuo8+CCl6gFCYmMIqk9ct/ySU9TvjULK1BjnInAYFeUl5djaBpF5IhhLpzrSabXyRo9lU+8JOF4dnA=="],
+
+    "node-linux-x64": ["node-linux-x64@24.13.0", "", { "os": "linux", "cpu": "x64", "bin": { "node": "bin/node" } }, "sha512-aUuFIsiqSfiF6C0nQgrgoB4DBQJdjLsSFYmOKj2h/ALtq7GThFwokviHOrFichPUhDXqLhiLqGYMWyiaqo9wBA=="],
 
     "node-releases": ["node-releases@2.0.53", "", {}, "sha512-D9UOmYG3UH1V+ENW56t5QXBwJw1YEY18ruVeus89Rw+SyIgjPkCO84bRzO3uNIYosJbNwiabWVn48o3uJLjxFQ=="],
 

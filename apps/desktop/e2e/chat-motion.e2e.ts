@@ -689,14 +689,18 @@ describe("chat motion", () => {
         "where the renderer stalled",
       ).toEqual(["turn", "step"]);
       // The first step landed while the activity line's opening was held:
-      // in the frame before the steps line, the line had yet to open.
+      // in the frame before the steps line, the line had yet to open. Read
+      // from its height, not its moving mark: the line stops waiting on an
+      // opening 2 s past its length (afterMotion), and the hold here lasts
+      // until the agent's first step, which macOS CI took 2.4 s to send.
       const first = frames.findIndex((frame) => frame.spinner && frame.toggle);
       const kept = frames
         .slice(0, first)
         .filter((frame) => frame.spinner)
         .at(-1);
-      expect(kept?.revealMoving, "the activity line opening").toBe(true);
-      expect(kept?.reveal?.[3], "its height then").toBeLessThan(1);
+      expect(kept?.reveal?.[3], "the activity line yet to open").toBeLessThan(
+        1,
+      );
       expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
       if (live === "notes") {
         expectStill(frames);

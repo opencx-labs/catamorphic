@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { toolRuntime, vitestShardArguments } from "./tool-runtime.js";
+import {
+  repositoryNodePath,
+  toolRuntime,
+  vitestShardArguments,
+} from "./tool-runtime.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
@@ -28,14 +32,8 @@ function temporaryDirectory(): string {
 }
 
 function writeFakeNode(input: { rootPath: string; version: string }): string {
-  const binaryDirectory = path.join(
-    input.rootPath,
-    "node_modules",
-    "node",
-    "bin",
-  );
-  mkdirSync(binaryDirectory, { recursive: true });
-  const binaryPath = path.join(binaryDirectory, "node");
+  const binaryPath = repositoryNodePath({ rootPath: input.rootPath });
+  mkdirSync(path.dirname(binaryPath), { recursive: true });
   writeFileSync(binaryPath, `#!/bin/sh\nprintf '${input.version}\\n'\n`, {
     mode: 0o755,
   });
@@ -79,6 +77,39 @@ function workspacePackagePaths(): string[] {
 }
 
 describe("toolRuntime", () => {
+  it("finds each platform's Node in the optional package the root manifest pins", () => {
+    const manifest: unknown = JSON.parse(
+      readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
+    );
+    if (
+      typeof manifest !== "object" ||
+      manifest === null ||
+      !("optionalDependencies" in manifest) ||
+      typeof manifest.optionalDependencies !== "object" ||
+      manifest.optionalDependencies === null
+    ) {
+      throw new Error("Root package does not pin Node's platform packages");
+    }
+    const pinned = manifest.optionalDependencies;
+    for (const [platform, arch] of [
+      ["darwin", "arm64"],
+      ["darwin", "x64"],
+      ["linux", "arm64"],
+      ["linux", "x64"],
+    ] as const) {
+      const nodePath = repositoryNodePath({
+        rootPath: "/repo",
+        platform,
+        arch,
+      });
+      const name = path
+        .relative("/repo/node_modules", nodePath)
+        .split(path.sep)[0];
+      expect(pinned).toHaveProperty([name ?? ""], "24.13.0");
+    }
+    expect("node" in pinned).toBe(false);
+  });
+
   it("selects repository Node 24.13.0 ahead of an older ambient Node", () => {
     const ambientRoot = temporaryDirectory();
     const ambientNode = writeFakeNode({
@@ -93,7 +124,7 @@ describe("toolRuntime", () => {
     });
 
     expect(runtime.nodePath).toBe(
-      path.join(repositoryRoot, "node_modules", "node", "bin", "node"),
+      repositoryNodePath({ rootPath: repositoryRoot }),
     );
     expect(runtime.env.PATH).toBe(
       `${path.dirname(runtime.nodePath)}${path.delimiter}${ambientBin}${path.delimiter}/usr/bin`,
