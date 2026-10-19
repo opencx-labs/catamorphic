@@ -12,7 +12,7 @@ const {
   parsePsTime,
   processName,
   ResourceMonitor,
-  sessionTag,
+  chatTag,
 } = await import("./resource-monitor.js");
 type Sources = ConstructorParameters<typeof ResourceMonitor>[0];
 type Row = Awaited<ReturnType<Sources["table"]>>;
@@ -21,7 +21,7 @@ const MAIN = 100;
 
 function monitor(input: {
   table: () => NonNullable<Row>;
-  sessions?: Record<number, string>;
+  chats?: Record<number, { sessionId: string; projectId: string }>;
   owners?: Sources["owners"];
   pages?: Sources["pages"];
   now: () => number;
@@ -36,9 +36,7 @@ function monitor(input: {
           pid,
           {
             command: `command ${pid}`,
-            ...(input.sessions?.[pid]
-              ? { sessionId: input.sessions[pid] }
-              : {}),
+            ...(input.chats?.[pid] ? { chat: input.chats[pid] } : {}),
           },
         ]),
       ),
@@ -119,12 +117,20 @@ describe("process tables", () => {
     });
   });
 
-  it("finds the chat tag in ps and /proc environments", () => {
+  it("finds the chat tag and its project in ps and /proc environments", () => {
     expect(
-      sessionTag("bun run dev HOME=/x CATAMORPHIC_SESSION_ID=abc-123 PATH=/y"),
-    ).toBe("abc-123");
-    expect(sessionTag("A=1\0CATAMORPHIC_SESSION_ID=s1\0")).toBe("s1");
-    expect(sessionTag("XCATAMORPHIC_SESSION_ID=nope")).toBeUndefined();
+      chatTag(
+        "bun run dev HOME=/x CATAMORPHIC_SESSION_ID=abc-123 CATAMORPHIC_PROJECT_ID=p-9 PATH=/y",
+      ),
+    ).toEqual({ sessionId: "abc-123", projectId: "p-9" });
+    expect(
+      chatTag("A=1\0CATAMORPHIC_PROJECT_ID=p1\0CATAMORPHIC_SESSION_ID=s1\0"),
+    ).toEqual({ sessionId: "s1", projectId: "p1" });
+    expect(
+      chatTag("XCATAMORPHIC_SESSION_ID=nope CATAMORPHIC_PROJECT_ID=p1"),
+    ).toBeUndefined();
+    // A chat is named with its project, or not at all.
+    expect(chatTag("CATAMORPHIC_SESSION_ID=s1")).toBeUndefined();
   });
 
   it("names interpreters by what they run", () => {
@@ -155,7 +161,10 @@ describe("ResourceMonitor", () => {
         row(301, 300, 0, "make"),
         row(400, MAIN, 0, "crashpad"),
       ],
-      sessions: { 200: "s1", 201: "s1" },
+      chats: {
+        200: { sessionId: "s1", projectId: "p1" },
+        201: { sessionId: "s1", projectId: "p1" },
+      },
       owners: () =>
         new Map([[300, { kind: "terminal", terminalId: "t1", title: "zsh" }]]),
     });
@@ -175,6 +184,11 @@ describe("ResourceMonitor", () => {
       [400, "crashpad", true],
     ]);
     const chat = first.groups[1];
+    expect(chat?.owner).toEqual({
+      kind: "chat",
+      sessionId: "s1",
+      projectId: "p1",
+    });
     expect(chat?.processes.map((proc) => [proc.pid, proc.parentPid])).toEqual([
       [200, undefined],
       [201, 200],

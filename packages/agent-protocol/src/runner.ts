@@ -28,12 +28,13 @@ import type {
 export const RUNNER_PROTOCOL_VERSION = 1;
 
 /**
- * The session an attempt's harness process works for, in its environment
- * (ADR 0266): the runner adds it, and a harness hands its environment to
- * what it runs, so a host can tell which chat a process belongs to. A
- * label only; nothing authorizes on it.
+ * The session an attempt's harness process works for, and its project, in
+ * its environment (ADR 0266): the runner adds them, and a harness hands its
+ * environment to what it runs, so a host can tell which chat a process
+ * belongs to. Labels only; nothing authorizes on them.
  */
 export const SESSION_ID_ENV = "CATAMORPHIC_SESSION_ID";
+export const PROJECT_ID_ENV = "CATAMORPHIC_PROJECT_ID";
 
 export {
   formatEnvFile,

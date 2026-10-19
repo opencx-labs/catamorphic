@@ -579,15 +579,21 @@ describe("the session's environment file (ADR 0206)", () => {
     expect(said()).toContain("OWN=the host's");
   });
 
-  it("names the attempt's session in the harness's environment (ADR 0266)", async () => {
+  it("names the attempt's session and project in the harness's environment (ADR 0266)", async () => {
     const { runner, frames, said, answer } = withFiles({});
     runner.handle({
       id: "start",
       command: {
         kind: "start",
-        attempt: attempt("[[env CATAMORPHIC_SESSION_ID]]", {
-          env: { CATAMORPHIC_SESSION_ID: "not the host's to choose" },
-        }),
+        attempt: attempt(
+          "[[env CATAMORPHIC_SESSION_ID]] [[env CATAMORPHIC_PROJECT_ID]]",
+          {
+            env: {
+              CATAMORPHIC_SESSION_ID: "not the host's to choose",
+              CATAMORPHIC_PROJECT_ID: "nor this",
+            },
+          },
+        ),
       },
     });
     const deadline = Date.now() + 5_000;
@@ -597,6 +603,7 @@ describe("the session's environment file (ADR 0206)", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(said()).toContain("CATAMORPHIC_SESSION_ID=session");
+    expect(said()).toContain("CATAMORPHIC_PROJECT_ID=project");
   });
 
   it("points BASH_ENV at the last file present", async () => {

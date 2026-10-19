@@ -440,7 +440,11 @@ export function registerTerminalSupport(
     const unregister = registerProcessOwner(
       pty.pid,
       input.agent
-        ? { kind: "chat", sessionId: input.agent.sessionId }
+        ? {
+            kind: "chat",
+            sessionId: input.agent.sessionId,
+            projectId: input.agent.projectId,
+          }
         : { kind: "terminal", terminalId: sessionId, title: input.shellName },
     );
 

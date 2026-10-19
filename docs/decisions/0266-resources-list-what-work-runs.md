@@ -27,7 +27,8 @@ and resident memory. A section shows it like any other list
 **Rows grow a `trend`.** `trend: { values, label?, tone? }` is the recent
 history of a value from 0 to 1, oldest first, drawn as a small line and area
 at the row's end with its current reading beside it. Resources uses it for
-CPU, so every row is a sparkline; any source may use it.
+CPU, so every row is a sparkline; any source may use it, chips included
+(ADR 0239), which draw it after their label and badges.
 
 **The main process samples only when asked.** A read returns one snapshot:
 `app.getAppMetrics()` for Electron's processes, and one `ps` (macOS) or
@@ -42,10 +43,12 @@ Electron's processes for now.
 or a browser tab (the window maps a guest to its tab); the terminal manager
 registers each local shell's pid (an agent's terminal belongs to its
 chat); a sidebar module's worker registers its pid. A harness CLI is
-recognized by `CATAMORPHIC_SESSION_ID`, which `AttemptRunner` adds to every
-attempt's environment: harnesses pass their environment to what they run,
-so the commands an agent starts carry it too. The variable is only a
-label; nothing authorizes on it. Descendants belong to their nearest
+recognized by `CATAMORPHIC_SESSION_ID` and `CATAMORPHIC_PROJECT_ID`, which
+`AttemptRunner` adds to every attempt's environment: harnesses pass their
+environment to what they run, so the commands an agent starts carry them
+too. The variables are only labels; nothing authorizes on them. A chat is
+named and opened through its own project, since a window lists the
+harnesses of every project's chats. Descendants belong to their nearest
 owned ancestor.
 
 **Ending goes through the owner.** A terminal closes as its tab does, a
@@ -64,7 +67,7 @@ folders); `pidusage` (one more dependency for what `ps` and `/proc` give).
 ## Consequences
 
 Any layout can add a Resources section and an agent can read it through
-`work.read`. Every harness process now carries its session id in its
-environment. Processes that leave Work's tree (a daemonized server) are
+`work.read`. Every harness process now carries its session and project
+ids in its environment. Processes that leave Work's tree (a daemonized server) are
 not listed. Linux reads `/proc` for every process each sample, which costs
 a few milliseconds while the section is shown.

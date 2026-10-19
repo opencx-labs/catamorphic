@@ -11,6 +11,7 @@ import {
   type HarnessEvent,
   type HostCall,
   type HostToolResult,
+  PROJECT_ID_ENV,
   RequestClosedError,
   type RequestDraft,
   RUNNER_LINE_MAX_BYTES,
@@ -597,10 +598,17 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The attempt with its session id in the harness's environment (ADR 0266). */
+/**
+ * The attempt with its session and project in the harness's environment
+ * (ADR 0266).
+ */
 function withSessionTag(attempt: AttemptStart): AttemptStart {
   return {
     ...attempt,
-    env: { ...attempt.env, [SESSION_ID_ENV]: attempt.sessionId },
+    env: {
+      ...attempt.env,
+      [SESSION_ID_ENV]: attempt.sessionId,
+      [PROJECT_ID_ENV]: attempt.projectId,
+    },
   };
 }

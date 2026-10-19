@@ -2,7 +2,10 @@ import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SESSION_ID_ENV } from "@catamorphic/agent-protocol/runner";
+import {
+  PROJECT_ID_ENV,
+  SESSION_ID_ENV,
+} from "@catamorphic/agent-protocol/runner";
 import { app, ipcMain, type WebContents, webContents } from "electron";
 import {
   type RegisteredOwner,
@@ -74,10 +77,16 @@ export interface ProcessRow {
   comm: string;
 }
 
+/** The chat a process works for, from its environment. */
+export interface ChatTag {
+  sessionId: string;
+  projectId: string;
+}
+
 /** What a newly seen process is: its command line and chat tag. */
 export interface ProcessDetail {
   command: string;
-  sessionId?: string;
+  chat?: ChatTag;
 }
 
 /** One of Electron's processes (`app.getAppMetrics()`). */
@@ -174,11 +183,13 @@ export function parseProcStat(
   };
 }
 
-/** The chat a process's environment names (ADR 0266). */
-export function sessionTag(environment: string): string | undefined {
-  return environment.match(
-    new RegExp(`(?:^|[\\s\\0])${SESSION_ID_ENV}=([\\w-]+)`),
-  )?.[1];
+/** The chat a process's environment names, with its project (ADR 0266). */
+export function chatTag(environment: string): ChatTag | undefined {
+  const value = (name: string) =>
+    environment.match(new RegExp(`(?:^|[\\s\\0])${name}=([\\w-]+)`))?.[1];
+  const sessionId = value(SESSION_ID_ENV);
+  const projectId = value(PROJECT_ID_ENV);
+  return sessionId && projectId ? { sessionId, projectId } : undefined;
 }
 
 /**
@@ -321,14 +332,14 @@ export class ResourceMonitor {
       const details = await sources
         .details(fresh.map((row) => row.pid))
         .catch(() => new Map<number, ProcessDetail>());
-      for (const row of fresh)
+      for (const row of fresh) {
+        const detail = details.get(row.pid);
         this.detailCache.set(row.pid, {
-          command: details.get(row.pid)?.command ?? row.comm,
-          ...(details.get(row.pid)?.sessionId
-            ? { sessionId: details.get(row.pid)?.sessionId }
-            : {}),
+          command: detail?.command ?? row.comm,
+          ...(detail?.chat ? { chat: detail.chat } : {}),
           comm: row.comm,
         });
+      }
     }
     const seen = new Set(descendants.map((row) => row.pid));
     for (const pid of this.detailCache.keys())
@@ -400,9 +411,7 @@ export class ResourceMonitor {
       const parentOwner = ownerOf.get(row.ppid) ?? work;
       const owner: ResourceOwner =
         registered.get(row.pid) ??
-        (detail?.sessionId
-          ? { kind: "chat", sessionId: detail.sessionId }
-          : parentOwner);
+        (detail?.chat ? { kind: "chat", ...detail.chat } : parentOwner);
       ownerOf.set(row.pid, owner);
       if (electronPids.has(row.pid)) continue;
       const previous = this.previous.get(row.pid);
@@ -586,11 +595,11 @@ async function readDetails(
     const tags = lines(environments);
     for (const pid of pids) {
       const command = commands.get(pid);
-      const sessionId = sessionTag(tags.get(pid) ?? "");
-      if (command !== undefined || sessionId)
+      const chat = chatTag(tags.get(pid) ?? "");
+      if (command !== undefined || chat)
         details.set(pid, {
           command: command ?? "",
-          ...(sessionId ? { sessionId } : {}),
+          ...(chat ? { chat } : {}),
         });
     }
     return details;
@@ -601,10 +610,10 @@ async function readDetails(
         fs.readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => ""),
         fs.readFile(`/proc/${pid}/environ`, "utf8").catch(() => ""),
       ]);
-      const sessionId = sessionTag(environment);
+      const chat = chatTag(environment);
       details.set(pid, {
         command: command.split("\0").filter(Boolean).join(" "),
-        ...(sessionId ? { sessionId } : {}),
+        ...(chat ? { chat } : {}),
       });
     }),
   );

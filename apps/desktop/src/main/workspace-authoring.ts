@@ -136,7 +136,7 @@ collapsed?, menu?, contextMenu?, actions?, data? }.
 - badges: strings or { label, icon }. signal: working (spinner), attention
   (needs the person), unread. progress: 0 through 1. trend: { values (up to
   60 readings from 0 through 1, oldest first), label? (the current reading,
-  "12%"), tone? }, drawn as a sparkline at the row's end. preview: { title,
+  "12%"), tone? }, drawn as a sparkline at the row's end (chips draw it too). preview: { title,
   description, metadata: [{label, value}] up to six }. collapsed: false opens a
   row with children the first time it loads (sources start closed; static items
   start open unless collapsed: true).
@@ -354,7 +354,8 @@ Option-click floating). actions are its buttons; menu or contextMenu its
 right-click entries, after the open modes and before Customize chips. preview
 is its hover card (false for none); without one, Work's chips show what they
 stand for live. signal: working spins its icon; attention and unread dot it.
-A chip with hasChildren is a group: a click opens its members upward. data is
+trend draws its sparkline after the label and badges, compact or wide, and on a
+group's members. A chip with hasChildren is a group: a click opens its members upward. data is
 the record behind it: Work's chips say what they are in data.kind
 (pull-request, attached, browser, terminal, editor, chat, subagent, step, app,
 workflow, mcpapp, group) and carry what their previews read. signal is one of

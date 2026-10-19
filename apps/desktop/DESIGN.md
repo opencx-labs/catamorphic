@@ -744,6 +744,8 @@ tabular figures, a fixed width so the column lines up down the list.
 Memory is the row's description, kept whole. A short history starts at
 the right edge and grows leftward, so a line never stretches to fill. A
 reading near one full core takes the warning tone; nothing else colors it.
+Chips draw a trend too, after their label and badges. A chat's row opens
+the chat in its own project, whichever project the window shows.
 End is the row's hover button, as every row action is: it ends a process
 Work started and what it started, and an owner's End or Close goes
 through the owner (a tab closes, a terminal ends). Work's own processes

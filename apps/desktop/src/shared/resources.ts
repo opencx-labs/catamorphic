@@ -7,8 +7,8 @@
 export type ResourceOwner =
   /** Work itself: its main process, graphics, utilities and windows. */
   | { kind: "work" }
-  /** A chat: its harness and what that harness started. */
-  | { kind: "chat"; sessionId: string }
+  /** A chat in its project: its harness and what that harness started. */
+  | { kind: "chat"; sessionId: string; projectId: string }
   /** A terminal's shell and what runs in it. */
   | { kind: "terminal"; terminalId: string; title: string }
   /** A page: a browser tab, or a page another surface shows. */

@@ -2,6 +2,7 @@
 import { createApiClient } from "@catamorphic/api-client";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
+import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ResourceSnapshot } from "../../shared/resources.js";
 import type { WorkspaceTab } from "../lib/workspace-types.js";
 import type { WorkSourceDeps, WorkSourceHost } from "./deps.js";
@@ -61,7 +62,7 @@ mocks.snapshot = {
     },
     {
       id: "chat:s1",
-      owner: { kind: "chat", sessionId: "s1" },
+      owner: { kind: "chat", sessionId: "s1", projectId: "p" },
       processes: [proc(10, { cpu: 120 }), proc(11, { parentPid: 10 })],
       cpu: 130,
       memory: 100 * 1024 * 1024,
@@ -131,7 +132,7 @@ it("lists a total, then owners named as the window knows them, with CPU as a tre
     ["page:7", "Example Domain", "90 MB"],
   ]);
   const chat = items[2];
-  expect(chat?.url).toBe("session:s1");
+  expect(chat?.url).toBe(chatBookmarkUrl({ projectId: "p", sessionId: "s1" }));
   // A reading past most of a core warns; the line spans its own peak.
   expect(chat?.trend).toEqual({
     values: [50 / 130, 1],
@@ -143,6 +144,52 @@ it("lists a total, then owners named as the window knows them, with CPU as a tre
   expect(items[1]?.trend?.values).toEqual([5 / 20]);
   // Work's own offers nothing to end.
   expect(items[1]?.menu).toEqual([]);
+});
+
+it("names and opens a chat through its own project, not the window's", async () => {
+  const requested: string[] = [];
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    requested.push(input instanceof Request ? input.url : String(input));
+    return new Response(
+      JSON.stringify({ snapshot: { session: { title: "Ship it" } } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  const previous = mocks.snapshot;
+  mocks.snapshot = {
+    ...(previous as ResourceSnapshot),
+    groups: [
+      {
+        id: "chat:s2",
+        owner: { kind: "chat", sessionId: "s2", projectId: "elsewhere" },
+        processes: [proc(40)],
+        cpu: 10,
+        memory: 50 * 1024 * 1024,
+        history: [10],
+      },
+    ],
+  };
+  try {
+    const source = resourcesSource({
+      ...deps(),
+      apiClient: createApiClient({ baseUrl: "http://test", fetch }),
+    });
+    const first = await source.load({ parentId: null, signal });
+    expect(first.items[1]).toMatchObject({
+      label: "Chat",
+      url: chatBookmarkUrl({ projectId: "elsewhere", sessionId: "s2" }),
+    });
+    await vi.waitFor(() => expect(requested).toHaveLength(1));
+    expect(requested[0]).toBe(
+      "http://test/api/projects/elsewhere/agent/sessions/s2",
+    );
+    await vi.waitFor(async () => {
+      const { items } = await source.load({ parentId: null, signal });
+      expect(items[1]?.label).toBe("Ship it");
+    });
+  } finally {
+    mocks.snapshot = previous;
+  }
 });
 
 it("nests an owner's processes, endable ones with End", async () => {

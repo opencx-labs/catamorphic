@@ -201,7 +201,12 @@ it("shows chips an agent attaches, and takes one off the chat with its X", async
         wide: true,
         badges: [{ label: "Live", tone: "success" }],
       },
-      { id: "notes", label: "Notes", icon: "NotebookPen" },
+      {
+        id: "notes",
+        label: "Notes",
+        icon: "NotebookPen",
+        trend: { values: [0.2, 0.6, 0.4], label: "40%" },
+      },
     ],
   });
   const attached = await wait<{ buttons: string[]; kind: string }>(
@@ -215,6 +220,15 @@ it("shows chips an agent attaches, and takes one off the chat with its X", async
     buttons: ["open-side", "remove"],
     kind: "attached",
   });
+  // A chip draws a trend as a row does: its line, its reading beside it.
+  const trend = await wait<{ line: boolean; label: string }>(
+    `const el = chip('notes')?.querySelector('[data-trend]');
+     if (!el) return false;
+     return { line: (el.querySelector('path:last-of-type')?.getAttribute('d') ?? '').startsWith('M'),
+       label: el.textContent };`,
+    { label: "a chip's trend" },
+  );
+  expect(trend).toEqual({ line: true, label: "40%" });
   // Compact chips come first, packed in lines; wide ones stack under them
   // (this one under the two pull requests, folded behind "1 more").
   const order = await run<string[]>(

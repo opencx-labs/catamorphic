@@ -2,6 +2,7 @@ import {
   type AgentSessionData,
   agentSessionQueryKey,
 } from "@catamorphic/react";
+import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import {
   formatBytes,
   formatCpu,
@@ -106,7 +107,17 @@ export function resourcesSource(deps: WorkSourceDeps): SectionSource {
   const titles = new Map<string, string | null>();
   let latest: ResourceSnapshot | undefined;
 
-  const chatTitle = (sessionId: string): string | undefined => {
+  /**
+   * A chat's title, read through its own project: a harness runs here for
+   * a chat in any project.
+   */
+  const chatTitle = ({
+    projectId,
+    sessionId,
+  }: {
+    projectId: string;
+    sessionId: string;
+  }): string | undefined => {
     const tab = deps
       .host()
       .tabs.find(
@@ -114,14 +125,14 @@ export function resourcesSource(deps: WorkSourceDeps): SectionSource {
       );
     if (tab?.label) return tab.label;
     const cached = deps.queryClient.getQueryData<AgentSessionData>(
-      agentSessionQueryKey(deps.projectId, sessionId),
+      agentSessionQueryKey(projectId, sessionId),
     )?.state.session.title;
     if (cached) return cached;
-    if (!titles.has(sessionId) && deps.projectId) {
+    if (!titles.has(sessionId)) {
       titles.set(sessionId, null);
       void deps.apiClient
         .GET("/api/projects/{projectId}/agent/sessions/{sessionId}", {
-          params: { path: { projectId: deps.projectId, sessionId } },
+          params: { path: { projectId, sessionId } },
           parseAs: "text",
         })
         .then((response) => {
@@ -181,11 +192,12 @@ export function resourcesSource(deps: WorkSourceDeps): SectionSource {
           ),
         };
       case "chat": {
-        const label = chatTitle(owner.sessionId) ?? "Chat";
+        const label = chatTitle(owner) ?? "Chat";
         return {
           ...base,
           label,
-          url: `session:${owner.sessionId}`,
+          // The chat in its own project, which need not be this window's.
+          url: chatBookmarkUrl(owner),
           contextMenu: endAll,
           preview: preview(label, "Its agent, and the commands it runs."),
         };
