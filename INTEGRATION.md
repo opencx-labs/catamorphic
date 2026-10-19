@@ -1206,12 +1206,7 @@ role check, an MCP OAuth exchange) always run. The broker opens the material
 only for the provider call and passes `connection: { id, revision }` so a
 provider can reuse upstream sessions per credential; a provider that does
 implements `release({ connectionId })`, which core calls after rotation,
-refresh, and revocation. A provider whose actions do not depend on what an
-authorization granted declares them as `capabilities`, and its connections
-offer that list as it is now, so actions a later release adds reach
-connections made before it (ADR 0261); one whose grants narrow (OAuth
-scopes, an MCP server's tools) leaves it out and returns what was granted
-from `completeAuthorization`. A workflow step that will later invoke an agent
+refresh, and revocation. A workflow step that will later invoke an agent
 inherits the workflow's Environment, Allocation, and narrowed grants; it must
 not create a second credential selection path.
 

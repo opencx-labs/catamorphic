@@ -184,7 +184,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
 | [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted (publishing through connections refined by 0177) |
 | [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177; `$prefix` leaf in 0181; directory events by 0210) |
-| [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted (refined by 0177, 0179, 0181; amended by 0261) |
+| [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted (refined by 0177, 0179, 0181) |
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted (project chat connections refined by 0181; idle release on any replica by 0192; setup and volumes by 0208) |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted (amended by 0198; terminals and previews by 0209; Daytona follow-up dropped by 0231) |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180; amended by 0184, 0206; HTTP APIs for code in 0212) |
@@ -266,4 +266,3 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
 | [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
-| [0261](0261-a-connection-offers-its-providers-actions.md) | A connection offers its provider's actions, those a later release adds included | Accepted (amends 0172) |

@@ -70,8 +70,8 @@ generation dropped; the label keeps the Environment's own policy for a
 restart. Microsandbox fixes a VM's network at creation and does not offer
 `network.setup`. Local-process offers it, as a no-op, only under
 `WORK_UNENFORCED_EGRESS=accept`. The queue carries `egress.widen` and
-`egress.narrow`; workers speak protocol 3 and protocol 2 is still driven,
-since placement never sends them either.
+`egress.narrow`; workers speak protocol 3, the oldest the control plane
+drives.
 
 **What remains.** Code a setup leaves running stays in the sandbox once it
 is narrow, and can use the grants and secrets written after, through the

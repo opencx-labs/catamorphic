@@ -28,7 +28,6 @@ export function defineGitConnectionProvider(
   return {
     kind: options.kind,
     displayName: options.displayName,
-    capabilities: GIT_CAPABILITIES,
     git: {
       remoteBaseUrls: [prefix],
       credentials: async ({ material, remoteUrl }) => {

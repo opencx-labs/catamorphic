@@ -344,7 +344,7 @@ export class ConnectionsService {
         outcome: "allowed",
         metadata: { personal: true },
       });
-      return this.record(row);
+      return mapConnection(row);
     } catch (cause) {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
@@ -366,7 +366,7 @@ export class ConnectionsService {
       .where("project_id", "is", null)
       .where("status", "!=", "revoked")
       .executeTakeFirst();
-    return row ? this.record(row) : undefined;
+    return row ? mapConnection(row) : undefined;
   }
 
   /**
@@ -400,7 +400,7 @@ export class ConnectionsService {
     const chosen =
       rows.find((row) => row.project_id !== null) ??
       rows.find((row) => row.project_id === null);
-    return chosen ? this.record(chosen) : undefined;
+    return chosen ? mapConnection(chosen) : undefined;
   }
 
   /**
@@ -426,7 +426,7 @@ export class ConnectionsService {
           .where("principal_kind", "=", "tenant_service")
           .where("status", "!=", "revoked")
           .executeTakeFirst();
-    return row ? this.record(row) : undefined;
+    return row ? mapConnection(row) : undefined;
   }
 
   async authorizationStatus(args: {
@@ -687,7 +687,7 @@ export class ConnectionsService {
         eventType: "connection.created",
         outcome: "allowed",
       });
-      return this.record(row);
+      return mapConnection(row);
     } catch (cause) {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
@@ -771,7 +771,7 @@ export class ConnectionsService {
       outcome: "allowed",
       metadata: { name: args.name, principalKind: args.principalKind },
     });
-    return this.record(row);
+    return mapConnection(row);
   }
 
   async list(args: {
@@ -796,7 +796,7 @@ export class ConnectionsService {
     }
     return (
       await query.selectAll().orderBy("created_at", "desc").execute()
-    ).map((row) => this.record(row));
+    ).map(mapConnection);
   }
 
   /** The organization's live service connections, by name. */
@@ -823,7 +823,7 @@ export class ConnectionsService {
       .selectAll()
       .orderBy("name")
       .execute();
-    return rows.map((row) => this.record(row));
+    return rows.map(mapConnection);
   }
 
   /** Host-side adoption/refresh of an already authenticated member account. */
@@ -1240,32 +1240,15 @@ export class ConnectionsService {
   }
 
   /**
-   * What a connection itself may do: the actions it offers (its provider's
-   * list, else what its authorization recorded, ADR 0261), and Git reads and
-   * writes when its provider serves Git through the gateway (ADR 0175).
-   * Bindings and roles narrow them.
+   * What a connection itself may do: the capabilities its authorization
+   * recorded, and Git reads and writes when its provider serves Git through
+   * the gateway (ADR 0175). Bindings and roles narrow them.
    */
   private connectionCapabilities(connection: ConnectionRow): string[] {
-    const own = this.offered(connection);
+    const own = stringArray(connection.capabilities);
     return this.providers.get(connection.provider_kind)?.git
       ? [...own, ...GIT_CAPABILITIES.filter((git) => !own.includes(git))]
       : own;
-  }
-
-  /**
-   * The actions a connection offers: its provider's own list when it has
-   * one, so actions a later release adds reach connections authorized
-   * before it, else what its authorization recorded (an MCP server's tools).
-   */
-  private offered(connection: ConnectionRow): string[] {
-    const provider = this.providers.get(connection.provider_kind);
-    return provider?.capabilities
-      ? [...provider.capabilities]
-      : stringArray(connection.capabilities);
-  }
-
-  private record(row: ConnectionRow): ConnectionRecord {
-    return { ...mapConnection(row), capabilities: this.offered(row) };
   }
 
   async revoke(args: {
@@ -1818,7 +1801,7 @@ export class ConnectionsService {
       });
     }
     await this.release(current);
-    return this.record(row);
+    return mapConnection(row);
   }
 
   private async release(connection: ConnectionRow): Promise<void> {

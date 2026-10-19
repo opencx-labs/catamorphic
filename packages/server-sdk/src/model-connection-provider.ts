@@ -45,7 +45,6 @@ export function defineModelConnectionProvider(
   return {
     kind: options.kind,
     displayName: options.displayName,
-    capabilities: [MODEL_CAPABILITY],
     model: {
       api: options.api,
       baseUrl,
