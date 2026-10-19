@@ -32,6 +32,19 @@ import { desktopAdapter } from "./harness-adapters.js";
  * the chat resumes on any machine.
  */
 
+/**
+ * The CLI's request replay records (`api-request-shape`, `api-request-blob`,
+ * `api-request`; Claude Code 2.1.300 and later) stay in its local file: it
+ * never mirrors them to a session store.
+ */
+function mirrored(entry: unknown): boolean {
+  const type =
+    typeof entry === "object" && entry !== null
+      ? Reflect.get(entry, "type")
+      : undefined;
+  return !(typeof type === "string" && type.startsWith("api-request"));
+}
+
 const identity: Identity = {
   tenantId: "00000000-0000-4000-8000-0000000000c1",
   externalUserId: "desktop-user",
@@ -169,7 +182,8 @@ it("stores every transcript line the CLI wrote by the time its turn settles", as
     .where("subpath", "=", "")
     .orderBy("seq")
     .execute();
-  // The CLI's own transcript, which it finished writing as it exited.
+  // The CLI's own transcript, which it finished writing as it exited, less
+  // the lines it keeps local.
   const ref = thread.native_ref;
   const nativeId =
     ref && typeof ref === "object" && !Array.isArray(ref) ? ref.id : undefined;
@@ -185,7 +199,8 @@ it("stores every transcript line the CLI wrote by the time its turn settles", as
   )
     .split("\n")
     .filter((line) => line.trim())
-    .map((line): unknown => JSON.parse(line));
+    .map((line): unknown => JSON.parse(line))
+    .filter(mirrored);
   expect(written.length).toBeGreaterThan(0);
   expect(stored).toHaveLength(written.length);
   expect(stored.map((row) => row.entry)).toEqual(written);
