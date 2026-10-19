@@ -182,8 +182,9 @@ export function DownloadsBubble({
       }}
     >
       {/* Hovering the bubble reveals its close control; the popover stays
-          outside the group so its rows reveal their own. */}
-      <div className="group relative">
+          outside the group so its rows reveal their own. Flex keeps the
+          hint's inline anchor off a text line, level with the dock. */}
+      <div className="group relative flex">
         <ShortcutHint
           label={
             active.length > 0

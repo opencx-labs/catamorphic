@@ -1,6 +1,6 @@
 # 0216: Voice: local speech, in any chat, and the assistant
 
-- **Status:** Proposed (experimental); session notes are task notifications by [0217](0217-only-people-write-user-messages.md); hearing, push to talk and dictation amended by [0236](0236-voice-hears-the-person-and-dictates-anywhere.md); talking over the agent, what agents see of the screen and the assistant's place amended by [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md)
+- **Status:** Proposed (experimental); session notes are task notifications by [0217](0217-only-people-write-user-messages.md); hearing, push to talk and dictation amended by [0236](0236-voice-hears-the-person-and-dictates-anywhere.md); talking over the agent, what agents see of the screen and the assistant's place amended by [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md); when a turn ends and replies ready while the person talks amended by [0267](0267-voice-waits-for-the-person-to-finish.md)
 - **Date:** 2026-10-02
 
 ## Context

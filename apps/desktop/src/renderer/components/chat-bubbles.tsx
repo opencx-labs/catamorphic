@@ -213,12 +213,14 @@ function Bubble({
     if (signals.awaitingInput) setAsking(true);
   }
   return (
+    // Flex, like every dock slot: the hint's inline anchor in a block would
+    // sit on a text line, and its descender space would lift the bubble.
     <div
       ref={rootRef}
       data-chat-bubble={entry.localId}
       data-session-id={entry.sessionId}
       style={theme}
-      className={`group relative ${
+      className={`group relative flex ${
         exiting
           ? "animate-bubble-out pointer-events-none"
           : fresh
@@ -709,12 +711,14 @@ export function ChatBubbles({
   // the microphone next to the arrows; both stay when the strip folds.
   // Kept out of the dock, the microphone shrinks to nothing in place and
   // takes its gap with it: beside downloads, the gap between them; alone,
-  // the dock's gap around the tools, which leaves them empty.
+  // the dock's gap around the tools, which leaves them empty. The slot is
+  // flex: a block would put the microphone's hint on a text line, whose
+  // descender space lifted it above the bubbles and grew the dock.
   const voiceSlot = (
     <div
       key="voice"
       data-dock-voice={voiceShown ? "shown" : "hidden"}
-      className={`transition-[max-width,margin,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`flex transition-[max-width,margin,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
         voiceShown
           ? "max-w-9 opacity-100"
           : `pointer-events-none max-w-0 overflow-hidden opacity-0 scale-40 ${side === "left" ? "-me-1.5" : "-ms-1.5"}`

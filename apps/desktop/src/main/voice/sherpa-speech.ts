@@ -132,9 +132,10 @@ function sileroActivity(model: string): VoiceActivity {
       sileroVad: {
         model,
         threshold: 0.5,
-        // Half a second of silence ends a turn: quick, yet a pause to
-        // think mid-sentence rarely splits it.
-        minSilenceDuration: 0.5,
+        // 0.8 seconds of silence ends a turn. Half a second ended turns
+        // while the person paused to think mid-sentence; this still
+        // answers soon after they stop.
+        minSilenceDuration: 0.8,
         minSpeechDuration: 0.25,
         maxSpeechDuration: 20,
         windowSize,

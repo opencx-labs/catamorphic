@@ -3442,3 +3442,31 @@ turn describes the screen as it was then, and the agent can load a
 picture of it when it needs one. Work pictures its own window when Work
 is in front, and from another app the screen, once the person has
 allowed Work to record it. See ADR 0265.
+
+### 2026-10-20: A working icon keeps its identity; the tab in front wears the accent; the dock sits level; voice waits its turn
+
+A working chat's icon turned into a spinner, so a tab, a chip or a bubble
+lost the one thing that said which chat it was. Now the icon stays and a
+small accent spinner rides its top-right corner, the corner the unread
+dot and the question badge use, cutting a gap out of the icon beneath it
+so it reads on any background (`SignalGlyph`, `.signal-cutout`). It is
+the one way a working spinner shows on an icon: tabs, sidebar rows,
+chips, bubbles and the collapsed dock bubble alike.
+
+The tab in front had a neutral border on the strip's near black and was
+hard to find. It now wears the theme's accent at 60%, as an open chat's
+bubble does; the palette's target keeps the full accent, so the two
+still read apart.
+
+The dock's microphone sat about two and a half pixels above the bubbles
+and made the dock five pixels taller, collapsed or not. Its slot, like a
+chat bubble's and the downloads bubble's, was a block around the hint's
+inline anchor, so the anchor sat on a line of text and kept room for its
+descenders. Every dock slot is now a flex box: no text line, every
+control on one centre line.
+
+Voice ended a turn after half a second of silence and so cut the person
+off as they paused to think; it now waits 0.8 seconds. A reply that
+became ready while they were already talking started over them. It now
+waits for them to finish from its first word, and is said once their
+words have gone to the agent. See ADR 0267.

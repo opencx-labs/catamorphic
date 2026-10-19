@@ -75,3 +75,26 @@ it("shows a question instead of a spinner while a running turn awaits input", ()
     container.querySelector('[aria-hidden="false"]')?.textContent,
   ).toContain("?");
 });
+
+it("keeps the icon while working, with the spinner on its corner", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  cleanup = () => act(() => root.unmount());
+  const render = (working: boolean) =>
+    act(() =>
+      root.render(
+        <SignalGlyph working={working}>
+          <span data-testid="icon">Chat</span>
+        </SignalGlyph>,
+      ),
+    );
+  render(true);
+  const icon = container.querySelector('[data-testid="icon"]');
+  const cutout = icon?.closest(".signal-cutout");
+  expect(cutout?.hasAttribute("data-cut")).toBe(true);
+  expect(cutout?.className).not.toContain("opacity-0");
+  expect(container.querySelector(".animate-spin")).not.toBeNull();
+  render(false);
+  expect(cutout?.hasAttribute("data-cut")).toBe(false);
+  expect(container.querySelector('[data-testid="icon"]')).toBe(icon);
+});

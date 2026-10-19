@@ -286,6 +286,61 @@ describe("downloads", () => {
     );
   });
 
+  it("every control in the strip sits on one centre line, open or folded", async () => {
+    // A slot that set a hint's inline anchor on a line of text kept room
+    // for descenders under it: its control rode high and the strip grew.
+    const level = `(() => {
+      const rail = document.querySelector('[data-dock-rail]');
+      if (!rail || rail.getAnimations({ subtree: true }).some((animation) => animation.playState === 'running')) return null;
+      const box = rail.getBoundingClientRect();
+      const style = getComputedStyle(rail);
+      const controls = [...rail.querySelectorAll('button')].filter(
+        (button) => !button.closest('[inert]') && button.getBoundingClientRect().height === 36,
+      );
+      return {
+        inner: box.height - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - parseFloat(style.borderTopWidth) - parseFloat(style.borderBottomWidth),
+        labels: controls.map((button) => button.getAttribute('aria-label')),
+        offsets: controls.map((button) => {
+          const control = button.getBoundingClientRect();
+          return Math.round((control.top + control.height / 2 - box.top - box.height / 2) * 2) / 2;
+        }),
+      };
+    })()`;
+    const levelWith = async (labels: string[], label: string) => {
+      const measured = await app.waitFor<{
+        inner: number;
+        labels: string[];
+        offsets: number[];
+      }>(
+        `(() => { const measured = ${level}; return measured && ${JSON.stringify(labels)}.every((label) => measured.labels.includes(label)) ? measured : null; })()`,
+        { label },
+      );
+      expect(measured.inner).toBe(36);
+      expect(measured.offsets.every((offset) => offset === 0)).toBe(true);
+    };
+    await app.waitFor(`!!document.querySelector('[data-dock-voice="shown"]')`, {
+      label: "microphone in the dock",
+    });
+    await levelWith(
+      ["Downloads", "Voice", "Collapse chat bubbles"],
+      "open strip measured",
+    );
+    await click("[data-dock-arrows]");
+    await app.waitFor(
+      `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+      { label: "strip folded" },
+    );
+    await levelWith(
+      ["Downloads", "Voice", "Expand chat bubbles"],
+      "folded strip measured",
+    );
+    await click('[aria-label="Expand chat bubbles"]');
+    await app.waitFor(
+      `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && !document.querySelector('[data-dock-rail]').getAnimations({ subtree: true }).some((animation) => animation.playState === 'running')`,
+      { label: "strip open again" },
+    );
+  });
+
   it("the popover leaves with its exit, and closes once the person turns elsewhere", async () => {
     const popover = `document.querySelector('[data-testid="downloads-popover"]')`;
     const opened = async (label: string) => {
