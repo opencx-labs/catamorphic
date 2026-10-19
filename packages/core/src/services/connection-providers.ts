@@ -169,17 +169,6 @@ export interface ConnectionProvider {
    */
   readonly mcp?: boolean;
   /**
-   * Every action the provider offers, for a provider whose actions do not
-   * depend on what an authorization granted. A connection then offers this
-   * list, not the one its authorization recorded, so actions a later
-   * release or configuration adds reach connections made before it;
-   * bindings and roles narrow it as always. Absent, a connection offers
-   * what its authorization recorded (an MCP server's tools). Leave it out
-   * when what a connection may do depends on what it was granted, such as
-   * OAuth scopes: this list would widen every connection to all of it.
-   */
-  readonly capabilities?: readonly string[];
-  /**
    * Start authorizing a member's or a service connection. `projectId` is
    * absent for a tenant service connection; `externalUserId` is whoever
    * authorizes (the member, or the administrator for a service).
