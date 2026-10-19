@@ -128,6 +128,22 @@ const hoverFixture = async () => {
   await move(await centerOf(row("Popup fixture"), "fixture row"));
   await cardOpen();
 };
+/**
+ * Rest the pointer off the switcher, on a list row with no card: left on
+ * the switcher, its own card opens over the page and takes the next Escape.
+ */
+const offTrigger = async () => {
+  await move(
+    await centerOf(
+      `[...${listbox}.querySelectorAll('button')].find(b => b.textContent.trim() === 'New project')`,
+      "New project",
+    ),
+  );
+  await app.waitFor(
+    "!document.querySelector('[data-resource-inspector][data-open]')",
+    { label: "no card open" },
+  );
+};
 const openActions = async () => {
   await press(
     await centerOf(
@@ -507,6 +523,7 @@ describe("the project list", () => {
     try {
       await press(await centerOf(trigger, "switcher"));
       await listOpen();
+      await offTrigger();
       await spans();
       await app.screenshot(path.join(artifacts, "project-list-wide.png"));
       await app.press("Escape");
@@ -529,17 +546,7 @@ describe("the project list", () => {
     await press(await centerOf(trigger, "switcher"));
     await listOpen();
     await spans();
-    // Off the trigger, whose own card would open over the page.
-    await move(
-      await centerOf(
-        `[...${listbox}.querySelectorAll('button')].find(b => b.textContent.trim() === 'New project')`,
-        "New project",
-      ),
-    );
-    await app.waitFor(
-      "!document.querySelector('[data-resource-inspector][data-open]')",
-      { label: "no card open" },
-    );
+    await offTrigger();
     await app.screenshot(path.join(artifacts, "project-list-long-name.png"));
     await app.press("Escape");
     await listClosed();
