@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type {
-  CreateSandboxOpts,
-  SandboxProvider,
-  SandboxResources,
+import {
+  type CreateSandboxOpts,
+  type SandboxProvider,
+  type SandboxResources,
+  sameEgress,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
@@ -16,10 +17,50 @@ import {
 } from "./volume-holds.js";
 
 /**
+ * A widening of the Allocation's sandbox for its setup (ADR 0257): only to
+ * the setup egress admission fixed, compared by value, so no caller widens
+ * a sandbox beyond it.
+ */
+function allocationWidening(args: {
+  allocation: ExecutionAllocation;
+  widenEgress: NonNullable<SandboxProvider["widenEgress"]>;
+}): NonNullable<SandboxProvider["widenEgress"]> {
+  const fixed = args.allocation.policy.sandbox?.setupEgress;
+  return async (input) => {
+    if (!fixed || !sameEgress(fixed, input.egress))
+      throw new Error(
+        "A workspace's network widens only to the setup network its Allocation fixed at admission",
+      );
+    await args.widenEgress(input);
+  };
+}
+
+/**
+ * A narrowing of the Allocation's sandbox (ADR 0257), with no ownership
+ * check: returning a sandbox to its own policy is always safe, and must
+ * work after the Allocation or its machine's lease has moved on. A sandbox
+ * that cannot be narrowed is stopped, unchecked as well.
+ */
+function allocationNarrowing(
+  provider: SandboxProvider,
+): SandboxProvider["narrowEgress"] {
+  const narrowEgress = provider.narrowEgress?.bind(provider);
+  if (!narrowEgress) return undefined;
+  return async (input) => {
+    try {
+      await narrowEgress(input);
+    } catch (error) {
+      await provider.stopSandbox(input.sandboxId).catch(() => {});
+      throw error;
+    }
+  };
+}
+
+/**
  * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
  * 0208) on a provider that keeps its own sandbox lifecycle, such as a
  * member's computer: the Environment decides what its sandboxes boot,
- * wherever they run.
+ * wherever they run, and which networks they switch to (ADR 0257).
  */
 export function withAllocationSandboxPolicy(args: {
   db: Kysely<DB>;
@@ -28,11 +69,13 @@ export function withAllocationSandboxPolicy(args: {
 }): SandboxProvider {
   const { provider } = args;
   const sandbox = args.allocation.policy.sandbox;
+  // A provider that widens is always wrapped: only admission says how far.
   if (
     !sandbox?.image &&
     !sandbox?.containers &&
     !sandbox?.egress &&
-    !sandbox?.volumes?.length
+    !sandbox?.volumes?.length &&
+    !provider.widenEgress
   )
     return provider;
   const createSandbox = async (opts: CreateSandboxOpts) => {
@@ -42,15 +85,22 @@ export function withAllocationSandboxPolicy(args: {
     });
     return provider.createSandbox({
       ...opts,
-      ...(sandbox.image ? { image: sandbox.image } : {}),
-      ...(sandbox.containers ? { containers: true } : {}),
-      ...(sandbox.egress ? { egress: sandbox.egress } : {}),
+      ...(sandbox?.image ? { image: sandbox.image } : {}),
+      ...(sandbox?.containers ? { containers: true } : {}),
+      ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
     });
   };
+  const widenEgress = provider.widenEgress?.bind(provider);
+  const widening = widenEgress
+    ? allocationWidening({ allocation: args.allocation, widenEgress })
+    : undefined;
+  const narrowing = allocationNarrowing(provider);
   return new Proxy(provider, {
     get(target, property) {
       if (property === "createSandbox") return createSandbox;
+      if (property === "widenEgress") return widening;
+      if (property === "narrowEgress") return narrowing;
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -76,39 +126,15 @@ export function allocationSandboxProvider(args: {
     storageMb: limits?.storageMb,
     gpu: limits?.gpu,
   };
-  const requireActive = async (sandboxId?: string) => {
-    const leaseToken =
-      typeof args.workerLeaseToken === "function"
-        ? args.workerLeaseToken()
-        : args.workerLeaseToken;
-    if (allocation.workerNodeId && args.workerLeaseToken) {
-      if (!leaseToken)
-        throw new Error("This machine no longer owns its execution lease");
-      const live = await db
-        .selectFrom("worker_nodes")
-        .select("id")
-        .where("id", "=", allocation.workerNodeId)
-        .where("lease_token", "=", leaseToken)
-        .where("enabled", "=", true)
-        .where("lease_expires_at", ">", sql<Date>`now()`)
-        .executeTakeFirst();
-      if (!live)
-        throw new Error("This machine no longer owns its execution lease");
-    }
-    const row = await db
-      .selectFrom("execution_allocations")
-      .selectAll()
-      .where("id", "=", allocation.id)
-      .where("status", "=", "active")
-      .where("capacity_released_at", "is", null)
-      .executeTakeFirst();
-    if (!row || (sandboxId && row.sandbox_provider_id !== sandboxId)) {
-      throw new Error(
-        "Workspace Allocation is no longer active or does not own this sandbox",
-      );
-    }
-    return row;
-  };
+  const requireActive = (sandboxId?: string) =>
+    requireActiveAllocation({
+      db,
+      allocation,
+      ...(args.workerLeaseToken
+        ? { workerLeaseToken: args.workerLeaseToken }
+        : {}),
+      ...(sandboxId ? { sandboxId } : {}),
+    });
   const create = async (opts: CreateSandboxOpts) => {
     const row = await requireActive();
     if (row.sandbox_provider_id) {
@@ -169,6 +195,11 @@ export function allocationSandboxProvider(args: {
   };
   const runtime = provider.deploymentRuntime;
   const processes = provider.processes;
+  const widenEgress = provider.widenEgress?.bind(provider);
+  const widening = widenEgress
+    ? allocationWidening({ allocation, widenEgress })
+    : undefined;
+  const narrowing = allocationNarrowing(provider);
   return {
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
@@ -202,6 +233,13 @@ export function allocationSandboxProvider(args: {
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>
       guard(id, () => provider.gitCheckout(id, path, ref)),
+    ...(widening
+      ? {
+          widenEgress: (input: Parameters<typeof widening>[0]) =>
+            guard(input.sandboxId, () => widening(input)),
+        }
+      : {}),
+    ...(narrowing ? { narrowEgress: narrowing } : {}),
     // Background processes live in the Allocation's sandbox and end with
     // it; each operation proves the Allocation still owns that sandbox.
     ...(processes
@@ -243,6 +281,76 @@ export function allocationSandboxProvider(args: {
         }
       : {}),
   };
+}
+
+/**
+ * The Allocation's row while it is active, its machine's lease (for a
+ * local node) still held, and, given `sandboxId`, its sandbox that one.
+ */
+async function requireActiveAllocation(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  workerLeaseToken?: string | (() => string | undefined);
+  sandboxId?: string;
+}) {
+  const { db, allocation } = args;
+  if (allocation.workerNodeId && args.workerLeaseToken) {
+    const leaseToken =
+      typeof args.workerLeaseToken === "function"
+        ? args.workerLeaseToken()
+        : args.workerLeaseToken;
+    if (!leaseToken)
+      throw new Error("This machine no longer owns its execution lease");
+    const live = await db
+      .selectFrom("worker_nodes")
+      .select("id")
+      .where("id", "=", allocation.workerNodeId)
+      .where("lease_token", "=", leaseToken)
+      .where("enabled", "=", true)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .executeTakeFirst();
+    if (!live)
+      throw new Error("This machine no longer owns its execution lease");
+  }
+  const row = await db
+    .selectFrom("execution_allocations")
+    .selectAll()
+    .where("id", "=", allocation.id)
+    .where("status", "=", "active")
+    .where("capacity_released_at", "is", null)
+    .executeTakeFirst();
+  if (!row || (args.sandboxId && row.sandbox_provider_id !== args.sandboxId)) {
+    throw new Error(
+      "Workspace Allocation is no longer active or does not own this sandbox",
+    );
+  }
+  return row;
+}
+
+/**
+ * Destroy an Allocation's sandbox so that its next create makes a new one
+ * in the same Allocation (ADR 0257): a setup that must run with its own
+ * network again gets a sandbox in which nothing has run. Its volumes and
+ * their holds stay. `provider` is the machine's own, whose destroy is real;
+ * a sandbox already gone counts as destroyed.
+ */
+export async function replaceAllocationSandbox(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+  sandboxId: string;
+  /** As for {@link allocationSandboxProvider}. */
+  workerLeaseToken?: string | (() => string | undefined);
+}): Promise<void> {
+  await requireActiveAllocation(args);
+  await args.provider.destroySandbox(args.sandboxId);
+  await args.db
+    .updateTable("execution_allocations")
+    .set({ sandbox_provider_id: null, sandbox_creation_started: false })
+    .where("id", "=", args.allocation.id)
+    .where("status", "=", "active")
+    .where("sandbox_provider_id", "=", args.sandboxId)
+    .execute();
 }
 
 /** A host's claim on an Allocation's maintenance (ADR 0192). */

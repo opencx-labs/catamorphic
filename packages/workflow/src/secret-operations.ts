@@ -1,4 +1,4 @@
-import type { WorkflowTransition } from "./workflow.js";
+import type { TransitionCall } from "./workflow.js";
 
 /**
  * One project secret as `list` reports it (ADR 0206). Never a value: only
@@ -21,9 +21,7 @@ export interface SecretStatusEntry {
 /** A member by their id, or by the email they sign in with. */
 type Member = string;
 
-type Call<Input, Output = unknown> = (
-  input: Input,
-) => WorkflowTransition<Output>;
+type Call<Input, Output = unknown> = TransitionCall<Input, Output>;
 
 /**
  * The project's secrets (ADR 0210), caller-bound like every host call. A

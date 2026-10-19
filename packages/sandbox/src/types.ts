@@ -242,6 +242,29 @@ export interface SandboxProvider {
   gitCheckout(sandboxId: string, path: string, ref: string): Promise<void>;
 
   /**
+   * Widen a running sandbox's egress for one setup (ADR 0257), where the
+   * provider lists `network.setup`. `id` names this widening, and `until`
+   * (an ISO time) is when the provider itself returns the sandbox to the
+   * policy it was created with, whoever asks or not, so a controller that
+   * dies cannot leave it wide. A widening whose `id` already ended, or
+   * whose `until` has passed, is refused. Every switch closes every
+   * connection open through the sandbox.
+   */
+  widenEgress?(args: {
+    sandboxId: string;
+    egress: SandboxEgress;
+    id: string;
+    until: string;
+  }): Promise<void>;
+  /**
+   * Return a sandbox to the policy it was created with, closing every
+   * connection open through it, and remember `id` as ended, so a widening
+   * still on its way is refused when it arrives. A sandbox that is not
+   * wide stays as it is. Narrowing is always safe to ask for.
+   */
+  narrowEgress?(args: { sandboxId: string; id: string }): Promise<void>;
+
+  /**
    * Optional warm deployment-runtime capability. Existing providers can omit
    * it and continue using command-based execution.
    */

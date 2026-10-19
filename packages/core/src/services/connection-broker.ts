@@ -874,6 +874,35 @@ export class ConnectionBroker {
   }
 
   /**
+   * Audit a model call the gateway refused before its guards ran: a path
+   * the connection does not serve, a rewrite's refusal, a model outside the
+   * binding (ADR 0256).
+   */
+  async auditModelRefusal(args: {
+    identity: Identity;
+    projectId: string;
+    allocationId: string;
+    connectionId: string;
+    action: string;
+    reason: string;
+    agentSessionId?: string;
+  }): Promise<void> {
+    await this.connections.audit({
+      identity: args.identity,
+      projectId: args.projectId,
+      connectionId: args.connectionId,
+      allocationId: args.allocationId,
+      eventType: "connection.model",
+      outcome: "denied",
+      action: args.action,
+      metadata: {
+        ...(args.agentSessionId ? { sessionId: args.agentSessionId } : {}),
+        reason: args.reason,
+      },
+    });
+  }
+
+  /**
    * Run the gateway's guards. Escalations ask the agent session's person;
    * a workflow cannot wait on a person mid-step, so it is refused.
    */

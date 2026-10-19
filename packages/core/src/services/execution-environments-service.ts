@@ -16,6 +16,7 @@ import {
   harnessCapability,
   MACHINE_CAPABILITIES,
   resolveEgress,
+  resolveSetupEgress,
   SANDBOX_CAPABILITIES,
   signInCapability,
   volumeKey,
@@ -36,6 +37,10 @@ import type {
   EnvironmentSandbox,
   EnvironmentSandboxVolume,
 } from "./execution-allocations-service.js";
+import type {
+  PlacementWaitReason,
+  PlacementWaitTarget,
+} from "./placement-waits.js";
 import {
   DEFAULT_IDLE_RELEASE_MINUTES,
   DEFAULT_SETUP_TIMEOUT_MINUTES,
@@ -67,8 +72,10 @@ export interface EnvironmentAdmission {
   /**
    * What runs in each new workspace's project folder before its first turn
    * (ADR 0208), as the Environment says now: a changed command runs again.
+   * `network` asks for the setup's own network while it runs (ADR 0257);
+   * the Allocation fixed what that is when it was admitted.
    */
-  setup?: { command: string; timeoutMinutes: number };
+  setup?: AdmittedSetup;
   /** How long unattended escalations wait for a person (ADR 0176). */
   approvals?: { waitMinutes: number };
   /**
@@ -83,6 +90,35 @@ export interface EnvironmentAdmission {
    * reach its sandboxes (ADR 0206).
    */
   isolated: boolean;
+  /**
+   * How the work would wait for a machine of this Environment (ADR 0258),
+   * should the machine admitted be full by the time its Allocation is made.
+   */
+  wait: Omit<PlacementWaitTarget, "reason">;
+}
+
+/** Arguments of {@link ExecutionEnvironmentsService.admit}. */
+export interface EnvironmentAdmitArgs {
+  identity: Identity;
+  projectId: string;
+  owner?: PlacementOwner;
+  environment?: string;
+  workerNodeId?: string;
+  allocationBindingId?: string;
+  allowed?: readonly string[];
+  preferred?: readonly string[];
+  requirements: EnvironmentRequirements;
+  /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
+  signIn?: SignInHarness;
+}
+
+/** An Environment's setup as admission reads it (ADRs 0208, 0257). */
+export interface AdmittedSetup {
+  command: string;
+  timeoutMinutes: number;
+  network?: { allow: readonly string[] };
+  /** The secrets a setup with its own network runs with, and no others. */
+  secrets?: readonly string[];
 }
 
 /**
@@ -212,6 +248,9 @@ export function sandboxCapabilitiesFor(
     ...(definition.network && definition.network.egress !== "open"
       ? [SANDBOX_CAPABILITIES.egressPolicy]
       : []),
+    // A setup with its own network needs a machine that switches a running
+    // sandbox's egress (ADR 0257).
+    ...(definition.setup?.network ? [SANDBOX_CAPABILITIES.setupNetwork] : []),
     ...(Object.keys(definition.volumes ?? {}).length > 0
       ? [SANDBOX_CAPABILITIES.volumes]
       : []),
@@ -525,19 +564,45 @@ export class ExecutionEnvironmentsService {
     return admissions;
   }
 
-  async admit(args: {
-    identity: Identity;
-    projectId: string;
-    owner?: PlacementOwner;
-    environment?: string;
-    workerNodeId?: string;
-    allocationBindingId?: string;
-    allowed?: readonly string[];
-    preferred?: readonly string[];
-    requirements: EnvironmentRequirements;
-    /** The agent runs on the owner's own sign-in on the machine (ADR 0199). */
-    signIn?: SignInHarness;
-  }): Promise<EnvironmentAdmission> {
+  async admit(args: EnvironmentAdmitArgs): Promise<EnvironmentAdmission> {
+    const placed = await this.place(args);
+    if ("admission" in placed) return placed.admission;
+    throw placed.error;
+  }
+
+  /**
+   * Admit work that may wait for a machine (ADR 0258). When no Environment
+   * could take it because no machine open to it had room or was online, it
+   * answers that the work waits in the first of those, in admission order,
+   * whose `waitMinutes` lets work wait, or with `always` (a chat already
+   * open, whose next turn waits as long as it is queued) the first of them.
+   * Any other failure throws as {@link admit} does.
+   */
+  async admitOrWait(
+    args: EnvironmentAdmitArgs & { always?: boolean },
+  ): Promise<
+    { admission: EnvironmentAdmission } | { wait: PlacementWaitTarget }
+  > {
+    const placed = await this.place(args);
+    if ("admission" in placed) return placed;
+    const wait = placed.waits.find(
+      (candidate) => args.always || candidate.waitMinutes > 0,
+    );
+    if (wait) return { wait };
+    throw placed.error;
+  }
+
+  /**
+   * Admission, or why it failed and where the work could wait: each
+   * Environment, in admission order, that had no machine with room or
+   * none online.
+   */
+  private async place(
+    args: EnvironmentAdmitArgs,
+  ): Promise<
+    | { admission: EnvironmentAdmission }
+    | { error: Error; waits: PlacementWaitTarget[] }
+  > {
     return withSpan(
       {
         tracer,
@@ -567,19 +632,41 @@ export class ExecutionEnvironmentsService {
           ) {
             throw new EnvironmentAccessDeniedError(args.environment);
           }
+          const waitFor = (reason: PlacementWaitReason) =>
+            waitTargetOf({
+              ...args,
+              name: args.environment ?? "",
+              definition,
+              reason,
+            });
           const evaluated = await this.evaluate({
             ...args,
             name: args.environment,
             reason: "requested",
+          }).catch((error) => {
+            if (error instanceof EnvironmentCapacityError)
+              return { capacity: error };
+            throw error;
           });
-          if ("admission" in evaluated) return evaluated.admission;
+          if ("capacity" in evaluated)
+            return {
+              error: evaluated.capacity,
+              waits: waitFor("capacity"),
+            };
+          if ("admission" in evaluated) return evaluated;
           if (evaluated.bindingUnavailable) {
-            throw new EnvironmentBindingUnavailableError(args.environment);
+            return {
+              error: new EnvironmentBindingUnavailableError(args.environment),
+              waits: waitFor("unavailable"),
+            };
           }
-          throw new EnvironmentIncompatibleError(
-            args.environment,
-            evaluated.reasons,
-          );
+          return {
+            error: new EnvironmentIncompatibleError(
+              args.environment,
+              evaluated.reasons,
+            ),
+            waits: [],
+          };
         }
 
         const ordered = [
@@ -588,8 +675,10 @@ export class ExecutionEnvironmentsService {
           ...Object.keys(policy.environments).sort(),
         ].filter((name, index, all) => all.indexOf(name) === index);
         const reasons: Record<string, readonly string[]> = {};
+        const waits: PlacementWaitTarget[] = [];
         for (const name of ordered) {
-          if (!policy.environments[name]) continue;
+          const definition = policy.environments[name];
+          if (!definition) continue;
           if (args.allowed && !args.allowed.includes(name)) {
             reasons[name] = ["Agent policy does not allow this Environment"];
             continue;
@@ -608,14 +697,32 @@ export class ExecutionEnvironmentsService {
             name,
             reason,
           }).catch((error) => {
-            if (error instanceof EnvironmentCapacityError)
+            if (error instanceof EnvironmentCapacityError) {
+              waits.push(
+                ...waitTargetOf({
+                  ...args,
+                  name,
+                  definition,
+                  reason: "capacity",
+                }),
+              );
               return {
                 bindingUnavailable: false as const,
                 reasons: [error.message],
               };
+            }
             throw error;
           });
-          if ("admission" in evaluated) return evaluated.admission;
+          if ("admission" in evaluated) return evaluated;
+          if (evaluated.bindingUnavailable)
+            waits.push(
+              ...waitTargetOf({
+                ...args,
+                name,
+                definition,
+                reason: "unavailable",
+              }),
+            );
           reasons[name] = evaluated.bindingUnavailable
             ? ["No machine for it is online and open to this work"]
             : evaluated.reasons;
@@ -626,7 +733,7 @@ export class ExecutionEnvironmentsService {
               `invalid in ${PROJECT_MANIFEST_PATH}: ${entry.invalid.error}`,
             ];
         }
-        throw new NoCompatibleEnvironmentError(reasons);
+        return { error: new NoCompatibleEnvironmentError(reasons), waits };
       },
     );
   }
@@ -674,21 +781,11 @@ export class ExecutionEnvironmentsService {
     }
     const source =
       definition.device === "member" ? this.memberDevices : this.provider;
-    const owner =
-      args.owner === undefined
-        ? placementOwner(args.identity.externalUserId)
-        : args.owner;
-    const effectiveRequirements = mergeRequirements(args.requirements, {
-      ...definition.requirements,
-      capabilities: [
-        ...(definition.requirements?.capabilities ?? []),
-        ...sandboxCapabilitiesFor(definition),
-        // A subscription runs only where its owner signed in (ADR 0199):
-        // placement takes a machine that reports that sign-in.
-        ...(args.signIn && owner
-          ? [signInCapability({ harness: args.signIn, member: owner })]
-          : []),
-      ],
+    const owner = ownerOf(args);
+    const effectiveRequirements = effectiveRequirementsOf({
+      ...args,
+      definition,
+      owner,
     });
     const runtime = await source?.get({
       tenantId: args.identity.tenantId,
@@ -749,23 +846,38 @@ export class ExecutionEnvironmentsService {
         ...(definition.setup
           ? {
               setup: {
-                command: definition.setup,
+                command: definition.setup.command,
                 timeoutMinutes:
-                  definition.setupTimeoutMinutes ??
+                  definition.setup.timeoutMinutes ??
                   DEFAULT_SETUP_TIMEOUT_MINUTES,
+                ...(definition.setup.network
+                  ? { network: definition.setup.network }
+                  : {}),
+                ...(definition.setup.secrets
+                  ? { secrets: definition.setup.secrets }
+                  : {}),
               },
             }
           : {}),
         ...(definition.approvals ? { approvals: definition.approvals } : {}),
         personalCredentials: personal.allowed,
         isolated: placementIsolatesOwner({ definition, owner, runtime }),
+        wait: {
+          environmentName: args.name,
+          pool: definition.pool ?? {},
+          owner,
+          requirements: waitRequirements(effectiveRequirements),
+          waitMinutes: definition.waitMinutes ?? 0,
+        },
       },
     };
   }
 
   /**
    * Resolve the image, containers, egress and volumes one Allocation's
-   * sandbox gets; volumes are the placement owner's.
+   * sandbox gets; volumes are the placement owner's. A setup with its own
+   * network also fixes the only policy the sandbox widens to for that
+   * setup (ADR 0257).
    */
   private async sandboxFor(args: {
     identity: Identity;
@@ -778,6 +890,10 @@ export class ExecutionEnvironmentsService {
       policy: definition.network,
       gatewayHosts: this.options.gatewayHosts ?? [],
     });
+    // The setup's hosts alone: not the gateway, nor the Environment's own.
+    const setupEgress = definition.setup?.network
+      ? resolveSetupEgress({ allow: definition.setup.network.allow })
+      : undefined;
     const volumes = environmentSandboxVolumes({
       projectId: args.projectId,
       owner: args.owner,
@@ -786,6 +902,7 @@ export class ExecutionEnvironmentsService {
     const common: EnvironmentSandbox = {
       ...(definition.requirements?.containers ? { containers: true } : {}),
       ...(egress.mode === "open" ? {} : { egress }),
+      ...(setupEgress ? { setupEgress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
     };
     const image = definition.image;
@@ -811,6 +928,86 @@ export class ExecutionEnvironmentsService {
       },
     };
   }
+}
+
+/** Whose work is placed: the caller's unless named (ADR 0167). */
+function ownerOf(args: {
+  identity: Identity;
+  owner?: PlacementOwner;
+}): string | null {
+  return args.owner === undefined
+    ? placementOwner(args.identity.externalUserId)
+    : args.owner;
+}
+
+/** What a machine must offer the work in this Environment. */
+function effectiveRequirementsOf(args: {
+  requirements: EnvironmentRequirements;
+  definition: ProjectEnvironmentDefinition;
+  owner: string | null;
+  signIn?: SignInHarness;
+}): EnvironmentRequirements {
+  const { definition } = args;
+  return mergeRequirements(args.requirements, {
+    ...definition.requirements,
+    capabilities: [
+      ...(definition.requirements?.capabilities ?? []),
+      ...sandboxCapabilitiesFor(definition),
+      // A subscription runs only where its owner signed in (ADR 0199):
+      // placement takes a machine that reports that sign-in.
+      ...(args.signIn && args.owner
+        ? [signInCapability({ harness: args.signIn, member: args.owner })]
+        : []),
+    ],
+  });
+}
+
+/** The part of a workload's needs that sizes a machine. */
+function waitRequirements(
+  requirements: EnvironmentRequirements,
+): PlacementWaitTarget["requirements"] {
+  const { cpuMillis, memoryMb, storageMb, gpu } = requirements.resources ?? {};
+  return {
+    resources: {
+      ...(cpuMillis !== undefined ? { cpuMillis } : {}),
+      ...(memoryMb !== undefined ? { memoryMb } : {}),
+      ...(storageMb !== undefined ? { storageMb } : {}),
+      ...(gpu ? { gpu } : {}),
+    },
+    capabilities: requirements.capabilities ?? [],
+    ...(requirements.trust ? { trust: requirements.trust } : {}),
+    ...(requirements.isolation ? { isolation: requirements.isolation } : {}),
+    ...(requirements.topology ? { topology: requirements.topology } : {}),
+  };
+}
+
+/**
+ * Where work waits for a machine of one Environment (ADR 0258); none for
+ * a member's own computer, which no machine rule creates.
+ */
+function waitTargetOf(args: {
+  identity: Identity;
+  owner?: PlacementOwner;
+  requirements: EnvironmentRequirements;
+  signIn?: SignInHarness;
+  name: string;
+  definition: ProjectEnvironmentDefinition;
+  reason: PlacementWaitReason;
+}): PlacementWaitTarget[] {
+  if (args.definition.device === "member") return [];
+  const owner = ownerOf(args);
+  return [
+    {
+      environmentName: args.name,
+      reason: args.reason,
+      pool: args.definition.pool ?? {},
+      owner,
+      requirements: waitRequirements(
+        effectiveRequirementsOf({ ...args, owner }),
+      ),
+      waitMinutes: args.definition.waitMinutes ?? 0,
+    },
+  ];
 }
 
 function mergeRequirements(

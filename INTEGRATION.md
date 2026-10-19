@@ -962,6 +962,20 @@ that person or their groups, using `accessTier` and `placementOrder` from
 its host-owned realization, and an Allocation is the immutable decision for
 one root session or workflow run. Machine selection is never a project choice.
 
+When the provider has no machine for a chat (it throws
+`EnvironmentCapacityError`, or answers nothing), an Environment with
+`"waitMinutes": n` starts the chat without an Allocation and its turns wait
+up to `n` minutes; a chat whose Allocation was released waits as long as it
+is queued. Core records each piece of waiting work in `placement_waits`
+(Environment, pool, owner, needs, on the database clock), deletes it in the
+transaction that creates the Allocation and when the chat's queued work is
+withdrawn (close, archive), and exposes
+`core.placementWaits.wake({ tenantId })` for a host to call when a machine
+comes online. A host that scales machines reads the table as demand: rows
+whose chat has a queued turn, tried within `PLACEMENT_WAIT_FRESH_SECONDS`
+([ADR 0258](docs/decisions/0258-machines-on-demand.md)). `sendMessage` on a
+waiting chat throws `AgentTurnUnsettledError` with state `waiting` at once.
+
 The managed multi-machine target is multiple Catamorphic server instances of
 one logical authority, sharing network Postgres and accessible authoritative
 storage ([ADR 0099](docs/decisions/0099-shared-postgres-server-environments.md)).
@@ -1082,7 +1096,18 @@ capability, and a binding may add `model: { allow? }`. The plugin serves
 bearer), a thin pass-through: any method and path below the base URL, the
 body byte for byte, headers but a small denylist (the caller's key, host,
 cookies, hop-by-hop, proxy and forwarding headers), and the answer streamed
-back unchanged. Guards see kind `model` with action = method and path
+back unchanged. Bodies may be rewritten first (ADR 0256): pass
+`modelRequestRewrites` to `createCatamorphic`, each
+`{ name, kinds?, rewrite(request) }`, where `rewrite` gets the method,
+path, query, headers, parsed body and caller (tenant, project, alias,
+provider kind, connection, principal kind, session) and returns the body to
+send or throws `ConnectionActionRefusedError`; a provider adds
+`defineModelConnectionProvider({ ..., override, paths })`, top-level fields
+set on every body after the rewrites (`null` removes one) and the endpoints
+it serves. Rewrites run before the allowlist and guards, bounded by the
+guard timeout; the gateway sends its own serialization, refuses bodies it
+cannot parse or that arrive content-encoded, and audits each refusal.
+Pinning OpenRouter's providers per project is a few lines of host code. Guards see kind `model` with action = method and path
 (`POST v1/messages`) and input = provider, model, stream; endpoint and
 spending rules belong in guards. Usage lands in `model_usage` per session and
 turn, read passively from Anthropic and OpenAI answers (zero when a format is
@@ -1096,7 +1121,11 @@ as a process with standard input (providers implement
 `processes.writeProcessInput` for a process started with `stdin: true`); the
 runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
-0198). Harness binaries come from the Environment image.
+0198). Harness binaries come from the Environment image. The bundle's
+harnesses are `claude-code`, `codex` and `acp`: an ACP agent registers
+`harness: { placement: "sandbox", id: "acp:<agent>" }` with
+`options: { command }`, and the adapter serves its model connection on the
+sandbox's loopback, reading the grant per request (ADR 0255).
 
 MCP connections (ADR 0225): a provider whose actions are an MCP server's
 tools sets `mcp: true` (`defineMcpConnectionProvider` from `@catamorphic/mcp`

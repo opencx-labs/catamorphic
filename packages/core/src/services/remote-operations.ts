@@ -28,6 +28,13 @@ import { type Wakeup, WorkWakeups } from "./work-wakeups.js";
 const tracer = getTracer("@catamorphic/core");
 
 const stringMap = z.record(z.string(), z.string());
+const egressSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("open") }),
+  z.object({
+    mode: z.literal("allowlist"),
+    allow: z.array(z.string()).readonly(),
+  }),
+]);
 export const RemoteOperationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("create"),
@@ -53,15 +60,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         ])
         .optional(),
       containers: z.boolean().optional(),
-      egress: z
-        .discriminatedUnion("mode", [
-          z.object({ mode: z.literal("open") }),
-          z.object({
-            mode: z.literal("allowlist"),
-            allow: z.array(z.string()).readonly(),
-          }),
-        ])
-        .optional(),
+      egress: egressSchema.optional(),
       language: z.string().optional(),
       envVars: stringMap.optional(),
       autoStopInterval: z.number().optional(),
@@ -137,6 +136,21 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     sandboxId: z.string(),
     path: z.string(),
     ref: z.string(),
+  }),
+  // A setup's network (ADR 0257): sent only to executors that offer
+  // `network.setup`. The executor narrows at `until` by itself, and refuses
+  // a widening whose id a narrowing already ended.
+  z.object({
+    kind: z.literal("egress.widen"),
+    sandboxId: z.string(),
+    egress: egressSchema,
+    id: z.string().min(1).max(200),
+    until: z.string().datetime(),
+  }),
+  z.object({
+    kind: z.literal("egress.narrow"),
+    sandboxId: z.string(),
+    id: z.string().min(1).max(200),
   }),
   // Background processes (ADR 0174): short request/response operations; a
   // follower reads again from the cursor the last read returned.
@@ -564,6 +578,14 @@ function forwardingSandboxProvider(args: {
     gitCheckout: async (sandboxId, path, ref) => {
       await call({ kind: "checkout", sandboxId, path, ref });
     },
+    // Placement sends these only to executors offering `network.setup`;
+    // one that cannot widen refuses (ADR 0257).
+    widenEgress: async (args) => {
+      await call({ kind: "egress.widen", ...args });
+    },
+    narrowEgress: async (args) => {
+      await call({ kind: "egress.narrow", ...args });
+    },
   };
 }
 
@@ -648,6 +670,11 @@ function operationTimeoutMs(operation: RemoteOperation): number {
   if (operation.kind === "machine.reset") return 15 * 60_000;
   // Codex prints its sign-in code within seconds, or not at all.
   if (operation.kind === "machine.codexSignIn") return 60_000;
+  // A switch only swaps the policy and closes connections. A widening
+  // abandoned here is ended by the narrowing that follows it; narrowing
+  // that does not answer in time fails closed: the sandbox is stopped.
+  if (operation.kind === "egress.widen" || operation.kind === "egress.narrow")
+    return 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
   const commandSeconds =
     operation.kind === "execute" ? (operation.options?.timeout ?? 0) : 0;

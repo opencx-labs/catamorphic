@@ -230,7 +230,7 @@ describe("project Environment policy", () => {
     expect(parsed.entries[0]?.invalid).toBeDefined();
   });
 
-  it("parses secrets, setup and volumes (ADRs 0206, 0208)", () => {
+  it("parses secrets, setup and volumes (ADRs 0206, 0208, 0257)", () => {
     const parsed = parseProjectEnvironmentPolicy({
       secrets: {
         CLICKHOUSE_API_KEY: { description: "Your ClickHouse key" },
@@ -240,8 +240,10 @@ describe("project Environment policy", () => {
         dev: {
           workloads: ["agent"],
           secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
-          setup: "pnpm install --frozen-lockfile",
-          setupTimeoutMinutes: 45,
+          setup: {
+            command: "pnpm install --frozen-lockfile",
+            timeoutMinutes: 45,
+          },
           volumes: {
             pnpm: "~/.local/share/pnpm/store",
             docker: { path: "/var/lib/docker", exclusive: true, sizeMb: 20480 },
@@ -256,12 +258,35 @@ describe("project Environment policy", () => {
     });
     expect(parsed.environments.dev).toMatchObject({
       secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
-      setup: "pnpm install --frozen-lockfile",
-      setupTimeoutMinutes: 45,
+      setup: { command: "pnpm install --frozen-lockfile", timeoutMinutes: 45 },
       volumes: {
         pnpm: { path: "~/.local/share/pnpm/store" },
         docker: { path: "/var/lib/docker", exclusive: true, sizeMb: 20480 },
       },
+    });
+  });
+
+  it("parses a setup with its own network and the secrets it names (ADR 0257)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      secrets: { NPM_TOKEN: {}, DATABASE_URL: {} },
+      environments: {
+        review: {
+          workloads: ["agent"],
+          network: { egress: "gateway" },
+          secrets: ["NPM_TOKEN", "DATABASE_URL"],
+          setup: {
+            command: "pnpm install --frozen-lockfile",
+            network: { allow: ["Registry.npmjs.org", "npm.pkg.github.com"] },
+            secrets: ["NPM_TOKEN"],
+          },
+        },
+      },
+    });
+    expect(parsed.entries[0]?.invalid).toBeUndefined();
+    expect(parsed.environments.review?.setup).toEqual({
+      command: "pnpm install --frozen-lockfile",
+      network: { allow: ["registry.npmjs.org", "npm.pkg.github.com"] },
+      secrets: ["NPM_TOKEN"],
     });
   });
 
@@ -279,6 +304,63 @@ describe("project Environment policy", () => {
       "volumes",
     ],
     ["an invalid volume name", { volumes: { Cache: "~/.cache" } }, "volumes"],
+    ["setup as a bare command", { setup: "pnpm install" }, "setup"],
+    [
+      "the setup timeout beside setup",
+      { setup: { command: "pnpm install" }, setupTimeoutMinutes: 45 },
+      "setupTimeoutMinutes",
+    ],
+    [
+      "a setup network entry that is no host",
+      {
+        network: { egress: "gateway" },
+        setup: { command: "pnpm install", network: { allow: ["not a host"] } },
+      },
+      "setup.network.allow",
+    ],
+    [
+      "a setup network with open egress",
+      {
+        network: { egress: "open" },
+        setup: { command: "pnpm install", network: { allow: ["npmjs.org"] } },
+      },
+      "setup.network: Open egress has nothing to widen: setup.network needs the Environment's network to be gateway or allowlist",
+    ],
+    [
+      "a setup network without a network",
+      { setup: { command: "pnpm install", network: { allow: ["npmjs.org"] } } },
+      "setup.network: Open egress has nothing to widen",
+    ],
+    [
+      "volumes beside a setup network",
+      {
+        network: { egress: "gateway" },
+        setup: { command: "pnpm install", network: { allow: ["npmjs.org"] } },
+        volumes: { pnpm: "~/.local/share/pnpm/store" },
+      },
+      "volumes: A volume would carry what agents wrote into the next setup's wider network",
+    ],
+    [
+      "setup secrets the Environment does not list",
+      {
+        network: { egress: "gateway" },
+        secrets: ["NPM_TOKEN"],
+        setup: {
+          command: "pnpm install",
+          network: { allow: ["npmjs.org"] },
+          secrets: ["DATABASE_URL"],
+        },
+      },
+      "setup.secrets",
+    ],
+    [
+      "setup secrets without a setup network",
+      {
+        secrets: ["NPM_TOKEN"],
+        setup: { command: "pnpm install", secrets: ["NPM_TOKEN"] },
+      },
+      "setup.secrets",
+    ],
   ])("reports %s as an invalid Environment", (_name, extra, message) => {
     const parsed = parseProjectEnvironmentPolicy({
       environments: { dev: { workloads: ["agent"], ...extra } },

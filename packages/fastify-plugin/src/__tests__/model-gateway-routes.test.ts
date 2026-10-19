@@ -50,6 +50,7 @@ function appWithGateway() {
     },
     broker: {
       reviews: () => false,
+      auditModelRefusal: async () => {},
       modelEndpoint: async () => ({
         endpoint: {
           api: "anthropic",

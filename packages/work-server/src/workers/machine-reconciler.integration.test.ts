@@ -52,7 +52,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         }
         return { ref: `vm-${name}` };
       },
-      destroy: async () => {},
+      destroy: async () => ({ done: true }),
     });
     try {
       for (const replica of ["a", "b"]) {

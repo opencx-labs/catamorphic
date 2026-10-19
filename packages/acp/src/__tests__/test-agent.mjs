@@ -11,6 +11,9 @@
 //   [[hang]]                         work until cancelled
 //   [[hang then ask]]                the same, then ask permission once cancelled
 //   [[recall]]                       say how many turns the session has seen
+//   [[model]]                        ask its model (a Chat Completions API) and
+//                                    say what it answered
+//   [[where]]                        say where its model is (WORK_MODEL_BASE_URL)
 //
 // With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows; with
 // TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
@@ -21,11 +24,19 @@
 // `hermes-flaky` for any session, as Hermes does when restoring one fails;
 // `plain` throws a plain error ("Invalid session identifier", as Gemini CLI
 // does), `auth` asks for a sign-in, `busy` errs with a passing internal
-// error, and `crash` exits mid-load. TEST_AGENT_LIST=1 offers
+// error, `opencode` answers a session it lacks with an internal error, as
+// OpenCode does, and `crash` exits mid-load. TEST_AGENT_LIST=1 offers
 // `session/list`. With
 // TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike, and starts a
 // process of its own (`sleeper` in its state). It notes a cancel it heard
-// as `cancelled` in its state.
+// as `cancelled` in its state. With TEST_AGENT_PROVIDERS=1 it takes its
+// providers from its client (ACP's `providers/set`): `main` (OpenAI API)
+// and `cloud` (Bedrock), noted in its state as `providers`. With
+// TEST_AGENT_MODELS=1 a session offers a model option, `default-model` or
+// `deepseek/v4-flash`, and notes the one chosen as the session's `model`.
+// Without a provider set, its model is at WORK_MODEL_BASE_URL with
+// WORK_MODEL_API_KEY. TEST_AGENT_PROVIDERS=fail advertises providers and
+// then fails to list them.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
@@ -43,6 +54,21 @@ const write = (state) =>
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 
 let cancel = () => {};
+
+/** The model option a session offers with TEST_AGENT_MODELS=1. */
+const modelOptions = (currentValue) => [
+  {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue,
+    options: [
+      { value: "default-model", name: "Default" },
+      { value: "deepseek/v4-flash", name: "DeepSeek V4 Flash" },
+    ],
+  },
+];
 if (process.env.TEST_AGENT_STUBBORN === "1") process.on("SIGTERM", () => {});
 
 const exitSave = Number(process.env.TEST_AGENT_EXIT_SAVE_MS ?? 0);
@@ -72,15 +98,52 @@ new acp.AgentSideConnection(
             ...(process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {}),
             ...(process.env.TEST_AGENT_LIST === "1" ? { list: {} } : {}),
           },
+          ...(process.env.TEST_AGENT_PROVIDERS ? { providers: {} } : {}),
         },
       }),
+      unstable_listProviders: async () => {
+        if (process.env.TEST_AGENT_PROVIDERS === "fail")
+          throw acp.RequestError.methodNotFound("providers/list");
+        return {
+          providers: [
+            { providerId: "main", supported: ["openai"], required: true },
+            { providerId: "cloud", supported: ["bedrock"], required: false },
+          ],
+        };
+      },
+      unstable_disableProvider: async ({ providerId }) => {
+        const state = read();
+        state.disabled = [...(state.disabled ?? []), providerId];
+        write(state);
+        return {};
+      },
+      unstable_setProvider: async (provider) => {
+        const state = read();
+        state.providers = {
+          ...state.providers,
+          [provider.providerId]: provider,
+        };
+        write(state);
+        return {};
+      },
+      setSessionConfigOption: async ({ sessionId, value }) => {
+        const state = read();
+        state.sessions[sessionId].model = value;
+        write(state);
+        return { configOptions: modelOptions(value) };
+      },
       authenticate: async () => {},
       newSession: async ({ cwd, mcpServers }) => {
         const state = read();
         const sessionId = `session-${Object.keys(state.sessions).length + 1}`;
         state.sessions[sessionId] = { cwd, mcpServers, prompts: [] };
         write(state);
-        return { sessionId };
+        return {
+          sessionId,
+          ...(process.env.TEST_AGENT_MODELS === "1"
+            ? { configOptions: modelOptions("default-model") }
+            : {}),
+        };
       },
       resumeSession: async ({ sessionId, cwd, mcpServers }) => {
         const state = read();
@@ -101,6 +164,11 @@ new acp.AgentSideConnection(
         if (failing === "hermes-flaky") return null;
         const state = read();
         const session = state.sessions[sessionId];
+        if (!session && failing === "opencode")
+          throw acp.RequestError.internalError(
+            { service: "session" },
+            "OpenCode service failure",
+          );
         if (!session && failing === "hermes") return null;
         if (!session) throw acp.RequestError.resourceNotFound(sessionId);
         Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
@@ -112,14 +180,19 @@ new acp.AgentSideConnection(
         }
         return {};
       },
-      listSessions: async () => ({
-        sessions: Object.entries(read().sessions).map(
-          ([sessionId, session]) => ({
-            sessionId,
-            cwd: session.cwd,
-          }),
-        ),
-      }),
+      listSessions: async () => {
+        // Noted, so a test can tell the adapter asked.
+        const state = read();
+        write({ ...state, listed: (state.listed ?? 0) + 1 });
+        return {
+          sessions: Object.entries(state.sessions).map(
+            ([sessionId, session]) => ({
+              sessionId,
+              cwd: session.cwd,
+            }),
+          ),
+        };
+      },
       cancel: async () => {
         write({ ...read(), cancelled: true });
         if (process.env.TEST_AGENT_STUBBORN !== "1") cancel();
@@ -250,6 +323,36 @@ new acp.AgentSideConnection(
             write({ ...read(), askedAfterCancel: outcome.outcome });
           }
           return { stopReason: "cancelled" };
+        }
+        if (words.includes("[[model]]")) {
+          const provider = read().providers?.main;
+          const base = provider?.baseUrl ?? process.env.WORK_MODEL_BASE_URL;
+          const headers = provider?.headers ?? {
+            authorization: `Bearer ${process.env.WORK_MODEL_API_KEY}`,
+          };
+          const answer = await fetch(`${base}/chat/completions`, {
+            method: "POST",
+            headers: { "content-type": "application/json", ...headers },
+            body: JSON.stringify({
+              model: session.model ?? process.env.WORK_MODEL ?? "unset",
+              messages: [{ role: "user", content: words }],
+            }),
+          });
+          const json = await answer.json();
+          await say(
+            sessionId,
+            "agent_message_chunk",
+            `Model said (${answer.status}): ${json.choices?.[0]?.message?.content ?? JSON.stringify(json)}`,
+          );
+          return { stopReason: "end_turn" };
+        }
+        if (words.includes("[[where]]")) {
+          await say(
+            sessionId,
+            "agent_message_chunk",
+            process.env.WORK_MODEL_BASE_URL ?? "nowhere",
+          );
+          return { stopReason: "end_turn" };
         }
         if (words.includes("[[recall]]")) {
           await say(

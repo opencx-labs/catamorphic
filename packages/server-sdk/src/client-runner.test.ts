@@ -335,6 +335,145 @@ describe("client runner transport (ADR 0187)", () => {
   });
 });
 
+describe("a setup's network (ADR 0257)", () => {
+  const egress = {
+    mode: "allowlist" as const,
+    allow: ["registry.npmjs.org"],
+  };
+  const sealed = (
+    id: string,
+    operation:
+      | {
+          kind: "egress.widen";
+          sandboxId: string;
+          egress: typeof egress;
+          id: string;
+          until: string;
+        }
+      | { kind: "egress.narrow"; sandboxId: string; id: string },
+  ): Job => ({
+    id,
+    operation: sealRemoteOperation({
+      operationId: id,
+      executor: EXECUTOR,
+      operation,
+      publicKey: KEYS.publicKey,
+    }),
+  });
+  const deadline = new Date(Date.now() + 60_000).toISOString();
+
+  it("widens and narrows where its provider can, and says so where it cannot", async () => {
+    const { provider } = recordingProvider();
+    const calls: unknown[] = [];
+    const switching = controlPlane([
+      sealed("job-1", {
+        kind: "egress.widen",
+        sandboxId: "sandbox-1",
+        egress,
+        id: "setup",
+        until: deadline,
+      }),
+      sealed("job-2", {
+        kind: "egress.narrow",
+        sandboxId: "sandbox-1",
+        id: "setup",
+      }),
+    ]);
+    const worker = startClientRunner({
+      provider: {
+        ...provider,
+        widenEgress: async (args) => {
+          calls.push({ widen: args });
+        },
+        narrowEgress: async (args) => {
+          calls.push({ narrow: args });
+        },
+      },
+      transport: switching.transport,
+      keys: RUNNER_KEYS,
+      sandboxes: new Set(["sandbox-1"]),
+    });
+    await until(() => switching.receipts.length === 2, "both receipts");
+    await worker.stop();
+    expect(calls).toEqual([
+      {
+        widen: { sandboxId: "sandbox-1", egress, id: "setup", until: deadline },
+      },
+      { narrow: { sandboxId: "sandbox-1", id: "setup" } },
+    ]);
+    expect(switching.receipts).toEqual([
+      { jobId: "job-1", response: null },
+      { jobId: "job-2", response: null },
+    ]);
+
+    const fixed = controlPlane([
+      sealed("job-3", {
+        kind: "egress.widen",
+        sandboxId: "sandbox-1",
+        egress,
+        id: "setup",
+        until: deadline,
+      }),
+    ]);
+    const runner = startClientRunner({
+      provider,
+      transport: fixed.transport,
+      keys: RUNNER_KEYS,
+      sandboxes: new Set(["sandbox-1"]),
+    });
+    await until(() => fixed.receipts.length === 1, "the refusal");
+    await runner.stop();
+    expect(fixed.receipts).toEqual([
+      {
+        jobId: "job-3",
+        error: "This machine cannot widen a sandbox's network",
+      },
+    ]);
+  });
+
+  it("narrows a sandbox of an ended connection, and widens only its own", async () => {
+    const { provider } = recordingProvider();
+    const calls: string[] = [];
+    const plane = controlPlane([
+      sealed("job-1", {
+        kind: "egress.widen",
+        sandboxId: "elsewhere",
+        egress,
+        id: "setup",
+        until: deadline,
+      }),
+      sealed("job-2", {
+        kind: "egress.narrow",
+        sandboxId: "elsewhere",
+        id: "setup",
+      }),
+    ]);
+    const runner = startClientRunner({
+      provider: {
+        ...provider,
+        widenEgress: async () => {
+          calls.push("widen");
+        },
+        narrowEgress: async () => {
+          calls.push("narrow");
+        },
+      },
+      transport: plane.transport,
+      keys: RUNNER_KEYS,
+    });
+    await until(() => plane.receipts.length === 2, "both receipts");
+    await runner.stop();
+    expect(calls).toEqual(["narrow"]);
+    expect(plane.receipts).toEqual([
+      {
+        jobId: "job-1",
+        error: "Sandbox does not belong to this runner connection",
+      },
+      { jobId: "job-2", response: null },
+    ]);
+  });
+});
+
 describe("operations sealed to the runner (ADR 0207)", () => {
   it("runs nothing it cannot open with its own keys", async () => {
     const { provider, commands } = recordingProvider();

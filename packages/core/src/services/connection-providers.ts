@@ -115,6 +115,18 @@ export interface ConnectionModelEndpoint {
   readonly baseUrl: string;
   /** The headers that carry the stored key on one upstream request. */
   headers(args: { material: Uint8Array }): Record<string, string>;
+  /**
+   * Top-level body fields set on every request that carries a body, each
+   * replacing whatever the caller sent, `null` removing it (ADR 0256): the
+   * providers an aggregator may route to, say. Applied after the host's
+   * rewrites, so it has the last word.
+   */
+  readonly override?: Readonly<Record<string, Json>>;
+  /**
+   * Path prefixes below `baseUrl` requests may reach (`/chat/completions`),
+   * matched by whole segments; absent reaches every path (ADR 0256).
+   */
+  readonly paths?: readonly string[];
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   MODEL_CAPABILITY,
   type ModelApi,
 } from "@catamorphic/core";
+import type { Json } from "@catamorphic/db";
 
 export interface ModelConnectionOptions {
   kind: string;
@@ -16,6 +17,18 @@ export interface ModelConnectionOptions {
    * own, e.g. `https://openrouter.ai/api/v1`.
    */
   baseUrl?: string;
+  /**
+   * Top-level body fields set on every request, each replacing whatever the
+   * caller sent (`null` removes the field), after the host's rewrites
+   * (ADR 0256). `{ "provider": { "only": ["provider-a"], "allow_fallbacks":
+   * false } }` keeps OpenRouter on the providers named.
+   */
+  override?: Readonly<Record<string, Json>>;
+  /**
+   * Path prefixes below `baseUrl` the gateway serves (`/chat/completions`),
+   * matched by whole segments; absent serves every path.
+   */
+  paths?: readonly string[];
 }
 
 const DEFAULT_BASE_URLS: Record<ModelApi, string> = {
@@ -43,6 +56,8 @@ export function defineModelConnectionProvider(
     model: {
       api: options.api,
       baseUrl,
+      ...(options.override ? { override: { ...options.override } } : {}),
+      ...(options.paths ? { paths: [...options.paths] } : {}),
       headers: ({ material }): Record<string, string> => {
         const key = decodeKey(material);
         return options.api === "anthropic"

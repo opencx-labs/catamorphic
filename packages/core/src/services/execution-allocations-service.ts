@@ -24,6 +24,14 @@ import {
   workerUsage,
 } from "./worker-capacity.js";
 
+const EgressSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("open") }),
+  z.object({
+    mode: z.literal("allowlist"),
+    allow: z.array(z.string()),
+  }),
+]);
+
 const AllocationPolicySchema = z.object({
   binding: z.object({
     id: z.string(),
@@ -92,15 +100,8 @@ const AllocationPolicySchema = z.object({
         ])
         .optional(),
       containers: z.boolean().optional(),
-      egress: z
-        .discriminatedUnion("mode", [
-          z.object({ mode: z.literal("open") }),
-          z.object({
-            mode: z.literal("allowlist"),
-            allow: z.array(z.string()),
-          }),
-        ])
-        .optional(),
+      egress: EgressSchema.optional(),
+      setupEgress: EgressSchema.optional(),
       volumes: z
         .array(
           z.object({
@@ -122,6 +123,12 @@ export interface EnvironmentSandbox {
   image?: SandboxImage;
   containers?: boolean;
   egress?: SandboxEgress;
+  /**
+   * What the sandbox reaches while its Environment's setup runs (ADR
+   * 0257): the setup's hosts alone. Present only for a restricted
+   * Environment whose setup names a network.
+   */
+  setupEgress?: SandboxEgress;
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
 }
@@ -208,6 +215,8 @@ export class ExecutionAllocationsService {
     const executor = args.transaction;
     let policy = args.policy;
     if (args.workerNodeId) {
+      // The node's row lock orders this with a machine being drained before
+      // it is removed (ADR 0258): one that is disabled takes nothing new.
       const node = await executor
         .selectFrom("worker_nodes")
         .selectAll()
@@ -277,6 +286,11 @@ export class ExecutionAllocationsService {
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      // Placed: the workload no longer waits for a machine (ADR 0258).
+      await executor
+        .deleteFrom("placement_waits")
+        .where("root_workload_id", "=", args.rootWorkloadId)
+        .execute();
       return mapAllocation(row);
     } catch (cause) {
       if (

@@ -12,6 +12,7 @@ deployment.
 | A person or a small trusted team | One Work server, PGlite, default execution (`WORK_SANDBOX=auto`). Nothing below applies. |
 | More agent capacity, or agents that must not run beside the server's secrets | One server (the control plane) plus enrolled **workers** |
 | Each person or team gets their own machine | Workers with **access** lists, created by hand or by **machine rules** |
+| Bursty work (pull request reviews) needs big machines only while it runs | **Machines on demand**: a machine rule that creates machines for waiting work and destroys them once idle |
 | Cloud VMs or dedicated servers without hardware virtualization | Workers with the **container backend** under gVisor (see [sandbox backends](#sandbox-backends)) |
 | The brain must survive a machine failure | Control-plane **replicas** on shared Postgres, plus workers |
 
@@ -252,6 +253,20 @@ admits a fresh workspace and restores it. Closing a chat
 deletes its session branch, and frees the key. Capacity follows activity,
 not open chats.
 
+When no machine open to a chat has room, or none is online, a new chat
+fails at once unless an Environment says how long work may wait:
+`"waitMinutes": 30` starts the chat without a workspace (in the first
+Environment, in admission order, that lets work wait), its turns wait
+(tried again every 5 to 30 seconds, and at once when a worker connects), and
+fail after 30 minutes saying why; the next message waits again. A chat whose
+workspace was given back always waits for a machine, and with `waitMinutes`
+gives up after that long too. A waiting chat whose Environment was removed
+or can no longer take it fails its turns with that error, and `ask_agent`
+answers at once that the chat waits for a machine. Waiting work is recorded
+in Postgres (`placement_waits`, ADR 0258) until it is placed or its chat is
+closed or archived; with a turn queued, it is what
+[machines on demand](#machines-on-demand) read.
+
 Groups come from the Google Workspace directory (see [company
 identity](company-identity.md)): the server checks the groups that access
 lists, machine rules, and project role mappings name.
@@ -286,16 +301,30 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   `firewalls` and `networks` (ids) and extra server `labels` are optional;
   `snapshot: true` keeps an image of a machine's disk when it is destroyed.
   The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
+- `sandbox` (Hetzner and custom classes): the backend the machines run,
+  passed to the [install script](#the-install-script) as `--sandbox`:
+  `auto` (default), `microsandbox`, or `container`, which runs gVisor even
+  where KVM is usable. Give `container` to classes for Environments whose
+  setup has its own network ([setup and volumes](#setup-and-volumes)),
+  which microVMs cannot host.
 - `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
 - `custom`: a custom server's `machineProvisioner` hook creates and destroys
-  them (`create({ name, class, labels, enrollment })` returns a platform
-  reference, `destroy({ name, ref })` destroys by the reference, or by the
-  name when it is `null`). `enrollment.cloudInit` is the same cloud-init a
-  Hetzner machine gets. `create` throws `MachineProvisioningRefusedError`
-  when the platform made nothing, so its code is withdrawn and the next pass
-  tries again; after any other error the code waits for the machine to
-  enroll. A server with the hook and no classes file treats every class as
-  custom.
+  them (`create({ name, class, rule, options, waiting, labels, enrollment })`
+  returns a platform reference; `destroy({ name, ref })` removes the machine
+  the reference names and every machine with that name, and answers
+  `{ done }`: Work asks again on later passes until it is done). `options` is the class's own
+  object from the file, passed through unread (an instance type, an image, a
+  subnet: `"review": { "platform": "custom", "options": { ... } }`);
+  `waiting` is what the work a machine on demand is made for needs
+  (`resources`, `capabilities`). `enrollment.cloudInit` is the same
+  cloud-init a Hetzner machine gets. `create` throws
+  `MachineProvisioningRefusedError` when the platform made nothing, so its
+  code is withdrawn and the next pass tries again; after any other error the
+  code waits for the machine to enroll. Work never calls `create` twice with
+  one code, so make it idempotent per code: pass `enrollment.idempotencyKey`
+  (a hash of the code) as the platform's idempotency token,
+  never the name, which a later machine of the rule reuses. A server with
+  the hook and no classes file treats every class as custom.
 
 The server refuses to start when a class needs what it lacks (a Hetzner
 class without the token, a custom class without the hook), and refuses a
@@ -360,12 +389,65 @@ no longer configured, whose machines are then left as they are; and a
 `failure` (`{ error, at }`) when something failed for the rule's machines
 in the latest pass.
 
+### Machines on demand
+
+A rule with `{ "machines": { "demand": { "max": 9 } } }` creates machines
+while work waits for one and destroys them once idle (ADR 0258), for bursty
+work such as [pull request reviews](review-pull-requests.md):
+
+```json
+{
+  "projects": ["<project id>"],
+  "machines": { "demand": { "max": 9, "min": 0, "idleMinutes": 10, "enrollMinutes": 15 } },
+  "class": "review",
+  "labels": { "pool": "review" }
+}
+```
+
+- Name exactly one of `group` (machines for its members' chats, which must
+  isolate with microsandbox or gVisor unless `"trusted": true`) or
+  `projects` (machines opened to those projects' own work: project chats
+  and automations).
+- Work counts for the rule when it has a turn queued, the rule's `labels`,
+  its class and `plane: worker` satisfy the work's Environment `pool`, and
+  the rule's access takes the work's owner. Each piece of waiting work
+  counts for one rule: the first by name whose connected machines can take
+  it. When they report they cannot (too little memory, no `containers`),
+  the rule's status says so and the work goes to the next rule. Give the
+  Environment a `waitMinutes`, or new chats fail before they wait.
+- A pass keeps machines still enrolling or connecting, holding work, or idle
+  for less than `idleMinutes` (default 10, at least 1), then the most
+  recently idle up to `min` (default 0). Work no connected machine has room
+  for (charged its resources, or the machine's per-workspace defaults),
+  beyond one piece for each machine still enrolling or connecting, gets new
+  machines, up to `max` (at most 100, counting machines the rule served
+  under an earlier group or projects until they go). A machine that does
+  not enroll within `enrollMinutes` (default 15), or is not seen for that
+  long (since it enrolled, when it never connected), is destroyed and
+  replaced. A machine no longer wanted is destroyed at once: `retainDays`
+  does not apply.
+- A machine that enrolled but never connected within `enrollMinutes` stops
+  the rule: it makes no more machines until you write the rule again (after
+  fixing the cause), and its status says why. A machine serving a group, or
+  several projects, must isolate its agents (microsandbox or gVisor) unless
+  the rule says `"trusted": true`; such a rule is refused when it is written
+  if machines of its class are known to run plain processes.
+- Only `hetzner-cloud` and `custom` classes scale; a pool class is refused.
+- A machine is revoked only while nothing holds it: the drain and a new
+  Allocation take the same lock, so work never lands on a machine being
+  destroyed. One holding workspaces goes anyway only once it has been
+  disconnected and unseen for `enrollMinutes`.
+- With a rule on demand, each replica looks at waiting work every 10 seconds
+  and starts a pass when it changed since its latest pass looked. The rule's
+  status adds `queued`: work waiting for one of its machines.
+
 ### The install script
 
 `GET /api/workers/install.sh` is public and holds no secret: a POSIX sh
 script with this server's public URL and worker image in it. Run it as root
 with `--code` (required) and optionally `--image`, `--data-dir` (default
-`/var/lib/work`) and `--name` (the container's, default `work-worker`). The
+`/var/lib/work`), `--name` (the container's, default `work-worker`) and
+`--sandbox` (`auto`, `microsandbox` or `container`, default `auto`). The
 data directory must be new, or an empty one (or a worker's) under
 `/var/lib`, `/srv`, `/opt`, `/data` or `/home/<user>`; the script refuses
 system directories. It:
@@ -373,17 +455,18 @@ system directories. It:
 - installs Docker with Docker's convenience script when `docker` is missing,
   downloaded to a file and checked first, waiting up to ten minutes for
   another package installation (a cloud machine's first boot) to finish;
-- with a usable `/dev/kvm`, gives the worker the device and its group, so
-  agents run in microVMs. libkrun needs nothing more: never `--privileged`
-  or added capabilities;
-- without KVM, installs gVisor from its apt repository (Debian and Ubuntu;
+- with a usable `/dev/kvm`, unless `--sandbox container`, gives the worker
+  the device and its group, so agents run in microVMs. libkrun needs
+  nothing more: never `--privileged` or added capabilities;
+- otherwise installs gVisor from its apt repository (Debian and Ubuntu;
   elsewhere install `runsc` first) and registers the `runsc` runtime with
   `--host-uds=open --net-raw` (ADR 0204), restarting Docker only when that
   changed;
 - creates the data directory for the image's user (uid 1000, mode 0700),
   pulls the image, replaces any container of that name, and runs the worker
   with `--restart unless-stopped`, the Docker socket and its group, the data
-  directory mounted at the same path, and `WORK_SANDBOX=auto`.
+  directory mounted at the same path, and `WORK_SANDBOX` set to
+  `--sandbox`.
 
 Running it again is safe: the worker keeps its enrollment in its data
 directory. The endpoint answers 503 naming what is missing when the server
@@ -419,7 +502,8 @@ each worker's `state` (`serving`, `released`, `resetting`, `free`,
 
 ### Passes
 
-The server reconciles every minute and when an account is disabled. One
+The server reconciles every minute, when an account is disabled, and, with
+[machines on demand](#machines-on-demand), when waiting work changed. One
 replica at a time runs a pass, under a claim in Postgres (ADR 0193) renewed
 while platform calls run and checked before every change; a replica whose
 claim moved stops changing anything. A machine whose enrollment code is
@@ -824,7 +908,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   directory, as the stock server and workers do.
 
 Machines advertise `images`, `images.build`, `containers`,
-`network.policy`, and `volumes`, `sign-ins` and one
+`network.policy`, `network.setup`, and `volumes`, `sign-ins` and one
 `sign-in:<harness>:<member>` per member signed in on them, and a
 local-process machine `harness.claude-code` and `harness.codex` when those
 CLIs are on its `PATH`; `GET /_work/operator/machines` shows them with the
@@ -846,8 +930,10 @@ caches (ADR 0208):
       "workloads": ["agent"],
       "image": ".work/images/dev.Dockerfile",
       "requirements": { "containers": true },
-      "setup": "corepack enable && pnpm install --frozen-lockfile",
-      "setupTimeoutMinutes": 45,
+      "setup": {
+        "command": "corepack enable && pnpm install --frozen-lockfile",
+        "timeoutMinutes": 45
+      },
       "volumes": {
         "pnpm": "~/.local/share/pnpm/store",
         "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb": 20480 }
@@ -857,18 +943,38 @@ caches (ADR 0208):
 }
 ```
 
-- `setup` is a shell command run in the project folder of every new
-  workspace before its first turn, once the chat's secrets and the member's
-  personal files are in place, and again when the command changes. A
-  workspace rebuilt after idle release runs it again. Its first failing
-  command stops it. Output is appended to `.work-session/setup.log` beside
-  the project, and the chat shows that the workspace is being set up. A
-  failure, or a run longer than `setupTimeoutMinutes` (30 by default), is
-  told to the agent with the end of the log; the turn goes on, and setup
-  runs again before the next turn. A member may add their own `setup` in
-  `.work/personal/environment.json`: it runs after the Environment's, only
-  in their own chats in Environments with `"personalCredentials": true`,
-  and only for turns they wrote.
+- `setup.command` is a shell command run in the project folder of every
+  new workspace before its first turn, once the chat's secrets and the
+  member's personal files are in place, again when the command changes,
+  and again when the workspace's base moves (a review chat reset to each
+  push). A workspace rebuilt after idle release runs it again. Its first
+  failing command stops it. Output is appended to `.work-session/setup.log`
+  beside the project, and the chat shows that the workspace is being set
+  up. A failure, or a run longer than `setup.timeoutMinutes` (30 by
+  default), is told to the agent with the end of the log; the turn goes
+  on, and setup runs again before the next turn. A member may add their
+  own `setup` in `.work/personal/environment.json`: it runs after the
+  Environment's, only in their own chats in Environments with
+  `"personalCredentials": true`, and only for turns they wrote.
+- `setup.network.allow` lists the only hosts the Environment's setup
+  reaches while it runs (ADR 0257), for an Environment whose `network` is
+  `gateway` or `allowlist`; `setup.secrets` names the Environment's secrets
+  it runs with: `"setup": { "command": "pnpm install --frozen-lockfile",
+  "network": { "allow": ["registry.npmjs.org", "npm.pkg.github.com"] },
+  "secrets": ["NPM_TOKEN"] }`. It runs in a new sandbox holding the
+  workspace's base commit alone, with no grant, gateway variable or other
+  secret, widened to those hosts (not even the gateway), and narrowed again
+  before the session's work, grants, secrets and files arrive; a setup that
+  must run again gets a new sandbox in the same Allocation. Only workspaces
+  at a ref of the project's remote (a delivery's `workspace: { ref }`) run
+  it; elsewhere the agent is told it did not run. Such an Environment
+  declares no volumes, which would carry what agents wrote into the next
+  setup: put caches in its image. It needs a machine that advertises
+  `network.setup`: the container backend wherever it enforces
+  `network.policy` (the worker narrows by itself when the setup's time is
+  up), or local-process under `WORK_UNENFORCED_EGRESS=accept`. Microsandbox
+  fixes a VM's network when it is created and does not offer it. The hosts
+  you list could receive the base checkout and the secrets the setup names.
 - `volumes` name directories kept on the machine for each owner (a member,
   or the project for its own chats and runs) and project: the owner's next
   sandbox on that machine mounts the same directory, and nobody else's does.

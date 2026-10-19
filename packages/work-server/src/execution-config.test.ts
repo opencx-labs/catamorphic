@@ -265,6 +265,7 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "images",
     "images.build",
     "network.policy",
+    "network.setup",
     "containers",
     "volumes",
   ]);
@@ -282,6 +283,7 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     "images",
     "images.build",
     "network.policy",
+    "network.setup",
     "volumes",
   ]);
   expect(runc.isolation).toBe("process");
@@ -294,7 +296,7 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
   });
   expect(
     workExecution({ settings: localSettings, dataDir }).provider.capabilities,
-  ).toEqual(["containers", "network.policy", "volumes"]);
+  ).toEqual(["containers", "network.policy", "network.setup", "volumes"]);
   // A plain local-process machine offers only volumes under ~.
   expect(
     workExecution({

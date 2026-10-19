@@ -30396,6 +30396,7 @@
                         "images.build",
                         "containers",
                         "network.policy",
+                        "network.setup",
                         "volumes"
                       ]
                     }

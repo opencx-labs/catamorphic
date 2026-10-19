@@ -14,6 +14,12 @@ export const SANDBOX_CAPABILITIES = {
   containers: "containers",
   /** Enforces an Environment's egress policy. */
   egressPolicy: "network.policy",
+  /**
+   * Widens a running sandbox's egress for a while and narrows it again,
+   * closing its connections at each switch (ADR 0257): what lets a setup
+   * reach its own hosts while it runs.
+   */
+  setupNetwork: "network.setup",
   /** Keeps volumes on the machine across sandboxes (ADR 0208). */
   volumes: "volumes",
 } as const;
@@ -79,6 +85,32 @@ export function resolveEgress(args: {
     ...(policy.egress === "allowlist" ? policy.allow : []),
   ].map((host) => host.toLowerCase());
   return { mode: "allowlist", allow: [...new Set(allow)] };
+}
+
+/**
+ * The policy a workspace's setup runs under (ADR 0257): the hosts its
+ * `setup.network` lists and nothing else, not even the gateway or the
+ * Environment's own allowlist. DNS goes through the sandbox's proxy, as
+ * for any restricted policy.
+ */
+export function resolveSetupEgress(args: {
+  allow: readonly string[];
+}): SandboxEgress {
+  return {
+    mode: "allowlist",
+    allow: [...new Set(args.allow.map((host) => host.toLowerCase()))],
+  };
+}
+
+/** Whether two resolved policies admit the same hosts, whatever their order. */
+export function sameEgress(left: SandboxEgress, right: SandboxEgress): boolean {
+  if (left.mode === "open" || right.mode === "open")
+    return left.mode === right.mode;
+  const hosts = new Set(left.allow);
+  return (
+    hosts.size === new Set(right.allow).size &&
+    right.allow.every((host) => hosts.has(host))
+  );
 }
 
 /**

@@ -164,7 +164,8 @@ Declare required provider aliases, principal policy, and actions in an inline
 \`connections\` array. Roles and the host's enablement flow resolve access and
 credentials; see \`workflow-lifecycle\`. Brokered calls such as
 \`context.connections.gmail.search(...)\` are returned host transitions, not
-ordinary promises. Chats are reached with one operation, \`deliver\`: by \`sessionId\`
+ordinary promises; pass \`{ state }\` as a second argument to keep data across
+one (\`durable-workflows\`). Chats are reached with one operation, \`deliver\`: by \`sessionId\`
 for a known chat, or by \`key\` for the chat this workflow keeps for that key,
 started on first use (the enabling member's chat, or for a project enablement a
 project chat; see \`session-workflows\`). \`mode: "message_only"\` with

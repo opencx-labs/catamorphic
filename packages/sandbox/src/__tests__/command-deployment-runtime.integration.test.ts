@@ -151,7 +151,30 @@ export const greeter = {
 Object.defineProperty(classify, "kind", { value: "batch-step" });
 export { classify };
 const checkpoint = {
-  run: async ({ input, pause, callWorkflow }) => {
+  run: async ({ input, pause, callWorkflow, connections, host }) => {
+    if (input.action === "carry") {
+      return connections.github.get({ path: "/repos/acme/web/pulls/1" }, { state: { turn: input.id } });
+    }
+    if (input.action === "host-carry") {
+      return host["catamorphic.sessions"].history({ key: "pr-1" }, { state: [input.id] });
+    }
+    if (input.action === "child-carry") {
+      return callWorkflow(analyze, { input: { records: input.records }, state: { turn: input.id } }, {
+        workflowName: "analyze",
+        modulePath: "defined-workflow.mjs",
+        exportName: "analyze",
+      });
+    }
+    if (input.action === "child-typo") {
+      return callWorkflow(analyze, { input: { records: [] }, stat: 1 }, {
+        workflowName: "analyze",
+        modulePath: "defined-workflow.mjs",
+        exportName: "analyze",
+      });
+    }
+    if (input.action === "bad-carry") {
+      return connections.github.get({ path: "/x" }, { stat: 1 });
+    }
     if (input.action === "pause") {
       return pause({ timeout: "1 hour", state: { checkpoint: input.id } });
     }
@@ -597,6 +620,77 @@ export const analyze = { steps: [checkpoint, batch] };`,
         },
       },
     });
+    // ADR 0260: a returned call records the state the next step receives.
+    await expect(
+      invokeBoundary({
+        invocationId: "boundary-carry",
+        value: { action: "carry", id: "t1" },
+      }),
+    ).resolves.toMatchObject({
+      terminal: {
+        status: "completed",
+        result: {
+          type: "connection_call",
+          transition: {
+            alias: "github",
+            action: "get",
+            args: { path: "/repos/acme/web/pulls/1" },
+            statePresent: true,
+            state: { turn: "t1" },
+          },
+        },
+      },
+    });
+    await expect(
+      invokeBoundary({
+        invocationId: "boundary-host-carry",
+        value: { action: "host-carry", id: "t2" },
+      }),
+    ).resolves.toMatchObject({
+      terminal: {
+        result: {
+          type: "host_call",
+          transition: {
+            capability: "catamorphic.sessions",
+            fn: "history",
+            statePresent: true,
+            state: ["t2"],
+          },
+        },
+      },
+    });
+    await expect(
+      invokeBoundary({
+        invocationId: "boundary-child-carry",
+        value: { action: "child-carry", id: "t3", records: [] },
+      }),
+    ).resolves.toMatchObject({
+      terminal: {
+        result: {
+          type: "child_workflow",
+          transition: {
+            input: { records: [] },
+            statePresent: true,
+            state: { turn: "t3" },
+          },
+        },
+      },
+    });
+    const refused = await invokeBoundary({
+      invocationId: "boundary-bad-carry",
+      value: { action: "bad-carry" },
+    });
+    expect(JSON.stringify(refused.terminal)).toMatch(
+      /second argument is \{ state \}/,
+    );
+    // A misspelled key is refused, not silently dropped.
+    const typo = await invokeBoundary({
+      invocationId: "boundary-child-typo",
+      value: { action: "child-typo" },
+    });
+    expect(JSON.stringify(typo.terminal)).toMatch(
+      /callWorkflow takes \{ input, state\? \}; 'stat' is not one of them/,
+    );
   }, 30_000);
 
   it("fails the invocation handoff when durable event reporting fails", async () => {

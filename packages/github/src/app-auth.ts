@@ -21,6 +21,9 @@ const JWT_LIFETIME_SECONDS = 9 * 60;
 const JWT_BACKDATE_SECONDS = 60;
 const DEFAULT_REFRESH_SKEW_MS = 5 * 60_000;
 
+/** How long one call to GitHub as the App may take. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 /** Parse and check a GitHub App private key (PKCS#1 or PKCS#8 PEM). */
 export function parseGithubAppPrivateKey(privateKey: string): KeyObject {
   let key: KeyObject;
@@ -77,6 +80,11 @@ export interface GithubAppAuthOptions {
   now?: () => number;
   /** Tokens closer than this to expiry are minted again. Default 5 minutes. */
   refreshSkewMs?: number;
+  /**
+   * How long one call as the App may take before it fails. Default 30
+   * seconds: a mint every caller of a token shares must never wait forever.
+   */
+  timeoutMs?: number;
 }
 
 interface CachedToken {
@@ -115,6 +123,7 @@ export class GithubAppAuth {
   private readonly apiBaseUrl: string;
   private readonly now: () => number;
   private readonly refreshSkewMs: number;
+  private readonly timeoutMs: number;
   private readonly tokens = new Map<string, CachedToken>();
 
   constructor(options: GithubAppAuthOptions = {}) {
@@ -122,6 +131,7 @@ export class GithubAppAuth {
     this.apiBaseUrl = (options.apiBaseUrl ?? API_BASE).replace(/\/+$/, "");
     this.now = options.now ?? Date.now;
     this.refreshSkewMs = options.refreshSkewMs ?? DEFAULT_REFRESH_SKEW_MS;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   appJwt(args: { app: GithubAppCredentials }): string {
@@ -257,6 +267,7 @@ export class GithubAppAuth {
         await this.fetch(`${this.apiBaseUrl}/installation/token`, {
           method: "DELETE",
           headers: headers(token.token),
+          signal: AbortSignal.timeout(this.timeoutMs),
         }).catch(() => undefined);
       }),
     );
@@ -308,6 +319,7 @@ export class GithubAppAuth {
   }): Promise<T> {
     const response = await this.fetch(`${this.apiBaseUrl}${args.path}`, {
       method: args.method ?? "GET",
+      signal: AbortSignal.timeout(this.timeoutMs),
       headers: {
         ...headers(this.appJwt({ app: args.app })),
         ...(args.body !== undefined

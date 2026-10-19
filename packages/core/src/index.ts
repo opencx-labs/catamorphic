@@ -182,6 +182,7 @@ export {
   ChatKeySchema,
   keyedChatOwnerId,
   parseChatKey,
+  projectChatIdentity,
 } from "./services/chat-delivery.js";
 export { ClientRunnersService } from "./services/client-runners-service.js";
 export type {
@@ -232,6 +233,8 @@ export {
   type ConnectionGuardRecord,
   type ConnectionGuardVerdict,
   type ConnectionReviewOutcome,
+  type ModelRequest,
+  type ModelRequestRewrite,
   reviewConnectionAction,
 } from "./services/connection-guards.js";
 export {
@@ -351,6 +354,7 @@ export {
 export {
   EnvironmentAccessDeniedError,
   type EnvironmentAdmission,
+  type EnvironmentAdmitArgs,
   EnvironmentBindingUnavailableError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
@@ -459,6 +463,13 @@ export {
   validatePersonalEnvironment,
 } from "./services/personal-environment-service.js";
 export {
+  PLACEMENT_WAIT_FRESH_SECONDS,
+  type PlacementWait,
+  type PlacementWaitReason,
+  PlacementWaitsService,
+  type PlacementWaitTarget,
+} from "./services/placement-waits.js";
+export {
   type AttachedPluginInfo,
   type PluginInfo,
   PluginNotAttachedError,
@@ -469,6 +480,7 @@ export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
   DEFAULT_SETUP_TIMEOUT_MINUTES,
+  type EnvironmentSetup,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
@@ -834,6 +846,7 @@ export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,
   EnvironmentCapacityError,
+  WorkerCapacitySchema,
 } from "./services/worker-capacity.js";
 export {
   REMOTE_EPOCH_PATTERN,
@@ -874,7 +887,9 @@ export {
   parseSetupRecord,
   planWorkspaceSetup,
   SETUP_LOG_TAIL_LINES,
+  type SetupPart,
   type SetupRecord,
+  setupRecordAfter,
   type WorkspaceSetupOutcome,
 } from "./services/workspace-setup.js";
 export {

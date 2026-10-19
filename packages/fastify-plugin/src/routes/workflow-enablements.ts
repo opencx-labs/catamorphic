@@ -3,6 +3,11 @@ import {
   AuthenticationRequiredError,
   ConnectionPermissionDeniedError,
   ConnectionUnavailableError,
+  EnvironmentAccessDeniedError,
+  EnvironmentBindingUnavailableError,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
   ProductionDeploymentNotFoundError,
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
@@ -305,7 +310,8 @@ function handleEnablementError(error: unknown, reply: FastifyReply) {
   }
   if (
     error instanceof AccessDeniedError ||
-    error instanceof ConnectionPermissionDeniedError
+    error instanceof ConnectionPermissionDeniedError ||
+    error instanceof EnvironmentAccessDeniedError
   ) {
     return reply.status(403).send({ error: error.message });
   }
@@ -313,6 +319,10 @@ function handleEnablementError(error: unknown, reply: FastifyReply) {
     error instanceof WorkflowEnablementConsentRequiredError ||
     error instanceof WorkflowEnablementConflictError ||
     error instanceof ConnectionUnavailableError ||
+    error instanceof EnvironmentNotFoundError ||
+    error instanceof EnvironmentPolicyInvalidError ||
+    error instanceof EnvironmentIncompatibleError ||
+    error instanceof EnvironmentBindingUnavailableError ||
     error instanceof WorkflowEnablementSuspendedError
   ) {
     return reply.status(409).send({ error: error.message });

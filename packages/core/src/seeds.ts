@@ -546,14 +546,21 @@ provide it take the work:
   only on a machine that isolates them; read the personal-environment skill
   before relying on one. A value that grants access to a company system
   belongs in a connection instead.
-- \`setup\`: a shell command run in the project folder of every new
-  workspace before its first turn, and again when it changes
-  (\`"pnpm install --frozen-lockfile"\`), within \`setupTimeoutMinutes\` (30
-  by default). The image holds the toolchain; setup installs the project's
+- \`setup\`: \`{ "command": "pnpm install --frozen-lockfile",
+  "timeoutMinutes": 30 }\`, a shell command run in the project folder of
+  every new workspace before its first turn, again when it changes, and
+  again when the workspace's base moves, within \`timeoutMinutes\` (30 by
+  default). The image holds the toolchain; setup installs the project's
   dependencies. Its output is in \`.work-session/setup.log\` beside the
   project; a failure is told to the agent and runs again next turn. A
   member may add their own \`setup\` in their
   \`.work/personal/environment.json\`, run after this one in their own chats.
+  With a \`gateway\` or \`allowlist\` network, \`"network": { "allow":
+  ["registry.npmjs.org"] }\` lets the setup reach those hosts alone while it
+  runs, in a workspace at a ref of the project's remote: a new sandbox
+  holding the base commit, with only the secrets \`"secrets"\` names, narrow
+  again before the session's work arrives. Such an Environment declares no
+  volumes; its image holds the caches.
 - \`volumes\`: directories kept on the machine for each owner and project,
   so later workspaces start warm: \`{ "pnpm": "~/.local/share/pnpm/store",
   "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb":
@@ -879,7 +886,8 @@ export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
 \`\`\`
 
 A host call is a boundary transition: return it, and read its result as the
-next boundary's input, as above. The workflow's output is the last
+next boundary's input, as above (or, given \`{ state }\` as a second argument,
+its \`result\` beside that state). The workflow's output is the last
 boundary's return value.
 
 3. Put it in \`app-api.ts\` and call it from the app with the generated

@@ -80,18 +80,27 @@ export const DOCUMENTS_CAPABILITY = "catamorphic.documents";
  * `capability`.`fn`(`args`) with the run's caller attached and feeds the
  * result to the next step, exactly like a child workflow's output.
  */
-export interface RuntimeHostCallTransition {
+export interface RuntimeHostCallTransition extends RuntimeCarriedState {
   __catamorphicDurableTransition: "host_call";
   capability: string;
   fn: string;
   args: unknown;
 }
 
-export interface RuntimeConnectionCallTransition {
+export interface RuntimeConnectionCallTransition extends RuntimeCarriedState {
   __catamorphicDurableTransition: "connection_call";
   alias: string;
   action: string;
   args: unknown;
+}
+
+/**
+ * State a returned call carries to the next step (ADR 0260): with
+ * `statePresent`, the host hands the next step `{ result, state }`.
+ */
+export interface RuntimeCarriedState {
+  statePresent?: true;
+  state?: unknown;
 }
 
 export type RuntimeInvocationRequest =

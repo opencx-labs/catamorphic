@@ -1,6 +1,6 @@
 # 0212 — HTTP APIs reach code in sandboxes through the gateway
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0255](0255-acp-agents-run-on-the-work-server.md): a renewed grant replaces the old one once the sandbox holds it, not at once)
 - **Date:** 2026-10-06
 - **Refines:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0206](0206-project-secrets-reach-environments-per-member.md)
 

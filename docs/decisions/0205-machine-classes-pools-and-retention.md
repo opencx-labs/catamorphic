@@ -1,6 +1,6 @@
 # 0205 — Machine classes: cloud servers, pooled machines, and retention
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by [0258](0258-machines-on-demand.md): machines on demand, work waiting for a machine, and draining under the node lock
 - **Date:** 2026-10-06
 - **Refines:** 0164, 0167, 0193
 

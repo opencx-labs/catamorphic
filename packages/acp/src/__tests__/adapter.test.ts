@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +15,8 @@ import {
 import { InProcessRunner } from "@catamorphic/agent-runner";
 import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAcpAdapter } from "../adapter.js";
+import { createAcpAdapter, modelChoice } from "../adapter.js";
+import { loopbackModelEnv, serveLoopbackModel } from "../model-endpoint.js";
 
 /*
  * The ACP adapter end to end (ADR 0241): the real runner drives the real
@@ -45,6 +47,8 @@ function workspace() {
       cancelled?: boolean;
       sleeper?: number;
       askedAfterCancel?: string;
+      /** How often the agent was asked to list its sessions. */
+      listed?: number;
       sessions: Record<
         string,
         {
@@ -838,6 +842,77 @@ describe("ACP adapter", () => {
     );
   });
 
+  it("tells Work its session is gone when the agent answers a load with an internal error and no longer lists it, as OpenCode does", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_LOAD: "opencode",
+          TEST_AGENT_LIST: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.events()).toContainEqual(
+      expect.objectContaining({
+        type: "thread.lost",
+        reason: expect.stringContaining("OpenCode service failure"),
+      }),
+    );
+  });
+
+  it("leaves a session the agent still lists for the next turn when its load fails with an internal error", async () => {
+    const space = workspace();
+    const first = run(attempt(space, "hello"));
+    await first.finished();
+    const second = run(
+      attempt(space, "again", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_LOAD: "busy",
+          TEST_AGENT_LIST: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+      }),
+    );
+    await second.finished();
+    expect(second.completed()).toMatchObject({ status: "failed" });
+    expect(second.events().some((event) => event.type === "thread.lost")).toBe(
+      false,
+    );
+    // The agent was asked, and it still had the session.
+    expect(space.state().listed).toBeGreaterThan(0);
+  });
+
+  it("leaves the session for the next turn when an agent that cannot list sessions answers a load with an internal error", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_LOAD: "opencode" },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "failed" });
+    expect(turn.events().some((event) => event.type === "thread.lost")).toBe(
+      false,
+    );
+  });
+
   it("tells Work its session is gone when the agent refuses to resume it", async () => {
     const space = workspace();
     const turn = run(
@@ -899,5 +974,511 @@ describe("ACP adapter", () => {
       status: "failed",
       error: { message: expect.stringContaining("Couldn't start hermes") },
     });
+  });
+});
+
+/**
+ * A stand-in for the gateway's model route: a Chat Completions API that
+ * answers only the grant now in `keyFile`, echoing the model it was asked
+ * for. `rotate` renews the grant as the gateway does, the old one refused
+ * at once; `renewDuringNextCall` renews it while the next call is on its
+ * way, so that call arrives with the grant just revoked.
+ */
+async function fakeGateway(keyFile: string) {
+  const seen: Array<{ authorization: string; body: string }> = [];
+  let grant = "grant-1";
+  let renewal: string | undefined;
+  fs.writeFileSync(keyFile, `${grant}\n`);
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk: Buffer) => {
+      body += chunk.toString();
+    });
+    request.on("end", () => {
+      const authorization = String(request.headers.authorization ?? "");
+      seen.push({ authorization, body });
+      if (renewal) {
+        grant = renewal;
+        renewal = undefined;
+        fs.writeFileSync(keyFile, `${grant}\n`);
+      }
+      if (
+        authorization !== `Bearer ${grant}` ||
+        request.url !== "/gateway/model/models/chat/completions"
+      ) {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "bad grant" } }));
+        return;
+      }
+      const model = String(JSON.parse(body).model);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [{ message: { content: `hi from ${model}` } }],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return {
+    seen,
+    baseUrl: `http://127.0.0.1:${port}/gateway/model/models`,
+    rotate: (next: string) => {
+      grant = next;
+      fs.writeFileSync(keyFile, `${next}\n`);
+    },
+    renewDuringNextCall: (next: string) => {
+      renewal = next;
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+describe("ACP agents on a model connection (ADR 0255)", () => {
+  const gatewayAttempt = (
+    space: ReturnType<typeof workspace>,
+    gateway: { baseUrl: string },
+    env: Record<string, string> = {},
+  ) =>
+    attempt(space, "[[model]]", {
+      model: "deepseek/v4-flash",
+      modelAccess: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: gateway.baseUrl,
+        keyFile: path.join(space.dir, "grant"),
+      },
+      env: { TEST_AGENT_STATE: space.stateFile, ...env },
+    });
+
+  it("reaches its model through the gateway on loopback, never holding the grant", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run(gatewayAttempt(space, gateway));
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "completed" });
+      expect(turn.text("assistant_message")).toBe(
+        "Model said (200): hi from deepseek/v4-flash",
+      );
+      // The agent sent its own key; the gateway saw the grant.
+      expect(gateway.seen.map((call) => call.authorization)).toEqual([
+        "Bearer grant-1",
+      ]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("chooses the definition's model where the agent offers models, and points its providers at the gateway", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run(
+        gatewayAttempt(space, gateway, {
+          TEST_AGENT_MODELS: "1",
+          TEST_AGENT_PROVIDERS: "1",
+        }),
+      );
+      await turn.finished();
+      expect(turn.text("assistant_message")).toBe(
+        "Model said (200): hi from deepseek/v4-flash",
+      );
+      const state = space.state() as ReturnType<typeof space.state> & {
+        providers?: Record<
+          string,
+          { apiType: string; baseUrl: string; headers: Record<string, string> }
+        >;
+      };
+      expect(state.sessions["session-1"]).toMatchObject({
+        model: "deepseek/v4-flash",
+      });
+      // Only the provider that speaks the connection's API, at loopback;
+      // the optional one that speaks another is turned off.
+      expect(Object.keys(state.providers ?? {})).toEqual(["main"]);
+      expect((state as { disabled?: string[] }).disabled).toEqual(["cloud"]);
+      expect(state.providers?.main).toMatchObject({ apiType: "openai" });
+      expect(state.providers?.main?.baseUrl).toMatch(
+        /^http:\/\/127\.0\.0\.1:\d+$/,
+      );
+      expect(state.providers?.main?.headers.authorization).toMatch(
+        /^Bearer work-/,
+      );
+      expect(JSON.stringify(state)).not.toContain("grant-1");
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("goes on with the variables when the agent fails to take providers, and says so", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run(
+        gatewayAttempt(space, gateway, { TEST_AGENT_PROVIDERS: "fail" }),
+      );
+      await turn.finished();
+      expect(turn.text("assistant_message")).toBe(
+        "Model said (200): hi from deepseek/v4-flash",
+      );
+      expect(turn.events()).toContainEqual(
+        expect.objectContaining({
+          type: "diagnostic",
+          level: "warn",
+          message: expect.stringContaining("WORK_MODEL_BASE_URL"),
+        }),
+      );
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("closes its model endpoint with the turn", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run({
+        ...gatewayAttempt(space, gateway),
+        input: { itemId: "input", text: "[[where]]", attachments: [] },
+      });
+      await turn.finished();
+      const where = turn.text("assistant_message");
+      expect(where).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      // Anything the agent left running loses its model with the turn.
+      await expect(fetch(`${where}/models`)).rejects.toThrow();
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("refuses a Work sign-in: an ACP agent brings its own or uses a connection", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        modelAccess: { kind: "sign_in", home: space.dir },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("not a Work sign-in") },
+    });
+  });
+});
+
+describe("choosing the definition's model", () => {
+  const option = (currentValue: string, options: unknown) =>
+    ({
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue,
+      options,
+    }) as Parameters<typeof modelChoice>[0]["options"] extends
+      | readonly (infer O)[]
+      | null
+      | undefined
+      ? O
+      : never;
+
+  it("finds it by id, by name, or as the one value ending in it, in groups too", () => {
+    const grouped = option("work/default", [
+      {
+        group: "work",
+        name: "Work",
+        options: [
+          { value: "work/default", name: "Default" },
+          { value: "work/deepseek/v4-flash", name: "DeepSeek" },
+        ],
+      },
+    ]);
+    expect(
+      modelChoice({ options: [grouped], model: "deepseek/v4-flash" }),
+    ).toEqual({
+      kind: "set",
+      configId: "model",
+      value: "work/deepseek/v4-flash",
+    });
+    expect(modelChoice({ options: [grouped], model: "DeepSeek" })).toEqual({
+      kind: "set",
+      configId: "model",
+      value: "work/deepseek/v4-flash",
+    });
+    expect(modelChoice({ options: [grouped], model: "work/default" })).toEqual({
+      kind: "chosen",
+    });
+  });
+
+  it("says what the agent offers when it offers no such model, and nothing when it offers no models", () => {
+    const flat = option("a", [
+      { value: "a", name: "A" },
+      { value: "b", name: "B" },
+    ]);
+    expect(modelChoice({ options: [flat], model: "c" })).toEqual({
+      kind: "unknown",
+      offered: ["a", "b"],
+    });
+    expect(modelChoice({ options: [], model: "c" })).toBeUndefined();
+    expect(modelChoice({ options: undefined, model: "c" })).toBeUndefined();
+  });
+});
+
+/** A one-off upstream for the endpoint, and what it saw of each request. */
+async function upstreamServer(
+  handle: (
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+  ) => void,
+) {
+  const closedEarly: string[] = [];
+  const server = http.createServer((request, response) => {
+    request.on("close", () => {
+      if (!response.writableEnded) closedEarly.push(request.url ?? "");
+    });
+    handle(request, response);
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return {
+    closedEarly,
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+describe("the loopback model endpoint", () => {
+  const keyFile = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-model-"));
+    dirs.push(dir);
+    const file = path.join(dir, "grant");
+    fs.writeFileSync(file, "grant-a\n");
+    return file;
+  };
+  const until = async (check: () => boolean) => {
+    for (let tries = 0; tries < 200 && !check(); tries++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(check()).toBe(true);
+  };
+
+  it("speaks the Anthropic API to an Anthropic connection: x-api-key both ways, its own error shape", async () => {
+    const seen: Array<{ url: string; key: string }> = [];
+    const upstream = await upstreamServer((request, response) => {
+      seen.push({
+        url: request.url ?? "",
+        key: String(request.headers["x-api-key"]),
+      });
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"type":"message"}');
+      });
+    });
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "anthropic",
+        baseUrl: `${upstream.baseUrl}/gateway/model/anthropic`,
+        keyFile: keyFile(),
+      },
+    });
+    try {
+      expect(loopbackModelEnv({ model })).toMatchObject({
+        WORK_MODEL_API: "anthropic",
+        ANTHROPIC_BASE_URL: model.baseUrl,
+        ANTHROPIC_API_KEY: model.apiKey,
+      });
+      const ok = await fetch(`${model.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": model.apiKey },
+        body: "{}",
+      });
+      expect(ok.status).toBe(200);
+      expect(seen).toEqual([
+        { url: "/gateway/model/anthropic/v1/messages", key: "grant-a" },
+      ]);
+      const refused = await fetch(`${model.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": "someone-else" },
+        body: "{}",
+      });
+      expect(refused.status).toBe(401);
+      expect(await refused.json()).toMatchObject({
+        type: "error",
+        error: { type: "authentication_error" },
+      });
+    } finally {
+      model.close();
+      await upstream.close();
+    }
+  });
+
+  it("streams an answer as it arrives", async () => {
+    let release = () => {};
+    const upstream = await upstreamServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("data: one\n\n");
+      release = () => response.end("data: two\n\n");
+    });
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: upstream.baseUrl,
+        keyFile: keyFile(),
+      },
+    });
+    try {
+      const answer = await fetch(`${model.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${model.apiKey}` },
+        body: "{}",
+      });
+      const reader = answer.body?.getReader();
+      const first = await reader?.read();
+      // The first event is here while the upstream has not finished.
+      expect(new TextDecoder().decode(first?.value)).toContain("one");
+      release();
+      let rest = "";
+      for (;;) {
+        const next = await reader?.read();
+        if (!next || next.done) break;
+        rest += new TextDecoder().decode(next.value);
+      }
+      expect(rest).toContain("two");
+    } finally {
+      model.close();
+      await upstream.close();
+    }
+  });
+
+  it("stops the upstream call when the agent stops waiting, even before the answer's headers", async () => {
+    const upstream = await upstreamServer((request) => {
+      request.resume();
+      // Never answers: a model thinking before its first byte.
+    });
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: upstream.baseUrl,
+        keyFile: keyFile(),
+      },
+    });
+    try {
+      const abort = new AbortController();
+      const answer = fetch(`${model.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${model.apiKey}` },
+        body: "{}",
+        signal: abort.signal,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      abort.abort();
+      await expect(answer).rejects.toThrow();
+      await until(() => upstream.closedEarly.length === 1);
+    } finally {
+      model.close();
+      await upstream.close();
+    }
+  });
+
+  it("ends every call still running when it closes", async () => {
+    const upstream = await upstreamServer((request) => {
+      request.resume();
+    });
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: upstream.baseUrl,
+        keyFile: keyFile(),
+      },
+    });
+    try {
+      const answer = fetch(`${model.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${model.apiKey}` },
+        body: "{}",
+      }).catch((error: unknown) => error);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      model.close();
+      await answer;
+      await until(() => upstream.closedEarly.length === 1);
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("opens only to its own key, reads the grant per request, and retries once after a renewal", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-model-"));
+    dirs.push(dir);
+    const keyFile = path.join(dir, "grant");
+    const gateway = await fakeGateway(keyFile);
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: gateway.baseUrl,
+        keyFile,
+      },
+    });
+    const ask = (key: string) =>
+      fetch(`${model.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ model: "m", messages: [] }),
+      });
+    try {
+      const stranger = await ask("not-the-key");
+      expect(stranger.status).toBe(401);
+      expect(gateway.seen).toHaveLength(0);
+
+      expect((await ask(model.apiKey)).status).toBe(200);
+      // Renewed between two calls: the next reads the new grant.
+      gateway.rotate("grant-2");
+      expect((await ask(model.apiKey)).status).toBe(200);
+      expect(gateway.seen.map((call) => call.authorization)).toEqual([
+        "Bearer grant-1",
+        "Bearer grant-2",
+      ]);
+
+      // Renewed while a call was on its way: refused once, then sent again
+      // with the grant the file holds now.
+      gateway.renewDuringNextCall("grant-3");
+      const retried = await ask(model.apiKey);
+      expect(retried.status).toBe(200);
+      expect(gateway.seen.slice(2).map((call) => call.authorization)).toEqual([
+        "Bearer grant-2",
+        "Bearer grant-3",
+      ]);
+      // A refusal the grant file cannot fix comes back as the gateway said.
+      fs.writeFileSync(keyFile, "grant-revoked\n");
+      const refused = await ask(model.apiKey);
+      expect(refused.status).toBe(401);
+      expect(gateway.seen).toHaveLength(5);
+    } finally {
+      model.close();
+      await gateway.close();
+    }
   });
 });

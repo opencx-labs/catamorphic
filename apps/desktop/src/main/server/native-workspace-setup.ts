@@ -5,6 +5,8 @@ import {
   parseSetupRecord,
   planWorkspaceSetup,
   SETUP_LOG_TAIL_LINES,
+  type SetupRecord,
+  setupRecordAfter,
   type WorkspaceSetupOutcome,
 } from "@catamorphic/core";
 
@@ -12,7 +14,8 @@ import {
  * Set up a chat's own worktree on this computer (ADR 0208, 0215), the way
  * a new sandbox workspace is set up: the Environment's `setup`, then the
  * person's own, each run by bash with `-e` in the worktree, with the PATH
- * of the person's login shell. What last succeeded is recorded
+ * of the person's login shell, again when a command changes or the
+ * worktree's base moves. What succeeded is recorded after each part
  * in `stateDirectory`, the worktree's own Git directory, so it goes with
  * the worktree and a worktree checked out again sets up again. Output is
  * appended to `work-setup.log` there.
@@ -23,6 +26,7 @@ export async function runNativeWorkspaceSetup(input: {
   environment?: string;
   personal?: string;
   personalAllowed: boolean;
+  base?: string;
   timeoutMinutes: number;
   signal: AbortSignal;
   onRun(): Promise<void>;
@@ -33,6 +37,7 @@ export async function runNativeWorkspaceSetup(input: {
     ...(input.environment ? { environment: input.environment } : {}),
     ...(input.personal ? { personal: input.personal } : {}),
     personalAllowed: input.personalAllowed,
+    ...(input.base ? { base: input.base } : {}),
     recorded: parseSetupRecord(
       await fs.readFile(recordPath, "utf8").catch(() => ""),
     ),
@@ -58,10 +63,10 @@ export async function runNativeWorkspaceSetup(input: {
         ]
       : []),
   ];
-  const record = async () =>
-    fs.writeFile(recordPath, `${JSON.stringify(plan.record)}\n`);
+  const record = async (done: SetupRecord) =>
+    fs.writeFile(recordPath, `${JSON.stringify(done)}\n`);
   if (parts.length === 0) {
-    await record();
+    await record(plan.record);
     return { outcome: { status: "current" }, logPath };
   }
   await input.onRun();
@@ -103,8 +108,8 @@ export async function runNativeWorkspaceSetup(input: {
           logPath,
         };
       }
+      await record(setupRecordAfter({ plan, part }));
     }
-    await record();
     await log.write(
       `\n== Workspace setup finished ${new Date().toISOString()} ==\n`,
     );

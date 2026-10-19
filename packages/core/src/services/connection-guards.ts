@@ -1,4 +1,4 @@
-import type { Json } from "@catamorphic/db";
+import type { Json, JsonObject } from "@catamorphic/db";
 
 /**
  * One brokered connection action, as a guard sees it (ADR 0162). The
@@ -102,4 +102,45 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       timer = setTimeout(() => reject(new GuardTimeoutError()), ms);
     }),
   ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * One model request through the gateway as a rewrite sees it (ADR 0256).
+ * Headers and query are the caller's, read-only: a rewrite governs the
+ * body, and refuses a call it will not send by throwing
+ * `ConnectionActionRefusedError`.
+ */
+export interface ModelRequest {
+  method: string;
+  /** Path below the connection's base URL, e.g. `chat/completions`. */
+  path: string;
+  query: string;
+  headers: Readonly<Record<string, string | undefined>>;
+  /** The parsed body; return it, changed or not. */
+  body: JsonObject;
+  context: {
+    tenantId: string;
+    projectId: string;
+    /** The Environment binding alias the call came through. */
+    alias: string;
+    /** The connection's provider kind, e.g. `openrouter`. */
+    providerKind: string;
+    connectionId: string;
+    /** Whose key it is: a service connection's or a member's own. */
+    principalKind: string;
+    sessionId: string | null;
+  };
+}
+
+/**
+ * Host code that rewrites model request bodies before the gateway's policy
+ * reads them and the provider receives them (ADR 0256), as guards review
+ * actions (ADR 0183). Rewrites run in order; `kinds` limits one to those
+ * provider kinds. A rewrite that throws refuses the call, and one slower
+ * than the guard timeout refuses it too.
+ */
+export interface ModelRequestRewrite {
+  readonly name: string;
+  readonly kinds?: readonly string[];
+  rewrite(request: ModelRequest): JsonObject | Promise<JsonObject>;
 }

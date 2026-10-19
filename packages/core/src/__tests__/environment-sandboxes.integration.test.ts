@@ -8,6 +8,7 @@ import {
   dockerfileDigest,
   type EnvironmentRuntimeBinding,
   environmentSatisfies,
+  type SandboxEgress,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -16,7 +17,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
-import { allocationSandboxProvider } from "../services/allocation-sandbox-provider.js";
+import {
+  allocationSandboxProvider,
+  withAllocationSandboxPolicy,
+} from "../services/allocation-sandbox-provider.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import {
   EnvironmentIncompatibleError,
@@ -38,12 +42,32 @@ const identity: Identity = {
 };
 const DOCKERFILE = "FROM docker:dind\nRUN apk add --no-cache git bash nodejs\n";
 
-/** A machine with the given capabilities, recording what sandboxes get. */
+/**
+ * A machine with the given capabilities, recording what sandboxes get and
+ * every switch of their egress.
+ */
 function machine(capabilities: string[]) {
   const created: CreateSandboxOpts[] = [];
+  const widened: SandboxEgress[] = [];
+  const narrowed: string[] = [];
+  const stopped: string[] = [];
+  const faults = { narrow: false };
   const provider = new Proxy({} as SandboxProvider, {
     get(_target, prop) {
       if (prop === "workspaceRoot") return "/workspace";
+      if (prop === "widenEgress")
+        return async (args: { egress: SandboxEgress }) => {
+          widened.push(args.egress);
+        };
+      if (prop === "narrowEgress")
+        return async (args: { id: string }) => {
+          if (faults.narrow) throw new Error("The machine did not answer");
+          narrowed.push(args.id);
+        };
+      if (prop === "stopSandbox")
+        return async (sandboxId: string) => {
+          stopped.push(sandboxId);
+        };
       if (prop === "createSandbox")
         return async (opts: CreateSandboxOpts) => {
           created.push(opts);
@@ -70,7 +94,7 @@ function machine(capabilities: string[]) {
     },
     sandboxProvider: provider,
   };
-  return { created, binding };
+  return { created, widened, narrowed, stopped, faults, binding };
 }
 
 describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
@@ -102,6 +126,14 @@ describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
             missing: {
               workloads: ["agent"],
               image: ".work/images/missing.Dockerfile",
+            },
+            install: {
+              workloads: ["agent"],
+              network: { egress: "gateway" },
+              setup: {
+                command: "pnpm install --frozen-lockfile",
+                network: { allow: ["registry.npmjs.org"] },
+              },
             },
           },
           defaultEnvironment: "review",
@@ -204,6 +236,135 @@ describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
       containers: true,
       egress: { mode: "allowlist", allow: ["work.acme.com", "github.com"] },
     });
+  });
+
+  it("admits a setup with its own network only where egress switches, fixing both policies (ADR 0257)", async () => {
+    const fixed = machine(["network.policy"]);
+    await expect(
+      environments([fixed.binding]).admit({
+        identity,
+        projectId,
+        environment: "install",
+        requirements: { workload: "agent", topology: "controller" },
+      }),
+    ).rejects.toThrow(/No machine|incompatible/);
+    expect(
+      environmentSatisfies(fixed.binding.descriptor, {
+        workload: "agent",
+        capabilities: ["network.policy", "network.setup"],
+      }),
+    ).toEqual({
+      compatible: false,
+      reasons: ["Capability 'network.setup' is not available"],
+    });
+
+    const switching = machine(["network.policy", "network.setup"]);
+    const admission = await environments([
+      fixed.binding,
+      switching.binding,
+    ]).admit({
+      identity,
+      projectId,
+      environment: "install",
+      requirements: { workload: "agent", topology: "controller" },
+    });
+    expect(admission.binding.id).toBe(switching.binding.descriptor.id);
+    const own: SandboxEgress = { mode: "allowlist", allow: ["work.acme.com"] };
+    // The setup's hosts alone: not the gateway, nor the Environment's own.
+    const setup = { mode: "allowlist" as const, allow: ["registry.npmjs.org"] };
+    expect(admission.sandbox).toEqual({ egress: own, setupEgress: setup });
+    expect(admission.setup).toEqual({
+      command: "pnpm install --frozen-lockfile",
+      timeoutMinutes: 30,
+      network: { allow: ["registry.npmjs.org"] },
+    });
+
+    // A widening goes only to what the Allocation fixed, compared by value.
+    const allocations = new ExecutionAllocationsService(db);
+    const allocation = await allocations.create({
+      identity,
+      projectId,
+      environmentName: admission.environmentName,
+      workloadKind: "agent",
+      rootWorkloadId: crypto.randomUUID(),
+      policy: {
+        binding: admission.binding,
+        requirements: admission.effectiveRequirements,
+        sandbox: admission.sandbox,
+      },
+    });
+    const sandboxProvider = switching.binding.sandboxProvider;
+    if (!sandboxProvider) throw new Error("unreachable");
+    const until = new Date(Date.now() + 60_000).toISOString();
+    const managed = allocationSandboxProvider({
+      db,
+      allocation,
+      provider: sandboxProvider,
+    });
+    for (const provider of [
+      managed,
+      withAllocationSandboxPolicy({
+        db,
+        allocation,
+        provider: sandboxProvider,
+      }),
+    ]) {
+      switching.widened.length = 0;
+      const { providerId } = await provider.createSandbox({});
+      expect(switching.created.at(-1)?.egress).toEqual(own);
+      await provider.widenEgress?.({
+        sandboxId: providerId,
+        egress: setup,
+        id: "setup",
+        until,
+      });
+      for (const other of [
+        own,
+        { mode: "open" as const },
+        {
+          mode: "allowlist" as const,
+          allow: [...setup.allow, "attacker.example"],
+        },
+      ])
+        await expect(
+          provider.widenEgress?.({
+            sandboxId: providerId,
+            egress: other,
+            id: "other",
+            until,
+          }),
+        ).rejects.toThrow("fixed at admission");
+      expect(switching.widened).toEqual([setup]);
+      await provider.narrowEgress?.({ sandboxId: providerId, id: "setup" });
+    }
+
+    // Once the Allocation is released (its lease lapsed, its workload
+    // retired), nothing widens, but narrowing still reaches the machine,
+    // and a sandbox it cannot narrow is stopped.
+    await allocations.release({
+      identity,
+      allocationId: allocation.id,
+      reason: "retired",
+    });
+    await expect(
+      managed.widenEgress?.({
+        sandboxId: "sb-1",
+        egress: setup,
+        id: "late",
+        until,
+      }),
+    ).rejects.toThrow("no longer active");
+    switching.narrowed.length = 0;
+    await managed.narrowEgress?.({ sandboxId: "sb-1", id: "after-release" });
+    expect(switching.narrowed).toEqual(["after-release"]);
+    switching.faults.narrow = true;
+    await expect(
+      managed.narrowEgress?.({ sandboxId: "sb-1", id: "failing" }),
+    ).rejects.toThrow("did not answer");
+    expect(switching.stopped).toEqual(["sb-1"]);
+    await expect(managed.stopSandbox("sb-1")).rejects.toThrow(
+      "no longer active",
+    );
   });
 
   it("explains a missing Dockerfile", async () => {

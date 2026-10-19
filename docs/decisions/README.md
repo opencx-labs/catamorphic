@@ -32,11 +32,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted (expanded by 0020, 0026) |
 | [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090; paths superseded by 0142 |
 | [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |
-| [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026) |
+| [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026, 0260) |
 | [0021](0021-durable-workflow-visualization.md) | Persisted workflow visualization | Accepted (updated by 0026) |
 | [0022](0022-workflow-cancellation-semantics.md) | Workflow cancellation is a host run control | Accepted (implemented by 0025; updated by 0026) |
 | [0023](0023-postgres-durable-boundary-execution.md) | Postgres boundary execution | Accepted (updated by 0026) |
-| [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026) |
+| [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026, 0260) |
 | [0025](0025-durable-cancellation-state-machine.md) | Persisted cancellation state machine | Accepted (updated by 0026) |
 | [0026](0026-unified-workflows-runs-and-batch-scopes.md) | Unified workflows, runs, and batch scopes | Accepted |
 | [0027](0027-correlation-keys-and-external-signals.md) | Correlation keys and named external signals | Accepted |
@@ -192,7 +192,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181) |
-| [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199) |
+| [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256) |
 | [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted |
 | [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
@@ -217,14 +217,14 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093) |
 | [0203](0203-work-runs-chrome-extensions-from-the-web-store.md) | Work runs Chrome extensions from the Chrome Web Store: a host-owned `chrome.*` API on Electron, verified store installs, Chrome's toolbar, popups, side panel and dialogs | Accepted (amends 0194; amended by 0235) |
 | [0204](0204-sandboxes-on-any-linux-machine.md) | Sandboxes on any Linux machine: the container backend | Accepted |
-| [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted |
+| [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted (machines on demand by 0258) |
 | [0206](0206-project-secrets-reach-environments-per-member.md) | Project secrets reach Environments, with a value per member | Accepted (amends 0162, 0175, 0184; refined by 0212; directory events by 0210) |
 | [0207](0207-operations-are-sealed-to-their-executor.md) | Operations are sealed to their executor; worker credentials rotate | Accepted (terminals and previews by 0209) |
-| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree) |
+| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree; amended by 0257: setup is an object with its own network, and runs again when the base moves) |
 | [0209](0209-people-reach-their-sandboxes.md) | People reach their sandboxes: terminals and previews | Accepted (the loopback API guard by 0211) |
 | [0210](0210-directory-events-start-workflows.md) | Directory events start workflows; workflows set members' secrets | Accepted |
 | [0211](0211-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
-| [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md) | HTTP APIs reach code in sandboxes through the gateway | Accepted (refines 0162, 0175, 0206) |
+| [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md) | HTTP APIs reach code in sandboxes through the gateway | Accepted (refines 0162, 0175, 0206; renewal overlap by 0255) |
 | [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199) |
 | [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Accepted (amends 0198) |
 | [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
@@ -253,10 +253,16 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0238](0238-one-ring-per-list-and-sidebar-focus.md) | One ring per list; an opened sidebar focuses what is in front | Accepted (amends 0168) |
 | [0239](0239-chips-are-a-source.md) | A chat's chips are a source, and agents attach chips by metadata | Accepted (builds on 0226, 0234) |
 | [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) | A message sent while the agent works reaches it at its next step, and can stop it to be read now | Accepted (amends 0197, 0217) |
-| [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245) |
+| [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245; on the Work server by 0255) |
 | [0244](0244-each-question-takes-its-own-answer-with-pills.md) | Each question takes its own answer, pills and all | Accepted (amends 0195) |
 | [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241) |
 | [0246](0246-a-restart-never-waits-on-work.md) | A restart never waits on work: working agents continue after it, a downloaded update stays downloaded | Accepted (amends 0083, 0198) |
 | [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md) | A person names a chat from its menu, and it keeps the name | Accepted (amends 0202) |
 | [0248](0248-sidebar-thumbs-take-lanes.md) | Sidebar thumbs take lanes, hidden at rest: the sidebar's own on its edge, a section's one lane in | Accepted (amends 0237) |
 | [0249](0249-a-window-coming-back-reads-only-what-it-missed.md) | A window coming back reads only what it missed: no refetch on focus, one catch-up for a hidden window | Accepted (refines 0229) |
+| [0255](0255-acp-agents-run-on-the-work-server.md) | ACP agents run on the Work server, their model through the gateway on loopback | Accepted (builds on 0180, 0198, 0241; amends 0212) |
+| [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180) |
+| [0257](0257-setup-has-its-own-network.md) | Setup has its own network: the base checkout alone, widened for a while, narrow before the session's work arrives | Accepted (amends 0208) |
+| [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
+| [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
+| [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |

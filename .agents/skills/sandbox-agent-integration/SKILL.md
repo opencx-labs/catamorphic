@@ -74,8 +74,9 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
   authoritative for retries, pauses, child Runs, batch items, cancellation,
   and terminal state; the supervisor only reports sequenced events.
 - The supervisor forks one Bun child per invocation (`bun-worker.ts`) with
-  `CATAMORPHIC_RUN_ID`, `CATAMORPHIC_WORKFLOW_NAME`, `CATAMORPHIC_WORKFLOW_FILE`,
-  and `CATAMORPHIC_TRIGGER_DATA`. Providers that support persistent local data
+  `CATAMORPHIC_RUN_ID`, `CATAMORPHIC_WORKFLOW_NAME` and
+  `CATAMORPHIC_WORKFLOW_FILE`; its input arrives in the `init` message, never
+  the environment, which caps one variable at 128 KiB. Providers that support persistent local data
   set `WORK_APP_DATA_DIR`; it is absent otherwise.
 - Tables: `workflow_runs` (one per invocation), `workflow_run_states`,
   `workflow_step_attempts`, `workflow_pauses`, `workflow_run_steps`,

@@ -255,7 +255,12 @@ export function startClientRunner(args: {
       // receipt was lost can be retried.
       const owned =
         !("sandboxId" in operation) || ownedSandboxes.has(operation.sandboxId);
-      if (!owned && operation.kind !== "destroy")
+      // A destroy of another connection's sandbox counts as done, and a
+      // narrowing runs for any sandbox of this machine (ADR 0257): it is
+      // always safe, and a widening must end after its connection did.
+      const unguarded =
+        operation.kind === "destroy" || operation.kind === "egress.narrow";
+      if (!owned && !unguarded)
         throw new Error("Sandbox does not belong to this runner connection");
       if (operation.kind === "create") {
         if (
@@ -266,14 +271,15 @@ export function startClientRunner(args: {
         creating++;
         reserved = true;
       }
-      const response = owned
-        ? await executeClientOperation({
-            provider: args.provider,
-            operation,
-            ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
-            ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
-          })
-        : null;
+      const response =
+        owned || operation.kind === "egress.narrow"
+          ? await executeClientOperation({
+              provider: args.provider,
+              operation,
+              ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
+              ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
+            })
+          : null;
       if (operation.kind === "create") {
         const handle = response;
         if (
@@ -418,6 +424,20 @@ async function executeClientOperation({
         operation.path,
         operation.ref,
       );
+    case "egress.widen": {
+      if (!provider.widenEgress)
+        throw new Error("This machine cannot widen a sandbox's network");
+      const { kind: _, ...args } = operation;
+      await provider.widenEgress(args);
+      return null;
+    }
+    case "egress.narrow": {
+      if (!provider.narrowEgress)
+        throw new Error("This machine cannot narrow a sandbox's network");
+      const { kind: _, ...args } = operation;
+      await provider.narrowEgress(args);
+      return null;
+    }
     case "process.start": {
       const { kind: _, ...args } = operation;
       return processesOf(provider).startProcess(args);

@@ -226,7 +226,7 @@ describe("the worker install script", () => {
     const runCall = first.log.find((call) => call.startsWith("docker run"));
     expect(runCall).toBeDefined();
     for (const part of [
-      "--detach --name work-worker --restart unless-stopped",
+      "--detach --name work-worker --restart unless-stopped --no-healthcheck",
       `--volume ${dataDir}:${dataDir} --env WORK_DATA_DIR=${dataDir}`,
       "--volume /var/run/docker.sock:/var/run/docker.sock --group-add 998",
       `--env WORK_CONTROL_PLANE_URL=${target.controlPlaneUrl}`,
@@ -262,6 +262,55 @@ describe("the worker install script", () => {
     expect(calls.find((call) => call.startsWith("docker run"))).toContain(
       "--name worker-b",
     );
+  });
+
+  it("runs the backend --sandbox names: gVisor for container even with KVM", () => {
+    const state = fs.mkdtempSync(path.join(root, "sandbox-"));
+    const contained = run({
+      argv: [
+        "--code",
+        "wke_x",
+        "--data-dir",
+        path.join(state, "data"),
+        "--sandbox",
+        "container",
+      ],
+      state,
+    });
+    expect(contained.stderr).toBe("");
+    expect(contained.status).toBe(0);
+    const runCall = contained.log.find((call) => call.startsWith("docker run"));
+    expect(runCall).toContain("--env WORK_SANDBOX=container");
+    expect(runCall).not.toContain("/dev/kvm");
+    expect(contained.log).toContain(
+      "runsc install -- --host-uds=open --net-raw",
+    );
+    const bogus = run({
+      argv: ["--code", "wke_x", "--sandbox=vm"],
+      state: fs.mkdtempSync(path.join(root, "sandbox-")),
+    });
+    expect(bogus.status).toBe(1);
+    expect(bogus.stderr).toContain(
+      "--sandbox is auto, microsandbox or container",
+    );
+    if (!usableKvm()) {
+      const microVMs = run({
+        argv: [
+          "--code",
+          "wke_x",
+          "--data-dir",
+          path.join(state, "vm"),
+          "--sandbox",
+          "microsandbox",
+        ],
+        state: fs.mkdtempSync(path.join(root, "sandbox-")),
+      });
+      expect(microVMs.status).toBe(1);
+      expect(microVMs.stderr).toContain("needs a /dev/kvm");
+      expect(microVMs.log.some((call) => call.startsWith("docker run"))).toBe(
+        false,
+      );
+    }
   });
 
   it("never takes a system directory, or someone else's, for its data", () => {
@@ -362,6 +411,14 @@ describe("cloud-init for cloud machines", () => {
     expect(userData).toContain(
       `  - ["sh", "${CLOUD_INIT_SCRIPT_PATH}", "--code", "wke_abc-DEF_123"]`,
     );
+    expect(
+      workerCloudInit({ script, code: "wke_x", sandbox: "container" }),
+    ).toContain(
+      `  - ["sh", "${CLOUD_INIT_SCRIPT_PATH}", "--code", "wke_x", "--sandbox", "container"]`,
+    );
+    expect(
+      workerCloudInit({ script, code: "wke_x", sandbox: "auto" }),
+    ).toContain(`  - ["sh", "${CLOUD_INIT_SCRIPT_PATH}", "--code", "wke_x"]`);
     // Hetzner accepts user data up to 32 KiB; nothing is fetched to start.
     expect(Buffer.byteLength(userData)).toBeLessThan(32 * 1024);
     expect(userData).not.toContain("install.sh |");

@@ -1,4 +1,4 @@
-import type { WorkflowTransition } from "./workflow.js";
+import type { TransitionCall } from "./workflow.js";
 
 /** Current host snapshot; authority fields identify its owner. Mirrors may lag. */
 export interface SessionSnapshot {
@@ -23,6 +23,8 @@ export interface SessionSnapshot {
   icon: string | null;
   /** The project's key for this chat (`pr-42`), or null. */
   key: string | null;
+  /** A project chat runs as the project; a member's chat as that member. */
+  owner: "project" | "member";
   /** Workflows that delivered to this chat by its key. */
   keyWorkflows: string[];
   /** Where the chat runs and why; null for chats from before placement was recorded. */
@@ -95,9 +97,7 @@ type DeliverTarget =
       environment?: string;
     };
 type Action = Target & { idempotencyKey: string };
-type Call<Input, Output = unknown> = (
-  input: Input,
-) => WorkflowTransition<Output>;
+type Call<Input, Output = unknown> = TransitionCall<Input, Output>;
 /** Host transitions must be returned from a boundary, never awaited as IO. */
 export interface SessionHostOperations {
   inspect: Call<Target, SessionSnapshot>;

@@ -78,7 +78,9 @@ and session_reopen for new work. Observe session.work-changed with
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
 deliver, create, fork, spawn, archive, unarchive, interrupt,
 complete, reopen, stopWatcher, and stop operations. Every host call is a
-boundary transition: RETURN it. Consume its result as the next boundary's input.
+boundary transition: RETURN it. Consume its result as the next boundary's input
+(pass { state } as a second argument to keep data across it; the next boundary
+then receives { result, state }, see durable-workflows).
 Do not await it, put it inside a use-step helper, or invoke a second host call
 in the same boundary. Put ordinary network/file IO in use-step helpers with
 one destructured object parameter and JSDoc display names.

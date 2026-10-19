@@ -134,7 +134,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
       seedFiles: {},
     });
     projectId = (await projects.create(ada, { name: "Setup" })).id;
-    await writeManifest({ setup: `echo "environment v1" >> '${runs}'` });
+    await writeManifest({
+      setup: { command: `echo "environment v1" >> '${runs}'` },
+    });
     machine = new LocalProcessSandboxProvider({
       root: path.join(tmpDir, "machine"),
     });
@@ -243,7 +245,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
     await send(ada, chat.id, "second");
     expect(await ranLines()).toEqual(["environment v1"]);
 
-    await writeManifest({ setup: `echo "environment v2" >> '${runs}'` });
+    await writeManifest({
+      setup: { command: `echo "environment v2" >> '${runs}'` },
+    });
     await send(ada, chat.id, "third");
     expect(await ranLines()).toEqual(["environment v1", "environment v2"]);
 
@@ -272,7 +276,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
   it("loads the chat's secrets and runs the owner's own setup only for the owner", async () => {
     await fs.rm(runs, { force: true });
     await writeManifest({
-      setup: `echo "environment \${DEMO_TOKEN:-none}" >> '${runs}'`,
+      setup: {
+        command: `echo "environment \${DEMO_TOKEN:-none}" >> '${runs}'`,
+      },
     });
     await personal.replace({
       identity: ada,
@@ -294,7 +300,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
       "/workspace/.work-session/env",
     );
     await writeManifest({
-      setup: `echo "environment \${DEMO_TOKEN:-none} v2" >> '${runs}'`,
+      setup: {
+        command: `echo "environment \${DEMO_TOKEN:-none} v2" >> '${runs}'`,
+      },
     });
     await send(ada, chat.id, "second");
     expect((await ranLines()).slice(2)).toEqual([
@@ -317,7 +325,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
     const flag = path.join(tmpDir, "fail");
     await fs.writeFile(flag, "");
     await writeManifest({
-      setup: `echo "attempt" >> '${runs}'\nif [ -f '${flag}' ]; then echo "boom: the registry is down"; exit 3; fi\necho "installed" >> '${runs}'`,
+      setup: {
+        command: `echo "attempt" >> '${runs}'\nif [ -f '${flag}' ]; then echo "boom: the registry is down"; exit 3; fi\necho "installed" >> '${runs}'`,
+      },
     });
     const chat = await sessions.create(ada, projectId);
     const failed = await send(ada, chat.id, "first");

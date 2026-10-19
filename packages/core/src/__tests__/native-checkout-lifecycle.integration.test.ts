@@ -20,12 +20,12 @@ import { ProjectEnvironmentsService } from "../services/project-environments-ser
 import { ProjectsService } from "../services/projects-service.js";
 import type { WorkspaceSetupOutcome } from "../services/workspace-setup.js";
 import { RecordingAdapter } from "./recording-adapter.js";
-import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
  * A native chat's own checkout (ADR 0215): set up like a new workspace
  * before its turn, never the person's own folder, and given back to the
- * host when the chat is archived or closed.
+ * host when the chat is archived or closed. A setup that needs its own
+ * network does not run in a folder (ADR 0257).
  */
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
@@ -68,7 +68,15 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
         PROJECT_MANIFEST_PATH,
         JSON.stringify({
           environments: {
-            dev: { workloads: ["agent"], setup: "bun install" },
+            dev: { workloads: ["agent"], setup: { command: "bun install" } },
+            fenced: {
+              workloads: ["agent"],
+              network: { egress: "gateway" },
+              setup: {
+                command: "bun install",
+                network: { allow: ["registry.npmjs.org"] },
+              },
+            },
           },
           defaultEnvironment: "dev",
         }),
@@ -111,7 +119,22 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
       projectManager,
       executionEnvironments: new ExecutionEnvironmentsService(
         new ProjectEnvironmentsService(db, projectManager),
-        testEnvironmentProvider(),
+        {
+          // A machine that claims what the fenced Environment needs, so
+          // only the folder itself can refuse its setup's network.
+          get: () => ({
+            descriptor: {
+              id: "local",
+              label: "Test Environment",
+              trust: "local",
+              isolation: "none",
+              workloads: ["agent", "workflow"],
+              agentTopologies: ["native"],
+              capabilities: ["network.policy", "network.setup"],
+              resources: {},
+            },
+          }),
+        },
       ),
       executionAllocations: new ExecutionAllocationsService(db),
       codingAgents: {
@@ -160,6 +183,21 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
     );
     expect(adapter.lastInput()).toContain("error: lockfile had changes");
     expect(adapter.lastInput()).toContain(path.join(tmpDir, "work-setup.log"));
+  }, 30_000);
+
+  it("refuses an Environment's setup that needs its own network, in a folder on this computer (ADR 0257)", async () => {
+    const chat = await sessions.create(identity, projectId, {
+      environment: "fenced",
+    });
+    owned.set(chat.id, true);
+    const before = setups.length;
+    await sessions.sendMessage(identity, projectId, chat.id, "first");
+    expect(setups).toHaveLength(before);
+    expect(adapter.lastInput()).toContain(
+      "[Workspace] The Environment's setup did not run",
+    );
+    expect(adapter.lastInput()).toContain("a folder on this computer");
+    expect(adapter.lastInput()).toContain("setup.network");
   }, 30_000);
 
   it("never sets up the person's own folder", async () => {

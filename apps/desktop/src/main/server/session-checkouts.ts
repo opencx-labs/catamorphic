@@ -971,7 +971,7 @@ export class SessionCheckouts {
   /**
    * Run the Environment's and the person's setup in a chat's own worktree
    * (ADR 0208, 0215), recorded in the worktree's own Git directory so a
-   * worktree checked out again sets up again.
+   * worktree checked out again, or moved to another base, sets up again.
    */
   async setup(input: {
     projectId: string;
@@ -980,6 +980,7 @@ export class SessionCheckouts {
     environment?: string;
     personal?: string;
     personalAllowed: boolean;
+    base?: string;
     timeoutMinutes: number;
     signal: AbortSignal;
     onRun(): Promise<void>;

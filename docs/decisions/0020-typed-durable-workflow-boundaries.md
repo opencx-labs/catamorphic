@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-22
-- **Updated by:** 0021 (visualization), 0022 (cancellation semantics), 0026 (one Workflow model and mixed boundary/batch scopes)
+- **Updated by:** 0021 (visualization), 0022 (cancellation semantics), 0026 (one Workflow model and mixed boundary/batch scopes), [0260](0260-every-returned-call-carries-state.md) (every returned call carries state, as pause does)
 
 ## Context
 
