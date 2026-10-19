@@ -12,9 +12,6 @@
     "packages/*",
     "apps/*"
   ],
-  "trustedDependencies": [
-    "node"
-  ],
   "scripts": {
     "dev": "bun scripts/dev.ts all",
     "dev:desktop": "bun scripts/dev.ts desktop",
@@ -42,10 +39,15 @@
     "@biomejs/biome": "^2.5.7",
     "@types/bun": "1.4.3",
     "@types/node": "^26.1.1",
-    "node": "24.13.0",
     "turbo": "2.10.10",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
+  },
+  "optionalDependencies": {
+    "node-bin-darwin-arm64": "24.13.0",
+    "node-darwin-x64": "24.13.0",
+    "node-linux-arm64": "24.13.0",
+    "node-linux-x64": "24.13.0"
   },
   "overrides": {
     "@xmldom/xmldom": "^0.8.15",

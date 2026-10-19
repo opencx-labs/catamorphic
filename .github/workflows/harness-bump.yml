@@ -76,10 +76,9 @@ jobs:
         if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.found == 'false'
         run: |
           # Only the lockfile and the SDK manifests are needed: skip the
-          # downloads postinstall scripts do, except the pinned Node the
-          # repository's test runner requires.
+          # downloads postinstall scripts do. The pinned Node the test runner
+          # requires is an ordinary package, so it installs without them.
           bun install --ignore-scripts
-          bun run --cwd node_modules/node preinstall
           bun run test:scripts -- scripts/harness-bump.test.ts
       - name: Open the pull request
         if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.found == 'false'

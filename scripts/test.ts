@@ -10,7 +10,7 @@ import {
   dockerTestPostgresDriver,
   withDisposablePostgres,
 } from "./test-postgres.js";
-import { toolRuntime } from "./tool-runtime.js";
+import { repositoryNodePath, toolRuntime } from "./tool-runtime.js";
 
 const TURBO_CONCURRENCY = 2;
 const PROCESS_GROUP_GRACE_MS = 5_000;
@@ -332,13 +332,7 @@ export function testRunCommands(input: {
   rootPath: string;
   cliArguments: readonly string[];
 }): TestRunCommand[] {
-  const nodePath = path.join(
-    input.rootPath,
-    "node_modules",
-    "node",
-    "bin",
-    "node",
-  );
+  const nodePath = repositoryNodePath({ rootPath: input.rootPath });
   return [
     {
       label: "root orchestration tests",

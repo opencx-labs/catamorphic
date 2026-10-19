@@ -137,8 +137,8 @@ is project code under `.work/`, changed through ordinary review.
 ## Gotchas
 
 - Build the image with the repository's Dockerfile as is: it installs with
-  `--ignore-scripts` because a pinned helper package would otherwise try to
-  run npm, and the image has only bun.
+  `--ignore-scripts` and leaves out the repository's pinned Node, because the
+  image has only bun.
 - The image has no `curl`; send setup requests with `bun -e` inside the
   container.
 - The login and OAuth consent forms are browser pages and expect an `Origin`
