@@ -138,7 +138,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0123](0123-desktop-consent-search-and-resource-links.md) | Desktop consent, search and resource links | Accepted |
 | [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126; publication refined by 0135 |
 | [0125](0125-canonical-app-icons.md) | Canonical semantic app icons | Accepted |
-| [0126](0126-installable-component-packs.md) | Installable component packs | Accepted |
+| [0126](0126-installable-component-packs.md) | Installable component packs | Accepted (recipes and `registry.read` by 0262) |
 | [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
 | [0128](0128-durable-manual-development-data.md) | Durable manual development data | Accepted |
 | [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0131 |
@@ -191,9 +191,9 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182; container sandboxes by 0204; setup and volumes by 0208) |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
-| [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181) |
+| [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181; the `slack-threads` pack by 0262) |
 | [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256) |
-| [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted |
+| [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted (the `pull-request-reviews` pack by 0262) |
 | [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted (logins superseded by 0199; amended by 0206; container sandboxes by 0204; sealed operations by 0207; setup and volumes by 0208) |
@@ -268,3 +268,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
 | [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Accepted (refines 0059, 0160; amends 0256) |
+| [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181) |

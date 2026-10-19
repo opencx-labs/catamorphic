@@ -8,6 +8,7 @@ import {
 import {
   type CSSProperties,
   type DOMAttributes,
+  Fragment,
   type MouseEvent,
   type ReactNode,
   useEffect,
@@ -655,6 +656,7 @@ export function ChatBubbles({
   // from the first frame as it slides into its corner.
   const items = (
     <div
+      key="items"
       id={itemsId}
       className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
         collapsed ? "pointer-events-none opacity-0" : "opacity-100"
@@ -710,6 +712,7 @@ export function ChatBubbles({
   // the dock's gap around the tools, which leaves them empty.
   const voiceSlot = (
     <div
+      key="voice"
       data-dock-voice={voiceShown ? "shown" : "hidden"}
       className={`transition-[max-width,margin,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
         voiceShown
@@ -722,8 +725,10 @@ export function ChatBubbles({
       {voice}
     </div>
   );
+  const trailingSlot = <Fragment key="trailing">{trailing}</Fragment>;
   const tools = (
     <div
+      key="tools"
       className={`flex items-center gap-1.5 transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
         side === "left"
           ? collapsed
@@ -734,23 +739,14 @@ export function ChatBubbles({
             : "[&:has(>[data-dock-voice=hidden]:only-child)]:-me-1.5"
       }`}
     >
-      {side === "left" ? (
-        <>
-          {voiceSlot}
-          {trailing}
-        </>
-      ) : (
-        <>
-          {trailing}
-          {voiceSlot}
-        </>
-      )}
+      {side === "left" ? [voiceSlot, trailingSlot] : [trailingSlot, voiceSlot]}
     </div>
   );
   // The arrows fold away with the strip; the collapsed bubble takes their
   // place as the outermost control.
   const arrowsSlot = (
     <div
+      key="arrows"
       className={`flex overflow-hidden transition-[max-width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
         collapsed
           ? "pointer-events-none max-w-0 opacity-0"
@@ -764,6 +760,7 @@ export function ChatBubbles({
   );
   const collapsedBubble = (
     <button
+      key="expand"
       ref={expandRef}
       type="button"
       {...dragHandlers}
@@ -804,6 +801,17 @@ export function ChatBubbles({
       </span>
     </button>
   );
+  // The outer edge is one slot the arrows and the collapsed bubble share,
+  // so folding cross-fades them in place. The strip mirrors for its side
+  // by moving its controls, keyed, never by drawing them anew: drawn anew,
+  // downloads would vanish until it had read its profile again.
+  const edge = (
+    <div key="edge" className="flex">
+      {side === "left"
+        ? [collapsedBubble, arrowsSlot]
+        : [arrowsSlot, collapsedBubble]}
+    </div>
+  );
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
       {targets}
@@ -821,27 +829,7 @@ export function ChatBubbles({
           collapsed ? "gap-0 p-1" : "gap-1.5 p-1.5"
         }`}
       >
-        {/* The outer edge is one slot the arrows and the collapsed bubble
-            share, so folding cross-fades them in place. */}
-        {side === "left" ? (
-          <>
-            <div className="flex">
-              {collapsedBubble}
-              {arrowsSlot}
-            </div>
-            {tools}
-            {items}
-          </>
-        ) : (
-          <>
-            {items}
-            {tools}
-            <div className="flex">
-              {arrowsSlot}
-              {collapsedBubble}
-            </div>
-          </>
-        )}
+        {side === "left" ? [edge, tools, items] : [items, tools, edge]}
       </div>
       {dockMenuAt && (
         <MenuPortal

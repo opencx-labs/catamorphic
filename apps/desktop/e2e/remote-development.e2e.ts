@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -155,16 +155,34 @@ async function terminalShows(text: string): Promise<void> {
   );
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+/** Whether nothing holds this port on this address. */
+function bindable(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
     const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close(() => resolve(port));
-    });
+    probe.once("error", () => resolve(false));
+    probe.listen(port, host, () => probe.close(() => resolve(true)));
   });
+}
+
+/**
+ * A port for another process to listen on, seconds from now. One the
+ * system picks (listening on 0) goes back, as its probe closes, to the
+ * range every connection on this machine draws from, and one was taken
+ * that way before the server's boot reached its listen. Below the
+ * ephemeral ranges (49152 and up on macOS, 32768 and up on Linux) a port
+ * is only ever taken by its number.
+ */
+async function unassignedPort(taken: number[] = []): Promise<number> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const port = 20_000 + randomInt(12_000);
+    if (
+      !taken.includes(port) &&
+      (await bindable(port, "0.0.0.0")) &&
+      (await bindable(port, "127.0.0.1"))
+    )
+      return port;
+  }
+  throw new Error("No free port below the ephemeral range");
 }
 
 async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -289,9 +307,10 @@ async function projectTool(
 /**
  * The server's public origin. It forwards everything, and signs bob in
  * when the desktop's browser tab opens the authorization page, as he would
- * by typing his password there.
+ * by typing his password there. It listens on a port of its own choosing,
+ * held from the start.
  */
-function startProxy(port: number, target: number): Promise<void> {
+function startProxy(target: number): Promise<number> {
   proxy = http.createServer((req, res) => {
     const forward = (cookie?: string) => {
       const upstream = http.request(
@@ -322,7 +341,10 @@ function startProxy(port: number, target: number): Promise<void> {
     forward();
   });
   return new Promise((resolve) => {
-    proxy?.listen(port, "127.0.0.1", () => resolve());
+    proxy?.listen(0, "127.0.0.1", () => {
+      const address = proxy?.address();
+      resolve(typeof address === "object" && address ? address.port : 0);
+    });
   });
 }
 
@@ -341,14 +363,11 @@ describe("remote development on a Work server", () => {
       path.join(codexBin, "codex"),
     );
     fs.chmodSync(path.join(codexBin, "codex"), 0o755);
-    const [serverPort, operatorPort, proxyPort] = await Promise.all([
-      freePort(),
-      freePort(),
-      freePort(),
-    ]);
+    const serverPort = await unassignedPort();
+    const operatorPort = await unassignedPort([serverPort]);
     serverBase = `http://127.0.0.1:${serverPort}`;
     operatorBase = `http://127.0.0.1:${operatorPort}`;
-    publicUrl = `http://127.0.0.1:${proxyPort}`;
+    publicUrl = `http://127.0.0.1:${await startProxy(serverPort)}`;
     const log = fs.openSync(
       path.join(ARTIFACTS, "remote-development-server.log"),
       "w",
@@ -373,7 +392,6 @@ describe("remote development on a Work server", () => {
       },
       stdio: ["ignore", log, log],
     });
-    await startProxy(proxyPort, serverPort);
     const deadline = Date.now() + 90_000;
     while (!(await fetch(`${serverBase}/healthz`).catch(() => null))?.ok) {
       if (Date.now() > deadline || server.exitCode !== null)
@@ -624,7 +642,7 @@ describe("remote development on a Work server", () => {
   }, 240_000);
 
   it("previews a server started in that terminal", async () => {
-    const port = await freePort();
+    const port = await unassignedPort();
     const marker = `Preview of bob's workspace on ${port}`;
     // Started as a person would (with the Bun this test runs on), then
     // waited for until its port answers.

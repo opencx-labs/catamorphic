@@ -1,6 +1,6 @@
 # 0181 — Project chats use their Environment's bindings; session events carry keys
 
-- **Status:** Accepted (refined by [0259](0259-reviews-post-from-a-workflow.md): reviews post from a workflow, the chat only reports)
+- **Status:** Accepted (refined by [0259](0259-reviews-post-from-a-workflow.md): reviews post from a workflow, the chat only reports; refined by [0262](0262-recipes-are-registry-packs.md): the review automation is the `pull-request-reviews` pack)
 - **Date:** 2026-09-27
 - **Refines:** 0156, 0171, 0172, 0173, 0179
 
@@ -56,8 +56,8 @@ reply recipe now binds `session.turn-changed` with
 are `$`-prefixed keys (ADR 0171), so payload fields named `prefix` or
 `exists` still match by value.
 
-**The review automation is project code.** The host skill
-`reviewing-pull-requests` carries the complete automation (GitHub trigger
+**The review automation is project code.** The `pull-request-reviews`
+registry pack (a host skill until ADR 0262) carries the complete automation (GitHub trigger
 library, `review` Environment and image, `reviewer` agent and doctrine, and the
 review, answer, and close workflows) as files a team commits under `.work/`;
 the setup guide covers the server side. It needs no framework code of its own.

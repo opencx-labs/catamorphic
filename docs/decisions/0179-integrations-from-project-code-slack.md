@@ -1,6 +1,6 @@
 # 0179 — Integrations from project code: named HTTP operations and declared delivery ids
 
-- **Status:** Accepted
+- **Status:** Accepted (refined by [0262](0262-recipes-are-registry-packs.md): the Slack recipe is the `slack-threads` pack)
 - **Date:** 2026-09-27
 - **Refines:** 0162, 0171, 0172, 0138
 

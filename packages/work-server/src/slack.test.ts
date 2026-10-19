@@ -3,11 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import {
-  HOST_SKILLS,
-  type Identity,
-  projectPrincipalIdentity,
-} from "@catamorphic/core";
+import { type Identity, projectPrincipalIdentity } from "@catamorphic/core";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,13 +14,14 @@ import {
 import {
   filesHolding,
   oauthAccessToken,
+  registryPack,
   replyOf,
   testServerOptions,
 } from "./test-support.js";
 
 /**
  * Slack from project code (#117, ADR 0179), end to end on a Work server:
- * the `slack` skill's trigger library and workflows deployed as ordinary
+ * the `slack-threads` pack's trigger library and workflows deployed as ordinary
  * project code, a fake Slack Web API behind a named-operation `http`
  * gateway connection, and recorded Slack payloads signed with a test
  * signing secret. Mentions become one project chat per thread, retries are
@@ -35,17 +32,10 @@ import {
 const SIGNING_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
 const BOT_TOKEN = `xoxb-test-${crypto.randomBytes(12).toString("hex")}`;
 
-const SKILL = HOST_SKILLS["slack/SKILL.md"] ?? "";
-const blocks = [...SKILL.matchAll(/```typescript\n([\s\S]*?)```/g)].map(
-  (match) => match[1] ?? "",
-);
-const LIBRARY = blocks.find((source) =>
-  source.startsWith("// .work/triggers/slack.ts"),
-);
-const WORKFLOWS = blocks.find((source) =>
-  source.includes("export const postSlackReplies"),
-);
-const AGENT = /```json\n(\{\n {2}"version": 1,[\s\S]*?)```/.exec(SKILL)?.[1];
+const PACK = registryPack("slack-threads");
+const LIBRARY = PACK[".work/triggers/slack.ts"];
+const WORKFLOWS = PACK[".work/workflows/src/slack-threads.ts"];
+const AGENT = PACK[".work/agents/slack.json"];
 
 interface SlackCall {
   method: string;
@@ -360,7 +350,7 @@ beforeAll(async () => {
         }),
         ".work/agents/slack.json": AGENT,
         ".work/triggers/slack.ts": LIBRARY,
-        ".work/workflows/src/slack.ts": WORKFLOWS,
+        ".work/workflows/src/slack-threads.ts": WORKFLOWS,
       },
     },
   );

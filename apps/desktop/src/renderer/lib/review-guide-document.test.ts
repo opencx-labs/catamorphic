@@ -22,7 +22,7 @@ it("produces an ordinary session app with immutable evidence and a shared review
     artifactId: "existing",
   });
   expect(prompt).toContain("read and update artifact existing");
-  expect(prompt).toContain("components.read");
+  expect(prompt).toContain("registry.read");
   expect(prompt).toContain("code-review");
   expect(prompt).toContain("temporary app files");
   expect(prompt).toContain("Do not publish or edit the user's checkout");

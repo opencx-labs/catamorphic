@@ -42,13 +42,13 @@ COPY . .
 # packages/runner-bundle/dist/runner.mjs, that sandboxes run with this
 # image's Bun, ADR 0198) + the mobile PWA the server serves at its root
 # (invite webLinks open it directly).
-# --ignore-scripts: the workspace's pinned `node` helper package installs a
-# Node binary through npm in its preinstall step; the image has bun only, and
-# every build here runs under bun.
+# Every build here runs under bun, and the image has bun only: install
+# scripts are skipped, and the repository's pinned Node (an optional package
+# its test tools run on) is removed with the install cache.
 RUN bun install --frozen-lockfile --ignore-scripts \
   && bunx turbo run build --filter='./packages/*' --filter=catamorphic-pwa --no-daemon \
   && test -s packages/runner-bundle/dist/runner.mjs \
-  && rm -rf /root/.bun/install/cache \
+  && rm -rf /root/.bun/install/cache node_modules/node-linux-* node_modules/.bun/node-linux-* \
   && printf '#!/bin/sh\nexec bun /app/apps/server/src/work.ts "$@"\n' > /usr/local/bin/work \
   && chmod 755 /usr/local/bin/work \
   && mkdir -p /data \

@@ -1,18 +1,34 @@
 # @catamorphic/registry
 
-Installable React source for host interfaces and generated apps. Items use the
-standard [shadcn registry format](https://ui.shadcn.com/docs/registry/registry-item-json).
-A component pack is an ordinary multi-file item with source, dependencies and usage
-notes. Once installed, the code belongs to the project and can be adapted.
+Installable source a project then owns: React components for host interfaces and
+generated apps, and project recipes (ADR 0262). Items use the standard
+[shadcn registry format](https://ui.shadcn.com/docs/registry/registry-item-json).
+A pack is an ordinary multi-file item with source, dependencies and usage notes.
+Once installed, the code belongs to the project and can be adapted.
+
+| Pack | What it installs |
+| --- | --- |
+| `code-review` | Review shell, navigation, findings and diffs for apps |
+| `pull-request-reviews` | A review chat per pull request on a review pool, and the workflow that posts its review, check run and summary to GitHub (`.work/` files and a project skill) |
+| `pull-request-reviews-opencode` | The same reviewer as OpenCode on an open-weight model, replacing two of `pull-request-reviews`'s files |
+| `slack-threads` | A project chat per Slack thread that answers mentions, with reading and citing guidance (`.work/` files and a project skill) |
+| The rest | Components the host interfaces are built from: chat, runs, file explorer, editors |
+
+A recipe pack's files target `.work/` paths. Its `docs` say what to merge (an
+Environment into `.work/project.json`, say) and what to replace, and it installs a
+project skill that explains the files to the agents working in that project
+afterwards. Packs are not default skills: an agent fetches one when someone asks
+for what it does.
 
 ## Discover and install
 
-Agents should reuse suitable project components first and follow registry locations
-or instructions supplied by the project or user. In the desktop, call `discover_capabilities` with query `components`, then
-`invoke_capability` with name `components.read`. Input `{}` lists shipped items;
-input `{ name: "code-review" }` returns
-the same installable manifest, including source and guidance. This is read-only:
-the agent must place files, install dependencies and apply any documented config.
+Agents reuse what the project already has first and follow registry locations or
+instructions supplied by the project or user. Otherwise they invoke the
+`registry.read` capability, which the desktop and the Work server both offer (any
+host registers it with `defineRegistryCapability` from `@catamorphic/core` and its
+own catalog): input `{}` lists the packs, and `{ name: "pull-request-reviews" }`
+returns one installable manifest with its source and docs. It only reads: the agent
+places the files, installs dependencies and applies the documented config.
 
 For shadcn projects, install the built manifest:
 

@@ -115,7 +115,7 @@ record the same events.
 An App has one webhook URL, so it feeds one project, and it delivers events
 from every repository the App is installed on. Install a webhook App only on
 the project's repository, or filter on `repository.full_name` in each
-trigger's `where` as the `reviewing-pull-requests` skill does; a workflow
+trigger's `where` as the `pull-request-reviews` pack does; a workflow
 that acts on another repository's event works against the wrong code. Give
 each project that needs GitHub events its own App.
 

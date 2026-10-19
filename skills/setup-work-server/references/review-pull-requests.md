@@ -5,7 +5,7 @@ from an agent that checks out the change, verifies it by running it, reads
 production's shape from a read-only replica, and reports a review with inline
 comments and a check run. It is ordinary project code (issue #118, ADRs 0181
 and 0259):
-the host skill `reviewing-pull-requests` holds every file. This guide is the
+the `pull-request-reviews` pack holds every file. This guide is the
 server side: GitHub, the service connections, and the review machines.
 
 What runs where:
@@ -143,8 +143,9 @@ the machine narrows it again by itself if the control plane goes away.
 
 ## 4. Commit the automation
 
-Ask an agent in the project to add the review automation from the
-`reviewing-pull-requests` skill, or copy its files:
+Ask an agent in the project to install the `pull-request-reviews` pack:
+`registry.read` fetches it, and its docs say what to merge and replace. It
+adds:
 
 - `.work/project.json`: the `review` Environment (pool, image, containers,
   gateway-only egress, a `setup` whose network reaches the package
@@ -160,8 +161,8 @@ Ask an agent in the project to add the review automation from the
   `docker:dind`; add the repository's toolchains.
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
-  review doctrine. The skill's "An open model: OpenCode" variant runs
-  OpenCode over ACP on a model connection instead, such as OpenRouter, with
+  review doctrine. The `pull-request-reviews-opencode` pack runs OpenCode
+  over ACP on a model connection instead, such as OpenRouter, with
   the providers that may serve the prompts pinned by a rewrite in the
   company's own server image
   ([Harnesses on the server](harnesses.md#pin-what-requests-carry-your-own-server-image)).

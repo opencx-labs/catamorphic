@@ -562,10 +562,15 @@ function SourceView({
     ? roots.filter((row) => !row.hasChildren && !hidden(row))
     : [];
   // An empty list that takes drops offers a place to drop while something
-  // it takes is dragged: its tree has no rows to drop between.
+  // it takes is dragged: its tree has no rows to drop between. Read once,
+  // it stays through a read again: shown for the drag, the section reads
+  // its list again, and the place would vanish under the pointer.
   const dragging = useDraggingTab();
   const emptyDrop =
-    capabilities.drop && dragging && roots.length === 0 && !root.fetching;
+    capabilities.drop &&
+    dragging &&
+    root.status === "ready" &&
+    roots.length === 0;
   return (
     <div
       className="sidebar-live-source"

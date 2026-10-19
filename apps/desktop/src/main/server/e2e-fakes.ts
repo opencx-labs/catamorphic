@@ -1310,21 +1310,21 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     process.env.CATAMORPHIC_E2E_REVIEW === "1" &&
     prompt.includes("build an individual interactive code review")
   ) {
-    const discovered = await turn.discover("components");
-    if (!discovered.items.some((item) => item.name === "components.read"))
-      throw new Error("Component registry was not discoverable");
+    const discovered = await turn.discover("registry");
+    if (!discovered.items.some((item) => item.name === "registry.read"))
+      throw new Error("The pack registry was not discoverable");
     const listed = z
       .array(z.object({ name: z.string() }))
-      .parse(await turn.capability("components.read", {}));
+      .parse(await turn.capability("registry.read", {}));
     if (!listed.some((item) => item.name === "code-review"))
       throw new Error("Review pack was not listed");
-    const pack = await turn.capability("components.read", {
+    const pack = await turn.capability("registry.read", {
       name: "code-review",
     });
     yield {
       type: "tool_call",
       toolName: "invoke_capability",
-      toolInput: { name: "components.read", input: { name: "code-review" } },
+      toolInput: { name: "registry.read", input: { name: "code-review" } },
       toolResult: pack,
     };
     const input = {

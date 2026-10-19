@@ -1,27 +1,29 @@
+// @vitest-environment node
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
+import {
+  agentDefinitionSchema,
+  GITHUB_TRIGGER_LIBRARY,
+  parseProjectEnvironmentPolicy,
+} from "@catamorphic/core";
 import { matchesAllWhere, parseProject } from "@catamorphic/parser";
 import { describe, expect, it } from "vitest";
-import {
-  REVIEW_AUTOMATION_FILES,
-  REVIEW_OPENCODE_BINDING,
-  REVIEW_OPENCODE_DOCKERFILE,
-  REVIEW_PROJECT_MANIFEST,
-  REVIEWER_OPENCODE_AGENT,
-} from "../reviewing-pull-requests-skill.js";
-import { HOST_SKILLS } from "../seeds.js";
-import { agentDefinitionSchema } from "../services/agent-definitions-service.js";
-import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
+import { packFiles } from "../pack-files.js";
 
-const SKILL = HOST_SKILLS["reviewing-pull-requests/SKILL.md"] ?? "";
+const PACK = packFiles("pull-request-reviews");
+const OPENCODE = packFiles("pull-request-reviews-opencode");
 const file = (name: string) => {
-  const content = REVIEW_AUTOMATION_FILES[name];
+  const content = PACK.files[name];
   if (content === undefined) throw new Error(`Missing ${name}`);
   return content;
 };
+/** The model binding the OpenCode pack's docs say to add. */
+const OPENCODE_BINDING =
+  /```json\n([\s\S]*?)\n```/.exec(OPENCODE.manifest.docs ?? "")?.[1] ?? "";
 
 /**
  * Runs the shipped workflows under bun with a fake host that records the
@@ -191,12 +193,29 @@ const comment = (input: {
   },
 });
 
-describe("the reviewing-pull-requests skill", () => {
-  it("shows every file of the automation verbatim", () => {
-    for (const [name, content] of Object.entries(REVIEW_AUTOMATION_FILES)) {
-      expect(SKILL, name).toContain(`## ${name}`);
-      expect(SKILL, name).toContain(content);
-    }
+describe("the pull-request-reviews pack", () => {
+  it("installs the automation and a project skill that explains it", () => {
+    expect(Object.keys(PACK.files)).toEqual([
+      ".work/project.json",
+      ".work/images/review.Dockerfile",
+      ".work/triggers/github.ts",
+      ".work/agents/reviewer.json",
+      ".work/agents/reviewer.md",
+      ".work/workflows/src/reviews.ts",
+      ".work/skills/pull-request-reviews/SKILL.md",
+    ]);
+    // The same trigger library writing-workflows teaches.
+    expect(file(".work/triggers/github.ts")).toBe(GITHUB_TRIGGER_LIBRARY);
+    // The doctrine records the pull request on the chat as every chat does.
+    expect(file(".work/agents/reviewer.md")).toContain(
+      SESSION_PULL_REQUESTS_CONTRACT,
+    );
+    const skill = file(".work/skills/pull-request-reviews/SKILL.md");
+    expect(skill).toMatch(/^---\nname: pull-request-reviews\n/);
+    for (const target of Object.keys(PACK.files).slice(0, -1))
+      expect(skill, target).toContain(`## ${target}`);
+    // The docs say what to replace before it reviews anything.
+    expect(PACK.manifest.docs).toContain("acme/web");
   });
 
   it("commits a valid review Environment and reviewer", () => {
@@ -244,7 +263,7 @@ describe("the reviewing-pull-requests skill", () => {
     expect(posterCapabilities).toContain("create_review");
     for (const verb of [...rawWrites, "git:write"])
       expect(posterCapabilities).not.toContain(verb);
-    expect(REVIEW_AUTOMATION_FILES[".work/images/review.Dockerfile"]).toMatch(
+    expect(file(".work/images/review.Dockerfile")).toMatch(
       /^FROM docker:[\w.-]+-dind$/m,
     );
     const agent = agentDefinitionSchema().safeParse(
@@ -270,17 +289,23 @@ describe("the reviewing-pull-requests skill", () => {
     ).toHaveLength(3);
   });
 
-  it("shows a valid OpenCode reviewer on a model connection", () => {
-    for (const content of [
-      REVIEW_OPENCODE_DOCKERFILE,
-      REVIEWER_OPENCODE_AGENT,
-      REVIEW_OPENCODE_BINDING,
-    ])
-      expect(SKILL).toContain(content);
-    const manifest = JSON.parse(REVIEW_PROJECT_MANIFEST);
+  it("swaps in a valid OpenCode reviewer on a model connection", () => {
+    // It replaces the review pack's image and reviewer, nothing else.
+    expect(OPENCODE.manifest.registryDependencies).toEqual([
+      "pull-request-reviews",
+    ]);
+    expect(Object.keys(OPENCODE.files)).toEqual([
+      ".work/images/review.Dockerfile",
+      ".work/agents/reviewer.json",
+    ]);
+    const REVIEW_OPENCODE_DOCKERFILE =
+      OPENCODE.files[".work/images/review.Dockerfile"] ?? "";
+    const REVIEWER_OPENCODE_AGENT =
+      OPENCODE.files[".work/agents/reviewer.json"] ?? "";
+    const manifest = JSON.parse(file(".work/project.json"));
     manifest.environments.review.connections = {
       ...manifest.environments.review.connections,
-      ...JSON.parse(`{${REVIEW_OPENCODE_BINDING}}`),
+      ...JSON.parse(`{${OPENCODE_BINDING}}`),
     };
     const policy = parseProjectEnvironmentPolicy(manifest);
     expect(policy.invalid).toBeUndefined();

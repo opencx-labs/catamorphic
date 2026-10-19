@@ -1,0 +1,40 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "slack-threads",
+  "type": "registry:item",
+  "title": "Slack threads",
+  "description": "Slack as project code: a project chat per Slack thread that answers mentions and posts its replies back, reading and searching Slack through the gateway.",
+  "files": [
+    {
+      "path": ".work/project.json",
+      "type": "registry:file",
+      "target": ".work/project.json"
+    },
+    {
+      "path": ".work/triggers/slack.ts",
+      "type": "registry:file",
+      "target": ".work/triggers/slack.ts"
+    },
+    {
+      "path": ".work/agents/slack.json",
+      "type": "registry:file",
+      "target": ".work/agents/slack.json"
+    },
+    {
+      "path": ".work/agents/slack.md",
+      "type": "registry:file",
+      "target": ".work/agents/slack.md"
+    },
+    {
+      "path": ".work/workflows/src/slack-threads.ts",
+      "type": "registry:file",
+      "target": ".work/workflows/src/slack-threads.ts"
+    },
+    {
+      "path": ".work/skills/slack/SKILL.md",
+      "type": "registry:file",
+      "target": ".work/skills/slack/SKILL.md"
+    }
+  ],
+  "docs": "Install into a project on a Work server where Slack is connected; the Work server guide's \"Connect Slack\" covers the server side (the Slack app, its gateway entry, and the `slack` and `slack-search` service connections).\n\n1. Copy the files to their targets, merging rather than overwriting: add the manifest's `slack` and `slackSearch` bindings to the Environments that should reach Slack in the project's `.work/project.json`, and leave `slackSearch` out until a search token is set up.\n2. Link Slack users to project members in `SLACK_MEMBERS` in `.work/workflows/src/slack-threads.ts`, or leave it empty; a link names the person, it never lends their access.\n3. Check the project (`program_check`) and deploy, then enable `answerSlackMentions` and `postSlackReplies` for the project with the `slack` connection consented. The `slack` webhook answers only once they are on: save its URL as the Slack app's Request URL after that, and invite the app to each channel (`/invite @app`).\n\nThe installed `.work/skills/slack/SKILL.md` stays with the project and explains each file and how to read and cite Slack."
+}

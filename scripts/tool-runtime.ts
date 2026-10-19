@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 const EXPECTED_NODE_VERSION = "v24.13.0";
@@ -8,17 +9,40 @@ export interface ToolRuntime {
   env: NodeJS.ProcessEnv & { PATH: string };
 }
 
+/**
+ * Where this platform's pinned Node lives: the root package's optional
+ * dependency for it. Bun installs only the one matching `os`/`cpu`, from its
+ * lockfile and cache; no install script downloads Node.
+ */
+export function repositoryNodePath(input: {
+  rootPath: string;
+  platform?: NodeJS.Platform;
+  arch?: string;
+}): string {
+  const platform = input.platform ?? process.platform;
+  const arch = input.arch ?? process.arch;
+  // The darwin-arm64 build is published under the node-bin prefix.
+  const prefix =
+    platform === "darwin" && arch === "arm64" ? "node-bin" : "node";
+  return path.join(
+    input.rootPath,
+    "node_modules",
+    `${prefix}-${platform}-${arch}`,
+    "bin",
+    "node",
+  );
+}
+
 export function toolRuntime(input: {
   rootPath: string;
   env: NodeJS.ProcessEnv;
 }): ToolRuntime {
-  const nodePath = path.join(
-    input.rootPath,
-    "node_modules",
-    "node",
-    "bin",
-    "node",
-  );
+  const nodePath = repositoryNodePath({ rootPath: input.rootPath });
+  if (!existsSync(nodePath)) {
+    throw new Error(
+      `Repository Node ${EXPECTED_NODE_VERSION} is not installed at ${nodePath}; run bun install`,
+    );
+  }
   const actualVersion = execFileSync(nodePath, ["--version"], {
     encoding: "utf8",
   }).trim();

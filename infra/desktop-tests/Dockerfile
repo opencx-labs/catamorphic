@@ -18,7 +18,6 @@ WORKDIR /workspace
 COPY --chown=bun:bun manifests/ ./
 ARG TARGETARCH
 RUN --mount=type=cache,id=catamorphic-desktop-user-bun-${TARGETARCH},target=/home/bun/.bun/install/cache,uid=1000,gid=1000,sharing=locked \
-    --mount=type=cache,id=catamorphic-desktop-user-npm-${TARGETARCH},target=/home/bun/.npm,uid=1000,gid=1000,sharing=locked \
     bun install --frozen-lockfile \
     && cd apps/desktop && node -e "require('electron')"
 COPY --chown=bun:bun source/ ./
