@@ -1465,6 +1465,12 @@ export class SessionCheckouts {
     await fs.rmdir(path.dirname(worktreePath)).catch(() => undefined);
   }
 
+  /**
+   * `candidate` is the project folder, or a checkout of the same repository
+   * whose own top level it is. A worktree's folder emptied but left inside
+   * the project reads as part of the project's checkout (Git walks up to its
+   * `.git`), so it is no checkout at all.
+   */
   private async assertSameRepository(
     root: string,
     candidate: string,
@@ -1475,6 +1481,15 @@ export class SessionCheckouts {
     ]);
     if (expected !== actual) {
       throw new Error("The checkout must belong to the same Git repository");
+    }
+    const [project, folder] = await Promise.all([
+      canonicalPath(root),
+      canonicalPath(candidate),
+    ]);
+    if (folder === project) return;
+    const top = (await git(candidate, ["rev-parse", "--show-toplevel"])).trim();
+    if ((await canonicalPath(top)) !== folder) {
+      throw new Error("The checkout must be a Git worktree of its own");
     }
   }
 

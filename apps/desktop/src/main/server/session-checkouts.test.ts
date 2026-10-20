@@ -1017,6 +1017,33 @@ describe("SessionCheckouts", () => {
       ).rejects.toThrow("is unavailable");
     });
 
+    it("reports a worktree emptied inside the project as unavailable, not as the project folder", async () => {
+      // Where Claude Code puts its worktrees: inside the project.
+      const inner = path.join(rootPath, ".claude", "worktrees", "inner");
+      await git(rootPath, ["worktree", "add", "-q", "-b", "inner", inner]);
+      await checkouts.adopt({ projectId, sessionId, path: inner });
+      const assigned = await fs.realpath(inner);
+      // Emptied but left in place: Git now walks up to the project's .git.
+      for (const entry of await fs.readdir(inner))
+        await fs.rm(path.join(inner, entry), { recursive: true, force: true });
+      expect((await git(inner, ["rev-parse", "--show-toplevel"])).trim()).toBe(
+        await fs.realpath(rootPath),
+      );
+      expect(await checkouts.describe({ projectId, sessionId })).toEqual({
+        path: assigned,
+        kind: "external",
+        branch: "inner",
+        present: true,
+        available: false,
+      });
+      await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
+        `The assigned worktree at ${assigned} is unavailable`,
+      );
+      // The project folder itself is still the project's checkout.
+      await checkouts.returnPrimary({ projectId, sessionId });
+      expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
+    });
+
     it("reports an assigned folder that left the repository as unavailable", async () => {
       const elsewhere = path.join(tmpDir, "elsewhere");
       await git(rootPath, [
