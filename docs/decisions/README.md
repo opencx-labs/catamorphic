@@ -240,7 +240,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0103, 0133, 0198) |
 | [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215; amended by 0234) |
 | [0227](0227-pages-ask-through-works-dialogs.md) | Pages ask through Work's dialogs: alerts, Leave site? and sign-ins over their tab | Accepted (amends 0150, 0151, 0194, 0202) |
-| [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222) |
+| [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222; amended by 0269) |
 | [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
 | [0230](0230-agent-terminals-mark-commands-in-bash-too.md) | Agent terminals mark commands in bash too | Accepted (amends 0223) |
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
@@ -275,3 +275,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0266](0266-resources-list-what-work-runs.md) | Resources lists what Work runs, by who it runs for: CPU and memory per chat, tab, terminal and module, with End | Accepted (builds on 0102, 0140, 0234) |
 | [0267](0267-voice-waits-for-the-person-to-finish.md) | Voice waits for the person to finish: 0.8 s of silence ends a turn, and a reply ready while they talk plays after them | Accepted (amends 0216, 0265) |
 | [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md) | Voice lowers other apps' audio while it listens, and any reply can be read aloud from its button | Accepted (amends 0216, 0236) |
+| [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md) | A turn that failed on its sign-in while the person was away runs again when they return; a chat's own task's turns too | Accepted (amends 0228) |
