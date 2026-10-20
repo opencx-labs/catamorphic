@@ -12843,7 +12843,10 @@ function sessionVisibility(value: string): SessionVisibility {
   throw new Error(`Invalid session visibility '${value}'`);
 }
 
-/** The host's subsession tools: a read-only chat's children read only. */
+/**
+ * The host's subsession tools: a read-only chat's children read only.
+ * Replica memory (c): fixed names, the same on every replica.
+ */
 const SUBSESSION_TOOLS = new Set([
   "spawn_subsession",
   "wait_for_subsessions",
