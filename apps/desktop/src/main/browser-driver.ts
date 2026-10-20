@@ -100,7 +100,29 @@ const FILE_CHOOSER_MS = 6000;
 const MAX_WAIT_MS = 600_000;
 /** How long wait_for reads the page every 100 ms before once a second. */
 const QUICK_WAIT_MS = 10_000;
+/** How long wait_for waits on one read before looking again. */
+const READ_PATIENCE_MS = 1_000;
 const pageTextSchema = z.object({ text: z.string() });
+
+/** `promise`'s value if it settles within `ms` and before `signal` aborts. */
+function settledWithin<T>(input: {
+  promise: Promise<T>;
+  ms: number;
+  signal: AbortSignal;
+}): Promise<{ settled: true; value: T } | { settled: false }> {
+  if (input.signal.aborted) return Promise.resolve({ settled: false });
+  return new Promise((resolve) => {
+    const done = (result: { settled: true; value: T } | { settled: false }) => {
+      clearTimeout(timer);
+      input.signal.removeEventListener("abort", stop);
+      resolve(result);
+    };
+    const stop = () => done({ settled: false });
+    const timer = setTimeout(stop, input.ms);
+    input.signal.addEventListener("abort", stop, { once: true });
+    void input.promise.then((value) => done({ settled: true, value }));
+  });
+}
 
 /**
  * A file an agent may hand a page: anything in its own folder, otherwise
@@ -170,6 +192,8 @@ export class BrowserDriver {
   private queue: Promise<unknown> = Promise.resolve();
   /** Requests and downloads, recorded from the agent's first look or action. */
   private watching = false;
+  /** Work holding the tab awake now: queued actions and waits overlap. */
+  private holds = 0;
   private network: NetworkEntry[] = [];
   private requests = new Map<string, NetworkEntry>();
   /** Finished requests an agent has read; pending ones come again. */
@@ -286,9 +310,30 @@ export class BrowserDriver {
       .catch(() => {});
   }
 
+  /**
+   * Keep the tab awake and laid out while anything works in it. A wait
+   * runs beside queued actions, so the first to start and the last to end
+   * tell the window.
+   */
+  private async hold(active: boolean): Promise<void> {
+    if (active) {
+      this.holds++;
+      if (this.holds > 1) return;
+      try {
+        await this.activity(true);
+      } catch (error) {
+        this.holds--;
+        throw error;
+      }
+      return;
+    }
+    this.holds = Math.max(0, this.holds - 1);
+    if (this.holds === 0) await this.activity(false);
+  }
+
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      await this.activity(true);
+      await this.hold(true);
       // Behind the person's window, the page is told it has focus instead.
       const elsewhere = this.elsewhere();
       const focused = elsewhere
@@ -311,7 +356,7 @@ export class BrowserDriver {
           // Not awaited: the action may have opened a dialog.
           if (elsewhere) void this.emulateFocus(false);
         } finally {
-          await this.activity(false);
+          await this.hold(false);
         }
       }
     };
@@ -824,10 +869,12 @@ export class BrowserDriver {
   /**
    * Wait until the page shows `text`. A look, not input: like `inspect`, it
    * neither focuses the tab nor queues behind (or holds up) other browser
-   * work, so a long wait never stalls anyone else's. It reads on across a
-   * navigation (a sign-in redirect loads a new page) and while the person
-   * drives the tab, quickly at first and then once a second. A dialog the
-   * page opens ends it with the dialog's report.
+   * work, so a long wait never stalls anyone else's; it only keeps the tab
+   * awake. It reads on across a navigation (a sign-in redirect loads a new
+   * page) and while the person drives the tab, quickly at first and then
+   * once a second. A read the page does not answer (a load, a busy page)
+   * counts as nothing yet, so the timeout and `stopWaiting` still end it. A
+   * dialog the page opens ends it with the dialog's report.
    */
   private async waitFor(
     action: Extract<BrowserAction, { type: "wait_for" }>,
@@ -836,33 +883,66 @@ export class BrowserDriver {
     const timeout = action.timeoutMs ?? 5000;
     if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_WAIT_MS)
       throw new Error(`timeoutMs must be between 1 and ${MAX_WAIT_MS}.`);
+    if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+    this.watch();
+    const deadline = Date.now() + timeout;
+    // One read at a time: a page that does not answer is asked once.
+    let reading: Promise<unknown> | null = null;
+    let read = false;
+    let failure: unknown = null;
     const shows = async () => {
       if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
-      // Between two pages there is nothing to read yet.
-      const read = await this.untilDialog(() => this.evaluate("read")).catch(
-        () => null,
+      reading ??= this.untilDialog(() => this.evaluate("read")).then(
+        (value) => {
+          read = true;
+          return value;
+        },
+        (error: unknown) => {
+          // Between two pages there is nothing to read yet.
+          failure = error;
+          return null;
+        },
       );
+      const current = reading;
+      const answer = await settledWithin({
+        promise: current,
+        ms: Math.min(READ_PATIENCE_MS, Math.max(0, deadline - Date.now())),
+        signal: stopWaiting,
+      });
+      if (answer.settled && reading === current) reading = null;
+      if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
       if (this.openDialog()) return true;
-      const page = pageTextSchema.safeParse(read);
+      const page = pageTextSchema.safeParse(
+        answer.settled ? answer.value : null,
+      );
       return page.success && page.data.text.includes(action.text);
     };
-    const quick = Math.min(timeout, QUICK_WAIT_MS);
-    let outcome = await waitUntil({
-      ready: shows,
-      timeoutMs: quick,
-      stopWaiting,
-      pollMs: 100,
-    });
-    if (outcome === "timeout" && timeout > quick)
-      outcome = await waitUntil({
+    await this.hold(true);
+    try {
+      const quick = Math.min(timeout, QUICK_WAIT_MS);
+      let outcome = await waitUntil({
         ready: shows,
-        timeoutMs: timeout - quick,
+        timeoutMs: quick,
         stopWaiting,
-        pollMs: 1_000,
+        pollMs: 100,
       });
-    const open = this.openDialog();
-    if (open) return this.reportDialog(open);
-    return { found: outcome === "ready" };
+      if (outcome === "timeout" && timeout > quick)
+        outcome = await waitUntil({
+          ready: shows,
+          timeoutMs: Math.max(0, deadline - Date.now()),
+          stopWaiting,
+          pollMs: 1_000,
+        });
+      if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+      const open = this.openDialog();
+      if (open) return this.reportDialog(open);
+      // A page never read once says why, instead of "not found".
+      if (outcome !== "ready" && !read && failure)
+        throw failure instanceof Error ? failure : new Error(String(failure));
+      return { found: outcome === "ready" };
+    } finally {
+      await this.hold(false).catch(() => {});
+    }
   }
 
   /** `stopWaiting` ends a wait (downloads, wait_for) early (ADR 0264). */

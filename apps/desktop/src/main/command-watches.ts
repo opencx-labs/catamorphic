@@ -585,12 +585,16 @@ export function runShellCheck(input: {
 }): Promise<{ exitCode: number | null; raw: string }> {
   return new Promise((resolve) => {
     const shell = input.shell ?? process.env.SHELL ?? "/bin/zsh";
-    const child = spawn(shell, ["-lc", withAgentShellOptions(input.command)], {
-      ...(input.workingDirectory ? { cwd: input.workingDirectory } : {}),
-      env: input.env,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      shell,
+      ["-lc", withAgentShellOptions(input.command, shell)],
+      {
+        ...(input.workingDirectory ? { cwd: input.workingDirectory } : {}),
+        env: input.env,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let raw = "";
     const collect = (chunk: Buffer) => {
       raw = (raw + chunk.toString("utf8")).slice(-RAW_CHECK_CAP);

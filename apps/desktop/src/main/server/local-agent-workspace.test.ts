@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { localAgentWorkspace } from "./local-agent-workspace.js";
+import {
+  localAgentWorkspace,
+  runLocalCommand,
+} from "./local-agent-workspace.js";
 
 it("runs in the selected checkout and updates files directly without replacing other work", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "local-agent-"));
@@ -70,7 +73,6 @@ it("keeps stdout and stderr in order with the real exit code", async () => {
 it.skipIf(!existsSync("/bin/zsh"))(
   "runs a pattern that matches nothing as bash would, in the person's zsh",
   async () => {
-    const { runLocalCommand } = await import("./local-agent-workspace.js");
     const previous = process.env.SHELL;
     process.env.SHELL = "/bin/zsh";
     try {

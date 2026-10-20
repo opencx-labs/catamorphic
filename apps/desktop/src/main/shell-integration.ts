@@ -33,12 +33,18 @@ import path from "node:path";
  * (`agentShellEnvFile`), Work's own agent and watches with each command
  * (`withAgentShellOptions`). The user's own shells never see it.
  */
-const AGENT_SHELL_OPTIONS = `if [ -n "\${ZSH_VERSION:-}" ]; then setopt no_nomatch no_null_glob no_csh_null_glob; fi
+const ZSH_AGENT_OPTIONS = "setopt no_nomatch no_null_glob no_csh_null_glob";
+const AGENT_SHELL_OPTIONS = `if [ -n "\${ZSH_VERSION:-}" ]; then ${ZSH_AGENT_OPTIONS}; fi
 `;
 
-/** A command as an agent's shell runs it, with the agent shell options. */
-export function withAgentShellOptions(command: string): string {
-  return `${AGENT_SHELL_OPTIONS}${command}`;
+/**
+ * A command as an agent's `shell` runs it: with the agent shell options in
+ * zsh, unchanged anywhere else (fish could not even parse them).
+ */
+export function withAgentShellOptions(command: string, shell: string): string {
+  return path.basename(shell) === "zsh"
+    ? `${ZSH_AGENT_OPTIONS}\n${command}`
+    : command;
 }
 
 /**

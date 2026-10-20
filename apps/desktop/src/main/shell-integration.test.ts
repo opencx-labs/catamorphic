@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { scanOsc133 } from "../shared/terminal-text.js";
-import { agentShellEnvFile, shellIntegration } from "./shell-integration.js";
+import {
+  agentShellEnvFile,
+  shellIntegration,
+  withAgentShellOptions,
+} from "./shell-integration.js";
 
 function bashVersion(candidate: string): [number, number] | undefined {
   try {
@@ -164,6 +168,14 @@ describe("shell integration for agent terminals", () => {
     expect(run("/bin/sh", ["-c", `. '${file}' && echo ok`], {})).toBe("ok");
     // Written again for the next attempt over the read-only one.
     expect(await agentShellEnvFile()).toBe(file);
+  });
+
+  it("adds the options only to a zsh command: fish could not parse them", () => {
+    expect(withAgentShellOptions("ls *.ts", "/bin/zsh")).toBe(
+      "setopt no_nomatch no_null_glob no_csh_null_glob\nls *.ts",
+    );
+    for (const shell of ["/opt/homebrew/bin/fish", "/bin/bash", "/bin/sh"])
+      expect(withAgentShellOptions("ls *.ts", shell)).toBe("ls *.ts");
   });
 
   it("leaves other shells to the foreground-process heuristic", async () => {

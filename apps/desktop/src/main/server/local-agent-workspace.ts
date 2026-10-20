@@ -46,16 +46,13 @@ export function runLocalCommand(
   options?: ExecOpts,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = spawn(
-      process.env.SHELL || "/bin/sh",
-      ["-lc", withAgentShellOptions(command)],
-      {
-        cwd: options?.cwd,
-        env: { ...process.env, ...options?.env },
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const shell = process.env.SHELL || "/bin/sh";
+    const child = spawn(shell, ["-lc", withAgentShellOptions(command, shell)], {
+      cwd: options?.cwd,
+      env: { ...process.env, ...options?.env },
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let output = "";
     let dropped = 0;
     const append = (chunk: Buffer) => {

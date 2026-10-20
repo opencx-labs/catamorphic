@@ -92,33 +92,44 @@ afterEach(() => {
 const waiting = new AbortController().signal;
 
 describe("browser driver waits", () => {
-  /** A page whose text the test sets; a null text is a page between loads. */
-  function pageWith(state: { text: string | null; reads: number }) {
+  interface Page {
+    /** What the page shows; null between two loads, which nothing reads. */
+    text: string | null;
+    /** A page that never answers a read (a load, a busy page). */
+    silent?: boolean;
+    reads: number;
+  }
+
+  /** A tab whose page the test sets. */
+  function pageWith(page: Page) {
     const guest = new Guest();
     guest.executeJavaScriptInIsolatedWorld.mockImplementation(
-      async (...args: unknown[]) => {
+      (...args: unknown[]) => {
         // Which page script ran, from the call as the page received it.
         if (!JSON.stringify(args).includes('catamorphicBrowser[\\"read\\"]'))
-          return { value: null };
-        state.reads++;
-        if (state.text === null) throw new Error("Execution context destroyed");
-        return { value: { text: state.text } };
+          return Promise.resolve({ value: null });
+        page.reads++;
+        if (page.silent) return new Promise(() => {});
+        if (page.text === null)
+          return Promise.reject(new Error("Execution context destroyed"));
+        return Promise.resolve({ value: { text: page.text } });
       },
     );
     return guest;
   }
 
-  it("waits as a look: past the old cap, across a page change, on a taken-over tab, holding nothing", async () => {
+  it("waits as a look: past the old cap, across a page change, on a taken-over tab, holding nothing but the tab awake", async () => {
     vi.useFakeTimers();
     try {
-      const state = { text: "Signing in" as string | null, reads: 0 };
-      const guest = pageWith(state);
+      const page: Page = { text: "Signing in", reads: 0 };
+      const guest = pageWith(page);
+      const activity = vi.fn(async (_active: boolean) => {});
       const driver = new BrowserDriver(
         asWebContents(guest),
         () => {
           throw new Error("The user has taken control of this surface.");
         },
-        async () => {},
+        activity,
       );
       let result: unknown;
       void driver
@@ -128,19 +139,24 @@ describe("browser driver waits", () => {
         });
       await vi.advanceTimersByTimeAsync(10_000);
       // The first ten seconds read the page every 100 ms.
-      expect(state.reads).toBeGreaterThan(90);
-      // The tab's queue stays free for everyone else meanwhile.
+      expect(page.reads).toBeGreaterThan(90);
+      // The tab's queue stays free for everyone else meanwhile, and the
+      // wait keeps the tab awake through it.
       await expect(driver.clear()).resolves.toBeDefined();
-      const quick = state.reads;
+      expect(activity.mock.calls).toEqual([[true]]);
+      const quick = page.reads;
       // A redirect: nothing to read between the two pages.
-      state.text = null;
+      page.text = null;
       await vi.advanceTimersByTimeAsync(5_000);
       // After that, once a second.
-      expect(state.reads - quick).toBeLessThanOrEqual(6);
+      expect(page.reads - quick).toBeLessThanOrEqual(6);
       expect(result).toBeUndefined();
-      state.text = "Welcome back. Ready";
+      page.text = "Welcome back. Ready";
       await vi.advanceTimersByTimeAsync(1_000);
       expect(result).toEqual({ found: true });
+      expect(activity.mock.calls).toEqual([[true], [false]]);
+      // Waiting never brought the tab forward.
+      expect(guest.focus).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -149,8 +165,8 @@ describe("browser driver waits", () => {
   it("ends a wait at its timeout, when something reaches the agent, or with a dialog", async () => {
     vi.useFakeTimers();
     try {
-      const state = { text: "Loading", reads: 0 };
-      const guest = pageWith(state);
+      const page: Page = { text: "Loading", reads: 0 };
+      const guest = pageWith(page);
       const driver = new BrowserDriver(
         asWebContents(guest),
         () => {},
@@ -183,8 +199,60 @@ describe("browser driver waits", () => {
       await expect(asked).resolves.toMatchObject({
         dialog: { kind: "alert" },
       });
-      // Waiting never brought the tab forward.
       expect(guest.focus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a wait on a page that never answers, asking it only once", async () => {
+    vi.useFakeTimers();
+    try {
+      const page: Page = { text: "Ready", silent: true, reads: 0 };
+      const driver = new BrowserDriver(
+        asWebContents(pageWith(page)),
+        () => {},
+        async () => {},
+      );
+      const timedOut = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 3_000 },
+        waiting,
+      );
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(timedOut).resolves.toEqual({ found: false });
+      expect(page.reads).toBe(1);
+
+      const reached = new AbortController();
+      const stopped = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 600_000 },
+        reached.signal,
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      reached.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(stopped).resolves.toEqual({ found: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says why a page it could never read was not found", async () => {
+    vi.useFakeTimers();
+    try {
+      const driver = new BrowserDriver(
+        asWebContents(pageWith({ text: null, reads: 0 })),
+        () => {},
+        async () => {},
+      );
+      const failed = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 2_000 },
+        waiting,
+      );
+      const settled = expect(failed).rejects.toThrow(
+        "Execution context destroyed",
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await settled;
     } finally {
       vi.useRealTimers();
     }
