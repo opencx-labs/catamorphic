@@ -60,6 +60,12 @@ export interface PaletteItem {
    * focused chat, the chat when one is focused, or what close-tab closes.
    */
   highlight?: PaletteHighlight;
+  /**
+   * The row takes words after it (a skill's instructions, ADR 0270): Tab on
+   * it, or Space after typing one of `names` exactly, enters `mode`, whose
+   * input is those words.
+   */
+  input?: { mode: string; names: readonly string[] };
   run: (mode: CommitMode) => void;
 }
 
@@ -76,8 +82,11 @@ export type PaletteRows =
   | {
       kind: "list";
       items: readonly PaletteItem[];
-      /** Unfiltered order: as given, or the current choice first. */
-      zero?: "given" | "pin-current";
+      /**
+       * Unfiltered order: as given, the current choice first, or the most
+       * used first under "Recent".
+       */
+      zero?: "given" | "pin-current" | "recent";
     }
   | { kind: "compute"; rows: (query: string) => PaletteItem[] }
   | {
@@ -116,6 +125,10 @@ export interface PaletteMode {
   rows: PaletteRows;
   /** The surface the mode's answer changes, accented while it is open. */
   highlight?: PaletteHighlight;
+  /** Backspace on empty input returns here instead of leaving modes. */
+  parent?: string;
+  /** What Enter and its modifiers do here, when not the usual open. */
+  commitHints?: ReadonlyArray<{ keycap: string; label: string }>;
 }
 
 /**
@@ -136,7 +149,14 @@ export type PaletteChoiceMode =
 export type PaletteModeId = BuiltinPaletteMode | PaletteChoiceMode;
 /** Open the palette inside a mode (a command run from anywhere, a sidebar search). */
 export type PaletteModeRequest = { nonce: string } & (
-  | { mode: PaletteModeId }
+  | {
+      mode: PaletteModeId;
+      /**
+       * The chat whose composer opened the palette ("/" in it, ADR 0270):
+       * closing without a skill hands the typing back to that composer.
+       */
+      composer?: string;
+    }
   | {
       mode: "section";
       label: string;

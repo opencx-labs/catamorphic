@@ -28,18 +28,24 @@ import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
-import { useProjectSkills } from "../lib/skills.js";
+import { useProjectSkillCatalog } from "../lib/skills.js";
 import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height.js";
 import { usePaletteHost } from "../palette/host.js";
 import {
   isFullPaletteModeName,
   matchPaletteMode,
   pinCurrentFirst,
+  recentFirst,
   usePaletteLoad,
 } from "../palette/load.js";
 import { isChoiceMode } from "../palette/modes/choices.js";
 import { useTopLevelModeRows } from "../palette/modes/custom.js";
 import { usePaletteModes } from "../palette/modes/index.js";
+import {
+  composerText,
+  SKILLS_MODE,
+  useSkillModes,
+} from "../palette/modes/skills.js";
 import { useProjectAgents } from "../palette/project-agents.js";
 import {
   createPaletteIndex,
@@ -142,6 +148,13 @@ function NewTabShortcutHints({
   );
 }
 
+const COMMIT_HINTS = [
+  { keycap: "↵", label: "open" },
+  { keycap: "⌘↵", label: "new tab" },
+  { keycap: "⌘⇧↵", label: "side" },
+  { keycap: "⌥↵", label: "floating" },
+];
+
 function FooterHint({ keycap, label }: { keycap: string; label: string }) {
   return (
     <span className="flex items-center gap-1">
@@ -186,6 +199,7 @@ export function CommandPalette({
     agents,
     defaultAgentId,
     actionAvailability,
+    onReturnToComposer,
   } = usePaletteHost();
   const [query, setQuery] = useState("");
   // Stays on a chosen row while late sources re-rank the list under it.
@@ -197,6 +211,9 @@ export function CommandPalette({
     PaletteModeRequest,
     { mode: "section" }
   > | null>(null);
+  // The chat whose composer opened the palette with "/" (ADR 0270): closing
+  // without a skill hands the typing back to it.
+  const [composer, setComposer] = useState<string>();
   // Exiting chip lingers to play chip-out; removed on animationend.
   const [exitingChip, setExitingChip] = useState<{
     icon: LucideIcon;
@@ -237,6 +254,7 @@ export function CommandPalette({
       setSelection(TOP_ROW);
       setModeId(null);
       setExitingChip(null);
+      setComposer(undefined);
       listMotionRef.current.reset();
     };
     if (open) {
@@ -276,6 +294,9 @@ export function CommandPalette({
   useEffect(() => {
     if (variant !== "overlay" || !modeRequest) return;
     if (modeRequest.mode === "section") setSectionSearch(modeRequest);
+    setComposer(
+      modeRequest.mode === "section" ? undefined : modeRequest.composer,
+    );
     enterMode(modeRequest.mode);
   }, [variant, modeRequest, enterMode]);
 
@@ -288,14 +309,19 @@ export function CommandPalette({
   useEffect(() => {
     if (open) setSkillsRefresh((count) => count + 1);
   }, [open]);
+  // Typing inside a mode is that mode's question, not a new session: the
+  // Skills mode's rows must stay put while a skill's name is typed.
+  const inMode = modeId !== null;
   useEffect(() => {
-    if (hasQuery) setSkillsRefresh((count) => count + 1);
-  }, [hasQuery]);
-  const skills = useProjectSkills(
+    if (hasQuery && !inMode) setSkillsRefresh((count) => count + 1);
+  }, [hasQuery, inMode]);
+  const [skillsRetry, setSkillsRetry] = useState(0);
+  const skillCatalog = useProjectSkillCatalog(
     projectId,
     variant === "tab" || open,
-    skillsRefresh,
+    skillsRefresh + skillsRetry,
   );
+  const skills = skillCatalog.skills;
   // Ranking signals (ADR 0186), on the same beat as skills: every opening
   // and every new query session, so use elsewhere shows up next time.
   const [signals, setSignals] = useState<PaletteSignals>(EMPTY_PALETTE_SIGNALS);
@@ -342,8 +368,14 @@ export function CommandPalette({
   });
   // Skills follow the target agent's allowlist: the focused chat's agent,
   // else the default, profile or project.
-  const skillAgent = [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
-    (agent) => agent.id === (focusedChat?.agentId ?? defaultAgentId),
+  // One identity per agent: rows built from it keep theirs across renders.
+  const skillAgentId = focusedChat?.agentId ?? defaultAgentId;
+  const skillAgent = useMemo(
+    () =>
+      [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
+        (agent) => agent.id === skillAgentId,
+      ),
+    [agents, projectAgents, skillAgentId],
   );
   const {
     actionItems,
@@ -363,6 +395,21 @@ export function CommandPalette({
     bookmarkedUsage,
   });
   const settingItems = useSettingRows();
+  const retrySkills = useCallback(
+    () => setSkillsRetry((count) => count + 1),
+    [],
+  );
+  const skillModes = useSkillModes({
+    modeId,
+    variant,
+    agent: skillAgent,
+    skills,
+    skillsLoading: skillCatalog.loading,
+    skillsError: skillCatalog.error,
+    refresh: skillsRefresh + skillsRetry,
+    onRetry: retrySkills,
+    composer,
+  });
   const { modes, customModes } = usePaletteModes({
     picker,
     historyRow,
@@ -371,6 +418,7 @@ export function CommandPalette({
     tabItems,
     sectionSearch,
     projectAgents,
+    skillModes,
   });
   const namedModes = useMemo(
     () => modes.filter((candidate) => candidate.names?.length),
@@ -383,9 +431,9 @@ export function CommandPalette({
     if (modeId && !activeMode) setModeId(null);
   }, [modeId, activeMode]);
   const exitMode = () => {
-    if (activeMode)
+    if (activeMode && !activeMode.parent)
       setExitingChip({ icon: activeMode.icon, label: activeMode.chip });
-    setModeId(null);
+    setModeId(activeMode?.parent ?? null);
   };
   const modeLoad = usePaletteLoad(
     activeMode?.rows,
@@ -500,10 +548,13 @@ export function CommandPalette({
         if (activeRows.filtered && !staleSearch) return modeLoad.items;
       }
       const items = modeItems ?? [];
-      if (!trimmed)
-        return activeRows.kind === "list" && activeRows.zero === "pin-current"
-          ? pinCurrentFirst([...items])
-          : [...items];
+      if (!trimmed) {
+        if (activeRows.kind === "list" && activeRows.zero === "pin-current")
+          return pinCurrentFirst([...items]);
+        if (activeRows.kind === "list" && activeRows.zero === "recent")
+          return recentFirst(items, rankContext);
+        return [...items];
+      }
       return searchMode?.(trimmed, rankContext) ?? [];
     }
 
@@ -756,10 +807,13 @@ export function CommandPalette({
   const record = (item: PaletteItem) => {
     const key = item.usage;
     if (!key || !profileId) return;
-    // Keyed exactly as the ranker looks picks up ("gpt-4o" → "gpt 4o").
-    const typed = normalizeCommandQuery(
-      trimmed.startsWith(">") ? trimmed.slice(1) : trimmed,
-    ).trim();
+    // Keyed exactly as the ranker looks picks up ("gpt-4o" → "gpt 4o"). A
+    // skill's instructions are words for the agent, not a search.
+    const typed = activeMode?.parent
+      ? ""
+      : normalizeCommandQuery(
+          trimmed.startsWith(">") ? trimmed.slice(1) : trimmed,
+        ).trim();
     const use = {
       key,
       ...(typed ? { query: typed } : {}),
@@ -837,10 +891,44 @@ export function CommandPalette({
         return;
       }
     }
-    // Backspace on empty input pops the chip (cmdk convention).
+    // "/" starts the Skills mode, as it does in a chat's composer.
+    if (
+      !activeMode &&
+      event.key === "/" &&
+      query === "" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      namedModes.some((candidate) => candidate.id === SKILLS_MODE)
+    ) {
+      event.preventDefault();
+      enterMode(SKILLS_MODE);
+      return;
+    }
+    // A row that takes words (a skill's instructions): Tab on it, or Space
+    // after typing its whole name inside a mode, moves on to them.
+    if ((event.key === "Tab" && !event.shiftKey) || event.key === " ") {
+      const typed = trimmed.toLowerCase();
+      const row =
+        event.key === "Tab"
+          ? results[selected]
+          : activeMode && typed && query === trimmed
+            ? allResults.find((item) =>
+                item.input?.names.some((name) => name.toLowerCase() === typed),
+              )
+            : undefined;
+      if (row?.input) {
+        event.preventDefault();
+        enterMode(row.input.mode);
+        return;
+      }
+    }
+    // Backspace on empty input pops the chip (cmdk convention). Opened by
+    // a composer's "/", the Skills mode's Backspace takes the "/" back.
     if (activeMode && event.key === "Backspace" && query === "") {
       event.preventDefault();
-      exitMode();
+      if (composer && !activeMode.parent) returnToComposer("");
+      else exitMode();
       return;
     }
     // ↑ and ↓ move the caret between the input's lines, like any text
@@ -872,6 +960,16 @@ export function CommandPalette({
     }
   };
 
+  // Closed without a skill, a palette a composer opened gives the typing
+  // back: "/" and what followed it, so a message can start with a slash.
+  const returnToComposer = (text: string) => {
+    if (composer) onReturnToComposer(composer, text);
+    onClose();
+  };
+  const dismissRef = useRef(onClose);
+  dismissRef.current = () =>
+    returnToComposer(composerText(activeMode?.id ?? null, query));
+
   // Escape closes the overlay (capture-phase so the chat dock's window
   // listener defers to us — same etiquette as Modal). A palette tab
   // ignores Escape, like Chrome's New Tab page.
@@ -881,12 +979,12 @@ export function CommandPalette({
       if (event.key !== "Escape" || event.isComposing) return;
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      dismissRef.current();
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [variant, open, onClose]);
+  }, [variant, open]);
 
   // The rendered chip: the live mode, or the exiting one mid chip-out.
   const chip = activeMode
@@ -1053,18 +1151,29 @@ export function CommandPalette({
         className="flex shrink-0 items-center gap-3 border-t border-border px-4 py-1.5 text-[11px] text-fg-faint"
       >
         {activeMode ? (
-          <FooterHint keycap="⌫" label="exit mode" />
+          <FooterHint
+            keycap="⌫"
+            label={
+              activeMode.parent
+                ? "back"
+                : composer
+                  ? "back to chat"
+                  : "exit mode"
+            }
+          />
         ) : (
           <>
             <FooterHint keycap="@" label="modes" />
             <FooterHint keycap=">" label="commands" />
+            {namedModes.some((candidate) => candidate.id === SKILLS_MODE) && (
+              <FooterHint keycap="/" label="skills" />
+            )}
           </>
         )}
         <span className="ml-auto" />
-        <FooterHint keycap="↵" label="open" />
-        <FooterHint keycap="⌘↵" label="new tab" />
-        <FooterHint keycap="⌘⇧↵" label="side" />
-        <FooterHint keycap="⌥↵" label="floating" />
+        {(activeMode?.commitHints ?? COMMIT_HINTS).map((hint) => (
+          <FooterHint key={hint.keycap} {...hint} />
+        ))}
       </footer>
     </div>
   );
@@ -1115,7 +1224,7 @@ export function CommandPalette({
           open ? "opacity-100" : "opacity-0"
         }`}
         onMouseDown={(event) => {
-          if (event.target === event.currentTarget) onClose();
+          if (event.target === event.currentTarget) dismissRef.current();
         }}
       />
       {/* The wrapper spans the full width to center the panel; it must not

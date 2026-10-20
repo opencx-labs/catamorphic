@@ -14,9 +14,14 @@ import {
 } from "../../../shared/actions.js";
 import { formatBinding, useKeybindings } from "../../lib/keybindings.js";
 import { lucideIcon } from "../../lib/lucide-icon.js";
-import { type SkillInfo, skillsForAgent } from "../../lib/skills.js";
+import {
+  type SkillInfo,
+  skillInvocation,
+  skillsForAgent,
+} from "../../lib/skills.js";
 import { usePaletteHost } from "../host.js";
 import { PICKER_ACTIONS } from "../modes/choices.js";
+import { SKILLS_MODE, skillTarget } from "../modes/skills.js";
 import type { PaletteHighlight, PaletteItem } from "../types.js";
 
 /** Commands that act on a specific surface accent it while highlighted. */
@@ -45,6 +50,7 @@ export function useCommandRows({
   agentSkills: Parameters<typeof skillsForAgent>[1];
 }) {
   const {
+    projectId,
     projects,
     activeProjectId,
     profiles,
@@ -170,32 +176,63 @@ export function useCommandRows({
     [startingActions, onSendToAgent],
   );
 
-  // Skills as commands (ADR 0052): a row is just a message send — into the
-  // focused chat when one exists (an action, chat highlighted like other
-  // scoped commands), else a new chat that honors the commit mode.
+  // Skills as commands (ADR 0052): a row is just a message send. The
+  // Skills mode (ADR 0270) is where they are listed; typed, they are found
+  // here too, and commit the same way: the chat in front, or ⌘↵ a new one.
+  const runSkillRef = useRef(onRunSkill);
+  runSkillRef.current = onRunSkill;
+  const skillsModeRow = useMemo<PaletteItem>(
+    () => ({
+      id: "skills-mode",
+      icon: Sparkles,
+      label: "Skills",
+      detail: "Use a skill in this chat or a new one",
+      keywords: ["skills", "skill", "slash", "commands", "use"],
+      shortcut: "/",
+      kind: "action",
+      category: "command",
+      usage: `mode:${SKILLS_MODE}`,
+      commit: "stay",
+      run: () => enterMode(SKILLS_MODE),
+    }),
+    [enterMode],
+  );
   const skillItems = useMemo<PaletteItem[]>(
-    () =>
-      skillsForAgent(skills, agentSkills).map((skill) => ({
-        id: `skill:${skill.name}`,
-        icon: Sparkles,
-        // The pretty title fronts the row; the slug stays a keyword so
-        // technical users typing the exact name still hit it.
-        label: skill.title,
-        detail: skill.source === "host" ? "App skill" : "Skill",
-        keywords: [
-          skill.name,
-          skill.title,
-          "skill",
-          "use",
-          ...skill.description.split(/\s+/).slice(0, 12),
-        ],
-        kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
-        category: "resource" as const,
-        usage: `skill:${skill.name}`,
-        highlight: "chat-if-focused" as const,
-        run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
-      })),
-    [skills, agentSkills, hasFocusedChat, onRunSkill],
+    () => [
+      // The Skills mode needs a project, as the skills do.
+      ...(projectId ? [skillsModeRow] : []),
+      ...skillsForAgent(skills, agentSkills).map(
+        (skill): PaletteItem => ({
+          id: `skill:${skill.name}`,
+          icon: Sparkles,
+          // The pretty title fronts the row; the slug stays a keyword so
+          // technical users typing the exact name still hit it.
+          label: skill.title,
+          detail: skill.source === "host" ? "App skill" : "Skill",
+          keywords: [
+            skill.name,
+            skill.title,
+            "skill",
+            "use",
+            ...skill.description.split(/\s+/).slice(0, 12),
+          ],
+          // Listed in the Skills mode; the empty palette has one row for it.
+          searchOnly: true,
+          kind: "navigate",
+          category: "resource",
+          usage: `skill:${skill.name}`,
+          highlight: "chat-if-focused",
+          // Tab moves on to its instructions, as in the Skills mode.
+          input: { mode: `skill:${skill.name}`, names: [] },
+          run: (mode) =>
+            runSkillRef.current({
+              message: skillInvocation(skill.name),
+              target: skillTarget(mode, hasFocusedChat),
+            }),
+        }),
+      ),
+    ],
+    [projectId, skillsModeRow, skills, agentSkills, hasFocusedChat],
   );
 
   const projectItems = useMemo<PaletteItem[]>(

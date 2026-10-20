@@ -2152,6 +2152,8 @@ export const SkillSchema = z.object({
   /** Human-facing name (frontmatter `title`, else the humanized slug). */
   title: z.string(),
   description: z.string(),
+  /** Frontmatter `argument-hint`: what an invocation's instructions say. */
+  argumentHint: z.string().optional(),
   path: z.string(),
   source: z.enum(["project", "user", "host"]),
 });

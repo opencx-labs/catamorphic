@@ -131,6 +131,42 @@ describe("ChatTimeline DOM contract", () => {
     expect($('[data-turn-id="t1"]')).not.toBeNull();
   });
 
+  it("lets the host lead the person's message with its own element", async () => {
+    await render({
+      timeline: timelineOf({
+        turns: [turn("t1", 1)],
+        items: [
+          input("t1", `Use the review skill: the parser ${ATTACHMENT_MARKER}`, {
+            attachments: [
+              {
+                kind: "text",
+                name: "notes.txt",
+                text: "Notes",
+                source: { type: "paste" },
+              },
+            ],
+          }),
+          reply("a1", "t1", "Reviewed."),
+        ],
+      }),
+      presentUserMessage: (text) =>
+        text.startsWith("Use the review skill: ")
+          ? {
+              lead: <span data-testid="lead">review</span>,
+              text: text.slice("Use the review skill: ".length),
+            }
+          : undefined,
+    });
+    const message = $("[data-user-message]");
+    expect(message?.querySelector('[data-testid="lead"]')?.textContent).toBe(
+      "review",
+    );
+    expect(message?.textContent).not.toContain("Use the review skill");
+    expect(message?.textContent).toContain("the parser");
+    // The words keep their pills where they were.
+    expect(message?.querySelector('[data-testid="sent-pill"]')).not.toBeNull();
+  });
+
   it("says when the person sent a message, and nothing for a send not held yet", async () => {
     const Hint: NonNullable<ChatTimelineProps["Hint"]> = ({
       label,

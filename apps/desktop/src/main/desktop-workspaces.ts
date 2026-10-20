@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { ChatSessionAction } from "../shared/chat-session-actions.js";
 import type {
   ChatDraft,
+  DockAction,
   DockCommand,
   DockData,
   DockSnapshot,
@@ -362,9 +363,16 @@ export class DesktopWorkspaces {
           return;
         const action = command.event;
         if (
-          ["surface", "mcpApp", "link", "file", "focus", "unsplit"].includes(
-            action.kind,
-          ) ||
+          [
+            "surface",
+            "mcpApp",
+            "link",
+            "file",
+            "focus",
+            "unsplit",
+            // The palette a composer's "/" opens is that window's.
+            "openSkills",
+          ].includes(action.kind) ||
           (action.kind === "entry" && action.entry.mode === "tab") ||
           // A verb that shows something in the chat's window (a rename or
           // subsession dialog, a terminal) brings that window forward.
@@ -430,21 +438,18 @@ export class DesktopWorkspaces {
     });
     ipcMain.handle(
       "catamorphic:dock-action",
-      (
-        event,
-        localId: string,
-        action: "close" | "minimize" | "send" | "focusChips",
-        message?: string,
-      ) => {
+      (event, localId: string, action: DockAction, message?: string) => {
         const chat = this.chats.get(localId);
         if (!chat || !this.sameProfile(event.sender, chat.owner)) return;
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
         const detached = floating && this.detached(profileId);
         const target = detached ? floating.webContents : event.sender;
-        // Keys follow the chips the shortcut focuses: the detached dock's
-        // window takes the keyboard first.
-        if (detached && action === "focusChips") floating.focus();
+        // Keys follow the chips the shortcut focuses, or the composer the
+        // palette hands typing back to: the detached dock's window takes
+        // the keyboard first.
+        if (detached && (action === "focusChips" || action === "resume"))
+          floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",
           localId,

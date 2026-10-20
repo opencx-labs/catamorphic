@@ -9946,6 +9946,7 @@ export interface paths {
                             name: string;
                             title: string;
                             description: string;
+                            argumentHint?: string;
                             path: string;
                             /** @enum {string} */
                             source: "project" | "user" | "host";

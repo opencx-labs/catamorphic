@@ -26,6 +26,7 @@ const HOST_SKILLS = {
     "---",
     "name: publishing-to-github",
     "description: Push the project to GitHub.",
+    'argument-hint: "[repository name]"',
     "---",
     "",
     "# Host github skill body",
@@ -83,7 +84,7 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     try {
       await repo.writeFile(
         ".work/skills/local-notes/SKILL.md",
-        "---\nname: local-notes\ndescription: A project skill.\n---\n\nproject body",
+        "---\nname: local-notes\ndescription: A project skill.\nargument-hint: [meeting]\n---\n\nproject body",
       );
       await repo.writeFile(
         ".work/skills/shadowed/SKILL.md",
@@ -109,6 +110,16 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     ]);
     const shadowed = skills.find((skill) => skill.name === "shadowed");
     expect(shadowed?.description).toBe("The PROJECT version.");
+    // Claude Code's `argument-hint`, from either tier; absent when undeclared.
+    expect(
+      Object.fromEntries(
+        skills.map((skill) => [skill.name, skill.argumentHint]),
+      ),
+    ).toEqual({
+      "local-notes": "[meeting]",
+      "publishing-to-github": "[repository name]",
+      shadowed: undefined,
+    });
   });
 
   it("reads content by name from either tier, project winning", async () => {

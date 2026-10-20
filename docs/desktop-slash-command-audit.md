@@ -1,5 +1,10 @@
 # Desktop slash command audit
 
+> Historical. The composer menu this audit repaired was replaced on
+> 2026-10-20 by the palette's Skills mode ([ADR 0270](decisions/0270-skills-live-in-the-palette.md)).
+> Its catalog findings (harness discovery, freshness, assignments) carry
+> over to that mode; its menu and typed-resolution findings no longer apply.
+
 Audited 2026-09-11; full local validation passed against main at `7a0b2058`.
 Rebased onto `56678c7a` before publishing, preserving the browser-import and
 review-theme changes. Final pushed-head validation is tracked by CI.

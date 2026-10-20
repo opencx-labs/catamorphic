@@ -35,6 +35,7 @@ import {
   PictureInPicture2,
   Radio,
   Server,
+  Sparkles,
   Square,
   X,
 } from "lucide-react";
@@ -44,13 +45,11 @@ import {
   type KeyboardEvent,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import { normalizePrefs } from "../../shared/app-prefs.js";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ChatDockProps, McpAppRef } from "../../shared/chat.js";
@@ -94,13 +93,7 @@ import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { usePullRequestStatuses } from "../lib/pr-status.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
 import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
-import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
-import {
-  matchSlashEntries,
-  resolveSlashMessage,
-  type SlashEntry,
-  slashEntries,
-} from "../lib/slash-commands";
+import { parseSkillInvocation } from "../lib/skill-entries.js";
 import { selectionName, textPill } from "../lib/text-pills";
 import { ThemeBackdrop } from "../lib/theme.js";
 import { useBackgroundCommands } from "../lib/use-background-commands";
@@ -125,10 +118,9 @@ import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatFolder } from "./chat-folder.js";
 import { ChipRail, type ChipRailHandle } from "./chip-rail.js";
 import { ClosingCollapsible } from "./closing-collapsible.js";
-import { ContextPill } from "./context-pill";
+import { ContextPill, PILL_SURFACE } from "./context-pill";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
-import { SlashMenu } from "./slash-menu";
 
 export type {
   ChatDockEntry,
@@ -248,6 +240,27 @@ const APP_SOURCE_PATTERN = new RegExp(
 /** A sent attachment reads as the composer's pill, with its preview. */
 function sentPill(attachment: AgentAttachment) {
   return <ContextPill view={attachment} animateIn={false} testId="sent-pill" />;
+}
+
+/**
+ * A skill the person ran (ADR 0270) leads its message as a chip, as the
+ * palette named it, before the instructions and pills sent with it.
+ */
+function presentSkillMessage(text: string) {
+  const invocation = parseSkillInvocation(text);
+  if (!invocation) return undefined;
+  return {
+    lead: (
+      <span
+        data-testid="sent-skill"
+        className={`mr-1 inline-flex items-center gap-1 px-1.5 py-px align-baseline ${PILL_SURFACE}`}
+      >
+        <Sparkles className="size-3 shrink-0" aria-hidden="true" />
+        {invocation.name}
+      </span>
+    ),
+    text: invocation.rest,
+  };
 }
 
 /** Project-app name from a file path under .work/apps/<name>/, if any. */
@@ -468,6 +481,9 @@ function ChatDockContent({
   registerClose,
   registerMinimize,
   registerSend,
+  registerSkill,
+  registerComposerReturn,
+  onOpenSkills,
   registerFocusChips,
   onSessionCreated,
   onSessionAgent,
@@ -643,7 +659,6 @@ function ChatDockContent({
     reason: "Start the session before moving it",
     moving: false,
   });
-  const [localInspectorNonce, setLocalInspectorNonce] = useState(0);
   const [moveCheckNonce, setMoveCheckNonce] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: inspector opening refreshes remote eligibility
   useEffect(() => {
@@ -692,7 +707,8 @@ function ChatDockContent({
   }, [activeSessionId, authority, chat.isSending, projectId, moveCheckNonce]);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
-  // (slash menu, recall gate, emptiness) and how many pills are live.
+  // (recall gate, emptiness, the "/" that opens skills) and how many
+  // pills are live.
   const [draft, setDraft] = useState("");
   const [pillCount, setPillCount] = useState(0);
   const composerRef = useRef<ComposerInputHandle>(null);
@@ -762,7 +778,7 @@ function ChatDockContent({
   };
   const draftRef = useRef(draft);
   draftRef.current = draft;
-  // Set while the dock itself rewrites the prose (recall, slash-complete)
+  // Set while the dock itself rewrites the prose (history recall)
   // so the change handler can tell "the user typed" from "we swapped".
   const rewritingRef = useRef(false);
   const rewriteText = (text: string) => {
@@ -778,19 +794,7 @@ function ChatDockContent({
   /** Outside a tab, the column the messages and the composer share. */
   const floatingColumn = isTab ? "" : "mx-auto w-full max-w-3xl";
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
-  const slashing = draft.startsWith("/");
-  const catalogActive = slashing && frontSurface;
-  const [commandsRefresh, setCommandsRefresh] = useState(0);
-  const skillCatalog = useProjectSkillCatalog(
-    projectId,
-    catalogActive,
-    commandsRefresh,
-  );
-  const slashListId = useId();
   const composerFormRef = useRef<HTMLFormElement>(null);
-  const slashToken = /^\/(\S*)$/.exec(draft)?.[1];
-  const [slashDismissed, setSlashDismissed] = useState(false);
-  const [slashSelection, setSlashSelection] = useState<string>();
   // Questions, approvals and elicitations waiting on this person; any
   // client answers them, and the chat survives a restart around them.
   const questionRequests = chat.requests.filter(
@@ -1379,7 +1383,6 @@ function ChatDockContent({
       if (!focusMovedByPerson(performance.now() - lastInputAtRef.current))
         return;
       setDockEngaged(false);
-      setSlashDismissed(true);
     };
     // Clicks on unfocusable chrome (blank pane space) never fire focusin,
     // and a click inside a page moves focus with no input this window
@@ -1388,7 +1391,6 @@ function ChatDockContent({
       userInteractionRef.current += 1;
       lastInputAtRef.current = performance.now();
       setDockEngaged(inside);
-      if (!inside) setSlashDismissed(true);
     };
     const onPointerDown = (event: PointerEvent) =>
       pressed(inDock(event.target));
@@ -1488,114 +1490,6 @@ function ChatDockContent({
       window.removeEventListener("focus", probe);
     };
   }, [frontSurface, sessionAuthAgent, activeAgent]);
-
-  // Fresh native commands belong to the selected agent and session checkout.
-  // A late response from an earlier agent never reaches the active composer.
-  const commandsAgentId = activeAgent?.id ?? null;
-  const commandsKey = JSON.stringify([
-    projectId,
-    activeAgent,
-    chat.sessionId,
-    checkout?.path,
-  ]);
-  const commandsRequest = useMemo(
-    () => ({
-      key: commandsKey,
-      active: catalogActive,
-      refresh: commandsRefresh,
-    }),
-    [commandsKey, catalogActive, commandsRefresh],
-  );
-  const [nativeCatalog, setNativeCatalog] = useState<
-    AgentCommandsResult & {
-      request?: typeof commandsRequest;
-      loading: boolean;
-    }
-  >({ commands: [], loading: true });
-  useEffect(() => {
-    if (!commandsRequest.active || commandsAgentId === null) return;
-    let cancelled = false;
-    setNativeCatalog({ request: commandsRequest, commands: [], loading: true });
-    void desktopApi
-      .agentCommands({
-        projectId,
-        agentId: commandsAgentId,
-        ...(chat.sessionId ? { sessionId: chat.sessionId } : {}),
-      })
-      .then((result) => {
-        if (!cancelled)
-          setNativeCatalog({
-            ...result,
-            request: commandsRequest,
-            loading: false,
-          });
-      })
-      .catch(() => {
-        if (!cancelled)
-          setNativeCatalog({
-            request: commandsRequest,
-            commands: [],
-            loading: false,
-            error: "Could not load agent commands. Retry to refresh the list.",
-          });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [commandsRequest, commandsAgentId, projectId, chat.sessionId]);
-  const nativeCurrent = nativeCatalog.request === commandsRequest;
-  const commandsLoading =
-    catalogActive &&
-    (skillCatalog.loading ||
-      (commandsAgentId !== null && (!nativeCurrent || nativeCatalog.loading)));
-  const commandsError =
-    skillCatalog.error ?? (nativeCurrent ? nativeCatalog.error : undefined);
-  const entries = useMemo(
-    () =>
-      slashEntries({
-        skills: skillsForAgent(skillCatalog.skills, activeAgent?.skills),
-        commands: nativeCurrent ? nativeCatalog.commands : [],
-        harnessLabel:
-          activeAgent?.harness === "codex" ? "Codex skill" : "Claude Code",
-      }),
-    [
-      skillCatalog.skills,
-      activeAgent?.skills,
-      activeAgent?.harness,
-      nativeCurrent,
-      nativeCatalog.commands,
-    ],
-  );
-  const slashMatches = useMemo(
-    () =>
-      slashToken === undefined ? [] : matchSlashEntries(entries, slashToken),
-    [entries, slashToken],
-  );
-  const slashMenuOpen =
-    frontSurface && slashToken !== undefined && !slashDismissed;
-  // Known entries remain usable while the other catalog is still loading.
-  // Only unresolved slash text waits, so a failed probe never sends it by accident.
-  const resolutionBlocked = (text: string, command?: SlashEntry) =>
-    text.startsWith("/") &&
-    !command &&
-    !entries.some(
-      (entry) => entry.name === /^\/([^\s\uFFFC]+)/.exec(text)?.[1],
-    ) &&
-    (!catalogActive || commandsLoading || !!commandsError);
-  const slashSelected = Math.max(
-    0,
-    slashMatches.findIndex((entry) => entry.name === slashSelection),
-  );
-  const commandResolutionBlocked = resolutionBlocked(
-    draft,
-    slashMenuOpen ? slashMatches[slashSelected] : undefined,
-  );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: typing or changing agents resets navigation
-  useEffect(() => {
-    setSlashSelection(undefined);
-  }, [slashToken, commandsKey]);
-
-  const runSlash = (entry: SlashEntry) => sendDraft(false, entry);
 
   // Whether a one-click re-login exists is main's verdict (the auth-health
   // probe reports it); the dock only supplies the label and the launcher.
@@ -1805,6 +1699,36 @@ function ChatDockContent({
   useEffect(() => {
     registerSend?.((message) => void sendRef.current(message));
   }, [registerSend]);
+  // A skill from the palette (ADR 0270). With no prose in the composer, the
+  // attachments there are what it is for, and go with it; a message being
+  // written stays.
+  const applySkill = (message: string) => {
+    const current = composerRef.current?.read({ trim: false });
+    const composed =
+      current?.text.trim() === "" && current.attachments.length > 0
+        ? takeComposer()
+        : null;
+    void sendRef.current(
+      composed ? `${message}\n${composed.message}` : message,
+      composed?.files,
+    );
+  };
+  const applySkillRef = useRef(applySkill);
+  applySkillRef.current = applySkill;
+  useEffect(() => {
+    registerSkill?.((message) => applySkillRef.current(message));
+  }, [registerSkill]);
+  // Back from the palette without a skill: the typing it took ("/" and
+  // what followed) returns, unless something was written here meanwhile.
+  useEffect(() => {
+    registerComposerReturn?.((text) => {
+      const composer = composerRef.current;
+      if (!composer) return;
+      composer.focusToType();
+      if (text && composer.read({ trim: false }).text.trim() === "")
+        composer.insertText(text);
+    });
+  }, [registerComposerReturn]);
 
   // Complete the mode change from the animation event instead of starting
   // an unmount timer before React has committed the exit pose. The fallback
@@ -1837,31 +1761,12 @@ function ChatDockContent({
     return { message, files };
   };
 
-  const sendDraft = (now: boolean, selected?: SlashEntry) => {
-    if (pendingTransfersRef.current > 0) return;
-    const current = composerRef.current?.read({ trim: false });
-    if (!current) return;
-    // Input and submit can arrive before React paints the new draft. Never
-    // apply a highlighted row from an earlier token to the user's live text.
-    const menuCurrent = slashMenuOpen && current.text === draft;
-    if (selected && !menuCurrent) return;
-    const command = menuCurrent
-      ? (selected ?? slashMatches[slashSelected])
-      : undefined;
-    if (command?.kind === "status" || current.text.trim() === "/status") {
-      rewriteText("");
-      setRecall(null);
-      setLocalInspectorNonce((value) => value + 1);
-      return;
-    }
-    if (resolutionBlocked(current.text, command)) return;
-    if (command) rewriteText(`/${command.name}`);
+  const sendDraft = (now: boolean) => {
     const composed = takeComposer();
     if (!composed) return;
-    const message = resolveSlashMessage(composed.message, entries);
-    if (now) void chat.sendNow(message, composed.files);
+    if (now) void chat.sendNow(composed.message, composed.files);
     else
-      void chat.send(message, composed.files, {
+      void chat.send(composed.message, composed.files, {
         dispatch: queueMessages ? "queue" : "steer",
       });
   };
@@ -1869,7 +1774,7 @@ function ChatDockContent({
     event?.preventDefault();
     sendDraft(false);
   };
-  /** ⌘↵ interrupts the running turn and sends through the same resolver. */
+  /** ⌘↵ interrupts the running turn and sends the same way. */
   const submitNow = () => sendDraft(true);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -1877,58 +1782,21 @@ function ChatDockContent({
     const primaryModifier = /Mac/.test(navigator.platform)
       ? event.metaKey
       : event.ctrlKey;
-    // The slash menu owns navigation keys while open (before recall's
-    // ArrowUp/Down claim below). Escape closes it and stays in the
-    // composer — preventDefault keeps the window listener from stepping
-    // the whole chat down.
+    // "/" with no prose yet is a skill (ADR 0270): the palette's Skills
+    // mode opens aimed at this chat, and the "/" comes back if it closes
+    // without one. Pills stay; the skill takes them along.
     if (
-      slashMenuOpen &&
-      composerRef.current?.read({ trim: false }).text === draft
+      event.key === "/" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      onOpenSkills &&
+      composerRef.current?.read({ trim: false }).text.trim() === ""
     ) {
-      if (
-        !event.altKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.shiftKey &&
-        slashMatches.length > 0 &&
-        (event.key === "ArrowDown" || event.key === "ArrowUp")
-      ) {
-        event.preventDefault();
-        setSlashSelection((current) => {
-          const at = Math.max(
-            0,
-            slashMatches.findIndex((entry) => entry.name === current),
-          );
-          const next =
-            event.key === "ArrowDown"
-              ? Math.min(at + 1, slashMatches.length - 1)
-              : Math.max(at - 1, 0);
-          return slashMatches[next]?.name;
-        });
-        return;
-      }
-      if (event.key === "Tab" && !event.shiftKey && slashMatches.length > 0) {
-        // Complete the name, keep typing arguments.
-        event.preventDefault();
-        const entry = slashMatches[slashSelected];
-        if (entry) {
-          rewriteText(`/${entry.name} `);
-          setRecall(null);
-        }
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSlashDismissed(true);
-        return;
-      }
-      if (event.key === "Enter" && !event.shiftKey && !primaryModifier) {
-        event.preventDefault();
-        const entry = slashMatches[slashSelected];
-        if (entry) runSlash(entry);
-        else if (!commandsLoading) submit();
-        return;
-      }
+      event.preventDefault();
+      setRecall(null);
+      onOpenSkills();
+      return;
     }
     if (event.key === "PageUp") {
       event.preventDefault();
@@ -2753,7 +2621,7 @@ function ChatDockContent({
                   )
                 }
                 incognito={isIncognito}
-                openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
+                openRequest={inspectRequestNonce ?? 0}
                 moving={moveState.moving}
                 moveError={moveState.canMove ? moveState.reason : undefined}
                 moveDisabledReason={
@@ -2979,6 +2847,7 @@ function ChatDockContent({
               resolveAgentName={resolveAgentName}
               sourceHref={sourceHref}
               renderAttachment={sentPill}
+              presentUserMessage={presentSkillMessage}
               Hint={ShortcutHint}
               jumpShortcut="⇞"
               error={
@@ -3349,54 +3218,6 @@ function ChatDockContent({
                 className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
                 onSubmit={submit}
               >
-                {/* "/" command menu: skills (ADR 0052) merged with the
-                harness's own commands. Rows commit on mousedown like
-                the palette, so the composer never loses focus; the
-                panel pops in/out and rows glide as the filter types. */}
-                {!slashMenuOpen &&
-                  slashing &&
-                  (commandsLoading || commandsError) && (
-                    <div
-                      role="status"
-                      className="mb-2 flex items-center gap-2 px-3 text-xs text-fg-muted"
-                    >
-                      <span>
-                        {commandsLoading ? "Loading commands…" : commandsError}
-                      </span>
-                      {commandsError && (
-                        <button
-                          type="button"
-                          className="rounded px-2 py-1 text-fg hover:bg-bg-overlay"
-                          onClick={() =>
-                            setCommandsRefresh((value) => value + 1)
-                          }
-                        >
-                          Retry
-                        </button>
-                      )}
-                    </div>
-                  )}
-                <SlashMenu
-                  open={slashMenuOpen}
-                  id={slashListId}
-                  anchorRef={composerFormRef}
-                  loading={commandsLoading}
-                  error={commandsError}
-                  onRetry={() => {
-                    setCommandsRefresh((value) => value + 1);
-                    composerRef.current?.focus();
-                  }}
-                  matches={slashMatches}
-                  selected={slashSelected}
-                  onHover={(index) =>
-                    setSlashSelection(slashMatches[index]?.name)
-                  }
-                  onCommit={runSlash}
-                  onDismiss={() => {
-                    setSlashDismissed(true);
-                    composerRef.current?.focus();
-                  }}
-                />
                 <div className="flex items-center gap-2">
                   {/* Any file attaches — as media when the agent takes it,
                   as a path pill otherwise — so the picker never filters
@@ -3444,16 +3265,6 @@ function ChatDockContent({
                   dropped, enter with pill-in and leave with pill-out. */}
                   <ComposerInput
                     ref={composerRef}
-                    suggestions={
-                      slashMenuOpen
-                        ? {
-                            listId: slashListId,
-                            activeId: slashMatches.length
-                              ? `${slashListId}-${slashSelected}`
-                              : undefined,
-                          }
-                        : undefined
-                    }
                     onAnimationEnd={(event) => {
                       if (event.animationName.startsWith("input-recall-")) {
                         setRecallMotion((current) =>
@@ -3475,16 +3286,13 @@ function ChatDockContent({
                       publishDraft();
                       setPillCount(state.pillCount);
                       setDraft(state.text);
-                      // Typing (or pasting) exits history-recall mode and
-                      // revives a dismissed slash menu; the dock's own
-                      // rewrites (recall itself) don't count.
+                      // Typing (or pasting) exits history-recall mode; the
+                      // dock's own rewrites (recall itself) don't count.
                       if (
                         !rewritingRef.current &&
                         state.text !== draftRef.current
-                      ) {
+                      )
                         setRecall(null);
-                        setSlashDismissed(false);
-                      }
                     }}
                     onKeyDown={onKeyDown}
                     onPaste={onComposerPaste}
@@ -3512,6 +3320,23 @@ function ChatDockContent({
                     }
                     ariaLabel="Message the assistant"
                   />
+                  {/* Skills live in the palette (ADR 0270); an empty
+                  composer says how to reach them. */}
+                  {onOpenSkills &&
+                    draft === "" &&
+                    pillCount === 0 &&
+                    questionRequests.length === 0 && (
+                      <span
+                        aria-hidden="true"
+                        data-testid="composer-skills-hint"
+                        className="flex shrink-0 select-none items-center gap-1 text-[11px] text-fg-faint"
+                      >
+                        <kbd className="rounded border border-border bg-bg-inset px-1 py-px font-sans text-[10px]">
+                          /
+                        </kbd>
+                        skills
+                      </span>
+                    )}
                   {/* Context ring (ADR 0057): quiet until a harness reports
                   occupancy and window size; danger red past 90%. */}
                   <ContextMeter turns={chat.timeline} />
@@ -3567,7 +3392,6 @@ function ChatDockContent({
                         className="button-primary size-8 rounded-lg p-0 disabled:opacity-35"
                         disabled={
                           pendingTransfers > 0 ||
-                          commandResolutionBlocked ||
                           (!draft.trim() && pillCount === 0)
                         }
                         data-disabled-reason="Write a message or attach a file first"

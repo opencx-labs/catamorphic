@@ -37,6 +37,7 @@ import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
   ChatDraftUpdate,
+  DockAction,
   DockCommand,
   DockData,
   DockSnapshot,
@@ -147,7 +148,7 @@ const api = {
     invoke("catamorphic:dock-new-chat", input),
   dockAction: (
     localId: string,
-    action: "close" | "minimize" | "send" | "focusChips",
+    action: DockAction,
     message?: string,
   ): Promise<void> =>
     invoke("catamorphic:dock-action", localId, action, message),

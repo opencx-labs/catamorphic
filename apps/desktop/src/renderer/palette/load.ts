@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { frequentItems, type PaletteRankContext } from "./rank.js";
 import type {
   PaletteItem,
   PaletteLoad,
@@ -121,3 +122,23 @@ export const pinCurrentFirst = (rows: PaletteItem[]): PaletteItem[] =>
   [...rows].sort(
     (a, b) => Number(b.current ?? false) - Number(a.current ?? false),
   );
+
+/**
+ * A list that opens with what is used most (the Skills mode): up to five
+ * rows under "Recent", then the rest under "All" in their given order.
+ * Nothing used yet: the list as given, unlabeled.
+ */
+export function recentFirst(
+  rows: readonly PaletteItem[],
+  context: PaletteRankContext,
+): PaletteItem[] {
+  const recent = frequentItems(rows, { ...context, limit: 5, pageLimit: 5 });
+  if (recent.length === 0) return [...rows];
+  const taken = new Set(recent.map((row) => row.id));
+  return [
+    ...recent.map((row) => ({ ...row, group: "Recent" })),
+    ...rows
+      .filter((row) => !taken.has(row.id))
+      .map((row) => ({ ...row, group: "All" })),
+  ];
+}

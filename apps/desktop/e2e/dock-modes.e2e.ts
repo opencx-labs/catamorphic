@@ -673,50 +673,36 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
-  it("the built-in slash menu offers shared skills without inventing native commands", async () => {
-    await run(`setComposer('/'); return true;`);
+  it("the built-in chat's Skills mode offers shared skills without inventing native commands", async () => {
+    // "/" in an empty composer opens the palette's Skills mode (ADR 0270).
+    await run(`setComposer(''); return true;`);
+    await app.press("Slash");
     const rows = await runWait<string[]>(
-      `const menu = $('[data-testid="slash-menu"]');
-       if (!menu || !menu.querySelector('[data-skill-name="writing-workflows"]') ||
-           menu.querySelector('[aria-busy="true"]')) return false;
-       return [...menu.querySelectorAll('[role="option"]')].map((el) => el.dataset.skillName);`,
-      { timeoutMs: 15_000, label: "built-in command catalog" },
+      `const input = document.activeElement;
+       if (input?.getAttribute('aria-label') !== 'Search commands, pages, and more') return false;
+       const dialog = input.closest('[role="dialog"]');
+       if (dialog.querySelector('[data-testid="palette-mode-chip"]')?.textContent.trim() !== 'Skills') return false;
+       const rows = [...dialog.querySelectorAll('[role="option"]')].map((el) => el.dataset.itemId);
+       if (!rows.includes('skills:writing-workflows') || rows.includes('skills:loading')) return false;
+       return rows;`,
+      { timeoutMs: 15_000, label: "built-in Skills mode" },
     );
     // This chat runs the built-in Fake Agent. Native command fixtures must
     // follow the selected harness, just like production discovery does.
-    expect(rows).toContain("status");
-    expect(rows).toContain("writing-workflows");
-    expect(rows).not.toContain("compact");
-    expect(rows).not.toContain("review");
-    // No row comes from the Claude Code harness (descriptions may name it).
-    expect(
-      await run<boolean>(
-        `return [...$('[data-testid="slash-menu"]').querySelectorAll('[role="option"]')].some((row) => row.dataset.source === 'Claude Code');`,
-      ),
-    ).toBe(false);
-    // The panel pops in (and pops out when the token dissolves).
-    expect(
-      await run<boolean>(
-        `return $('[data-testid="slash-menu"]').className.includes('animate-pop-in');`,
-      ),
-    ).toBe(true);
-    await run(`setComposer(''); return true;`);
-    await runWait(`return !$('[data-testid="slash-menu"]');`, {
-      label: "menu closed after its exit animation",
-    });
-    // Unknown slash text remains an ordinary message after discovery settles.
-    await run(`setComposer('/unknown-command-zzzz'); return true;`);
+    expect(rows).toContain("skills:status");
+    expect(rows).not.toContain("skills:compact");
+    expect(rows).not.toContain("skills:review");
+    // The slash did not land in the composer.
+    expect(await run<string>(`return composer().textContent;`)).toBe("");
+    // Escape hands the slash back, so a message can start with one; it
+    // goes as written.
+    await app.press("Escape");
     await runWait(
-      `const menu = $('[data-testid="slash-menu"]');
-       return !!menu && menu.textContent.includes('No matching commands') &&
-         !menu.querySelector('[aria-busy="true"]');`,
-      { label: "unknown command after discovery" },
+      `return document.activeElement === composer() && composer().textContent === '/';`,
+      { label: "slash back in the composer" },
     );
-    await run(`
-      composer().dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', bubbles: true, cancelable: true }));
-      return true;
-    `);
+    await app.insertText("unknown-command-zzzz");
+    await app.press("Enter");
     await runWait(
       `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /unknown-command-zzzz');`,
       { timeoutMs: 30_000, label: "harness received the raw command" },

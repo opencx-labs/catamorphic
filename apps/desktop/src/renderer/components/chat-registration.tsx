@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ChatDockProps } from "../../shared/chat.js";
-import type { ChatEvent, DockData } from "../../shared/desktop-workspace.js";
+import type {
+  ChatEvent,
+  DockAction,
+  DockData,
+} from "../../shared/desktop-workspace.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useTheme } from "../lib/theme.js";
@@ -66,10 +70,7 @@ export function ChatRegistration(
     void desktopApi.dockPublish(data);
   });
   useEffect(() => {
-    const send = (
-      action: "close" | "minimize" | "send" | "focusChips",
-      message?: string,
-    ) => {
+    const send = (action: DockAction, message?: string) => {
       void desktopApi.dockAction(localId, action, message);
     };
     current.current.registerClose?.(() => {
@@ -78,6 +79,8 @@ export function ChatRegistration(
     });
     current.current.registerMinimize?.(() => send("minimize"));
     current.current.registerSend?.((message) => send("send", message));
+    current.current.registerSkill?.((message) => send("skill", message));
+    current.current.registerComposerReturn?.((text) => send("resume", text));
     current.current.registerFocusChips?.(() => {
       send("focusChips");
       return true;
@@ -147,6 +150,9 @@ export function ChatRegistration(
           break;
         case "editPermissionMode":
           p.onEditPermissionMode?.();
+          break;
+        case "openSkills":
+          p.onOpenSkills?.();
           break;
         case "fork":
           p.onFork?.(event.messageId);

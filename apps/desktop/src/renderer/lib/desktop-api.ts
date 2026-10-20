@@ -30,6 +30,7 @@ import type { ClaudeCodeInstallStatus } from "../../shared/claude-code-install.j
 import type {
   ChatDraft,
   ChatDraftUpdate,
+  DockAction,
   DockCommand,
   DockData,
   DockSnapshot,
@@ -1265,7 +1266,7 @@ export interface CatamorphicDesktopApi {
   dockNewChat: (input?: { shortcut?: boolean }) => Promise<void>;
   dockAction: (
     localId: string,
-    action: "close" | "minimize" | "send" | "focusChips",
+    action: DockAction,
     message?: string,
   ) => Promise<void>;
   dockDrag: (input: DockDrag) => Promise<void>;

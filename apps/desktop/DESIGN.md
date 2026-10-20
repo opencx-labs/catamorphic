@@ -729,6 +729,25 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-20: Skills live in the palette; "/" opens them from a chat
+
+The composer's `/` menu is gone (ADR 0270). Skills are a palette mode with
+the palette's own ranking and keyboard: `/` in a composer with no prose
+opens it aimed at that chat, which wears the target accent while it is
+open. Enter applies the highlighted skill there, ⌘↵ starts a chat with it,
+⌥↵ a floating one; the footer says which. Tab, or Space after a full name,
+moves the skill into the chip and the input takes its instructions, with
+the skill's `argument-hint` as the placeholder, so `/review the auth
+change ↵` typed without looking still runs. Escape gives the composer back
+the slash and what followed it, and a message starting with a slash goes
+out as written. The palette's empty state lists one Skills row; the mode
+opens with what is used most under Recent.
+
+An empty composer carries a faint `/ skills` hint before its controls. A
+skill sent from the palette reads in the transcript as a chip with the
+skill's name, then what came with it, pills included: pills waiting in the
+composer go with the skill when nothing else is written there.
+
 ### 2026-10-19: Resources shows what Work runs, by who it runs for
 
 Activity Monitor lists Work as a dozen `node`, `bun`, `claude` and `Work

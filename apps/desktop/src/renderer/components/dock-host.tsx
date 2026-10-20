@@ -112,6 +112,8 @@ export function DockHost({
         close?: () => void;
         minimize?: () => void;
         send?: (message: string) => void;
+        skill?: (message: string) => void;
+        resume?: (text: string) => void;
         focusChips?: () => boolean;
       }
     >(),
@@ -258,6 +260,10 @@ export function DockHost({
         const action = actions.current.get(event.localId);
         if (event.action === "send" && event.message)
           action?.send?.(event.message);
+        else if (event.action === "skill" && event.message)
+          action?.skill?.(event.message);
+        else if (event.action === "resume")
+          action?.resume?.(event.message ?? "");
         else if (event.action === "close") action?.close?.();
         else if (event.action === "minimize") action?.minimize?.();
         else if (event.action === "focusChips") action?.focusChips?.();
@@ -854,6 +860,8 @@ export function DockHost({
           close?: () => void;
           minimize?: () => void;
           send?: (message: string) => void;
+          skill?: (message: string) => void;
+          resume?: (text: string) => void;
           focusChips?: () => boolean;
         }) =>
           actions.current.set(entry.localId, {
@@ -956,6 +964,9 @@ export function DockHost({
                 registerClose={(close) => register({ close })}
                 registerMinimize={(minimize) => register({ minimize })}
                 registerSend={(send) => register({ send })}
+                registerSkill={(skill) => register({ skill })}
+                registerComposerReturn={(resume) => register({ resume })}
+                onOpenSkills={() => invoke(chat, { kind: "openSkills" })}
                 registerFocusChips={(focusChips) => register({ focusChips })}
                 onCustomizeChips={() =>
                   invoke(chat, { kind: "customizeChips" })

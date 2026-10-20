@@ -262,6 +262,14 @@ export interface ChatTimelineProps {
   /** Names each control on hover; defaults to the browser's tooltip. */
   Hint?: HintComponent;
   /**
+   * The person's own message as the host shows it: an element of its own
+   * leading the words (a skill chip before what a skill launcher sent) and
+   * the words after it, attachment markers kept. Undefined: as sent.
+   */
+  presentUserMessage?: (
+    text: string,
+  ) => { lead: ReactNode; text: string } | undefined;
+  /**
    * Hands the host the "jump to my previous message" scroll action, so a
    * composer shortcut triggers the same move as the button.
    */
@@ -281,6 +289,7 @@ interface TimelineHost {
   Hint: HintComponent;
   resolveToolIcon?: ChatTimelineProps["resolveToolIcon"];
   resolveAgentName?: ChatTimelineProps["resolveAgentName"];
+  presentUserMessage?: ChatTimelineProps["presentUserMessage"];
   sourceHref?: SourceHref;
   /** Which callbacks the host gave: their controls show only then. */
   opensLinks: boolean;
@@ -566,6 +575,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     backgroundCommands,
     renderAttachment = defaultAttachment,
     Hint = TitleHint,
+    presentUserMessage,
     registerJumpToPreviousUserMessage,
     jumpShortcut,
   } = props;
@@ -616,6 +626,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       Hint,
       resolveToolIcon,
       resolveAgentName,
+      presentUserMessage,
       sourceHref,
       opensLinks,
       opensFiles,
@@ -628,6 +639,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       Hint,
       resolveToolIcon,
       resolveAgentName,
+      presentUserMessage,
       sourceHref,
       opensLinks,
       opensFiles,
@@ -1672,6 +1684,7 @@ const UserMessage = memo(function UserMessage({
   dismissable = false,
 }: UserMessageProps) {
   const actions = useContext(ActionsContext);
+  const { presentUserMessage } = useContext(HostContext);
   // A queued message whose turn just started takes over from its bubble:
   // it arrives from where the bubble was, already shown, instead of rising
   // in anew below it. Read in the commit, once the bubble has left the
@@ -1707,6 +1720,7 @@ const UserMessage = memo(function UserMessage({
   const enterClasses = takeover ? "" : entering;
   const text = item?.text ?? pending?.text ?? "";
   const attachments = item?.attachments ?? pending?.attachments ?? [];
+  const shown = presentUserMessage?.(text);
   const failed = pending?.status === "failed";
   return (
     <article
@@ -1722,7 +1736,11 @@ const UserMessage = memo(function UserMessage({
     >
       <AttachmentStrip text={text} attachments={attachments} />
       <div className="whitespace-pre-wrap break-words leading-6">
-        <InlineMessage content={text} attachments={attachments} />
+        {shown?.lead}
+        <InlineMessage
+          content={shown ? shown.text : text}
+          attachments={attachments}
+        />
       </div>
       <UnreadLine
         unread={unread}
