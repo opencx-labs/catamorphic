@@ -1,8 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { agentToolResult } from "@catamorphic/sandbox";
+import { agentToolResult, waitUntil } from "@catamorphic/sandbox";
 import { BrowserWindow, type WebContents, webContents } from "electron";
 import { z } from "zod";
 import { type PageDialog, pageDialogAsker } from "../shared/page-dialogs.js";
@@ -94,6 +93,39 @@ const NETWORK_KEPT = 300;
 const EVALUATE_RESULT_LIMIT = 20_000;
 const EVALUATE_MS = 30_000;
 const FILE_CHOOSER_MS = 6000;
+/**
+ * The longest a wait_for or downloads call waits, as browser_act's
+ * timeoutMs declares. A message reaching the agent ends it sooner.
+ */
+const MAX_WAIT_MS = 600_000;
+/** How long wait_for reads the page every 100 ms before once a second. */
+const QUICK_WAIT_MS = 10_000;
+/** How long wait_for waits on one read before looking again. */
+const READ_PATIENCE_MS = 1_000;
+const pageTextSchema = z.object({ text: z.string() });
+
+/** `promise`'s value if it settles within `ms` and before `signal` aborts. */
+function settledWithin<T>(input: {
+  promise: Promise<T>;
+  ms: number;
+  signal: AbortSignal;
+}): Promise<{ settled: true; value: T } | { settled: false }> {
+  if (input.signal.aborted) return Promise.resolve({ settled: false });
+  return new Promise((resolve) => {
+    const done = (result: { settled: true; value: T } | { settled: false }) => {
+      clearTimeout(timer);
+      input.signal.removeEventListener("abort", stop);
+      resolve(result);
+    };
+    const stop = () => done({ settled: false });
+    const timer = setTimeout(stop, input.ms);
+    input.signal.addEventListener("abort", stop, { once: true });
+    void input.promise.then(
+      (value) => done({ settled: true, value }),
+      () => done({ settled: false }),
+    );
+  });
+}
 
 /**
  * A file an agent may hand a page: anything in its own folder, otherwise
@@ -163,6 +195,10 @@ export class BrowserDriver {
   private queue: Promise<unknown> = Promise.resolve();
   /** Requests and downloads, recorded from the agent's first look or action. */
   private watching = false;
+  /** Work holding the tab awake now: queued actions and waits overlap. */
+  private holds = 0;
+  /** The window keeping the tab awake and laid out, shared by every hold. */
+  private awake: Promise<void> | null = null;
   private network: NetworkEntry[] = [];
   private requests = new Map<string, NetworkEntry>();
   /** Finished requests an agent has read; pending ones come again. */
@@ -279,9 +315,39 @@ export class BrowserDriver {
       .catch(() => {});
   }
 
+  /**
+   * Keep the tab awake and laid out while anything works in it. A wait
+   * runs beside queued actions, so they share one activation: every holder
+   * awaits the same one (input must reach a laid-out tab), the last
+   * release ends it, and each holder releases whether it worked or not.
+   */
+  private hold(): Promise<void> {
+    this.holds++;
+    this.awake ??= this.activity(true).catch((error: unknown) => {
+      this.awake = null;
+      throw error;
+    });
+    return this.awake;
+  }
+
+  private async release(): Promise<void> {
+    this.holds = Math.max(0, this.holds - 1);
+    if (this.holds > 0) return;
+    await this.awake?.catch(() => {});
+    // Taken again while the activation settled: it is theirs now.
+    if (this.holds > 0) return;
+    this.awake = null;
+    await this.activity(false);
+  }
+
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      await this.activity(true);
+      try {
+        await this.hold();
+      } catch (error) {
+        await this.release();
+        throw error;
+      }
       // Behind the person's window, the page is told it has focus instead.
       const elsewhere = this.elsewhere();
       const focused = elsewhere
@@ -304,7 +370,7 @@ export class BrowserDriver {
           // Not awaited: the action may have opened a dialog.
           if (elsewhere) void this.emulateFocus(false);
         } finally {
-          await this.activity(false);
+          await this.release();
         }
       }
     };
@@ -805,12 +871,93 @@ export class BrowserDriver {
         return Promise.resolve(this.takeNetwork());
       case "downloads": {
         const timeout = action.timeoutMs ?? 0;
-        if (!Number.isFinite(timeout) || timeout < 0 || timeout > 600_000)
+        if (!Number.isFinite(timeout) || timeout < 0 || timeout > MAX_WAIT_MS)
           return Promise.reject(
-            new Error("timeoutMs must be between 0 and 600000."),
+            new Error(`timeoutMs must be between 0 and ${MAX_WAIT_MS}.`),
           );
         return downloadLogOf(this.guest).take(timeout, stopWaiting);
       }
+    }
+  }
+
+  /**
+   * Wait until the page shows `text`. A look, not input: like `inspect`, it
+   * neither focuses the tab nor queues behind (or holds up) other browser
+   * work, so a long wait never stalls anyone else's; it only keeps the tab
+   * awake. It reads on across a navigation (a sign-in redirect loads a new
+   * page) and while the person drives the tab, quickly at first and then
+   * once a second. A read the page does not answer (a load, a busy page)
+   * counts as nothing yet, so the timeout and `stopWaiting` still end it. A
+   * dialog the page opens ends it with the dialog's report.
+   */
+  private async waitFor(
+    action: Extract<BrowserAction, { type: "wait_for" }>,
+    stopWaiting: AbortSignal,
+  ): Promise<unknown> {
+    const timeout = action.timeoutMs ?? 5000;
+    if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_WAIT_MS)
+      throw new Error(`timeoutMs must be between 1 and ${MAX_WAIT_MS}.`);
+    if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+    this.watch();
+    const deadline = Date.now() + timeout;
+    // One read at a time: a page that does not answer is asked once.
+    let reading: Promise<unknown> | null = null;
+    let read = false;
+    let failure: unknown = null;
+    const shows = async () => {
+      if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+      reading ??= this.untilDialog(() => this.evaluate("read")).then(
+        (value) => {
+          read = true;
+          return value;
+        },
+        (error: unknown) => {
+          // Between two pages there is nothing to read yet.
+          failure = error;
+          return null;
+        },
+      );
+      const current = reading;
+      const answer = await settledWithin({
+        promise: current,
+        ms: Math.min(READ_PATIENCE_MS, Math.max(0, deadline - Date.now())),
+        signal: stopWaiting,
+      });
+      if (answer.settled && reading === current) reading = null;
+      if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+      if (this.openDialog()) return true;
+      const page = pageTextSchema.safeParse(
+        answer.settled ? answer.value : null,
+      );
+      return page.success && page.data.text.includes(action.text);
+    };
+    // A read needs the tab awake, not the window's answer: a covered or
+    // minimised window, whose frames are paused, never gives one.
+    this.hold().catch(() => {});
+    try {
+      let outcome = await waitUntil({
+        ready: shows,
+        timeoutMs: Math.min(QUICK_WAIT_MS, Math.max(0, deadline - Date.now())),
+        stopWaiting,
+        pollMs: 100,
+      });
+      if (outcome === "timeout" && Date.now() < deadline)
+        outcome = await waitUntil({
+          ready: shows,
+          timeoutMs: Math.max(0, deadline - Date.now()),
+          stopWaiting,
+          pollMs: 1_000,
+        });
+      if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+      const open = this.openDialog();
+      if (open) return this.reportDialog(open);
+      // A page never read once by the deadline says why, instead of "not
+      // found"; a read still under way is a page still loading.
+      if (outcome === "timeout" && !read && failure && reading === null)
+        throw failure instanceof Error ? failure : new Error(String(failure));
+      return { found: outcome === "ready" };
+    } finally {
+      void this.release().catch(() => {});
     }
   }
 
@@ -822,6 +969,7 @@ export class BrowserDriver {
       action.type === "downloads"
     )
       return this.inspect(action, stopWaiting);
+    if (action.type === "wait_for") return this.waitFor(action, stopWaiting);
     // A page waiting on its dialog takes keys and text there, not in the
     // page; going somewhere else is the one other thing it allows.
     const waiting = this.openDialog();
@@ -838,20 +986,17 @@ export class BrowserDriver {
       // address bar does; a page holding on with beforeunload asks again.
       if (open) pageDialogs()?.cancel(this.guest.id);
       this.watch();
-      return this.untilDialog((live) =>
-        this.perform(action, live, stopWaiting),
-      );
+      return this.untilDialog((live) => this.perform(action, live));
     });
   }
 
   private async perform(
     action: Exclude<
       BrowserAction,
-      { type: "console" | "network" | "downloads" }
+      { type: "console" | "network" | "downloads" | "wait_for" }
     >,
     /** Throws once the page opened a dialog and the action was given up. */
     live: () => void,
-    stopWaiting: AbortSignal,
   ): Promise<unknown> {
     try {
       switch (action.type) {
@@ -951,30 +1096,6 @@ export class BrowserDriver {
             );
           }
           break;
-        }
-        case "wait_for": {
-          const timeout = action.timeoutMs ?? 5000;
-          if (!Number.isFinite(timeout) || timeout < 1 || timeout > 10000)
-            throw new Error("timeoutMs must be between 1 and 10000.");
-          const deadline = Date.now() + timeout;
-          const generation = await this.evaluate("generation");
-          do {
-            this.guard();
-            live();
-            if (
-              this.guest.isDestroyed() ||
-              (await this.evaluate("generation")) !== generation
-            )
-              throw new Error(
-                "Page changed while waiting. Take a fresh snapshot.",
-              );
-            const page = z
-              .object({ text: z.string() })
-              .parse(await this.evaluate("read"));
-            if (page.text.includes(action.text)) return { found: true };
-            await delay(Math.min(100, Math.max(0, deadline - Date.now())));
-          } while (Date.now() < deadline && !stopWaiting.aborted);
-          return { found: false };
         }
       }
       return { ok: true };

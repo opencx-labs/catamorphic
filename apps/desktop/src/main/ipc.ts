@@ -174,6 +174,7 @@ import {
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
+import { shellQuote } from "./shell-integration.js";
 import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
@@ -344,18 +345,14 @@ export function registerIpcHandlers(
       if (!server) throw new Error("The local server is unavailable.");
       const root = await server.projectRoots.get(input.projectId);
       if (!root) throw new Error("The project folder is unavailable.");
-      const paths =
-        input.paths ??
-        (input.sessionId
-          ? [
-              (
-                await server.sessionCheckouts.describe({
-                  projectId: input.projectId,
-                  sessionId: input.sessionId,
-                })
-              ).path,
-            ]
-          : undefined);
+      const checkout =
+        input.paths === undefined && input.sessionId
+          ? await server.sessionCheckouts.resolve({
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
+          : undefined;
+      const paths = input.paths ?? (checkout ? [checkout] : undefined);
       return { root, paths };
     },
   });
@@ -1403,12 +1400,10 @@ export function registerIpcHandlers(
         const server = state.current;
         if (!server) throw new Error("The project server is not ready.");
         const workingDirectory = input.sessionId
-          ? (
-              await server.sessionCheckouts.describe({
-                projectId: input.projectId,
-                sessionId: input.sessionId,
-              })
-            ).path
+          ? await server.sessionCheckouts.resolve({
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
           : await server.projectRoots.get(input.projectId);
         if (!workingDirectory)
           throw new Error("The project folder is unavailable.");
@@ -1436,12 +1431,10 @@ export function registerIpcHandlers(
         const server = state.current;
         if (!server) throw new Error("The project server is not ready.");
         const workingDirectory = input.sessionId
-          ? (
-              await server.sessionCheckouts.describe({
-                projectId: input.projectId,
-                sessionId: input.sessionId,
-              })
-            ).path
+          ? await server.sessionCheckouts.resolve({
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
           : await server.projectRoots.get(input.projectId);
         if (!workingDirectory)
           throw new Error("The project folder is unavailable.");
@@ -3226,18 +3219,14 @@ export function registerIpcHandlers(
           paths.some((value) => typeof value !== "string"))
       )
         throw new Error("Invalid checkout scope");
-      const scopedPaths =
-        paths ??
-        (sessionId && state.current
-          ? [
-              (
-                await state.current.sessionCheckouts.describe({
-                  projectId,
-                  sessionId,
-                })
-              ).path,
-            ]
-          : undefined);
+      const checkout =
+        paths === undefined && sessionId && state.current
+          ? await state.current.sessionCheckouts.resolve({
+              projectId,
+              sessionId,
+            })
+          : undefined;
+      const scopedPaths = paths ?? (checkout ? [checkout] : undefined);
       return gitOverview(rootPath, scopedPaths);
     },
   );
@@ -3878,10 +3867,6 @@ function isBuilderCheckout(capabilities: {
       capabilities.source?.remoteUrl &&
       repoFullNameFromUrl(capabilities.source.remoteUrl),
   );
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /** Tell every window a project's files moved under it. */

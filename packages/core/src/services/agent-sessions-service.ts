@@ -511,7 +511,10 @@ export interface AgentTodo {
 }
 
 export interface AgentTodoInput {
-  /** Echo the returned id when editing an existing item; omit for new items. */
+  /**
+   * The item's identity across updates: echo it to keep the item. An id the
+   * list does not hold yet adds a new item with it; omitted, one is made.
+   */
   id?: string;
   title: string;
   description: string;
@@ -2239,12 +2242,10 @@ export class AgentSessionsService {
     sessionId: string,
     input: readonly AgentTodoInput[],
   ): Promise<AgentTodo[]> {
-    const session = await this.requireSession(identity, projectId, sessionId);
+    await this.requireSession(identity, projectId, sessionId);
     if (input.length > 50) {
       throw new Error("A todo list can contain at most 50 items");
     }
-    const existing = agentTodos(session.todos);
-    const existingIds = new Set(existing.map((item) => item.id));
     const usedIds = new Set<string>();
     const todos = input.map((item) => {
       const title = item.title.replace(/\s+/g, " ").trim();
@@ -2264,11 +2265,9 @@ export class AgentSessionsService {
       ) {
         throw new Error(`Unknown todo status: ${String(item.status)}`);
       }
-      const requestedId = item.id?.trim();
-      if (requestedId && !existingIds.has(requestedId)) {
-        throw new Error(`Todo '${requestedId}' does not exist in this session`);
-      }
-      const id = requestedId || randomUUID();
+      // An id the list does not hold yet names a new item, kept as given
+      // so the agent can echo it in its next update.
+      const id = item.id?.trim() || randomUUID();
       if (usedIds.has(id)) throw new Error(`Duplicate todo id: ${id}`);
       usedIds.add(id);
       const activeForm = liveStatusLine(item.activeForm);

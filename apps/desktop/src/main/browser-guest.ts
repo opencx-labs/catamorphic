@@ -86,7 +86,6 @@ export const BROWSER_GUEST = String.raw`
       };
     },
     viewport() { return {width:innerWidth,height:innerHeight}; },
-    generation() { return generation; },
     prepare(uid, editing = false) {
       const el = resolve(uid);
       if (el.matches(':disabled,[aria-disabled="true"]') || (editing && el.readOnly)) throw Error('Element is disabled or read-only.');

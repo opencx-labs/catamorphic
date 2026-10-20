@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { scanOsc133 } from "../shared/terminal-text.js";
-import { shellIntegration } from "./shell-integration.js";
+import {
+  agentShellEnvFile,
+  shellIntegration,
+  withAgentShellOptions,
+} from "./shell-integration.js";
 
 function bashVersion(candidate: string): [number, number] | undefined {
   try {
@@ -43,6 +47,14 @@ function modernBash(): string | undefined {
 
 const bash = modernBash();
 const bash3 = oldBash();
+const zsh = ["/bin/zsh", "/usr/bin/zsh"].find((candidate) =>
+  fs.existsSync(candidate),
+);
+
+/** What `args` print to stdout in `shell`. */
+function run(shell: string, args: string[], env: NodeJS.ProcessEnv): string {
+  return execFileSync(shell, args, { encoding: "utf8", env }).trim();
+}
 
 describe("shell integration for agent terminals", () => {
   it("starts zsh as a login shell through its ZDOTDIR shim", async () => {
@@ -77,6 +89,94 @@ describe("shell integration for agent terminals", () => {
       expect(await shellIntegration(bash3 ?? "")).toBeNull();
     },
   );
+
+  it.skipIf(!zsh)(
+    "passes a pattern that matches nothing through, as bash does, in an agent's zsh",
+    async () => {
+      const integrated = await shellIntegration(zsh ?? "");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "zsh-home-"));
+      // The person's own .zshrc runs first and keeps the rest of its say.
+      fs.writeFileSync(
+        path.join(home, ".zshrc"),
+        "setopt nomatch null_glob\nexport OWN_RC=ran\n",
+      );
+      try {
+        // A pattern with no match fails the whole command in plain zsh.
+        expect(() =>
+          execFileSync(zsh ?? "", ["-c", "echo --include=*.zzz"], {
+            cwd: home,
+            stdio: "pipe",
+            env: { PATH: process.env.PATH ?? "", HOME: home },
+          }),
+        ).toThrow(/no matches found/);
+        expect(
+          run(zsh ?? "", ["-i", "-c", 'echo --include=*.zzz "$OWN_RC"'], {
+            PATH: process.env.PATH ?? "",
+            HOME: home,
+            ...integrated?.env,
+            USER_ZDOTDIR: home,
+          }),
+        ).toBe("--include=*.zzz ran");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!zsh)(
+    "gives native harnesses a file that sets the same option ahead of each command",
+    async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-env-"));
+      const own = path.join(home, "it's mine.sh");
+      fs.writeFileSync(own, "export OWN_SETUP=ran\n");
+      const previous = process.env.CLAUDE_ENV_FILE;
+      process.env.CLAUDE_ENV_FILE = own;
+      try {
+        const file = (await agentShellEnvFile()) ?? "";
+        const env = { PATH: process.env.PATH ?? "", HOME: home };
+        // Claude Code's snapshot carries the person's own options.
+        expect(
+          run(
+            zsh ?? "",
+            ["-c", `setopt null_glob; . '${file}'; echo --include=*.zzz`],
+            env,
+          ),
+        ).toBe("--include=*.zzz");
+        // A file the person set for themselves still runs, first.
+        expect(
+          run(zsh ?? "", ["-c", `. '${file}'; echo "$OWN_SETUP"`], env),
+        ).toBe("ran");
+      } finally {
+        if (previous === undefined) delete process.env.CLAUDE_ENV_FILE;
+        else process.env.CLAUDE_ENV_FILE = previous;
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps the harness file read-only, and a no-op that succeeds in any other shell", async () => {
+    const file = (await agentShellEnvFile()) ?? "";
+    // Every chat's Claude Code reads it: nothing appends to it (root, as a
+    // CI container may run, ignores the mode).
+    expect(fs.statSync(file).mode & 0o777).toBe(0o400);
+    if (process.getuid?.() !== 0)
+      expect(() =>
+        execFileSync("/bin/sh", ["-c", `echo 'export X=1' >> '${file}'`], {
+          stdio: "pipe",
+        }),
+      ).toThrow();
+    expect(run("/bin/sh", ["-c", `. '${file}' && echo ok`], {})).toBe("ok");
+    // Written again for the next attempt over the read-only one.
+    expect(await agentShellEnvFile()).toBe(file);
+  });
+
+  it("adds the options only to a zsh command: fish could not parse them", () => {
+    expect(withAgentShellOptions("ls *.ts", "/bin/zsh")).toBe(
+      "setopt no_nomatch no_null_glob no_csh_null_glob\nls *.ts",
+    );
+    for (const shell of ["/opt/homebrew/bin/fish", "/bin/bash", "/bin/sh"])
+      expect(withAgentShellOptions("ls *.ts", shell)).toBe("ls *.ts");
+  });
 
   it("leaves other shells to the foreground-process heuristic", async () => {
     expect(await shellIntegration("/usr/bin/fish")).toBeNull();

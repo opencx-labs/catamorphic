@@ -24,6 +24,30 @@ import path from "node:path";
  */
 
 /**
+ * How agents' commands read in zsh: a pattern that matches nothing stays as
+ * written, as bash leaves it, instead of failing the whole command with
+ * "no matches found". Agents write bash (`grep -r --include=*.ts`), and an
+ * aborted search reads to them as a search that found nothing. The null
+ * glob options would drop the pattern instead, so they are off too. Agent
+ * terminals run it after the user's .zshrc, Claude Code before each command
+ * (`agentShellEnvFile`), Work's own agent and watches with each command
+ * (`withAgentShellOptions`). The user's own shells never see it.
+ */
+const ZSH_AGENT_OPTIONS = "setopt no_nomatch no_null_glob no_csh_null_glob";
+const AGENT_SHELL_OPTIONS = `if [ -n "\${ZSH_VERSION:-}" ]; then ${ZSH_AGENT_OPTIONS}; fi
+`;
+
+/**
+ * A command as an agent's `shell` runs it: with the agent shell options in
+ * zsh, unchanged anywhere else (fish could not even parse them).
+ */
+export function withAgentShellOptions(command: string, shell: string): string {
+  return path.basename(shell) === "zsh"
+    ? `${ZSH_AGENT_OPTIONS}\n${command}`
+    : command;
+}
+
+/**
  * Emit `133;C` when a command is accepted, `133;D;<exit>` at the prompt —
  * and, when the spawn provided a shim bin, put it FIRST on PATH here,
  * after the user's profiles ran (macOS path_helper and profile exports
@@ -73,7 +97,7 @@ fi
 const ZSHRC = `${sourcingScript(".zshrc")}
 ZDOTDIR="\${USER_ZDOTDIR:-$HOME}"
 [[ "$ZDOTDIR" == "$HOME" ]] && unset ZDOTDIR
-${ZSHRC_HOOKS}`;
+${AGENT_SHELL_OPTIONS}${ZSHRC_HOOKS}`;
 
 /**
  * Agent command shims: URLs an agent (or the user) opens from a Work
@@ -162,6 +186,34 @@ export async function shellBinShimDir(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The file Claude Code runs ahead of each of an agent's commands
+ * (`CLAUDE_ENV_FILE`), holding the agent shell options. One the person set
+ * for themselves still runs first. Every chat's Claude Code shares it and
+ * its commands see its path, so it is read-only: an `export` appended to
+ * it fails instead of reaching other chats. Null on Windows or a write
+ * failure.
+ */
+export async function agentShellEnvFile(): Promise<string | null> {
+  if (process.platform === "win32") return null;
+  try {
+    const own = process.env.CLAUDE_ENV_FILE;
+    return await writeShim({
+      dir: path.join(await shimRoot(), "harness"),
+      name: "env.sh",
+      content: `${own ? `if [ -f ${shellQuote(own)} ]; then . ${shellQuote(own)}; fi\n` : ""}${AGENT_SHELL_OPTIONS}`,
+      mode: 0o400,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** `value` as one single-quoted shell word. */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /**

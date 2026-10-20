@@ -289,7 +289,11 @@ it("starts the downloaded executable with its toolchain and friendly errors", as
   expect(starts.at(-1)?.env).toEqual({
     PATH: "/toolchain",
     CLAUDE_CONFIG_DIR: "/home",
+    // The agent shell options it runs ahead of each command.
+    CLAUDE_ENV_FILE: expect.stringMatching(/env\.sh$/),
   });
+  const envFile = String(starts.at(-1)?.env?.CLAUDE_ENV_FILE);
+  expect(fs.readFileSync(envFile, "utf8")).toContain("setopt no_nomatch");
   const completed = events.find((event) => event.type === "turn.completed");
   expect(completed?.type === "turn.completed" && completed.error?.kind).toBe(
     "auth",
@@ -587,7 +591,7 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
         running: true,
         task: null,
         activity: null,
-        checkout: { kind: "primary" as const, branch: null },
+        checkout: { kind: "primary" as const, branch: null, available: true },
       },
     ]);
     const registry = registryWith(claudeAgent, {

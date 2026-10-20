@@ -56,7 +56,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `open_browser`, `browser_snapshot`, `browser_act` | Eager, the signed-in browser: real input, uploads, downloads, and the page's console, network and JavaScript (ADR 0202); a page's dialogs are reported and answered with `press` and `fill`, never a sign-in (ADR 0227) |
 | `surface_control` | Deferred, release, reclaim or close a browser tab or terminal. A browser tab the agent drives goes back to the person by itself when the turn ends |
 | `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0155). Foreground commands use each harness's native shell |
-| `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `stop_background_command` ends it (ADR 0156) |
+| `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `read_background_output` reads its latest check, `stop_background_command` ends it (ADR 0156) |
 | `stop_listening` | Eager. Turns voice off in this chat once the turn's replies are read aloud; the microphone closes at once. Says what it does, never when (ADR 0224) |
 | `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
@@ -148,6 +148,23 @@ stop. `read_background_output`, `wait_for_subsessions` and the browser's
 `downloads` and `wait_for` wait with `waitUntil` and return early, and core
 adds one note to the result saying why.
 
+
+## Agents' shells read patterns as bash does
+
+Agents write bash: an unquoted `grep -r --include=*.ts` failed in zsh with
+"no matches found" before grep ran, and an aborted search read to the agent
+as a search that found nothing (488 commands in 117 of 152 chats over four
+days). Agent shells set zsh's `no_nomatch` (and turn off the null glob
+options, which would drop the pattern), so a pattern that matches nothing
+stays as written:
+
+- agent terminals, after the person's `.zshrc`;
+- Claude Code, ahead of each command through `CLAUDE_ENV_FILE`, a read-only
+  file every chat shares (a file the person set there still runs first);
+- Work's own agent and watch checks, with each command.
+
+Codex runs commands in its own shell and is not covered. The person's own
+terminals and shell config are untouched.
 
 ## Seeing Work itself (ADR 0195)
 

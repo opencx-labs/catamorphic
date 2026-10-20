@@ -152,6 +152,20 @@ export interface WorkspaceBridge {
     output: string;
     nextCheckInSeconds: number | null;
   }>;
+  /** A watch's status and latest check; waits like a background read. */
+  readCommandWatch(input: {
+    sessionId: string;
+    id: string;
+    waitMs?: number;
+    waitFor?: string;
+    stopWaiting: AbortSignal;
+  }): Promise<{
+    status: BackgroundCommandView["status"];
+    exitCode: number | null;
+    output: string;
+    checks: number;
+    matched?: string;
+  }>;
   stopCommandWatch(input: {
     sessionId: string;
     id: string;
@@ -730,6 +744,7 @@ export function registerAgentBridge(
     readBackgroundCommand: (input) => background.read(input),
     stopBackgroundCommand: (input) => background.stop(input),
     startCommandWatch: (input) => watches.start(input),
+    readCommandWatch: (input) => watches.read(input),
     stopCommandWatch: (input) => watches.stop(input),
     backgroundCommands: (filter) => [
       ...background.list(filter),

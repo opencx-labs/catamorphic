@@ -1,8 +1,12 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { localAgentWorkspace } from "./local-agent-workspace.js";
+import {
+  localAgentWorkspace,
+  runLocalCommand,
+} from "./local-agent-workspace.js";
 
 it("runs in the selected checkout and updates files directly without replacing other work", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "local-agent-"));
@@ -65,3 +69,20 @@ it("keeps stdout and stderr in order with the real exit code", async () => {
   const result = await runLocalCommand("echo one; echo two >&2; exit 4");
   expect(result).toEqual({ exitCode: 4, result: "one\ntwo\n" });
 });
+
+it.skipIf(!existsSync("/bin/zsh"))(
+  "runs a pattern that matches nothing as bash would, in the person's zsh",
+  async () => {
+    const previous = process.env.SHELL;
+    process.env.SHELL = "/bin/zsh";
+    try {
+      expect(await runLocalCommand("echo --include=*.zzz")).toEqual({
+        exitCode: 0,
+        result: "--include=*.zzz\n",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.SHELL;
+      else process.env.SHELL = previous;
+    }
+  },
+);

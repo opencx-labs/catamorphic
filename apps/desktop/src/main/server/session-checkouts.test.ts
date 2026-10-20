@@ -977,12 +977,111 @@ describe("SessionCheckouts", () => {
         external,
       ]);
       await checkouts.adopt({ projectId, sessionId, path: external });
+      const assigned = await fs.realpath(external);
       await fs.rm(external, { recursive: true, force: true });
       expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
         kind: "external",
         available: false,
         present: false,
       });
+      // Describing it, as listing chats does, reports it.
+      expect(await checkouts.describe({ projectId, sessionId })).toEqual({
+        path: assigned,
+        kind: "external",
+        branch: "assigned",
+        present: false,
+        available: false,
+      });
+      // So does asking whether another chat already works somewhere.
+      expect(
+        await checkouts.isOccupied({
+          projectId,
+          sessionId: secondSessionId,
+          path: rootPath,
+          peerSessionIds: [sessionId],
+        }),
+      ).toBe(false);
+      // Working there is what fails: never silently in the project folder.
+      await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
+        `The assigned worktree at ${assigned} is unavailable`,
+      );
+      await expect(
+        checkouts.resolveForAgent({
+          projectId,
+          sessionId,
+          requiresIsolation: async () => false,
+        }),
+      ).rejects.toThrow("is unavailable");
+      await expect(
+        checkouts.preparePullRequest({ projectId, sessionId, message: "x" }),
+      ).rejects.toThrow("is unavailable");
+    });
+
+    it("reports a worktree emptied inside the project as unavailable, not as the project folder", async () => {
+      // Where Claude Code puts its worktrees: inside the project.
+      const inner = path.join(rootPath, ".claude", "worktrees", "inner");
+      await git(rootPath, ["worktree", "add", "-q", "-b", "inner", inner]);
+      await checkouts.adopt({ projectId, sessionId, path: inner });
+      const assigned = await fs.realpath(inner);
+      // Emptied but left in place: Git now walks up to the project's .git.
+      for (const entry of await fs.readdir(inner))
+        await fs.rm(path.join(inner, entry), { recursive: true, force: true });
+      expect((await git(inner, ["rev-parse", "--show-toplevel"])).trim()).toBe(
+        await fs.realpath(rootPath),
+      );
+      expect(await checkouts.describe({ projectId, sessionId })).toEqual({
+        path: assigned,
+        kind: "external",
+        branch: "inner",
+        present: true,
+        available: false,
+      });
+      await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
+        `The assigned worktree at ${assigned} is unavailable`,
+      );
+      // The project folder itself is still the project's checkout.
+      await checkouts.returnPrimary({ projectId, sessionId });
+      expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
+    });
+
+    it("reports an assigned folder that left the repository as unavailable", async () => {
+      const elsewhere = path.join(tmpDir, "elsewhere");
+      await git(rootPath, [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "elsewhere",
+        elsewhere,
+      ]);
+      await checkouts.adopt({ projectId, sessionId, path: elsewhere });
+      await fs.rm(elsewhere, { recursive: true, force: true });
+      await fs.mkdir(elsewhere);
+      await git(elsewhere, ["init", "-q", "-b", "main"]);
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        kind: "external",
+        present: true,
+        available: false,
+      });
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        available: false,
+        changedFiles: null,
+      });
+    });
+
+    it("reports a chat's own worktree that became another repository, without counting its changes", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const own = await agentCheckout();
+      await fs.rm(own.path, { recursive: true, force: true });
+      await fs.mkdir(own.path);
+      await git(own.path, ["init", "-q", "-b", "main"]);
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        kind: "managed",
+        present: true,
+        available: false,
+        changedFiles: null,
+      });
+      await expect(agentCheckout()).rejects.toThrow("is unavailable");
     });
 
     it("puts away resting chats' worktrees and worktrees agents left when the host starts", async () => {

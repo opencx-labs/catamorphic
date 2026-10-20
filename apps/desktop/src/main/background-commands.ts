@@ -538,7 +538,8 @@ export class BackgroundCommands {
   }
 }
 
-function outputPattern(source: string, name: string): RegExp {
+/** An agent's output pattern, matched line by line. */
+export function outputPattern(source: string, name: string): RegExp {
   try {
     return new RegExp(source, "m");
   } catch (error) {

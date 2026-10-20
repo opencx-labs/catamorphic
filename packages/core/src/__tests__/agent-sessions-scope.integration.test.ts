@@ -414,6 +414,29 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       updated,
     );
 
+    // An id the agent made up for a new item is the item's id from then on.
+    const ownId = "b1c1e0a1-0000-4000-8000-000000000001";
+    const added = await sessions.replaceTodos(viewer, projectId, session.id, [
+      ...updated,
+      {
+        id: ownId,
+        title: "Open the pull request",
+        description: "Push the branch and open it for review.",
+        status: "pending",
+      },
+    ]);
+    expect(added.map((todo) => todo.id)).toEqual([updated[0]!.id, ownId]);
+    const echoed = await sessions.replaceTodos(viewer, projectId, session.id, [
+      { ...added[1]!, status: "in_progress" },
+    ]);
+    expect(echoed).toEqual([{ ...added[1], status: "in_progress" }]);
+    await expect(
+      sessions.replaceTodos(viewer, projectId, session.id, [
+        { ...added[1]! },
+        { ...added[1]!, title: "Twice" },
+      ]),
+    ).rejects.toThrow(`Duplicate todo id: ${ownId}`);
+
     const foreign = { ...viewer, externalUserId: "csm-carol" };
     await expect(
       sessions.replaceTodos(foreign, projectId, session.id, []),

@@ -43,12 +43,16 @@ export interface SessionCheckoutDescription {
    * out (ADR 0215).
    */
   present: boolean;
+  /**
+   * The chat can work there: false when a folder the person assigned is
+   * gone or no longer this repository. A chat's own worktree stays
+   * available while put away; its next turn checks it out again.
+   */
+  available: boolean;
 }
 
 /** What the chat's status popup shows about where the chat works. */
 export interface SessionCheckoutDetail extends SessionCheckoutDescription {
-  /** False when an assigned folder is gone or no longer this repository. */
-  available: boolean;
   projectFolder: string;
   /** The project is a Git repository with a commit to start a worktree at. */
   worktreesAvailable: boolean;
@@ -182,6 +186,16 @@ async function exists(filePath: string): Promise<boolean> {
   return fs.access(filePath).then(
     () => true,
     () => false,
+  );
+}
+
+/** A checkout the chat can work in, or the reason it cannot. */
+export function usableCheckout(
+  checkout: SessionCheckoutDescription,
+): SessionCheckoutDescription {
+  if (checkout.available) return checkout;
+  throw new Error(
+    `The assigned worktree at ${checkout.path} is unavailable. Restore that folder or explicitly choose the project folder before continuing. Your changes have not been moved.`,
   );
 }
 
@@ -321,25 +335,17 @@ export class SessionCheckouts {
     `);
   }
 
+  /**
+   * The folder the chat works in now. Unlike `describe`, an assigned folder
+   * the chat cannot work in is an error here: work never silently moves to
+   * the project folder.
+   */
   async resolve(input: {
     projectId: string;
     sessionId: string;
   }): Promise<string | undefined> {
-    const root = this.projectRoot(input.projectId);
-    if (!root) return undefined;
-    const binding = await this.binding(input);
-    if (!binding) return root;
-    // The chat's own worktree comes back with its next turn.
-    if (binding.kind === "managed" && !(await exists(binding.path)))
-      return binding.path;
-    try {
-      await this.assertSameRepository(root, binding.path);
-      return await canonicalPath(binding.path);
-    } catch {
-      throw new Error(
-        `The assigned worktree at ${binding.path} is unavailable. Restore that folder or explicitly choose the project folder before continuing. Your changes have not been moved.`,
-      );
-    }
+    if (!this.projectRoot(input.projectId)) return undefined;
+    return usableCheckout(await this.describe(input)).path;
   }
 
   /**
@@ -361,7 +367,7 @@ export class SessionCheckouts {
     // A put-away, bring or discard under way finishes first (ADR 0215); a
     // folder without Git has none.
     const root = this.projectRoot(input.projectId);
-    const current =
+    const current = usableCheckout(
       root && (await hasLocalGit({ path: root }))
         ? await this.withAssignmentLock({
             projectId: input.projectId,
@@ -369,7 +375,8 @@ export class SessionCheckouts {
             // A repository Git cannot read (ownership, a dangling .git)
             // still works as a plain folder.
           }).catch(() => this.describe(input))
-        : await this.describe(input);
+        : await this.describe(input),
+    );
     if (input.workspace && current.kind === "primary") {
       const created = await this.createManaged({
         projectId: input.projectId,
@@ -411,22 +418,49 @@ export class SessionCheckouts {
     return { path: current.path, owned: current.kind === "managed" };
   }
 
+  /**
+   * Where the chat works, reported and never refused: a folder the person
+   * assigned that is gone or no longer this repository comes back
+   * unavailable, so listing chats or showing one never fails on it.
+   */
   async describe(input: {
     projectId: string;
     sessionId: string;
   }): Promise<SessionCheckoutDescription> {
-    const resolved = await this.resolve(input);
-    if (!resolved)
-      throw new Error(`Project '${input.projectId}' has no folder`);
+    const root = this.projectRoot(input.projectId);
+    if (!root) throw new Error(`Project '${input.projectId}' has no folder`);
     const binding = await this.binding(input);
-    return binding
-      ? {
-          path: resolved,
-          kind: binding.kind,
-          branch: binding.branch,
-          present: await exists(resolved),
-        }
-      : { path: resolved, kind: "primary", branch: null, present: true };
+    if (!binding)
+      return {
+        path: root,
+        kind: "primary",
+        branch: null,
+        present: true,
+        available: true,
+      };
+    const assigned = {
+      path: binding.path,
+      kind: binding.kind,
+      branch: binding.branch,
+    };
+    // The chat's own worktree comes back with its next turn.
+    if (binding.kind === "managed" && !(await exists(binding.path)))
+      return { ...assigned, present: false, available: true };
+    try {
+      await this.assertSameRepository(root, binding.path);
+    } catch {
+      return {
+        ...assigned,
+        present: await exists(binding.path),
+        available: false,
+      };
+    }
+    return {
+      ...assigned,
+      path: await canonicalPath(binding.path),
+      present: true,
+      available: true,
+    };
   }
 
   /**
@@ -440,33 +474,19 @@ export class SessionCheckouts {
   }): Promise<SessionCheckoutDetail> {
     const root = this.requireRoot(input.projectId);
     const worktreesAvailable = await this.worktreesAvailable(input.projectId);
-    const description = await this.describe(input).catch(() => null);
-    if (!description) {
-      const binding = await this.binding(input);
-      return {
-        path: binding?.path ?? root,
-        kind: binding?.kind ?? "primary",
-        branch: binding?.branch ?? null,
-        present: false,
-        available: false,
-        projectFolder: root,
-        worktreesAvailable,
-        changedFiles: null,
-      };
-    }
+    const description = await this.describe(input);
     let changedFiles: number | null = null;
-    if (description.kind === "managed" && description.branch) {
-      changedFiles = await this.changedFiles({
-        root,
-        branch: description.branch,
-        worktree: description.present ? description.path : null,
-      }).catch(() => null);
-    } else if (description.kind === "managed") {
-      changedFiles = 0;
+    if (description.available && description.kind === "managed") {
+      changedFiles = description.branch
+        ? await this.changedFiles({
+            root,
+            branch: description.branch,
+            worktree: description.present ? description.path : null,
+          }).catch(() => null)
+        : 0;
     }
     return {
       ...description,
-      available: true,
       projectFolder: root,
       worktreesAvailable,
       changedFiles,
@@ -758,7 +778,13 @@ export class SessionCheckouts {
   }): Promise<SessionCheckoutDescription> {
     const root = this.requireRoot(input.projectId);
     await this.deleteBinding(input.sessionId);
-    return { path: root, kind: "primary", branch: null, present: true };
+    return {
+      path: root,
+      kind: "primary",
+      branch: null,
+      present: true,
+      available: true,
+    };
   }
 
   async withAssignmentLock<T>(input: {
@@ -1026,7 +1052,7 @@ export class SessionCheckouts {
     sessionId: string;
     message: string;
   }): Promise<{ path: string; branch: string }> {
-    const description = await this.describe(input);
+    const description = usableCheckout(await this.describe(input));
     if (description.kind === "primary") {
       throw new Error("The session is not using an isolated worktree");
     }
@@ -1439,6 +1465,12 @@ export class SessionCheckouts {
     await fs.rmdir(path.dirname(worktreePath)).catch(() => undefined);
   }
 
+  /**
+   * `candidate` is the project folder, or a checkout of the same repository
+   * whose own top level it is. A worktree's folder emptied but left inside
+   * the project reads as part of the project's checkout (Git walks up to its
+   * `.git`), so it is no checkout at all.
+   */
   private async assertSameRepository(
     root: string,
     candidate: string,
@@ -1449,6 +1481,15 @@ export class SessionCheckouts {
     ]);
     if (expected !== actual) {
       throw new Error("The checkout must belong to the same Git repository");
+    }
+    const [project, folder] = await Promise.all([
+      canonicalPath(root),
+      canonicalPath(candidate),
+    ]);
+    if (folder === project) return;
+    const top = (await git(candidate, ["rev-parse", "--show-toplevel"])).trim();
+    if ((await canonicalPath(top)) !== folder) {
+      throw new Error("The checkout must be a Git worktree of its own");
     }
   }
 

@@ -6,6 +6,7 @@ import type {
   ExecResult,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+import { withAgentShellOptions } from "../shell-integration.js";
 
 /** Output kept per command before the middle is dropped. */
 const OUTPUT_CAP = 8 * 1024 * 1024;
@@ -45,7 +46,8 @@ export function runLocalCommand(
   options?: ExecOpts,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = spawn(process.env.SHELL || "/bin/sh", ["-lc", command], {
+    const shell = process.env.SHELL || "/bin/sh";
+    const child = spawn(shell, ["-lc", withAgentShellOptions(command, shell)], {
       cwd: options?.cwd,
       env: { ...process.env, ...options?.env },
       detached: true,
