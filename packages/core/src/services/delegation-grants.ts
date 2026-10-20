@@ -1,4 +1,4 @@
-import type { AgentEffort } from "@catamorphic/sandbox";
+import { AGENT_EFFORT_LEVELS, type AgentEffort } from "@catamorphic/sandbox";
 import {
   type AgentDelegationGrant,
   type AgentDelegationPolicy,
@@ -25,13 +25,12 @@ export function delegationPolicy(
   return policy ?? DEFAULT_DELEGATION_POLICY;
 }
 
-const EFFORTS: readonly AgentEffort[] = [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+/** A stored effort as one, or undefined for anything else. */
+export function effortOf(
+  value: string | null | undefined,
+): AgentEffort | undefined {
+  return AGENT_EFFORT_LEVELS.find((effort) => effort === value);
+}
 
 /** What a parent asks for: whom to start and with what. */
 export interface DelegationRequest {
@@ -45,6 +44,8 @@ export interface DelegationRequest {
   parentEffort?: AgentEffort;
   /** A wildcard grant admits the target: its sandboxing is no wider. */
   wildcardAdmits: boolean;
+  /** The names a model goes by: its catalog id and the one it resolves to. */
+  modelNames?(model: string): readonly string[];
 }
 
 /** A grant's agent as an id, with `project:<slug>` made absolute. */
@@ -58,14 +59,23 @@ export function grantAgentId(
     : grant.agent;
 }
 
-function admits(
-  grant: AgentDelegationGrant,
-  request: DelegationRequest,
-): boolean {
+/** A grant that names the target: itself (`self`), or its id. */
+function names(grant: AgentDelegationGrant, request: DelegationRequest) {
   if (grant.agent === "self")
     return request.targetAgentId === request.sourceAgentId;
-  if (grant.agent === "*") return request.wildcardAdmits;
+  if (grant.agent === "*") return false;
   return grantAgentId(grant, request.projectId) === request.targetAgentId;
+}
+
+function listed(
+  list: readonly string[],
+  model: string,
+  modelNames: DelegationRequest["modelNames"],
+): boolean {
+  const known = (modelNames?.(model) ?? [model]).map((name) =>
+    name.toLowerCase(),
+  );
+  return list.some((entry) => known.includes(entry.toLowerCase()));
 }
 
 /** Why `grant` refuses the requested settings, or null when it takes them. */
@@ -75,18 +85,24 @@ function settingsRefusal(
 ): string | null {
   if (request.model !== undefined) {
     if (grant.model === "fixed") return "its model is fixed";
-    if (Array.isArray(grant.model) && !grant.model.includes(request.model))
+    if (
+      Array.isArray(grant.model) &&
+      !listed(grant.model, request.model, request.modelNames)
+    )
       return `its model is one of ${grant.model.join(", ")}`;
   }
   if (request.effort !== undefined) {
     if (grant.effort === "fixed") return "its effort is fixed";
     if (grant.effort === "at-most-parent") {
-      if (!request.parentEffort)
-        return "its effort can be no higher than this chat's, which is the harness default";
+      // A chat on its harness's default effort runs at least `low`.
+      const ceiling = request.parentEffort ?? "low";
       if (
-        EFFORTS.indexOf(request.effort) > EFFORTS.indexOf(request.parentEffort)
+        AGENT_EFFORT_LEVELS.indexOf(request.effort) >
+        AGENT_EFFORT_LEVELS.indexOf(ceiling)
       )
-        return `its effort is at most this chat's, ${request.parentEffort}`;
+        return request.parentEffort
+          ? `its effort is at most this chat's, ${request.parentEffort}`
+          : "this chat runs on its harness's default effort, so ask for low or leave effort out";
     }
     if (Array.isArray(grant.effort) && !grant.effort.includes(request.effort))
       return `its effort is one of ${grant.effort.join(", ")}`;
@@ -95,21 +111,29 @@ function settingsRefusal(
 }
 
 /**
- * The first grant that admits the target and takes the requested settings,
- * or why none does. A refusal says what is allowed instead.
+ * The grant that admits the target and takes the requested settings, or
+ * why none does. Grants that name the target decide before a wildcard,
+ * so `*` never lifts the limits set for one agent; among them the first
+ * that takes the settings applies. A refusal says what is allowed instead.
  */
 export function chooseGrant(
   policy: AgentDelegationPolicy,
   request: DelegationRequest,
 ): { grant: AgentDelegationGrant } | { refusal: string } {
-  const admitting = policy.agents.filter((grant) => admits(grant, request));
+  const named = policy.agents.filter((grant) => names(grant, request));
+  const candidates =
+    named.length > 0
+      ? named
+      : request.wildcardAdmits
+        ? policy.agents.filter((grant) => grant.agent === "*")
+        : [];
   const who =
     request.targetAgentId === request.sourceAgentId
       ? "a copy of yourself"
       : `agent ${request.targetAgentId}`;
-  if (admitting.length === 0) return { refusal: `You may not start ${who}.` };
+  if (candidates.length === 0) return { refusal: `You may not start ${who}.` };
   const reasons: string[] = [];
-  for (const grant of admitting) {
+  for (const grant of candidates) {
     const reason = settingsRefusal(grant, request);
     if (!reason) return { grant };
     if (!reasons.includes(reason)) reasons.push(reason);
@@ -120,12 +144,81 @@ export function chooseGrant(
 }
 
 /**
- * Why the target's harness refuses the settings, from its own catalog: a
- * model it does not offer, or an effort its model does not take. Null when
- * it takes them, or when the catalog is unknown.
+ * The model and effort a child runs on. A copy keeps the parent chat's
+ * model and effort as a pair: a new model drops the parent's effort,
+ * which was chosen for the old one. Another agent starts on its own. A
+ * grant's list holds what the child runs on, not only what is asked: an
+ * unlisted inherited or default setting gives way to the first listed.
+ */
+export function childSettings(input: {
+  grant: AgentDelegationGrant;
+  copy: boolean;
+  requested: { model?: string; effort?: AgentEffort };
+  parent: { model?: string; effort?: AgentEffort };
+  modelNames?: DelegationRequest["modelNames"];
+}): { model?: string; effort?: AgentEffort } {
+  const { grant, copy, requested, parent } = input;
+  let model = requested.model ?? (copy ? parent.model : undefined);
+  if (
+    Array.isArray(grant.model) &&
+    requested.model === undefined &&
+    !(model !== undefined && listed(grant.model, model, input.modelNames))
+  )
+    model = grant.model[0];
+  let effort =
+    requested.effort ??
+    (copy && requested.model === undefined ? parent.effort : undefined);
+  if (
+    Array.isArray(grant.effort) &&
+    requested.effort === undefined &&
+    !(effort !== undefined && grant.effort.includes(effort))
+  )
+    effort = grant.effort[0];
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+  };
+}
+
+/** A model's catalog entry, by its id or the id it resolves to, any case. */
+export function catalogEntry(
+  catalog: readonly AgentModelChoice[],
+  model: string,
+): AgentModelChoice | undefined {
+  const wanted = model.toLowerCase();
+  return catalog.find(
+    (choice) =>
+      choice.id.toLowerCase() === wanted ||
+      choice.resolvedId?.toLowerCase() === wanted,
+  );
+}
+
+/** Whether `model` takes `effort`, as far as the catalog says. */
+export function effortFits(input: {
+  catalog: readonly AgentModelChoice[];
+  model: string | undefined;
+  effort: AgentEffort;
+}): boolean {
+  const choice = input.model
+    ? catalogEntry(input.catalog, input.model)
+    : undefined;
+  if (!choice) return true;
+  if (choice.supportsEffort === false) return false;
+  return (
+    !choice.supportedEffortLevels?.length ||
+    choice.supportedEffortLevels.includes(input.effort)
+  );
+}
+
+/**
+ * Why the target's harness refuses the requested settings, from its own
+ * catalog: a model it does not offer, or an effort its model does not
+ * take. Null when it takes them, or when the catalog is empty.
  */
 export function catalogRefusal(input: {
   catalog: readonly AgentModelChoice[];
+  /** Whose harness: "your harness", or another agent's. */
+  harness: string;
   /** The requested model. */
   model?: string;
   /** The model the child will run: requested, inherited or its default. */
@@ -133,34 +226,40 @@ export function catalogRefusal(input: {
   effort?: AgentEffort;
 }): string | null {
   if (input.catalog.length === 0) return null;
-  const find = (id: string) =>
-    input.catalog.find(
-      (choice) => choice.id === id || choice.resolvedId === id,
-    );
-  if (input.model !== undefined && !find(input.model)) {
+  if (input.model !== undefined && !catalogEntry(input.catalog, input.model)) {
     const ids = input.catalog.map((choice) => choice.id);
-    return `${input.model} is not a model its harness offers. It offers: ${ids.slice(0, 30).join(", ")}${ids.length > 30 ? ", …" : ""}`;
+    return `${input.model} is not a model ${input.harness} offers. It offers: ${ids.slice(0, 30).join(", ")}${ids.length > 30 ? ", …" : ""}`;
   }
-  if (input.effort !== undefined && input.runningModel !== undefined) {
-    const choice = find(input.runningModel);
-    if (choice?.supportsEffort === false)
-      return `${choice.id} takes no effort setting`;
-    const levels = choice?.supportedEffortLevels;
-    if (levels?.length && !levels.includes(input.effort))
-      return `${choice?.id ?? input.runningModel} takes effort ${levels.join(", ")}`;
+  if (
+    input.effort !== undefined &&
+    !effortFits({
+      catalog: input.catalog,
+      model: input.runningModel,
+      effort: input.effort,
+    })
+  ) {
+    const choice = input.runningModel
+      ? catalogEntry(input.catalog, input.runningModel)
+      : undefined;
+    return choice?.supportsEffort === false
+      ? `${choice.id} takes no effort setting`
+      : `${choice?.id ?? input.runningModel} takes effort ${choice?.supportedEffortLevels?.join(", ")}`;
   }
   return null;
 }
 
 function modelText(grant: AgentDelegationGrant): string {
   if (grant.model === "any") return "any model its harness offers";
-  if (grant.model === "fixed") return "its own model";
+  if (grant.model === "fixed")
+    return grant.agent === "self" ? "this chat's model" : "its own model";
   return `model ${grant.model.join(" or ")}`;
 }
 
 function effortText(grant: AgentDelegationGrant): string {
-  if (grant.effort === "any") return `any effort (${EFFORTS.join(", ")})`;
-  if (grant.effort === "fixed") return "its own effort";
+  if (grant.effort === "any")
+    return `any effort (${AGENT_EFFORT_LEVELS.join(", ")})`;
+  if (grant.effort === "fixed")
+    return grant.agent === "self" ? "this chat's effort" : "its own effort";
   if (grant.effort === "at-most-parent")
     return "effort no higher than this chat's";
   return `effort ${grant.effort.join(" or ")}`;
@@ -194,8 +293,8 @@ function grantWho(grant: AgentDelegationGrant, input: MenuInput): string {
 
 /**
  * The agent's menu: whom it may start and what it may set, one line per
- * grant. It names no id to copy for a copy of yourself: leaving `agent` out
- * is the way.
+ * grant. It names no id for a copy of yourself: leaving `agent` out is
+ * the way.
  */
 export function delegationMenu(input: MenuInput): string[] {
   return input.policy.agents.map(

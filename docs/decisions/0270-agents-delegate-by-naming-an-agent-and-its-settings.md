@@ -1,97 +1,79 @@
 # 0270 — Agents delegate by naming an agent and its settings; grants decide
 
-- **Status:** Accepted (amends 0090)
+- **Status:** Accepted (amends 0090, 0216)
 - **Date:** 2026-10-20
 
 ## Context
 
-ADR 0090 made subsessions first-class and gave agent definitions
-delegation routes: named edges (`id`, `target`, `allowFurtherDelegation`)
-the model picked by id. Two things went wrong in practice.
-
-- **Agents named the wrong thing.** The prompt listed routes as
-  `same-agent: <agent id>`. Agents passed the agent id as the route, and 38
-  of 67 spawns over four days were refused. A model wants to name who
-  should do the work, not which grant allows it.
-- **A child could not be shaped.** It ran on its agent's configured model
-  and effort, with no way to start a stronger or cheaper copy, or a
-  read-only reviewer. It did not even keep the model the person had picked
-  for the parent chat.
+ADR 0090 gave agent definitions delegation routes, named edges the model
+picked by id. The prompt listed them as `same-agent: <agent id>`, so agents
+passed the agent id: 38 of 67 spawns on one desktop over four days were
+refused. A child also could not be shaped: it ran on its agent's defaults,
+with no stronger or cheaper copy and no read-only reviewer.
 
 ## Decision
 
-**The tool names an agent and its settings.** `spawn_subsession` takes:
+**The tool names an agent and its settings.** `spawn_subsession` takes
+`task`, `agent` (omitted: a copy of the caller), `model`, `effort`,
+`read_only`, `delegate`, `context_mode` and `title`. No route id. The
+workflow `spawn` action and the server API take the same, as `agentId`,
+`readOnly`. The voice assistant's `start_session` takes `model` and `effort`
+(amending 0216; its routes become grants).
 
-- `task`;
-- `agent`, omitted for a copy of the caller;
-- `model` and `effort`;
-- `read_only` and `delegate`;
-- `context_mode` and `title`.
+**Grants decide.** `delegation.agents` lists grants: `agent` (`self`, an id,
+`project:<slug>`, or `*`, whose sandboxing ceiling stands), `model` (`any`,
+`fixed`, or a list), `effort` (`any`, `fixed`, `at-most-parent`, or a
+list), `delegate`, and a `description`. Grants that name the target decide
+before `*`, so `*` never lifts one agent's limits; among them, the first
+that takes the settings applies. Refusals list the choices.
 
-There is no route id. Workflows' `spawn` action and the server API take the
-same fields.
+**By default an agent starts copies of itself on any model and effort**, and
+omitted grant fields mean `any`. Handing hard work to a stronger model is
+the point; the voice assistant on a fast model does it. People who want
+children at or below the parent use `at-most-parent` or lists. This amends
+0090 for named targets too: an agent's own model is its default, not its
+ceiling; a grant author who wants it held sets `fixed`.
 
-**Grants decide.** An agent definition's `delegation` lists `agents`. Each
-grant names who may be started and what the parent may choose for them:
+**A copy starts from the parent chat**: its model and effort, as a pair, so
+a new model drops the old effort. Another agent starts on its own defaults.
+A grant's list bounds what the child runs on: an unlisted inherited or
+default setting gives way to the first listed.
 
-- `agent`: `self`, an exact agent id, `project:<slug>`, or `*` (any
-  accessible agent whose sandboxing is no wider than the caller's, as
-  before);
-- `model`: `any` (any model the target's harness offers), `fixed` (no
-  choice), or a list;
-- `effort`: `any`, `fixed`, `at-most-parent` (no higher than the parent
-  chat's), or a list;
-- `delegate`: whether the child may start its own;
-- `description`, shown to the agent.
+**Narrowing needs no grant.** `delegate: false` and `read_only`. A read-only
+chat runs in its harness's read-only mode (Claude Code `plan`, without a
+shell; Codex's `read-only` sandbox; others refuse), keeps only host tools
+marked `readOnly`, and counts as `contained` for capabilities, connections
+and connectors. Its children and forks read only too. Widening is never a
+spawn setting.
 
-A request takes the first grant that admits the agent and permits the
-settings. A refusal lists what is allowed. `maxConcurrentChildren` and
-`enabled` stay.
+**The harness decides what exists.** A model and effort must be ones the
+target's harness offers (0214). Core asks the host's optional
+`CodingAgentRegistry.models()`, the model picker's catalog, only when a
+spawn names a setting, waits at most five seconds, and otherwise leaves the
+check to the harness. A catalog's names match any case, by alias or the
+version it resolves to.
 
-**By default an agent may start copies of itself with any model and
-effort.** An absent `delegation` means one grant:
-`{ agent: "self", model: "any", effort: "any", delegate: true }`. Omitted
-grant fields mean `any` and `true`. A stronger child is allowed by
-default, because that is the point of delegating hard work. The voice
-assistant, on a fast model, starts work on a stronger one. People who want
-children at or below the parent configure it.
+### Alternatives considered
 
-**A copy starts from the parent chat.** A child of the caller's own agent
-takes the parent session's current model and effort unless the request sets
-them. Any other agent starts from its own defaults.
-
-**Narrowing is always allowed.** `read_only` and `delegate: false` only
-take power away, so no grant gates them.
-
-- `read_only` runs the child in its harness's read-only mode: Claude Code's
-  `plan`, Codex's `read-only` sandbox. Harnesses without one refuse it by
-  name.
-- A child's onward delegation is the grant's `delegate` and the request's,
-  together.
-- Widening (more sandboxing, other tools) is never a spawn setting. It
-  takes another agent definition and an explicit grant, as in 0090.
-
-**The harness decides what exists.** A model or effort must also be one the
-target agent's harness offers: a chat runs on one harness (0214). Core asks
-the host through an optional `CodingAgentRegistry.models()`, the same
-catalog the model picker shows. Without one, the harness itself is the
-check at the first turn. The catalog is consulted only when a spawn names
-a model or effort, so creating a chat never waits on it.
+- **Print route ids unambiguously.** The model would still name a grant
+  where it wants a worker, and could not shape the child.
+- **Accept an agent id where a route id is expected.** Two ways to address
+  one choice, and still no settings.
+- **Children at or below the parent by default.** Defeats delegating hard
+  work to a stronger model; it stays one setting away.
+- **Read-only as an agent with `contained` sandboxing.** Needs a definition
+  per reviewer; the session-level flag reuses `contained` for what Work
+  enforces and adds only the harness's own mode.
 
 ## Consequences
 
-- The prompt lists whom an agent may start and what it may set, never an
-  id to copy. Errors name the valid choices.
-- The voice assistant's `start_session` takes `model` and `effort`, so the
-  person can ask it to put a stronger model on the work.
-- `agent_delegations.route_id` becomes `grant_agent`: the grant that
-  admitted the child. The child's model, effort and read-only flag live on
-  its session, which gains `read_only`.
-- Agent definitions and profile agents move from `routes` to `agents`, a
-  clean break.
-  - A committed definition that still has `routes` is invalid, with a
-    message naming the replacement. Dropping it silently would widen what
-    a shared definition allows.
-  - A profile agent's old `routes` give way to the default.
-- The agent settings screen edits grants: per agent, whether it may be
-  started, its model and effort choices, and onward delegation.
+- The prompt lists whom an agent may start and what it may set; it never
+  shows an id for a copy of itself.
+- `agent_sessions.read_only` and `AgentSession.readOnly` are new;
+  `agent_delegations.route_id` becomes `grant_agent`, old route names mapped.
+- A committed definition that still has `routes` is invalid, with a message
+  naming the replacement: dropping it silently would widen what it allows.
+  A profile agent's routes become grants, keeping whether delegation is on.
+- The settings screen edits grants per agent (model any or its own, effort
+  any, up to the parent's or its own, onward delegation); lists come from
+  definitions and are kept.

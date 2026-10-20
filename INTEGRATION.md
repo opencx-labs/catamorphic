@@ -511,8 +511,9 @@ first with metadata. `parentSessionId` is immediate hierarchy;
 `forkedFromSessionId` is transcript lineage. First-class subsessions are
 ordinary child sessions created through explicit delegation grants (ADR 0270),
 with create/list/wait/interrupt endpoints under the parent session. A create
-names an agent (none: a copy of the parent's) with the `model`, `effort`,
-`readOnly` and `delegate` its grants allow; a registry's optional `models()`
+names an agent (none: a copy of the parent's) with the `model` and `effort`
+its grants allow, and `readOnly` and `delegate` that need no grant (a host
+tool marks itself `readOnly` to stay with a read-only chat); a registry's optional `models()`
 lets core check the model against the agent's harness catalog. A native
 harness subagent is only an execution optimization when it preserves these
 durable identities and policies.

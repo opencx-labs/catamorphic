@@ -221,6 +221,11 @@ export interface ExtraTool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  /**
+   * The tool only reads: a read-only chat (ADR 0270) keeps it, and loses
+   * every tool without it.
+   */
+  readOnly?: boolean;
   execute(
     input: Record<string, unknown>,
     context: ExtraToolContext,

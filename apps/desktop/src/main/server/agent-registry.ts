@@ -435,11 +435,25 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       ? this.resolveProjectConfig(agentId, ref.projectId, ref.slug)
       : this.findConfig(parseAssistantAgentId(agentId)?.agentId ?? agentId);
     if (!resolved || "error" in resolved) return undefined;
-    const models = await listAgentModels(resolved.config, {
-      agentHome: (id) => this.agentHome(id),
-      harnessExecutable: async (harness) =>
-        (await this.ensureHarnessExecutable(harness)).executablePath,
-    });
+    // A project agent on a project secret or connection runs on no sign-in
+    // of the person's: its catalog is not theirs to read (as the model
+    // picker holds), and the harness checks the model at the first turn.
+    if ("source" in resolved && resolved.source !== "profile") return undefined;
+    const { config } = resolved;
+    const models = await listAgentModels(
+      {
+        id: config.id,
+        harness: config.harness,
+        provider: config.provider,
+        auth: config.auth,
+        apiKey: config.apiKey,
+      },
+      {
+        agentHome: (id) => this.agentHome(id),
+        harnessExecutable: async (harness) =>
+          (await this.ensureHarnessExecutable(harness)).executablePath,
+      },
+    );
     return models.map((model) => ({
       id: model.id,
       ...(model.resolvedId ? { resolvedId: model.resolvedId } : {}),
@@ -722,7 +736,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
     // The assistant (ADR 0216) is one of the person's agents with the
-    // assistant's tools and delegation routes: as configured, or as Work's
+    // assistant's tools and delegation grants: as configured, or as Work's
     // built-in assistant, with no instructions of its own and the
     // harness's default model: Claude Code's and Codex's own, while the
     // built-in agent, which has none, keeps the model it names.

@@ -237,8 +237,9 @@ message, interrupt, attention, and policy machinery as any other session. Its
 result reaches the parent like a subagent's: during the parent's turn while it
 still works, or as a new turn after it. An agent starts a copy of itself, or
 another agent it is granted, on the model and effort the work needs, or
-read-only for a review; grants in its definition limit whom it may start and
-what it may choose, and by default it may start copies of itself on any.
+read-only for a review (on harnesses with a read-only mode); grants in its
+definition limit whom it may start and what it may choose, and by default it
+may start copies of itself on any model and effort.
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.

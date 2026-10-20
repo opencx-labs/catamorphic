@@ -15,6 +15,7 @@ import {
   type McpToolPolicy,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import { z } from "zod";
 import {
   DESKTOP_DEFAULT_SANDBOXING,
   effectiveHarnessPermissions,
@@ -572,16 +573,48 @@ export class AgentsStore {
       apiKey = apiKeyPlaintext ?? null;
     }
     const { delegation, ...others } = rest;
-    // Delegation from before grants (ADR 0270) gives way to the default.
-    const grants = delegation
-      ? AgentDelegationPolicySchema.safeParse(delegation)
-      : undefined;
-    return {
-      ...others,
-      ...(grants?.success ? { delegation: grants.data } : {}),
-      apiKey,
-    };
+    const grants = delegation ? storedDelegation(delegation) : undefined;
+    return { ...others, ...(grants ? { delegation: grants } : {}), apiKey };
   }
+}
+
+/**
+ * Delegation before grants (ADR 0270): routes, each a target and whether
+ * the child may delegate onward.
+ */
+const LegacyDelegationSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxConcurrentChildren: z.number().int().min(1).max(100).optional(),
+  routes: z.array(
+    z.object({
+      target: z.string().min(1),
+      allowFurtherDelegation: z.boolean().optional(),
+    }),
+  ),
+});
+
+/**
+ * A saved delegation policy. One from before grants keeps what the person
+ * set: on or off, how many at once, and its routes as grants on any model
+ * and effort.
+ */
+function storedDelegation(value: unknown): AgentDelegationPolicy | undefined {
+  const current = AgentDelegationPolicySchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = LegacyDelegationSchema.safeParse(value);
+  if (!legacy.success) return undefined;
+  return AgentDelegationPolicySchema.parse({
+    ...(legacy.data.enabled !== undefined
+      ? { enabled: legacy.data.enabled }
+      : {}),
+    ...(legacy.data.maxConcurrentChildren !== undefined
+      ? { maxConcurrentChildren: legacy.data.maxConcurrentChildren }
+      : {}),
+    agents: legacy.data.routes.map((route) => ({
+      agent: route.target,
+      delegate: route.allowFurtherDelegation ?? true,
+    })),
+  });
 }
 
 /** Only Claude Code and Codex keep sessions Work can import (ADR 0233). */

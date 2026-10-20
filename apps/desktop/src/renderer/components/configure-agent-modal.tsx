@@ -680,8 +680,8 @@ function ProfileAgentBody({
                   <span>
                     <span className="block text-fg">Allow subsessions</span>
                     <span className="block text-[11px] text-fg-faint">
-                      This agent may start the agents below, on the models and
-                      effort they allow.
+                      This agent may start the agents below, with the model and
+                      effort choices set for each.
                     </span>
                   </span>
                 </label>
@@ -716,14 +716,17 @@ function ProfileAgentBody({
                         })),
                       { agent: "*", name: "Any configured agent" },
                     ].map((choice) => {
-                      const grant = delegation.agents.find(
+                      // The first grant naming an agent decides for it.
+                      const index = delegation.agents.findIndex(
                         (candidate) => candidate.agent === choice.agent,
                       );
+                      const grant = delegation.agents[index];
+                      const copies = choice.agent === "self";
                       const change = (patch: Partial<AgentDelegationGrant>) =>
                         setDelegation((current) => ({
                           ...current,
-                          agents: current.agents.map((candidate) =>
-                            candidate.agent === choice.agent
+                          agents: current.agents.map((candidate, at) =>
+                            at === index
                               ? { ...candidate, ...patch }
                               : candidate,
                           ),
@@ -796,7 +799,11 @@ function ProfileAgentBody({
                                 className="field h-7 min-w-0 flex-1 px-1.5 text-[12px] text-fg"
                               >
                                 <option value="any">Any model</option>
-                                <option value="fixed">Its own model</option>
+                                <option value="fixed">
+                                  {copies
+                                    ? "The parent's model"
+                                    : "Its own model"}
+                                </option>
                                 {Array.isArray(grant.model) ? (
                                   <option value="list">
                                     {grant.model.join(", ")}
@@ -828,7 +835,11 @@ function ProfileAgentBody({
                                 <option value="at-most-parent">
                                   Up to the parent's
                                 </option>
-                                <option value="fixed">Its own effort</option>
+                                <option value="fixed">
+                                  {copies
+                                    ? "The parent's effort"
+                                    : "Its own effort"}
+                                </option>
                                 {Array.isArray(grant.effort) ? (
                                   <option value="list">
                                     {grant.effort.join(", ")}

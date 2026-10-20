@@ -451,7 +451,7 @@ export function buildWorkspaceToolkit(
     {
       name: "spawn_subsession",
       description:
-        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you. Leave agent out for a copy of yourself on this chat's model and effort; set model or effort to run it stronger or cheaper, as your delegation grants allow. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
+        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you. Whom you may start, and the model and effort you may set, are listed in your instructions. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
       parameters: {
         task: z
           .string()
@@ -463,17 +463,25 @@ export function buildWorkspaceToolkit(
           .string()
           .min(1)
           .optional()
-          .describe("Another agent to run it; leave out for yourself"),
+          .describe(
+            "An agent id from your instructions' list; leave out for a copy of yourself",
+          ),
         model: z
           .string()
           .min(1)
           .optional()
-          .describe("Its model, as its harness names it"),
-        effort: effortSchema.optional().describe("How hard it thinks"),
+          .describe(
+            "As its harness names it, like opus; left out, a copy keeps this chat's, another agent its own",
+          ),
+        effort: effortSchema
+          .optional()
+          .describe("How hard it thinks; left out like model"),
         read_only: z
           .boolean()
           .optional()
-          .describe("It reads and reports, changing nothing"),
+          .describe(
+            "Runs it in its harness's read-only mode, with only Work's read-only tools",
+          ),
         delegate: z
           .boolean()
           .optional()
@@ -1472,7 +1480,6 @@ async function filterWorkspaceOverview(
   };
 }
 
-/** What an agent needs about a subsession: which one, and how it stands. */
 /** A child as its parent reads it: what runs it, and how (ADR 0270). */
 function subsessionSummary(child: unknown): Record<string, unknown> {
   const parsed = z

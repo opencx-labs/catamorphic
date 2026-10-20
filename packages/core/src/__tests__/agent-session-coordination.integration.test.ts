@@ -410,6 +410,19 @@ describe("agent session coordination", () => {
                 parameters: {},
                 execute: async () => null,
               },
+              {
+                name: "read_page",
+                description: "Read a page",
+                parameters: {},
+                readOnly: true,
+                execute: async () => null,
+              },
+              {
+                name: "run_background_command",
+                description: "Run anything",
+                parameters: {},
+                execute: async () => null,
+              },
             ],
           },
           topology: "native",
@@ -426,16 +439,19 @@ describe("agent session coordination", () => {
       list: () => [...agents.values()],
       // The worker's harness catalog, as its model picker shows it.
       models: async ({ agentId }: { agentId: string }) =>
-        agentId === "worker"
-          ? [
-              {
-                id: "opus",
-                resolvedId: "claude-opus-5-5",
-                supportedEffortLevels: ["low", "high", "max"] as const,
-              },
-              { id: "haiku", supportsEffort: false },
-            ]
-          : undefined,
+        // A harness whose catalog never answers.
+        agentId === "builder"
+          ? new Promise<undefined>(() => {})
+          : agentId === "worker"
+            ? [
+                {
+                  id: "opus",
+                  resolvedId: "claude-opus-5-5",
+                  supportedEffortLevels: ["low", "high", "max"] as const,
+                },
+                { id: "haiku", supportsEffort: false },
+              ]
+            : undefined,
     };
     const nativeAgentCheckout = {
       resolve: async ({
@@ -1597,7 +1613,7 @@ describe("agent session coordination", () => {
         agentId: "publisher",
         task: "Escalate through wildcard",
       }),
-    ).rejects.toThrow(/^You may not start agent publisher\. You may start:/);
+    ).rejects.toThrow(/^You may not start agent publisher\. Your choices:/);
     provider.release();
     await vi.waitFor(
       async () =>
@@ -1671,7 +1687,7 @@ describe("agent session coordination", () => {
         model: "gpt-5",
       }),
     ).rejects.toThrow(
-      "gpt-5 is not a model its harness offers. It offers: opus, haiku",
+      "gpt-5 is not a model your harness offers. It offers: opus, haiku",
     );
     await expect(
       sessions.createSubsession(identity, project.id, parent.id, {
@@ -1680,6 +1696,27 @@ describe("agent session coordination", () => {
         effort: "high",
       }),
     ).rejects.toThrow("haiku takes no effort setting");
+    // A new model starts without the parent's effort, chosen for its own;
+    // the catalog's names, in any case, are stored as it gives them.
+    const quick = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Quick look", model: "Haiku", agentId: "self" },
+    );
+    expect(quick.session).toMatchObject({
+      agentId: "worker",
+      model: "haiku",
+      modelEffort: null,
+    });
+    await expect(
+      sessions.createSubsession(identity, project.id, parent.id, {
+        task: "Somebody",
+        agentId: "nobody",
+      }),
+    ).rejects.toThrow(
+      /^There is no agent nobody you may start\. Your choices:/,
+    );
     // Another agent starts from its own defaults, not the parent's.
     const other = await sessions.create(identity, project.id, {
       agentId: "orchestrator",
@@ -1706,7 +1743,7 @@ describe("agent session coordination", () => {
         task: "Only look",
         readOnly: true,
       }),
-    ).rejects.toThrow("worker runs on echo, which has no read-only mode.");
+    ).rejects.toThrow("Your harness has no read-only mode.");
     const reviewer = await sessions.create(identity, project.id, {
       agentId: "reader",
     });
@@ -1726,6 +1763,19 @@ describe("agent session coordination", () => {
         ).toEqual({ permissionMode: "plan" }),
       { timeout: 10_000 },
     );
+    // Work's tools that only read, and capabilities as a contained chat.
+    const tools = readerAttempts
+      .find((attempt) => attempt.input?.text?.includes("Review the change"))
+      ?.hostTools.map((tool) => tool.name);
+    expect(tools).toContain("read_page");
+    expect(tools).not.toContain("run_background_command");
+    expect(tools).not.toContain("spawn_subsession");
+    expect(
+      await sessions.agentSandboxing({
+        projectId: project.id,
+        sessionId: look.session.id,
+      }),
+    ).toBe("contained");
     const lookRow = await db
       .selectFrom("agent_sessions")
       .select("system_prompt")
@@ -1740,7 +1790,29 @@ describe("agent session coordination", () => {
       { task: "Look deeper" },
     );
     expect(deeper.session.readOnly).toBe(true);
+    // A fork of a read-only chat reads only too.
+    const fork = await sessions.fork(identity, project.id, look.session.id);
+    expect(fork.readOnly).toBe(true);
   });
+
+  it("never waits long on a harness catalog that does not answer", async () => {
+    const project = await projects.create(identity, {
+      name: "Slow catalog",
+    });
+    const parent = await sessions.create(identity, project.id, {
+      agentId: "orchestrator",
+    });
+    const started = Date.now();
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { agentId: "builder", task: "Build it", model: "opus" },
+    );
+    expect(Date.now() - started).toBeLessThan(9_000);
+    // The harness checks the model at the child's first turn instead.
+    expect(child.session.model).toBe("opus");
+  }, 20_000);
 
   it("promotes failed delegated work and informs its parent", async () => {
     const project = await projects.create(identity, {
@@ -3332,6 +3404,8 @@ describe("agent session coordination", () => {
         sessionId: session.id,
         task: "Inspect the result",
         agentId: "small",
+        model: "opus",
+        delegate: false,
         idempotencyKey: "child",
       },
     };
@@ -3343,6 +3417,11 @@ describe("agent session coordination", () => {
       session.id,
     );
     expect(children).toHaveLength(1);
+    // A workflow's spawn takes the tool's settings too (ADR 0270).
+    expect(children[0]).toMatchObject({
+      allowFurtherDelegation: false,
+      session: { agentId: "small", model: "opus" },
+    });
     const events = await exportEvents(children[0]?.session.id ?? "");
     expect(
       events.find((event) => event.kind === "session.created")?.payload,

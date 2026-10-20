@@ -583,6 +583,17 @@ values: \`{ "permissionMode": "auto" }\` for \`claude-code\` (\`default\`,
 The two are independent: \`bypassPermissions\` inside a \`contained\`
 sandbox is fast inside and changes nothing outside.
 
+\`delegation\` says which subagents an agent may start (ADR 0270). Without it
+an agent starts copies of itself on any model and effort. \`agents\` lists
+grants: \`agent\` is \`self\`, an agent id, \`project:<slug>\`, or \`*\` (any
+agent whose sandboxing is no wider); \`model\` is \`any\`, \`fixed\`, or a list;
+\`effort\` is \`any\`, \`fixed\`, \`at-most-parent\`, or a list; \`delegate\`
+says whether the child may start its own. For example
+\`{ "maxConcurrentChildren": 4, "agents": [{ "agent": "self", "effort":
+"at-most-parent" }, { "agent": "project:reviewer", "model": ["sonnet"],
+"delegate": false }] }\`. A grant naming an agent decides before \`*\`.
+\`routes\` is no longer read: a definition that has it is refused.
+
 A remote project keeps one authority for membership, connections, and history.
 \`device: "member"\` offers an authenticated member's own computer when the
 host supports client execution. It never requires the member to receive

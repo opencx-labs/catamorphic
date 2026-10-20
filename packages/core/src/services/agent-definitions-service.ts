@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
 import {
+  AGENT_EFFORT_LEVELS,
   CLAUDE_CODE_PERMISSION_MODES,
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
@@ -238,8 +239,6 @@ export interface AgentEnvironmentPolicy {
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
 }
 
-const AGENT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-
 /**
  * Who an agent may start as a subsession, and what it may choose for them
  * (ADR 0270). Omitted settings mean `any`: a parent picks the child's model
@@ -264,7 +263,7 @@ export const AgentDelegationGrantSchema = z.object({
   effort: z
     .union([
       z.enum(["any", "fixed", "at-most-parent"]),
-      z.array(z.enum(AGENT_EFFORTS)).min(1),
+      z.array(z.enum(AGENT_EFFORT_LEVELS)).min(1),
     ])
     .default("any"),
   /** Whether the child may start subsessions of its own. */

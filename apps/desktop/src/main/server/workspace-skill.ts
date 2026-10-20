@@ -144,7 +144,9 @@ and returns at once; it runs in parallel, in its own chat the person can open.
 Leave agent out for a copy of yourself on this chat's model and effort, or name
 another agent your instructions list. Set model and effort to fit the work: a
 stronger model for a hard design or a careful review, a quicker one for broad
-searching. read_only gives a reviewer that changes nothing; delegate false
+searching. read_only gives a reviewer that changes nothing, where its
+harness has a read-only mode (Claude Code: plan mode, without a shell; Codex:
+its read-only sandbox), with only Work's tools that read; delegate: false
 keeps it from starting its own. Write the task so it stands alone (or pass
 context_mode inherit), and spawn several for independent pieces: research
 across sources, separate reviews, exploring a large codebase. Each result
