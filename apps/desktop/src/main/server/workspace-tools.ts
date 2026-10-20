@@ -1043,7 +1043,9 @@ export function buildWorkspaceToolkit(
       description:
         "Read a background command's output since your last read, or a watch's latest check, with its status (running, finished, stopped) and exit code. wait_seconds blocks until something new or the end; with wait_for, until a line matches.",
       parameters: {
-        id: z.string().describe("The id run_background_command returned"),
+        id: z
+          .string()
+          .describe("The id run_background_command or watch_command returned"),
         wait_seconds: z
           .number()
           .int()

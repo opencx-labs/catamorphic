@@ -154,11 +154,17 @@ adds one note to the result saying why.
 Agents write bash: an unquoted `grep -r --include=*.ts` failed in zsh with
 "no matches found" before grep ran, and an aborted search read to the agent
 as a search that found nothing (488 commands in 117 of 152 chats over four
-days). Every shell an agent's commands run in sets zsh's `no_nomatch`, so a
-pattern that matches nothing stays as written: agent terminals after the
-person's `.zshrc`, and Claude Code ahead of each command through
-`CLAUDE_ENV_FILE` (a file the person set there still runs first). The
-person's own terminals and shell config are untouched.
+days). Agent shells set zsh's `no_nomatch` (and turn off the null glob
+options, which would drop the pattern), so a pattern that matches nothing
+stays as written:
+
+- agent terminals, after the person's `.zshrc`;
+- Claude Code, ahead of each command through `CLAUDE_ENV_FILE`, a read-only
+  file every chat shares (a file the person set there still runs first);
+- Work's own agent and watch checks, with each command.
+
+Codex runs commands in its own shell and is not covered. The person's own
+terminals and shell config are untouched.
 
 ## Seeing Work itself (ADR 0195)
 

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type CheckResult,
@@ -145,7 +146,7 @@ describe("CommandWatches", () => {
       await h.watches.read({ sessionId: "s", id, stopWaiting: never }),
     ).toEqual({
       status: "running",
-      exitCode: null,
+      exitCode: 1,
       output: "not yet",
       checks: 1,
     });
@@ -161,6 +162,7 @@ describe("CommandWatches", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(await next).toMatchObject({
       status: "running",
+      exitCode: 1,
       output: "still building",
       checks: 2,
     });
@@ -295,4 +297,18 @@ describe("runShellCheck", () => {
     expect(hung.exitCode).toBeNull();
     expect(hung.raw).toContain("timed out");
   });
+
+  it.skipIf(!existsSync("/bin/zsh"))(
+    "runs a check's pattern that matches nothing as bash would, in zsh",
+    async () => {
+      await expect(
+        runShellCheck({
+          command: "echo --include=*.zzz",
+          timeoutMs: 5_000,
+          env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+          shell: "/bin/zsh",
+        }),
+      ).resolves.toEqual({ exitCode: 0, raw: "--include=*.zzz\n" });
+    },
+  );
 });

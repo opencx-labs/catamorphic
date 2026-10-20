@@ -111,7 +111,7 @@ import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { registryCapability } from "./registry.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
-import { SessionCheckouts } from "./session-checkouts.js";
+import { SessionCheckouts, usableCheckout } from "./session-checkouts.js";
 import { SessionNotes } from "./session-notes.js";
 import { mayRunAgain, SignInRecovery } from "./sign-in-recovery.js";
 import { syncReport } from "./sync-report.js";
@@ -1372,10 +1372,9 @@ export async function startEmbeddedServer(
   // project's linked remote, through the provider-agnostic core service.
   agentRegistry.workspaceToolkit?.setGitBridge({
     sync: async (projectId, sessionId) => {
-      const checkout = await sessionCheckouts.describe({
-        projectId,
-        sessionId,
-      });
+      const checkout = usableCheckout(
+        await sessionCheckouts.describe({ projectId, sessionId }),
+      );
       if (checkout.kind !== "primary") {
         return {
           status: "isolated",

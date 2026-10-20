@@ -1,8 +1,7 @@
 import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { agentToolResult } from "@catamorphic/sandbox";
+import { agentToolResult, waitUntil } from "@catamorphic/sandbox";
 import { BrowserWindow, type WebContents, webContents } from "electron";
 import { z } from "zod";
 import { type PageDialog, pageDialogAsker } from "../shared/page-dialogs.js";
@@ -99,6 +98,9 @@ const FILE_CHOOSER_MS = 6000;
  * timeoutMs declares. A message reaching the agent ends it sooner.
  */
 const MAX_WAIT_MS = 600_000;
+/** How long wait_for reads the page every 100 ms before once a second. */
+const QUICK_WAIT_MS = 10_000;
+const pageTextSchema = z.object({ text: z.string() });
 
 /**
  * A file an agent may hand a page: anything in its own folder, otherwise
@@ -819,6 +821,50 @@ export class BrowserDriver {
     }
   }
 
+  /**
+   * Wait until the page shows `text`. A look, not input: like `inspect`, it
+   * neither focuses the tab nor queues behind (or holds up) other browser
+   * work, so a long wait never stalls anyone else's. It reads on across a
+   * navigation (a sign-in redirect loads a new page) and while the person
+   * drives the tab, quickly at first and then once a second. A dialog the
+   * page opens ends it with the dialog's report.
+   */
+  private async waitFor(
+    action: Extract<BrowserAction, { type: "wait_for" }>,
+    stopWaiting: AbortSignal,
+  ): Promise<unknown> {
+    const timeout = action.timeoutMs ?? 5000;
+    if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_WAIT_MS)
+      throw new Error(`timeoutMs must be between 1 and ${MAX_WAIT_MS}.`);
+    const shows = async () => {
+      if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
+      // Between two pages there is nothing to read yet.
+      const read = await this.untilDialog(() => this.evaluate("read")).catch(
+        () => null,
+      );
+      if (this.openDialog()) return true;
+      const page = pageTextSchema.safeParse(read);
+      return page.success && page.data.text.includes(action.text);
+    };
+    const quick = Math.min(timeout, QUICK_WAIT_MS);
+    let outcome = await waitUntil({
+      ready: shows,
+      timeoutMs: quick,
+      stopWaiting,
+      pollMs: 100,
+    });
+    if (outcome === "timeout" && timeout > quick)
+      outcome = await waitUntil({
+        ready: shows,
+        timeoutMs: timeout - quick,
+        stopWaiting,
+        pollMs: 1_000,
+      });
+    const open = this.openDialog();
+    if (open) return this.reportDialog(open);
+    return { found: outcome === "ready" };
+  }
+
   /** `stopWaiting` ends a wait (downloads, wait_for) early (ADR 0264). */
   act(action: BrowserAction, stopWaiting: AbortSignal): Promise<unknown> {
     if (
@@ -827,6 +873,7 @@ export class BrowserDriver {
       action.type === "downloads"
     )
       return this.inspect(action, stopWaiting);
+    if (action.type === "wait_for") return this.waitFor(action, stopWaiting);
     // A page waiting on its dialog takes keys and text there, not in the
     // page; going somewhere else is the one other thing it allows.
     const waiting = this.openDialog();
@@ -852,7 +899,7 @@ export class BrowserDriver {
   private async perform(
     action: Exclude<
       BrowserAction,
-      { type: "console" | "network" | "downloads" }
+      { type: "console" | "network" | "downloads" | "wait_for" }
     >,
     /** Throws once the page opened a dialog and the action was given up. */
     live: () => void,
@@ -956,33 +1003,6 @@ export class BrowserDriver {
             );
           }
           break;
-        }
-        case "wait_for": {
-          const timeout = action.timeoutMs ?? 5000;
-          if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_WAIT_MS)
-            throw new Error(`timeoutMs must be between 1 and ${MAX_WAIT_MS}.`);
-          const started = Date.now();
-          const deadline = started + timeout;
-          const generation = await this.evaluate("generation");
-          do {
-            this.guard();
-            live();
-            if (
-              this.guest.isDestroyed() ||
-              (await this.evaluate("generation")) !== generation
-            )
-              throw new Error(
-                "Page changed while waiting. Take a fresh snapshot.",
-              );
-            const page = z
-              .object({ text: z.string() })
-              .parse(await this.evaluate("read"));
-            if (page.text.includes(action.text)) return { found: true };
-            // Quick at first; a long wait reads the page once a second.
-            const pause = Date.now() - started < 10_000 ? 100 : 1_000;
-            await delay(Math.min(pause, Math.max(0, deadline - Date.now())));
-          } while (Date.now() < deadline && !stopWaiting.aborted);
-          return { found: false };
         }
       }
       return { ok: true };

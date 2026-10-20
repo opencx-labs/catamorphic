@@ -1042,6 +1042,21 @@ describe("SessionCheckouts", () => {
       });
     });
 
+    it("reports a chat's own worktree that became another repository, without counting its changes", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const own = await agentCheckout();
+      await fs.rm(own.path, { recursive: true, force: true });
+      await fs.mkdir(own.path);
+      await git(own.path, ["init", "-q", "-b", "main"]);
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        kind: "managed",
+        present: true,
+        available: false,
+        changedFiles: null,
+      });
+      await expect(agentCheckout()).rejects.toThrow("is unavailable");
+    });
+
     it("puts away resting chats' worktrees and worktrees agents left when the host starts", async () => {
       await checkouts.plan({ projectId, sessionId });
       const resting = await agentCheckout();

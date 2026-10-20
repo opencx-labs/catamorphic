@@ -174,6 +174,7 @@ import {
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
+import { shellQuote } from "./shell-integration.js";
 import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
@@ -3866,10 +3867,6 @@ function isBuilderCheckout(capabilities: {
       capabilities.source?.remoteUrl &&
       repoFullNameFromUrl(capabilities.source.remoteUrl),
   );
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 /** Tell every window a project's files moved under it. */

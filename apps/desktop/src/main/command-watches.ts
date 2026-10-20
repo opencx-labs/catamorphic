@@ -7,6 +7,7 @@ import {
   type BackgroundNotifier,
   outputPattern,
 } from "./background-commands.js";
+import { withAgentShellOptions } from "./shell-integration.js";
 
 /**
  * Command watches (ADR 0156): a check an agent asks this computer to repeat
@@ -38,6 +39,8 @@ export interface CommandWatch {
   baseline: string | null;
   /** The last output seen, so a change message can show before and after. */
   lastOutput: string;
+  /** The last check's exit code; absent from watches saved before it. */
+  lastExitCode?: number | null;
   checks: number;
 }
 
@@ -180,6 +183,7 @@ export class CommandWatches {
     const first = await this.check(watch.command, watch.workingDirectory);
     watch.checks = 1;
     watch.lastOutput = first.output;
+    watch.lastExitCode = first.exitCode;
     if (watch.until === "success" && first.exitCode === 0) {
       // Already true: nothing to watch, and nothing to wake about later.
       this.end(watch, "finished", 0);
@@ -228,8 +232,9 @@ export class CommandWatches {
   /**
    * A watch's status and its latest check, for read_background_output.
    * With `waitMs`, blocks until the next check or the end of the watch;
-   * with `waitFor` too, until a check prints a line matching it. Something
-   * reaching the agent ends any wait (`stopWaiting`, ADR 0264).
+   * with `waitFor` too, until a check prints a line matching it (the
+   * latest check counts, so a match already there returns at once).
+   * Something reaching the agent ends any wait (`stopWaiting`, ADR 0264).
    */
   async read(input: {
     sessionId: string;
@@ -306,7 +311,7 @@ export class CommandWatches {
     if (watch?.sessionId === input.sessionId)
       return {
         status: "running",
-        exitCode: null,
+        exitCode: watch.lastExitCode ?? null,
         output: tail(watch.lastOutput),
         checks: watch.checks,
       };
@@ -322,7 +327,7 @@ export class CommandWatches {
         checks: ended.checks,
       };
     throw new Error(
-      `No watch '${input.id}' in this chat. Start one with watch_command.`,
+      `No watch '${input.id}' in this chat. A watch that ended before Work restarted is no longer kept; start one with watch_command.`,
     );
   }
 
@@ -383,6 +388,7 @@ export class CommandWatches {
     watch.checks++;
     const previous = watch.lastOutput;
     watch.lastOutput = result.output;
+    watch.lastExitCode = result.exitCode;
     // The next check is an interval from now, never a backlog.
     watch.dueAt = this.now() + watch.everySeconds * 1000;
     if (watch.until === "success" && result.exitCode === 0) {
@@ -579,7 +585,7 @@ export function runShellCheck(input: {
 }): Promise<{ exitCode: number | null; raw: string }> {
   return new Promise((resolve) => {
     const shell = input.shell ?? process.env.SHELL ?? "/bin/zsh";
-    const child = spawn(shell, ["-lc", input.command], {
+    const child = spawn(shell, ["-lc", withAgentShellOptions(input.command)], {
       ...(input.workingDirectory ? { cwd: input.workingDirectory } : {}),
       env: input.env,
       detached: true,

@@ -314,7 +314,7 @@ describe("desktop facts and peers", () => {
       '- "Renewal deck" (working now, in a separate worktree (work/peer)): Prepare the renewal deck',
     );
     expect(context).toContain(
-      '- "Palette input" (idle, in a separate worktree (palette-input) whose folder is missing)',
+      '- "Palette input" (idle, in a separate worktree (palette-input) whose folder is unavailable)',
     );
     expect(context).toContain("Returned to the project folder.");
     expect(

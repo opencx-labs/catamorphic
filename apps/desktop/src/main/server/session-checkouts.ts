@@ -190,7 +190,7 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 /** A checkout the chat can work in, or the reason it cannot. */
-function usable(
+export function usableCheckout(
   checkout: SessionCheckoutDescription,
 ): SessionCheckoutDescription {
   if (checkout.available) return checkout;
@@ -345,7 +345,7 @@ export class SessionCheckouts {
     sessionId: string;
   }): Promise<string | undefined> {
     if (!this.projectRoot(input.projectId)) return undefined;
-    return usable(await this.describe(input)).path;
+    return usableCheckout(await this.describe(input)).path;
   }
 
   /**
@@ -367,7 +367,7 @@ export class SessionCheckouts {
     // A put-away, bring or discard under way finishes first (ADR 0215); a
     // folder without Git has none.
     const root = this.projectRoot(input.projectId);
-    const current = usable(
+    const current = usableCheckout(
       root && (await hasLocalGit({ path: root }))
         ? await this.withAssignmentLock({
             projectId: input.projectId,
@@ -1052,7 +1052,7 @@ export class SessionCheckouts {
     sessionId: string;
     message: string;
   }): Promise<{ path: string; branch: string }> {
-    const description = usable(await this.describe(input));
+    const description = usableCheckout(await this.describe(input));
     if (description.kind === "primary") {
       throw new Error("The session is not using an isolated worktree");
     }

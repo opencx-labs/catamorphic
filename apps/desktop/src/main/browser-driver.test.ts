@@ -92,33 +92,110 @@ afterEach(() => {
 const waiting = new AbortController().signal;
 
 describe("browser driver waits", () => {
-  it("waits for text as long as browser_act's timeoutMs allows", async () => {
+  /** A page whose text the test sets; a null text is a page between loads. */
+  function pageWith(state: { text: string | null; reads: number }) {
     const guest = new Guest();
-    let reads = 0;
     guest.executeJavaScriptInIsolatedWorld.mockImplementation(
       async (...args: unknown[]) => {
         // Which page script ran, from the call as the page received it.
-        const call = JSON.stringify(args);
-        if (call.includes('catamorphicBrowser[\\"generation\\"]'))
-          return { value: 1 };
-        if (call.includes('catamorphicBrowser[\\"read\\"]'))
-          return { value: { text: ++reads < 3 ? "Signing in" : "Ready" } };
-        return { value: null };
+        if (!JSON.stringify(args).includes('catamorphicBrowser[\\"read\\"]'))
+          return { value: null };
+        state.reads++;
+        if (state.text === null) throw new Error("Execution context destroyed");
+        return { value: { text: state.text } };
       },
     );
+    return guest;
+  }
+
+  it("waits as a look: past the old cap, across a page change, on a taken-over tab, holding nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = { text: "Signing in" as string | null, reads: 0 };
+      const guest = pageWith(state);
+      const driver = new BrowserDriver(
+        asWebContents(guest),
+        () => {
+          throw new Error("The user has taken control of this surface.");
+        },
+        async () => {},
+      );
+      let result: unknown;
+      void driver
+        .act({ type: "wait_for", text: "Ready", timeoutMs: 60_000 }, waiting)
+        .then((value) => {
+          result = value;
+        });
+      await vi.advanceTimersByTimeAsync(10_000);
+      // The first ten seconds read the page every 100 ms.
+      expect(state.reads).toBeGreaterThan(90);
+      // The tab's queue stays free for everyone else meanwhile.
+      await expect(driver.clear()).resolves.toBeDefined();
+      const quick = state.reads;
+      // A redirect: nothing to read between the two pages.
+      state.text = null;
+      await vi.advanceTimersByTimeAsync(5_000);
+      // After that, once a second.
+      expect(state.reads - quick).toBeLessThanOrEqual(6);
+      expect(result).toBeUndefined();
+      state.text = "Welcome back. Ready";
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(result).toEqual({ found: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a wait at its timeout, when something reaches the agent, or with a dialog", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = { text: "Loading", reads: 0 };
+      const guest = pageWith(state);
+      const driver = new BrowserDriver(
+        asWebContents(guest),
+        () => {},
+        async () => {},
+      );
+      const timedOut = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 20_000 },
+        waiting,
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(timedOut).resolves.toEqual({ found: false });
+
+      const reached = new AbortController();
+      const stopped = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 600_000 },
+        reached.signal,
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      reached.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(stopped).resolves.toEqual({ found: false });
+
+      const asked = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 60_000 },
+        waiting,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      openDialog(guest.id);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(asked).resolves.toMatchObject({
+        dialog: { kind: "alert" },
+      });
+      // Waiting never brought the tab forward.
+      expect(guest.focus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a wait longer than browser_act declares", async () => {
     const driver = new BrowserDriver(
-      asWebContents(guest),
+      asWebContents(new Guest()),
       () => {},
       async () => {},
     );
-    // Longer than the old ten-second cap, as a sign-in redirect needs.
-    await expect(
-      driver.act(
-        { type: "wait_for", text: "Ready", timeoutMs: 30_000 },
-        waiting,
-      ),
-    ).resolves.toEqual({ found: true });
-    expect(reads).toBe(3);
     await expect(
       driver.act(
         { type: "wait_for", text: "Ready", timeoutMs: 600_001 },

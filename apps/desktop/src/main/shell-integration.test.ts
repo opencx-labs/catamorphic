@@ -91,6 +91,11 @@ describe("shell integration for agent terminals", () => {
     async () => {
       const integrated = await shellIntegration(zsh ?? "");
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "zsh-home-"));
+      // The person's own .zshrc runs first and keeps the rest of its say.
+      fs.writeFileSync(
+        path.join(home, ".zshrc"),
+        "setopt nomatch null_glob\nexport OWN_RC=ran\n",
+      );
       try {
         // A pattern with no match fails the whole command in plain zsh.
         expect(() =>
@@ -101,13 +106,13 @@ describe("shell integration for agent terminals", () => {
           }),
         ).toThrow(/no matches found/);
         expect(
-          run(zsh ?? "", ["-i", "-c", "echo --include=*.zzz"], {
+          run(zsh ?? "", ["-i", "-c", 'echo --include=*.zzz "$OWN_RC"'], {
             PATH: process.env.PATH ?? "",
             HOME: home,
             ...integrated?.env,
             USER_ZDOTDIR: home,
           }),
-        ).toBe("--include=*.zzz");
+        ).toBe("--include=*.zzz ran");
       } finally {
         fs.rmSync(home, { recursive: true, force: true });
       }
@@ -125,17 +130,18 @@ describe("shell integration for agent terminals", () => {
       try {
         const file = (await agentShellEnvFile()) ?? "";
         const env = { PATH: process.env.PATH ?? "", HOME: home };
+        // Claude Code's snapshot carries the person's own options.
         expect(
-          run(zsh ?? "", ["-c", `. '${file}'; echo --include=*.zzz`], env),
+          run(
+            zsh ?? "",
+            ["-c", `setopt null_glob; . '${file}'; echo --include=*.zzz`],
+            env,
+          ),
         ).toBe("--include=*.zzz");
         // A file the person set for themselves still runs, first.
         expect(
           run(zsh ?? "", ["-c", `. '${file}'; echo "$OWN_SETUP"`], env),
         ).toBe("ran");
-        // Any other shell reads it as a no-op that succeeds.
-        expect(run("/bin/sh", ["-c", `. '${file}' && echo ok`], env)).toBe(
-          "ok",
-        );
       } finally {
         if (previous === undefined) delete process.env.CLAUDE_ENV_FILE;
         else process.env.CLAUDE_ENV_FILE = previous;
@@ -143,6 +149,22 @@ describe("shell integration for agent terminals", () => {
       }
     },
   );
+
+  it("keeps the harness file read-only, and a no-op that succeeds in any other shell", async () => {
+    const file = (await agentShellEnvFile()) ?? "";
+    // Every chat's Claude Code reads it: nothing appends to it (root, as a
+    // CI container may run, ignores the mode).
+    expect(fs.statSync(file).mode & 0o777).toBe(0o400);
+    if (process.getuid?.() !== 0)
+      expect(() =>
+        execFileSync("/bin/sh", ["-c", `echo 'export X=1' >> '${file}'`], {
+          stdio: "pipe",
+        }),
+      ).toThrow();
+    expect(run("/bin/sh", ["-c", `. '${file}' && echo ok`], {})).toBe("ok");
+    // Written again for the next attempt over the read-only one.
+    expect(await agentShellEnvFile()).toBe(file);
+  });
 
   it("leaves other shells to the foreground-process heuristic", async () => {
     expect(await shellIntegration("/usr/bin/fish")).toBeNull();

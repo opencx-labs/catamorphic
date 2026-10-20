@@ -591,7 +591,7 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
         running: true,
         task: null,
         activity: null,
-        checkout: { kind: "primary" as const, branch: null },
+        checkout: { kind: "primary" as const, branch: null, available: true },
       },
     ]);
     const registry = registryWith(claudeAgent, {
