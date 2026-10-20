@@ -212,7 +212,6 @@ import {
 import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { sessionLabel } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
-import { skillInvocation } from "./lib/skills.js";
 import {
   EMPTY_SURFACE_HISTORY,
   restoreSurface,
@@ -2494,9 +2493,13 @@ export function App({
   );
 
   // Live message senders per chat dock — how anything outside a dock
-  // (skill palette rows, post-auth continuations) speaks into an already
-  // open chat. Sends queue behind an in-flight turn like composer sends.
+  // (post-auth continuations) speaks into an already open chat. Sends
+  // queue behind an in-flight turn like composer sends.
   const chatSendersRef = useRef(new Map<string, (message: string) => void>());
+  // The palette's skills (ADR 0270): each chat's skill sender, which takes
+  // its composer's pills along, and the way back into its composer.
+  const chatSkillsRef = useRef(new Map<string, (message: string) => void>());
+  const composerReturnsRef = useRef(new Map<string, (text: string) => void>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -2718,6 +2721,8 @@ export function App({
     closingChatIds.current.delete(localId);
     chatClosersRef.current.delete(localId);
     chatMinimizersRef.current.delete(localId);
+    chatSkillsRef.current.delete(localId);
+    composerReturnsRef.current.delete(localId);
     updateWorkspace((ws) => {
       const closing = ws.chats.find((chat) => chat.localId === localId);
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
@@ -3364,20 +3369,48 @@ export function App({
     ? sessionsById.get(focusedChat.sessionId)
     : undefined;
 
-  // Palette skill rows (ADR 0052): the invocation lands in the focused
-  // chat when one exists — the border-accented target — else it starts a
-  // new chat exactly like "Send to agent".
-  const runSkill = (name: string, mode: "float" | "tab") => {
-    const send = focusedChat
-      ? chatSendersRef.current.get(focusedChat.localId)
-      : undefined;
-    if (focusedChat && send) {
-      send(skillInvocation(name));
-      revealChat(focusedChat.localId);
+  // Palette skills (ADR 0052, 0270): applied here, the invocation lands in
+  // the chat whose composer opened the palette, else the focused chat (the
+  // border-accented target), and its composer has the keyboard back. A new
+  // chat starts exactly like "Send to agent".
+  const runSkill: PaletteHost["onRunSkill"] = ({
+    message,
+    target,
+    composer,
+    agentId,
+  }) => {
+    const chat = composer ?? focusedChat?.localId;
+    const apply = chat ? chatSkillsRef.current.get(chat) : undefined;
+    if (target === "chat" && chat && apply) {
+      apply(message);
+      revealChat(chat);
+      composerReturnsRef.current.get(chat)?.("");
       return;
     }
-    sendToAgent(skillInvocation(name), mode, undefined, { inNewTab: true });
+    sendToAgent(message, target === "tab" ? "tab" : "float", agentId, {
+      inNewTab: true,
+    });
   };
+  /**
+   * "/" in a chat's composer: the palette's Skills mode, aimed there. A chat
+   * of a project behind the one in front brings its project forward first;
+   * the palette opens once this workspace shows.
+   */
+  const [skillsFor, setSkillsFor] = useState<string | null>(null);
+  const openSkills = (localId: string) => {
+    revealChat(localId);
+    setSkillsFor(localId);
+  };
+  useEffect(() => {
+    if (!skillsFor || !runtime.visible) return;
+    setSkillsFor(null);
+    setPaletteOpen(true);
+    setModeRequest({
+      mode: "skills",
+      composer: skillsFor,
+      nonce: crypto.randomUUID(),
+    });
+  }, [skillsFor, runtime.visible]);
 
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);
@@ -6304,6 +6337,8 @@ export function App({
       sendToAgent(message, mode, agentId, { inNewTab: true }),
     startingActions,
     onRunSkill: runSkill,
+    onReturnToComposer: (chat, text) =>
+      composerReturnsRef.current.get(chat)?.(text),
     actionHandlers,
     terminalMacros: prefs?.terminalMacros ?? [],
     onRunTerminalMacro: runTerminalMacro,
@@ -7966,6 +8001,13 @@ export function App({
                       registerSend={(send) =>
                         chatSendersRef.current.set(entry.localId, send)
                       }
+                      registerSkill={(apply) =>
+                        chatSkillsRef.current.set(entry.localId, apply)
+                      }
+                      registerComposerReturn={(resume) =>
+                        composerReturnsRef.current.set(entry.localId, resume)
+                      }
+                      onOpenSkills={() => openSkills(entry.localId)}
                       onSessionCreated={onSessionCreated}
                       onSessionAgent={onSessionAgent}
                       onSignalsChange={onSignalsChange}

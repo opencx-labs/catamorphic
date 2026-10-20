@@ -214,11 +214,26 @@ export interface ChatDockProps {
    */
   registerFocusChips?: (focus: () => boolean) => void;
   /**
-   * Hands the host this chat's live sender (palette skill rows, post-auth
-   * continuations). Sends queue behind an in-flight turn like composer
-   * sends do.
+   * Hands the host this chat's live sender (post-auth continuations).
+   * Sends queue behind an in-flight turn like composer sends do.
    */
   registerSend?: (send: (message: string) => void) => void;
+  /**
+   * "/" in a composer with no prose (ADR 0270): the palette's Skills mode,
+   * aimed at this chat.
+   */
+  onOpenSkills?: () => void;
+  /**
+   * Hands the host this chat's skill sender (ADR 0270): it sends like
+   * `registerSend`, and takes the composer's attachments along when the
+   * composer holds nothing else.
+   */
+  registerSkill?: (apply: (message: string) => void) => void;
+  /**
+   * Hands the host a way back into this composer: the palette it opened
+   * closed without a skill, handing back what was typed ("/" and after).
+   */
+  registerComposerReturn?: (resume: (text: string) => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
    * The agent the chat's session runs on and the harness it is bound to,

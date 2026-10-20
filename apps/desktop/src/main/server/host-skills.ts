@@ -81,7 +81,7 @@ export function materializeHostSkills(
 }
 
 const SKILLS_PREAMBLE =
-  "Skills are reusable playbooks invoked by name — when the user asks to \"use the X skill\" (the app's command palette and /commands send exactly that phrasing), or a task matches a skill's description, load the skill and follow it.";
+  "Skills are reusable playbooks invoked by name. When the user asks to \"use the X skill\" (the app's command palette sends exactly that phrasing), or a task matches a skill's description, load the skill and follow it.";
 
 /** A listing line: the name and the description's first sentence. */
 function listing(skills: Array<{ name: string; description: string }>): string {

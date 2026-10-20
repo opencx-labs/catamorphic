@@ -101,7 +101,9 @@ Host-specific pieces enter through props: `renderAttachment(attachment, place)`
 for sent attachments (default: a pill with an icon and the name), `Hint`
 (`{ label, shortcut?, children }`, default: the native title), `renderLink` and
 `onLinkClick`, `sourceHref`, `resolveToolIcon`, `onFileClick`, `onReauth`,
-`backgroundCommands`, `workDisplay` and `registerJumpToPreviousUserMessage`
+`backgroundCommands`, `workDisplay`, `presentUserMessage(text)` (an element of
+the host's own leading the person's message, and the words after it; the
+desktop leads a sent skill with a chip) and `registerJumpToPreviousUserMessage`
 with `jumpShortcut`. Rows are memoized: keep render-affecting slots stable;
 action callbacks may change every render.
 

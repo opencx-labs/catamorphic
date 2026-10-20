@@ -2267,12 +2267,14 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
-  // `Use the "<name>" skill`, the EXACT message palette skill rows and
-  // composer /commands send, runs the REAL read_skill tool, so skill e2e
-  // covers renderer → invocation message → toolkit → core's merged tiers.
+  // `Use the "<name>" skill`, the EXACT message the palette's skills send,
+  // runs the REAL read_skill tool, so skill e2e covers renderer →
+  // invocation message → toolkit → core's merged tiers. What followed it
+  // (instructions) is echoed back.
   const skillRun = /^Use the "([^"]+)" skill[.:]?/.exec(message.trim());
   if (skillRun?.[1]) {
     const name = skillRun[1];
+    const instructions = message.trim().slice(skillRun[0].length).trim();
     yield { type: "title", content: "Skill exercise" };
     try {
       const result = z
@@ -2283,7 +2285,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         .parse(await turn.tool("read_skill", { name }));
       yield {
         type: "text",
-        content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)`,
+        content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)${instructions ? ` | ${instructions}` : ""}`,
       };
     } catch (error) {
       yield {

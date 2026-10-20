@@ -31,8 +31,11 @@ export function usePaletteModes({
   tabItems,
   sectionSearch,
   projectAgents,
+  skillModes,
 }: {
   picker: PaletteChoiceMode | null;
+  /** Skills and a chosen skill's instructions (modes/skills.tsx). */
+  skillModes: readonly PaletteMode[];
   projectAgents: readonly ProjectAgentInfo[];
   historyRow: (entry: HistoryEntry) => PaletteItem;
   settingItems: readonly PaletteItem[];
@@ -76,6 +79,7 @@ export function usePaletteModes({
       settingsMode(settingItems),
       sites,
       commandsMode(commandItems),
+      ...skillModes,
       ...choices,
       ...input,
       ...customModes,
@@ -88,6 +92,7 @@ export function usePaletteModes({
       settingItems,
       sites,
       commandItems,
+      skillModes,
       choices,
       input,
       customModes,

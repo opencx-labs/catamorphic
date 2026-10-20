@@ -673,50 +673,36 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
-  it("the built-in slash menu offers shared skills without inventing native commands", async () => {
-    await run(`setComposer('/'); return true;`);
+  it("the built-in chat's Skills mode offers shared skills without inventing native commands", async () => {
+    // "/" in an empty composer opens the palette's Skills mode (ADR 0270).
+    await run(`setComposer(''); return true;`);
+    await app.press("Slash");
     const rows = await runWait<string[]>(
-      `const menu = $('[data-testid="slash-menu"]');
-       if (!menu || !menu.querySelector('[data-skill-name="writing-workflows"]') ||
-           menu.querySelector('[aria-busy="true"]')) return false;
-       return [...menu.querySelectorAll('[role="option"]')].map((el) => el.dataset.skillName);`,
-      { timeoutMs: 15_000, label: "built-in command catalog" },
+      `const input = document.activeElement;
+       if (input?.getAttribute('aria-label') !== 'Search commands, pages, and more') return false;
+       const dialog = input.closest('[role="dialog"]');
+       if (dialog.querySelector('[data-testid="palette-mode-chip"]')?.textContent.trim() !== 'Skills') return false;
+       const rows = [...dialog.querySelectorAll('[role="option"]')].map((el) => el.dataset.itemId);
+       if (!rows.includes('skills:writing-workflows') || rows.includes('skills:loading')) return false;
+       return rows;`,
+      { timeoutMs: 15_000, label: "built-in Skills mode" },
     );
     // This chat runs the built-in Fake Agent. Native command fixtures must
     // follow the selected harness, just like production discovery does.
-    expect(rows).toContain("status");
-    expect(rows).toContain("writing-workflows");
-    expect(rows).not.toContain("compact");
-    expect(rows).not.toContain("review");
-    // No row comes from the Claude Code harness (descriptions may name it).
-    expect(
-      await run<boolean>(
-        `return [...$('[data-testid="slash-menu"]').querySelectorAll('[role="option"]')].some((row) => row.dataset.source === 'Claude Code');`,
-      ),
-    ).toBe(false);
-    // The panel pops in (and pops out when the token dissolves).
-    expect(
-      await run<boolean>(
-        `return $('[data-testid="slash-menu"]').className.includes('animate-pop-in');`,
-      ),
-    ).toBe(true);
-    await run(`setComposer(''); return true;`);
-    await runWait(`return !$('[data-testid="slash-menu"]');`, {
-      label: "menu closed after its exit animation",
-    });
-    // Unknown slash text remains an ordinary message after discovery settles.
-    await run(`setComposer('/unknown-command-zzzz'); return true;`);
+    expect(rows).toContain("skills:status");
+    expect(rows).not.toContain("skills:compact");
+    expect(rows).not.toContain("skills:review");
+    // The slash did not land in the composer.
+    expect(await run<string>(`return composer().textContent;`)).toBe("");
+    // Escape hands the slash back, so a message can start with one; it
+    // goes as written.
+    await app.press("Escape");
     await runWait(
-      `const menu = $('[data-testid="slash-menu"]');
-       return !!menu && menu.textContent.includes('No matching commands') &&
-         !menu.querySelector('[aria-busy="true"]');`,
-      { label: "unknown command after discovery" },
+      `return document.activeElement === composer() && composer().textContent === '/';`,
+      { label: "slash back in the composer" },
     );
-    await run(`
-      composer().dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', bubbles: true, cancelable: true }));
-      return true;
-    `);
+    await app.insertText("unknown-command-zzzz");
+    await app.press("Enter");
     await runWait(
       `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /unknown-command-zzzz');`,
       { timeoutMs: 30_000, label: "harness received the raw command" },
@@ -957,4 +943,118 @@ describe("dock modes", () => {
       server.close();
     }
   }, 90_000);
+
+  it("in its own window, \"/\" opens the workspace's Skills mode, the skill lands in the dock's chat with its pills, and a chat in a tab keeps its skills in the workspace", async () => {
+    const idle = `!frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,')`;
+    await runWait(`return ${idle};`, {
+      label: "the previous turn ended",
+      timeoutMs: 40_000,
+    });
+    await app.movePointer({ x: 1, y: 1 });
+    await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
+    const dock = await app.connectToFrame("surface=dock");
+    const dockRun = <T = unknown>(body: string) =>
+      dock.eval<T>(`(() => { ${helpers}\n${body} })()`);
+    const dockWait = <T = unknown>(
+      body: string,
+      opts?: { timeoutMs?: number; label?: string },
+    ) => dock.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+    // The workspace window's palette, the one "/" opens.
+    const palette = `const input = document.activeElement;
+      const dialog = input?.getAttribute('aria-label') === 'Search commands, pages, and more' ? input.closest('[role="dialog"]') : null;
+      const chip = dialog?.querySelector('[data-testid="palette-mode-chip"]')?.textContent.trim();
+      const rows = dialog ? [...dialog.querySelectorAll('[role="option"]')].map((el) => el.dataset.itemId) : [];`;
+    const slashInDock = async () => {
+      await dockRun(
+        `composer().dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true })); return true;`,
+      );
+      await runWait(
+        `${palette} return chip === 'Skills' && rows.includes('skills:writing-workflows');`,
+        { label: "the workspace's Skills mode", timeoutMs: 15_000 },
+      );
+    };
+    try {
+      await dockWait(`return !!composer();`, {
+        label: "chat in the dock window",
+      });
+      await dockRun(
+        `composer().focus(); setReactValue(composer(), ''); const data = new DataTransfer(); data.setData('text/plain', 'Release notes. '.repeat(120)); composer().dispatchEvent(new ClipboardEvent('paste', {bubbles:true,cancelable:true,clipboardData:data})); return true;`,
+      );
+      await dockWait(
+        `return composer().querySelectorAll('[data-pill-id]').length === 1;`,
+        { label: "a pill in the dock's composer" },
+      );
+      await slashInDock();
+      await app.insertText("writing-workflows");
+      await runWait(
+        `${palette} return rows[0] === 'skills:writing-workflows';`,
+      );
+      await app.press("Enter");
+      await dockWait(
+        `const sent = [...frontDock().querySelectorAll('[data-user-message]')].pop();
+         return !!sent?.querySelector('[data-testid="sent-skill"]') && !!sent.querySelector('[data-testid="sent-pill"]') &&
+           composer().querySelectorAll('[data-pill-id]').length === 0;`,
+        {
+          label: "the skill and its pill in the dock's chat",
+          timeoutMs: 30_000,
+        },
+      );
+      await dockWait(
+        `const log = frontDock().querySelector('[role="log"]').textContent;
+         return log.includes('[prose] Use the "writing-workflows" skill.') && log.includes('Received 1 attachment') && ${idle};`,
+        { label: "the agent got both", timeoutMs: 30_000 },
+      );
+      // Escape gives the dock's composer back what was typed.
+      await slashInDock();
+      await app.insertText("usr");
+      await app.press("Escape");
+      await dockWait(`return composer().textContent === '/usr';`, {
+        label: "the slash back in the dock's composer",
+      });
+      await dockRun(`setReactValue(composer(), ''); return true;`);
+      // A chat in a tab is the workspace window's: "/" there applies there.
+      await run(
+        `window.focus(); pressKey('p', { metaKey: true }); return true;`,
+      );
+      await runWait(
+        `const input = document.activeElement; return input?.getAttribute('aria-label') === 'Search commands, pages, and more';`,
+        { label: "palette open in the workspace" },
+      );
+      await app.insertText("agent");
+      await app.press("Space");
+      await app.insertText("hello from a tab");
+      await app.press("Enter", process.platform === "darwin" ? 4 : 2);
+      await runWait(
+        `const tab = $$('[data-chat-tab]').find((el) => !el.inert);
+         return !!tab && tab.textContent.includes('You said: hello from a tab') && ${idle.replaceAll("frontDock()", "tab")};`,
+        { label: "a chat in a tab", timeoutMs: 30_000 },
+      );
+      await run(
+        `$$('[data-chat-tab]').find((el) => !el.inert).querySelector('[data-composer-input]').focus(); return true;`,
+      );
+      await app.press("Slash");
+      await runWait(
+        `${palette} return chip === 'Skills' && rows.includes('skills:writing-workflows');`,
+        { label: "the tab chat's Skills mode", timeoutMs: 15_000 },
+      );
+      await app.insertText("writing-workflows");
+      await runWait(
+        `${palette} return rows[0] === 'skills:writing-workflows';`,
+      );
+      await app.press("Enter");
+      await runWait(
+        `const tab = $$('[data-chat-tab]').find((el) => !el.inert);
+         return !!tab && tab.textContent.includes('skill loaded: writing-workflows');`,
+        { label: "the skill ran in the tab chat", timeoutMs: 30_000 },
+      );
+      await runWait(
+        `return document.activeElement === $$('[data-chat-tab]').find((el) => !el.inert).querySelector('[data-composer-input]');`,
+        { label: "the tab chat's composer has the keyboard back" },
+      );
+      expect(app.getRendererErrors()).toEqual([]);
+    } finally {
+      dock.close();
+      await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
+    }
+  }, 120_000);
 });

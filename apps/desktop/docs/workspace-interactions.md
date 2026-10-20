@@ -178,10 +178,20 @@ text and never echoes the draft message.
 Every palette mode has one shape (ADR 0186): a chip, typed names, and rows that
 are ranked, computed, or loaded. Type a name then Space or Tab, or pick it from
 the @ list; Backspace on an empty input leaves. Choice pickers, sidebar searches,
-Sites, Commands (also `>`) and workspace.js `palette.modes` all use it. Results rank
-by match, row kind and use: commands and surfaces before pages, frequent
-destinations first, and rows picked earlier for a query. The empty palette shows
-starting actions, the focused site's settings, then up to six Frequent rows.
+Sites, Commands (also `>`), Skills (also `/`) and workspace.js `palette.modes` all
+use it. Results rank by match, row kind and use: commands and surfaces before
+pages, frequent destinations first, and rows picked earlier for a query. The
+empty palette shows starting actions, the focused site's settings, then up to
+six Frequent rows.
+
+Skills (ADR 0270) are the palette's, never a composer menu. `/` in a composer
+with no prose opens the Skills mode aimed at that chat; Escape hands back the
+slash and what followed it, Backspace on the empty mode an empty composer, and
+whatever the composer then sends goes as written. Enter applies a skill to the
+chat in front, ⌘↵ starts a chat with it, ⌥↵ a floating one. Tab, or Space after
+a full name, puts the skill in the chip and takes its instructions; Backspace on them returns
+to the list. Applied to its chat, a skill takes the pills of a composer with no
+prose along; a new chat starts with the skill alone.
 
 Find (`find`, Cmd+F) acts on what is in front: a web page opens its find bar,
 a diff focuses its own search, and anywhere else the key stays with what has

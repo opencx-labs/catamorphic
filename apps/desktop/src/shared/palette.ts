@@ -131,6 +131,7 @@ export const BUILTIN_PALETTE_TRIGGERS = {
   settings: ["settings", "preferences"],
   sites: ["sites"],
   commands: ["commands"],
+  skills: ["skills"],
   model: ["model"],
   effort: ["effort"],
   "permission-mode": ["permissions"],

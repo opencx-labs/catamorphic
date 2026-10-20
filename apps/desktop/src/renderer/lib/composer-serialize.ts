@@ -26,7 +26,7 @@ export interface SerializedComposer<T> {
   message: string;
   /** Pills in marker order (exiting pills are skipped). */
   attachments: T[];
-  /** Prose without markers — what "the draft says" (slash menu, emptiness). */
+  /** Prose without markers — what "the draft says" ("/" for skills, emptiness). */
   text: string;
 }
 

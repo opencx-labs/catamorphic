@@ -2,7 +2,7 @@ import { useCatamorphic } from "@catamorphic/react";
 import { useEffect, useMemo, useState } from "react";
 
 /**
- * A skill as the palette and composer see it: the tiers merged by core
+ * A skill as the palette sees it: the tiers merged by core
  * (`GET /projects/:id/skills`) — project skills from `.work/skills/`, the
  * user's personal skills (ADR 0056), host skills shipped by the app
  * (ADR 0049); name collisions resolve project > user > host.
@@ -12,6 +12,8 @@ export interface SkillInfo {
   /** Human-facing name (frontmatter `title`, else the humanized slug). */
   title: string;
   description: string;
+  /** Frontmatter `argument-hint`: what the instructions say, e.g. "[issue-number]". */
+  argumentHint?: string;
   path: string;
   source: "project" | "user" | "host";
 }
@@ -73,10 +75,12 @@ export function useProjectSkillCatalog(
       cancelled = true;
     };
   }, [request]);
+  // One empty list: rows built from it keep their identity across renders.
   return catalog.request === request
     ? catalog
-    : { skills: [], loading: active };
+    : { skills: NO_SKILLS, loading: active };
 }
+const NO_SKILLS: SkillInfo[] = [];
 
 /** Shared by both skill launchers; an empty picked set really offers no skills. */
 export function skillsForAgent(

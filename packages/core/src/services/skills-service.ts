@@ -22,6 +22,11 @@ export interface ProjectSkill {
   title: string;
   description: string;
   /**
+   * Frontmatter `argument-hint`: what an invocation's instructions say
+   * ("[issue-number]"), shown where they are typed. Absent for free text.
+   */
+  argumentHint?: string;
+  /**
    * For project skills, the SKILL.md path relative to the project root; for
    * host skills, relative to the host-skills root (`<name>/SKILL.md`).
    */
@@ -236,16 +241,8 @@ function skillsFromTier(
   return Object.entries(files)
     .filter(([path]) => path.endsWith("/SKILL.md"))
     .map(([path, content]) => {
-      const frontmatter = parseSkillFrontmatter(content);
       const dirName = path.slice(0, path.length - "/SKILL.md".length);
-      const name = frontmatter.name ?? dirName;
-      return {
-        name,
-        title: frontmatter.title ?? humanizeSkillName(name),
-        description: frontmatter.description ?? "",
-        path,
-        source,
-      };
+      return skillFrom({ content, dirName, path, source });
     });
 }
 
@@ -256,22 +253,44 @@ function skillsFromFiles(files: Record<string, string>): ProjectSkill[] {
       ([file]) =>
         file.startsWith(`${PROJECT_SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     )
-    .map(([file, source]) => {
-      const frontmatter = parseSkillFrontmatter(source);
-      const dirName = file.slice(
-        PROJECT_SKILLS_DIR.length + 1,
-        file.length - "/SKILL.md".length,
-      );
-      const name = frontmatter.name ?? dirName;
-      return {
-        name,
-        title: frontmatter.title ?? humanizeSkillName(name),
-        description: frontmatter.description ?? "",
+    .map(([file, content]) =>
+      skillFrom({
+        content,
+        dirName: file.slice(
+          PROJECT_SKILLS_DIR.length + 1,
+          file.length - "/SKILL.md".length,
+        ),
         path: file,
-        source: "project" as const,
-      };
-    })
+        source: "project",
+      }),
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** One SKILL.md as a listed skill, whatever tier it comes from. */
+function skillFrom({
+  content,
+  dirName,
+  path,
+  source,
+}: {
+  content: string;
+  dirName: string;
+  path: string;
+  source: ProjectSkill["source"];
+}): ProjectSkill {
+  const frontmatter = parseSkillFrontmatter(content);
+  const name = frontmatter.name ?? dirName;
+  return {
+    name,
+    title: frontmatter.title ?? humanizeSkillName(name),
+    description: frontmatter.description ?? "",
+    ...(frontmatter.argumentHint
+      ? { argumentHint: frontmatter.argumentHint }
+      : {}),
+    path,
+    source,
+  };
 }
 
 /**
@@ -284,10 +303,16 @@ export function parseSkillFrontmatter(source: string): {
   name?: string;
   title?: string;
   description?: string;
+  argumentHint?: string;
 } {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match?.[1]) return {};
-  const result: { name?: string; title?: string; description?: string } = {};
+  const result: {
+    name?: string;
+    title?: string;
+    description?: string;
+    argumentHint?: string;
+  } = {};
   for (const line of match[1].split("\n")) {
     const colon = line.indexOf(":");
     if (colon === -1) continue;
@@ -299,6 +324,8 @@ export function parseSkillFrontmatter(source: string): {
     if (key === "name") result.name = value;
     if (key === "title") result.title = value;
     if (key === "description") result.description = value;
+    // Claude Code's spelling, so one SKILL.md reads the same in both.
+    if (key === "argument-hint") result.argumentHint = value;
   }
   return result;
 }

@@ -29794,6 +29794,9 @@
                       "description": {
                         "type": "string"
                       },
+                      "argumentHint": {
+                        "type": "string"
+                      },
                       "path": {
                         "type": "string"
                       },

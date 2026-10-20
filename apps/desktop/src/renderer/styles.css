@@ -530,7 +530,7 @@ kbd {
 }
 
 /* Popover surfaces anchored to a control (surface-rail popovers, the
-   composer's slash menu): a quick rise + settle in, the reverse on the
+   downloads bubble): a quick rise + settle in, the reverse on the
    way out. Exit holds its final frame until React unmounts on
    animationend. */
 @keyframes pop-in {

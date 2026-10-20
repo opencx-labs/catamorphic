@@ -631,6 +631,7 @@ export type KeyName = keyof typeof KEY_CODES;
 const KEY_CODES = {
   p: { windowsVirtualKeyCode: 80, code: "KeyP" },
   Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
+  Slash: { key: "/", windowsVirtualKeyCode: 191, code: "Slash", text: "/" },
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
   b: { windowsVirtualKeyCode: 66, code: "KeyB" },
   f: { windowsVirtualKeyCode: 70, code: "KeyF" },
