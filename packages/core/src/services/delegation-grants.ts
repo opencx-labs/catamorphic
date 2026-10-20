@@ -149,31 +149,50 @@ export function chooseGrant(
  * which was chosen for the old one. Another agent starts on its own. A
  * grant's list holds what the child runs on, not only what is asked: an
  * unlisted inherited or default setting gives way to the first listed.
+ * `at-most-parent` holds what it runs on to the parent's effort too, when
+ * the parent's is known.
  */
 export function childSettings(input: {
   grant: AgentDelegationGrant;
   copy: boolean;
   requested: { model?: string; effort?: AgentEffort };
   parent: { model?: string; effort?: AgentEffort };
+  /** The parent chat's effort now: its own, or its agent's default. */
+  parentEffort?: AgentEffort;
+  /** The target agent's own defaults, what runs when nothing is set. */
+  own: { model?: string; effort?: AgentEffort };
   modelNames?: DelegationRequest["modelNames"];
 }): { model?: string; effort?: AgentEffort } {
-  const { grant, copy, requested, parent } = input;
+  const { grant, copy, requested, parent, own } = input;
   let model = requested.model ?? (copy ? parent.model : undefined);
+  const runningModel = model ?? own.model;
   if (
     Array.isArray(grant.model) &&
     requested.model === undefined &&
-    !(model !== undefined && listed(grant.model, model, input.modelNames))
+    !(
+      runningModel !== undefined &&
+      listed(grant.model, runningModel, input.modelNames)
+    )
   )
     model = grant.model[0];
   let effort =
     requested.effort ??
     (copy && requested.model === undefined ? parent.effort : undefined);
+  const runningEffort = effort ?? own.effort;
   if (
     Array.isArray(grant.effort) &&
     requested.effort === undefined &&
-    !(effort !== undefined && grant.effort.includes(effort))
+    !(runningEffort !== undefined && grant.effort.includes(runningEffort))
   )
     effort = grant.effort[0];
+  if (
+    grant.effort === "at-most-parent" &&
+    input.parentEffort &&
+    runningEffort &&
+    AGENT_EFFORT_LEVELS.indexOf(runningEffort) >
+      AGENT_EFFORT_LEVELS.indexOf(input.parentEffort)
+  )
+    effort = input.parentEffort;
   return {
     ...(model !== undefined ? { model } : {}),
     ...(effort !== undefined ? { effort } : {}),

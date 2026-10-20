@@ -33,7 +33,10 @@ import {
   AgentTurnInProgressError,
 } from "../services/agent-sessions-service.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
-import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
+import type {
+  AgentTurnContext,
+  RegisteredCodingAgent,
+} from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -308,6 +311,8 @@ describe("agent session coordination", () => {
   const provider = new CoordinationAdapter();
   /** What the read-only-capable harness was started with. */
   const readerAttempts: AttemptStart[] = [];
+  /** What the host was told when it mounted the reader's servers. */
+  const readerContexts: AgentTurnContext[] = [];
   const checkpointedTurns: Array<{
     sessionId: string;
     workingDirectory: string;
@@ -402,6 +407,10 @@ describe("agent session coordination", () => {
                 readerAttempts.push(attempt);
                 return provider.start(attempt, host);
               },
+            },
+            mcpServers: (context: AgentTurnContext) => {
+              readerContexts.push(context);
+              return {};
             },
             hostTools: [
               {
@@ -1769,13 +1778,19 @@ describe("agent session coordination", () => {
       ?.hostTools.map((tool) => tool.name);
     expect(tools).toContain("read_page");
     expect(tools).not.toContain("run_background_command");
-    expect(tools).not.toContain("spawn_subsession");
+    // Its subagents read only too, so it keeps starting them.
+    expect(tools).toContain("spawn_subsession");
     expect(
       await sessions.agentSandboxing({
         projectId: project.id,
         sessionId: look.session.id,
       }),
     ).toBe("contained");
+    // The host mounts nothing that writes for it.
+    expect(
+      readerContexts.find((context) => context.sessionId === look.session.id)
+        ?.readOnly,
+    ).toBe(true);
     const lookRow = await db
       .selectFrom("agent_sessions")
       .select("system_prompt")

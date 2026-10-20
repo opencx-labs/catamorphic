@@ -588,6 +588,7 @@ const LegacyDelegationSchema = z.object({
   routes: z.array(
     z.object({
       target: z.string().min(1),
+      description: z.string().max(500).optional(),
       allowFurtherDelegation: z.boolean().optional(),
     }),
   ),
@@ -612,6 +613,7 @@ function storedDelegation(value: unknown): AgentDelegationPolicy | undefined {
       : {}),
     agents: legacy.data.routes.map((route) => ({
       agent: route.target,
+      ...(route.description ? { description: route.description } : {}),
       delegate: route.allowFurtherDelegation ?? true,
     })),
   });

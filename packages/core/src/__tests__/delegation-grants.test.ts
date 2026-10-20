@@ -162,7 +162,7 @@ describe("delegation grants (ADR 0270)", () => {
       effort: "high",
     };
     expect(
-      childSettings({ grant: any, copy: true, requested: {}, parent }),
+      childSettings({ grant: any, copy: true, requested: {}, parent, own: {} }),
     ).toEqual({ model: "opus", effort: "high" });
     // A new model drops the effort chosen for the old one.
     expect(
@@ -171,11 +171,18 @@ describe("delegation grants (ADR 0270)", () => {
         copy: true,
         requested: { model: "haiku" },
         parent,
+        own: {},
       }),
     ).toEqual({ model: "haiku" });
     // Another agent starts on its own.
     expect(
-      childSettings({ grant: any, copy: false, requested: {}, parent }),
+      childSettings({
+        grant: any,
+        copy: false,
+        requested: {},
+        parent,
+        own: {},
+      }),
     ).toEqual({});
     const listed = policy([
       { agent: "self", model: ["claude-sonnet-5-5"], effort: ["low"] },
@@ -187,6 +194,7 @@ describe("delegation grants (ADR 0270)", () => {
         copy: true,
         requested: {},
         parent,
+        own: {},
         modelNames,
       }),
     ).toEqual({ model: "claude-sonnet-5-5", effort: "low" });
@@ -196,9 +204,73 @@ describe("delegation grants (ADR 0270)", () => {
         copy: true,
         requested: {},
         parent: { model: "sonnet", effort: "low" },
+        own: {},
         modelNames,
       }),
     ).toEqual({ model: "sonnet", effort: "low" });
+    // Another agent's own listed default stands; an unlisted one gives way.
+    const reviewer = policy([
+      { agent: "reviewer", model: ["sonnet", "opus"], effort: ["high", "max"] },
+    ]).agents[0];
+    if (!reviewer) throw new Error("Expected a grant");
+    expect(
+      childSettings({
+        grant: reviewer,
+        copy: false,
+        requested: {},
+        parent,
+        own: { model: "opus", effort: "max" },
+        modelNames,
+      }),
+    ).toEqual({});
+    expect(
+      childSettings({
+        grant: reviewer,
+        copy: false,
+        requested: {},
+        parent,
+        own: { model: "haiku", effort: "low" },
+        modelNames,
+      }),
+    ).toEqual({ model: "sonnet", effort: "high" });
+  });
+
+  it("holds what a child runs on to the parent's effort, not only what is asked", () => {
+    const capped = policy([{ agent: "*", effort: "at-most-parent" }]).agents[0];
+    if (!capped) throw new Error("Expected a grant");
+    // Another agent whose own effort is max, beside a parent at low.
+    expect(
+      childSettings({
+        grant: capped,
+        copy: false,
+        requested: {},
+        parent: { model: "opus", effort: "low" },
+        parentEffort: "low",
+        own: { effort: "max" },
+      }),
+    ).toEqual({ effort: "low" });
+    // A copy on a new model, whose agent default is above the parent's.
+    expect(
+      childSettings({
+        grant: capped,
+        copy: true,
+        requested: { model: "sonnet" },
+        parent: { model: "opus", effort: "medium" },
+        parentEffort: "medium",
+        own: { effort: "xhigh" },
+      }),
+    ).toEqual({ model: "sonnet", effort: "medium" });
+    // At or under the parent's, nothing changes.
+    expect(
+      childSettings({
+        grant: capped,
+        copy: false,
+        requested: {},
+        parent: {},
+        parentEffort: "high",
+        own: { effort: "low" },
+      }),
+    ).toEqual({});
   });
 
   it("refuses a definition that still names routes", () => {

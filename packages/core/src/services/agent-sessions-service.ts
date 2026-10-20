@@ -4884,9 +4884,12 @@ export class AgentSessionsService {
         ? (input.agent.harness.hostTools ?? [])
         : [];
     const own = [
-      // A read-only chat keeps the host's tools that only read (ADR 0270).
+      // A read-only chat keeps the host's tools that only read, and its
+      // subagents, which read only too (ADR 0270).
       ...(input.session.read_only
-        ? hosted.filter((tool) => tool.readOnly === true)
+        ? hosted.filter(
+            (tool) => tool.readOnly === true || SUBSESSION_TOOLS.has(tool.name),
+          )
         : hosted),
       ASK_USER_HOST_TOOL,
       this.closeQuestionsTool(input.session.id),
@@ -5346,6 +5349,7 @@ export class AgentSessionsService {
       sessionId,
       turnId: turn.id,
       workingDirectory,
+      ...(session.read_only ? { readOnly: true } : {}),
       caller: {
         tenantId: identity.tenantId,
         externalUserId: identity.externalUserId,
@@ -8975,6 +8979,15 @@ export class AgentSessionsService {
         ...(source.model ? { model: source.model } : {}),
         ...(effortOf(source.model_effort)
           ? { effort: effortOf(source.model_effort) }
+          : {}),
+      },
+      ...(parentEffort ? { parentEffort } : {}),
+      own: {
+        ...(targetAgent.defaults?.model
+          ? { model: targetAgent.defaults.model }
+          : {}),
+        ...(targetAgent.defaults?.effort
+          ? { effort: targetAgent.defaults.effort }
           : {}),
       },
       modelNames,
@@ -12829,6 +12842,13 @@ function sessionVisibility(value: string): SessionVisibility {
   }
   throw new Error(`Invalid session visibility '${value}'`);
 }
+
+/** The host's subsession tools: a read-only chat's children read only. */
+const SUBSESSION_TOOLS = new Set([
+  "spawn_subsession",
+  "wait_for_subsessions",
+  "interrupt_subsession",
+]);
 
 /** What a read-only chat is told about itself (ADR 0270). */
 const READ_ONLY_NOTE =

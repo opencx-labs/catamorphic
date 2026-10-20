@@ -26,6 +26,11 @@ export interface AgentTurnContext
   extends Omit<ExtraToolContext, "stopWaiting"> {
   /** The turn the hook serves. */
   turnId: string;
+  /**
+   * The chat runs read-only (ADR 0270): the host mounts nothing for it
+   * that writes past the harness's read-only mode.
+   */
+  readOnly?: boolean;
 }
 
 /**

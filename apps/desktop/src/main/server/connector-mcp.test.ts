@@ -57,7 +57,7 @@ function serve(
     /** The connection's own policy, e.g. rename asks. */
     policy?: Record<string, unknown>;
     approval?: "allow" | "deny";
-    session?: "missing";
+    session?: "missing" | "read-only";
     /** What the connector's call throws instead of answering. */
     failure?: Error;
   } = {},
@@ -80,6 +80,7 @@ function serve(
             // The caller's role denies purge.
             return {
               agentId: "agent",
+              readOnly: surface.session === "read-only",
               toolPolicies: { probe: [{ tools: { purge: "deny" } }] },
             };
           },
@@ -142,6 +143,14 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
 
   it("lists only reads for a contained agent and refuses its writes", async () => {
     const { rpc, callTool } = serve({ readOnly: true });
+    expect((await rpc("tools/list")).json().result.tools).toEqual([LOOKUP]);
+    const called = await rpc("tools/call", { name: "rename", arguments: {} });
+    expect(called.json()).toMatchObject({ error: { code: -32602 } });
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("lists only reads for a read-only chat of any agent (ADR 0270)", async () => {
+    const { rpc, callTool } = serve({ session: "read-only" });
     expect((await rpc("tools/list")).json().result.tools).toEqual([LOOKUP]);
     const called = await rpc("tools/call", { name: "rename", arguments: {} });
     expect(called.json()).toMatchObject({ error: { code: -32602 } });

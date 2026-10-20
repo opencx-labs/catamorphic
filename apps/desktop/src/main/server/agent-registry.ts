@@ -1312,7 +1312,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   mcp,
                   context,
                 }),
-                ...(mcp.nativeServers ?? {}),
+                // Computer use acts: a read-only chat goes without it.
+                ...(context.readOnly ? {} : (mcp.nativeServers ?? {})),
               };
             },
             toolPolicies: () =>

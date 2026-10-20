@@ -37,14 +37,16 @@ ceiling; a grant author who wants it held sets `fixed`.
 **A copy starts from the parent chat**: its model and effort, as a pair, so
 a new model drops the old effort. Another agent starts on its own defaults.
 A grant's list bounds what the child runs on: an unlisted inherited or
-default setting gives way to the first listed.
+default setting gives way to the first listed. `at-most-parent` caps the
+effort it runs on at the parent's, when the parent's is known.
 
 **Narrowing needs no grant.** `delegate: false` and `read_only`. A read-only
 chat runs in its harness's read-only mode (Claude Code `plan`, without a
 shell; Codex's `read-only` sandbox; others refuse), keeps only host tools
-marked `readOnly`, and counts as `contained` for capabilities, connections
-and connectors. Its children and forks read only too. Widening is never a
-spawn setting.
+marked `readOnly` and its subsession tools, counts as `contained` for
+capabilities, connections and connectors, and its host mounts nothing that
+writes (the turn context says `readOnly`). Its children and forks read only
+too. Widening is never a spawn setting.
 
 **The harness decides what exists.** A model and effort must be ones the
 target's harness offers (0214). Core asks the host's optional
