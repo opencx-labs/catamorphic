@@ -152,6 +152,9 @@ import { DEFAULT_WORKSPACE_FILE } from "./workspace-config.js";
  *  - unpacked Chrome extensions loaded per profile.
  */
 
+/** How long the share picker waits on a tab's thumbnail before listing it bare. */
+const TAB_THUMBNAIL_TIMEOUT_MS = 750;
+
 /**
  * The app a link would open, named for the prompt ("wants to open Slack").
  * Only the scheme and the registered app's name leave this function; the
@@ -1766,8 +1769,11 @@ export function registerBrowserSupport(
                   /^https?:/i.test(contents.getURL()),
               )
               .map(async (contents): Promise<ScreenShareSource> => {
-                const thumbnail = await contents
-                  .capturePage()
+                // A background tab is a hidden webview, and on macOS its
+                // capture can wait forever on a frame it never paints. It
+                // gets no thumbnail rather than holding back the list.
+                const capture = contents
+                  .capturePage(undefined, { stayHidden: true })
                   .then((image) =>
                     image.isEmpty()
                       ? null
@@ -1776,6 +1782,16 @@ export function registerBrowserSupport(
                           .toDataURL(),
                   )
                   .catch(() => null);
+                let timer: NodeJS.Timeout | undefined;
+                const thumbnail = await Promise.race([
+                  capture,
+                  new Promise<null>((resolve) => {
+                    timer = setTimeout(
+                      () => resolve(null),
+                      TAB_THUMBNAIL_TIMEOUT_MS,
+                    );
+                  }),
+                ]).finally(() => clearTimeout(timer));
                 const url = contents.getURL();
                 return {
                   id: `tab:${contents.id}`,
