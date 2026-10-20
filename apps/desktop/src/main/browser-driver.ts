@@ -890,9 +890,7 @@ export class BrowserDriver {
       // address bar does; a page holding on with beforeunload asks again.
       if (open) pageDialogs()?.cancel(this.guest.id);
       this.watch();
-      return this.untilDialog((live) =>
-        this.perform(action, live, stopWaiting),
-      );
+      return this.untilDialog((live) => this.perform(action, live));
     });
   }
 
@@ -903,7 +901,6 @@ export class BrowserDriver {
     >,
     /** Throws once the page opened a dialog and the action was given up. */
     live: () => void,
-    stopWaiting: AbortSignal,
   ): Promise<unknown> {
     try {
       switch (action.type) {
