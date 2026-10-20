@@ -219,6 +219,33 @@ describe("VoiceEngine", () => {
     ).toHaveLength(1);
   });
 
+  it("waits for the person to finish before it starts talking, then says it", async () => {
+    const voice = harness(["and check the tests too"]);
+    // The person is already talking when a reply comes in.
+    voice.frame(0.5, 40);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    // Held from its first word: nothing played before the pause.
+    expect(voice.audio[0]).toEqual({ type: "pause" });
+    voice.frame(0.5, 100);
+    voice.frame(0);
+    await voice.settle();
+    // Their words reach the agent, and what it held is said after them.
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    expect(voice.events).not.toContainEqual({ type: "barge-in" });
+    expect(voice.events).not.toContainEqual({
+      type: "spoken",
+      id: "reply",
+      interrupted: true,
+    });
+    expect(voice.events.at(-1)).toEqual({
+      type: "utterance",
+      text: "and check the tests too",
+      segment: 1,
+    });
+    expect(voice.engine.audible).toBe(true);
+  });
+
   it("carries on where it paused when it heard its own voice", async () => {
     const voice = harness(["answer about the build"]);
     voice.engine.speak("reply", "Here is a long answer about the build.");
@@ -402,6 +429,20 @@ describe("VoiceEngine voice print", () => {
     expect(controls(voice)).toEqual([]);
     expect(voice.events).not.toContainEqual({ type: "barge-in" });
     expect(voice.engine.audible).toBe(true);
+  });
+
+  it("waits for the person, not for someone else, once a second tells", async () => {
+    const voice = harness(["what is on tonight"]);
+    voice.engine.setVoiceprint([1, 0]);
+    voice.frame(0.3, 40);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause"]);
+    voice.frame(0.3, 80);
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    voice.frame(0);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({ type: "ignored" });
   });
 
   it("pauses for the person's voice, and stops once their words end", async () => {

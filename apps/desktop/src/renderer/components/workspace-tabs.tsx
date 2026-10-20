@@ -594,12 +594,16 @@ function TabStrip({
                     ? ""
                     : "animate-tab-in"
               } ${
+                // The tab in front wears the theme's accent, as an open
+                // chat's bubble does: a neutral border on the strip's near
+                // black was hard to find. The palette's target keeps the
+                // full accent, so the two still read apart.
                 highlighted
                   ? active
                     ? "border-accent bg-bg text-fg"
                     : "border-accent text-fg"
                   : active
-                    ? "border-border bg-bg text-fg"
+                    ? "border-accent/60 bg-bg text-fg"
                     : secondary
                       ? "border-border bg-bg text-fg-muted"
                       : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
@@ -654,8 +658,9 @@ function TabStrip({
                   className="workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 self-stretch px-2.5"
                   aria-current={active || undefined}
                 >
-                  {/* Same signal vocabulary as the chat bubbles: spinner
-                  while working; unread/draft/question land as badges. */}
+                  {/* Same signal vocabulary as the chat bubbles: a spinner
+                  on the icon's corner while working (the icon still names
+                  the tab); unread/draft/question land as badges there. */}
                   <span className="relative grid size-3.5 shrink-0 place-items-center">
                     <SignalGlyph
                       working={tab.working ?? false}

@@ -3,10 +3,12 @@ import type { ReactNode } from "react";
 
 /**
  * The shared indicator vocabulary for chat surfaces. Every place that
- * represents a chat as an icon — bottom-strip bubbles, workspace tabs, the
- * collapsed aggregate bubble — renders the same signals the same way:
+ * represents a chat as an icon — bottom-strip bubbles, workspace tabs,
+ * sidebar rows, chips, the collapsed aggregate bubble — renders the same
+ * signals the same way:
  *
- * - working:       the icon cross-fades to a spinner (the agent is busy)
+ * - working:       a small spinner on the icon's corner (the agent is
+ *                  busy); the icon stays, so the surface keeps its identity
  * - awaitingInput: pulsing accent "?" badge (the agent asked and is waiting)
  * - attention:     pulsing accent dot (a workflow asked the user to open it)
  * - unread:        filled accent dot (a reply landed while the surface was
@@ -35,7 +37,13 @@ export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
   attention: list.some((signals) => signals.attention),
 });
 
-/** Base icon that cross-fades to a spinner while the agent works. */
+/**
+ * Base icon with the working spinner on its top-right corner. The icon
+ * stays, so a busy chat, tab or chip still shows which one it is; the
+ * spinner cuts its own gap out of the icon so it reads on any background.
+ * It takes the corner `SignalBadge` uses on an icon, which shows no badge
+ * while working.
+ */
 export function SignalGlyph({
   working = false,
   awaitingInput = false,
@@ -44,7 +52,7 @@ export function SignalGlyph({
 }: {
   working?: boolean;
   awaitingInput?: boolean;
-  /** Size of the icon box (the icon and spinner share it). */
+  /** Size of the icon box. */
   className?: string;
   /** The base icon (lucide icon, favicon img, …), sized to fill the box. */
   children: ReactNode;
@@ -53,17 +61,22 @@ export function SignalGlyph({
   return (
     <span className={`relative grid shrink-0 place-items-center ${className}`}>
       <span
-        className={`col-start-1 row-start-1 grid size-full place-items-center transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          busy ? "scale-50 opacity-0" : "scale-100 opacity-100"
-        }`}
+        className="signal-cutout grid size-full place-items-center"
+        data-cut={busy || undefined}
       >
         {children}
       </span>
-      <LoaderCircle
-        className={`col-start-1 row-start-1 size-full text-accent transition-[opacity] duration-200 ${
-          busy ? "animate-spin opacity-100" : "opacity-0"
+      <span
+        className={`absolute -right-1 -top-1 grid size-3 place-items-center transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          busy ? "scale-100 opacity-100" : "scale-0 opacity-0"
         }`}
-      />
+        aria-hidden="true"
+      >
+        <LoaderCircle
+          strokeWidth={3}
+          className={`size-2 text-accent ${busy ? "animate-spin" : ""}`}
+        />
+      </span>
     </span>
   );
 }

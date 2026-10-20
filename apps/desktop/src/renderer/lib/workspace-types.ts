@@ -10,7 +10,7 @@ import type { SettingsDestination } from "../../shared/settings-catalog.js";
  * pulsing "?" for a waiting agent question.
  */
 interface TabIndicators {
-  /** Agent working → the icon cross-fades to a spinner. */
+  /** Agent working → a spinner rides the icon's corner. */
   working?: boolean;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;

@@ -1,6 +1,6 @@
 # 0265 — Voice yields to the person, and keeps what they saw as they spoke
 
-- **Status:** Accepted
+- **Status:** Accepted; a reply ready while the person is already talking amended by [0267](0267-voice-waits-for-the-person-to-finish.md)
 - **Date:** 2026-10-19
 - **Amends:** 0216 (voice), 0236 (hearing the person)
 

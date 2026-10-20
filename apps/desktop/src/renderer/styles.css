@@ -1215,6 +1215,31 @@ kbd {
   }
 }
 
+/* The working spinner on an icon's corner (SignalGlyph) cuts a gap
+   out of the icon under it, so it reads on any row background. The gap
+   opens and closes with the spinner, centred where it turns. */
+@property --signal-cutout {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.signal-cutout {
+  mask-image: radial-gradient(
+    circle at calc(100% - 2px) 2px,
+    transparent calc(var(--signal-cutout) - 0.5px),
+    #000 var(--signal-cutout)
+  );
+  transition: --signal-cutout 200ms var(--ease-standard);
+}
+.signal-cutout[data-cut] {
+  --signal-cutout: 5.5px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .signal-cutout {
+    transition: none;
+  }
+}
+
 /* A workspace tab's close button takes no room in the strip, so the tab is
    only as wide as its icon and title. The button rides over the end of the
    label, where the title's padding was: its X covers the title's last 12px,

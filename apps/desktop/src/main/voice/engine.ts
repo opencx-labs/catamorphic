@@ -214,6 +214,8 @@ interface Stretch {
  * does. The person talking over the agent pauses it as they start (ADR
  * 0265): their words stop it for good, and anything else (its own voice
  * coming back, noise, someone else) lets it carry on where it paused.
+ * What it has to say once they are already talking waits for them to
+ * finish, then is said (ADR 0267).
  *
  * Only the person is heard (ADR 0236): the nearest voice that keeps
  * talking. Voice learns their voice and how loud they speak from what they
@@ -295,6 +297,13 @@ export class VoiceEngine {
   private pausedFor: number | null = null;
   /** The last stretch that paused the agent: one pause per stretch. */
   private overheard = 0;
+  /** The last stretch that began with the agent quiet. */
+  private quietAt = 0;
+  /**
+   * The last stretch the agent waited for: it had something to say only
+   * once the person was talking, so it held it until they finished.
+   */
+  private waitedFor = 0;
   /** Whether the paused stretch's voice was checked as it went on. */
   private pauseChecked = false;
   /** How often a stretch's voice was asked about before it could pause. */
@@ -350,6 +359,7 @@ export class VoiceEngine {
     if (!text.trim()) return;
     this.queue.push({ id, text });
     void this.drainSpeech();
+    this.waitForThePerson();
   }
 
   setVoice(voice: VoiceId): void {
@@ -593,7 +603,8 @@ export class VoiceEngine {
       this.pauseChecked = true;
       try {
         const stretch = this.stretchOf(concat(this.utterance), seconds);
-        if (this.whose(stretch, { speaking: true }) === "someone else")
+        const speaking = this.waitedFor !== this.segment;
+        if (this.whose(stretch, { speaking }) === "someone else")
           this.resumeSpeech();
       } catch {
         // Judged whole once it ends, which reports a failure.
@@ -622,6 +633,32 @@ export class VoiceEngine {
     this.pausedFor = this.segment;
     // Paused once it was long enough to tell whose: told already.
     this.pauseChecked = seconds >= VOICE_MIN_SECONDS;
+    this.audio({ type: "pause" });
+  }
+
+  /**
+   * Something to say only once the person was already talking waits for
+   * them to finish, from its first word: the agent never starts talking
+   * over them. The stretch began with the agent quiet, so it is not its
+   * own voice coming back and needs no moment to tell; someone else's
+   * voice, once a second tells, lets it speak (`overhear`). When the
+   * stretch ends, what was held is said, the person's words or not.
+   */
+  private waitForThePerson(): void {
+    if (
+      !this.inSpeech ||
+      this.dictation ||
+      this.learning ||
+      this.quietAt !== this.segment ||
+      this.overheard === this.segment ||
+      this.pausedFor !== null ||
+      !this.audible
+    )
+      return;
+    this.overheard = this.segment;
+    this.waitedFor = this.segment;
+    this.pausedFor = this.segment;
+    this.pauseChecked = false;
     this.audio({ type: "pause" });
   }
 
@@ -683,6 +720,7 @@ export class VoiceEngine {
   private beginSpeech(): void {
     this.inSpeech = true;
     this.segment += 1;
+    if (!this.audible) this.quietAt = this.segment;
     this.sincePartial = 0;
     this.speechPowers = [];
     this.speechSoFar = null;
@@ -831,7 +869,10 @@ export class VoiceEngine {
       return;
     }
     const heard = this.stretchOf(samples, speech);
-    const speaking = this.audible;
+    // Waited for, the agent was never talking over this stretch: it holds
+    // what it has to say until the stretch is heard, then says it.
+    const waited = this.waitedFor === segment;
+    const speaking = !waited && this.audible;
     // Not the person's words: what this stretch paused carries on.
     const carryOn = () => {
       if (this.pausedFor === segment) this.resumeSpeech();
@@ -861,7 +902,7 @@ export class VoiceEngine {
       return;
     }
     // The agent may have started talking while this was recognized.
-    const talking = speaking || this.audible;
+    const talking = !waited && (speaking || this.audible);
     // "Yeah" while it talks says go on: it neither stops nor answers it.
     // The keys held say the person means it.
     const goOn = talking && !pressed && isAcknowledgement(text);
