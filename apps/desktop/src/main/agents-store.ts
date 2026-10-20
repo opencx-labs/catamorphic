@@ -6,7 +6,10 @@ import type {
   AgentDelegationPolicy,
   AgentEnvironmentPolicy,
 } from "@catamorphic/core";
-import { AgentDelegationPolicySchema } from "@catamorphic/core";
+import {
+  AgentDelegationPolicySchema,
+  DEFAULT_DELEGATION_POLICY,
+} from "@catamorphic/core";
 import {
   harnessPermissionIssues,
   type McpToolPolicy,
@@ -568,7 +571,16 @@ export class AgentsStore {
     } else {
       apiKey = apiKeyPlaintext ?? null;
     }
-    return { ...rest, apiKey };
+    const { delegation, ...others } = rest;
+    // Delegation from before grants (ADR 0270) gives way to the default.
+    const grants = delegation
+      ? AgentDelegationPolicySchema.safeParse(delegation)
+      : undefined;
+    return {
+      ...others,
+      ...(grants?.success ? { delegation: grants.data } : {}),
+      apiKey,
+    };
   }
 }
 
@@ -619,16 +631,6 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},
-    delegation: agent.delegation ?? {
-      enabled: true,
-      maxConcurrentChildren: 10,
-      routes: [
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ],
-    },
+    delegation: agent.delegation ?? DEFAULT_DELEGATION_POLICY,
   };
 }

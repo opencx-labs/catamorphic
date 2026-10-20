@@ -16,6 +16,7 @@ export {
   type CodexSandboxMode,
   type HarnessPermissions,
   harnessPermissionIssues,
+  readOnlyPermissions,
 } from "./coding-agent/harness-permissions.js";
 export {
   buildPluginsPreamble,

@@ -3,9 +3,15 @@ import type {
   SessionMessageAuthor,
 } from "@catamorphic/agent-protocol";
 import type { AgentSession, AgentSessionDetail } from "@catamorphic/core";
-import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
+import type {
+  AgentEffort,
+  ExtraTool,
+  ExtraToolContext,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 import { voiceChatOf } from "../voice/conversation.js";
+
+const EFFORT = z.enum(["low", "medium", "high", "xhigh", "max"]);
 
 /**
  * What the assistant's session tools reach (ADR 0216): every chat of the
@@ -44,7 +50,13 @@ export interface AssistantAccess {
   start(
     projectId: string,
     assistantSessionId: string,
-    input: { task: string; title: string; agentId?: string },
+    input: {
+      task: string;
+      title: string;
+      agentId?: string;
+      model?: string;
+      effort?: AgentEffort;
+    },
   ): Promise<unknown>;
   /** The follower hears a chat's notes as it works, or stops hearing them. */
   follow(input: {
@@ -208,6 +220,16 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
           .describe(
             "An agent the person named, like the reviewer; leave out for their own agent",
           ),
+        model: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "A model to run it on, named as its agent's harness names it, when the work needs a stronger or a quicker one; leave out for the agent's own",
+          ),
+        effort: EFFORT.optional().describe(
+          "How hard it thinks; leave out for the agent's own",
+        ),
       },
       execute: async (input, context) => {
         if (!context.sessionId) throw new Error("This turn has no chat.");
@@ -230,6 +252,8 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
             request: String(input.request),
           }),
           ...(agentId ? { agentId } : {}),
+          ...(typeof input.model === "string" ? { model: input.model } : {}),
+          ...(input.effort ? { effort: EFFORT.parse(input.effort) } : {}),
         });
         return "Started. It will report back here.";
       },

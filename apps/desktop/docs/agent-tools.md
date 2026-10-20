@@ -47,7 +47,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 |---|---|
 | `workspace_overview`, `read_tab`, `open_surface`, `update_todo_list` | Eager, bounded workspace context, reading what is on screen, and visible handoff/progress |
 | `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing; a message steers by default (read at the other agent's next step, or a turn when it is idle), and a subagent's to its parent always does (ADR 0250) |
-| `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
+| `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202). A copy of the agent unless `agent` names another, on the `model` and `effort` its grants allow, `read_only` and `delegate: false` always allowed (ADR 0270) |
 | `interrupt_subsession` | Deferred, stops a direct child |
 | `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0226) |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
@@ -189,6 +189,17 @@ subagents. The five tools cost about 4.7 KB of schemas; the eager budget is
 13.5 KB. Discovery now ranks by matched words with name matches counting double,
 `requestId` is optional, and invalid input returns the capability's schema.
 
+## Subagents on the model the work needs (ADR 0270)
+
+`spawn_subsession` took a route id, and its prompt listed routes as
+`same-agent: <agent id>`, so agents passed the agent id: 38 of 67 spawns over
+four days were refused. The tool now names an agent (none: a copy of yourself)
+and the child's `model`, `effort`, `read_only` and `delegate`. Grants in the
+agent's `delegation.agents` decide what it may set, the agent's harness
+catalog decides what exists, and refusals list the choices. A copy starts on
+the parent chat's model and effort. The new fields raised the eager budget to
+14 KB.
+
 ## The assistant and voice (ADR 0216)
 
 The dock's assistant runs on `work-assistant:<agent id>` (Work's built-in
@@ -202,8 +213,10 @@ project-only session tools (`spawn_subsession`, `wait_for_subsessions`,
 `read_session`, `message_session`, `follow_session`, `answer_question` and
 `stop_session`,
 which reach the person's chats in every project of the profile, the ones
-they started included, and never incognito ones. Its delegation routes
-target the base agent (`work`) and any agent the person names (`named`).
+they started included, and never incognito ones. Its delegation grants
+admit the base agent and any agent the person names, on any model and effort
+(ADR 0270): `start_session` takes `model` and `effort` for work that needs a
+stronger or quicker model.
 Its host instructions describe the tools (`ASSISTANT_INSTRUCTIONS` in
 `main/voice/guidance.ts`).
 

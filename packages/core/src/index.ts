@@ -80,9 +80,10 @@ export {
   type AgentDefinitionKind,
   AgentDefinitionSchema,
   AgentDefinitionsService,
+  type AgentDelegationGrant,
+  AgentDelegationGrantSchema,
   type AgentDelegationPolicy,
   AgentDelegationPolicySchema,
-  AgentDelegationRouteSchema,
   type AgentEnvironmentPolicy,
   agentDefinitionSchema,
   definitionHash,
@@ -95,6 +96,7 @@ export {
 } from "./services/agent-definitions-service.js";
 export {
   AgentDelegationDeniedError,
+  AgentDelegationSettingsError,
   AgentHarnessFixedError,
   AgentNotConfiguredError,
   type AgentSession,
@@ -206,6 +208,7 @@ export {
 } from "./services/code-hosts-service.js";
 export {
   type AgentHarness,
+  type AgentModelChoice,
   type AgentRetry,
   type AgentTurnContext,
   type CodingAgentRegistry,
@@ -290,6 +293,10 @@ export {
   MemoryCredentialVault,
 } from "./services/credential-vault.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
+export {
+  DEFAULT_DELEGATION_POLICY,
+  delegationPolicy,
+} from "./services/delegation-grants.js";
 export {
   createDeploymentArtifactIdentity,
   type DeploymentArtifact,

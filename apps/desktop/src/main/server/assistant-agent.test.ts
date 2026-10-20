@@ -33,10 +33,10 @@ describe("the assistant", () => {
     expect(rosterAgentId("project:p:s")).toBe("project:p:s");
   });
 
-  it("starts its sessions on the base agent, or on one the person names", () => {
-    expect(assistantDelegation("a1").routes).toEqual([
-      expect.objectContaining({ id: "work", target: "a1" }),
-      expect.objectContaining({ id: "named", target: "*" }),
+  it("starts its sessions on the base agent, or on one the person names, on any model", () => {
+    expect(assistantDelegation("a1").agents).toEqual([
+      { agent: "a1", model: "any", effort: "any", delegate: true },
+      { agent: "*", model: "any", effort: "any", delegate: true },
     ]);
   });
 

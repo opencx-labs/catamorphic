@@ -40,7 +40,7 @@ import cors from "@fastify/cors";
 import { BrowserWindow, app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
-import { rosterAgentId } from "../../shared/voice.js";
+import { parseAssistantAgentId, rosterAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { readAgentCredentials } from "../agent-credentials.js";
 import {
@@ -86,10 +86,6 @@ import {
   syncProfileMcpWorkflowConnections,
 } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
-import {
-  ASSISTANT_NAMED_ROUTE,
-  ASSISTANT_WORK_ROUTE,
-} from "./assistant-agent.js";
 import { assistantTools } from "./assistant-tools.js";
 import {
   connectorMcpPath,
@@ -1083,15 +1079,20 @@ export async function startEmbeddedServer(
       start: async (projectId, assistantSessionId, { agentId, ...input }) => {
         const service = catamorphic.core.agentSessions;
         if (!service) throw new Error("Agent sessions are not configured");
+        // Work goes to the person's own agent unless they name another.
+        const assistant = await service.get(
+          desktopIdentity,
+          projectId,
+          assistantSessionId,
+        );
+        const own = parseAssistantAgentId(assistant.agentId ?? "")?.agentId;
         const child = await service.createSubsession(
           desktopIdentity,
           projectId,
           assistantSessionId,
           {
             ...input,
-            ...(agentId
-              ? { routeId: ASSISTANT_NAMED_ROUTE, agentId }
-              : { routeId: ASSISTANT_WORK_ROUTE }),
+            ...((agentId ?? own) ? { agentId: agentId ?? own } : {}),
           },
         );
         // The child already runs: missing its notes is no reason to fail.

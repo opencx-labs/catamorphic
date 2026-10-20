@@ -17,6 +17,7 @@ import type {
   AgentCoordinationStrategy,
   AgentDefinition,
   AgentDelegationPolicy,
+  AgentModelChoice,
   AgentTurnContext,
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -87,6 +88,7 @@ import {
   desktopAdapter,
   unavailableAdapter,
 } from "./harness-adapters.js";
+import { listAgentModels } from "./harness-models.js";
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
 import { localAgentWorkspace } from "./local-agent-workspace.js";
 import { parseProjectAgentId } from "./project-agents.js";
@@ -233,14 +235,11 @@ function resolveProjectDelegation(
   if (!policy) return undefined;
   return {
     ...policy,
-    routes: policy.routes.map((route) => {
-      const relative = route.target.match(/^project:([^:]+)$/);
+    agents: policy.agents.map((grant) => {
+      const relative = grant.agent.match(/^project:([^:]+)$/);
       return relative
-        ? {
-            ...route,
-            target: projectAgentId(projectId, relative[1] ?? ""),
-          }
-        : route;
+        ? { ...grant, agent: projectAgentId(projectId, relative[1] ?? "") }
+        : grant;
     }),
   };
 }
@@ -416,6 +415,41 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       component,
       environment: { ...environment, CATAMORPHIC_BUN: bun.executablePath },
     };
+  }
+
+  /**
+   * The models an agent's harness offers, as its model picker lists them:
+   * core checks a subsession's requested model and effort against them
+   * (ADR 0270). Undefined when the agent cannot be resolved here.
+   */
+  async models({
+    agentId,
+    projectId,
+  }: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined> {
+    const ref = parseProjectAgentId(agentId);
+    if (ref && ref.projectId !== projectId) return undefined;
+    const resolved = ref
+      ? this.resolveProjectConfig(agentId, ref.projectId, ref.slug)
+      : this.findConfig(parseAssistantAgentId(agentId)?.agentId ?? agentId);
+    if (!resolved || "error" in resolved) return undefined;
+    const models = await listAgentModels(resolved.config, {
+      agentHome: (id) => this.agentHome(id),
+      harnessExecutable: async (harness) =>
+        (await this.ensureHarnessExecutable(harness)).executablePath,
+    });
+    return models.map((model) => ({
+      id: model.id,
+      ...(model.resolvedId ? { resolvedId: model.resolvedId } : {}),
+      ...(model.supportsEffort !== undefined
+        ? { supportsEffort: model.supportsEffort }
+        : {}),
+      ...(model.supportedEffortLevels
+        ? { supportedEffortLevels: model.supportedEffortLevels }
+        : {}),
+    }));
   }
 
   /** Resolve the same configuration and consent as execution, without starting a session. */

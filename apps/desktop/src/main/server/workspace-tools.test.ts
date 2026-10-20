@@ -71,8 +71,9 @@ describe("workspace coordination tools", () => {
     }));
     // Background execution and watches are core needs for every harness
     // (ADR 0155, 0156); so are driving Work's browser and delegating to
-    // subagents (ADR 0202).
-    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(13_500);
+    // subagents (ADR 0202), with the model and effort a subagent runs on
+    // (ADR 0270).
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(14_000);
     expect(
       toolkit.tools.every(
         (tool) =>
@@ -288,8 +289,11 @@ describe("workspace coordination tools", () => {
     });
     await execute("spawn_subsession", {
       task: "Review the API",
-      route_id: "reviewer",
-      agent_id: "agent-small",
+      agent: "agent-small",
+      model: "opus",
+      effort: "high",
+      read_only: true,
+      delegate: false,
       context_mode: "fresh",
       title: "API review",
     });
@@ -310,8 +314,11 @@ describe("workspace coordination tools", () => {
         "session",
         {
           task: "Review the API",
-          routeId: "reviewer",
           agentId: "agent-small",
+          model: "opus",
+          effort: "high",
+          readOnly: true,
+          delegate: false,
           contextMode: "fresh",
           title: "API review",
         },

@@ -21,6 +21,7 @@ const session: AgentSession = {
   harness: null,
   model: null,
   modelEffort: null,
+  readOnly: false,
   title: "Prepare Acme QBR",
   icon: null,
   forkedFromSessionId: null,

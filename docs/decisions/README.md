@@ -102,7 +102,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a workflow's chat reaches) |
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
-| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202; causation is a typed delivery field by 0219) |
+| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202, 0270; causation is a typed delivery field by 0219) |
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
 | [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted (`when.builder` superseded by 0158) |
 | [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted (PATH amended by 0202) |
@@ -277,3 +277,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md) | Voice lowers other apps' audio while it listens, and any reply can be read aloud from its button | Accepted (amends 0216, 0236) |
 | [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md) | A turn that failed on its sign-in while the person was away runs again when they return; a chat's own task's turns too | Accepted (amends 0228) |
 | [0270](0270-skills-live-in-the-palette.md) | Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat | Accepted (supersedes 0052's composer menu; builds on 0186) |
+| [0270](0270-agents-delegate-by-naming-an-agent-and-its-settings.md) | Agents delegate by naming an agent and its settings (model, effort, read-only); grants decide, and copies of yourself with any model are the default | Accepted (amends 0090, 0216) |

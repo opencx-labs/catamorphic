@@ -2,14 +2,10 @@ import type { AgentDelegationPolicy } from "@catamorphic/core";
 import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
 
-/** The route to the person's own agent: where work goes by default. */
-export const ASSISTANT_WORK_ROUTE = "work";
-/** The route to an agent the person names. */
-export const ASSISTANT_NAMED_ROUTE = "named";
-
 /**
- * Sessions the assistant starts run on its base agent, or on any agent
- * the person names.
+ * Sessions the assistant starts run on its base agent, or on any agent the
+ * person names, on any model and effort their harness offers (ADR 0270): a
+ * quick voice assistant hands hard work to a stronger model.
  */
 export function assistantDelegation(
   baseAgentId: string,
@@ -17,13 +13,9 @@ export function assistantDelegation(
   return {
     enabled: true,
     maxConcurrentChildren: 10,
-    routes: [
-      {
-        id: ASSISTANT_WORK_ROUTE,
-        target: baseAgentId,
-        allowFurtherDelegation: true,
-      },
-      { id: ASSISTANT_NAMED_ROUTE, target: "*", allowFurtherDelegation: true },
+    agents: [
+      { agent: baseAgentId, model: "any", effort: "any", delegate: true },
+      { agent: "*", model: "any", effort: "any", delegate: true },
     ],
   };
 }

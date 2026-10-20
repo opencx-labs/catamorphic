@@ -182,6 +182,25 @@ export interface CodingAgentRegistry {
     | Promise<RegisteredCodingAgent | undefined>
     | RegisteredCodingAgent
     | undefined;
+  /**
+   * The models an agent's harness offers, as its model picker shows them.
+   * Core checks a subsession's requested model and effort against it (ADR
+   * 0270); without it, the harness checks them at the child's first turn.
+   */
+  models?(args: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined>;
+}
+
+/** One model a harness offers, and the efforts it takes. */
+export interface AgentModelChoice {
+  id: string;
+  /** The versioned model an alias (`opus`) resolves to. */
+  resolvedId?: string;
+  /** False when the model takes no effort setting. */
+  supportsEffort?: boolean;
+  supportedEffortLevels?: readonly AgentEffort[];
 }
 
 /** Wrap one agent as a one-entry registry: hosts with a single agent, and tests. */

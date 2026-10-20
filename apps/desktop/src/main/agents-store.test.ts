@@ -61,11 +61,12 @@ describe("AgentsStore — ADR 0056 fields", () => {
       delegation: {
         enabled: true,
         maxConcurrentChildren: 4,
-        routes: [
+        agents: [
           {
-            id: "reviewer",
-            target: "project:reviewer",
-            allowFurtherDelegation: false,
+            agent: "project:reviewer",
+            model: ["claude-sonnet-5-5"],
+            effort: "at-most-parent",
+            delegate: false,
           },
         ],
       },
@@ -82,11 +83,12 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(agent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 4,
-      routes: [
+      agents: [
         {
-          id: "reviewer",
-          target: "project:reviewer",
-          allowFurtherDelegation: false,
+          agent: "project:reviewer",
+          model: ["claude-sonnet-5-5"],
+          effort: "at-most-parent",
+          delegate: false,
         },
       ],
     });
@@ -125,11 +127,30 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
     expect(publicAgent.coordination).toBe("shared-first");
-    expect(publicAgent.delegation).toMatchObject({
+    // By default, copies of itself on any model and effort (ADR 0270).
+    expect(publicAgent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 10,
-      routes: [{ id: "same-agent", target: "self" }],
+      agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
     });
+  });
+
+  it("gives delegation from before grants way to the default", () => {
+    const file = storeFile();
+    const store = new AgentsStore(file);
+    const agent = store.create({ harness: "claude-code" });
+    const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+    saved.agents[0].delegation = {
+      enabled: true,
+      maxConcurrentChildren: 3,
+      routes: [{ id: "same-agent", target: "self" }],
+    };
+    fs.writeFileSync(file, JSON.stringify(saved));
+    const reread = new AgentsStore(file).get(agent.id);
+    expect(reread?.delegation).toBeUndefined();
+    expect(toPublicAgent(reread ?? agent).delegation.agents).toEqual([
+      { agent: "self", model: "any", effort: "any", delegate: true },
+    ]);
   });
 
   it("update clears back to defaults including shared-first coordination", () => {
@@ -145,7 +166,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
       delegation: {
         enabled: false,
         maxConcurrentChildren: 2,
-        routes: [],
+        agents: [],
       },
     });
     const updated = store.update(agent.id, {
@@ -158,12 +179,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
       delegation: {
         enabled: true,
         maxConcurrentChildren: 10,
-        routes: [
-          {
-            id: "same-agent",
-            target: "self",
-            allowFurtherDelegation: true,
-          },
+        agents: [
+          { agent: "self", model: "any", effort: "any", delegate: true },
         ],
       },
     });

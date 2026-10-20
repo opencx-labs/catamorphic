@@ -169,11 +169,19 @@ export interface SessionHostOperations {
     Action & { messageId?: string },
     SessionSnapshot | QueuedSessionAction
   >;
+  /**
+   * Start a subsession of the chat through its agent's grants (ADR 0270): a
+   * copy of its agent unless `agentId` names another, with the model and
+   * effort a grant allows; `readOnly` and `delegate: false` only narrow.
+   */
   spawn: Call<
     Action & {
       task: string;
-      routeId?: string;
       agentId?: string;
+      model?: string;
+      effort?: "low" | "medium" | "high" | "xhigh" | "max";
+      readOnly?: boolean;
+      delegate?: boolean;
       title?: string;
       contextMode?: "fresh" | "inherit";
     },

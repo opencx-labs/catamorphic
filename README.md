@@ -235,12 +235,16 @@ Delegation is also first-class. A subagent works in an ordinary durable child
 session with explicit delegation authority, its own transcript, and the same
 message, interrupt, attention, and policy machinery as any other session. Its
 result reaches the parent like a subagent's: during the parent's turn while it
-still works, or as a new turn after it.
+still works, or as a new turn after it. An agent starts a copy of itself, or
+another agent it is granted, on the model and effort the work needs, or
+read-only for a review; grants in its definition limit whom it may start and
+what it may choose, and by default it may start copies of itself on any.
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 (ADRs [0089](docs/decisions/0089-project-shaped-member-shell.md),
-[0090](docs/decisions/0090-first-class-subsessions-and-delegation.md))
+[0090](docs/decisions/0090-first-class-subsessions-and-delegation.md),
+[0270](docs/decisions/0270-agents-delegate-by-naming-an-agent-and-its-settings.md))
 
 ## Durable workflows
 

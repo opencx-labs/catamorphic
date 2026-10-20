@@ -269,6 +269,32 @@ it("leaves connectors in the catalog when the host cannot serve them", () => {
   expect(registry.capabilitySurface("claude")?.connectorsMounted).toBe(false);
 });
 
+it("lists an agent's models from its harness catalog, for checking a subagent's settings", async () => {
+  const previous = process.env.CATAMORPHIC_E2E_FAKE_AGENT;
+  // The catalog's own deterministic stub, with no CLI or network.
+  process.env.CATAMORPHIC_E2E_FAKE_AGENT = "1";
+  try {
+    const registry = registryWith(claudeAgent);
+    expect(
+      await registry.models({ agentId: "claude", projectId: "p" }),
+    ).toEqual([
+      { id: "fake-model-a", resolvedId: "fake-model-a-2.1" },
+      { id: "fake-model-b" },
+    ]);
+    // The assistant lists its own agent's models.
+    expect(
+      await registry.models({ agentId: "assistant:claude", projectId: "p" }),
+    ).toHaveLength(2);
+    // Another project's agent is not this project's to start.
+    expect(
+      await registry.models({ agentId: "project:q:reviewer", projectId: "p" }),
+    ).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.CATAMORPHIC_E2E_FAKE_AGENT;
+    else process.env.CATAMORPHIC_E2E_FAKE_AGENT = previous;
+  }
+});
+
 it("starts the downloaded executable with its toolchain and friendly errors", async () => {
   const { harness } = hostOf(registryWith(claudeAgent), "claude");
   const events: HarnessEvent[] = [];

@@ -140,8 +140,12 @@ through discovery when its latest state is needed. Do not maintain a competing
 private native todo list.
 
 Subsessions are your subagents. spawn_subsession starts one on a bounded task
-through an allowed route and returns at once; it runs in parallel, in its own
-chat the person can open. Write the task so it stands alone (or pass
+and returns at once; it runs in parallel, in its own chat the person can open.
+Leave agent out for a copy of yourself on this chat's model and effort, or name
+another agent your instructions list. Set model and effort to fit the work: a
+stronger model for a hard design or a careful review, a quicker one for broad
+searching. read_only gives a reviewer that changes nothing; delegate false
+keeps it from starting its own. Write the task so it stands alone (or pass
 context_mode inherit), and spawn several for independent pieces: research
 across sources, separate reviews, exploring a large codebase. Each result
 arrives in this chat as a message from the subsession, during your turn while

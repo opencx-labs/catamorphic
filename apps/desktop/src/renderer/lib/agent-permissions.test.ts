@@ -25,7 +25,7 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
     connections: { mode: "all" },
     skills: { mode: "all" },
     toolPolicies: {},
-    delegation: { enabled: true, maxConcurrentChildren: 10, routes: [] },
+    delegation: { enabled: true, maxConcurrentChildren: 10, agents: [] },
     ...overrides,
   };
 }

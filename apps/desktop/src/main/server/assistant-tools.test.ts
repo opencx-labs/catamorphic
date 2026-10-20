@@ -221,6 +221,26 @@ describe("the assistant's session tools", () => {
     );
   });
 
+  it("puts a stronger model on the work when it needs one (ADR 0270)", async () => {
+    const assistant = harness({ p1: [] });
+    await assistant.call("start_session", {
+      request: "Redesign the sync engine",
+      title: "Sync redesign",
+      model: "opus",
+      effort: "max",
+    });
+    expect(assistant.started).toEqual([
+      expect.objectContaining({ model: "opus", effort: "max" }),
+    ]);
+    await expect(
+      assistant.call("start_session", {
+        request: "Anything",
+        title: "Anything",
+        effort: "extreme",
+      }),
+    ).rejects.toThrow();
+  });
+
   it("follows a chat's notes, and stops", async () => {
     const assistant = harness({ p2: [chat("build", { title: "Build" })] });
     expect(
