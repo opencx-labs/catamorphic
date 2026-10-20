@@ -21,7 +21,11 @@ import {
   openModeForAction,
   openModeFromEvent,
 } from "../../shared/open-mode.js";
-import type { SidebarBadge, SidebarSignal } from "../../shared/sidebar.js";
+import type {
+  SidebarBadge,
+  SidebarSignal,
+  SidebarTrend,
+} from "../../shared/sidebar.js";
 import { appIsMovingFocus } from "../lib/app-focus.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
@@ -45,6 +49,7 @@ import {
   type SidebarPreviewAnchor,
   SidebarPreviewPopover,
 } from "./sidebar-preview.js";
+import { Sparkline } from "./sparkline.js";
 
 export function SidebarIcon({ name }: { name?: string }) {
   const Icon = lucideIcon(name) ?? icons.Circle;
@@ -87,6 +92,7 @@ export function SidebarItemRow<
   keepDescription = false,
   badges,
   progress,
+  trend,
   signal,
   presentation = "row",
   expanded,
@@ -123,6 +129,8 @@ export function SidebarItemRow<
   keepDescription?: boolean;
   badges?: readonly (string | SidebarBadge)[];
   progress?: number;
+  /** A reading's recent history, drawn as a sparkline (ADR 0266). */
+  trend?: SidebarTrend;
   /** What the row is doing, drawn the same everywhere (ADR 0234). */
   signal?: SidebarSignal;
   presentation?: "row" | "tile";
@@ -251,6 +259,7 @@ export function SidebarItemRow<
   description = overrides.description ?? description;
   badges = overrides.badges ?? badges;
   progress = overrides.progress ?? progress;
+  trend = overrides.trend ?? trend;
   signal = overrides.signal ?? signal;
   preview = overrides.preview ?? preview;
   if (preview === false) previewContent = undefined;
@@ -520,6 +529,7 @@ export function SidebarItemRow<
                   className="h-1 w-12 accent-accent"
                 />
               )}
+              {trend && presentation !== "tile" && <Sparkline trend={trend} />}
               {(signal === "attention" || signal === "unread") && (
                 <span
                   data-signal={signal}
@@ -557,8 +567,13 @@ export function SidebarItemRow<
               </span>
             </ShortcutHint>
           )}
-          {inlineActions.map((entry) => {
+          {inlineActions.map((entry, index) => {
             const Icon = lucideIcon(entry.icon) ?? icons.Circle;
+            // The row's last control sits where ⋯ or the chevron would.
+            const last =
+              index === inlineActions.length - 1 &&
+              !disclosure &&
+              (resolvedMenu.length === 0 || presentation === "tile");
             return (
               <ShortcutHint
                 key={`${entry.action}:${entry.label}`}
@@ -576,8 +591,8 @@ export function SidebarItemRow<
                   onClick={() => void invoke(entry)}
                   // Row buttons show with the row's hover or focus, as ⋯ does.
                   className={`grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40 ${
-                    pending === entry.action ? "" : "row-reveal"
-                  }`}
+                    last ? "mr-0.5" : ""
+                  } ${pending === entry.action ? "" : "row-reveal"}`}
                 >
                   {pending === entry.action ? (
                     <LoaderCircle

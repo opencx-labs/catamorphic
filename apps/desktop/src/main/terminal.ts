@@ -6,6 +6,7 @@ import { spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
+import { registerProcessOwner } from "./process-owners.js";
 import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
 import { shellBinShimDir, shellIntegration } from "./shell-integration.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
@@ -434,6 +435,18 @@ export function registerTerminalSupport(
       },
     };
     sessions.set(sessionId, session);
+    // Resources credits the shell and what runs in it (ADR 0266): an
+    // agent's terminal to its chat.
+    const unregister = registerProcessOwner(
+      pty.pid,
+      input.agent
+        ? {
+            kind: "chat",
+            sessionId: input.agent.sessionId,
+            projectId: input.agent.projectId,
+          }
+        : { kind: "terminal", terminalId: sessionId, title: input.shellName },
+    );
 
     pty.onData((data) => {
       appendBuffer(session, data);
@@ -460,6 +473,7 @@ export function registerTerminalSupport(
       emit(session, "catamorphic:terminal-data", { sessionId, data });
     });
     pty.onExit(({ exitCode, message }) => {
+      unregister();
       session.running = false;
       session.exitCode = exitCode;
       session.releaseSender?.();

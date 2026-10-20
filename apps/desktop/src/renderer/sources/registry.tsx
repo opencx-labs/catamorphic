@@ -41,6 +41,7 @@ import { gitSource, prsSource } from "./changes.js";
 import { chatRow, chatsSource } from "./chats.js";
 import type { SectionSource } from "./contract.js";
 import type { WorkSourceDeps, WorkSourceHost } from "./deps.js";
+import { resourcesSource } from "./processes.js";
 import { remoteSource } from "./remote.js";
 import {
   appsSource,
@@ -238,6 +239,7 @@ export function useWorkSources({
       git: gitSource(deps),
       prs: prsSource(deps),
       session: sessionSource(deps),
+      resources: resourcesSource(deps),
     };
     const reads = new Map<string, Set<WorkSourceName>>();
     const readers = new Map<string, Set<(name: WorkSourceName) => void>>();

@@ -1,6 +1,7 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
+import type { ResourceSnapshot } from "../shared/resources.js";
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -1274,6 +1275,12 @@ const api = {
     invoke("catamorphic:terminal-resize", sessionId, cols, rows),
   terminalKill: (sessionId: string): Promise<void> =>
     invoke("catamorphic:terminal-kill", sessionId),
+  /** What Work runs, by who it runs for (ADR 0266). */
+  resourcesRead: (): Promise<ResourceSnapshot> =>
+    invoke("catamorphic:resources-read"),
+  /** End a process Work started, and what it started. */
+  resourcesEnd: (pid: number): Promise<void> =>
+    invoke("catamorphic:resources-end", pid),
   onTerminalData: (
     listener: (payload: { sessionId: string; data: string }) => void,
   ): (() => void) => {

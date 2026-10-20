@@ -81,6 +81,14 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
   the program only). prs: open pull requests (or a server's proposals).
 - session: the chat in front: its folder and the pull requests its agent
   recorded under pull_requests. Needs when: {session:true}.
+- resources: what Work runs, like Activity Monitor: a Total row, Work itself,
+  then each chat, terminal, browser tab and sidebar module with processes;
+  their processes nest under them (row ids pid:<pid>). Rows show CPU as a trend
+  (percent of one core) and memory as the description; data has cpu, memory
+  and the owner or pid and command. Actions: end (a process Work started, with
+  what it started; on a chat or module, its processes), close (a terminal or
+  browser tab). Read every 2 seconds while shown; not in any default layout:
+  { id: "resources", source: "work:resources" }.
 Row ids: session UUIDs for chats, paths for files, names for workflows and apps,
 tab keys for tabs, store ids for bookmarks, numbers for PRs.
 
@@ -111,7 +119,7 @@ muted sentence when empty, the error with Retry. Never draw your own.
 ## Rows
 
 Every row, whoever wrote it, is the same: { id, label, url?, icon?, description?,
-badges?, signal?, progress?, preview?, keywords?, hide?, parentId?, hasChildren?,
+badges?, signal?, progress?, trend?, preview?, keywords?, hide?, parentId?, hasChildren?,
 collapsed?, menu?, contextMenu?, actions?, data? }.
 - url is where the row goes, opened by one resolver: a web page, a chat
   (catamorphic://chat?project=&session=, or session:<id>), workflow:<name>,
@@ -126,7 +134,9 @@ collapsed?, menu?, contextMenu?, actions?, data? }.
   rocket:blue), or an image address. Without one the url picks it (a favicon,
   a chat glyph).
 - badges: strings or { label, icon }. signal: working (spinner), attention
-  (needs the person), unread. progress: 0 through 1. preview: { title,
+  (needs the person), unread. progress: 0 through 1. trend: { values (up to
+  60 readings from 0 through 1, oldest first), label? (the current reading,
+  "12%"), tone? }, drawn as a sparkline at the row's end (chips draw it too). preview: { title,
   description, metadata: [{label, value}] up to six }. collapsed: false opens a
   row with children the first time it loads (sources start closed; static items
   start open unless collapsed: true).
@@ -344,7 +354,8 @@ Option-click floating). actions are its buttons; menu or contextMenu its
 right-click entries, after the open modes and before Customize chips. preview
 is its hover card (false for none); without one, Work's chips show what they
 stand for live. signal: working spins its icon; attention and unread dot it.
-A chip with hasChildren is a group: a click opens its members upward. data is
+trend draws its sparkline after the label and badges, compact or wide, and on a
+group's members. A chip with hasChildren is a group: a click opens its members upward. data is
 the record behind it: Work's chips say what they are in data.kind
 (pull-request, attached, browser, terminal, editor, chat, subagent, step, app,
 workflow, mcpapp, group) and carry what their previews read. signal is one of

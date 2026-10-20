@@ -45,6 +45,7 @@ import { MobilePairingService } from "./mobile-pairing.js";
 import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
+import { registerResourceSupport } from "./resource-monitor.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
@@ -778,6 +779,7 @@ app.whenReady().then(async () => {
     }),
     (projectId, sender) => desktopWorkspaces?.owner(projectId) === sender,
   );
+  registerResourceSupport();
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
