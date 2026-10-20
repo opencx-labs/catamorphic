@@ -102,8 +102,9 @@ that list only shrinks.
 Desktop behavior enters through the timeline's host surface, never an edit to
 the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
 (`ShortcutHint`, with `jumpShortcut` for PageUp), `renderLink` and `onLinkClick`,
-`sourceHref`, `resolveToolIcon`, `onReauth`, `backgroundCommands` and
-`workDisplay`. Rows are memoized: keep render-affecting slots stable
+`sourceHref`, `resolveToolIcon`, `onReauth`, `backgroundCommands`,
+`workDisplay` and `presentUserMessage` (a sent skill leads its message as a
+chip, `presentSkillMessage`). Rows are memoized: keep render-affecting slots stable
 (`useCallback` or module-level functions); action callbacks may change every
 render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
 `cat-step-in`, `cat-gap-in`, `cat-swap-*`, `cat-reveal` with its

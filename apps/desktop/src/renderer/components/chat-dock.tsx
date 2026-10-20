@@ -794,7 +794,6 @@ function ChatDockContent({
   /** Outside a tab, the column the messages and the composer share. */
   const floatingColumn = isTab ? "" : "mx-auto w-full max-w-3xl";
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
-  const composerFormRef = useRef<HTMLFormElement>(null);
   // Questions, approvals and elicitations waiting on this person; any
   // client answers them, and the chat survives a restart around them.
   const questionRequests = chat.requests.filter(
@@ -1784,7 +1783,7 @@ function ChatDockContent({
       : event.ctrlKey;
     // "/" with no prose yet is a skill (ADR 0270): the palette's Skills
     // mode opens aimed at this chat, and the "/" comes back if it closes
-    // without one. Pills stay; the skill takes them along.
+    // without one. Pills stay, for a skill applied here to take along.
     if (
       event.key === "/" &&
       !event.metaKey &&
@@ -3214,7 +3213,6 @@ function ChatDockContent({
               </div>
             ) : (
               <form
-                ref={composerFormRef}
                 className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
                 onSubmit={submit}
               >

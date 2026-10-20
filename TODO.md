@@ -215,7 +215,7 @@
 - **Review-deferred architecture cleanups (2026-08-21 code review).** Three
   confirmed-but-invasive findings deferred from the fix pass: (a) slash
   command listing as an optional provider capability (today: a Claude Code
-  special case across the ipc gate, the SlashEntry shape, and a hardcoded
+  special case across the ipc gate, the SkillEntry shape, and a hardcoded
   badge; Codex has ~/.codex/prompts waiting); (b) per-harness transcript
   usage-sources so the desktop scanner stops owning each CLI's on-disk
   format (usage-transcripts.ts provider switches + hardcoded home

@@ -21,6 +21,7 @@ import {
   paletteCountsVisit,
   webUsageKey,
 } from "../../shared/palette.js";
+import { rosterAgentId } from "../../shared/voice.js";
 import { moveFocusAsApp } from "../lib/app-focus.js";
 import { caretCanMove } from "../lib/caret-line.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
@@ -369,7 +370,9 @@ export function CommandPalette({
   // Skills follow the target agent's allowlist: the focused chat's agent,
   // else the default, profile or project.
   // One identity per agent: rows built from it keep theirs across renders.
-  const skillAgentId = focusedChat?.agentId ?? defaultAgentId;
+  // An assistant chat runs on a roster agent under its own id.
+  const chatAgentId = focusedChat?.agentId ?? defaultAgentId;
+  const skillAgentId = chatAgentId ? rosterAgentId(chatAgentId) : null;
   const skillAgent = useMemo(
     () =>
       [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
@@ -804,16 +807,17 @@ export function CommandPalette({
 
   // What the palette learns from a pick (ADR 0186): the typed query, and a
   // visit for destinations nothing else counts.
-  const record = (item: PaletteItem) => {
+  const record = (item: PaletteItem, { searched = true } = {}) => {
     const key = item.usage;
     if (!key || !profileId) return;
     // Keyed exactly as the ranker looks picks up ("gpt-4o" → "gpt 4o"). A
     // skill's instructions are words for the agent, not a search.
-    const typed = activeMode?.parent
-      ? ""
-      : normalizeCommandQuery(
-          trimmed.startsWith(">") ? trimmed.slice(1) : trimmed,
-        ).trim();
+    const typed =
+      !searched || activeMode?.parent
+        ? ""
+        : normalizeCommandQuery(
+            trimmed.startsWith(">") ? trimmed.slice(1) : trimmed,
+          ).trim();
     const use = {
       key,
       ...(typed ? { query: typed } : {}),
@@ -851,19 +855,56 @@ export function CommandPalette({
       return;
     }
     const inTab = variant === "tab";
-    const commitMode: CommitMode = floating
-      ? "floating"
-      : withCmd && withShift
-        ? "side"
-        : inTab || withCmd
-          ? "tab"
-          : "replace";
     if (variant === "overlay") onClose();
-    item.run(commitMode);
+    item.run(commitModeFor(withCmd, withShift, floating));
     record(item);
     // A palette tab is consumed by whatever it opened; pure actions
     // (toggle sidebar, …) leave it in place.
     if (inTab && item.kind === "navigate") onClose();
+  };
+  const commitModeFor = (
+    withCmd: boolean,
+    withShift: boolean,
+    floating: boolean,
+  ): CommitMode =>
+    floating
+      ? "floating"
+      : withCmd && withShift
+        ? "side"
+        : variant === "tab" || withCmd
+          ? "tab"
+          : "replace";
+  /**
+   * Enter on a row's whole name and words after it, typed before Space
+   * could take the name (its list was still loading, or it was pasted):
+   * the words are that row's instructions, as if Space had been pressed.
+   */
+  const commitWords = (
+    withCmd: boolean,
+    withShift: boolean,
+    floating: boolean,
+  ): boolean => {
+    if (!activeMode) return false;
+    const typed = trimmed.toLowerCase();
+    const named = (modeItems ?? []).flatMap((item) =>
+      item.input && !item.disabled
+        ? item.input.names
+            .filter((name) => name && /^\s/.test(typed.slice(name.length)))
+            .filter((name) => typed.startsWith(name.toLowerCase()))
+            .map((name) => ({ item, name }))
+        : [],
+    );
+    const longest = named.sort((a, b) => b.name.length - a.name.length)[0];
+    const input = longest?.item.input;
+    if (!longest || !input) return false;
+    if (variant === "overlay") onClose();
+    input.run(
+      trimmed.slice(longest.name.length).trim(),
+      commitModeFor(withCmd, withShift, floating),
+    );
+    record(longest.item, { searched: false });
+    if (variant === "tab" && longest.item.kind === "navigate") onClose();
+    return true;
   };
 
   const moveSelection = (delta: number) => {
@@ -907,6 +948,8 @@ export function CommandPalette({
     }
     // A row that takes words (a skill's instructions): Tab on it, or Space
     // after typing its whole name inside a mode, moves on to them.
+    // The overlay holds focus: Tab never leaves its input for the page.
+    if (event.key === "Tab" && variant === "overlay") event.preventDefault();
     if ((event.key === "Tab" && !event.shiftKey) || event.key === " ") {
       const typed = trimmed.toLowerCase();
       const row =
@@ -948,15 +991,13 @@ export function CommandPalette({
     ) {
       // Shift+Enter alone stays a newline; ⌘⇧↵ is the side commit.
       event.preventDefault();
+      const withCmd = /Mac/.test(navigator.platform)
+        ? event.metaKey
+        : event.ctrlKey;
+      const floating = event.altKey && !event.metaKey && !event.ctrlKey;
+      if (commitWords(withCmd, event.shiftKey, floating)) return;
       const item = results[selected];
-      if (item) {
-        commit(
-          item,
-          /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey,
-          event.shiftKey,
-          event.altKey && !event.metaKey && !event.ctrlKey,
-        );
-      }
+      if (item) commit(item, withCmd, event.shiftKey, floating);
     }
   };
 

@@ -63,9 +63,14 @@ export interface PaletteItem {
   /**
    * The row takes words after it (a skill's instructions, ADR 0270): Tab on
    * it, or Space after typing one of `names` exactly, enters `mode`, whose
-   * input is those words.
+   * input is those words. Enter on a name and words typed together runs
+   * the row with them.
    */
-  input?: { mode: string; names: readonly string[] };
+  input?: {
+    mode: string;
+    names: readonly string[];
+    run: (words: string, mode: CommitMode) => void;
+  };
   run: (mode: CommitMode) => void;
 }
 

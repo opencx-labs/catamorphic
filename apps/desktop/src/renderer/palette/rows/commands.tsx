@@ -223,7 +223,15 @@ export function useCommandRows({
           usage: `skill:${skill.name}`,
           highlight: "chat-if-focused",
           // Tab moves on to its instructions, as in the Skills mode.
-          input: { mode: `skill:${skill.name}`, names: [] },
+          input: {
+            mode: `skill:${skill.name}`,
+            names: [],
+            run: (instructions, mode) =>
+              runSkillRef.current({
+                message: skillInvocation(skill.name, instructions),
+                target: skillTarget(mode, hasFocusedChat),
+              }),
+          },
           run: (mode) =>
             runSkillRef.current({
               message: skillInvocation(skill.name),

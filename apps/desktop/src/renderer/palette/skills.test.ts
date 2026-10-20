@@ -55,4 +55,27 @@ describe("skills in the palette", () => {
       ["alpha", "All"],
     ]);
   });
+
+  it("keeps Recent to five rows, the most used first", () => {
+    const names = ["a", "b", "c", "d", "e", "f", "g"];
+    const ordered = recentFirst(names.map(row), {
+      signals: {
+        ...EMPTY_PALETTE_SIGNALS,
+        usage: Object.fromEntries(
+          names.map((name, index) => [
+            `skill:${name}`,
+            { frecency: index + 1 },
+          ]),
+        ),
+      },
+    });
+    expect(
+      ordered
+        .filter((item) => item.group === "Recent")
+        .map((item) => item.label),
+    ).toEqual(["g", "f", "e", "d", "c"]);
+    expect(
+      ordered.filter((item) => item.group === "All").map((item) => item.label),
+    ).toEqual(["a", "b"]);
+  });
 });

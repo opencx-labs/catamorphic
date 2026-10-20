@@ -745,8 +745,9 @@ opens with what is used most under Recent.
 
 An empty composer carries a faint `/ skills` hint before its controls. A
 skill sent from the palette reads in the transcript as a chip with the
-skill's name, then what came with it, pills included: pills waiting in the
-composer go with the skill when nothing else is written there.
+skill's name, then what came with it, pills included: applied to its own
+chat, a skill takes the pills waiting in a composer with nothing else
+written there; a new chat starts with the skill alone.
 
 ### 2026-10-19: Resources shows what Work runs, by who it runs for
 

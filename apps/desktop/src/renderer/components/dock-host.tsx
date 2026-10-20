@@ -492,9 +492,16 @@ export function DockHost({
   const invoke = (chat: DockData, event: ChatEvent) => {
     if (chat.local) {
       if (
-        ["surface", "mcpApp", "link", "file", "focus", "unsplit"].includes(
-          event.kind,
-        ) ||
+        [
+          "surface",
+          "mcpApp",
+          "link",
+          "file",
+          "focus",
+          "unsplit",
+          // The palette "/" opens is its project's: that project comes forward.
+          "openSkills",
+        ].includes(event.kind) ||
         (event.kind === "entry" && event.entry.mode === "tab")
       )
         void desktopApi.workspaceNavigate({ projectId: chat.projectId });

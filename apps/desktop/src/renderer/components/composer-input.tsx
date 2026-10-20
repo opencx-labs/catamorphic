@@ -90,7 +90,6 @@ export interface ComposerInputHandle {
 export interface ComposerInputProps {
   placeholder: string;
   ariaLabel: string;
-  suggestions?: { listId: string; activeId?: string };
   /** Layout classes for the height-animated frame around the editable. */
   wrapperClassName?: string;
   className?: string;
@@ -203,7 +202,6 @@ export const ComposerInput = forwardRef<
   {
     placeholder,
     ariaLabel,
-    suggestions,
     wrapperClassName = "",
     className = "",
     onChange,
@@ -549,9 +547,6 @@ export const ComposerInput = forwardRef<
         tabIndex={0}
         aria-multiline="true"
         aria-label={ariaLabel}
-        aria-autocomplete={suggestions ? "list" : undefined}
-        aria-controls={suggestions?.listId}
-        aria-activedescendant={suggestions?.activeId}
         contentEditable
         suppressContentEditableWarning
         spellCheck

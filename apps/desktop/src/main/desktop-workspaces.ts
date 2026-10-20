@@ -443,12 +443,17 @@ export class DesktopWorkspaces {
         if (!chat || !this.sameProfile(event.sender, chat.owner)) return;
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
-        const detached = floating && this.detached(profileId);
-        const target = detached ? floating.webContents : event.sender;
+        // The detached dock shows floating chats; a chat in a tab is shown
+        // by its workspace window, which the action goes to instead.
+        const inDock =
+          floating &&
+          this.detached(profileId) &&
+          chat.data.entry.mode !== "tab";
+        const target = inDock ? floating.webContents : event.sender;
         // Keys follow the chips the shortcut focuses, or the composer the
         // palette hands typing back to: the detached dock's window takes
         // the keyboard first.
-        if (detached && (action === "focusChips" || action === "resume"))
+        if (inDock && (action === "focusChips" || action === "resume"))
           floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",

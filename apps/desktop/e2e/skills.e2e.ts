@@ -186,6 +186,43 @@ describe("skills as commands", () => {
     await run(`pressKey('Escape'); return true;`);
   });
 
+  it("lists one Skills row in the empty palette, enters the mode on /, and Tab takes a skill's instructions", async () => {
+    await ensurePalette();
+    await paletteType("");
+    await runWait(`return rowIds().includes('skills-mode');`, {
+      label: "one Skills row in the empty palette",
+    });
+    expect(
+      await run<string[]>(
+        `return rowIds().filter((id) => id.startsWith('skill:'));`,
+      ),
+    ).toEqual([]);
+    await app.press("Slash");
+    await runWait(
+      `return chip() === 'Skills' && paletteInput().value === '';`,
+      {
+        label: "/ enters the Skills mode",
+      },
+    );
+    // Not opened by a composer: Backspace leaves the mode, as any mode.
+    await app.press("Backspace");
+    await runWait(`return !chip();`, { label: "left the mode" });
+    await paletteType(">team");
+    await runWait(`return rowIds()[0] === 'skill:team-notes';`);
+    await app.press("Tab");
+    await runWait(
+      `return chip() === 'Team notes' && paletteInput().placeholder === '[meeting]';`,
+      { label: "Tab takes its instructions, with its hint" },
+    );
+    // Leave the palette as found (it may be the New Tab's, which Escape
+    // does not close): back to the list, out of the mode, empty.
+    await app.press("Backspace");
+    await runWait(`return chip() === 'Skills';`, { label: "back to the list" });
+    await app.press("Backspace");
+    await runWait(`return !chip();`, { label: "out of the mode" });
+    await run(`pressKey('Escape'); return true;`);
+  });
+
   it("runs a host skill from the palette into a new chat", async () => {
     await ensurePalette();
     await paletteType(">publishing-to-github");
@@ -257,8 +294,8 @@ describe("skills as commands", () => {
     await app.insertText("include the decisions");
     await app.press("Enter");
     await runWait(
-      `return !!byText('[role="log"] *', 'skill loaded: team-notes') &&
-              !!byText('[role="log"] *', '| include the decisions');`,
+      `return /skill loaded: team-notes \\(source:project, \\d+ chars\\) \\| include the decisions/
+         .test(visibleDock().querySelector('[role="log"]').textContent);`,
       { timeoutMs: 30_000, label: "instructions reached the agent" },
     );
     expect(await run(`return lastSent()?.textContent;`)).toContain(
@@ -285,6 +322,43 @@ describe("skills as commands", () => {
   });
 
   it("hands what was typed back to the composer on Escape, sent as written", async () => {
+    // From a chosen skill: its name and the instructions come back.
+    await slashFromComposer();
+    await app.insertText("check");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Tab");
+    await runWait(`return chip() === 'Checklist';`);
+    await app.insertText("ship it");
+    await app.press("Escape");
+    await runWait(
+      `return overlayClosed() && document.activeElement === composer() &&
+         composer().textContent === '/checklist ship it';`,
+      { label: "the chosen skill's typing back in the composer" },
+    );
+    // A click beside the palette is the same as Escape.
+    await run(`setReactValue(composer(), ''); return true;`);
+    await slashFromComposer();
+    await run(
+      `const backdrop = $('[data-palette="overlay"]').closest('.fixed').firstElementChild;
+       backdrop.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+       return true;`,
+    );
+    await runWait(`return overlayClosed() && composer().textContent === '/';`, {
+      label: "the slash back after a click beside the palette",
+    });
+    // An IME composing never opens the palette or chips a skill.
+    await run(`setReactValue(composer(), ''); return true;`);
+    await run(`composerKey('/', { isComposing: true }); return true;`);
+    expect(await run(`return overlayClosed();`)).toBe(true);
+    await slashFromComposer();
+    await app.insertText("team-notes");
+    await run(
+      `paletteInput().dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true, isComposing: true })); return true;`,
+    );
+    expect(await run(`return chip();`)).toBe("Skills");
+    await app.press("Escape");
+    await runWait(`return overlayClosed();`);
+    await run(`setReactValue(composer(), ''); return true;`);
     await slashFromComposer();
     await app.insertText("usr/bin is missing");
     await app.press("Escape");
@@ -297,6 +371,16 @@ describe("skills as commands", () => {
     await runWait(
       `return !!byText('[role="log"] *', 'You said: /usr/bin is missing');`,
       { timeoutMs: 30_000, label: "slash message sent as written" },
+    );
+    // A name and words typed together, before Space could take the name:
+    // Enter runs that skill with them.
+    await slashFromComposer();
+    await paletteType("team-notes before the list loaded");
+    await app.press("Enter");
+    await runWait(
+      `return /skill loaded: team-notes \\(source:project, \\d+ chars\\) \\| before the list loaded/
+         .test(visibleDock().querySelector('[role="log"]').textContent);`,
+      { timeoutMs: 30_000, label: "words run as the skill's instructions" },
     );
     // A pasted slash command is a message too: no menu, no resolution.
     await run(
@@ -323,8 +407,55 @@ describe("skills as commands", () => {
     );
     await runWait(
       `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(before)}.includes(el.dataset.chatLocalId));
-       return !!fresh && fresh.textContent.includes('skill loaded: checklist');`,
-      { timeoutMs: 30_000, label: "the new chat ran the skill" },
+       return !!fresh && fresh.hasAttribute('data-chat-tab') &&
+         fresh.textContent.includes('skill loaded: checklist');`,
+      { timeoutMs: 30_000, label: "the new chat, a tab, ran the skill" },
+    );
+  });
+
+  it("starts a floating chat on ⌥↵, and a New Tab's palette starts the chat in the tab", async () => {
+    let before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+    );
+    await slashFromComposer();
+    await app.insertText("checklist");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Enter", 1);
+    await runWait(
+      `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(before)}.includes(el.dataset.chatLocalId));
+       return !!fresh && fresh.hasAttribute('data-floating-chat') &&
+         fresh.textContent.includes('skill loaded: checklist');`,
+      { timeoutMs: 30_000, label: "a floating chat ran the skill" },
+    );
+    before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+    );
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(
+      `const input = document.activeElement;
+       return input?.getAttribute('aria-label') === 'Search commands, pages, and more' &&
+         input.closest('[data-palette="tab"]') !== null;`,
+      { label: "a New Tab's palette" },
+    );
+    await app.press("Slash");
+    await runWait(
+      `return chip() === 'Skills' && !rowIds().includes('skills:loading');`,
+      {
+        label: "the New Tab's Skills mode",
+      },
+    );
+    // No chat is the target here: no Status row.
+    expect(await run<string[]>(`return rowIds();`)).not.toContain(
+      "skills:status",
+    );
+    await app.insertText("checklist");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Enter");
+    await runWait(
+      `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(before)}.includes(el.dataset.chatLocalId));
+       return !!fresh && fresh.hasAttribute('data-chat-tab') &&
+         fresh.textContent.includes('skill loaded: checklist');`,
+      { timeoutMs: 30_000, label: "the chat took the tab" },
     );
   });
 
@@ -477,14 +608,56 @@ describe("skills as commands", () => {
         name === "Catalog claude"
           ? "You said: /compact release 42"
           : name === "Catalog codex"
-            ? "native skill loaded: Native notes fixture. | release 42"
-            : "skill loaded: team-notes";
+            ? "native skill loaded: Native notes fixture\\. \\| release 42"
+            : "skill loaded: team-notes \\(source:project, \\d+ chars\\) \\| release 42";
       await runWait(
-        `return visibleDock().querySelector('[role="log"]').textContent.includes(${JSON.stringify(reply)});`,
+        `return new RegExp(${JSON.stringify(reply)}).test(visibleDock().querySelector('[role="log"]').textContent);`,
         { label: `${name} command reply`, timeoutMs: 30_000 },
       );
       expect(await run(`return composer().textContent;`)).toBe("");
+      if (name !== "Catalog claude") continue;
+      // In a new chat, an agent's own command runs on that agent.
+      const chats = await run<string[]>(
+        `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+      );
+      await slashFromComposer();
+      await app.insertText("compact");
+      await runWait(`return rowIds()[0] === 'skills:compact';`);
+      await app.press("Enter", PRIMARY);
+      await runWait(
+        `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(chats)}.includes(el.dataset.chatLocalId));
+         return !!fresh && fresh.textContent.includes('You said: /compact') &&
+           !!fresh.querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes('Catalog claude');`,
+        { label: "the new chat runs on Catalog claude", timeoutMs: 30_000 },
+      );
     }
+  });
+
+  it("opens with the most used skills under Recent", async () => {
+    await slashFromComposer();
+    const listed = await runWait<string>(
+      `const list = paletteInput().closest('[role="dialog"]').querySelector('[role="listbox"]');
+       return list.textContent.startsWith('Recent') ? list.textContent : false;`,
+      { label: "a Recent group first" },
+    );
+    expect(listed).toContain("All");
+    // team-notes and checklist were run above; Status, never.
+    const recent = await run<string[]>(
+      `const rows = []; let group = '';
+       const list = paletteInput().closest('[role="dialog"]').querySelector('[role="listbox"] > div');
+       for (const el of list.children) {
+         if (!el.dataset.itemId) group = el.textContent.trim();
+         else if (group === 'Recent') rows.push(el.dataset.itemId);
+       }
+       return rows;`,
+    );
+    expect(recent).toEqual(
+      expect.arrayContaining(["skills:team-notes", "skills:checklist"]),
+    );
+    expect(recent).not.toContain("skills:status");
+    await app.press("Escape");
+    await runWait(`return overlayClosed();`);
+    await run(`setReactValue(composer(), ''); return true;`);
   });
 
   it("opens Status without sending, and a skill takes the composer's pills along", async () => {

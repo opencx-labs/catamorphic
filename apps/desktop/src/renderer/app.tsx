@@ -3391,16 +3391,26 @@ export function App({
       inNewTab: true,
     });
   };
-  /** "/" in a chat's composer: the palette's Skills mode, aimed there. */
+  /**
+   * "/" in a chat's composer: the palette's Skills mode, aimed there. A chat
+   * of a project behind the one in front brings its project forward first;
+   * the palette opens once this workspace shows.
+   */
+  const [skillsFor, setSkillsFor] = useState<string | null>(null);
   const openSkills = (localId: string) => {
     revealChat(localId);
+    setSkillsFor(localId);
+  };
+  useEffect(() => {
+    if (!skillsFor || !runtime.visible) return;
+    setSkillsFor(null);
     setPaletteOpen(true);
     setModeRequest({
       mode: "skills",
-      composer: localId,
+      composer: skillsFor,
       nonce: crypto.randomUUID(),
     });
-  };
+  }, [skillsFor, runtime.visible]);
 
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);

@@ -189,8 +189,9 @@ with no prose opens the Skills mode aimed at that chat; Escape hands back the
 slash and what followed it, Backspace on the empty mode an empty composer, and
 whatever the composer then sends goes as written. Enter applies a skill to the
 chat in front, ⌘↵ starts a chat with it, ⌥↵ a floating one. Tab, or Space after
-a full name, takes its instructions in a second chip; Backspace on them returns
-to the list. Pills in a composer with no prose go with the skill.
+a full name, puts the skill in the chip and takes its instructions; Backspace on them returns
+to the list. Applied to its chat, a skill takes the pills of a composer with no
+prose along; a new chat starts with the skill alone.
 
 Find (`find`, Cmd+F) acts on what is in front: a web page opens its find bar,
 a diff focuses its own search, and anywhere else the key stays with what has

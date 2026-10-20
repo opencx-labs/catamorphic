@@ -236,6 +236,7 @@ export function useSkillModes({
               input: {
                 mode: `${CHOSEN_PREFIX}${entry.name}`,
                 names: [entry.name, entry.title],
+                run: (instructions, mode) => run(entry, instructions, mode),
               },
             }),
         run: (mode) => run(entry, "", mode),
