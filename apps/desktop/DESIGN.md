@@ -3470,3 +3470,17 @@ off as they paused to think; it now waits 0.8 seconds. A reply that
 became ready while they were already talking started over them. It now
 waits for them to finish from its first word, and is said once their
 words have gone to the agent. See ADR 0267.
+
+### 2026-10-20: Voice lowers other apps' audio while it listens; any reply can be read aloud
+
+Music or a video in another app reached the microphone, and the agent heard
+it. Now, on macOS, while voice listens, hears the person or waits on the
+agent, other apps' audio dips the way it does on a call, and comes back up
+while the agent speaks and when voice turns off. It does so only when voice
+listens with the system's microphone: lowering audio opens the system's
+input, and opening a Bluetooth headset's would drop it into its call mode.
+
+Every agent reply has a read aloud button beside Copy. It reads the reply
+voice on or off: off, in its agent's voice, with the microphone closed.
+While it is on its way the button spins, while it plays it is a stop
+square and stays in view, and pressed again it stops. See ADR 0268.

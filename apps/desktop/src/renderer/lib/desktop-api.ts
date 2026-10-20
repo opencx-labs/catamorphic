@@ -129,6 +129,7 @@ import type {
   VoiceKeysState,
   VoiceLevels,
   VoicePress,
+  VoiceReadAloud,
   VoiceStatus,
   VoiceWindowChoice,
 } from "../../shared/voice.js";
@@ -2120,6 +2121,12 @@ export interface CatamorphicDesktopApi {
    * prefs (`voice*`, `agentVoices`): a live voice follows them.
    */
   voiceStatus: () => Promise<VoiceStatus>;
+  /**
+   * Read a reply aloud in its agent's voice, voice on or off (ADR 0268);
+   * pressed again for the same reply, it stops. `reading` in the status
+   * says which reply is being read.
+   */
+  voiceReadAloud: (input: VoiceReadAloud) => Promise<void>;
   /**
    * A microphone or a voice shortcut went down (ADR 0236): voice hears the
    * person from now. Released soon after, it was a tap, and voice turns on

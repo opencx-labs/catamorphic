@@ -13,6 +13,7 @@ import {
   type WebContents,
   type WebFrameMain,
 } from "electron";
+import { z } from "zod";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { MenuItem } from "../../shared/menu.js";
 import {
@@ -31,6 +32,7 @@ import {
   type VoiceId,
   type VoiceKeysState,
   type VoicePress,
+  type VoiceReadAloud,
   type VoiceSessionRef,
   type VoiceStatus,
   type VoiceTarget,
@@ -58,10 +60,11 @@ import {
   sightFor,
   takePicture,
 } from "./sight.js";
-import { isStopCommand } from "./speech-text.js";
+import { isStopCommand, speakableText } from "./speech-text.js";
 import { SystemKeys } from "./system-keys.js";
 import { createVoiceBubble, voiceBubbleDragSchema } from "./voice-bubble.js";
 import { listenForVoiceKeys } from "./voice-keys.js";
+import { QUIET_PHASES, VoiceQuiet } from "./voice-quiet.js";
 
 /** What voice says when it starts learning the person's voice. */
 const LEARN_PROMPT =
@@ -211,7 +214,30 @@ interface ActiveVoice {
   applied: Applied;
   /** Microphone moves, one at a time: each opens the audio page anew. */
   moving: Promise<void>;
+  /** The label of the microphone the audio page opened; null until then. */
+  microphone: string | null;
 }
+
+/** A reply read aloud from its button (ADR 0268). */
+interface Reading {
+  profileId: string;
+  itemId: string;
+  /** The utterance the speech worker reports on: one per press. */
+  id: string;
+  preparing: boolean;
+  /** Voice was off: the worker and audio page it borrowed until said. */
+  borrowed: {
+    worker: UtilityProcess;
+    audio: BrowserWindow | null;
+    detach: () => void;
+  } | null;
+}
+
+const readAloudSchema = z.object({
+  itemId: z.string().min(1).max(200),
+  text: z.string().max(200_000),
+  agentId: z.string().min(1).nullable(),
+});
 
 /** A microphone or shortcut held down, until it comes up. */
 interface Press {
@@ -262,6 +288,42 @@ export function registerVoiceSupport(deps: {
   );
   let fakeStarts = 0;
   let active: ActiveVoice | null = null;
+  /**
+   * The reply read aloud from its button, voice on or off (ADR 0268). Off,
+   * it borrows the speech worker and audio page, the microphone closed.
+   */
+  let reading: Reading | null = null;
+  /**
+   * Other apps' audio, lowered while voice listens, hears the person or
+   * waits on the agent (ADR 0268): on macOS, through the helper, never
+   * with scripted speech. It comes back up while the agent speaks, which
+   * macOS would lower too, and when voice turns off the helper goes.
+   */
+  const quiet =
+    process.platform === "darwin" && !fakeUtterances
+      ? new VoiceQuiet({
+          helperPath: app.isPackaged
+            ? path.join(process.resourcesPath, "..", "MacOS", "voice-quiet")
+            : path.join(
+                app.getAppPath(),
+                "native",
+                "voice-quiet",
+                "bin",
+                "voice-quiet",
+              ),
+        })
+      : null;
+  const settleQuiet = () => {
+    const voice = active;
+    if (!voice) {
+      quiet?.stop();
+      return;
+    }
+    quiet?.set({
+      quiet: !voice.ending && QUIET_PHASES.has(voice.live.phase),
+      microphone: voice.microphone,
+    });
+  };
   let disposed = false;
   /** Why each profile's voice stopped, and what it was talking to. */
   const errors = new Map<
@@ -336,12 +398,17 @@ export function registerVoiceSupport(deps: {
 
   const statusFor = (profileId: string): VoiceStatus => {
     const pending = news.has(profileId);
+    const read =
+      reading?.profileId === profileId
+        ? { itemId: reading.itemId, preparing: reading.preparing }
+        : null;
     if (active?.profileId === profileId)
-      return { ...VOICE_OFF, ...active.live, pending };
+      return { ...VOICE_OFF, ...active.live, pending, reading: read };
     const error = errors.get(profileId);
     return {
       ...VOICE_OFF,
       pending,
+      reading: read,
       ...(error ? { error: error.message, target: error.target } : {}),
     };
   };
@@ -374,6 +441,7 @@ export function registerVoiceSupport(deps: {
   };
 
   const publish = () => {
+    settleQuiet();
     // The bubble first: it may read another profile's status from now.
     refreshBubble();
     for (const window of BrowserWindow.getAllWindows()) {
@@ -446,6 +514,7 @@ export function registerVoiceSupport(deps: {
   /** An audio page whose renderer went: it can hear nothing more. */
   const audioGone = (window: BrowserWindow) => {
     if (resting?.audio === window) resting.audio = null;
+    if (reading?.borrowed?.audio === window) endReading();
     if (active?.audioWindow === window)
       void stop("The microphone stopped. Turn voice on again.");
   };
@@ -505,6 +574,8 @@ export function registerVoiceSupport(deps: {
     const voice = active;
     if (!voice) return;
     active = null;
+    // A reply it was reading goes with it.
+    if (reading && !reading.borrowed) reading = null;
     clearTimeout(voice.idle);
     clearTimeout(voice.finishing);
     settleDictation(voice);
@@ -518,6 +589,118 @@ export function registerVoiceSupport(deps: {
         target: voice.live.target,
       });
     publish();
+  };
+
+  /** The reply stops being read: what it borrowed rests, warm for voice. */
+  const endReading = () => {
+    const was = reading;
+    if (!was) return;
+    reading = null;
+    if (was.borrowed) {
+      was.borrowed.detach();
+      rest(was.borrowed.worker, was.borrowed.audio);
+    }
+    publish();
+  };
+
+  /**
+   * Read a reply aloud in its agent's voice (ADR 0268); pressed again, or
+   * for another reply, the one being read stops. With voice on, voice says
+   * it as it says a reply, and talking over it stops it the same way. Off,
+   * the speech worker and audio page say it with the microphone closed,
+   * and rest once it is said.
+   */
+  const readAloud = async (profileId: string, input: VoiceReadAloud) => {
+    const again =
+      reading?.profileId === profileId && reading.itemId === input.itemId;
+    if (reading) {
+      if (!reading.borrowed && active) send(active, { type: "stop-speaking" });
+      endReading();
+    }
+    if (again) return;
+    const text = speakableText(input.text);
+    if (!text.trim()) return;
+    const id = `read-${randomUUID()}`;
+    if (active) {
+      reading = {
+        profileId,
+        itemId: input.itemId,
+        id,
+        preparing: true,
+        borrowed: null,
+      };
+      send(active, { type: "speak", id, text });
+      publish();
+      return;
+    }
+    const warm = takeWarm();
+    const borrowed: NonNullable<Reading["borrowed"]> = {
+      worker: warm.worker,
+      audio: warm.audio,
+      detach: () => {},
+    };
+    const mine: Reading = {
+      profileId,
+      itemId: input.itemId,
+      id,
+      preparing: true,
+      borrowed,
+    };
+    reading = mine;
+    publish();
+    const onMessage = (event: VoiceWorkerEvent) => {
+      if (reading !== mine) return;
+      if (event.type === "speaking" && event.id === id) {
+        mine.preparing = false;
+        publish();
+      } else if (
+        (event.type === "spoken" && event.id === id) ||
+        event.type === "failed"
+      )
+        endReading();
+    };
+    const onExit = () => {
+      if (reading === mine) endReading();
+    };
+    warm.worker.on("message", onMessage);
+    warm.worker.once("exit", onExit);
+    borrowed.detach = () => {
+      warm.worker.off("message", onMessage);
+      warm.worker.off("exit", onExit);
+    };
+    try {
+      const paths = fakeUtterances ? null : await models.ensure(() => {});
+      if (reading !== mine) return;
+      const window = warm.audio ?? (await openAudioWindow(audioGone));
+      if (reading !== mine) {
+        if (window !== warm.audio) window.destroy();
+        return;
+      }
+      borrowed.audio = window;
+      // The page and its port first: the speech plays as soon as it is made.
+      connectAudio(window, warm.worker, { microphone: null, listen: false });
+      warm.worker.postMessage({
+        type: "start",
+        speech: paths
+          ? {
+              kind: "models",
+              paths,
+              voice: agentVoice(prefs(profileId).load(), input.agentId),
+            }
+          : { kind: "fake", utterance: "" },
+        voiceprint: null,
+        handsFree: false,
+        dictation: false,
+      } satisfies VoiceWorkerCommand);
+      warm.worker.postMessage({
+        type: "speak",
+        id,
+        text,
+      } satisfies VoiceWorkerCommand);
+    } catch (cause) {
+      if (reading === mine) endReading();
+      console.warn("[voice] reading a reply aloud failed:", cause);
+    }
   };
 
   const agentSessions = () => {
@@ -792,7 +975,7 @@ export function registerVoiceSupport(deps: {
       .then(() => {
         const page = voice.audioWindow;
         if (active !== voice || !page || page.isDestroyed()) return;
-        connectAudio(page, voice.worker, microphone);
+        connectAudio(page, voice.worker, { microphone, listen: true });
       })
       .catch((cause: unknown) => {
         if (active === voice)
@@ -855,13 +1038,19 @@ export function registerVoiceSupport(deps: {
         return;
       case "speaking":
         voice.speaking.add(event.id);
+        if (reading?.id === event.id) reading.preparing = false;
         break;
       case "spoken":
         voice.speaking.delete(event.id);
+        if (reading?.id === event.id) reading = null;
         voice.conversation?.said(event.id);
         break;
       case "failed":
         void stop(event.message);
+        return;
+      case "microphone":
+        voice.microphone = event.label;
+        settleQuiet();
         return;
       case "levels":
         // Every frame of it animates in the windows; no status changes.
@@ -1146,6 +1335,8 @@ export function registerVoiceSupport(deps: {
   ) => {
     errors.delete(profileId);
     if (request.kind !== "dictation") lastRequests.set(profileId, request);
+    // A reply being read gives back the worker and page it borrowed.
+    endReading();
     const warm = takeWarm();
     const worker = warm.worker;
     const voice: ActiveVoice = {
@@ -1180,6 +1371,7 @@ export function registerVoiceSupport(deps: {
       },
       applied: appliedOf(prefs(profileId).load(), null),
       moving: Promise.resolve(),
+      microphone: null,
     };
     active = voice;
     publish();
@@ -1239,7 +1431,10 @@ export function registerVoiceSupport(deps: {
           return;
         }
         voice.audioWindow = window;
-        connectAudio(window, worker, stored.voiceMicrophone);
+        connectAudio(window, worker, {
+          microphone: stored.voiceMicrophone,
+          listen: true,
+        });
       })();
       const [resolved] = await Promise.all([
         resolve(profileId, request),
@@ -1488,6 +1683,13 @@ export function registerVoiceSupport(deps: {
   ipcMain.handle("catamorphic:voice-get-status", (event) =>
     statusFor(windows.profileFor(event.sender)),
   );
+  // Resolve at once: the status events say when it plays and ends.
+  ipcMain.handle("catamorphic:voice-read-aloud", (event, input: unknown) => {
+    void readAloud(
+      windows.profileFor(event.sender),
+      readAloudSchema.parse(input),
+    );
+  });
   // Resolve at once: preparing can take a first download, and the status
   // events carry the rest.
   ipcMain.handle("catamorphic:voice-press", (event, pressed: VoicePress) => {
@@ -1910,11 +2112,13 @@ export function registerVoiceSupport(deps: {
       app.off("browser-window-focus", onWindowFocus);
       stopVoiceKeys();
       systemKeys?.stop();
+      quiet?.stop();
       ipcMain.off("catamorphic:voice-field-focus", onFieldFocus);
       ipcMain.off("catamorphic:voice-dictation-sent", dictationSent);
       ipcMain.off("catamorphic:voice-front-chat", onFrontChat);
       for (const channel of [
         "catamorphic:voice-get-status",
+        "catamorphic:voice-read-aloud",
         "catamorphic:voice-press",
         "catamorphic:voice-release",
         "catamorphic:voice-reset",
@@ -1931,6 +2135,7 @@ export function registerVoiceSupport(deps: {
       ])
         ipcMain.removeHandler(channel);
       clearInterval(newsTimer);
+      endReading();
       await stop();
       if (resting) {
         letGo(resting);
@@ -2019,18 +2224,18 @@ async function openAudioWindow(
 }
 
 /**
- * The audio page opens a microphone for the speech worker: their port
- * goes straight between them, so audio never passes through the main
- * process. Whatever the page served before closes.
+ * The audio page opens a microphone for the speech worker, unless it only
+ * plays: their port goes straight between them, so audio never passes
+ * through the main process. Whatever the page served before closes.
  */
 function connectAudio(
   window: BrowserWindow,
   worker: UtilityProcess,
-  microphone: string | null,
+  input: { microphone: string | null; listen: boolean },
 ): void {
   const { port1, port2 } = new MessageChannelMain();
   worker.postMessage({ type: "audio" } satisfies VoiceWorkerCommand, [port1]);
-  window.webContents.postMessage(VOICE_PORT_MESSAGE, microphone, [port2]);
+  window.webContents.postMessage(VOICE_PORT_MESSAGE, input, [port2]);
 }
 
 function parseFakeUtterances(raw: string | undefined): string[] | undefined {

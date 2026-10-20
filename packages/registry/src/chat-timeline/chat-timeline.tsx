@@ -33,8 +33,10 @@ import {
   LoaderCircle,
   type LucideIcon,
   RotateCcw,
+  Square,
   TextQuote,
   Undo2,
+  Volume2,
   Zap,
 } from "lucide-react";
 import {
@@ -198,6 +200,20 @@ export interface ChatTimelineProps {
   onRollback?: (turnId: string, item: UserMessageItem) => ActionResult;
   /** Fork the conversation through one of the agent's replies (the item id). */
   onFork?: (itemId: string) => void;
+  /**
+   * Read one of the agent's replies aloud, as written, in its agent's
+   * voice; with it, replies offer a read aloud button beside Copy.
+   */
+  onReadAloud?: (input: {
+    itemId: string;
+    text: string;
+    agentId: string | null;
+  }) => void;
+  /**
+   * The reply being read aloud, if any, and whether it is still on its
+   * way: its button shows so, stays in view, and stops it.
+   */
+  readingAloud?: { itemId: string; preparing: boolean } | null;
   onResendFailed?: (commandId: string) => void;
   onDismissFailed?: (commandId: string) => void;
   // The host's own surface.
@@ -270,6 +286,8 @@ interface TimelineHost {
   opensLinks: boolean;
   opensFiles: boolean;
   forks: boolean;
+  readsAloud: boolean;
+  readingAloud: { itemId: string; preparing: boolean } | null;
 }
 
 /**
@@ -280,6 +298,11 @@ interface TimelineActions {
   openLink: (url: string, modifiers: LinkModifiers) => void;
   openFile: (path: string, modifiers?: LinkModifiers) => void;
   fork: (itemId: string) => void;
+  readAloud: (input: {
+    itemId: string;
+    text: string;
+    agentId: string | null;
+  }) => void;
   rollback: (turnId: string, item: UserMessageItem) => ActionResult;
   /** Has the agent read the message now; its turn says it is stopping. */
   steerNow: (item: UserMessageItem) => ActionResult;
@@ -293,12 +316,15 @@ const HostContext = createContext<TimelineHost>({
   opensLinks: false,
   opensFiles: false,
   forks: false,
+  readsAloud: false,
+  readingAloud: null,
 });
 
 const ActionsContext = createContext<TimelineActions>({
   openLink: () => undefined,
   openFile: () => undefined,
   fork: () => undefined,
+  readAloud: () => undefined,
   rollback: () => undefined,
   steerNow: () => undefined,
   resend: () => undefined,
@@ -527,6 +553,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
     reauthLabel,
     onRollback,
     onFork,
+    onReadAloud,
+    readingAloud = null,
     onResendFailed,
     onDismissFailed,
     resolveAgentName,
@@ -554,6 +582,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     openFile: (path, modifiers) =>
       latest.current.onFileClick?.(path, modifiers),
     fork: (itemId) => latest.current.onFork?.(itemId),
+    readAloud: (input) => latest.current.onReadAloud?.(input),
     rollback: (turnId, item) => latest.current.onRollback?.(turnId, item),
     steerNow: async (item) => {
       const unread = [
@@ -580,6 +609,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
   const opensLinks = Boolean(onLinkClick);
   const opensFiles = Boolean(onFileClick);
   const forks = Boolean(onFork);
+  const readsAloud = Boolean(onReadAloud);
   const host = useMemo<TimelineHost>(
     () => ({
       renderAttachment,
@@ -590,6 +620,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
       opensLinks,
       opensFiles,
       forks,
+      readsAloud,
+      readingAloud,
     }),
     [
       renderAttachment,
@@ -600,6 +632,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
       opensLinks,
       opensFiles,
       forks,
+      readsAloud,
+      readingAloud,
     ],
   );
 
@@ -2093,14 +2127,26 @@ const AgentMessage = memo(function AgentMessage({
         focused ? "rounded-md outline outline-1 outline-accent/50" : ""
       }`}
     >
-      {/* Copy and fork from this reply. The pl-2 bridges the gap between
-          the message edge and the buttons: without it the pointer leaves
-          the group mid-crossing and the reveal blinks. */}
+      {/* Copy, read aloud and fork from this reply. The pl-2 bridges the
+          gap between the message edge and the buttons: without it the
+          pointer leaves the group mid-crossing and the reveal blinks.
+          Being read aloud, they stay in view, so it can be stopped. */}
       {item && !writing && text.trim() && (
         <span
-          className={`absolute bottom-0 left-full flex items-center gap-0.5 pl-2 ${MESSAGE_ACTIONS}`}
+          className={`absolute bottom-0 left-full flex items-center gap-0.5 pl-2 ${
+            host.readingAloud?.itemId === item.id
+              ? "opacity-100 transition-opacity duration-150"
+              : MESSAGE_ACTIONS
+          }`}
         >
           <CopyMessageButton content={text} />
+          {host.readsAloud && (
+            <ReadAloudButton
+              itemId={item.id}
+              text={text}
+              agentId={item.agentId}
+            />
+          )}
           {host.forks && (
             <Hint label="Fork the chat from here">
               <button
@@ -2648,6 +2694,53 @@ function CopyMessageButton({ content }: { content: string }) {
           />
           <Check
             className={`col-start-1 row-start-1 size-3 text-success transition-opacity duration-150 ${copied ? "opacity-100" : "opacity-0"}`}
+          />
+        </span>
+      </button>
+    </Hint>
+  );
+}
+
+/**
+ * Reads the reply aloud in its agent's voice; pressed again, it stops. A
+ * spinner while it is on its way, a stop square while it plays.
+ */
+function ReadAloudButton({
+  itemId,
+  text,
+  agentId,
+}: {
+  itemId: string;
+  text: string;
+  agentId: string | null;
+}) {
+  const { Hint, readingAloud } = useContext(HostContext);
+  const actions = useContext(ActionsContext);
+  const reading = readingAloud?.itemId === itemId ? readingAloud : null;
+  const label = reading ? "Stop reading aloud" : "Read aloud";
+  return (
+    <Hint label={label}>
+      <button
+        type="button"
+        onClick={() => actions.readAloud({ itemId, text, agentId })}
+        className={ICON_BUTTON}
+        aria-label={label}
+        aria-pressed={Boolean(reading)}
+        data-testid="chat-read-aloud"
+        data-reading={
+          reading ? (reading.preparing ? "preparing" : "speaking") : undefined
+        }
+      >
+        {/* Every glyph stays mounted so each swap cross-fades in place. */}
+        <span className="grid place-items-center">
+          <Volume2
+            className={`col-start-1 row-start-1 size-3 transition-opacity duration-150 ${reading ? "opacity-0" : "opacity-100"}`}
+          />
+          <LoaderCircle
+            className={`col-start-1 row-start-1 size-3 transition-opacity duration-150 ${reading?.preparing ? "animate-spin opacity-100" : "opacity-0"}`}
+          />
+          <Square
+            className={`col-start-1 row-start-1 size-2.5 fill-current transition-opacity duration-150 ${reading && !reading.preparing ? "opacity-100" : "opacity-0"}`}
           />
         </span>
       </button>

@@ -1,6 +1,6 @@
 # 0236 — Voice hears the person, dictates anywhere, and its keys tap or hold
 
-- **Status:** Accepted; talking over the agent, where the person was, and `sureOfWords` (-0.25 for messages) amended by [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md)
+- **Status:** Accepted; talking over the agent, where the person was, and `sureOfWords` (-0.25 for messages) amended by [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md); other apps' audio lowered while it listens by [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md)
 - **Date:** 2026-10-16
 - **Amends:** 0216 (voice)
 

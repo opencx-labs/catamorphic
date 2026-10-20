@@ -931,6 +931,66 @@ describe("voice", () => {
     expect(status).toMatchObject({ error: null, pending: false });
   }, 120_000);
 
+  it("reads a reply aloud from its button, with voice off and the microphone closed", async () => {
+    const before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map((el) => el.dataset.chatLocalId);`,
+    );
+    await run(`window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'n', bubbles: true, cancelable: true,
+      ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
+    })); return true;`);
+    const localId = await runWait<string>(
+      `const known = ${JSON.stringify(before)};
+       const chat = $$('[data-chat-local-id]').find((el) => !known.includes(el.dataset.chatLocalId));
+       return chat?.querySelector('[data-composer-input]') && chat.dataset.chatLocalId;`,
+      { label: "a new chat" },
+    );
+    await run(`const input = chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]');
+      setReactValue(input, 'how am i talking to you'); input.closest('form').requestSubmit(); return true;`);
+    const button = `chatOf(${JSON.stringify(localId)}).querySelector('[data-testid="chat-read-aloud"]')`;
+    await runWait(`return !!${button};`, {
+      timeoutMs: 30_000,
+      label: "a reply with its read aloud button",
+    });
+    // Every reading the windows hear, in order.
+    await run(`window.__readings = [];
+      window.__readingsOff?.();
+      window.__readingsOff = api.onVoiceStatus((status) => {
+        const last = window.__readings.at(-1);
+        const now = status.reading ? (status.reading.preparing ? 'preparing' : 'speaking') : 'none';
+        if (last !== now) window.__readings.push(now);
+        if (status.phase !== 'off') window.__voiceOn = true;
+      });
+      return true;`);
+    // Pressed again before it plays, it stops: nothing is said.
+    await run(`${button}.click(); ${button}.click(); return true;`);
+    await runWait(
+      `return window.__readings.at(-1) === 'none' && (await api.voiceStatus()).reading === null;`,
+      { label: "reading stopped by a second press" },
+    );
+    expect(await run<string[]>(`return window.__readings;`)).not.toContain(
+      "speaking",
+    );
+    // Pressed once, it plays to the end and the button is itself again.
+    await run(`window.__readings = []; ${button}.click(); return true;`);
+    await runWait(
+      `return window.__readings.includes('speaking') && window.__readings.at(-1) === 'none';`,
+      { timeoutMs: 30_000, label: "the reply read to its end" },
+    );
+    // A late word of the stop before may come first; from the press on:
+    const readings = await run<string[]>(`return window.__readings;`);
+    expect(readings.slice(readings.indexOf("preparing"))).toEqual([
+      "preparing",
+      "speaking",
+      "none",
+    ]);
+    expect(await run(`return ${button}.dataset.reading ?? null;`)).toBeNull();
+    // Voice stayed off, and its microphone with it.
+    expect(await run(`return window.__voiceOn === true;`)).toBe(false);
+    expect(await run(`return mic().dataset.phase;`)).toBe("off");
+    await run(`window.__readingsOff?.(); return true;`);
+  }, 120_000);
+
   it("keeps what was on screen as the person started speaking, for the agent to load", async () => {
     // Work in front: the picture is its window, as on any machine.
     await focusWindow(app);

@@ -347,8 +347,9 @@ export class VoiceEngine {
     } else if (message.type === "drained") {
       this.drainedSeq = Math.max(this.drainedSeq, message.seq);
       this.settlePlayback();
-    } else if (message.type === "levels") {
-      // For the speaking animation, on its way to the windows.
+    } else if (message.type === "levels" || message.type === "microphone") {
+      // For the speaking animation and lowering other apps' audio, on
+      // their way to the main process.
       this.emit(message);
     } else {
       this.emit({ type: "failed", message: message.message });

@@ -534,4 +534,53 @@ describe("ChatTimeline work display", () => {
       "Found it.\n\nThe bug is in the parser.",
     );
   });
+
+  it("reads a reply aloud only where the host can, and shows which", async () => {
+    const readButtons = () =>
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="chat-read-aloud"]',
+      );
+    const workDisplay = { live: "all", settled: "keep" } as const;
+    await render({ timeline: settled(), workDisplay });
+    expect(readButtons()).toHaveLength(0);
+
+    const asked: Array<{
+      itemId: string;
+      text: string;
+      agentId: string | null;
+    }> = [];
+    await render({
+      timeline: settled(),
+      workDisplay,
+      onReadAloud: (input) => asked.push(input),
+    });
+    await act(async () => readButtons()[1]?.click());
+    expect(asked).toEqual([
+      {
+        itemId: "a2",
+        text: "Found it.\n\nThe bug is in the parser.",
+        agentId: null,
+      },
+    ]);
+
+    // On its way, then playing: its actions stay in view to stop it.
+    for (const [preparing, state] of [
+      [true, "preparing"],
+      [false, "speaking"],
+    ] as const) {
+      await render({
+        timeline: settled(),
+        workDisplay,
+        onReadAloud: (input) => asked.push(input),
+        readingAloud: { itemId: "a2", preparing },
+      });
+      const button = readButtons()[1];
+      expect(button?.dataset.reading).toBe(state);
+      expect(button?.getAttribute("aria-label")).toBe("Stop reading aloud");
+      expect(button?.closest("span.absolute")?.className).toContain(
+        "opacity-100",
+      );
+      expect(readButtons()[0]?.dataset.reading).toBeUndefined();
+    }
+  });
 });
