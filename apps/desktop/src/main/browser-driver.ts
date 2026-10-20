@@ -120,7 +120,10 @@ function settledWithin<T>(input: {
     const stop = () => done({ settled: false });
     const timer = setTimeout(stop, input.ms);
     input.signal.addEventListener("abort", stop, { once: true });
-    void input.promise.then((value) => done({ settled: true, value }));
+    void input.promise.then(
+      (value) => done({ settled: true, value }),
+      () => done({ settled: false }),
+    );
   });
 }
 
@@ -194,6 +197,8 @@ export class BrowserDriver {
   private watching = false;
   /** Work holding the tab awake now: queued actions and waits overlap. */
   private holds = 0;
+  /** The window keeping the tab awake and laid out, shared by every hold. */
+  private awake: Promise<void> | null = null;
   private network: NetworkEntry[] = [];
   private requests = new Map<string, NetworkEntry>();
   /** Finished requests an agent has read; pending ones come again. */
@@ -312,28 +317,37 @@ export class BrowserDriver {
 
   /**
    * Keep the tab awake and laid out while anything works in it. A wait
-   * runs beside queued actions, so the first to start and the last to end
-   * tell the window.
+   * runs beside queued actions, so they share one activation: every holder
+   * awaits the same one (input must reach a laid-out tab), the last
+   * release ends it, and each holder releases whether it worked or not.
    */
-  private async hold(active: boolean): Promise<void> {
-    if (active) {
-      this.holds++;
-      if (this.holds > 1) return;
-      try {
-        await this.activity(true);
-      } catch (error) {
-        this.holds--;
-        throw error;
-      }
-      return;
-    }
+  private hold(): Promise<void> {
+    this.holds++;
+    this.awake ??= this.activity(true).catch((error: unknown) => {
+      this.awake = null;
+      throw error;
+    });
+    return this.awake;
+  }
+
+  private async release(): Promise<void> {
     this.holds = Math.max(0, this.holds - 1);
-    if (this.holds === 0) await this.activity(false);
+    if (this.holds > 0) return;
+    await this.awake?.catch(() => {});
+    // Taken again while the activation settled: it is theirs now.
+    if (this.holds > 0) return;
+    this.awake = null;
+    await this.activity(false);
   }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      await this.hold(true);
+      try {
+        await this.hold();
+      } catch (error) {
+        await this.release();
+        throw error;
+      }
       // Behind the person's window, the page is told it has focus instead.
       const elsewhere = this.elsewhere();
       const focused = elsewhere
@@ -356,7 +370,7 @@ export class BrowserDriver {
           // Not awaited: the action may have opened a dialog.
           if (elsewhere) void this.emulateFocus(false);
         } finally {
-          await this.hold(false);
+          await this.release();
         }
       }
     };
@@ -917,16 +931,17 @@ export class BrowserDriver {
       );
       return page.success && page.data.text.includes(action.text);
     };
-    await this.hold(true);
+    // A read needs the tab awake, not the window's answer: a covered or
+    // minimised window, whose frames are paused, never gives one.
+    this.hold().catch(() => {});
     try {
-      const quick = Math.min(timeout, QUICK_WAIT_MS);
       let outcome = await waitUntil({
         ready: shows,
-        timeoutMs: quick,
+        timeoutMs: Math.min(QUICK_WAIT_MS, Math.max(0, deadline - Date.now())),
         stopWaiting,
         pollMs: 100,
       });
-      if (outcome === "timeout" && timeout > quick)
+      if (outcome === "timeout" && Date.now() < deadline)
         outcome = await waitUntil({
           ready: shows,
           timeoutMs: Math.max(0, deadline - Date.now()),
@@ -936,12 +951,13 @@ export class BrowserDriver {
       if (this.guest.isDestroyed()) throw new Error("Browser tab was closed.");
       const open = this.openDialog();
       if (open) return this.reportDialog(open);
-      // A page never read once says why, instead of "not found".
-      if (outcome !== "ready" && !read && failure)
+      // A page never read once by the deadline says why, instead of "not
+      // found"; a read still under way is a page still loading.
+      if (outcome === "timeout" && !read && failure && reading === null)
         throw failure instanceof Error ? failure : new Error(String(failure));
       return { found: outcome === "ready" };
     } finally {
-      await this.hold(false).catch(() => {});
+      void this.release().catch(() => {});
     }
   }
 

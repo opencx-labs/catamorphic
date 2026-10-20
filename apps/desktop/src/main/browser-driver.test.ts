@@ -236,6 +236,95 @@ describe("browser driver waits", () => {
     }
   });
 
+  it("never waits on the window to read: a covered window does not answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const page: Page = { text: "Loading", reads: 0 };
+      // A covered or minimised window: its frames are paused.
+      const activity = vi.fn((_active: boolean) => new Promise<void>(() => {}));
+      const driver = new BrowserDriver(
+        asWebContents(pageWith(page)),
+        () => {},
+        activity,
+      );
+      const timedOut = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 1_000 },
+        waiting,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(timedOut).resolves.toEqual({ found: false });
+      expect(page.reads).toBeGreaterThan(5);
+      page.text = "Ready";
+      await expect(
+        driver.act(
+          { type: "wait_for", text: "Ready", timeoutMs: 1_000 },
+          waiting,
+        ),
+      ).resolves.toEqual({ found: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("makes an action that joins a wait await the tab's activation, and retries one that failed", async () => {
+    vi.useFakeTimers();
+    try {
+      const page: Page = { text: "Loading", reads: 0 };
+      const guest = pageWith(page);
+      let activate = () => {};
+      let failNext = false;
+      const activity = vi.fn((active: boolean) => {
+        if (!active) return Promise.resolve();
+        if (failNext) {
+          failNext = false;
+          return Promise.reject(new Error("Browser workspace unavailable"));
+        }
+        return new Promise<void>((resolve) => {
+          activate = resolve;
+        });
+      });
+      const driver = new BrowserDriver(
+        asWebContents(guest),
+        () => {},
+        activity,
+      );
+      const waited = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 5_000 },
+        waiting,
+      );
+      let cleared = false;
+      void driver.clear().then(() => {
+        cleared = true;
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      // The wait reads meanwhile; the action waits for a laid-out tab.
+      expect(page.reads).toBeGreaterThan(0);
+      expect(cleared).toBe(false);
+      expect(guest.focus).not.toHaveBeenCalled();
+      activate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleared).toBe(true);
+      expect(activity.mock.calls.filter(([active]) => active)).toHaveLength(1);
+      page.text = "Ready";
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(waited).resolves.toEqual({ found: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(activity.mock.calls.at(-1)).toEqual([false]);
+
+      // An activation that failed fails its action, and the next one asks again.
+      failNext = true;
+      await expect(driver.clear()).rejects.toThrow(
+        "Browser workspace unavailable",
+      );
+      const again = driver.clear();
+      await vi.advanceTimersByTimeAsync(0);
+      activate();
+      await expect(again).resolves.toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says why a page it could never read was not found", async () => {
     vi.useFakeTimers();
     try {
@@ -253,6 +342,16 @@ describe("browser driver waits", () => {
       );
       await vi.advanceTimersByTimeAsync(2_000);
       await settled;
+      // A wait something ended early is not a page that cannot be read.
+      const reached = new AbortController();
+      const stopped = driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 60_000 },
+        reached.signal,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      reached.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(stopped).resolves.toEqual({ found: false });
     } finally {
       vi.useRealTimers();
     }
