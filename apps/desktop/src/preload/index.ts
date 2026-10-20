@@ -78,6 +78,7 @@ import {
   type VoiceLevels,
   type VoicePortMessage,
   type VoicePress,
+  type VoiceReadAloud,
   type VoiceRestMessage,
   type VoiceStatus,
   type VoiceWindowChoice,
@@ -1612,6 +1613,8 @@ const api = {
   // --- voice (ADR 0216); its settings are prefs ---
   voiceStatus: (): Promise<VoiceStatus> =>
     invoke("catamorphic:voice-get-status"),
+  voiceReadAloud: (input: VoiceReadAloud): Promise<void> =>
+    invoke("catamorphic:voice-read-aloud", input),
   voicePress: (press: VoicePress): Promise<void> =>
     invoke("catamorphic:voice-press", press),
   voiceRelease: (input?: { heldMs?: number }): Promise<void> =>
@@ -1694,11 +1697,20 @@ contextBridge.exposeInMainWorld("catamorphicDesktop", api);
 // cannot cross the context bridge as a value, but it can be transferred
 // into the page with a window message to itself ("*": a file:// page's
 // origin is opaque and cannot be named as a target).
-ipcRenderer.on(VOICE_PORT_MESSAGE, (event, microphone: unknown) => {
+ipcRenderer.on(VOICE_PORT_MESSAGE, (event, input: unknown) => {
+  const microphone =
+    typeof input === "object" && input !== null && "microphone" in input
+      ? input.microphone
+      : null;
+  const listen =
+    typeof input === "object" && input !== null && "listen" in input
+      ? input.listen !== false
+      : true;
   window.postMessage(
     {
       type: VOICE_PORT_MESSAGE,
       microphone: typeof microphone === "string" ? microphone : null,
+      listen,
     } satisfies VoicePortMessage,
     "*",
     event.ports,

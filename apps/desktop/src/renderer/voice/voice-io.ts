@@ -44,15 +44,16 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (!port) return;
   current?.close();
   const speaker = new Speaker(port);
-  const microphone = listen(port, event.data.microphone).catch(
-    (cause: unknown) => {
-      post(port, {
-        type: "failed",
-        message: `The microphone could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
-      });
-      return undefined;
-    },
-  );
+  // A reply read aloud only plays: the microphone stays closed.
+  const microphone = event.data.listen
+    ? listen(port, event.data.microphone).catch((cause: unknown) => {
+        post(port, {
+          type: "failed",
+          message: `The microphone could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
+        });
+        return undefined;
+      })
+    : Promise.resolve(undefined);
   port.onmessage = (message: MessageEvent<VoiceAudioDown>) => {
     if (message.data.type === "close-microphone")
       void microphone.then((close) => close?.());
@@ -107,6 +108,9 @@ async function capture(
   context: AudioContext,
 ): Promise<void> {
   const [track] = stream.getAudioTracks();
+  // Which microphone it is: other apps' audio is lowered only for the
+  // system's own (ADR 0268).
+  post(port, { type: "microphone", label: track?.label ?? "" });
   await context.audioWorklet.addModule(captureWorklet);
   const tap = new AudioWorkletNode(context, "voice-capture", {
     numberOfInputs: 1,
@@ -190,6 +194,8 @@ function isPortMessage(value: unknown): value is VoicePortMessage {
     "type" in value &&
     value.type === VOICE_PORT_MESSAGE &&
     "microphone" in value &&
-    (value.microphone === null || typeof value.microphone === "string")
+    (value.microphone === null || typeof value.microphone === "string") &&
+    "listen" in value &&
+    typeof value.listen === "boolean"
   );
 }

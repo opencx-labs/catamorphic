@@ -931,6 +931,81 @@ describe("voice", () => {
     expect(status).toMatchObject({ error: null, pending: false });
   }, 120_000);
 
+  it("reads a reply aloud from its button, with voice off and the microphone closed", async () => {
+    const before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map((el) => el.dataset.chatLocalId);`,
+    );
+    await run(`window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'n', bubbles: true, cancelable: true,
+      ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
+    })); return true;`);
+    const localId = await runWait<string>(
+      `const known = ${JSON.stringify(before)};
+       const chat = $$('[data-chat-local-id]').find((el) => !known.includes(el.dataset.chatLocalId));
+       return chat?.querySelector('[data-composer-input]') && chat.dataset.chatLocalId;`,
+      { label: "a new chat" },
+    );
+    // A long answer: about two seconds of speech.
+    await run(`const input = chatOf(${JSON.stringify(localId)}).querySelector('[data-composer-input]');
+      setReactValue(input, 'pace the work quickly'); input.closest('form').requestSubmit(); return true;`);
+    const button = `[...chatOf(${JSON.stringify(localId)}).querySelectorAll('article')]
+      .find((el) => el.textContent.includes('Fixed: the lexer'))
+      ?.querySelector('[data-testid="chat-read-aloud"]')`;
+    await runWait(`return !!${button};`, {
+      timeoutMs: 30_000,
+      label: "a long reply with its read aloud button",
+    });
+    // Every reading the windows hear, in order, with when.
+    await run(`window.__readings = [];
+      window.__readingsOff?.();
+      window.__readingsOff = api.onVoiceStatus((status) => {
+        const last = window.__readings.at(-1)?.state;
+        const state = status.reading ? (status.reading.preparing ? 'preparing' : 'speaking') : 'none';
+        if (last !== state) window.__readings.push({ state, at: performance.now() });
+        if (status.phase !== 'off') window.__voiceOn = true;
+      });
+      return true;`);
+    const states = () =>
+      run<string[]>(
+        `return window.__readings.map((reading) => reading.state);`,
+      );
+    // Pressed again while it plays, it stops at once, long before its end.
+    await run(`${button}.click(); return true;`);
+    await runWait(`return window.__readings.at(-1)?.state === 'speaking';`, {
+      timeoutMs: 30_000,
+      label: "the reply playing",
+    });
+    await run(`${button}.click(); return true;`);
+    await runWait(`return window.__readings.at(-1)?.state === 'none';`, {
+      label: "reading stopped by a second press",
+    });
+    expect(await states()).toEqual(["preparing", "speaking", "none"]);
+    expect(
+      await run<number>(
+        `const [, speaking, none] = window.__readings; return none.at - speaking.at;`,
+      ),
+    ).toBeLessThan(1_500);
+    expect(await run(`return ${button}.dataset.reading ?? null;`)).toBeNull();
+    // Pressed once, it plays to its end and the button is itself again.
+    await run(`window.__readings = []; ${button}.click(); return true;`);
+    await runWait(
+      `return window.__readings.some((reading) => reading.state === 'speaking') && window.__readings.at(-1)?.state === 'none';`,
+      { timeoutMs: 30_000, label: "the reply read to its end" },
+    );
+    // A late word of the stop before may come first; from the press on:
+    const readings = await states();
+    expect(readings.slice(readings.indexOf("preparing"))).toEqual([
+      "preparing",
+      "speaking",
+      "none",
+    ]);
+    expect(await run(`return ${button}.dataset.reading ?? null;`)).toBeNull();
+    // Voice stayed off, and its microphone with it.
+    expect(await run(`return window.__voiceOn === true;`)).toBe(false);
+    expect(await run(`return mic().dataset.phase;`)).toBe("off");
+    await run(`window.__readingsOff?.(); return true;`);
+  }, 120_000);
+
   it("keeps what was on screen as the person started speaking, for the agent to load", async () => {
     // Work in front: the picture is its window, as on any machine.
     await focusWindow(app);

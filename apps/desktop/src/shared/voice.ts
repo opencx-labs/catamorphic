@@ -159,6 +159,26 @@ export interface VoiceStatus {
    * was started by holding a shortcut or a microphone).
    */
   handsFree: boolean;
+  /**
+   * The reply being read aloud from its button (ADR 0268), voice on or
+   * off: `preparing` until its first words play.
+   */
+  reading: VoiceReading | null;
+}
+
+/** A reply read aloud: the message, and whether it is still on its way. */
+export interface VoiceReading {
+  itemId: string;
+  preparing: boolean;
+}
+
+/** What a reply's read aloud button asks for. */
+export interface VoiceReadAloud {
+  itemId: string;
+  /** The reply as the agent wrote it (Markdown); voice reads its words. */
+  text: string;
+  /** Whose reply: it is read in that agent's voice. */
+  agentId: string | null;
 }
 
 export const VOICE_OFF: VoiceStatus = {
@@ -170,6 +190,7 @@ export const VOICE_OFF: VoiceStatus = {
   learning: false,
   dictation: false,
   handsFree: false,
+  reading: null,
 };
 
 /**
@@ -322,7 +343,9 @@ export type VoiceWorkerEvent =
   | { type: "unheard" }
   /** Everything heard before `finish` is recognized and said. */
   | { type: "finished" }
-  | ({ type: "levels" } & VoiceLevels);
+  | ({ type: "levels" } & VoiceLevels)
+  /** The microphone voice listens with, by its label (ADR 0268). */
+  | { type: "microphone"; label: string };
 
 /**
  * The rate the audio page captures the microphone at, and the detector and
@@ -355,7 +378,9 @@ export type VoiceAudioUp =
   /** Playback reached the end of every chunk up to `seq`. */
   | { type: "drained"; seq: number }
   | ({ type: "levels" } & VoiceLevels)
-  | { type: "failed"; message: string };
+  | { type: "failed"; message: string }
+  /** The microphone the page opened, by its label, as it opens. */
+  | { type: "microphone"; label: string };
 
 /** Speech worker → audio page. */
 export type VoiceAudioDown =
@@ -381,6 +406,8 @@ export interface VoicePortMessage {
   type: typeof VOICE_PORT_MESSAGE;
   /** A device id from `enumerateDevices`; null opens the system's. */
   microphone: string | null;
+  /** Open the microphone; false only plays (a reply read aloud). */
+  listen: boolean;
 }
 
 /**

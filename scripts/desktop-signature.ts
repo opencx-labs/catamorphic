@@ -13,8 +13,8 @@ const execute: Execute = (command, args) => {
 /**
  * The native helpers a macOS package carries: each must be signed by the
  * app's team, hold both architectures and speak its protocol.
- * `--version` is the only invocation: it reads no Keychain and taps no
- * keys.
+ * `--version` is the only invocation: it reads no Keychain, taps no keys
+ * and opens no microphone.
  */
 const HELPERS = [
   {
@@ -26,6 +26,11 @@ const HELPERS = [
     file: "voice-keys",
     name: "Voice keys helper",
     protocol: "work-voice-keys 1",
+  },
+  {
+    file: "voice-quiet",
+    name: "Voice quiet helper",
+    protocol: "work-voice-quiet 1",
   },
 ] as const;
 

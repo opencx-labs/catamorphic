@@ -107,6 +107,7 @@ import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
+import { useVoiceReading } from "../lib/use-voice-reading.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
 import { isOpenAction } from "../sources/run.js";
@@ -626,6 +627,13 @@ function ChatDockContent({
   }).data;
   const inWorktree = worktreeDraft || checkout?.kind === "managed";
   const backgroundCommands = useBackgroundCommands(activeSessionId);
+  // A reply read aloud from its button, voice on or off (ADR 0268).
+  const readingAloud = useVoiceReading();
+  const readAloud = useCallback(
+    (input: { itemId: string; text: string; agentId: string | null }) =>
+      void desktopApi.voiceReadAloud(input),
+    [],
+  );
   const [moveState, setMoveState] = useState<{
     canMove: boolean;
     reason: string | null;
@@ -2984,6 +2992,8 @@ function ChatDockContent({
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}
+              onReadAloud={readAloud}
+              readingAloud={readingAloud}
               registerJumpToPreviousUserMessage={(jump) => {
                 jumpToPreviousRef.current = jump;
               }}

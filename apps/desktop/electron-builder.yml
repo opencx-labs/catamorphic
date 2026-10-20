@@ -57,9 +57,12 @@ mac:
       to: MacOS/browser-keychain
     - from: native/voice-keys/bin/voice-keys
       to: MacOS/voice-keys
+    - from: native/voice-quiet/bin/voice-quiet
+      to: MacOS/voice-quiet
   binaries:
     - Contents/MacOS/browser-keychain
     - Contents/MacOS/voice-keys
+    - Contents/MacOS/voice-quiet
   category: public.app-category.developer-tools
   # Icon Composer source: packaging compiles it with Xcode 26's actool into
   # the Assets.car macOS 26 draws, plus the icns earlier versions show.

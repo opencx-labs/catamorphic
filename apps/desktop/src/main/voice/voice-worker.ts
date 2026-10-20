@@ -40,6 +40,11 @@ function onAudio(data: VoiceAudioUp): void {
     engine.onAudio(data);
     return;
   }
+  // Which microphone it is matters before the models are loaded too.
+  if (data.type === "microphone") {
+    emit(data);
+    return;
+  }
   if (data.type === "failed") {
     emit({ type: "failed", message: data.message });
     return;
@@ -206,6 +211,7 @@ function isAudioUp(value: unknown): value is VoiceAudioUp {
     (value.type === "frame" ||
       value.type === "drained" ||
       value.type === "levels" ||
-      value.type === "failed")
+      value.type === "failed" ||
+      value.type === "microphone")
   );
 }
