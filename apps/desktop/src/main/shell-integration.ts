@@ -24,6 +24,17 @@ import path from "node:path";
  */
 
 /**
+ * How agents' commands read in zsh: a pattern that matches nothing stays as
+ * written, as bash leaves it, instead of failing the whole command with
+ * "no matches found". Agents write bash (`grep -r --include=*.ts`), and an
+ * aborted search reads to them as a search that found nothing. Agent
+ * terminals run it after the user's .zshrc; native harnesses before each
+ * command (`agentShellEnvFile`). The user's own shells never see it.
+ */
+const AGENT_SHELL_OPTIONS = `if [ -n "\${ZSH_VERSION:-}" ]; then setopt no_nomatch; fi
+`;
+
+/**
  * Emit `133;C` when a command is accepted, `133;D;<exit>` at the prompt —
  * and, when the spawn provided a shim bin, put it FIRST on PATH here,
  * after the user's profiles ran (macOS path_helper and profile exports
@@ -73,7 +84,7 @@ fi
 const ZSHRC = `${sourcingScript(".zshrc")}
 ZDOTDIR="\${USER_ZDOTDIR:-$HOME}"
 [[ "$ZDOTDIR" == "$HOME" ]] && unset ZDOTDIR
-${ZSHRC_HOOKS}`;
+${AGENT_SHELL_OPTIONS}${ZSHRC_HOOKS}`;
 
 /**
  * Agent command shims: URLs an agent (or the user) opens from a Work
@@ -162,6 +173,29 @@ export async function shellBinShimDir(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The file Claude Code runs ahead of each of an agent's commands
+ * (`CLAUDE_ENV_FILE`), holding the agent shell options. One the person set
+ * for themselves still runs first. Null on Windows or a write failure.
+ */
+export async function agentShellEnvFile(): Promise<string | null> {
+  if (process.platform === "win32") return null;
+  try {
+    const own = process.env.CLAUDE_ENV_FILE;
+    return await writeShim({
+      dir: path.join(await shimRoot(), "harness"),
+      name: "env.sh",
+      content: `${own ? `if [ -f ${shellQuote(own)} ]; then . ${shellQuote(own)}; fi\n` : ""}${AGENT_SHELL_OPTIONS}`,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 /**

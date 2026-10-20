@@ -1,8 +1,12 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import type { TaskNotificationStatus } from "@catamorphic/agent-protocol";
+import { waitUntil } from "@catamorphic/sandbox";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
-import type { BackgroundNotifier } from "./background-commands.js";
+import {
+  type BackgroundNotifier,
+  outputPattern,
+} from "./background-commands.js";
 
 /**
  * Command watches (ADR 0156): a check an agent asks this computer to repeat
@@ -67,9 +71,22 @@ const OUTPUT_TAIL = 2_000;
 const RAW_CHECK_CAP = 200_000;
 /** Ended watches the chat still shows, so their steps settle. */
 const ENDED_KEPT = 50;
+/** The longest a read waits for a watch's next check. */
+const READ_MAX_WAIT_MS = 600_000;
 
 interface Ended {
   view: BackgroundCommandView;
+  output: string;
+  checks: number;
+}
+
+/** A watch as read_background_output reads it. */
+interface WatchReading {
+  status: BackgroundCommandView["status"];
+  exitCode: number | null;
+  /** The latest check's output (its tail). */
+  output: string;
+  checks: number;
 }
 
 export class CommandWatches {
@@ -208,6 +225,44 @@ export class CommandWatches {
     return { status: "stopped" };
   }
 
+  /**
+   * A watch's status and its latest check, for read_background_output.
+   * With `waitMs`, blocks until the next check or the end of the watch;
+   * with `waitFor` too, until a check prints a line matching it. Something
+   * reaching the agent ends any wait (`stopWaiting`, ADR 0264).
+   */
+  async read(input: {
+    sessionId: string;
+    id: string;
+    waitMs?: number;
+    waitFor?: string;
+    stopWaiting: AbortSignal;
+  }): Promise<WatchReading & { matched?: string }> {
+    await this.resume();
+    const waitFor = input.waitFor
+      ? outputPattern(input.waitFor, "wait_for")
+      : undefined;
+    const match = (output: string) =>
+      waitFor
+        ? output.split("\n").find((line) => waitFor.test(line))
+        : undefined;
+    const before = this.reading(input);
+    await waitUntil({
+      ready: () => {
+        const now = this.reading(input);
+        if (now.status !== "running") return true;
+        return waitFor
+          ? match(now.output) !== undefined
+          : now.checks > before.checks;
+      },
+      timeoutMs: Math.min(Math.max(input.waitMs ?? 0, 0), READ_MAX_WAIT_MS),
+      stopWaiting: input.stopWaiting,
+    });
+    const reading = this.reading(input);
+    const matched = match(reading.output);
+    return { ...reading, ...(matched !== undefined ? { matched } : {}) };
+  }
+
   /** Archive ends a chat's watches along with its processes. */
   async stopForSessions(projectId: string, sessionIds: readonly string[]) {
     await this.resume();
@@ -243,6 +298,31 @@ export class CommandWatches {
       (item) =>
         (!filter?.projectId || item.projectId === filter.projectId) &&
         (!filter?.sessionId || item.sessionId === filter.sessionId),
+    );
+  }
+
+  private reading(input: { sessionId: string; id: string }): WatchReading {
+    const watch = this.watches.get(input.id);
+    if (watch?.sessionId === input.sessionId)
+      return {
+        status: "running",
+        exitCode: null,
+        output: tail(watch.lastOutput),
+        checks: watch.checks,
+      };
+    const ended = this.ended.find(
+      (entry) =>
+        entry.view.id === input.id && entry.view.sessionId === input.sessionId,
+    );
+    if (ended)
+      return {
+        status: ended.view.status,
+        exitCode: ended.view.exitCode,
+        output: tail(ended.output),
+        checks: ended.checks,
+      };
+    throw new Error(
+      `No watch '${input.id}' in this chat. Start one with watch_command.`,
     );
   }
 
@@ -373,7 +453,11 @@ export class CommandWatches {
     const timer = this.timers.get(watch.id);
     if (timer) clearTimeout(timer);
     this.timers.delete(watch.id);
-    this.ended.push({ view: view(watch, status, exitCode, this.now()) });
+    this.ended.push({
+      view: view(watch, status, exitCode, this.now()),
+      output: watch.lastOutput,
+      checks: watch.checks,
+    });
     if (this.ended.length > ENDED_KEPT) this.ended.shift();
     this.deps.changed();
   }

@@ -291,7 +291,20 @@ describe("desktop facts and peers", () => {
             running: true,
             task: "Prepare the renewal deck",
             activity: null,
-            checkout: { kind: "managed", branch: "work/peer" },
+            checkout: { kind: "managed", branch: "work/peer", available: true },
+          },
+          {
+            id: "gone",
+            title: "Palette input",
+            agentId: "csm",
+            running: false,
+            task: null,
+            activity: null,
+            checkout: {
+              kind: "external",
+              branch: "palette-input",
+              available: false,
+            },
           },
         ],
         checkoutNotice: async () => "Returned to the project folder.",
@@ -299,6 +312,9 @@ describe("desktop facts and peers", () => {
     });
     expect(context).toContain(
       '- "Renewal deck" (working now, in a separate worktree (work/peer)): Prepare the renewal deck',
+    );
+    expect(context).toContain(
+      '- "Palette input" (idle, in a separate worktree (palette-input) whose folder is missing)',
     );
     expect(context).toContain("Returned to the project folder.");
     expect(
@@ -318,7 +334,7 @@ describe("desktop facts and peers", () => {
         running: false,
         task: null,
         activity: null,
-        checkout: { kind: "primary", branch: null },
+        checkout: { kind: "primary", branch: null, available: true },
       },
     ]);
     expect(formatProjectSessionsContext([])).toBe("");

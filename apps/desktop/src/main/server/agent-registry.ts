@@ -64,7 +64,7 @@ import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
-import { shellBinShimDir } from "../shell-integration.js";
+import { agentShellEnvFile, shellBinShimDir } from "../shell-integration.js";
 import {
   ASSISTANT_INSTRUCTIONS,
   personPlaceContext,
@@ -1387,6 +1387,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       },
     );
     const key = input.keyEnv ? await input.keyEnv() : {};
+    const shellFile =
+      input.harness === "claude-code" ? await agentShellEnvFile() : null;
     const debugFile =
       input.harness === "claude-code"
         ? this.signInRetryLog(input.attempt)
@@ -1400,7 +1402,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       adapter: input.adapter,
       attempt: {
         ...input.attempt,
-        env: { ...environment, ...input.attempt.env, ...key },
+        env: {
+          ...environment,
+          ...(shellFile ? { CLAUDE_ENV_FILE: shellFile } : {}),
+          ...input.attempt.env,
+          ...key,
+        },
         options,
       },
     };

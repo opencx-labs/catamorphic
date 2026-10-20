@@ -121,8 +121,10 @@ until "success" the chat wakes once when the check exits 0; with until "change" 
 wakes whenever the check's output changes, until you stop it. Make the check print
 only the part that matters. Watches survive restarts; checks missed while the
 computer sleeps collapse into one, so tell the person it reports late if this
-computer is off. stop_background_command ends a watch as well. For events a
-project workflow already receives (webhooks, GitHub), prefer a workflow.
+computer is off. read_background_output with a watch's id shows its latest
+check (wait_seconds waits for the next one), and stop_background_command ends
+it. For events a project workflow already receives (webhooks, GitHub), prefer a
+workflow.
 
 write_terminal sends raw input to a terminal: an answer to a prompt, a REPL line,
 or Ctrl+C (\u0003). It also types into the person's own terminal when they ask

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { scanOsc133 } from "../shared/terminal-text.js";
-import { shellIntegration } from "./shell-integration.js";
+import { agentShellEnvFile, shellIntegration } from "./shell-integration.js";
 
 function bashVersion(candidate: string): [number, number] | undefined {
   try {
@@ -43,6 +43,14 @@ function modernBash(): string | undefined {
 
 const bash = modernBash();
 const bash3 = oldBash();
+const zsh = ["/bin/zsh", "/usr/bin/zsh"].find((candidate) =>
+  fs.existsSync(candidate),
+);
+
+/** What `args` print to stdout in `shell`. */
+function run(shell: string, args: string[], env: NodeJS.ProcessEnv): string {
+  return execFileSync(shell, args, { encoding: "utf8", env }).trim();
+}
 
 describe("shell integration for agent terminals", () => {
   it("starts zsh as a login shell through its ZDOTDIR shim", async () => {
@@ -75,6 +83,64 @@ describe("shell integration for agent terminals", () => {
     "leaves a bash without PS0 (before 4.4) a plain login shell",
     async () => {
       expect(await shellIntegration(bash3 ?? "")).toBeNull();
+    },
+  );
+
+  it.skipIf(!zsh)(
+    "passes a pattern that matches nothing through, as bash does, in an agent's zsh",
+    async () => {
+      const integrated = await shellIntegration(zsh ?? "");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "zsh-home-"));
+      try {
+        // A pattern with no match fails the whole command in plain zsh.
+        expect(() =>
+          execFileSync(zsh ?? "", ["-c", "echo --include=*.zzz"], {
+            cwd: home,
+            stdio: "pipe",
+            env: { PATH: process.env.PATH ?? "", HOME: home },
+          }),
+        ).toThrow(/no matches found/);
+        expect(
+          run(zsh ?? "", ["-i", "-c", "echo --include=*.zzz"], {
+            PATH: process.env.PATH ?? "",
+            HOME: home,
+            ...integrated?.env,
+            USER_ZDOTDIR: home,
+          }),
+        ).toBe("--include=*.zzz");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!zsh)(
+    "gives native harnesses a file that sets the same option ahead of each command",
+    async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-env-"));
+      const own = path.join(home, "it's mine.sh");
+      fs.writeFileSync(own, "export OWN_SETUP=ran\n");
+      const previous = process.env.CLAUDE_ENV_FILE;
+      process.env.CLAUDE_ENV_FILE = own;
+      try {
+        const file = (await agentShellEnvFile()) ?? "";
+        const env = { PATH: process.env.PATH ?? "", HOME: home };
+        expect(
+          run(zsh ?? "", ["-c", `. '${file}'; echo --include=*.zzz`], env),
+        ).toBe("--include=*.zzz");
+        // A file the person set for themselves still runs, first.
+        expect(
+          run(zsh ?? "", ["-c", `. '${file}'; echo "$OWN_SETUP"`], env),
+        ).toBe("ran");
+        // Any other shell reads it as a no-op that succeeds.
+        expect(run("/bin/sh", ["-c", `. '${file}' && echo ok`], env)).toBe(
+          "ok",
+        );
+      } finally {
+        if (previous === undefined) delete process.env.CLAUDE_ENV_FILE;
+        else process.env.CLAUDE_ENV_FILE = previous;
+        fs.rmSync(home, { recursive: true, force: true });
+      }
     },
   );
 

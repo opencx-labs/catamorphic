@@ -918,7 +918,11 @@ export async function startEmbeddedServer(
         });
         return {
           ...peer,
-          checkout: { kind: checkout.kind, branch: checkout.branch },
+          checkout: {
+            kind: checkout.kind,
+            branch: checkout.branch,
+            available: checkout.available,
+          },
         };
       }),
     );

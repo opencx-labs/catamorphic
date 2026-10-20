@@ -12,6 +12,8 @@ export interface ProjectSessionContext {
   checkout: {
     kind: "primary" | "managed" | "external";
     branch: string | null;
+    /** False when the folder the person assigned is gone. */
+    available: boolean;
   };
 }
 
@@ -326,7 +328,7 @@ export function formatProjectSessionsContext(
         ? ""
         : `, in a separate worktree${
             peer.checkout.branch ? ` (${oneLine(peer.checkout.branch)})` : ""
-          }`;
+          }${peer.checkout.available ? "" : " whose folder is missing"}`;
     const doing = peer.activity ?? (peer.task !== title ? peer.task : null);
     lines.push(
       `- "${title}" (${peer.running ? "working now" : "idle"}${where})${

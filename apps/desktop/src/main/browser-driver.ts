@@ -94,6 +94,11 @@ const NETWORK_KEPT = 300;
 const EVALUATE_RESULT_LIMIT = 20_000;
 const EVALUATE_MS = 30_000;
 const FILE_CHOOSER_MS = 6000;
+/**
+ * The longest a wait_for or downloads call waits, as browser_act's
+ * timeoutMs declares. A message reaching the agent ends it sooner.
+ */
+const MAX_WAIT_MS = 600_000;
 
 /**
  * A file an agent may hand a page: anything in its own folder, otherwise
@@ -805,9 +810,9 @@ export class BrowserDriver {
         return Promise.resolve(this.takeNetwork());
       case "downloads": {
         const timeout = action.timeoutMs ?? 0;
-        if (!Number.isFinite(timeout) || timeout < 0 || timeout > 600_000)
+        if (!Number.isFinite(timeout) || timeout < 0 || timeout > MAX_WAIT_MS)
           return Promise.reject(
-            new Error("timeoutMs must be between 0 and 600000."),
+            new Error(`timeoutMs must be between 0 and ${MAX_WAIT_MS}.`),
           );
         return downloadLogOf(this.guest).take(timeout, stopWaiting);
       }
@@ -954,9 +959,10 @@ export class BrowserDriver {
         }
         case "wait_for": {
           const timeout = action.timeoutMs ?? 5000;
-          if (!Number.isFinite(timeout) || timeout < 1 || timeout > 10000)
-            throw new Error("timeoutMs must be between 1 and 10000.");
-          const deadline = Date.now() + timeout;
+          if (!Number.isFinite(timeout) || timeout < 1 || timeout > MAX_WAIT_MS)
+            throw new Error(`timeoutMs must be between 1 and ${MAX_WAIT_MS}.`);
+          const started = Date.now();
+          const deadline = started + timeout;
           const generation = await this.evaluate("generation");
           do {
             this.guard();
@@ -972,7 +978,9 @@ export class BrowserDriver {
               .object({ text: z.string() })
               .parse(await this.evaluate("read"));
             if (page.text.includes(action.text)) return { found: true };
-            await delay(Math.min(100, Math.max(0, deadline - Date.now())));
+            // Quick at first; a long wait reads the page once a second.
+            const pause = Date.now() - started < 10_000 ? 100 : 1_000;
+            await delay(Math.min(pause, Math.max(0, deadline - Date.now())));
           } while (Date.now() < deadline && !stopWaiting.aborted);
           return { found: false };
         }

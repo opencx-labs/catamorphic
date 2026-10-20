@@ -977,11 +977,68 @@ describe("SessionCheckouts", () => {
         external,
       ]);
       await checkouts.adopt({ projectId, sessionId, path: external });
+      const assigned = await fs.realpath(external);
       await fs.rm(external, { recursive: true, force: true });
       expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
         kind: "external",
         available: false,
         present: false,
+      });
+      // Describing it, as listing chats does, reports it.
+      expect(await checkouts.describe({ projectId, sessionId })).toEqual({
+        path: assigned,
+        kind: "external",
+        branch: "assigned",
+        present: false,
+        available: false,
+      });
+      // So does asking whether another chat already works somewhere.
+      expect(
+        await checkouts.isOccupied({
+          projectId,
+          sessionId: secondSessionId,
+          path: rootPath,
+          peerSessionIds: [sessionId],
+        }),
+      ).toBe(false);
+      // Working there is what fails: never silently in the project folder.
+      await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
+        `The assigned worktree at ${assigned} is unavailable`,
+      );
+      await expect(
+        checkouts.resolveForAgent({
+          projectId,
+          sessionId,
+          requiresIsolation: async () => false,
+        }),
+      ).rejects.toThrow("is unavailable");
+      await expect(
+        checkouts.preparePullRequest({ projectId, sessionId, message: "x" }),
+      ).rejects.toThrow("is unavailable");
+    });
+
+    it("reports an assigned folder that left the repository as unavailable", async () => {
+      const elsewhere = path.join(tmpDir, "elsewhere");
+      await git(rootPath, [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "elsewhere",
+        elsewhere,
+      ]);
+      await checkouts.adopt({ projectId, sessionId, path: elsewhere });
+      await fs.rm(elsewhere, { recursive: true, force: true });
+      await fs.mkdir(elsewhere);
+      await git(elsewhere, ["init", "-q", "-b", "main"]);
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        kind: "external",
+        present: true,
+        available: false,
+      });
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        available: false,
+        changedFiles: null,
       });
     });
 

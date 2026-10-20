@@ -137,6 +137,82 @@ describe("CommandWatches", () => {
     expect(h.watches.list()).toMatchObject([{ status: "running" }]);
   });
 
+  it("reads a watch's latest check, waits for the next, and reads it once ended", async () => {
+    const h = harness();
+    const { id } = await start(h.watches);
+    const never = new AbortController().signal;
+    expect(
+      await h.watches.read({ sessionId: "s", id, stopWaiting: never }),
+    ).toEqual({
+      status: "running",
+      exitCode: null,
+      output: "not yet",
+      checks: 1,
+    });
+
+    // A wait ends at the next check.
+    h.results.push({ exitCode: 1, output: "still building" });
+    const next = h.watches.read({
+      sessionId: "s",
+      id,
+      waitMs: 60_000,
+      stopWaiting: never,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await next).toMatchObject({
+      status: "running",
+      output: "still building",
+      checks: 2,
+    });
+
+    // wait_for waits for a matching line; the watch ending ends it too.
+    h.results.push({ exitCode: 0, output: "build 42\nready" });
+    const ready = h.watches.read({
+      sessionId: "s",
+      id,
+      waitMs: 60_000,
+      waitFor: "^ready$",
+      stopWaiting: never,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await ready).toEqual({
+      status: "finished",
+      exitCode: 0,
+      output: "build 42\nready",
+      checks: 3,
+      matched: "ready",
+    });
+
+    await expect(
+      h.watches.read({ sessionId: "other", id, stopWaiting: never }),
+    ).rejects.toThrow(`No watch '${id}' in this chat`);
+    await expect(
+      h.watches.read({
+        sessionId: "s",
+        id,
+        waitFor: "(",
+        stopWaiting: never,
+      }),
+    ).rejects.toThrow("wait_for is not a valid regular expression");
+  });
+
+  it("ends a wait on a watch when something reaches the agent", async () => {
+    const h = harness();
+    const { id } = await start(h.watches, { everySeconds: 300 });
+    const reached = new AbortController();
+    const read = h.watches.read({
+      sessionId: "s",
+      id,
+      waitMs: 600_000,
+      stopWaiting: reached.signal,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    reached.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await read).toMatchObject({ status: "running", checks: 1 });
+    expect(h.runs).toHaveLength(1);
+  });
+
   it("resumes saved watches with one check for all the time it missed", async () => {
     const saved: CommandWatch = {
       id: "watch-1",

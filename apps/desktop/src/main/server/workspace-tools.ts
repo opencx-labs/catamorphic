@@ -615,7 +615,7 @@ export function buildWorkspaceToolkit(
     {
       name: "update_todo_list",
       description:
-        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an existing item's id when editing, completing, reordering, or retaining it; omit id only for a new item. Omitting an existing item removes it. Give the in-progress item an activeForm; the person sees it as what you are doing.",
+        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an item's id when editing, completing, reordering, or retaining it; a new item needs no id. Omitting an existing item removes it. Give the in-progress item an activeForm; the person sees it as what you are doing.",
       parameters: {
         items: todoInputSchema.describe(
           "The complete desired todo list, in display order",
@@ -1041,7 +1041,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_background_output",
       description:
-        "Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. wait_seconds blocks until it prints something new or finishes; with wait_for, until a line matches.",
+        "Read a background command's output since your last read, or a watch's latest check, with its status (running, finished, stopped) and exit code. wait_seconds blocks until something new or the end; with wait_for, until a line matches.",
       parameters: {
         id: z.string().describe("The id run_background_command returned"),
         wait_seconds: z
@@ -1053,8 +1053,8 @@ export function buildWorkspaceToolkit(
           .describe("Seconds to wait"),
         wait_for: z.string().optional().describe("Regex of a line to wait for"),
       },
-      execute: (input, ctx) =>
-        bridge.readBackgroundCommand({
+      execute: (input, ctx) => {
+        const read = {
           sessionId: ctx.sessionId ?? "",
           id: String(input.id),
           stopWaiting: ctx.stopWaiting,
@@ -1064,7 +1064,11 @@ export function buildWorkspaceToolkit(
           ...(typeof input.wait_for === "string" && input.wait_for
             ? { waitFor: input.wait_for }
             : {}),
-        }),
+        };
+        return read.id.startsWith("watch-")
+          ? bridge.readCommandWatch(read)
+          : bridge.readBackgroundCommand(read);
+      },
     },
     {
       name: "stop_background_command",

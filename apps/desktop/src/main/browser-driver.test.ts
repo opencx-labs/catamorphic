@@ -91,6 +91,43 @@ afterEach(() => {
 /** Nothing reaches the agent while the driver acts. */
 const waiting = new AbortController().signal;
 
+describe("browser driver waits", () => {
+  it("waits for text as long as browser_act's timeoutMs allows", async () => {
+    const guest = new Guest();
+    let reads = 0;
+    guest.executeJavaScriptInIsolatedWorld.mockImplementation(
+      async (...args: unknown[]) => {
+        // Which page script ran, from the call as the page received it.
+        const call = JSON.stringify(args);
+        if (call.includes('catamorphicBrowser[\\"generation\\"]'))
+          return { value: 1 };
+        if (call.includes('catamorphicBrowser[\\"read\\"]'))
+          return { value: { text: ++reads < 3 ? "Signing in" : "Ready" } };
+        return { value: null };
+      },
+    );
+    const driver = new BrowserDriver(
+      asWebContents(guest),
+      () => {},
+      async () => {},
+    );
+    // Longer than the old ten-second cap, as a sign-in redirect needs.
+    await expect(
+      driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 30_000 },
+        waiting,
+      ),
+    ).resolves.toEqual({ found: true });
+    expect(reads).toBe(3);
+    await expect(
+      driver.act(
+        { type: "wait_for", text: "Ready", timeoutMs: 600_001 },
+        waiting,
+      ),
+    ).rejects.toThrow("timeoutMs must be between 1 and 600000.");
+  });
+});
+
 describe("browser driver and page dialogs", () => {
   it("clears pointers without waiting on a page that waits on its dialog", async () => {
     const guest = new Guest();
