@@ -6,6 +6,7 @@ import {
 import {
   AccessDeniedError,
   AgentDelegationDeniedError,
+  AgentDelegationSettingsError,
   AgentHarnessFixedError,
   AgentNotConfiguredError,
   AgentSessionArchiveConfirmationRequiredError,
@@ -838,7 +839,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         if (error instanceof AgentDelegationDeniedError) {
           return reply.status(403).send({ error: error.message });
         }
-        if (error instanceof AgentNotConfiguredError) {
+        if (
+          error instanceof AgentNotConfiguredError ||
+          error instanceof AgentDelegationSettingsError
+        ) {
           return reply.status(400).send({ error: error.message });
         }
         if (error instanceof AgentSessionClosedError) {

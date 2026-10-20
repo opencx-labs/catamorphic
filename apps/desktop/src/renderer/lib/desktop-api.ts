@@ -198,18 +198,28 @@ export type AgentSkillsSetting =
   | { mode: "all" }
   | { mode: "picked"; names: string[] };
 
-export interface AgentDelegationRoute {
-  id: string;
-  target: string;
+/** Who an agent may start, and what it may choose for them (ADR 0271). */
+export interface AgentDelegationGrant {
+  /** `self`, an agent id, `project:<slug>`, or `*`. */
+  agent: string;
   description?: string;
-  allowFurtherDelegation: boolean;
+  model: "any" | "fixed" | string[];
+  effort: "any" | "fixed" | "at-most-parent" | AgentEffort[];
+  delegate: boolean;
 }
 
 export interface AgentDelegationPolicy {
   enabled: boolean;
   maxConcurrentChildren: number;
-  routes: AgentDelegationRoute[];
+  agents: AgentDelegationGrant[];
 }
+
+/** No delegation set: copies of itself on any model and effort. */
+export const DEFAULT_AGENT_DELEGATION: AgentDelegationPolicy = {
+  enabled: true,
+  maxConcurrentChildren: 10,
+  agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
+};
 
 export interface AgentInfo {
   id: string;
@@ -336,17 +346,7 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
       ? { mode: "picked", names: agent.skills }
       : { mode: "all" },
     toolPolicies: {},
-    delegation: agent.delegation ?? {
-      enabled: true,
-      maxConcurrentChildren: 10,
-      routes: [
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ],
-    },
+    delegation: agent.delegation ?? DEFAULT_AGENT_DELEGATION,
   };
 }
 

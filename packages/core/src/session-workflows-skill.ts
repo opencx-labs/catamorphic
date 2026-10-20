@@ -439,7 +439,10 @@ sandboxes need it.
   session's grant, never the remote's credential. Pushes go to work/* branches
   (or the binding's push rules); the default branch, deletes, and anything
   without git:write are refused with a readable Git error.
-- spawn respects the source agent's configured delegation routes. Fresh context
+- spawn starts a copy of the chat's agent unless agentId names another, and
+  takes model and effort as the agent's delegation grants allow (a copy keeps
+  the chat's model and effort otherwise); readOnly and delegate: false need no
+  grant. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
 - attention: "required" on deliver alerts the user to that exact message. It is

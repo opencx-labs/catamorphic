@@ -6,12 +6,16 @@ import type {
   AgentDelegationPolicy,
   AgentEnvironmentPolicy,
 } from "@catamorphic/core";
-import { AgentDelegationPolicySchema } from "@catamorphic/core";
+import {
+  AgentDelegationPolicySchema,
+  DEFAULT_DELEGATION_POLICY,
+} from "@catamorphic/core";
 import {
   harnessPermissionIssues,
   type McpToolPolicy,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import { z } from "zod";
 import {
   DESKTOP_DEFAULT_SANDBOXING,
   effectiveHarnessPermissions,
@@ -568,8 +572,51 @@ export class AgentsStore {
     } else {
       apiKey = apiKeyPlaintext ?? null;
     }
-    return { ...rest, apiKey };
+    const { delegation, ...others } = rest;
+    const grants = delegation ? storedDelegation(delegation) : undefined;
+    return { ...others, ...(grants ? { delegation: grants } : {}), apiKey };
   }
+}
+
+/**
+ * Delegation before grants (ADR 0271): routes, each a target and whether
+ * the child may delegate onward.
+ */
+const LegacyDelegationSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxConcurrentChildren: z.number().int().min(1).max(100).optional(),
+  routes: z.array(
+    z.object({
+      target: z.string().min(1),
+      description: z.string().max(500).optional(),
+      allowFurtherDelegation: z.boolean().optional(),
+    }),
+  ),
+});
+
+/**
+ * A saved delegation policy. One from before grants keeps what the person
+ * set: on or off, how many at once, and its routes as grants on any model
+ * and effort.
+ */
+function storedDelegation(value: unknown): AgentDelegationPolicy | undefined {
+  const current = AgentDelegationPolicySchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = LegacyDelegationSchema.safeParse(value);
+  if (!legacy.success) return undefined;
+  return AgentDelegationPolicySchema.parse({
+    ...(legacy.data.enabled !== undefined
+      ? { enabled: legacy.data.enabled }
+      : {}),
+    ...(legacy.data.maxConcurrentChildren !== undefined
+      ? { maxConcurrentChildren: legacy.data.maxConcurrentChildren }
+      : {}),
+    agents: legacy.data.routes.map((route) => ({
+      agent: route.target,
+      ...(route.description ? { description: route.description } : {}),
+      delegate: route.allowFurtherDelegation ?? true,
+    })),
+  });
 }
 
 /** Only Claude Code and Codex keep sessions Work can import (ADR 0233). */
@@ -619,16 +666,6 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},
-    delegation: agent.delegation ?? {
-      enabled: true,
-      maxConcurrentChildren: 10,
-      routes: [
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ],
-    },
+    delegation: agent.delegation ?? DEFAULT_DELEGATION_POLICY,
   };
 }

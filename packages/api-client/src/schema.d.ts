@@ -6251,6 +6251,7 @@ export interface paths {
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -6395,6 +6396,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -6611,6 +6613,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -6746,6 +6749,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -6890,6 +6894,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -7415,6 +7420,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -7669,6 +7675,7 @@ export interface paths {
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -7910,6 +7917,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -8114,7 +8122,7 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             delegationId: string;
-                            routeId: string;
+                            grant: string;
                             task: string;
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
@@ -8145,6 +8153,7 @@ export interface paths {
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -8250,8 +8259,12 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        routeId?: string;
                         agentId?: string;
+                        model?: string;
+                        /** @enum {string} */
+                        effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        readOnly?: boolean;
+                        delegate?: boolean;
                         task: string;
                         /** @enum {string} */
                         contextMode?: "fresh" | "inherit";
@@ -8269,7 +8282,7 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             delegationId: string;
-                            routeId: string;
+                            grant: string;
                             task: string;
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
@@ -8300,6 +8313,7 @@ export interface paths {
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -8467,7 +8481,7 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             delegationId: string;
-                            routeId: string;
+                            grant: string;
                             task: string;
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
@@ -8498,6 +8512,7 @@ export interface paths {
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -8721,6 +8736,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -9147,6 +9163,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -9295,6 +9312,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -9593,6 +9611,7 @@ export interface paths {
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
@@ -9770,6 +9789,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
@@ -11393,6 +11413,7 @@ export interface paths {
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */

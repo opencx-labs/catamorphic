@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
 import {
+  AGENT_EFFORT_LEVELS,
   CLAUDE_CODE_PERMISSION_MODES,
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
@@ -238,44 +239,54 @@ export interface AgentEnvironmentPolicy {
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
 }
 
-export const AgentDelegationRouteSchema = z.object({
-  /** Stable name exposed to the model when it chooses a route. */
-  id: z.string().min(1).max(100),
-  /** `self`, `*`, an exact agent id, or `project:<slug>` in project files. */
-  target: z.string().min(1),
+/**
+ * Who an agent may start as a subsession, and what it may choose for them
+ * (ADR 0271). Omitted settings mean `any`: a parent picks the child's model
+ * and effort freely within what the child's harness offers.
+ */
+export const AgentDelegationGrantSchema = z.object({
+  /** `self`, an exact agent id, `project:<slug>` in project files, or `*`. */
+  agent: z.string().min(1),
+  /** Shown to the agent beside the grant. */
   description: z.string().max(500).optional(),
-  /** This edge may explicitly remove onward delegation from the child. */
-  allowFurtherDelegation: z.boolean().default(true),
+  /** `any` model the target's harness offers, `fixed` (none), or a list. */
+  model: z
+    .union([
+      z.enum(["any", "fixed"]),
+      z.array(z.string().min(1)).min(1).max(50),
+    ])
+    .default("any"),
+  /**
+   * `any` effort, `fixed` (none), `at-most-parent` (no higher than the
+   * parent chat's), or a list.
+   */
+  effort: z
+    .union([
+      z.enum(["any", "fixed", "at-most-parent"]),
+      z.array(z.enum(AGENT_EFFORT_LEVELS)).min(1),
+    ])
+    .default("any"),
+  /** Whether the child may start subsessions of its own. */
+  delegate: z.boolean().default(true),
 });
 
-export const AgentDelegationPolicySchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
-    routes: z
-      .array(AgentDelegationRouteSchema)
-      .max(100)
-      .default([
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ]),
-  })
-  .superRefine((policy, context) => {
-    const ids = new Set<string>();
-    for (const [index, route] of policy.routes.entries()) {
-      if (ids.has(route.id)) {
-        context.addIssue({
-          code: "custom",
-          message: `Duplicate delegation route id '${route.id}'`,
-          path: ["routes", index, "id"],
-        });
-      }
-      ids.add(route.id);
-    }
-  });
+export type AgentDelegationGrant = z.infer<typeof AgentDelegationGrantSchema>;
+
+export const AgentDelegationPolicySchema = z.object({
+  enabled: z.boolean().default(true),
+  maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
+  agents: z
+    .array(AgentDelegationGrantSchema)
+    .max(100)
+    .default([{ agent: "self", model: "any", effort: "any", delegate: true }]),
+  /** Replaced by `agents`: a definition still naming routes is refused. */
+  routes: z
+    .never({
+      error:
+        "delegation.routes was replaced by delegation.agents (ADR 0271): list the agents this one may start, with their model and effort choices",
+    })
+    .optional(),
+});
 
 export type AgentDelegationPolicy = z.infer<typeof AgentDelegationPolicySchema>;
 

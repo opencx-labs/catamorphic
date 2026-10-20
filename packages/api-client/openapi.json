@@ -20066,6 +20066,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -20303,6 +20306,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -20685,6 +20689,9 @@
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
+                          "readOnly": {
+                            "type": "boolean"
+                          },
                           "title": {
                             "nullable": true,
                             "type": "string"
@@ -20931,6 +20938,7 @@
                           "harness",
                           "model",
                           "modelEffort",
+                          "readOnly",
                           "title",
                           "icon",
                           "forkedFromSessionId",
@@ -21130,6 +21138,9 @@
                       "nullable": true,
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
+                    },
+                    "readOnly": {
+                      "type": "boolean"
                     },
                     "title": {
                       "nullable": true,
@@ -21368,6 +21379,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -21741,6 +21753,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -21981,6 +21996,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -22158,6 +22174,9 @@
                       "nullable": true,
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
+                    },
+                    "readOnly": {
+                      "type": "boolean"
                     },
                     "title": {
                       "nullable": true,
@@ -22396,6 +22415,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -23206,6 +23226,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -23443,6 +23466,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -23779,6 +23803,9 @@
                           "type": "string",
                           "enum": ["low", "medium", "high", "xhigh", "max"]
                         },
+                        "readOnly": {
+                          "type": "boolean"
+                        },
                         "title": {
                           "nullable": true,
                           "type": "string"
@@ -24021,6 +24048,7 @@
                         "harness",
                         "model",
                         "modelEffort",
+                        "readOnly",
                         "title",
                         "icon",
                         "forkedFromSessionId",
@@ -24573,6 +24601,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -24810,6 +24841,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -25039,14 +25071,23 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "routeId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 100
-                  },
                   "agentId": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "effort": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "xhigh", "max"]
+                  },
+                  "readOnly": {
+                    "type": "boolean"
+                  },
+                  "delegate": {
+                    "type": "boolean"
                   },
                   "task": {
                     "type": "string",
@@ -25103,7 +25144,7 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
-                    "routeId": {
+                    "grant": {
                       "type": "string"
                     },
                     "task": {
@@ -25203,6 +25244,9 @@
                           "nullable": true,
                           "type": "string",
                           "enum": ["low", "medium", "high", "xhigh", "max"]
+                        },
+                        "readOnly": {
+                          "type": "boolean"
                         },
                         "title": {
                           "nullable": true,
@@ -25446,6 +25490,7 @@
                         "harness",
                         "model",
                         "modelEffort",
+                        "readOnly",
                         "title",
                         "icon",
                         "forkedFromSessionId",
@@ -25481,7 +25526,7 @@
                   },
                   "required": [
                     "delegationId",
-                    "routeId",
+                    "grant",
                     "task",
                     "contextMode",
                     "allowFurtherDelegation",
@@ -25618,7 +25663,7 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
-                      "routeId": {
+                      "grant": {
                         "type": "string"
                       },
                       "task": {
@@ -25718,6 +25763,9 @@
                             "nullable": true,
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh", "max"]
+                          },
+                          "readOnly": {
+                            "type": "boolean"
                           },
                           "title": {
                             "nullable": true,
@@ -25965,6 +26013,7 @@
                           "harness",
                           "model",
                           "modelEffort",
+                          "readOnly",
                           "title",
                           "icon",
                           "forkedFromSessionId",
@@ -26000,7 +26049,7 @@
                     },
                     "required": [
                       "delegationId",
-                      "routeId",
+                      "grant",
                       "task",
                       "contextMode",
                       "allowFurtherDelegation",
@@ -26115,7 +26164,7 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
-                      "routeId": {
+                      "grant": {
                         "type": "string"
                       },
                       "task": {
@@ -26215,6 +26264,9 @@
                             "nullable": true,
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh", "max"]
+                          },
+                          "readOnly": {
+                            "type": "boolean"
                           },
                           "title": {
                             "nullable": true,
@@ -26462,6 +26514,7 @@
                           "harness",
                           "model",
                           "modelEffort",
+                          "readOnly",
                           "title",
                           "icon",
                           "forkedFromSessionId",
@@ -26497,7 +26550,7 @@
                     },
                     "required": [
                       "delegationId",
-                      "routeId",
+                      "grant",
                       "task",
                       "contextMode",
                       "allowFurtherDelegation",
@@ -26761,6 +26814,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -26998,6 +27054,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -27616,6 +27673,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -27853,6 +27913,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -28050,6 +28111,9 @@
                       "type": "string",
                       "enum": ["low", "medium", "high", "xhigh", "max"]
                     },
+                    "readOnly": {
+                      "type": "boolean"
+                    },
                     "title": {
                       "nullable": true,
                       "type": "string"
@@ -28287,6 +28351,7 @@
                     "harness",
                     "model",
                     "modelEffort",
+                    "readOnly",
                     "title",
                     "icon",
                     "forkedFromSessionId",
@@ -28816,6 +28881,9 @@
                             "type": "string",
                             "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
+                          "readOnly": {
+                            "type": "boolean"
+                          },
                           "title": {
                             "nullable": true,
                             "type": "string"
@@ -29062,6 +29130,7 @@
                           "harness",
                           "model",
                           "modelEffort",
+                          "readOnly",
                           "title",
                           "icon",
                           "forkedFromSessionId",
@@ -29349,6 +29418,9 @@
                         "type": "string",
                         "enum": ["low", "medium", "high", "xhigh", "max"]
                       },
+                      "readOnly": {
+                        "type": "boolean"
+                      },
                       "title": {
                         "nullable": true,
                         "type": "string"
@@ -29586,6 +29658,7 @@
                       "harness",
                       "model",
                       "modelEffort",
+                      "readOnly",
                       "title",
                       "icon",
                       "forkedFromSessionId",
@@ -32467,6 +32540,9 @@
                         "type": "string",
                         "enum": ["low", "medium", "high", "xhigh", "max"]
                       },
+                      "readOnly": {
+                        "type": "boolean"
+                      },
                       "title": {
                         "nullable": true,
                         "type": "string"
@@ -32704,6 +32780,7 @@
                       "harness",
                       "model",
                       "modelEffort",
+                      "readOnly",
                       "title",
                       "icon",
                       "forkedFromSessionId",

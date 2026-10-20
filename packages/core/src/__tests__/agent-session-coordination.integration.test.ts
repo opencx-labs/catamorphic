@@ -33,7 +33,10 @@ import {
   AgentTurnInProgressError,
 } from "../services/agent-sessions-service.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
-import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
+import type {
+  AgentTurnContext,
+  RegisteredCodingAgent,
+} from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -306,6 +309,10 @@ describe("agent session coordination", () => {
   let answerReceiver: AgentSessionsService;
   let projects: ProjectsService;
   const provider = new CoordinationAdapter();
+  /** What the read-only-capable harness was started with. */
+  const readerAttempts: AttemptStart[] = [];
+  /** What the host was told when it mounted the reader's servers. */
+  const readerContexts: AgentTurnContext[] = [];
   const checkpointedTurns: Array<{
     sessionId: string;
     workingDirectory: string;
@@ -345,7 +352,10 @@ describe("agent session coordination", () => {
     projects = new ProjectsService(db, projectManager);
     const registeredAgent = (
       id: string,
-      input: Pick<RegisteredCodingAgent, "sandboxing" | "delegation"> = {},
+      input: Pick<
+        RegisteredCodingAgent,
+        "sandboxing" | "delegation" | "copiesAs"
+      > = {},
     ): RegisteredCodingAgent => ({
       id,
       harness: {
@@ -375,26 +385,73 @@ describe("agent session coordination", () => {
         } satisfies RegisteredCodingAgent,
         registeredAgent("small", { sandboxing: "contained" }),
         registeredAgent("builder", { sandboxing: "publish" }),
+        registeredAgent("publisher", { sandboxing: "publish" }),
+        // Layered on the worker, like a voice assistant: its copies run
+        // as the worker.
+        registeredAgent("voice", {
+          copiesAs: "worker",
+          delegation: {
+            enabled: true,
+            maxConcurrentChildren: 10,
+            agents: [
+              { agent: "self", model: "any", effort: "any", delegate: true },
+              { agent: "*", model: "any", effort: "any", delegate: true },
+            ],
+          },
+        }),
         registeredAgent("orchestrator", {
           sandboxing: "propose",
           delegation: {
             enabled: true,
             maxConcurrentChildren: 1,
-            routes: [
-              {
-                id: "small-only",
-                target: "small",
-                allowFurtherDelegation: false,
-              },
-              { id: "any-lower", target: "*", allowFurtherDelegation: true },
-              {
-                id: "trusted-builder",
-                target: "builder",
-                allowFurtherDelegation: true,
-              },
+            agents: [
+              { agent: "small", model: "any", effort: "any", delegate: false },
+              { agent: "*", model: "any", effort: "any", delegate: true },
+              { agent: "builder", model: "any", effort: "any", delegate: true },
             ],
           },
         }),
+        // On Claude Code, which runs read-only in plan mode.
+        {
+          id: "reader",
+          harness: {
+            placement: "host",
+            adapter: {
+              id: "claude-code",
+              capabilities: () => provider.capabilities(),
+              start: (attempt: AttemptStart, host: AttemptHost) => {
+                readerAttempts.push(attempt);
+                return provider.start(attempt, host);
+              },
+            },
+            mcpServers: (context: AgentTurnContext) => {
+              readerContexts.push(context);
+              return {};
+            },
+            hostTools: [
+              {
+                name: "spawn_subsession",
+                description: "Start a subagent",
+                parameters: {},
+                execute: async () => null,
+              },
+              {
+                name: "read_page",
+                description: "Read a page",
+                parameters: {},
+                readOnly: true,
+                execute: async () => null,
+              },
+              {
+                name: "run_background_command",
+                description: "Run anything",
+                parameters: {},
+                execute: async () => null,
+              },
+            ],
+          },
+          topology: "native",
+        } satisfies RegisteredCodingAgent,
       ].map((agent) => [agent.id, agent]),
     );
     const executionEnvironments = new ExecutionEnvironmentsService(
@@ -405,6 +462,21 @@ describe("agent session coordination", () => {
       defaultAgentId: () => "worker",
       get: (id: string) => agents.get(id),
       list: () => [...agents.values()],
+      // The worker's harness catalog, as its model picker shows it.
+      models: async ({ agentId }: { agentId: string }) =>
+        // A harness whose catalog never answers.
+        agentId === "builder"
+          ? new Promise<undefined>(() => {})
+          : agentId === "worker"
+            ? [
+                {
+                  id: "opus",
+                  resolvedId: "claude-opus-5-5",
+                  supportedEffortLevels: ["low", "high", "max"] as const,
+                },
+                { id: "haiku", supportsEffort: false },
+              ]
+            : undefined,
     };
     const nativeAgentCheckout = {
       resolve: async ({
@@ -1522,7 +1594,7 @@ describe("agent session coordination", () => {
     expect(child.agentId).toBe("small");
   });
 
-  it("enforces delegation routes, concurrency, onward grants, and sandboxing ceilings", async () => {
+  it("enforces delegation grants, concurrency, onward grants, and sandboxing ceilings", async () => {
     const project = await projects.create(identity, {
       name: "Delegation policy",
     });
@@ -1531,11 +1603,11 @@ describe("agent session coordination", () => {
     });
     const attempts = await Promise.allSettled([
       sessions.createSubsession(identity, project.id, parent.id, {
-        routeId: "small-only",
+        agentId: "small",
         task: "Prepare the Globex renewal deck A",
       }),
       sessions.createSubsession(identity, project.id, parent.id, {
-        routeId: "small-only",
+        agentId: "small",
         task: "Prepare the Globex renewal deck B",
       }),
     ]);
@@ -1557,14 +1629,16 @@ describe("agent session coordination", () => {
       .select("system_prompt")
       .where("id", "=", parent.id)
       .executeTakeFirstOrThrow();
-    expect(parentRow.system_prompt).toContain("small-only: small");
+    expect(parentRow.system_prompt).toContain(
+      "- Agent small: any model its harness offers, any effort (low, medium, high, xhigh, max), and it cannot start subsessions",
+    );
+    expect(child.grant).toBe("small");
     await expect(
       sessions.createSubsession(identity, project.id, parent.id, {
-        routeId: "any-lower",
-        agentId: "builder",
+        agentId: "publisher",
         task: "Escalate through wildcard",
       }),
-    ).rejects.toThrow(/cannot grant an agent with wider sandboxing/);
+    ).rejects.toThrow(/^You may not start agent publisher\. Your choices:/);
     provider.release();
     await vi.waitFor(
       async () =>
@@ -1592,12 +1666,235 @@ describe("agent session coordination", () => {
       project.id,
       parent.id,
       {
-        routeId: "trusted-builder",
+        agentId: "builder",
         task: "Implement the approved fix",
       },
     );
     expect(trusted.session.agentId).toBe("builder");
+    expect(trusted.grant).toBe("builder");
   });
+
+  it("starts copies on the parent chat's settings, takes what the grants and the harness allow, and narrows always", async () => {
+    const project = await projects.create(identity, {
+      name: "Subagent settings",
+    });
+    const parent = await sessions.create(identity, project.id, {
+      agentId: "worker",
+      model: "sonnet",
+      effort: "low",
+    });
+    const copy = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Same as me" },
+    );
+    expect(copy.grant).toBe("self");
+    expect(copy.session).toMatchObject({
+      agentId: "worker",
+      model: "sonnet",
+      modelEffort: "low",
+      readOnly: false,
+    });
+    const stronger = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Think harder", model: "claude-opus-5-5", effort: "max" },
+    );
+    expect(stronger.session).toMatchObject({
+      model: "claude-opus-5-5",
+      modelEffort: "max",
+    });
+    await expect(
+      sessions.createSubsession(identity, project.id, parent.id, {
+        task: "Elsewhere",
+        model: "gpt-5",
+      }),
+    ).rejects.toThrow(
+      "gpt-5 is not a model your harness offers. It offers: opus, haiku",
+    );
+    await expect(
+      sessions.createSubsession(identity, project.id, parent.id, {
+        task: "Fast and deep",
+        model: "haiku",
+        effort: "high",
+      }),
+    ).rejects.toThrow("haiku takes no effort setting");
+    // A new model starts without the parent's effort, chosen for its own;
+    // the catalog's names, in any case, are stored as it gives them.
+    const quick = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Quick look", model: "Haiku", agentId: "self" },
+    );
+    expect(quick.session).toMatchObject({
+      agentId: "worker",
+      model: "haiku",
+      modelEffort: null,
+    });
+    await expect(
+      sessions.createSubsession(identity, project.id, parent.id, {
+        task: "Somebody",
+        agentId: "nobody",
+      }),
+    ).rejects.toThrow(
+      /^There is no agent nobody you may start\. Your choices:/,
+    );
+    // Another agent starts from its own defaults, not the parent's.
+    const other = await sessions.create(identity, project.id, {
+      agentId: "orchestrator",
+      model: "sonnet",
+    });
+    const small = await sessions.createSubsession(
+      identity,
+      project.id,
+      other.id,
+      { agentId: "small", task: "Small task" },
+    );
+    expect(small.session).toMatchObject({ model: null, modelEffort: null });
+
+    // Narrowing needs no grant.
+    const alone = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "No helpers", delegate: false },
+    );
+    expect(alone.allowFurtherDelegation).toBe(false);
+    await expect(
+      sessions.createSubsession(identity, project.id, parent.id, {
+        task: "Only look",
+        readOnly: true,
+      }),
+    ).rejects.toThrow("Your harness has no read-only mode.");
+    const reviewer = await sessions.create(identity, project.id, {
+      agentId: "reader",
+    });
+    const look = await sessions.createSubsession(
+      identity,
+      project.id,
+      reviewer.id,
+      { task: "Review the change", readOnly: true },
+    );
+    expect(look.session.readOnly).toBe(true);
+    await vi.waitFor(
+      () =>
+        expect(
+          readerAttempts.find((attempt) =>
+            attempt.input?.text?.includes("Review the change"),
+          )?.permissions,
+        ).toEqual({ permissionMode: "plan" }),
+      { timeout: 10_000 },
+    );
+    // Work's tools that only read, and capabilities as a contained chat.
+    const tools = readerAttempts
+      .find((attempt) => attempt.input?.text?.includes("Review the change"))
+      ?.hostTools.map((tool) => tool.name);
+    expect(tools).toContain("read_page");
+    expect(tools).not.toContain("run_background_command");
+    // Its subagents read only too, so it keeps starting them.
+    expect(tools).toContain("spawn_subsession");
+    expect(
+      await sessions.agentSandboxing({
+        projectId: project.id,
+        sessionId: look.session.id,
+      }),
+    ).toBe("contained");
+    // The host mounts nothing that writes for it.
+    expect(
+      readerContexts.find((context) => context.sessionId === look.session.id)
+        ?.readOnly,
+    ).toBe(true);
+    const lookRow = await db
+      .selectFrom("agent_sessions")
+      .select("system_prompt")
+      .where("id", "=", look.session.id)
+      .executeTakeFirstOrThrow();
+    expect(lookRow.system_prompt).toContain("This chat runs read-only");
+    // A read-only chat's own subsessions read only too.
+    const deeper = await sessions.createSubsession(
+      identity,
+      project.id,
+      look.session.id,
+      { task: "Look deeper" },
+    );
+    expect(deeper.session.readOnly).toBe(true);
+    // A fork of a read-only chat reads only too.
+    const fork = await sessions.fork(identity, project.id, look.session.id);
+    expect(fork.readOnly).toBe(true);
+  });
+
+  it("starts a copy of an agent layered on another as that agent, on the parent chat's settings", async () => {
+    const project = await projects.create(identity, {
+      name: "Layered copies",
+    });
+    const parent = await sessions.create(identity, project.id, {
+      agentId: "voice",
+      model: "opus",
+      effort: "high",
+    });
+    const copy = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Do the work" },
+    );
+    expect(copy.grant).toBe("self");
+    expect(copy.session).toMatchObject({
+      agentId: "worker",
+      model: "opus",
+      modelEffort: "high",
+    });
+    // Naming itself is a copy too: never a second layered chat.
+    const named = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { agentId: "voice", task: "Again" },
+    );
+    expect(named.session.agentId).toBe("worker");
+    // Named by another agent, it starts the agent beneath too.
+    const worker = await sessions.create(identity, project.id, {
+      agentId: "worker",
+    });
+    const beneath = await sessions.createSubsession(
+      identity,
+      project.id,
+      worker.id,
+      { agentId: "voice", task: "Through the layer" },
+    );
+    expect(beneath.session.agentId).toBe("worker");
+    expect(beneath.grant).toBe("self");
+    const { system_prompt } = await db
+      .selectFrom("agent_sessions")
+      .select("system_prompt")
+      .where("id", "=", parent.id)
+      .executeTakeFirstOrThrow();
+    expect(system_prompt).toContain(
+      "- A copy of yourself (leave agent out), which runs as agent worker:",
+    );
+  });
+
+  it("never waits long on a harness catalog that does not answer", async () => {
+    const project = await projects.create(identity, {
+      name: "Slow catalog",
+    });
+    const parent = await sessions.create(identity, project.id, {
+      agentId: "orchestrator",
+    });
+    const started = Date.now();
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { agentId: "builder", task: "Build it", model: "opus" },
+    );
+    expect(Date.now() - started).toBeLessThan(9_000);
+    // The harness checks the model at the child's first turn instead.
+    expect(child.session.model).toBe("opus");
+  }, 20_000);
 
   it("promotes failed delegated work and informs its parent", async () => {
     const project = await projects.create(identity, {
@@ -3188,7 +3485,9 @@ describe("agent session coordination", () => {
       args: {
         sessionId: session.id,
         task: "Inspect the result",
-        routeId: "small-only",
+        agentId: "small",
+        model: "opus",
+        delegate: false,
         idempotencyKey: "child",
       },
     };
@@ -3200,6 +3499,11 @@ describe("agent session coordination", () => {
       session.id,
     );
     expect(children).toHaveLength(1);
+    // A workflow's spawn takes the tool's settings too (ADR 0271).
+    expect(children[0]).toMatchObject({
+      allowFurtherDelegation: false,
+      session: { agentId: "small", model: "opus" },
+    });
     const events = await exportEvents(children[0]?.session.id ?? "");
     expect(
       events.find((event) => event.kind === "session.created")?.payload,

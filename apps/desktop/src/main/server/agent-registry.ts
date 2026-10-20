@@ -17,6 +17,7 @@ import type {
   AgentCoordinationStrategy,
   AgentDefinition,
   AgentDelegationPolicy,
+  AgentModelChoice,
   AgentTurnContext,
   CodingAgentRegistry,
   RegisteredCodingAgent,
@@ -73,11 +74,12 @@ import {
 } from "../voice/guidance.js";
 import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
+  ASSISTANT_DELEGATION,
   ASSISTANT_EAGER,
-  assistantDelegation,
   assistantHostTools,
+  assistantWorkspaceTools,
+  type FollowSession,
   inThePersonsWindow,
-  withoutReplacedTools,
 } from "./assistant-agent.js";
 import { buildAiSdkAdapter } from "./coding-agent.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
@@ -87,6 +89,7 @@ import {
   desktopAdapter,
   unavailableAdapter,
 } from "./harness-adapters.js";
+import { listAgentModels } from "./harness-models.js";
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
 import { localAgentWorkspace } from "./local-agent-workspace.js";
 import { parseProjectAgentId } from "./project-agents.js";
@@ -233,14 +236,11 @@ function resolveProjectDelegation(
   if (!policy) return undefined;
   return {
     ...policy,
-    routes: policy.routes.map((route) => {
-      const relative = route.target.match(/^project:([^:]+)$/);
+    agents: policy.agents.map((grant) => {
+      const relative = grant.agent.match(/^project:([^:]+)$/);
       return relative
-        ? {
-            ...route,
-            target: projectAgentId(projectId, relative[1] ?? ""),
-          }
-        : route;
+        ? { ...grant, agent: projectAgentId(projectId, relative[1] ?? "") }
+        : grant;
     }),
   };
 }
@@ -297,8 +297,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
-  /** The assistant's tools over the person's chats (ADR 0216). */
-  private assistantTools: ExtraTool[] = [];
+  /**
+   * The assistant's tools over the person's chats, and how it follows the
+   * sessions it starts (ADR 0216).
+   */
+  private assistant: { tools: ExtraTool[]; follow: FollowSession } = {
+    tools: [],
+    follow: async () => {},
+  };
   private voice: VoiceControl | null = null;
   /** Where the person is, by profile (ADR 0265); late-bound. */
   private personProject: (profileId: string) => string | null = () => null;
@@ -416,6 +422,55 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       component,
       environment: { ...environment, CATAMORPHIC_BUN: bun.executablePath },
     };
+  }
+
+  /**
+   * The models an agent's harness offers, as its model picker lists them:
+   * core checks a subsession's requested model and effort against them
+   * (ADR 0271). Undefined when the agent cannot be resolved here.
+   */
+  async models({
+    agentId,
+    projectId,
+  }: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined> {
+    const ref = parseProjectAgentId(agentId);
+    if (ref && ref.projectId !== projectId) return undefined;
+    const resolved = ref
+      ? this.resolveProjectConfig(agentId, ref.projectId, ref.slug)
+      : this.findConfig(parseAssistantAgentId(agentId)?.agentId ?? agentId);
+    if (!resolved || "error" in resolved) return undefined;
+    // A project agent on a project secret or connection runs on no sign-in
+    // of the person's: its catalog is not theirs to read (as the model
+    // picker holds), and the harness checks the model at the first turn.
+    if ("source" in resolved && resolved.source !== "profile") return undefined;
+    const { config } = resolved;
+    const models = await listAgentModels(
+      {
+        id: config.id,
+        harness: config.harness,
+        provider: config.provider,
+        auth: config.auth,
+        apiKey: config.apiKey,
+      },
+      {
+        agentHome: (id) => this.agentHome(id),
+        harnessExecutable: async (harness) =>
+          (await this.ensureHarnessExecutable(harness)).executablePath,
+      },
+    );
+    return models.map((model) => ({
+      id: model.id,
+      ...(model.resolvedId ? { resolvedId: model.resolvedId } : {}),
+      ...(model.supportsEffort !== undefined
+        ? { supportsEffort: model.supportsEffort }
+        : {}),
+      ...(model.supportedEffortLevels
+        ? { supportedEffortLevels: model.supportedEffortLevels }
+        : {}),
+    }));
   }
 
   /** Resolve the same configuration and consent as execution, without starting a session. */
@@ -688,10 +743,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
     // The assistant (ADR 0216) is one of the person's agents with the
-    // assistant's tools and delegation routes: as configured, or as Work's
+    // assistant's tools and delegation grants: as configured, or as Work's
     // built-in assistant, with no instructions of its own and the
     // harness's default model: Claude Code's and Codex's own, while the
-    // built-in agent, which has none, keeps the model it names.
+    // built-in agent, which has none, keeps the model it names. A copy of
+    // it runs as that agent, without the assistant's tools (ADR 0271).
     const assistant = parseAssistantAgentId(id);
     const found = this.findConfig(assistant?.agentId ?? id);
     if (!found) return undefined;
@@ -705,12 +761,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : found.config;
     const built = this.build({ config, profileId, assistant: !!assistant });
     if (!built) return undefined;
-    const delegation = assistant
-      ? assistantDelegation(assistant.agentId)
-      : config.delegation;
+    const delegation = assistant ? ASSISTANT_DELEGATION : config.delegation;
     return {
       id,
       name: config.name,
+      ...(assistant ? { copiesAs: assistant.agentId } : {}),
       ...built,
       topology: "native",
       sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
@@ -1035,8 +1090,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const workspace = this.workspaceTools(config, "native") ?? [];
     const served = {
       hostTools: assistant
-        ? assistantHostTools(
-            inThePersonsWindow(
+        ? assistantHostTools({
+            workspace: inThePersonsWindow(
               [
                 ...workspace,
                 ...(this.workspaceTools(config, "native", true) ?? []).filter(
@@ -1045,8 +1100,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               ],
               this.personsWindows(profileId),
             ),
-            this.assistantTools,
-          )
+            sessions: this.assistant.tools,
+            follow: this.assistant.follow,
+          })
         : workspace,
       toolPolicies: () => live().policies,
       toolAnnotations: () => live().annotations,
@@ -1264,7 +1320,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   mcp,
                   context,
                 }),
-                ...(mcp.nativeServers ?? {}),
+                // Computer use acts: a read-only chat goes without it.
+                ...(context.readOnly ? {} : (mcp.nativeServers ?? {})),
               };
             },
             toolPolicies: () =>
@@ -1741,8 +1798,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /** Late-bound: the assistant's tools over the person's chats. */
-  setAssistantTools(tools: ExtraTool[]): void {
-    this.assistantTools = tools;
+  setAssistant(assistant: { tools: ExtraTool[]; follow: FollowSession }): void {
+    this.assistant = assistant;
   }
 
   /**
@@ -1774,12 +1831,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const tools = this.workspaceTools(config, "native", true) ?? [];
     return {
       revision: JSON.stringify([id, config.sandboxing, profileId, "native"]),
-      // The assistant discovers neither Work's project-only chat tools nor
-      // subsessions: its own session tools take their place (ADR 0216).
-      // Its window tools act where the person is (ADR 0265).
+      // The assistant discovers none of Work's project-only chat tools: its
+      // own session tools take their place (ADR 0216). Its window tools act
+      // where the person is (ADR 0265).
       tools: parseAssistantAgentId(id)
         ? inThePersonsWindow(
-            withoutReplacedTools(tools),
+            assistantWorkspaceTools({
+              tools,
+              follow: this.assistant.follow,
+            }),
             this.personsWindows(profileId),
           )
         : tools,

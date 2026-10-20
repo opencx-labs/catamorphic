@@ -19,6 +19,7 @@ import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
   type AgentCoordinationStrategy,
+  type AgentDelegationGrant,
   type AgentDelegationPolicy,
   type AgentEffort,
   type AgentHarness,
@@ -679,8 +680,8 @@ function ProfileAgentBody({
                   <span>
                     <span className="block text-fg">Allow subsessions</span>
                     <span className="block text-[11px] text-fg-faint">
-                      This agent may delegate work only through the routes
-                      below.
+                      This agent may start the agents below, with the model and
+                      effort choices set for each.
                     </span>
                   </span>
                 </label>
@@ -705,79 +706,147 @@ function ProfileAgentBody({
                         className="field h-8 w-20 px-2 text-[13px] text-fg"
                       />
                     </label>
-                    <p className="text-[11px] text-fg-faint">
-                      Allowed agents. Onward delegation is controlled per route.
-                    </p>
                     {[
-                      { id: "same-agent", target: "self", name: "Same agent" },
+                      { agent: "self", name: "Copies of itself" },
                       ...(data?.agents ?? [])
                         .filter((candidate) => candidate.id !== agent.id)
                         .map((candidate) => ({
-                          id: `agent:${candidate.id}`,
-                          target: candidate.id,
+                          agent: candidate.id,
                           name: candidate.name,
                         })),
-                      {
-                        id: "any-agent",
-                        target: "*",
-                        name: "Any configured agent",
-                      },
+                      { agent: "*", name: "Any configured agent" },
                     ].map((choice) => {
-                      const route = delegation.routes.find(
-                        (candidate) => candidate.id === choice.id,
+                      // The first grant naming an agent decides for it.
+                      const index = delegation.agents.findIndex(
+                        (candidate) => candidate.agent === choice.agent,
                       );
+                      const grant = delegation.agents[index];
+                      const copies = choice.agent === "self";
+                      const change = (patch: Partial<AgentDelegationGrant>) =>
+                        setDelegation((current) => ({
+                          ...current,
+                          agents: current.agents.map((candidate, at) =>
+                            at === index
+                              ? { ...candidate, ...patch }
+                              : candidate,
+                          ),
+                        }));
                       return (
                         <div
-                          key={choice.id}
-                          className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5"
+                          key={choice.agent}
+                          className="flex flex-col gap-1.5 rounded-md border border-border px-2.5 py-1.5"
                         >
-                          <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-fg-muted">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(route)}
-                              onChange={(event) =>
-                                setDelegation((current) => ({
-                                  ...current,
-                                  routes: event.target.checked
-                                    ? [
-                                        ...current.routes,
-                                        {
-                                          id: choice.id,
-                                          target: choice.target,
-                                          allowFurtherDelegation: true,
-                                        },
-                                      ]
-                                    : current.routes.filter(
-                                        (candidate) =>
-                                          candidate.id !== choice.id,
-                                      ),
-                                }))
-                              }
-                            />
-                            <span className="truncate">{choice.name}</span>
-                          </label>
-                          {route ? (
-                            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-faint">
+                          <div className="flex items-center gap-2">
+                            <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-fg-muted">
                               <input
                                 type="checkbox"
-                                checked={route.allowFurtherDelegation}
+                                checked={Boolean(grant)}
                                 onChange={(event) =>
                                   setDelegation((current) => ({
                                     ...current,
-                                    routes: current.routes.map((candidate) =>
-                                      candidate.id === choice.id
-                                        ? {
-                                            ...candidate,
-                                            allowFurtherDelegation:
-                                              event.target.checked,
-                                          }
-                                        : candidate,
-                                    ),
+                                    agents: event.target.checked
+                                      ? [
+                                          ...current.agents,
+                                          {
+                                            agent: choice.agent,
+                                            model: "any",
+                                            effort: "any",
+                                            delegate: true,
+                                          },
+                                        ]
+                                      : current.agents.filter(
+                                          (candidate) =>
+                                            candidate.agent !== choice.agent,
+                                        ),
                                   }))
                                 }
                               />
-                              Can delegate
+                              <span className="truncate">{choice.name}</span>
                             </label>
+                            {grant ? (
+                              <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-faint">
+                                <input
+                                  type="checkbox"
+                                  checked={grant.delegate}
+                                  onChange={(event) =>
+                                    change({ delegate: event.target.checked })
+                                  }
+                                />
+                                Can delegate
+                              </label>
+                            ) : null}
+                          </div>
+                          {grant ? (
+                            <div className="flex gap-2 pl-5">
+                              <select
+                                aria-label={`${choice.name} model`}
+                                value={
+                                  Array.isArray(grant.model)
+                                    ? "list"
+                                    : grant.model
+                                }
+                                onChange={(event) =>
+                                  change({
+                                    model:
+                                      event.target.value === "fixed"
+                                        ? "fixed"
+                                        : event.target.value === "list" &&
+                                            Array.isArray(grant.model)
+                                          ? grant.model
+                                          : "any",
+                                  })
+                                }
+                                className="field h-7 min-w-0 flex-1 px-1.5 text-[12px] text-fg"
+                              >
+                                <option value="any">Any model</option>
+                                <option value="fixed">
+                                  {copies
+                                    ? "The parent's model"
+                                    : "Its own model"}
+                                </option>
+                                {Array.isArray(grant.model) ? (
+                                  <option value="list">
+                                    {grant.model.join(", ")}
+                                  </option>
+                                ) : null}
+                              </select>
+                              <select
+                                aria-label={`${choice.name} effort`}
+                                value={
+                                  Array.isArray(grant.effort)
+                                    ? "list"
+                                    : grant.effort
+                                }
+                                onChange={(event) =>
+                                  change({
+                                    effort:
+                                      event.target.value === "fixed" ||
+                                      event.target.value === "at-most-parent"
+                                        ? event.target.value
+                                        : event.target.value === "list" &&
+                                            Array.isArray(grant.effort)
+                                          ? grant.effort
+                                          : "any",
+                                  })
+                                }
+                                className="field h-7 min-w-0 flex-1 px-1.5 text-[12px] text-fg"
+                              >
+                                <option value="any">Any effort</option>
+                                <option value="at-most-parent">
+                                  Up to the parent's
+                                </option>
+                                <option value="fixed">
+                                  {copies
+                                    ? "The parent's effort"
+                                    : "Its own effort"}
+                                </option>
+                                {Array.isArray(grant.effort) ? (
+                                  <option value="list">
+                                    {grant.effort.join(", ")}
+                                  </option>
+                                ) : null}
+                              </select>
+                            </div>
                           ) : null}
                         </div>
                       );
@@ -1068,9 +1137,9 @@ function ProjectAgentBody({
             "Delegation",
             agent.delegation
               ? agent.delegation.enabled
-                ? `${agent.delegation.maxConcurrentChildren} max, ${agent.delegation.routes.length} routes`
+                ? `${agent.delegation.maxConcurrentChildren} max, ${agent.delegation.agents.length} ${agent.delegation.agents.length === 1 ? "agent" : "agents"}`
                 : "disabled"
-              : "10 max, same agent",
+              : "10 max, copies of itself",
           )}
           {agent.promptPreview && (
             <div className="mt-1 border-t border-border pt-2">

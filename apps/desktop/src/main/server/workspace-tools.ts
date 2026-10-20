@@ -9,6 +9,7 @@ import {
   setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
 import {
+  type AgentEffort,
   agentToolResult,
   type ExtraTool,
   type ExtraToolContext,
@@ -107,6 +108,7 @@ const SESSION_MESSAGE_MODES = [
 ] as const;
 export type SessionMessageMode = (typeof SESSION_MESSAGE_MODES)[number];
 const sessionMessageMode = z.enum(SESSION_MESSAGE_MODES);
+const effortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
 
 export interface SessionCoordinationBridge {
   list(projectId: string, sessionId: string): Promise<unknown[]>;
@@ -129,8 +131,11 @@ export interface SessionCoordinationBridge {
     projectId: string,
     sessionId: string,
     input: {
-      routeId?: string;
       agentId?: string;
+      model?: string;
+      effort?: AgentEffort;
+      readOnly?: boolean;
+      delegate?: boolean;
       task: string;
       contextMode?: "fresh" | "inherit";
       title?: string;
@@ -446,7 +451,7 @@ export function buildWorkspaceToolkit(
     {
       name: "spawn_subsession",
       description:
-        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you, through an allowed delegation route. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
+        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you. Whom you may start, and the model and effort you may set, are listed in your instructions. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
       parameters: {
         task: z
           .string()
@@ -454,12 +459,33 @@ export function buildWorkspaceToolkit(
           .describe(
             "The whole task: the child sees nothing else unless inherit",
           ),
-        route_id: z.string().min(1).optional().describe("Allowed route id"),
-        agent_id: z
+        agent: z
           .string()
           .min(1)
           .optional()
-          .describe("Agent choice when the route allows it"),
+          .describe(
+            "An agent id from your instructions' list; leave out for a copy of yourself",
+          ),
+        model: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "As its harness names it, like opus; left out, a copy keeps this chat's, another agent its own",
+          ),
+        effort: effortSchema
+          .optional()
+          .describe("How hard it thinks; left out like model"),
+        read_only: z
+          .boolean()
+          .optional()
+          .describe(
+            "Runs it in its harness's read-only mode, with only Work's read-only tools",
+          ),
+        delegate: z
+          .boolean()
+          .optional()
+          .describe("false: it starts no subagents of its own"),
         context_mode: z.enum(["fresh", "inherit"]).default("fresh"),
         title: z.string().min(1).max(500).optional(),
       },
@@ -473,8 +499,13 @@ export function buildWorkspaceToolkit(
           ctx.sessionId,
           {
             task: String(input.task),
-            ...(input.route_id ? { routeId: String(input.route_id) } : {}),
-            ...(input.agent_id ? { agentId: String(input.agent_id) } : {}),
+            ...(input.agent ? { agentId: String(input.agent) } : {}),
+            ...(input.model ? { model: String(input.model) } : {}),
+            ...(input.effort
+              ? { effort: effortSchema.parse(input.effort) }
+              : {}),
+            ...(input.read_only === true ? { readOnly: true } : {}),
+            ...(input.delegate === false ? { delegate: false } : {}),
             contextMode: input.context_mode as "fresh" | "inherit",
             ...(input.title ? { title: String(input.title) } : {}),
           },
@@ -1449,21 +1480,32 @@ async function filterWorkspaceOverview(
   };
 }
 
-/** What an agent needs about a subsession: which one, and how it stands. */
+/** A child as its parent reads it: what runs it, and how (ADR 0271). */
 function subsessionSummary(child: unknown): Record<string, unknown> {
   const parsed = z
     .object({
       status: z.string(),
-      session: z.object({ id: z.string(), title: z.string().nullable() }),
+      session: z.object({
+        id: z.string(),
+        title: z.string().nullable(),
+        agentId: z.string().nullable().optional(),
+        model: z.string().nullable().optional(),
+        modelEffort: z.string().nullable().optional(),
+        readOnly: z.boolean().optional(),
+      }),
     })
     .safeParse(child);
-  return parsed.success
-    ? {
-        sessionId: parsed.data.session.id,
-        title: parsed.data.session.title,
-        status: parsed.data.status,
-      }
-    : { subsession: child };
+  if (!parsed.success) return { subsession: child };
+  const { session } = parsed.data;
+  return {
+    sessionId: session.id,
+    title: session.title,
+    status: parsed.data.status,
+    ...(session.agentId ? { agent: session.agentId } : {}),
+    ...(session.model ? { model: session.model } : {}),
+    ...(session.modelEffort ? { effort: session.modelEffort } : {}),
+    ...(session.readOnly ? { readOnly: true } : {}),
+  };
 }
 
 function boundedTranscript(transcript: {

@@ -61,11 +61,12 @@ describe("AgentsStore — ADR 0056 fields", () => {
       delegation: {
         enabled: true,
         maxConcurrentChildren: 4,
-        routes: [
+        agents: [
           {
-            id: "reviewer",
-            target: "project:reviewer",
-            allowFurtherDelegation: false,
+            agent: "project:reviewer",
+            model: ["claude-sonnet-5-5"],
+            effort: "at-most-parent",
+            delegate: false,
           },
         ],
       },
@@ -82,11 +83,12 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(agent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 4,
-      routes: [
+      agents: [
         {
-          id: "reviewer",
-          target: "project:reviewer",
-          allowFurtherDelegation: false,
+          agent: "project:reviewer",
+          model: ["claude-sonnet-5-5"],
+          effort: "at-most-parent",
+          delegate: false,
         },
       ],
     });
@@ -125,10 +127,54 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
     expect(publicAgent.coordination).toBe("shared-first");
-    expect(publicAgent.delegation).toMatchObject({
+    // By default, copies of itself on any model and effort (ADR 0271).
+    expect(publicAgent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 10,
+      agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
+    });
+  });
+
+  it("keeps what a person set before grants: off stays off, and routes become grants", () => {
+    const file = storeFile();
+    const store = new AgentsStore(file);
+    const off = store.create({ harness: "claude-code" });
+    const reviewer = store.create({ harness: "claude-code" });
+    const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+    saved.agents[0].delegation = {
+      enabled: false,
+      maxConcurrentChildren: 3,
       routes: [{ id: "same-agent", target: "self" }],
+    };
+    saved.agents[1].delegation = {
+      enabled: true,
+      maxConcurrentChildren: 2,
+      routes: [
+        {
+          id: "agent:project:reviewer",
+          target: "project:reviewer",
+          allowFurtherDelegation: false,
+        },
+      ],
+    };
+    fs.writeFileSync(file, JSON.stringify(saved));
+    const reread = new AgentsStore(file);
+    expect(reread.get(off.id)?.delegation).toEqual({
+      enabled: false,
+      maxConcurrentChildren: 3,
+      agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
+    });
+    expect(reread.get(reviewer.id)?.delegation).toEqual({
+      enabled: true,
+      maxConcurrentChildren: 2,
+      agents: [
+        {
+          agent: "project:reviewer",
+          model: "any",
+          effort: "any",
+          delegate: false,
+        },
+      ],
     });
   });
 
@@ -145,7 +191,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
       delegation: {
         enabled: false,
         maxConcurrentChildren: 2,
-        routes: [],
+        agents: [],
       },
     });
     const updated = store.update(agent.id, {
@@ -158,12 +204,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
       delegation: {
         enabled: true,
         maxConcurrentChildren: 10,
-        routes: [
-          {
-            id: "same-agent",
-            target: "self",
-            allowFurtherDelegation: true,
-          },
+        agents: [
+          { agent: "self", model: "any", effort: "any", delegate: true },
         ],
       },
     });

@@ -259,4 +259,4 @@ remotesPath }` uses `FsBackend`/`FsRemoteBackend` from `@catamorphic/git`;
 `S3ObjectStore` (`@catamorphic/s3`, ADR 0012), `ArtifactsRemoteBackend`
 (`@catamorphic/cloudflare`).
 
-Run, session, and delegation routes are listed in `INTEGRATION.md`.
+Run, session, and subsession HTTP routes are listed in `INTEGRATION.md`.

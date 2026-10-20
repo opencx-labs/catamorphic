@@ -137,7 +137,8 @@ export function registerConnectorMcpRoute(
           (tool) =>
             connectorToolPermitted({
               layers,
-              readOnly: surface.readOnly,
+              // A read-only chat only reads, whatever its agent (ADR 0271).
+              readOnly: surface.readOnly || session?.readOnly === true,
               tool,
             }),
         );

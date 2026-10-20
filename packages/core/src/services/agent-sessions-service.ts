@@ -80,6 +80,7 @@ import {
   mergePolicyLayers,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
+  readOnlyPermissions,
   renderQuestionAnswer,
   renderTurnContext,
   SANDBOXING_LEVELS,
@@ -118,7 +119,6 @@ import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
   type AgentDefinition,
   AgentDefinitionsService,
-  type AgentDelegationPolicy,
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
@@ -139,6 +139,7 @@ import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import { projectChatIdentity } from "./chat-delivery.js";
 import {
+  type AgentModelChoice,
   type AgentTurnContext,
   type CodingAgentRegistry,
   harnessIdOf,
@@ -155,6 +156,17 @@ import {
   type ResolvedConnectionBinding,
 } from "./connection-types.js";
 import { DbSandboxStore } from "./db-sandbox-store.js";
+import {
+  catalogEntry,
+  catalogRefusal,
+  childSettings,
+  chooseGrant,
+  delegationMenu,
+  delegationPolicy,
+  effortFits,
+  effortOf,
+  grantAgentId,
+} from "./delegation-grants.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import { checkpointDraft, draftStoreFolder } from "./draft-workspace.js";
@@ -413,6 +425,11 @@ export interface AgentSession {
   model: string | null;
   /** Per-session reasoning-effort override; null = the agent's default. */
   modelEffort: AgentEffort | null;
+  /**
+   * The chat runs in its harness's read-only mode: a subsession started
+   * read-only, or by a read-only parent (ADR 0271).
+   */
+  readOnly: boolean;
   title: string | null;
   /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
   icon: string | null;
@@ -548,7 +565,8 @@ export interface AgentSessionPeer {
 
 export interface AgentSubsession {
   delegationId: string;
-  routeId: string;
+  /** The grant that admitted it: `self`, `*` or an agent id (ADR 0271). */
+  grant: string;
   task: string;
   contextMode: "fresh" | "inherit";
   allowFurtherDelegation: boolean;
@@ -639,6 +657,14 @@ export class AgentDelegationDeniedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AgentDelegationDeniedError";
+  }
+}
+
+/** A subsession's model or effort its harness does not offer (ADR 0271). */
+export class AgentDelegationSettingsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentDelegationSettingsError";
   }
 }
 
@@ -4853,10 +4879,18 @@ export class AgentSessionsService {
     turnId: string;
     workingDirectory?: string;
   }): Promise<ExtraTool[]> {
-    const own = [
-      ...(input.agent.harness.placement === "host"
+    const hosted =
+      input.agent.harness.placement === "host"
         ? (input.agent.harness.hostTools ?? [])
-        : []),
+        : [];
+    const own = [
+      // A read-only chat keeps the host's tools that only read, and its
+      // subagents, which read only too (ADR 0271).
+      ...(input.session.read_only
+        ? hosted.filter(
+            (tool) => tool.readOnly === true || SUBSESSION_TOOLS.has(tool.name),
+          )
+        : hosted),
       ASK_USER_HOST_TOOL,
       this.closeQuestionsTool(input.session.id),
     ];
@@ -5315,6 +5349,7 @@ export class AgentSessionsService {
       sessionId,
       turnId: turn.id,
       workingDirectory,
+      ...(session.read_only ? { readOnly: true } : {}),
       caller: {
         tenantId: identity.tenantId,
         externalUserId: identity.externalUserId,
@@ -5424,7 +5459,19 @@ export class AgentSessionsService {
     const stateDirectory = runtime.provider
       ? `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`
       : workingDirectory;
-    const permissions = protocolJson(agent.defaults?.harnessPermissions ?? {});
+    const configured = agent.defaults?.harnessPermissions ?? {};
+    // A read-only chat runs in its harness's read-only mode (ADR 0271).
+    const harnessPermissions = session.read_only
+      ? readOnlyPermissions({
+          harness: harnessIdOf(agent),
+          permissions: configured,
+        })
+      : configured;
+    if (!harnessPermissions)
+      throw new Error(
+        `This chat runs read-only, and ${harnessIdOf(agent)} has no read-only mode.`,
+      );
+    const permissions = protocolJson(harnessPermissions);
     const start: PreparedAttempt["start"] = {
       harness: harnessIdOf(agent),
       workingDirectory,
@@ -5879,6 +5926,8 @@ export class AgentSessionsService {
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
+      /** Run in the harness's read-only mode (a subsession, ADR 0271). */
+      readOnly?: boolean;
       transaction?: Transaction<DB>;
       prepared?: PreparedSessionCreate;
       workspace?: SessionWorkspaceRequest;
@@ -5933,6 +5982,8 @@ export class AgentSessionsService {
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
+      /** Run in the harness's read-only mode (a subsession, ADR 0271). */
+      readOnly?: boolean;
       workspace?: SessionWorkspaceRequest;
     },
   ): Promise<PreparedSessionCreate> {
@@ -5985,7 +6036,10 @@ export class AgentSessionsService {
     const systemPrompt = [
       relationshipPrompt,
       input.systemPrompt,
-      this.delegationPrompt(
+      input.readOnly && !input.systemPrompt?.includes(READ_ONLY_NOTE)
+        ? READ_ONLY_NOTE
+        : null,
+      await this.delegationPrompt(
         identity,
         projectId,
         agent,
@@ -6106,6 +6160,7 @@ export class AgentSessionsService {
             agent_id: selectedAgentId ?? null,
             model: input.model || null,
             model_effort: input.effort ?? null,
+            read_only: input.readOnly === true,
             system_prompt: systemPrompt || null,
             sandbox_id: null,
             allocation_id: allocation?.id ?? null,
@@ -8646,6 +8701,8 @@ export class AgentSessionsService {
           ...(session.environment_name
             ? { environment: session.environment_name }
             : {}),
+          // A fork of a read-only chat reads only too (ADR 0271).
+          ...(session.read_only ? { readOnly: true } : {}),
           systemPrompt: forkSystemPrompt,
           source: session.source as AgentSessionSource,
           parentSessionId: sessionId,
@@ -8778,7 +8835,11 @@ export class AgentSessionsService {
     );
   }
 
-  /** Create a durable child session through one of the source agent's grants. */
+  /**
+   * Create a durable child session through one of the source agent's grants
+   * (ADR 0271): the agent it names, or a copy of the source, with the model,
+   * effort and narrowing it asks for when a grant allows them.
+   */
   async createSubsession(
     identity: Identity,
     projectId: string,
@@ -8786,8 +8847,14 @@ export class AgentSessionsService {
     input: {
       sourceActionId?: string;
       origin?: SessionOperationOrigin;
-      routeId?: string;
+      /** Omitted: a copy of the source agent. */
       agentId?: string;
+      model?: string;
+      effort?: AgentEffort;
+      /** Run in the harness's read-only mode; always allowed. */
+      readOnly?: boolean;
+      /** False keeps the child from starting its own; always allowed. */
+      delegate?: boolean;
       task: string;
       contextMode?: "fresh" | "inherit";
       title?: string;
@@ -8827,45 +8894,167 @@ export class AgentSessionsService {
         "This agent is not allowed to create subsessions",
       );
     }
-    const routeId = input.routeId ?? policy.routes[0]?.id;
-    const route = policy.routes.find((candidate) => candidate.id === routeId);
-    if (!route) {
+    if (!sourceAgentId) throw new AgentNotConfiguredError(undefined);
+    // A child that may not delegate learns so before anything else.
+    const incoming = await this.db
+      .selectFrom("agent_delegations")
+      .select("allow_further_delegation")
+      .where("target_session_id", "=", sourceSessionId)
+      .executeTakeFirst();
+    if (incoming && !incoming.allow_further_delegation)
       throw new AgentDelegationDeniedError(
-        routeId
-          ? `Delegation route '${routeId}' is not allowed`
-          : "This agent has no delegation routes",
+        "This subsession is not allowed to delegate further",
       );
-    }
-    const targetAgentId = resolveDelegationTarget({
-      target: route.target,
-      requestedAgentId: input.agentId,
-      sourceAgentId,
+    const named = input.agentId?.trim();
+    const requested =
+      !named || named === "self"
+        ? undefined
+        : named.match(/^project:([^:]+)$/)
+          ? grantAgentId({ agent: named }, projectId)
+          : named;
+    // A copy of an agent layered on another runs as that one (ADR 0271).
+    const copyAgentId = sourceAgent.copiesAs ?? sourceAgentId;
+    const choices = () =>
+      this.delegationChoices(identity, projectId, sourceAgent, "Your choices:");
+    const resolveTarget = async (agentId: string) => {
+      try {
+        this.assertAgentAccess(identity, projectId, agentId);
+        return await this.resolveAgent(agentId, projectId);
+      } catch (error) {
+        if (
+          error instanceof AgentNotConfiguredError ||
+          error instanceof AccessDeniedError
+        )
+          throw new AgentDelegationDeniedError(
+            `There is no agent ${agentId} you may start. ${await choices()}`,
+          );
+        throw error;
+      }
+    };
+    const other =
+      requested === undefined || requested === sourceAgentId
+        ? undefined
+        : await resolveTarget(requested);
+    // A layered agent never runs as a subsession: whoever names it starts
+    // the agent beneath, never a second layer.
+    const targetAgentId =
+      other === undefined
+        ? copyAgentId
+        : (other.copiesAs ?? requested ?? copyAgentId);
+    const targetAgent =
+      other && !other.copiesAs ? other : await resolveTarget(targetAgentId);
+    const copy = targetAgentId === copyAgentId;
+    // The harness's own catalog, only when the parent names a setting.
+    const catalog =
+      input.model || input.effort
+        ? await this.modelCatalog({ agentId: targetAgentId, projectId })
+        : undefined;
+    const modelNames = (model: string) => {
+      const entry = catalog ? catalogEntry(catalog, model) : undefined;
+      return entry
+        ? [entry.id, ...(entry.resolvedId ? [entry.resolvedId] : [])]
+        : [model];
+    };
+    // A model the catalog knows is stored as the catalog spells it: its
+    // alias, or the version it resolves to, whichever was asked for.
+    const entry =
+      input.model && catalog ? catalogEntry(catalog, input.model) : undefined;
+    const model =
+      entry && input.model
+        ? [entry.id, entry.resolvedId].find(
+            (name) => name?.toLowerCase() === input.model?.toLowerCase(),
+          )
+        : input.model;
+    const parentEffort =
+      effortOf(source.model_effort) ?? sourceAgent.defaults?.effort;
+    const choice = chooseGrant(policy, {
+      targetAgentId,
+      copy,
       projectId,
+      ...(model ? { model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(parentEffort ? { parentEffort } : {}),
+      wildcardAdmits:
+        sandboxingRank(targetAgent.sandboxing) <=
+        sandboxingRank(sourceAgent.sandboxing),
+      modelNames,
     });
-    this.assertAgentAccess(identity, projectId, targetAgentId);
-    const targetAgent = await this.resolveAgent(targetAgentId, projectId);
-    if (
-      route.target === "*" &&
-      sandboxingRank(targetAgent.sandboxing) >
-        sandboxingRank(sourceAgent.sandboxing)
-    ) {
+    if ("refusal" in choice)
       throw new AgentDelegationDeniedError(
-        "A wildcard delegation route cannot grant an agent with wider sandboxing",
+        `${choice.refusal} ${await choices()}`,
       );
+    const { grant } = choice;
+    const settings = childSettings({
+      grant,
+      copy,
+      requested: {
+        ...(model ? { model } : {}),
+        ...(input.effort ? { effort: input.effort } : {}),
+      },
+      parent: {
+        ...(source.model ? { model: source.model } : {}),
+        ...(effortOf(source.model_effort)
+          ? { effort: effortOf(source.model_effort) }
+          : {}),
+      },
+      ...(parentEffort ? { parentEffort } : {}),
+      own: {
+        ...(targetAgent.defaults?.model
+          ? { model: targetAgent.defaults.model }
+          : {}),
+        ...(targetAgent.defaults?.effort
+          ? { effort: targetAgent.defaults.effort }
+          : {}),
+      },
+      modelNames,
+    });
+    if (catalog) {
+      const runningModel = settings.model ?? targetAgent.defaults?.model;
+      const refusal = catalogRefusal({
+        catalog,
+        harness: copy ? "your harness" : `the harness of ${targetAgentId}`,
+        ...(model ? { model } : {}),
+        ...(runningModel ? { runningModel } : {}),
+        ...(input.effort ? { effort: input.effort } : {}),
+      });
+      if (refusal) throw new AgentDelegationSettingsError(refusal);
+      // An effort nobody asked for gives way where the model takes none.
+      if (
+        !input.effort &&
+        settings.effort &&
+        !effortFits({ catalog, model: runningModel, effort: settings.effort })
+      )
+        delete settings.effort;
     }
+    // A read-only parent's children read only too: narrowing never ends
+    // with a child.
+    const readOnly = input.readOnly === true || source.read_only;
+    if (
+      readOnly &&
+      !readOnlyPermissions({
+        harness: harnessIdOf(targetAgent),
+        permissions: targetAgent.defaults?.harnessPermissions ?? {},
+      })
+    )
+      throw new AgentDelegationSettingsError(
+        `${copy ? "Your harness" : `${targetAgentId} runs on ${harnessIdOf(targetAgent)}, which`} has no read-only mode${source.read_only ? ", and this chat's subsessions read only" : ""}.`,
+      );
 
     const task = input.task.trim();
     if (!task) throw new Error("A subsession task is required");
     const contextMode = input.contextMode ?? "fresh";
+    const allowFurtherDelegation = grant.delegate && input.delegate !== false;
     const childInput = {
       sourceActionId: input.sourceActionId,
       agentId: targetAgentId,
+      ...settings,
+      readOnly,
       parentSessionId: sourceSessionId,
       visibility: "latent" as const,
       title: input.title ?? summarizeSessionTask(task) ?? "Subsession",
       systemPrompt:
         "Complete the delegated task independently. Your settled result is delivered to the parent automatically.",
-      allowFurtherDelegation: route.allowFurtherDelegation,
+      allowFurtherDelegation,
     };
     const preparedChild = await this.prepareSessionCreate(
       identity,
@@ -8956,10 +9145,10 @@ export class AgentSessionsService {
           project_id: projectId,
           source_session_id: sourceSessionId,
           target_session_id: child.id,
-          route_id: route.id,
+          grant_agent: grant.agent,
           task,
           context_mode: contextMode,
-          allow_further_delegation: route.allowFurtherDelegation,
+          allow_further_delegation: allowFurtherDelegation,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -8986,7 +9175,7 @@ export class AgentSessionsService {
     const { child, delegation } = created;
     return {
       delegationId: delegation.id,
-      routeId: delegation.route_id,
+      grant: delegation.grant_agent,
       task: delegation.task,
       contextMode,
       allowFurtherDelegation: delegation.allow_further_delegation,
@@ -9033,7 +9222,7 @@ export class AgentSessionsService {
       return [
         {
           delegationId: delegation.id,
-          routeId: delegation.route_id,
+          grant: delegation.grant_agent,
           task: delegation.task,
           contextMode: delegation.context_mode as "fresh" | "inherit",
           allowFurtherDelegation: delegation.allow_further_delegation,
@@ -11191,12 +11380,12 @@ export class AgentSessionsService {
     return agent;
   }
 
-  private delegationPrompt(
+  private async delegationPrompt(
     identity: Identity,
     projectId: string,
     sourceAgent: RegisteredCodingAgent,
     allowFurtherDelegation: boolean | undefined,
-  ): string {
+  ): Promise<string> {
     // Only an agent this host gives spawn_subsession hears about it: one
     // without it (a server's agent keeps its harness's own subagents)
     // would be pointed at a tool it does not have.
@@ -11210,10 +11399,57 @@ export class AgentSessionsService {
       return "Delegation is disabled for this subsession. Do not call spawn_subsession.";
     }
     const policy = delegationPolicy(sourceAgent.delegation);
-    if (!policy.enabled || policy.routes.length === 0) {
+    if (!policy.enabled || policy.agents.length === 0) {
       return "Delegation is disabled for this agent. Do not call spawn_subsession.";
     }
-    const accessibleAgents = this.codingAgents.list().filter((candidate) => {
+    return [
+      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
+      await this.delegationChoices(identity, projectId, sourceAgent),
+    ].join("\n");
+  }
+
+  /**
+   * The harness catalog of an agent's models, or undefined when the host
+   * has none or it takes longer than a spawn should wait: the harness then
+   * checks the model at the child's first turn.
+   */
+  private async modelCatalog(input: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), MODEL_CATALOG_WAIT_MS);
+      timer.unref?.();
+    });
+    const lookup = Promise.resolve()
+      .then(() => this.codingAgents.models?.(input))
+      .catch(() => undefined);
+    try {
+      return await Promise.race([lookup, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Whom the source agent may start and with what, as it reads it. */
+  private async delegationChoices(
+    identity: Identity,
+    projectId: string,
+    sourceAgent: RegisteredCodingAgent,
+    header = "You may start:",
+  ): Promise<string> {
+    const policy = delegationPolicy(sourceAgent.delegation);
+    const accessible = [
+      ...this.codingAgents.list(),
+      // The project's own agents are listed only where a grant can reach
+      // them, by `*` or by name, with their names.
+      ...(policy.agents.some(
+        (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
+      )
+        ? await this.committedAgents(projectId)
+        : []),
+    ].filter((candidate) => {
       try {
         this.assertAgentAccess(identity, projectId, candidate.id);
         return true;
@@ -11221,32 +11457,76 @@ export class AgentSessionsService {
         return false;
       }
     });
-    const routes = policy.routes.map((route) => {
-      let target: string;
-      if (route.target === "self") {
-        target = sourceAgent.id;
-      } else if (route.target === "*") {
-        const allowed = accessibleAgents
+    return [
+      header,
+      ...delegationMenu({
+        policy,
+        projectId,
+        ...(sourceAgent.copiesAs ? { copiesAs: sourceAgent.copiesAs } : {}),
+        wildcardAgents: accessible
           .filter(
             (candidate) =>
               sandboxingRank(candidate.sandboxing) <=
               sandboxingRank(sourceAgent.sandboxing),
           )
-          .map((candidate) => candidate.id);
-        target =
-          allowed.length > 0 ? allowed.join(", ") : "no accessible agents";
-      } else {
-        const relative = route.target.match(/^project:([^:]+)$/);
-        target = relative
-          ? formatProjectAgentId(projectId, relative[1] ?? "")
-          : route.target;
-      }
-      return `- ${route.id}: ${target}${route.description ? ` (${route.description})` : ""}; onward delegation ${route.allowFurtherDelegation ? "allowed" : "disabled"}`;
-    });
-    return [
-      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. Pass one of these route ids and, for a route listing several agents, the exact agent_id:`,
-      ...routes,
+          .map((candidate) => ({
+            id: candidate.id,
+            ...(candidate.name ? { name: candidate.name } : {}),
+          })),
+        nameOf: (agentId) =>
+          accessible.find((candidate) => candidate.id === agentId)?.name,
+      }),
     ].join("\n");
+  }
+
+  /**
+   * The project's committed agents that resolve, for the delegation menu:
+   * one that does not is left out, never failing the prompt.
+   */
+  private async committedAgents(
+    projectId: string,
+  ): Promise<RegisteredCodingAgent[]> {
+    // A host without a project-agent factory resolves them by id, the
+    // way `resolveAgent` falls back.
+    const projectAgent = this.codingAgents.projectAgent?.bind(
+      this.codingAgents,
+    );
+    try {
+      const project = await this.db
+        .selectFrom("projects")
+        .select("tenant_id")
+        .where("id", "=", projectId)
+        .executeTakeFirstOrThrow();
+      const entries = await new AgentDefinitionsService(
+        this.db,
+        this.projectManager,
+      ).listCommitted({ tenantId: project.tenant_id, projectId });
+      const resolved = await Promise.all(
+        entries.map(async (entry) => {
+          const { definition } = entry;
+          if (!definition) return null;
+          const id = formatProjectAgentId(projectId, entry.slug);
+          try {
+            const agent = projectAgent
+              ? await projectAgent({ id, entry })
+              : this.codingAgents.get(id);
+            // One that cannot run now (unapproved, broken) is no choice.
+            if (!agent || agent.unavailable) return null;
+            return {
+              ...(projectAgent
+                ? withDefinitionPolicy(agent, definition)
+                : agent),
+              name: agent.name ?? definition.name,
+            };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return resolved.filter((agent) => agent !== null);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -12037,6 +12317,8 @@ export class AgentSessionsService {
     sessionId: string;
   }): Promise<{
     agentId: string | null;
+    /** The chat only reads: its connectors' tools that write are off (ADR 0271). */
+    readOnly: boolean;
     toolPolicies?: Record<string, McpToolPolicyLayers>;
   }> {
     // Tool discovery needs the assignment and caller ceiling, never the transcript.
@@ -12047,6 +12329,7 @@ export class AgentSessionsService {
     );
     return {
       agentId: session.agent_id,
+      readOnly: session.read_only,
       toolPolicies: withAgentLayers(
         await this.callerToolPolicies(
           args.identity,
@@ -12088,11 +12371,14 @@ export class AgentSessionsService {
   }): Promise<Sandboxing | undefined> {
     const session = await this.db
       .selectFrom("agent_sessions")
-      .select("agent_id")
+      .select(["agent_id", "read_only"])
       .where("id", "=", args.sessionId)
       .where("project_id", "=", args.projectId)
       .executeTakeFirst();
     if (!session) return undefined;
+    // A read-only chat acts as contained: capabilities and connections it
+    // reaches only read (ADR 0271).
+    if (session.read_only) return "contained";
     // An agent that no longer resolves cannot act; the narrowest level holds.
     const agent = await this.resolveAgent(
       session.agent_id,
@@ -12520,6 +12806,7 @@ function mapSession(
     harness: row.harness,
     model: row.model,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
+    readOnly: row.read_only,
     title: row.title,
     icon: row.icon,
     forkedFromSessionId: row.forked_from_session_id,
@@ -12632,26 +12919,25 @@ function sessionVisibility(value: string): SessionVisibility {
   throw new Error(`Invalid session visibility '${value}'`);
 }
 
+/**
+ * The host's subsession tools: a read-only chat's children read only.
+ * Replica memory (c): fixed names, the same on every replica.
+ */
+const SUBSESSION_TOOLS = new Set([
+  "spawn_subsession",
+  "wait_for_subsessions",
+  "interrupt_subsession",
+]);
+
+/** What a read-only chat is told about itself (ADR 0271). */
+const READ_ONLY_NOTE =
+  "This chat runs read-only: read, search and report, but change nothing. Any subsession it starts reads only too.";
+
+/** How long a spawn waits on a harness's model catalog (ADR 0271). */
+const MODEL_CATALOG_WAIT_MS = 5_000;
+
 /** How often a running turn renews its sandbox grants (they live an hour). */
 const GRANT_RENEWAL_MS = 20 * 60_000;
-
-const DEFAULT_DELEGATION_POLICY: AgentDelegationPolicy = {
-  enabled: true,
-  maxConcurrentChildren: 10,
-  routes: [
-    {
-      id: "same-agent",
-      target: "self",
-      allowFurtherDelegation: true,
-    },
-  ],
-};
-
-function delegationPolicy(
-  policy: AgentDelegationPolicy | undefined,
-): AgentDelegationPolicy {
-  return policy ?? DEFAULT_DELEGATION_POLICY;
-}
 
 /**
  * A committed definition's own narrowing (ADR 0054 agent scope), sandboxing
@@ -12707,46 +12993,6 @@ function withAgentLayers(
 
 function sandboxingRank(sandboxing: Sandboxing | undefined): number {
   return sandboxing ? SANDBOXING_LEVELS.indexOf(sandboxing) : 0;
-}
-
-function resolveDelegationTarget(input: {
-  target: string;
-  requestedAgentId?: string;
-  sourceAgentId: string | undefined;
-  projectId: string;
-}): string {
-  if (input.target === "self") {
-    if (!input.sourceAgentId) {
-      throw new AgentNotConfiguredError(undefined);
-    }
-    if (
-      input.requestedAgentId &&
-      input.requestedAgentId !== input.sourceAgentId
-    ) {
-      throw new AgentDelegationDeniedError(
-        "The selected route only permits the source agent",
-      );
-    }
-    return input.sourceAgentId;
-  }
-  if (input.target === "*") {
-    if (!input.requestedAgentId) {
-      throw new AgentDelegationDeniedError(
-        "This route requires an explicit target agent",
-      );
-    }
-    return input.requestedAgentId;
-  }
-  const relativeProject = input.target.match(/^project:([^:]+)$/);
-  const resolved = relativeProject
-    ? formatProjectAgentId(input.projectId, relativeProject[1] ?? "")
-    : input.target;
-  if (input.requestedAgentId && input.requestedAgentId !== resolved) {
-    throw new AgentDelegationDeniedError(
-      `The selected route only permits agent '${resolved}'`,
-    );
-  }
-  return resolved;
 }
 
 /** Whether a forwarded action names one this host runs. */

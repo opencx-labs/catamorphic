@@ -71,8 +71,9 @@ describe("workspace coordination tools", () => {
     }));
     // Background execution and watches are core needs for every harness
     // (ADR 0155, 0156); so are driving Work's browser and delegating to
-    // subagents (ADR 0202).
-    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(13_500);
+    // subagents (ADR 0202), with the model and effort a subagent runs on
+    // (ADR 0271).
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(14_000);
     expect(
       toolkit.tools.every(
         (tool) =>
@@ -251,7 +252,18 @@ describe("workspace coordination tools", () => {
       },
       spawn: async (...args) => {
         calls.push(["spawn", ...args]);
-        return { delegationId: "delegation", session: { id: "child" } };
+        return {
+          delegationId: "delegation",
+          status: "running",
+          session: {
+            id: "child",
+            title: "API review",
+            agentId: "agent-small",
+            model: "opus",
+            modelEffort: "high",
+            readOnly: true,
+          },
+        };
       },
       listSubsessions: async (...args) => {
         calls.push(["list", ...args]);
@@ -286,12 +298,25 @@ describe("workspace coordination tools", () => {
       session_id: "parent",
       message: "Option A or B?",
     });
-    await execute("spawn_subsession", {
-      task: "Review the API",
-      route_id: "reviewer",
-      agent_id: "agent-small",
-      context_mode: "fresh",
-      title: "API review",
+    // The parent reads what it started: whom, on what, and how.
+    expect(
+      await execute("spawn_subsession", {
+        task: "Review the API",
+        agent: "agent-small",
+        model: "opus",
+        effort: "high",
+        read_only: true,
+        delegate: false,
+        context_mode: "fresh",
+        title: "API review",
+      }),
+    ).toMatchObject({
+      sessionId: "child",
+      status: "running",
+      agent: "agent-small",
+      model: "opus",
+      effort: "high",
+      readOnly: true,
     });
     await execute("list_project_sessions", { children_only: true });
     await execute("wait_for_subsessions", {
@@ -310,8 +335,11 @@ describe("workspace coordination tools", () => {
         "session",
         {
           task: "Review the API",
-          routeId: "reviewer",
           agentId: "agent-small",
+          model: "opus",
+          effort: "high",
+          readOnly: true,
+          delegate: false,
           contextMode: "fresh",
           title: "API review",
         },

@@ -26,6 +26,11 @@ export interface AgentTurnContext
   extends Omit<ExtraToolContext, "stopWaiting"> {
   /** The turn the hook serves. */
   turnId: string;
+  /**
+   * The chat runs read-only (ADR 0271): the host mounts nothing for it
+   * that writes past the harness's read-only mode.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -125,6 +130,12 @@ export interface RegisteredCodingAgent {
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
   /**
+   * The agent a copy of this one runs as (ADR 0271), when it is another:
+   * an agent layered on one of the person's, like a voice assistant, has
+   * its copies run as that agent, without the layer. Omitted: itself.
+   */
+  copiesAs?: string;
+  /**
    * What a turn whose machine stopped does (ADR 0198): `continue` queues a
    * continuation when the native thread can resume exactly; `stop` leaves
    * it interrupted. Default `continue`. A turn its harness had not begun
@@ -182,6 +193,25 @@ export interface CodingAgentRegistry {
     | Promise<RegisteredCodingAgent | undefined>
     | RegisteredCodingAgent
     | undefined;
+  /**
+   * The models an agent's harness offers, as its model picker shows them.
+   * Core checks a subsession's requested model and effort against it (ADR
+   * 0271); without it, the harness checks them at the child's first turn.
+   */
+  models?(args: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined>;
+}
+
+/** One model a harness offers, and the efforts it takes. */
+export interface AgentModelChoice {
+  id: string;
+  /** The versioned model an alias (`opus`) resolves to. */
+  resolvedId?: string;
+  /** False when the model takes no effort setting. */
+  supportsEffort?: boolean;
+  supportedEffortLevels?: readonly AgentEffort[];
 }
 
 /** Wrap one agent as a one-entry registry: hosts with a single agent, and tests. */

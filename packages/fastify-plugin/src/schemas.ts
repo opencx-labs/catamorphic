@@ -1175,6 +1175,8 @@ export const AgentSessionSchema = z.object({
   harness: z.string().nullable(),
   model: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
+  /** Runs in its harness's read-only mode (ADR 0271). */
+  readOnly: z.boolean(),
   title: z.string().nullable(),
   icon: z.string().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
@@ -1259,8 +1261,15 @@ export const CreateAgentSessionSchema = z.object({
 });
 
 export const CreateAgentSubsessionSchema = z.object({
-  routeId: z.string().min(1).max(100).optional(),
+  /** Omitted: a copy of the parent's own agent (ADR 0271). */
   agentId: z.string().min(1).optional(),
+  /** A model a grant allows and the agent's harness offers. */
+  model: z.string().min(1).optional(),
+  effort: AgentEffortSchema.optional(),
+  /** Run in the harness's read-only mode; always allowed. */
+  readOnly: z.boolean().optional(),
+  /** False keeps the child from starting its own; always allowed. */
+  delegate: z.boolean().optional(),
   task: z.string().min(1).max(100_000),
   contextMode: z.enum(["fresh", "inherit"]).optional(),
   title: z.string().min(1).max(500).optional(),
@@ -1268,7 +1277,8 @@ export const CreateAgentSubsessionSchema = z.object({
 
 export const AgentSubsessionSchema = z.object({
   delegationId: z.string().uuid(),
-  routeId: z.string(),
+  /** The grant that admitted it: `self`, `*` or an agent id. */
+  grant: z.string(),
   task: z.string(),
   contextMode: z.enum(["fresh", "inherit"]),
   allowFurtherDelegation: z.boolean(),

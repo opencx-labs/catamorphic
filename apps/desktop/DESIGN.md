@@ -3517,3 +3517,16 @@ failure afresh, and runs a turn that failed here again at once when the
 sign-in can still refresh: a new Claude Code renews the token itself. A
 turn the chat's own task started (a background command, a watch, a
 subsession) runs again too. See ADR 0269.
+
+### 2026-10-20: Agents start subagents by naming an agent and how it runs; the assistant uses the same tool
+
+Agents named a delegation route where they meant an agent, and most of
+their spawns were refused; a subagent could not be made stronger, cheaper
+or read-only. Now `spawn_subsession` names an agent (left out, a copy of
+yourself on this chat's model and effort) and its model, effort,
+read-only and onward delegation. The agent's settings list whom it may
+start and what it may choose: by default, copies of itself on any model.
+The voice assistant starts sessions with the same tool. A copy of it is
+the person's own agent, without the assistant's tools; a session it starts is
+still handed a brief that leads back to it, and it still passes on the
+session's notes. See ADR 0271.

@@ -48,11 +48,11 @@ export interface AgentDelegations {
   completed_at: Timestamp | null;
   context_mode: Generated<string>;
   created_at: Generated<Timestamp>;
+  grant_agent: string;
   id: Generated<string>;
   interrupted_by_external_user_id: string | null;
   project_id: string;
   result_item_id: string | null;
-  route_id: string;
   source_session_id: string;
   status: Generated<string>;
   target_session_id: string;
@@ -176,6 +176,7 @@ export interface AgentSessions {
   parent_session_id: string | null;
   placement: Json | null;
   project_id: string;
+  read_only: Generated<boolean>;
   rewind_until: Timestamp | null;
   sandbox_id: string | null;
   secrets_delivered_ref: string | null;

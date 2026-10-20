@@ -85,3 +85,19 @@ export function harnessPermissionIssues(args: {
           : `A ${args.kind} agent takes ${allowed.map((name) => `'${name}'`).join(" and ")}, not '${field}'`,
     }));
 }
+
+/**
+ * `permissions` for a chat that only reads (ADR 0271): Claude Code's `plan`
+ * mode, Codex's `read-only` sandbox. Null for a harness without one, which
+ * cannot run read-only.
+ */
+export function readOnlyPermissions(args: {
+  harness: string;
+  permissions: HarnessPermissions;
+}): HarnessPermissions | null {
+  if (args.harness === "claude-code")
+    return { ...args.permissions, permissionMode: "plan" };
+  if (args.harness === "codex")
+    return { ...args.permissions, sandbox: "read-only" };
+  return null;
+}

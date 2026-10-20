@@ -78,8 +78,12 @@ export const SESSION_ACTION_SCHEMAS = {
   spawn: chat({
     ...mutation,
     task: z.string().min(1),
-    routeId: z.string().optional(),
+    /** Omitted: a copy of the chat's own agent (ADR 0271). */
     agentId: z.string().optional(),
+    model: z.string().min(1).optional(),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    readOnly: z.boolean().optional(),
+    delegate: z.boolean().optional(),
     title: z.string().max(500).optional(),
     contextMode: z.enum(["fresh", "inherit"]).optional(),
   }),

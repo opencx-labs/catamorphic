@@ -104,6 +104,7 @@ describe("PGlite migrations", () => {
       "065_imported_sessions.sql",
       "066_placement_waits.sql",
       "067_step_call_state.sql",
+      "068_subsession_grants.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

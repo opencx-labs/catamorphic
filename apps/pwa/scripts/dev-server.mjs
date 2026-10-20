@@ -1157,7 +1157,7 @@ const server = http.createServer(async (req, res) => {
           .filter((child) => child.row.parentSessionId === session.row.id)
           .map((child) => ({
             delegationId: child.row.id,
-            routeId: "fake",
+            grant: "self",
             task: child.row.title ?? "Review",
             contextMode: "fresh",
             allowFurtherDelegation: false,

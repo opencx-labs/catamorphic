@@ -30,7 +30,6 @@ function harness(
   const delivered: unknown[] = [];
   const answered: unknown[] = [];
   const interrupted: string[] = [];
-  const started: unknown[] = [];
   const followed: unknown[] = [];
   const names: Record<string, string> = { p1: "Work", p2: "Website" };
   const access: AssistantAccess = {
@@ -59,13 +58,6 @@ function harness(
     answer: async (projectId, sessionId, input) => {
       answered.push({ projectId, sessionId, ...input });
     },
-    agents: async (projectId) => [
-      { id: "agent", name: "Claude" },
-      { id: `project:${projectId}:reviewer`, name: "PR reviewer" },
-    ],
-    start: async (projectId, assistantSessionId, input) => {
-      started.push({ projectId, assistantSessionId, ...input });
-    },
     follow: async (input) => {
       followed.push(input);
     },
@@ -84,7 +76,7 @@ function harness(
     if (!tool) throw new Error(`no ${name}`);
     return tool.execute(input, context);
   };
-  return { call, delivered, interrupted, started, followed, answered };
+  return { call, delivered, interrupted, followed, answered };
 }
 
 describe("the assistant's session tools", () => {
@@ -172,53 +164,6 @@ describe("the assistant's session tools", () => {
     expect(assistant.delivered).toEqual([
       expect.objectContaining({ sessionId: "build", mode: "steer" }),
     ]);
-  });
-
-  it("starts work with a brief that leads back to the assistant", async () => {
-    const assistant = harness({ p1: [] });
-    await assistant.call("start_session", {
-      request: "Tidy the docs folder",
-      title: "Tidy the docs",
-    });
-    const [start] = assistant.started as {
-      projectId: string;
-      assistantSessionId: string;
-      title: string;
-      task: string;
-    }[];
-    expect(start).toMatchObject({
-      projectId: "p1",
-      assistantSessionId: ASSISTANT,
-      title: "Tidy the docs",
-    });
-    // The relay, where to read what was said, and how to reach the person.
-    expect(start?.task).toContain("Tidy the docs folder");
-    expect(start?.task).toContain(`read_project_session`);
-    expect(start?.task).toContain(
-      `send_project_session_message (session_id ${ASSISTANT}, delivery_mode steer)`,
-    );
-    expect(start?.task).toContain('"Tidy the docs:"');
-  });
-
-  it("starts work on an agent the person names", async () => {
-    const assistant = harness({ p1: [] });
-    await assistant.call("start_session", {
-      request: "Review the open pull request",
-      title: "Review the PR",
-      agent: "the reviewer agent",
-    });
-    expect(assistant.started).toEqual([
-      expect.objectContaining({ agentId: "project:p1:reviewer" }),
-    ]);
-    await expect(
-      assistant.call("start_session", {
-        request: "Write the release notes",
-        title: "Release notes",
-        agent: "writer",
-      }),
-    ).rejects.toThrow(
-      "No agent called writer. The agents here: Claude, PR reviewer.",
-    );
   });
 
   it("follows a chat's notes, and stops", async () => {

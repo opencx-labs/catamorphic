@@ -47,7 +47,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 |---|---|
 | `workspace_overview`, `read_tab`, `open_surface`, `update_todo_list` | Eager, bounded workspace context, reading what is on screen, and visible handoff/progress |
 | `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing; a message steers by default (read at the other agent's next step, or a turn when it is idle), and a subagent's to its parent always does (ADR 0250) |
-| `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
+| `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202). A copy of the agent unless `agent` names another, on the `model` and `effort` its grants allow; `read_only` (where the harness has a read-only mode) and `delegate: false` need no grant (ADR 0271) |
 | `interrupt_subsession` | Deferred, stops a direct child |
 | `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0226) |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
@@ -189,6 +189,19 @@ subagents. The five tools cost about 4.7 KB of schemas; the eager budget is
 13.5 KB. Discovery now ranks by matched words with name matches counting double,
 `requestId` is optional, and invalid input returns the capability's schema.
 
+## Subagents on the model the work needs (ADR 0271)
+
+`spawn_subsession` took a route id, and its prompt listed routes as
+`same-agent: <agent id>`, so agents passed the agent id: 38 of 67 spawns over
+four days were refused. The tool now names an agent (none: a copy of yourself)
+and the child's `model`, `effort`, `read_only` and `delegate`. Grants in the
+agent's `delegation.agents` decide what it may set (a grant naming the agent
+decides before `*`), the agent's harness catalog decides what exists, and
+refusals list the choices. A copy starts on the parent chat's model and effort
+as a pair. A read-only chat runs in its harness's read-only mode, keeps only
+the host tools marked `readOnly`, and is `contained` for capabilities,
+connections and connectors. The new fields raised the eager budget to 14 KB.
+
 ## The assistant and voice (ADR 0216)
 
 The dock's assistant runs on `work-assistant:<agent id>` (Work's built-in
@@ -196,23 +209,28 @@ assistant: the person's default agent with no persona, at its harness's
 default model) or `assistant:<agent id>` (an agent the person chose, as
 configured), each with its base agent's full surface above. Six direct
 tools (`main/server/assistant-tools.ts`) take the place of the
-project-only session tools (`spawn_subsession`, `wait_for_subsessions`,
-`interrupt_subsession`, `list_project_sessions`, `read_project_session`,
-`send_project_session_message`): `start_session`, plus `list_sessions`,
-`read_session`, `message_session`, `follow_session`, `answer_question` and
-`stop_session`,
+project-only session tools (`list_project_sessions`, `read_project_session`,
+`send_project_session_message`, `interrupt_subsession`,
+`wait_for_subsessions`): `list_sessions`, `read_session`, `message_session`,
+`follow_session`, `answer_question` and `stop_session`,
 which reach the person's chats in every project of the profile, the ones
-they started included, and never incognito ones. Its delegation routes
-target the base agent (`work`) and any agent the person names (`named`).
+they started included, and never incognito ones. It never waits on a
+session: the person may be talking.
 Its host instructions describe the tools (`ASSISTANT_INSTRUCTIONS` in
 `main/voice/guidance.ts`).
 
-`start_session` takes the person's request in a sentence or two, and an
-agent's name when they give one, and wraps the request in a brief
-(`assistantTaskBrief`): the session reads the assistant's chat with
-`read_project_session` for what was actually said, and reaches the person
-by sending it a message with `send_project_session_message`, starting with
-its title. The assistant follows the sessions it starts, and others with
+It starts sessions with `spawn_subsession`, like any agent (ADR 0271). Its
+copies run as its base agent (`copiesAs`), without its tools, on the
+assistant chat's model and effort; its grants admit them and any agent the
+person names, on any model and effort, so a quick assistant hands hard work
+to a stronger model. Named by any agent, the assistant starts as its base
+agent too, never a second assistant. Its `spawn_subsession` is Work's, wrapped
+(`assistantWorkspaceTools` in `main/server/assistant-agent.ts`): it puts the
+task in a brief (`assistantSubsession`), and follows the session. The session
+reads the assistant's chat with `read_project_session` for what was
+actually said, and reaches the person by sending it a message with
+`send_project_session_message`, starting with its title (the task's first
+words when it has none); a read-only session says everything in its result. The assistant follows the sessions it starts, and others with
 `follow_session`: their notes (messages with more work after them in the
 turn) reach it as one task notification a few at a time, shown as one row
 that opens to the notes and links to that chat, and a followed chat's result
@@ -222,8 +240,8 @@ waits on reaches it at once; `answer_question` answers a question with what
 the person said, as the person, while approvals stay theirs to give in that
 chat. `read_session` lists what a chat waits on. The assistant's chat is kept local like an
 incognito chat, so it is never mirrored and no other chat reads it; its
-playbook leaves out subsessions and the project-only chat tools, which it
-neither has nor discovers. It messages a chat the person
+playbook leaves out the project-only chat tools, which it neither has nor
+discovers. It messages a chat the person
 created, and relays a session's question and the answer
 (`e2e/voice-agent.e2e.ts`).
 

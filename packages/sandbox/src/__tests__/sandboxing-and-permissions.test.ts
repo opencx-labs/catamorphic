@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { harnessPermissionIssues } from "../coding-agent/harness-permissions.js";
+import {
+  harnessPermissionIssues,
+  readOnlyPermissions,
+} from "../coding-agent/harness-permissions.js";
 import {
   SANDBOXING_LEVELS,
   sandboxingAllows,
@@ -85,5 +88,26 @@ describe("harness permissions", () => {
           "A builtin agent has no harness permission settings; remove 'approvals'",
       },
     ]);
+  });
+});
+
+describe("read-only chats (ADR 0271)", () => {
+  it("run in each harness's own read-only mode, keeping its other settings", () => {
+    expect(
+      readOnlyPermissions({
+        harness: "claude-code",
+        permissions: { permissionMode: "bypassPermissions" },
+      }),
+    ).toEqual({ permissionMode: "plan" });
+    expect(
+      readOnlyPermissions({
+        harness: "codex",
+        permissions: { sandbox: "danger-full-access", approvals: "never" },
+      }),
+    ).toEqual({ sandbox: "read-only", approvals: "never" });
+    // A harness without one cannot run read-only.
+    expect(
+      readOnlyPermissions({ harness: "ai-sdk", permissions: {} }),
+    ).toBeNull();
   });
 });

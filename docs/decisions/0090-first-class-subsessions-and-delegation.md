@@ -1,6 +1,6 @@
 # 0090: First-class subsessions and explicit delegation grants
 
-- **Status:** Accepted (subsessions are sessions with a parent, amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md); results steer into a working parent, amended by [0202](0202-agents-see-the-browser-subagents-and-their-path.md))
+- **Status:** Accepted (subsessions are sessions with a parent, amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md); results steer into a working parent, amended by [0202](0202-agents-see-the-browser-subagents-and-their-path.md); agents name an agent and its settings and grants replace routes, amended by [0271](0271-agents-delegate-by-naming-an-agent-and-its-settings.md))
 - **Date:** 2026-09-04
 - **Builds on:** 0038, 0050, 0054, 0056, 0067, 0074, and 0087
 
