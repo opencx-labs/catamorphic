@@ -17,8 +17,8 @@ with no stronger or cheaper copy and no read-only reviewer.
 `task`, `agent` (omitted: a copy of the caller), `model`, `effort`,
 `read_only`, `delegate`, `context_mode` and `title`. No route id. The
 workflow `spawn` action and the server API take the same, as `agentId`,
-`readOnly`. The voice assistant's `start_session` takes `model` and `effort`
-(amending 0216; its routes become grants).
+`readOnly`. The voice assistant starts sessions with it too: its own
+`start_session` is gone (amending 0216).
 
 **Grants decide.** `delegation.agents` lists grants: `agent` (`self`, an id,
 `project:<slug>`, or `*`, whose sandboxing ceiling stands), `model` (`any`,
@@ -39,6 +39,17 @@ a new model drops the old effort. Another agent starts on its own defaults.
 A grant's list bounds what the child runs on: an unlisted inherited or
 default setting gives way to the first listed. `at-most-parent` caps the
 effort it runs on at the parent's, when the parent's is known.
+
+**A copy of a layered agent runs as the agent beneath.** A registered
+agent may name `copiesAs`: its copies, and a spawn naming itself, run as
+that agent. The voice assistant is one of the person's agents with
+assistant tools, so a copy of it is that agent without them, on the
+assistant chat's model and effort: never a second assistant. What is the
+assistant's alone stays in Work's spawn path: a child it starts is handed
+a brief that leads back to it (where the person's words are, how to reach
+them, a reply that reads aloud), and it follows the child's notes. Spoken
+names are the model's to match: the menu names every agent it may start,
+the project's committed agents included.
 
 **Narrowing needs no grant.** `delegate: false` and `read_only`. A read-only
 chat runs in its harness's read-only mode (Claude Code `plan`, without a
@@ -63,6 +74,9 @@ version it resolves to.
   one choice, and still no settings.
 - **Children at or below the parent by default.** Defeats delegating hard
   work to a stronger model; it stays one setting away.
+- **A voice tool of its own.** `start_session` was `spawn_subsession`
+  with a brief, a different default and fuzzy names; it also lacked
+  read-only. The differences belong to the parent, not the tool.
 - **Read-only as an agent with `contained` sandboxing.** Needs a definition
   per reviewer; the session-level flag reuses `contained` for what Work
   enforces and adds only the harness's own mode.

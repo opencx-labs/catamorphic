@@ -48,7 +48,6 @@ const ASSISTANT_SESSION_TOOLS = [
   "list_sessions",
   "message_session",
   "read_session",
-  "start_session",
   "stop_session",
 ];
 
@@ -413,6 +412,8 @@ describe("voice", () => {
     expect(tools).toEqual(
       expect.arrayContaining([
         ...ASSISTANT_SESSION_TOOLS,
+        // It starts sessions like any agent (ADR 0270).
+        "spawn_subsession",
         "open_surface",
         // What was on screen as the person spoke, at once (ADR 0265).
         "screen_when_spoken",
@@ -420,7 +421,7 @@ describe("voice", () => {
         "update_todo_list",
       ]),
     );
-    expect(tools).not.toContain("spawn_subsession");
+    expect(tools).not.toContain("wait_for_subsessions");
     expect(second.sessionId).not.toBe(first.sessionId);
     expect(second.projectId).toBe(first.projectId);
     await run(`mic().click(); return true;`);

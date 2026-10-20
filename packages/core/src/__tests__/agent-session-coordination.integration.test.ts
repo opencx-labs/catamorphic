@@ -352,7 +352,10 @@ describe("agent session coordination", () => {
     projects = new ProjectsService(db, projectManager);
     const registeredAgent = (
       id: string,
-      input: Pick<RegisteredCodingAgent, "sandboxing" | "delegation"> = {},
+      input: Pick<
+        RegisteredCodingAgent,
+        "sandboxing" | "delegation" | "copiesAs"
+      > = {},
     ): RegisteredCodingAgent => ({
       id,
       harness: {
@@ -383,6 +386,19 @@ describe("agent session coordination", () => {
         registeredAgent("small", { sandboxing: "contained" }),
         registeredAgent("builder", { sandboxing: "publish" }),
         registeredAgent("publisher", { sandboxing: "publish" }),
+        // Layered on the worker, like a voice assistant: its copies run
+        // as the worker.
+        registeredAgent("voice", {
+          copiesAs: "worker",
+          delegation: {
+            enabled: true,
+            maxConcurrentChildren: 10,
+            agents: [
+              { agent: "self", model: "any", effort: "any", delegate: true },
+              { agent: "*", model: "any", effort: "any", delegate: true },
+            ],
+          },
+        }),
         registeredAgent("orchestrator", {
           sandboxing: "propose",
           delegation: {
@@ -1808,6 +1824,45 @@ describe("agent session coordination", () => {
     // A fork of a read-only chat reads only too.
     const fork = await sessions.fork(identity, project.id, look.session.id);
     expect(fork.readOnly).toBe(true);
+  });
+
+  it("starts a copy of an agent layered on another as that agent, on the parent chat's settings", async () => {
+    const project = await projects.create(identity, {
+      name: "Layered copies",
+    });
+    const parent = await sessions.create(identity, project.id, {
+      agentId: "voice",
+      model: "opus",
+      effort: "high",
+    });
+    const copy = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Do the work" },
+    );
+    expect(copy.grant).toBe("self");
+    expect(copy.session).toMatchObject({
+      agentId: "worker",
+      model: "opus",
+      modelEffort: "high",
+    });
+    // Naming itself is a copy too: never a second layered chat.
+    const named = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { agentId: "voice", task: "Again" },
+    );
+    expect(named.session.agentId).toBe("worker");
+    const { system_prompt } = await db
+      .selectFrom("agent_sessions")
+      .select("system_prompt")
+      .where("id", "=", parent.id)
+      .executeTakeFirstOrThrow();
+    expect(system_prompt).toContain(
+      "- A copy of yourself (leave agent out), which runs as agent worker:",
+    );
   });
 
   it("never waits long on a harness catalog that does not answer", async () => {

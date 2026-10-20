@@ -209,25 +209,27 @@ assistant: the person's default agent with no persona, at its harness's
 default model) or `assistant:<agent id>` (an agent the person chose, as
 configured), each with its base agent's full surface above. Six direct
 tools (`main/server/assistant-tools.ts`) take the place of the
-project-only session tools (`spawn_subsession`, `wait_for_subsessions`,
-`interrupt_subsession`, `list_project_sessions`, `read_project_session`,
-`send_project_session_message`): `start_session`, plus `list_sessions`,
-`read_session`, `message_session`, `follow_session`, `answer_question` and
-`stop_session`,
+project-only session tools (`list_project_sessions`, `read_project_session`,
+`send_project_session_message`, `interrupt_subsession`,
+`wait_for_subsessions`): `list_sessions`, `read_session`, `message_session`,
+`follow_session`, `answer_question` and `stop_session`,
 which reach the person's chats in every project of the profile, the ones
-they started included, and never incognito ones. Its delegation grants
-admit the base agent and any agent the person names, on any model and effort
-(ADR 0270): `start_session` takes `model` and `effort` for work that needs a
-stronger or quicker model.
+they started included, and never incognito ones. It never waits on a
+session: the person may be talking.
 Its host instructions describe the tools (`ASSISTANT_INSTRUCTIONS` in
 `main/voice/guidance.ts`).
 
-`start_session` takes the person's request in a sentence or two, and an
-agent's name when they give one, and wraps the request in a brief
-(`assistantTaskBrief`): the session reads the assistant's chat with
-`read_project_session` for what was actually said, and reaches the person
-by sending it a message with `send_project_session_message`, starting with
-its title. The assistant follows the sessions it starts, and others with
+It starts sessions with `spawn_subsession`, like any agent (ADR 0270). Its
+copies run as its base agent (`copiesAs`), without its tools, on the
+assistant chat's model and effort; its grants admit them and any agent the
+person names, on any model and effort, so a quick assistant hands hard work
+to a stronger model. Work's spawn path (`spawn` in `main/server/boot.ts`)
+wraps the task of a session the assistant starts in a brief
+(`assistantSubsession` in `main/server/assistant-agent.ts`): the session
+reads the assistant's chat with `read_project_session` for what was
+actually said, and reaches the person by sending it a message with
+`send_project_session_message`, starting with its title (the task's first
+words when it has none). The assistant follows the sessions it starts, and others with
 `follow_session`: their notes (messages with more work after them in the
 turn) reach it as one task notification a few at a time, shown as one row
 that opens to the notes and links to that chat, and a followed chat's result

@@ -5,8 +5,9 @@ import {
   rosterAgentId,
 } from "../../shared/voice.js";
 import {
-  assistantDelegation,
+  ASSISTANT_DELEGATION,
   assistantHostTools,
+  assistantSubsession,
   inThePersonsWindow,
   withoutReplacedTools,
 } from "./assistant-agent.js";
@@ -33,23 +34,51 @@ describe("the assistant", () => {
     expect(rosterAgentId("project:p:s")).toBe("project:p:s");
   });
 
-  it("starts its sessions on the base agent, or on one the person names, on any model", () => {
-    expect(assistantDelegation("a1").agents).toEqual([
-      { agent: "a1", model: "any", effort: "any", delegate: true },
+  it("starts copies of itself, which run as its base agent, or one the person names, on any model", () => {
+    expect(ASSISTANT_DELEGATION.agents).toEqual([
+      { agent: "self", model: "any", effort: "any", delegate: true },
       { agent: "*", model: "any", effort: "any", delegate: true },
     ]);
   });
 
-  it("discovers none of the session tools it replaces", () => {
+  it("hands its sessions a brief that leads back to it, under a title", () => {
+    const child = assistantSubsession(
+      { task: "Tidy the docs folder", title: "Tidy the docs", model: "opus" },
+      "assistant-chat",
+    );
+    expect(child).toMatchObject({ title: "Tidy the docs", model: "opus" });
+    // The relay, where to read what was said, and how to reach the person.
+    expect(child.task).toContain("Tidy the docs folder");
+    expect(child.task).toContain("read_project_session");
+    expect(child.task).toContain(
+      "send_project_session_message (session_id assistant-chat, delivery_mode steer)",
+    );
+    expect(child.task).toContain('"Tidy the docs:"');
+    // Untitled, it is named by its task's first words.
+    const untitled = assistantSubsession(
+      {
+        task: "Find out why the nightly deploy failed and   fix it if it is ours to fix",
+      },
+      "assistant-chat",
+    );
+    expect(untitled.title).toBe(
+      "Find out why the nightly deploy failed and fix it if it is…",
+    );
+    expect(untitled.task).toContain(`"${untitled.title}:"`);
+  });
+
+  it("discovers none of the session tools it replaces, and starts sessions like any agent", () => {
     expect(
       withoutReplacedTools([
         { name: "list_project_sessions" },
         { name: "read_project_session" },
         { name: "send_project_session_message" },
         { name: "interrupt_subsession" },
+        { name: "wait_for_subsessions" },
+        { name: "spawn_subsession" },
         { name: "type_in_terminal" },
       ]).map((tool) => tool.name),
-    ).toEqual(["type_in_terminal"]);
+    ).toEqual(["spawn_subsession", "type_in_terminal"]);
   });
 
   it("keeps the base agent's tools, with its own session tools in place of Work's", () => {
@@ -66,9 +95,9 @@ describe("the assistant", () => {
           tool("spawn_subsession"),
           tool("read_project_session"),
         ],
-        [tool("start_session")],
+        [tool("list_sessions")],
       ).map((each) => each.name),
-    ).toEqual(["open_surface", "start_session"]);
+    ).toEqual(["open_surface", "spawn_subsession", "list_sessions"]);
   });
 
   describe("its window tools", () => {

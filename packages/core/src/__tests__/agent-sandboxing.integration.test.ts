@@ -104,6 +104,17 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
           harnessPermissions: { permissionMode: "bypassPermissions" },
         }),
       );
+      // May start any agent no wider than itself.
+      await repo.writeFile(
+        ".work/agents/lead.json",
+        JSON.stringify({
+          version: 1,
+          name: "Lead",
+          kind: "builtin",
+          sandboxing: "propose",
+          delegation: { agents: [{ agent: "*" }] },
+        }),
+      );
       await repo.commit("Add agents", {
         name: "root",
         email: "root@example.com",
@@ -115,11 +126,16 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       defaultAgentId: () => undefined,
       get: () => undefined,
       list: () => [],
-      // The host declares neither sandboxing nor policies: core applies both.
-      projectAgent: ({ id }) => ({
+      // The host declares neither sandboxing nor policies: core applies
+      // both. Delegation is the host's to carry, as Work's does.
+      projectAgent: ({ id, entry }) => ({
         id,
+        ...(entry.definition?.name ? { name: entry.definition.name } : {}),
         harness: { placement: "host", adapter },
         topology: "native",
+        ...(entry.definition?.delegation
+          ? { delegation: entry.definition.delegation }
+          : {}),
       }),
     };
     const executionAllocations = new ExecutionAllocationsService(db);
@@ -225,6 +241,26 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
     expect(
       await sessions.agentSandboxing({ projectId, sessionId: session.id }),
     ).toBe("publish");
+  });
+
+  it("lists the project's agents by name to an agent that may start any", async () => {
+    const lead = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:lead`,
+    });
+    const refusal = await sessions
+      .createSubsession(root, projectId, lead.id, {
+        agentId: "nobody",
+        task: "Look",
+      })
+      .then(
+        () => "",
+        (error: unknown) => String(error),
+      );
+    expect(refusal).toContain("There is no agent nobody you may start.");
+    expect(refusal).toContain(`project:${projectId}:reviewer (Reviewer)`);
+    expect(refusal).toContain(`project:${projectId}:editor (Editor)`);
+    // Wider than the lead: not among its choices.
+    expect(refusal).not.toContain("Publisher");
   });
 
   it("refuses capabilities above the agent's sandboxing with a readable reason", async () => {

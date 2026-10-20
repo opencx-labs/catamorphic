@@ -6039,7 +6039,7 @@ export class AgentSessionsService {
       input.readOnly && !input.systemPrompt?.includes(READ_ONLY_NOTE)
         ? READ_ONLY_NOTE
         : null,
-      this.delegationPrompt(
+      await this.delegationPrompt(
         identity,
         projectId,
         agent,
@@ -8912,7 +8912,12 @@ export class AgentSessionsService {
         : named.match(/^project:([^:]+)$/)
           ? grantAgentId({ agent: named }, projectId)
           : named;
-    const targetAgentId = requested ?? sourceAgentId;
+    // A copy of an agent layered on another runs as that one (ADR 0270).
+    const copyAgentId = sourceAgent.copiesAs ?? sourceAgentId;
+    const targetAgentId =
+      requested === undefined || requested === sourceAgentId
+        ? copyAgentId
+        : requested;
     const choices = () =>
       this.delegationChoices(identity, projectId, sourceAgent, "Your choices:");
     let targetAgent: RegisteredCodingAgent;
@@ -8925,11 +8930,11 @@ export class AgentSessionsService {
         error instanceof AccessDeniedError
       )
         throw new AgentDelegationDeniedError(
-          `There is no agent ${targetAgentId} you may start. ${choices()}`,
+          `There is no agent ${targetAgentId} you may start. ${await choices()}`,
         );
       throw error;
     }
-    const copy = targetAgentId === sourceAgentId;
+    const copy = targetAgentId === copyAgentId;
     // The harness's own catalog, only when the parent names a setting.
     const catalog =
       input.model || input.effort
@@ -8955,7 +8960,7 @@ export class AgentSessionsService {
       effortOf(source.model_effort) ?? sourceAgent.defaults?.effort;
     const choice = chooseGrant(policy, {
       targetAgentId,
-      sourceAgentId,
+      copy,
       projectId,
       ...(model ? { model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
@@ -8966,7 +8971,9 @@ export class AgentSessionsService {
       modelNames,
     });
     if ("refusal" in choice)
-      throw new AgentDelegationDeniedError(`${choice.refusal} ${choices()}`);
+      throw new AgentDelegationDeniedError(
+        `${choice.refusal} ${await choices()}`,
+      );
     const { grant } = choice;
     const settings = childSettings({
       grant,
@@ -11364,12 +11371,12 @@ export class AgentSessionsService {
     return agent;
   }
 
-  private delegationPrompt(
+  private async delegationPrompt(
     identity: Identity,
     projectId: string,
     sourceAgent: RegisteredCodingAgent,
     allowFurtherDelegation: boolean | undefined,
-  ): string {
+  ): Promise<string> {
     // Only an agent this host gives spawn_subsession hears about it: one
     // without it (a server's agent keeps its harness's own subagents)
     // would be pointed at a tool it does not have.
@@ -11388,7 +11395,7 @@ export class AgentSessionsService {
     }
     return [
       `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
-      this.delegationChoices(identity, projectId, sourceAgent),
+      await this.delegationChoices(identity, projectId, sourceAgent),
     ].join("\n");
   }
 
@@ -11417,14 +11424,23 @@ export class AgentSessionsService {
   }
 
   /** Whom the source agent may start and with what, as it reads it. */
-  private delegationChoices(
+  private async delegationChoices(
     identity: Identity,
     projectId: string,
     sourceAgent: RegisteredCodingAgent,
     header = "You may start:",
-  ): string {
+  ): Promise<string> {
     const policy = delegationPolicy(sourceAgent.delegation);
-    const accessible = this.codingAgents.list().filter((candidate) => {
+    const accessible = [
+      ...this.codingAgents.list(),
+      // The project's own agents are listed only where a grant can reach
+      // them, by `*` or by name, with their names.
+      ...(policy.agents.some(
+        (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
+      )
+        ? await this.committedAgents(projectId)
+        : []),
+    ].filter((candidate) => {
       try {
         this.assertAgentAccess(identity, projectId, candidate.id);
         return true;
@@ -11437,6 +11453,7 @@ export class AgentSessionsService {
       ...delegationMenu({
         policy,
         projectId,
+        ...(sourceAgent.copiesAs ? { copiesAs: sourceAgent.copiesAs } : {}),
         wildcardAgents: accessible
           .filter(
             (candidate) =>
@@ -11451,6 +11468,48 @@ export class AgentSessionsService {
           accessible.find((candidate) => candidate.id === agentId)?.name,
       }),
     ].join("\n");
+  }
+
+  /**
+   * The project's committed agents that resolve, for the delegation menu:
+   * one that does not is left out, never failing the prompt.
+   */
+  private async committedAgents(
+    projectId: string,
+  ): Promise<RegisteredCodingAgent[]> {
+    const projectAgent = this.codingAgents.projectAgent?.bind(
+      this.codingAgents,
+    );
+    if (!projectAgent) return [];
+    try {
+      const project = await this.db
+        .selectFrom("projects")
+        .select("tenant_id")
+        .where("id", "=", projectId)
+        .executeTakeFirstOrThrow();
+      const entries = await new AgentDefinitionsService(
+        this.db,
+        this.projectManager,
+      ).listCommitted({ tenantId: project.tenant_id, projectId });
+      const resolved = await Promise.all(
+        entries.map(async (entry) => {
+          const { definition } = entry;
+          if (!definition) return null;
+          try {
+            const agent = await projectAgent({
+              id: formatProjectAgentId(projectId, entry.slug),
+              entry,
+            });
+            return agent ? withDefinitionPolicy(agent, definition) : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return resolved.filter((agent) => agent !== null);
+    } catch {
+      return [];
+    }
   }
 
   /**

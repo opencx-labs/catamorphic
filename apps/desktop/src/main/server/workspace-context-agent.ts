@@ -283,14 +283,13 @@ export function workPlaybook({
 }: {
   hasTools: boolean;
   /**
-   * The assistant (ADR 0216) has its own session tools in place of
-   * subsessions and Work's project-only chat tools; its instructions say so.
+   * The assistant (ADR 0216) has its own session tools in place of Work's
+   * project-only chat tools; its instructions say so. It starts
+   * subsessions like any agent (ADR 0270).
    */
   assistant?: boolean;
 }): string {
-  const chats = assistant
-    ? "Type into terminals, build apps and connect services through discover_capabilities"
-    : "Subsessions are your subagents: use spawn_subsession wherever a skill or habit calls for a subagent or Task tool. Type into terminals, reach other chats, build apps and connect services through discover_capabilities";
+  const chats = `Subsessions are your subagents: use spawn_subsession wherever a skill or habit calls for a subagent or Task tool. Type into terminals, ${assistant ? "" : "reach other chats, "}build apps and connect services through discover_capabilities`;
   const tools = hasTools
     ? `
 

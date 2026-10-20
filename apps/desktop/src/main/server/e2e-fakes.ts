@@ -998,26 +998,27 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     return;
   }
 
-  // The assistant handing work to sessions of its own.
-  const delegations: [string, { request: string; title: string }, string][] = [
+  // The assistant handing work to sessions of its own, with the tool any
+  // agent starts subsessions with (ADR 0270).
+  const delegations: [string, { task: string; title: string }, string][] = [
     [
       "start a session to tidy the docs",
-      { request: "Tidy the docs", title: "Tidy the docs" },
+      { task: "Tidy the docs", title: "Tidy the docs" },
       "It's started. I'll tell you when it's done.",
     ],
     [
       "start a session that reports as it goes",
-      { request: "Report as you go", title: "Report" },
+      { task: "Report as you go", title: "Report" },
       "Started. I'll pass on what it finds.",
     ],
     [
       "start a session that asks me to choose a layout",
-      { request: "Choose a layout with the person", title: "Layout" },
+      { task: "Choose a layout with the person", title: "Layout" },
       "Started. It will ask you which layout.",
     ],
     [
       "start a session that asks me something",
-      { request: "Ask the person which pages to keep", title: "Docs pages" },
+      { task: "Ask the person which pages to keep", title: "Docs pages" },
       "Started. It may have a question for you.",
     ],
   ];
@@ -1025,8 +1026,8 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   if (delegation) {
     const [, input, reply] = delegation;
     yield { type: "text", content: "Starting a session for that." };
-    yield { type: "tool_call", toolName: "start_session", toolInput: input };
-    await turn.tool("start_session", input);
+    yield { type: "tool_call", toolName: "spawn_subsession", toolInput: input };
+    await turn.tool("spawn_subsession", input);
     yield { type: "text", content: reply };
     return;
   }

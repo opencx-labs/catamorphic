@@ -21,7 +21,7 @@ const request = (
   overrides: Partial<DelegationRequest> = {},
 ): DelegationRequest => ({
   targetAgentId: "worker",
-  sourceAgentId: "worker",
+  copy: true,
   projectId,
   wildcardAdmits: true,
   ...overrides,
@@ -63,7 +63,7 @@ describe("delegation grants (ADR 0270)", () => {
     expect(
       chooseGrant(
         DEFAULT_DELEGATION_POLICY,
-        request({ targetAgentId: "reviewer" }),
+        request({ targetAgentId: "reviewer", copy: false }),
       ),
     ).toEqual({ refusal: "You may not start agent reviewer." });
   });
@@ -79,27 +79,37 @@ describe("delegation grants (ADR 0270)", () => {
     expect(
       chooseGrant(
         grants,
-        request({ targetAgentId: reviewer, model: "sonnet" }),
+        request({ targetAgentId: reviewer, copy: false, model: "sonnet" }),
       ),
     ).toMatchObject({ grant: { model: ["sonnet"] } });
     expect(
-      chooseGrant(grants, request({ targetAgentId: reviewer, model: "opus" })),
+      chooseGrant(
+        grants,
+        request({ targetAgentId: reviewer, copy: false, model: "opus" }),
+      ),
     ).toMatchObject({ grant: { model: "any", delegate: false } });
     // `*` never lifts the limits set for an agent it names.
     expect(chooseGrant(grants, request({ model: "opus" }))).toEqual({
       refusal: "You may start a copy of yourself, but its model is fixed.",
     });
     expect(
-      chooseGrant(grants, request({ targetAgentId: "builder" })),
+      chooseGrant(grants, request({ targetAgentId: "builder", copy: false })),
     ).toMatchObject({ grant: { agent: "*" } });
     expect(
       chooseGrant(
         grants,
-        request({ targetAgentId: "builder", wildcardAdmits: false }),
+        request({
+          targetAgentId: "builder",
+          copy: false,
+          wildcardAdmits: false,
+        }),
       ),
     ).toEqual({ refusal: "You may not start agent builder." });
     expect(
-      chooseGrant(grants, request({ targetAgentId: "builder", model: "opus" })),
+      chooseGrant(
+        grants,
+        request({ targetAgentId: "builder", copy: false, model: "opus" }),
+      ),
     ).toEqual({
       refusal: "You may start agent builder, but its model is fixed.",
     });
@@ -365,6 +375,18 @@ describe("delegation grants (ADR 0270)", () => {
       }),
     ).toEqual([
       "- Any of: no agents right now: any model its harness offers, any effort (low, medium, high, xhigh, max)",
+    ]);
+    // An agent layered on another names the agent its copies run as.
+    expect(
+      delegationMenu({
+        policy: DEFAULT_DELEGATION_POLICY,
+        projectId,
+        copiesAs: "a1",
+        wildcardAgents: [],
+        nameOf: (id) => (id === "a1" ? "Claude" : undefined),
+      }),
+    ).toEqual([
+      "- A copy of yourself (leave agent out), which runs as agent a1 (Claude): any model its harness offers, any effort (low, medium, high, xhigh, max)",
     ]);
   });
 });

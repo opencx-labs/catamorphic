@@ -3,30 +3,78 @@ import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
 
 /**
- * Sessions the assistant starts run on its base agent, or on any agent the
- * person names, on any model and effort their harness offers (ADR 0270): a
- * quick voice assistant hands hard work to a stronger model.
+ * Sessions the assistant starts with spawn_subsession, like any agent's
+ * (ADR 0270): copies of it, which run as the agent it is built on without
+ * its tools, or any agent the person names, on any model and effort their
+ * harness offers: a quick voice assistant hands hard work to a stronger
+ * model.
  */
-export function assistantDelegation(
-  baseAgentId: string,
-): AgentDelegationPolicy {
+export const ASSISTANT_DELEGATION: AgentDelegationPolicy = {
+  enabled: true,
+  maxConcurrentChildren: 10,
+  agents: [
+    { agent: "self", model: "any", effort: "any", delegate: true },
+    { agent: "*", model: "any", effort: "any", delegate: true },
+  ],
+};
+
+/**
+ * What a session the assistant starts reads first (ADR 0216): where the
+ * request came from, and how to reach the person while they are away from
+ * the screen.
+ */
+export function assistantTaskBrief(input: {
+  assistantSessionId: string;
+  title: string;
+  request: string;
+}): string {
+  return `The person asked for this through their assistant in Work, which relayed it as:
+
+${input.request}
+
+The relay is short and may be slightly off. For what the person actually said, read the assistant's chat, session ${input.assistantSessionId} in this project, with read_project_session.
+
+The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode steer), starting with "${input.title}:". It may be read aloud to them, where a sentence or two of plain words comes across best. Their answer comes back here; keep going on whatever does not depend on it.
+
+Your final reply goes back to the assistant, which passes it on to the person: a sentence or two up front that sum it up are what it will use.`;
+}
+
+/** The longest title a session the assistant starts gets from its task. */
+const TITLE_CHARS = 60;
+
+/**
+ * A subsession the assistant starts (ADR 0216, 0270): its task in the
+ * brief that leads back to the assistant, under the title its messages to
+ * the person start with.
+ */
+export function assistantSubsession<T extends { task: string; title?: string }>(
+  input: T,
+  assistantSessionId: string,
+): T & { title: string } {
+  const task = input.task.replace(/\s+/g, " ").trim();
+  const title =
+    input.title?.trim() ||
+    (task.length > TITLE_CHARS
+      ? `${task.slice(0, TITLE_CHARS - 1).trimEnd()}…`
+      : task);
   return {
-    enabled: true,
-    maxConcurrentChildren: 10,
-    agents: [
-      { agent: baseAgentId, model: "any", effort: "any", delegate: true },
-      { agent: "*", model: "any", effort: "any", delegate: true },
-    ],
+    ...input,
+    title,
+    task: assistantTaskBrief({
+      assistantSessionId,
+      title,
+      request: input.task,
+    }),
   };
 }
 
 /**
  * Work's own session tools reach this project's sessions only; the
- * assistant's reach the person's chats in every project, and its sessions
- * report back through it. One set of each, so the assistant has its own.
+ * assistant's reach the person's chats in every project. One set of each,
+ * so the assistant has its own. It never waits on a session it started:
+ * the person may be talking, and the result comes to it anyway.
  */
 const REPLACED = new Set([
-  "spawn_subsession",
   "wait_for_subsessions",
   "interrupt_subsession",
   "list_project_sessions",

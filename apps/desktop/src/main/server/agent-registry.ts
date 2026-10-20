@@ -74,8 +74,8 @@ import {
 } from "../voice/guidance.js";
 import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
+  ASSISTANT_DELEGATION,
   ASSISTANT_EAGER,
-  assistantDelegation,
   assistantHostTools,
   inThePersonsWindow,
   withoutReplacedTools,
@@ -739,7 +739,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // assistant's tools and delegation grants: as configured, or as Work's
     // built-in assistant, with no instructions of its own and the
     // harness's default model: Claude Code's and Codex's own, while the
-    // built-in agent, which has none, keeps the model it names.
+    // built-in agent, which has none, keeps the model it names. A copy of
+    // it runs as that agent, without the assistant's tools (ADR 0270).
     const assistant = parseAssistantAgentId(id);
     const found = this.findConfig(assistant?.agentId ?? id);
     if (!found) return undefined;
@@ -753,12 +754,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : found.config;
     const built = this.build({ config, profileId, assistant: !!assistant });
     if (!built) return undefined;
-    const delegation = assistant
-      ? assistantDelegation(assistant.agentId)
-      : config.delegation;
+    const delegation = assistant ? ASSISTANT_DELEGATION : config.delegation;
     return {
       id,
       name: config.name,
+      ...(assistant ? { copiesAs: assistant.agentId } : {}),
       ...built,
       topology: "native",
       sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
