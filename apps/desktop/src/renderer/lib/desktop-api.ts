@@ -198,7 +198,7 @@ export type AgentSkillsSetting =
   | { mode: "all" }
   | { mode: "picked"; names: string[] };
 
-/** Who an agent may start, and what it may choose for them (ADR 0270). */
+/** Who an agent may start, and what it may choose for them (ADR 0271). */
 export interface AgentDelegationGrant {
   /** `self`, an agent id, `project:<slug>`, or `*`. */
   agent: string;

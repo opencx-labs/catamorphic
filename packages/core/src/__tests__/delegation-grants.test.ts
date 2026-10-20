@@ -47,7 +47,7 @@ const modelNames = (model: string): string[] => {
     : [model];
 };
 
-describe("delegation grants (ADR 0270)", () => {
+describe("delegation grants (ADR 0271)", () => {
   it("lets an agent start copies of itself on any model and effort by default", () => {
     expect(
       chooseGrant(
@@ -288,7 +288,7 @@ describe("delegation grants (ADR 0270)", () => {
       AgentDelegationPolicySchema.parse({
         routes: [{ id: "same-agent", target: "self" }],
       }),
-    ).toThrow("delegation.routes was replaced by delegation.agents (ADR 0270)");
+    ).toThrow("delegation.routes was replaced by delegation.agents (ADR 0271)");
   });
 
   it("checks a model and effort against the harness's own catalog", () => {

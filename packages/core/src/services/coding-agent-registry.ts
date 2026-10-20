@@ -27,7 +27,7 @@ export interface AgentTurnContext
   /** The turn the hook serves. */
   turnId: string;
   /**
-   * The chat runs read-only (ADR 0270): the host mounts nothing for it
+   * The chat runs read-only (ADR 0271): the host mounts nothing for it
    * that writes past the harness's read-only mode.
    */
   readOnly?: boolean;
@@ -130,7 +130,7 @@ export interface RegisteredCodingAgent {
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
   /**
-   * The agent a copy of this one runs as (ADR 0270), when it is another:
+   * The agent a copy of this one runs as (ADR 0271), when it is another:
    * an agent layered on one of the person's, like a voice assistant, has
    * its copies run as that agent, without the layer. Omitted: itself.
    */
@@ -196,7 +196,7 @@ export interface CodingAgentRegistry {
   /**
    * The models an agent's harness offers, as its model picker shows them.
    * Core checks a subsession's requested model and effort against it (ADR
-   * 0270); without it, the harness checks them at the child's first turn.
+   * 0271); without it, the harness checks them at the child's first turn.
    */
   models?(args: {
     agentId: string;

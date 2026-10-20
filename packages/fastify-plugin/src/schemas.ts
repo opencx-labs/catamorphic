@@ -1175,7 +1175,7 @@ export const AgentSessionSchema = z.object({
   harness: z.string().nullable(),
   model: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
-  /** Runs in its harness's read-only mode (ADR 0270). */
+  /** Runs in its harness's read-only mode (ADR 0271). */
   readOnly: z.boolean(),
   title: z.string().nullable(),
   icon: z.string().nullable(),
@@ -1261,7 +1261,7 @@ export const CreateAgentSessionSchema = z.object({
 });
 
 export const CreateAgentSubsessionSchema = z.object({
-  /** Omitted: a copy of the parent's own agent (ADR 0270). */
+  /** Omitted: a copy of the parent's own agent (ADR 0271). */
   agentId: z.string().min(1).optional(),
   /** A model a grant allows and the agent's harness offers. */
   model: z.string().min(1).optional(),

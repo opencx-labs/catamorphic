@@ -245,7 +245,7 @@ keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 (ADRs [0089](docs/decisions/0089-project-shaped-member-shell.md),
 [0090](docs/decisions/0090-first-class-subsessions-and-delegation.md),
-[0270](docs/decisions/0270-agents-delegate-by-naming-an-agent-and-its-settings.md))
+[0271](docs/decisions/0271-agents-delegate-by-naming-an-agent-and-its-settings.md))
 
 ## Durable workflows
 

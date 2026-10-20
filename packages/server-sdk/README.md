@@ -79,7 +79,7 @@ registry entries with `topology: "native"` also require
 agents, per-session selection, delegation grants, and provider replacement use
 one orchestration path. Implement the registry's optional `models()` to let
 core check a subsession's model and effort against the agent's harness catalog
-(ADR 0270).
+(ADR 0271).
 
 `environmentProvider` is always explicit. The project's `default` Environment
 selects no pool, so the static binding above takes it; label bindings

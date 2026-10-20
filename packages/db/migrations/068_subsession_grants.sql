@@ -1,4 +1,4 @@
--- Subsessions name an agent and its settings, and grants decide (ADR 0270).
+-- Subsessions name an agent and its settings, and grants decide (ADR 0271).
 -- A child may run read-only, in its harness's own read-only mode; the grant
 -- that admitted it replaces the route it was started through: `self`, `*`,
 -- or the agent it named.

@@ -170,7 +170,7 @@ export interface SessionHostOperations {
     SessionSnapshot | QueuedSessionAction
   >;
   /**
-   * Start a subsession of the chat through its agent's grants (ADR 0270): a
+   * Start a subsession of the chat through its agent's grants (ADR 0271): a
    * copy of its agent unless `agentId` names another, with the model and
    * effort a grant allows; `readOnly` and `delegate: false` only narrow.
    */

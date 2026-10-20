@@ -4,7 +4,7 @@ import { z } from "zod";
 
 /**
  * Sessions the assistant starts with spawn_subsession, like any agent's
- * (ADR 0270): copies of it, which run as the agent it is built on without
+ * (ADR 0271): copies of it, which run as the agent it is built on without
  * its tools, or any agent the person names, on any model and effort their
  * harness offers: a quick voice assistant hands hard work to a stronger
  * model.
@@ -48,7 +48,7 @@ Your final reply goes back to the assistant, which passes it on to the person: a
 const TITLE_CHARS = 60;
 
 /**
- * A subsession the assistant starts (ADR 0216, 0270): its task in the
+ * A subsession the assistant starts (ADR 0216, 0271): its task in the
  * brief that leads back to the assistant, under the title its messages to
  * the person start with.
  */

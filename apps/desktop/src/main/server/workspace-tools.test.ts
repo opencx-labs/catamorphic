@@ -72,7 +72,7 @@ describe("workspace coordination tools", () => {
     // Background execution and watches are core needs for every harness
     // (ADR 0155, 0156); so are driving Work's browser and delegating to
     // subagents (ADR 0202), with the model and effort a subagent runs on
-    // (ADR 0270).
+    // (ADR 0271).
     expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(14_000);
     expect(
       toolkit.tools.every(

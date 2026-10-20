@@ -149,7 +149,7 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
     expect(callTool).not.toHaveBeenCalled();
   });
 
-  it("lists only reads for a read-only chat of any agent (ADR 0270)", async () => {
+  it("lists only reads for a read-only chat of any agent (ADR 0271)", async () => {
     const { rpc, callTool } = serve({ session: "read-only" });
     expect((await rpc("tools/list")).json().result.tools).toEqual([LOOKUP]);
     const called = await rpc("tools/call", { name: "rename", arguments: {} });

@@ -1,4 +1,4 @@
-# 0270 — Agents delegate by naming an agent and its settings; grants decide
+# 0271 — Agents delegate by naming an agent and its settings; grants decide
 
 - **Status:** Accepted (amends 0090, 0216)
 - **Date:** 2026-10-20

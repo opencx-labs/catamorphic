@@ -427,7 +427,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /**
    * The models an agent's harness offers, as its model picker lists them:
    * core checks a subsession's requested model and effort against them
-   * (ADR 0270). Undefined when the agent cannot be resolved here.
+   * (ADR 0271). Undefined when the agent cannot be resolved here.
    */
   async models({
     agentId,
@@ -747,7 +747,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // built-in assistant, with no instructions of its own and the
     // harness's default model: Claude Code's and Codex's own, while the
     // built-in agent, which has none, keeps the model it names. A copy of
-    // it runs as that agent, without the assistant's tools (ADR 0270).
+    // it runs as that agent, without the assistant's tools (ADR 0271).
     const assistant = parseAssistantAgentId(id);
     const found = this.findConfig(assistant?.agentId ?? id);
     if (!found) return undefined;

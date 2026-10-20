@@ -583,7 +583,7 @@ values: \`{ "permissionMode": "auto" }\` for \`claude-code\` (\`default\`,
 The two are independent: \`bypassPermissions\` inside a \`contained\`
 sandbox is fast inside and changes nothing outside.
 
-\`delegation\` says which subagents an agent may start (ADR 0270). Without it
+\`delegation\` says which subagents an agent may start (ADR 0271). Without it
 an agent starts copies of itself on any model and effort. \`agents\` lists
 grants: \`agent\` is \`self\`, an agent id, \`project:<slug>\`, or \`*\` (any
 agent whose sandboxing is no wider); \`model\` is \`any\`, \`fixed\`, or a list;

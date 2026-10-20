@@ -127,7 +127,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
     expect(publicAgent.coordination).toBe("shared-first");
-    // By default, copies of itself on any model and effort (ADR 0270).
+    // By default, copies of itself on any model and effort (ADR 0271).
     expect(publicAgent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 10,

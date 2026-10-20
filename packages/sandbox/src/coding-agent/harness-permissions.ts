@@ -87,7 +87,7 @@ export function harnessPermissionIssues(args: {
 }
 
 /**
- * `permissions` for a chat that only reads (ADR 0270): Claude Code's `plan`
+ * `permissions` for a chat that only reads (ADR 0271): Claude Code's `plan`
  * mode, Codex's `read-only` sandbox. Null for a harness without one, which
  * cannot run read-only.
  */

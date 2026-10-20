@@ -1480,7 +1480,7 @@ async function filterWorkspaceOverview(
   };
 }
 
-/** A child as its parent reads it: what runs it, and how (ADR 0270). */
+/** A child as its parent reads it: what runs it, and how (ADR 0271). */
 function subsessionSummary(child: unknown): Record<string, unknown> {
   const parsed = z
     .object({

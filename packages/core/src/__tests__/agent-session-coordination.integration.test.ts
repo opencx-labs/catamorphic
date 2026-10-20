@@ -3499,7 +3499,7 @@ describe("agent session coordination", () => {
       session.id,
     );
     expect(children).toHaveLength(1);
-    // A workflow's spawn takes the tool's settings too (ADR 0270).
+    // A workflow's spawn takes the tool's settings too (ADR 0271).
     expect(children[0]).toMatchObject({
       allowFurtherDelegation: false,
       session: { agentId: "small", model: "opus" },

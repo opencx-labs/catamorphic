@@ -509,7 +509,7 @@ authority, or while the session moves to another host, as it does for
 activity. Session protocol 2 (`GET /me` `agentProtocol.session`) is the
 first with metadata. `parentSessionId` is immediate hierarchy;
 `forkedFromSessionId` is transcript lineage. First-class subsessions are
-ordinary child sessions created through explicit delegation grants (ADR 0270),
+ordinary child sessions created through explicit delegation grants (ADR 0271),
 with create/list/wait/interrupt endpoints under the parent session. A create
 names an agent (none: a copy of the parent's) with the `model` and `effort`
 its grants allow, and `readOnly` and `delegate` that need no grant (a host

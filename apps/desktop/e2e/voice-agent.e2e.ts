@@ -412,7 +412,7 @@ describe("voice", () => {
     expect(tools).toEqual(
       expect.arrayContaining([
         ...ASSISTANT_SESSION_TOOLS,
-        // It starts sessions like any agent (ADR 0270).
+        // It starts sessions like any agent (ADR 0271).
         "spawn_subsession",
         "open_surface",
         // What was on screen as the person spoke, at once (ADR 0265).

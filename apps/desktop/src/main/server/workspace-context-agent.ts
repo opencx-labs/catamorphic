@@ -285,7 +285,7 @@ export function workPlaybook({
   /**
    * The assistant (ADR 0216) has its own session tools in place of Work's
    * project-only chat tools; its instructions say so. It starts
-   * subsessions like any agent (ADR 0270).
+   * subsessions like any agent (ADR 0271).
    */
   assistant?: boolean;
 }): string {

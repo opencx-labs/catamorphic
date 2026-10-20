@@ -579,7 +579,7 @@ export class AgentsStore {
 }
 
 /**
- * Delegation before grants (ADR 0270): routes, each a target and whether
+ * Delegation before grants (ADR 0271): routes, each a target and whether
  * the child may delegate onward.
  */
 const LegacyDelegationSchema = z.object({

@@ -427,7 +427,7 @@ export interface AgentSession {
   modelEffort: AgentEffort | null;
   /**
    * The chat runs in its harness's read-only mode: a subsession started
-   * read-only, or by a read-only parent (ADR 0270).
+   * read-only, or by a read-only parent (ADR 0271).
    */
   readOnly: boolean;
   title: string | null;
@@ -565,7 +565,7 @@ export interface AgentSessionPeer {
 
 export interface AgentSubsession {
   delegationId: string;
-  /** The grant that admitted it: `self`, `*` or an agent id (ADR 0270). */
+  /** The grant that admitted it: `self`, `*` or an agent id (ADR 0271). */
   grant: string;
   task: string;
   contextMode: "fresh" | "inherit";
@@ -660,7 +660,7 @@ export class AgentDelegationDeniedError extends Error {
   }
 }
 
-/** A subsession's model or effort its harness does not offer (ADR 0270). */
+/** A subsession's model or effort its harness does not offer (ADR 0271). */
 export class AgentDelegationSettingsError extends Error {
   constructor(message: string) {
     super(message);
@@ -4885,7 +4885,7 @@ export class AgentSessionsService {
         : [];
     const own = [
       // A read-only chat keeps the host's tools that only read, and its
-      // subagents, which read only too (ADR 0270).
+      // subagents, which read only too (ADR 0271).
       ...(input.session.read_only
         ? hosted.filter(
             (tool) => tool.readOnly === true || SUBSESSION_TOOLS.has(tool.name),
@@ -5460,7 +5460,7 @@ export class AgentSessionsService {
       ? `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`
       : workingDirectory;
     const configured = agent.defaults?.harnessPermissions ?? {};
-    // A read-only chat runs in its harness's read-only mode (ADR 0270).
+    // A read-only chat runs in its harness's read-only mode (ADR 0271).
     const harnessPermissions = session.read_only
       ? readOnlyPermissions({
           harness: harnessIdOf(agent),
@@ -5926,7 +5926,7 @@ export class AgentSessionsService {
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
-      /** Run in the harness's read-only mode (a subsession, ADR 0270). */
+      /** Run in the harness's read-only mode (a subsession, ADR 0271). */
       readOnly?: boolean;
       transaction?: Transaction<DB>;
       prepared?: PreparedSessionCreate;
@@ -5982,7 +5982,7 @@ export class AgentSessionsService {
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
-      /** Run in the harness's read-only mode (a subsession, ADR 0270). */
+      /** Run in the harness's read-only mode (a subsession, ADR 0271). */
       readOnly?: boolean;
       workspace?: SessionWorkspaceRequest;
     },
@@ -8701,7 +8701,7 @@ export class AgentSessionsService {
           ...(session.environment_name
             ? { environment: session.environment_name }
             : {}),
-          // A fork of a read-only chat reads only too (ADR 0270).
+          // A fork of a read-only chat reads only too (ADR 0271).
           ...(session.read_only ? { readOnly: true } : {}),
           systemPrompt: forkSystemPrompt,
           source: session.source as AgentSessionSource,
@@ -8837,7 +8837,7 @@ export class AgentSessionsService {
 
   /**
    * Create a durable child session through one of the source agent's grants
-   * (ADR 0270): the agent it names, or a copy of the source, with the model,
+   * (ADR 0271): the agent it names, or a copy of the source, with the model,
    * effort and narrowing it asks for when a grant allows them.
    */
   async createSubsession(
@@ -8912,7 +8912,7 @@ export class AgentSessionsService {
         : named.match(/^project:([^:]+)$/)
           ? grantAgentId({ agent: named }, projectId)
           : named;
-    // A copy of an agent layered on another runs as that one (ADR 0270).
+    // A copy of an agent layered on another runs as that one (ADR 0271).
     const copyAgentId = sourceAgent.copiesAs ?? sourceAgentId;
     const choices = () =>
       this.delegationChoices(identity, projectId, sourceAgent, "Your choices:");
@@ -12317,7 +12317,7 @@ export class AgentSessionsService {
     sessionId: string;
   }): Promise<{
     agentId: string | null;
-    /** The chat only reads: its connectors' tools that write are off (ADR 0270). */
+    /** The chat only reads: its connectors' tools that write are off (ADR 0271). */
     readOnly: boolean;
     toolPolicies?: Record<string, McpToolPolicyLayers>;
   }> {
@@ -12377,7 +12377,7 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!session) return undefined;
     // A read-only chat acts as contained: capabilities and connections it
-    // reaches only read (ADR 0270).
+    // reaches only read (ADR 0271).
     if (session.read_only) return "contained";
     // An agent that no longer resolves cannot act; the narrowest level holds.
     const agent = await this.resolveAgent(
@@ -12929,11 +12929,11 @@ const SUBSESSION_TOOLS = new Set([
   "interrupt_subsession",
 ]);
 
-/** What a read-only chat is told about itself (ADR 0270). */
+/** What a read-only chat is told about itself (ADR 0271). */
 const READ_ONLY_NOTE =
   "This chat runs read-only: read, search and report, but change nothing. Any subsession it starts reads only too.";
 
-/** How long a spawn waits on a harness's model catalog (ADR 0270). */
+/** How long a spawn waits on a harness's model catalog (ADR 0271). */
 const MODEL_CATALOG_WAIT_MS = 5_000;
 
 /** How often a running turn renews its sandbox grants (they live an hour). */

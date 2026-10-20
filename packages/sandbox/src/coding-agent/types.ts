@@ -222,7 +222,7 @@ export interface ExtraTool {
   description: string;
   parameters: Record<string, unknown>;
   /**
-   * The tool only reads: a read-only chat (ADR 0270) keeps it, and loses
+   * The tool only reads: a read-only chat (ADR 0271) keeps it, and loses
    * every tool without it.
    */
   readOnly?: boolean;

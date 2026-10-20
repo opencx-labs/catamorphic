@@ -8,7 +8,7 @@ import type { AgentModelChoice } from "./coding-agent-registry.js";
 
 /**
  * Who an agent may start as a subsession, and what it may choose for them
- * (ADR 0270). Grants are matched here, apart from sessions, so the rules
+ * (ADR 0271). Grants are matched here, apart from sessions, so the rules
  * read in one place.
  */
 

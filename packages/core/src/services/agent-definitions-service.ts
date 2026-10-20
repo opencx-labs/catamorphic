@@ -241,7 +241,7 @@ export interface AgentEnvironmentPolicy {
 
 /**
  * Who an agent may start as a subsession, and what it may choose for them
- * (ADR 0270). Omitted settings mean `any`: a parent picks the child's model
+ * (ADR 0271). Omitted settings mean `any`: a parent picks the child's model
  * and effort freely within what the child's harness offers.
  */
 export const AgentDelegationGrantSchema = z.object({
@@ -283,7 +283,7 @@ export const AgentDelegationPolicySchema = z.object({
   routes: z
     .never({
       error:
-        "delegation.routes was replaced by delegation.agents (ADR 0270): list the agents this one may start, with their model and effort choices",
+        "delegation.routes was replaced by delegation.agents (ADR 0271): list the agents this one may start, with their model and effort choices",
     })
     .optional(),
 });

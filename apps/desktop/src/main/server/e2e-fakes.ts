@@ -999,7 +999,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   }
 
   // The assistant handing work to sessions of its own, with the tool any
-  // agent starts subsessions with (ADR 0270).
+  // agent starts subsessions with (ADR 0271).
   const delegations: [string, { task: string; title: string }, string][] = [
     [
       "start a session to tidy the docs",

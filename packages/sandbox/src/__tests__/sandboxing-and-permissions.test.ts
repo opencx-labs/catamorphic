@@ -91,7 +91,7 @@ describe("harness permissions", () => {
   });
 });
 
-describe("read-only chats (ADR 0270)", () => {
+describe("read-only chats (ADR 0271)", () => {
   it("run in each harness's own read-only mode, keeping its other settings", () => {
     expect(
       readOnlyPermissions({

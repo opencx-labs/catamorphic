@@ -357,7 +357,7 @@ describe("Work playbook", () => {
 
   it("leaves the assistant's replaced chat tools out of its playbook", () => {
     const playbook = workPlaybook({ hasTools: true, assistant: true });
-    // It starts subsessions like any agent (ADR 0270).
+    // It starts subsessions like any agent (ADR 0271).
     expect(playbook).toContain("spawn_subsession");
     expect(playbook).not.toContain("reach other chats");
     expect(playbook).toContain("discover_capabilities");
