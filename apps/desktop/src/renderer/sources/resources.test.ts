@@ -72,6 +72,7 @@ function deps(host: Partial<WorkSourceHost> = {}, writesProgram = true) {
     reorderTab: vi.fn(),
     sessionAction: vi.fn(),
     openTab: vi.fn(),
+    resourceTab: () => undefined,
     ...host,
   };
   const value: WorkSourceDeps = {

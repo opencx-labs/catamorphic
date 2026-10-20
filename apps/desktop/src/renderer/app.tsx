@@ -6565,6 +6565,20 @@ export function App({
       reorderTab,
       sessionAction: applySessionAction,
       openTab,
+      resourceTab: (owner) => {
+        if (owner.kind === "page") {
+          const match = [...browserGuestIdsRef.current].find(
+            ([, guestId]) => guestId === owner.webContentsId,
+          );
+          return match ? browserTabKey(match[0]) : undefined;
+        }
+        const terminal = workspaceRef.current.terminals.find(
+          (entry) =>
+            entry.ptySessionId === owner.terminalId ||
+            entry.attachSessionId === owner.terminalId,
+        );
+        return terminal ? `terminal:${terminal.localId}` : undefined;
+      },
     },
     open: (url, mode) => openTarget(url, mode),
   });

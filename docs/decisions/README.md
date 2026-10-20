@@ -272,3 +272,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0263](0263-theme-pictures-behind-sidebars-and-chat.md) | A theme can put a picture behind the sidebars and the chat | Accepted |
 | [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
 | [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person, and keeps what they saw as they spoke | Accepted (amends 0216, 0236) |
+| [0266](0266-resources-list-what-work-runs.md) | Resources lists what Work runs, by who it runs for: CPU and memory per chat, tab, terminal and module, with End | Accepted (builds on 0102, 0140, 0234) |

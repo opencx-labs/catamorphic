@@ -11,12 +11,14 @@ import {
   type HarnessEvent,
   type HostCall,
   type HostToolResult,
+  PROJECT_ID_ENV,
   RequestClosedError,
   type RequestDraft,
   RUNNER_LINE_MAX_BYTES,
   RUNNER_PROTOCOL_VERSION,
   type RunnerCommandFrame,
   type RunnerFrame,
+  SESSION_ID_ENV,
 } from "@catamorphic/agent-protocol/runner";
 import { ToolGate } from "@catamorphic/sandbox";
 import { askUser } from "./ask-user.js";
@@ -230,7 +232,7 @@ export class AttemptRunner {
     });
     let control: AttemptControl;
     try {
-      const started = this.withEnvFiles(attempt);
+      const started = withSessionTag(this.withEnvFiles(attempt));
       control = adapter.start(started, this.host(started), this.options.local);
     } catch (error) {
       this.emitEvent({
@@ -594,4 +596,19 @@ function toJson(value: unknown): JsonValue {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The attempt with its session and project in the harness's environment
+ * (ADR 0266).
+ */
+function withSessionTag(attempt: AttemptStart): AttemptStart {
+  return {
+    ...attempt,
+    env: {
+      ...attempt.env,
+      [SESSION_ID_ENV]: attempt.sessionId,
+      [PROJECT_ID_ENV]: attempt.projectId,
+    },
+  };
 }

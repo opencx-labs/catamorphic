@@ -169,6 +169,18 @@ export interface SidebarBadge {
 }
 
 /**
+ * A reading's recent history (ADR 0266): `values` from 0 through 1, oldest
+ * first, drawn as a small line at the row's end with `label`, the current
+ * reading, beside it. `tone` colors the line by what it says (a value near
+ * its limit), never for decoration.
+ */
+export interface SidebarTrend {
+  values: number[];
+  label?: string;
+  tone?: SidebarTone;
+}
+
+/**
  * What a row is doing, drawn the same everywhere: a chat working, one that
  * needs the person, one they have not read; a deploy in progress.
  */
@@ -189,6 +201,7 @@ export interface SidebarItemPresentation {
   wide?: boolean;
   badges?: (string | SidebarBadge)[];
   progress?: number;
+  trend?: SidebarTrend;
   signal?: SidebarSignal;
   open?: OpenMode;
   menu?: SidebarMenuEntry[];
@@ -251,6 +264,7 @@ export const WORK_SOURCES = [
   "git",
   "prs",
   "session",
+  "resources",
 ] as const;
 export type WorkSourceName = (typeof WORK_SOURCES)[number];
 export const isWorkSourceName = (name: string): name is WorkSourceName =>

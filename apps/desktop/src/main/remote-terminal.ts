@@ -15,6 +15,8 @@ export interface TerminalBackend {
   onExit(listener: (event: TerminalExit) => void): { dispose(): void };
   /** The foreground program's name, where the backend knows it. */
   readonly process?: string;
+  /** The shell's process on this machine; a remote one has none. */
+  readonly pid?: number;
 }
 
 export interface TerminalExit {

@@ -119,6 +119,7 @@ function view(projectId = "paged") {
       reorderTab: () => {},
       sessionAction: mocks.actions,
       openTab: () => {},
+      resourceTab: () => undefined,
     }),
     onWindowChange: () => () => {},
   };

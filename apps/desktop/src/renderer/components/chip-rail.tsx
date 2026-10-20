@@ -62,6 +62,7 @@ import { PopPanel } from "./pop-panel.js";
 import { ResourceInspector } from "./resource-inspector.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import { SiteFavicon } from "./site-favicon.js";
+import { Sparkline } from "./sparkline.js";
 
 /** Lines the rail shows before the rest fold behind "N more". */
 const MAX_LINES = 3;
@@ -364,6 +365,7 @@ function ChipView({
       {wide && (
         <span className="flex shrink-0 items-center gap-1">{badges}</span>
       )}
+      {chip.trend && <Sparkline trend={chip.trend} />}
       {chip.hasChildren && (
         <ChevronUp
           aria-hidden="true"
@@ -584,6 +586,11 @@ function GroupMembers({
                     {member.description}
                   </span>
                 )}
+                {member.trend && (
+                  <span className="ml-auto flex shrink-0 pl-1">
+                    <Sparkline trend={member.trend} />
+                  </span>
+                )}
               </button>
             )}
           </ResourceInspector>
@@ -769,6 +776,8 @@ export const ChipRail = memo(function ChipRail({
         chip.wide ? 1 : 0,
         chip.icon ?? "",
         JSON.stringify(chip.badges ?? []),
+        // A trend's width is fixed; whether it has a reading beside it is not.
+        chip.trend ? (chip.trend.label === undefined ? 1 : 2) : 0,
         chip.hasChildren ? 1 : 0,
         (chip.actions ?? []).length,
       ].join("\u0001"),
