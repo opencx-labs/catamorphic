@@ -3484,3 +3484,16 @@ Every agent reply has a read aloud button beside Copy. It reads the reply
 voice on or off: off, in its agent's voice, with the microphone closed.
 While it is on its way the button spins, while it plays it is a stop
 square and stays in view, and pressed again it stops. See ADR 0268.
+
+### 2026-10-20: A turn that failed on its sign-in while you were away runs again when you are back
+
+A chat's background tasks finished in the night and woke it while every
+Claude Code on the Mac was renewing the same expired token; its turns
+failed on the sign-in, and the cards were still there in the morning. Main
+forgot each failure half an hour after seeing it, and ran again only turns
+the person's own message started. Now nothing is forgotten while the Mac
+sleeps or its screen is locked. Waking or unlocking it watches every
+failure afresh, and runs a turn that failed here again at once when the
+sign-in can still refresh: a new Claude Code renews the token itself. A
+turn the chat's own task started (a background command, a watch, a
+subsession) runs again too. See ADR 0269.

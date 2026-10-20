@@ -48,13 +48,22 @@ interface Tracked extends SignInFailure {
    * for a change, so opening an old chat does not run it.
    */
   settledHere: boolean;
+  /**
+   * The person came back since: one look runs it if its sign-in can
+   * refresh, as a new Claude Code renews an expired token itself.
+   */
+  revive: boolean;
   since: number;
 }
 
 /** How often a failed chat's sign-in is looked at, and for how long. */
 const POLL_MS = 5_000;
 const POLL_FOR_MS = 10 * 60_000;
-/** After this, a failure is forgotten until its chat shows it again. */
+/**
+ * After this, a failure is forgotten until its chat shows it again. The
+ * time counts from when it was seen, or from the person's return, and not
+ * while they are away.
+ */
 const FORGET_AFTER_MS = 30 * 60_000;
 /** Runs one turn gets from sign-in changes, so nothing flaps forever. */
 const MAX_RETRIES_PER_TURN = 3;
@@ -65,8 +74,10 @@ const RETRIES_KEPT_MS = 24 * 60 * 60_000;
  * Whether a chat's failed turn may run again by itself (ADR 0228): it is
  * still the chat's latest and failed on its sign-in; the chat is a
  * top-level one the person keeps (active, not archived, not a subsession,
- * not continued on a server); and the turn ran the person's own message,
- * not a workflow's, an automation's or another agent's.
+ * not continued on a server); and the turn ran the person's own message or
+ * the news of a task the chat started itself (a background command, a
+ * watch, a subsession), not a workflow's, an automation's or another
+ * agent's message.
  */
 export function mayRunAgain(input: {
   turnId: string;
@@ -102,7 +113,9 @@ export function mayRunAgain(input: {
   )
     return false;
   const opened = input.items.find((item) => item.id === latest.inputItemId);
-  return opened?.kind === "user_message";
+  return (
+    opened?.kind === "user_message" || opened?.kind === "task_notification"
+  );
 }
 
 /**
@@ -117,6 +130,12 @@ export function mayRunAgain(input: {
  * times at most; a turn that fails again waits for the next change. It
  * works for chats that are not on screen, and for one shown after a
  * restart once its chat reports the failure.
+ *
+ * Nothing is forgotten while the person is away (the machine asleep, its
+ * screen locked), when a chat's own background tasks often finish and
+ * every Claude Code wakes to renew the same expired token at once. Once
+ * they are back, each failure is watched as if just seen, and one seen
+ * here runs again if its sign-in can still refresh.
  */
 export class SignInRecovery {
   /** The failure each chat shows, by session. */
@@ -128,6 +147,8 @@ export class SignInRecovery {
   >();
   private timer: ReturnType<typeof setInterval> | undefined;
   private probing: Promise<void> | undefined;
+  /** The machine sleeps or its screen is locked. */
+  private away = false;
 
   constructor(
     private readonly deps: SignInRecoveryDeps,
@@ -189,6 +210,27 @@ export class SignInRecovery {
     );
   }
 
+  /** The person left: the machine sleeps, or its screen locked. */
+  left(): void {
+    this.away = true;
+  }
+
+  /**
+   * The person is back: the machine woke, or its screen unlocked. Every
+   * failure is watched afresh, and one seen here runs again now if its
+   * sign-in can still refresh.
+   */
+  returned(): Promise<void> {
+    this.away = false;
+    const now = this.now();
+    for (const failure of this.failures.values()) {
+      failure.since = now;
+      if (failure.settledHere) failure.revive = true;
+    }
+    this.schedule();
+    return this.probe();
+  }
+
   /** Look at every failed chat's sign-in now (focus, wake, the poll). */
   probe(): Promise<void> {
     this.probing ??= this.check().finally(() => {
@@ -228,6 +270,7 @@ export class SignInRecovery {
             )
           : Promise.resolve(undefined),
       settledHere,
+      revive: false,
       since: this.now(),
     });
     this.schedule();
@@ -261,9 +304,14 @@ export class SignInRecovery {
     }
     for (const { signIn, waiting } of bySignIn.values()) {
       const read = await this.deps.readSignIn(signIn).catch(() => undefined);
+      // A return is looked at once: a sign-in that cannot refresh then
+      // waits for a change.
+      const revived = new Set(waiting.filter((failure) => failure.revive));
+      for (const failure of waiting) failure.revive = false;
       if (!read?.usable) continue;
       for (const failure of waiting) {
         const cue =
+          revived.has(failure) ||
           (failure.settledHere && read.fresh) ||
           (await failure.baseline) !== read.fingerprint;
         if (cue) await this.recover(failure, { asked: false });
@@ -299,6 +347,7 @@ export class SignInRecovery {
 
   /** Failures past their time, and runs counted long enough ago. */
   private forgetOld(): void {
+    if (this.away) return;
     const now = this.now();
     for (const [sessionId, failure] of this.failures)
       if (now - failure.since >= FORGET_AFTER_MS)

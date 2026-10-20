@@ -862,7 +862,17 @@ app.whenReady().then(async () => {
     // process expires on the wall clock, so the step's work is discarded on
     // wake; releasing before the freeze parks the job cleanly and resume
     // picks it back up within a poll interval.
-    powerMonitor.on("suspend", () => void server?.suspendExecution());
+    powerMonitor.on("suspend", () => {
+      void server?.suspendExecution();
+      server?.signInRecovery.left();
+    });
+    // Away and back again: a chat whose turn failed on its sign-in while
+    // the person was away is not given up on (ADR 0228).
+    powerMonitor.on("lock-screen", () => server?.signInRecovery.left());
+    powerMonitor.on(
+      "unlock-screen",
+      () => void server?.signInRecovery.returned(),
+    );
     powerMonitor.on("resume", () => {
       server?.resumeExecution();
       server?.syncSessionMailboxes();
@@ -888,7 +898,7 @@ app.whenReady().then(async () => {
     // window to re-probe its agents' auth health.
     powerMonitor.on("resume", () => {
       state.broadcast("catamorphic:agent-auth-maybe-changed", {});
-      void server?.signInRecovery.probe();
+      void server?.signInRecovery.returned();
     });
     setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {

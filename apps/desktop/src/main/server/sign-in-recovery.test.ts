@@ -244,6 +244,45 @@ describe("SignInRecovery (ADR 0228)", () => {
     expect(retried).toEqual([]);
   });
 
+  it("forgets nothing while the person is away, and watches afresh once they are back", async () => {
+    const { recovery, signIn, retried, fail, advance } = tracked();
+    // A chat's background task finished in the night; its turn failed.
+    recovery.left();
+    fail("t1");
+    advance(6 * 60 * 60_000);
+    await recovery.probe();
+    expect(retried).toEqual([]);
+    // Back: the Mac woke or unlocked. Its sign-in can still refresh, and a
+    // new Claude Code renews an expired token itself: the turn runs again.
+    await recovery.returned();
+    expect(retried.map((failure) => failure.turnId)).toEqual(["t1"]);
+    // And only once for that return.
+    signIn.usable = true;
+    await recovery.returned();
+    expect(retried).toHaveLength(1);
+  });
+
+  it("on return runs only failures seen here, while the sign-in can refresh", async () => {
+    const { recovery, signIn, retried, fail, shown, advance } = tracked();
+    recovery.left();
+    signIn.usable = false;
+    fail("t1", "s1");
+    shown("t2", "s2");
+    advance(60 * 60_000);
+    // A sign-in that cannot refresh waits for a change.
+    await recovery.returned();
+    expect(retried).toEqual([]);
+    // Still watched after the return, as if just seen: the change runs both.
+    signIn.usable = true;
+    signIn.fingerprint = "keychain:2";
+    advance(20 * 60_000);
+    await recovery.probe();
+    expect(retried.map((failure) => failure.turnId).sort()).toEqual([
+      "t1",
+      "t2",
+    ]);
+  });
+
   it("looks every few seconds after a failure, then only when asked", async () => {
     vi.useFakeTimers();
     const { signIn, retried, fail } = tracked();
@@ -369,6 +408,30 @@ describe("mayRunAgain (ADR 0228)", () => {
         ],
       }),
     ).toBe(false);
+  });
+
+  it("holds for a turn one of the chat's own background tasks started", () => {
+    expect(
+      check({
+        items: [
+          {
+            ...common,
+            ...delivery,
+            id: "i1",
+            kind: "task_notification",
+            task: {
+              type: "background_command",
+              id: "b1",
+              title: "Run the merge gate",
+              status: "completed",
+            },
+            summary: "Run the merge gate finished",
+            detail: "exit=0",
+            source: null,
+          },
+        ],
+      }),
+    ).toBe(true);
   });
 
   it("never for a turn a workflow, an automation or another agent started", () => {
