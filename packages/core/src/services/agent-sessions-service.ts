@@ -8914,26 +8914,35 @@ export class AgentSessionsService {
           : named;
     // A copy of an agent layered on another runs as that one (ADR 0270).
     const copyAgentId = sourceAgent.copiesAs ?? sourceAgentId;
-    const targetAgentId =
-      requested === undefined || requested === sourceAgentId
-        ? copyAgentId
-        : requested;
     const choices = () =>
       this.delegationChoices(identity, projectId, sourceAgent, "Your choices:");
-    let targetAgent: RegisteredCodingAgent;
-    try {
-      this.assertAgentAccess(identity, projectId, targetAgentId);
-      targetAgent = await this.resolveAgent(targetAgentId, projectId);
-    } catch (error) {
-      if (
-        error instanceof AgentNotConfiguredError ||
-        error instanceof AccessDeniedError
-      )
-        throw new AgentDelegationDeniedError(
-          `There is no agent ${targetAgentId} you may start. ${await choices()}`,
-        );
-      throw error;
-    }
+    const resolveTarget = async (agentId: string) => {
+      try {
+        this.assertAgentAccess(identity, projectId, agentId);
+        return await this.resolveAgent(agentId, projectId);
+      } catch (error) {
+        if (
+          error instanceof AgentNotConfiguredError ||
+          error instanceof AccessDeniedError
+        )
+          throw new AgentDelegationDeniedError(
+            `There is no agent ${agentId} you may start. ${await choices()}`,
+          );
+        throw error;
+      }
+    };
+    const other =
+      requested === undefined || requested === sourceAgentId
+        ? undefined
+        : await resolveTarget(requested);
+    // A layered agent never runs as a subsession: whoever names it starts
+    // the agent beneath, never a second layer.
+    const targetAgentId =
+      other === undefined
+        ? copyAgentId
+        : (other.copiesAs ?? requested ?? copyAgentId);
+    const targetAgent =
+      other && !other.copiesAs ? other : await resolveTarget(targetAgentId);
     const copy = targetAgentId === copyAgentId;
     // The harness's own catalog, only when the parent names a setting.
     const catalog =
@@ -11477,10 +11486,11 @@ export class AgentSessionsService {
   private async committedAgents(
     projectId: string,
   ): Promise<RegisteredCodingAgent[]> {
+    // A host without a project-agent factory resolves them by id, the
+    // way `resolveAgent` falls back.
     const projectAgent = this.codingAgents.projectAgent?.bind(
       this.codingAgents,
     );
-    if (!projectAgent) return [];
     try {
       const project = await this.db
         .selectFrom("projects")
@@ -11495,12 +11505,19 @@ export class AgentSessionsService {
         entries.map(async (entry) => {
           const { definition } = entry;
           if (!definition) return null;
+          const id = formatProjectAgentId(projectId, entry.slug);
           try {
-            const agent = await projectAgent({
-              id: formatProjectAgentId(projectId, entry.slug),
-              entry,
-            });
-            return agent ? withDefinitionPolicy(agent, definition) : null;
+            const agent = projectAgent
+              ? await projectAgent({ id, entry })
+              : this.codingAgents.get(id);
+            // One that cannot run now (unapproved, broken) is no choice.
+            if (!agent || agent.unavailable) return null;
+            return {
+              ...(projectAgent
+                ? withDefinitionPolicy(agent, definition)
+                : agent),
+              name: agent.name ?? definition.name,
+            };
           } catch {
             return null;
           }

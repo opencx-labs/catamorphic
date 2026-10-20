@@ -21,20 +21,25 @@ export const ASSISTANT_DELEGATION: AgentDelegationPolicy = {
 /**
  * What a session the assistant starts reads first (ADR 0216): where the
  * request came from, and how to reach the person while they are away from
- * the screen.
+ * the screen. A read-only session cannot message the assistant's chat, so
+ * it says everything in its result.
  */
 export function assistantTaskBrief(input: {
   assistantSessionId: string;
   title: string;
   request: string;
+  readOnly?: boolean;
 }): string {
+  const reach = input.readOnly
+    ? "The person may be away from the screen, talking by voice. This session only reads, so put everything they should hear in your final reply."
+    : `The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode steer), starting with "${input.title}:". It may be read aloud to them, where a sentence or two of plain words comes across best. Their answer comes back here; keep going on whatever does not depend on it.`;
   return `The person asked for this through their assistant in Work, which relayed it as:
 
 ${input.request}
 
 The relay is short and may be slightly off. For what the person actually said, read the assistant's chat, session ${input.assistantSessionId} in this project, with read_project_session.
 
-The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode steer), starting with "${input.title}:". It may be read aloud to them, where a sentence or two of plain words comes across best. Their answer comes back here; keep going on whatever does not depend on it.
+${reach}
 
 Your final reply goes back to the assistant, which passes it on to the person: a sentence or two up front that sum it up are what it will use.`;
 }
@@ -47,24 +52,73 @@ const TITLE_CHARS = 60;
  * brief that leads back to the assistant, under the title its messages to
  * the person start with.
  */
-export function assistantSubsession<T extends { task: string; title?: string }>(
-  input: T,
-  assistantSessionId: string,
-): T & { title: string } {
+export function assistantSubsession(input: {
+  assistantSessionId: string;
+  task: string;
+  title?: string;
+  readOnly?: boolean;
+}): { task: string; title: string } {
   const task = input.task.replace(/\s+/g, " ").trim();
+  if (!task) throw new Error("A subsession task is required");
   const title =
     input.title?.trim() ||
     (task.length > TITLE_CHARS
       ? `${task.slice(0, TITLE_CHARS - 1).trimEnd()}…`
       : task);
   return {
-    ...input,
     title,
     task: assistantTaskBrief({
-      assistantSessionId,
+      assistantSessionId: input.assistantSessionId,
       title,
       request: input.task,
+      ...(input.readOnly ? { readOnly: true } : {}),
     }),
+  };
+}
+
+/** Follows a session's notes for the assistant's chat (ADR 0216). */
+export type FollowSession = (input: {
+  follower: { projectId: string; sessionId: string };
+  followed: { projectId: string; sessionId: string };
+  title: string;
+}) => Promise<void>;
+
+/**
+ * The assistant's spawn_subsession: Work's own, with the task in the brief
+ * that leads back to the assistant, and the session's notes followed so
+ * the assistant can pass them on.
+ */
+function briefedSpawn<T extends ExtraTool>(spawn: T, follow: FollowSession): T {
+  return {
+    ...spawn,
+    execute: async (input, context) => {
+      const assistantSessionId = context.sessionId;
+      if (!assistantSessionId) return spawn.execute(input, context);
+      const briefed = assistantSubsession({
+        assistantSessionId,
+        task: typeof input.task === "string" ? input.task : "",
+        ...(typeof input.title === "string" ? { title: input.title } : {}),
+        ...(input.read_only === true ? { readOnly: true } : {}),
+      });
+      const child = await spawn.execute({ ...input, ...briefed }, context);
+      const sessionId =
+        child && typeof child === "object" && "sessionId" in child
+          ? child.sessionId
+          : undefined;
+      // The child already runs: missing its notes is no reason to fail.
+      if (typeof sessionId === "string")
+        await follow({
+          follower: {
+            projectId: context.projectId,
+            sessionId: assistantSessionId,
+          },
+          followed: { projectId: context.projectId, sessionId },
+          title: briefed.title,
+        }).catch((cause: unknown) =>
+          console.warn("[assistant] following a session failed:", cause),
+        );
+      return child;
+    },
   };
 }
 
@@ -96,12 +150,32 @@ export function withoutReplacedTools<T extends { name: string }>(
   return tools.filter((tool) => !REPLACED.has(tool.name));
 }
 
+/**
+ * Work's tools as the assistant has them, served or discovered: without
+ * the session tools it replaces, and its spawn_subsession briefed.
+ */
+export function assistantWorkspaceTools<T extends ExtraTool>(input: {
+  tools: readonly T[];
+  follow: FollowSession;
+}): T[] {
+  return withoutReplacedTools(input.tools).map((tool) =>
+    tool.name === "spawn_subsession" ? briefedSpawn(tool, input.follow) : tool,
+  );
+}
+
 /** The base agent's tools, with the assistant's session tools. */
-export function assistantHostTools(
-  workspace: readonly ExtraTool[],
-  sessions: readonly ExtraTool[],
-): ExtraTool[] {
-  return [...withoutReplacedTools(workspace), ...sessions];
+export function assistantHostTools(input: {
+  workspace: readonly ExtraTool[];
+  sessions: readonly ExtraTool[];
+  follow: FollowSession;
+}): ExtraTool[] {
+  return [
+    ...assistantWorkspaceTools({
+      tools: input.workspace,
+      follow: input.follow,
+    }),
+    ...input.sessions,
+  ];
 }
 
 /**

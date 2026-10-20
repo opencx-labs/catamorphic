@@ -1855,6 +1855,18 @@ describe("agent session coordination", () => {
       { agentId: "voice", task: "Again" },
     );
     expect(named.session.agentId).toBe("worker");
+    // Named by another agent, it starts the agent beneath too.
+    const worker = await sessions.create(identity, project.id, {
+      agentId: "worker",
+    });
+    const beneath = await sessions.createSubsession(
+      identity,
+      project.id,
+      worker.id,
+      { agentId: "voice", task: "Through the layer" },
+    );
+    expect(beneath.session.agentId).toBe("worker");
+    expect(beneath.grant).toBe("self");
     const { system_prompt } = await db
       .selectFrom("agent_sessions")
       .select("system_prompt")

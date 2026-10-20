@@ -317,8 +317,8 @@ function grantWho(grant: AgentDelegationGrant, input: MenuInput): string {
 
 /**
  * The agent's menu: whom it may start and what it may set, one line per
- * grant. It names no id for a copy of yourself: leaving `agent` out is
- * the way.
+ * grant. A copy of yourself is started by leaving `agent` out; its id is
+ * named only when it runs as another agent (`copiesAs`).
  */
 export function delegationMenu(input: MenuInput): string[] {
   return input.policy.agents.map(

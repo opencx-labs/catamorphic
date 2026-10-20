@@ -77,8 +77,9 @@ import {
   ASSISTANT_DELEGATION,
   ASSISTANT_EAGER,
   assistantHostTools,
+  assistantWorkspaceTools,
+  type FollowSession,
   inThePersonsWindow,
-  withoutReplacedTools,
 } from "./assistant-agent.js";
 import { buildAiSdkAdapter } from "./coding-agent.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
@@ -296,8 +297,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
-  /** The assistant's tools over the person's chats (ADR 0216). */
-  private assistantTools: ExtraTool[] = [];
+  /**
+   * The assistant's tools over the person's chats, and how it follows the
+   * sessions it starts (ADR 0216).
+   */
+  private assistant: { tools: ExtraTool[]; follow: FollowSession } = {
+    tools: [],
+    follow: async () => {},
+  };
   private voice: VoiceControl | null = null;
   /** Where the person is, by profile (ADR 0265); late-bound. */
   private personProject: (profileId: string) => string | null = () => null;
@@ -1083,8 +1090,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const workspace = this.workspaceTools(config, "native") ?? [];
     const served = {
       hostTools: assistant
-        ? assistantHostTools(
-            inThePersonsWindow(
+        ? assistantHostTools({
+            workspace: inThePersonsWindow(
               [
                 ...workspace,
                 ...(this.workspaceTools(config, "native", true) ?? []).filter(
@@ -1093,8 +1100,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               ],
               this.personsWindows(profileId),
             ),
-            this.assistantTools,
-          )
+            sessions: this.assistant.tools,
+            follow: this.assistant.follow,
+          })
         : workspace,
       toolPolicies: () => live().policies,
       toolAnnotations: () => live().annotations,
@@ -1790,8 +1798,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /** Late-bound: the assistant's tools over the person's chats. */
-  setAssistantTools(tools: ExtraTool[]): void {
-    this.assistantTools = tools;
+  setAssistant(assistant: { tools: ExtraTool[]; follow: FollowSession }): void {
+    this.assistant = assistant;
   }
 
   /**
@@ -1823,12 +1831,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const tools = this.workspaceTools(config, "native", true) ?? [];
     return {
       revision: JSON.stringify([id, config.sandboxing, profileId, "native"]),
-      // The assistant discovers neither Work's project-only chat tools nor
-      // subsessions: its own session tools take their place (ADR 0216).
-      // Its window tools act where the person is (ADR 0265).
+      // The assistant discovers none of Work's project-only chat tools: its
+      // own session tools take their place (ADR 0216). Its window tools act
+      // where the person is (ADR 0265).
       tools: parseAssistantAgentId(id)
         ? inThePersonsWindow(
-            withoutReplacedTools(tools),
+            assistantWorkspaceTools({
+              tools,
+              follow: this.assistant.follow,
+            }),
             this.personsWindows(profileId),
           )
         : tools,

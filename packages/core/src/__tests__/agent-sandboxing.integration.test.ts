@@ -52,6 +52,8 @@ const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
 describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   let tmpDir: string;
   let sessions: AgentSessionsService;
+  /** The same services over another host's agent registry. */
+  let sessionsWith: (registry: CodingAgentRegistry) => AgentSessionsService;
   let capabilities: AgentCapabilitiesService;
   let projectId: string;
   const adapter = new RecordingAdapter();
@@ -143,16 +145,18 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       new ProjectEnvironmentsService(db, projectManager),
       testEnvironmentProvider(unusedSandboxProvider),
     );
-    sessions = new AgentSessionsService(db, {
-      hostId: "sandboxing-test-host",
-      projectManager,
-      codingAgents: registry,
-      executionEnvironments,
-      executionAllocations,
-      nativeAgentCheckout: {
-        resolve: () => ({ path: rootPath, owned: false }),
-      },
-    });
+    sessionsWith = (codingAgents) =>
+      new AgentSessionsService(db, {
+        hostId: "sandboxing-test-host",
+        projectManager,
+        codingAgents,
+        executionEnvironments,
+        executionAllocations,
+        nativeAgentCheckout: {
+          resolve: () => ({ path: rootPath, owned: false }),
+        },
+      });
+    sessions = sessionsWith(registry);
     const capability = (
       name: string,
       effect: "read" | "write",
@@ -261,6 +265,50 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
     expect(refusal).toContain(`project:${projectId}:editor (Editor)`);
     // Wider than the lead: not among its choices.
     expect(refusal).not.toContain("Publisher");
+  });
+
+  it("lists them too where the host resolves project agents by id, leaving out one that cannot run", async () => {
+    // Like Work's desktop: no factory, project agents come from get().
+    const byId = sessionsWith({
+      defaultAgentId: () => undefined,
+      get: (id) => {
+        const slug = id.split(":").at(-1);
+        if (!id.startsWith("project:") || !slug) return undefined;
+        return {
+          id,
+          harness: { placement: "host", adapter },
+          topology: "native",
+          sandboxing: slug === "lead" ? "propose" : "contained",
+          ...(slug === "lead"
+            ? {
+                delegation: {
+                  enabled: true,
+                  maxConcurrentChildren: 10,
+                  agents: [
+                    { agent: "*", model: "any", effort: "any", delegate: true },
+                  ],
+                },
+              }
+            : {}),
+          ...(slug === "editor" ? { unavailable: "Needs approval" } : {}),
+        };
+      },
+      list: () => [],
+    });
+    const lead = await byId.create(root, projectId, {
+      agentId: `project:${projectId}:lead`,
+    });
+    const refusal = await byId
+      .createSubsession(root, projectId, lead.id, {
+        agentId: "nobody",
+        task: "Look",
+      })
+      .then(
+        () => "",
+        (error: unknown) => String(error),
+      );
+    expect(refusal).toContain(`project:${projectId}:reviewer (Reviewer)`);
+    expect(refusal).not.toContain("Editor");
   });
 
   it("refuses capabilities above the agent's sandboxing with a readable reason", async () => {

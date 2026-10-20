@@ -1,3 +1,4 @@
+import type { ExtraTool } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import {
   assistantAgentId,
@@ -8,6 +9,7 @@ import {
   ASSISTANT_DELEGATION,
   assistantHostTools,
   assistantSubsession,
+  assistantWorkspaceTools,
   inThePersonsWindow,
   withoutReplacedTools,
 } from "./assistant-agent.js";
@@ -42,11 +44,12 @@ describe("the assistant", () => {
   });
 
   it("hands its sessions a brief that leads back to it, under a title", () => {
-    const child = assistantSubsession(
-      { task: "Tidy the docs folder", title: "Tidy the docs", model: "opus" },
-      "assistant-chat",
-    );
-    expect(child).toMatchObject({ title: "Tidy the docs", model: "opus" });
+    const child = assistantSubsession({
+      assistantSessionId: "assistant-chat",
+      task: "Tidy the docs folder",
+      title: "Tidy the docs",
+    });
+    expect(child.title).toBe("Tidy the docs");
     // The relay, where to read what was said, and how to reach the person.
     expect(child.task).toContain("Tidy the docs folder");
     expect(child.task).toContain("read_project_session");
@@ -55,16 +58,27 @@ describe("the assistant", () => {
     );
     expect(child.task).toContain('"Tidy the docs:"');
     // Untitled, it is named by its task's first words.
-    const untitled = assistantSubsession(
-      {
-        task: "Find out why the nightly deploy failed and   fix it if it is ours to fix",
-      },
-      "assistant-chat",
-    );
+    const untitled = assistantSubsession({
+      assistantSessionId: "assistant-chat",
+      task: "Find out why the nightly deploy failed and   fix it if it is ours to fix",
+    });
     expect(untitled.title).toBe(
       "Find out why the nightly deploy failed and fix it if it is…",
     );
     expect(untitled.task).toContain(`"${untitled.title}:"`);
+    // One that only reads cannot message the assistant: its result says it all.
+    const reader = assistantSubsession({
+      assistantSessionId: "assistant-chat",
+      task: "Review the README",
+      readOnly: true,
+    });
+    expect(reader.task).not.toContain("send_project_session_message");
+    expect(reader.task).toContain(
+      "put everything they should hear in your final reply",
+    );
+    expect(() =>
+      assistantSubsession({ assistantSessionId: "assistant-chat", task: "  " }),
+    ).toThrow("A subsession task is required");
   });
 
   it("discovers none of the session tools it replaces, and starts sessions like any agent", () => {
@@ -89,15 +103,70 @@ describe("the assistant", () => {
       execute: async () => null,
     });
     expect(
-      assistantHostTools(
-        [
+      assistantHostTools({
+        workspace: [
           tool("open_surface"),
           tool("spawn_subsession"),
           tool("read_project_session"),
         ],
-        [tool("list_sessions")],
-      ).map((each) => each.name),
+        sessions: [tool("list_sessions")],
+        follow: async () => {},
+      }).map((each) => each.name),
     ).toEqual(["open_surface", "spawn_subsession", "list_sessions"]);
+  });
+
+  it("briefs the sessions it starts with Work's spawn_subsession and follows them", async () => {
+    const spawned: Record<string, unknown>[] = [];
+    const followed: unknown[] = [];
+    const spawn: ExtraTool = {
+      name: "spawn_subsession",
+      description: "Start a subagent",
+      parameters: {},
+      execute: async (input: Record<string, unknown>) => {
+        spawned.push(input);
+        return { sessionId: "child", title: input.title };
+      },
+    };
+    const follow = async (input: unknown) => {
+      followed.push(input);
+    };
+    const context = {
+      projectId: "p1",
+      sessionId: "assistant-chat",
+      stopWaiting: new AbortController().signal,
+    };
+    const [served] = assistantHostTools({
+      workspace: [spawn],
+      sessions: [],
+      follow,
+    });
+    await served?.execute(
+      {
+        task: "Count the lines in words.txt",
+        model: "opus",
+        context_mode: "fresh",
+      },
+      context,
+    );
+    expect(spawned[0]).toMatchObject({
+      model: "opus",
+      context_mode: "fresh",
+      title: "Count the lines in words.txt",
+    });
+    expect(spawned[0]?.task).toContain(
+      "relayed it as:\n\nCount the lines in words.txt",
+    );
+    expect(followed).toEqual([
+      {
+        follower: { projectId: "p1", sessionId: "assistant-chat" },
+        followed: { projectId: "p1", sessionId: "child" },
+        title: "Count the lines in words.txt",
+      },
+    ]);
+    // Discovered, it is the same tool.
+    const [discovered] = assistantWorkspaceTools({ tools: [spawn], follow });
+    await discovered?.execute({ task: "Again", title: "Again" }, context);
+    expect(spawned[1]?.task).toContain('"Again:"');
   });
 
   describe("its window tools", () => {

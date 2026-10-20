@@ -223,13 +223,14 @@ It starts sessions with `spawn_subsession`, like any agent (ADR 0270). Its
 copies run as its base agent (`copiesAs`), without its tools, on the
 assistant chat's model and effort; its grants admit them and any agent the
 person names, on any model and effort, so a quick assistant hands hard work
-to a stronger model. Work's spawn path (`spawn` in `main/server/boot.ts`)
-wraps the task of a session the assistant starts in a brief
-(`assistantSubsession` in `main/server/assistant-agent.ts`): the session
+to a stronger model. Named by any agent, the assistant starts as its base
+agent too, never a second assistant. Its `spawn_subsession` is Work's, wrapped
+(`assistantWorkspaceTools` in `main/server/assistant-agent.ts`): it puts the
+task in a brief (`assistantSubsession`), and follows the session. The session
 reads the assistant's chat with `read_project_session` for what was
 actually said, and reaches the person by sending it a message with
 `send_project_session_message`, starting with its title (the task's first
-words when it has none). The assistant follows the sessions it starts, and others with
+words when it has none); a read-only session says everything in its result. The assistant follows the sessions it starts, and others with
 `follow_session`: their notes (messages with more work after them in the
 turn) reach it as one task notification a few at a time, shown as one row
 that opens to the notes and links to that chat, and a followed chat's result
@@ -239,8 +240,8 @@ waits on reaches it at once; `answer_question` answers a question with what
 the person said, as the person, while approvals stay theirs to give in that
 chat. `read_session` lists what a chat waits on. The assistant's chat is kept local like an
 incognito chat, so it is never mirrored and no other chat reads it; its
-playbook leaves out subsessions and the project-only chat tools, which it
-neither has nor discovers. It messages a chat the person
+playbook leaves out the project-only chat tools, which it neither has nor
+discovers. It messages a chat the person
 created, and relays a session's question and the answer
 (`e2e/voice-agent.e2e.ts`).
 
