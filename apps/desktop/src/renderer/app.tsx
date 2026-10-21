@@ -346,6 +346,13 @@ const NO_CHAT_SIGNALS: ChatLiveSignals = {
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
 
+/** How long the agent-control pill stays before it steps aside. */
+const PILL_QUIET_MS = 4_000;
+
+/** Keep `value` within `low` and `high`. */
+const clamp = (value: number, low: number, high: number) =>
+  Math.min(high, Math.max(low, value));
+
 /**
  * Veil over a surface an agent is driving: interaction is blocked (the
  * surface stays fully visible — watch the agent work live) until the
@@ -361,9 +368,6 @@ const truncateLabel = (value: string): string =>
  * Stays mounted after `active` flips false to play fade-out (the mirror
  * of its fade-in enter) before disappearing, per the motion contract.
  */
-/** How long the agent-control pill stays before it steps aside. */
-const PILL_QUIET_MS = 4_000;
-
 function AgentControlOverlay({
   kind,
   active,
@@ -405,14 +409,17 @@ function AgentControlOverlay({
   }, [active, wake]);
   // Dragged by its body (not its buttons), the pill stays where it is put.
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  // Where the drag began, and how far the pill may go each way and stay
-  // inside the surface it marks.
+  // Where the drag began, and the offsets that keep the pill inside the
+  // surface it marks.
   const drag = useRef<{
     x: number;
     y: number;
     from: typeof offset;
-    room: { left: number; right: number; up: number; down: number };
+    bounds: { left: number; right: number; top: number; bottom: number };
   } | null>(null);
+  const endDrag = () => {
+    drag.current = null;
+  };
   if (phase === "gone") return null;
   const exiting = phase === "out";
   const anim = exiting ? "animate-fade-out" : "animate-fade-in";
@@ -476,7 +483,6 @@ function AgentControlOverlay({
         data-agent-control-pill
         role="toolbar"
         aria-label={`Agent owns this ${kind}`}
-        onPointerEnter={wake}
         onPointerMove={wake}
         // Tabbing to its buttons brings it back too.
         onFocus={wake}
@@ -490,38 +496,33 @@ function AgentControlOverlay({
             x: event.clientX,
             y: event.clientY,
             from: offset,
-            room: {
-              left: pill.left - area.left,
-              right: area.right - pill.right,
-              up: pill.top - area.top,
-              down: area.bottom - pill.bottom,
+            bounds: {
+              left: offset.x - (pill.left - area.left),
+              right: offset.x + (area.right - pill.right),
+              top: offset.y - (pill.top - area.top),
+              bottom: offset.y + (area.bottom - pill.bottom),
             },
           };
         }}
         onPointerMoveCapture={(event) => {
           const start = drag.current;
           if (!start) return;
-          const clamp = (value: number, low: number, high: number) =>
-            Math.min(high, Math.max(low, value));
+          const { bounds } = start;
           setOffset({
-            x:
-              start.from.x +
-              clamp(
-                event.clientX - start.x,
-                -start.room.left,
-                start.room.right,
-              ),
-            y:
-              start.from.y +
-              clamp(event.clientY - start.y, -start.room.up, start.room.down),
+            x: clamp(
+              start.from.x + event.clientX - start.x,
+              bounds.left,
+              bounds.right,
+            ),
+            y: clamp(
+              start.from.y + event.clientY - start.y,
+              bounds.top,
+              bounds.bottom,
+            ),
           });
         }}
-        onPointerUp={() => {
-          drag.current = null;
-        }}
-        onPointerCancel={() => {
-          drag.current = null;
-        }}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
       >
         <span className="relative flex size-2">
           <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
@@ -2796,20 +2797,12 @@ export function App({
 
   /**
    * An agent-held surface's "Go to chat": the chat comes on screen and its
-   * composer takes the keys, so the move shows even when the chat is
-   * already beside the surface in a split.
+   * composer takes the keys (as a palette skill hands back), so the move
+   * shows even when the chat is already beside the surface in a split.
    */
   const goToChat = (localId: string) => {
     revealChat(localId);
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() =>
-        document
-          .querySelector<HTMLElement>(
-            `[data-chat-local-id="${CSS.escape(localId)}"] [data-composer-input]`,
-          )
-          ?.focus(),
-      ),
-    );
+    composerReturnsRef.current.get(localId)?.("");
   };
 
   const revealChatRef = useRef(revealChat);
