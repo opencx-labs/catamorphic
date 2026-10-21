@@ -839,6 +839,8 @@ export function projectWorkspaceFile(projectRoot: string): string {
 /** The candidate files for a resolution, most specific first. */
 export function workspaceLayerFiles(opts: {
   profileDir: string;
+  /** The profile layer when it is synced with another profile (ADR 0272). */
+  profileFile?: string;
   projectId?: string;
   projectRoot?: string | null;
 }): Array<{ layer: WorkspaceLayer; file: string }> {
@@ -857,7 +859,7 @@ export function workspaceLayerFiles(opts: {
   }
   layers.push({
     layer: "profile",
-    file: path.join(opts.profileDir, "workspace.js"),
+    file: opts.profileFile ?? path.join(opts.profileDir, "workspace.js"),
   });
   return layers;
 }
@@ -873,6 +875,7 @@ export function workspaceLayerFiles(opts: {
  */
 export function resolveWorkspaceConfig(opts: {
   profileDir: string;
+  profileFile?: string;
   projectId?: string;
   projectRoot?: string | null;
 }): ResolvedWorkspaceConfig {

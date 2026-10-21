@@ -90,6 +90,10 @@ import type {
   PullRequestStatus,
 } from "../../shared/pr-details.js";
 import type {
+  ProfileSync,
+  ProfileSyncPart,
+} from "../../shared/profile-sync.js";
+import type {
   CodexSignIn,
   CodexSignInStatus,
   RemoteMachine,
@@ -734,6 +738,8 @@ export interface Profile {
   color: string;
   projectIds: string[];
   defaultProjectId?: string;
+  /** Part → the profile whose settings it shares (ADR 0272). */
+  syncedFrom?: ProfileSync;
 }
 
 export interface ProfilesData {
@@ -1919,6 +1925,18 @@ export interface CatamorphicDesktopApi {
     patch: { name?: string; color?: string; defaultProjectId?: string },
   ) => Promise<Profile | undefined>;
   profilesSetDefault: (id: string) => Promise<void>;
+  /** Bring parts of another profile's settings in, shared or copied (ADR 0272). */
+  profilesSyncSettings: (input: {
+    profileId: string;
+    from: string;
+    parts: ProfileSyncPart[];
+    keepInSync: boolean;
+  }) => Promise<void>;
+  /** Stop sharing parts; the profile keeps what it shows now. */
+  profilesStopSyncing: (input: {
+    profileId: string;
+    parts: ProfileSyncPart[];
+  }) => Promise<void>;
   profilesRemove: (id: string) => Promise<boolean>;
   profilesClaimProject: (profileId: string, projectId: string) => Promise<void>;
   profilesForProject: (projectId: string) => Promise<Profile>;

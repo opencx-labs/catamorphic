@@ -3539,3 +3539,15 @@ The voice assistant starts sessions with the same tool. Left without an
 agent, it starts the person's own agent, without the assistant's tools; a
 session it starts is still handed a brief that leads back to it, and it
 still passes on the session's notes. See ADR 0271.
+
+### 2026-10-21: A new profile can bring another profile's settings, and keep them in sync
+
+Setting up a second profile meant redoing the theme, shortcuts, sidebars and
+macros by hand, and the two drifted apart. A new profile's welcome screen now
+offers "Import from a profile" beside "Import from a browser": pick a profile,
+tick Appearance, Workspace, Macros, Keyboard shortcuts or Notifications, and
+keep them in sync or take a copy. Kept in sync, both profiles use the same
+files, so a change in either shows in both; Settings says so under each shared
+category. Profile settings lists what stays in sync, with Stop syncing, which
+leaves each profile with what it shows. Agents, passwords and browsing data
+always stay with their own profile. See ADR 0272.

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { BrowserImport } from "../components/browser-import";
 import { Modal } from "../components/modal";
 import { PendingButton } from "../components/pending-button";
+import { ProfileSettingsSync } from "../components/profile-settings-sync";
 import {
   desktopApi,
   type Profile,
@@ -133,8 +134,8 @@ function ProfileSettingsForm({
         <header className="mb-6">
           <h1 className="text-base font-semibold">Profile settings</h1>
           <p className="mt-0.5 text-xs text-fg-muted">
-            Manage this profile's identity, projects, passwords, and browser
-            data.
+            Manage this profile's identity, projects, passwords, browser data
+            and shared settings.
           </p>
         </header>
 
@@ -231,6 +232,12 @@ function ProfileSettingsForm({
         <PasswordsLink profileId={profile.id} onOpen={onOpenPasswords} />
 
         <BrowserImport key={profile.id} profileId={profile.id} />
+
+        <ProfileSettingsSync
+          key={`sync:${profile.id}`}
+          profile={profile}
+          data={data}
+        />
 
         <section className="mt-4 rounded-lg border border-danger/30 p-4">
           <h2 className="text-sm font-semibold text-fg">Delete profile</h2>

@@ -96,3 +96,43 @@ it("distinguishes restricted native access from an unavailable host filesystem",
   expect(unavailable).not.toHaveProperty("files");
   expect(unavailable.note).toContain("sandbox");
 });
+
+it("points shared parts at the other profile's files and names it", () => {
+  const { root, config, one, two } = fixture();
+  const project = { id: "project-two", rootPath: `${root}/primary-project` };
+  config.syncSettings({
+    profileId: two.id,
+    from: one.id,
+    parts: ["appearance", "workspace"],
+    keepInSync: true,
+  });
+  const context = desktopSettingsContext({
+    config,
+    profileId: two.id,
+    project,
+    access: "native",
+  });
+  expect(context.sharedSettings).toEqual({
+    appearance: ["One"],
+    workspace: ["One"],
+  });
+  expect(context.files?.theme.profile).toBe(
+    `${root}/profiles/${one.id}/theme.json`,
+  );
+  // The shared profile layer, but this profile's own per-project override.
+  expect(context.files?.workspace).toEqual({
+    profile: `${root}/profiles/${one.id}/workspace.js`,
+    personal: `${root}/profiles/${two.id}/workspace-projects/${project.id}.js`,
+    project: `${project.rootPath}/.work/workspace.js`,
+  });
+  expect(context.files?.preferences.profile).toBe(
+    `${root}/profiles/${two.id}/prefs.json`,
+  );
+  expect(context.files?.preferences.synced).toEqual([
+    {
+      file: `${root}/profiles/${one.id}/prefs.json`,
+      keys: expect.arrayContaining(["codeTheme", "tabPlacement"]),
+    },
+  ]);
+  expect(DESKTOP_SETTINGS_SKILL).toContain("sharedSettings");
+});
