@@ -209,7 +209,7 @@ person wants to see them, offer one on the right sidebar: { id: "session",
 title: "This chat", source: "work:session", when: { session: true } }. A pull request you open, or are asked
 to work on, belongs in that list as soon as you open it, however you opened it:
 read it first and include the ones already there, and write it again when you
-see one merged or closed. A person's own
+see one merged, closed or retitled. A person's own
 sidebar modules receive the metadata of the chat they sit beside and can show
 other keys; keep the ones they ask for.
 
