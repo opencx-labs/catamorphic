@@ -241,15 +241,22 @@ export function hostProcessEnv(
  * with a sign-in that was fine (ADR 0275). Naming the sign-in's own home
  * as the store, as the SDK itself does on Windows, keeps the resumed CLI
  * on the real sign-in: it refreshes it in place, under the shared lock,
- * and takes up a token another process renewed. An empty name is the
- * default home's store.
+ * and takes up a token another process renewed.
+ *
+ * The host's sign-in is the one its CLI would use on a fresh thread, with
+ * the attempt's names first: every CLI hands this setting to what it runs,
+ * so a host started from a chat's shell inherits one, and an agent signed
+ * in on a home of its own keeps that home. An empty name is the default
+ * home's store.
  */
-function withSignInStore(env: Record<string, string>): Record<string, string> {
-  return {
-    ...env,
-    CLAUDE_SECURESTORAGE_CONFIG_DIR:
-      env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR ?? "",
-  };
+function hostSignInStore(env: Record<string, string>): string {
+  return (
+    env.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
+    env.CLAUDE_CONFIG_DIR ??
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
+    process.env.CLAUDE_CONFIG_DIR ??
+    ""
+  );
 }
 
 /**
@@ -580,8 +587,17 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     // The member's own sign-in, in the harness's own home (ADR 0199).
     ...(access.kind === "sign_in" ? { CLAUDE_CONFIG_DIR: access.home } : {}),
   };
+  // A member's sign-in is always its own home, whatever the attempt names.
+  const store =
+    access.kind === "sign_in"
+      ? access.home
+      : host
+        ? hostSignInStore(attempt.env)
+        : undefined;
   const env =
-    host || access.kind === "sign_in" ? withSignInStore(launch) : launch;
+    store === undefined
+      ? launch
+      : { ...launch, CLAUDE_SECURESTORAGE_CONFIG_DIR: store };
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 

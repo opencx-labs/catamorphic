@@ -186,10 +186,27 @@ describe("model access", () => {
       // A host started on a Claude home of its own.
       process.env.CLAUDE_CONFIG_DIR = "/host-home";
       expect(store(attempt())).toBe("/host-home");
-      // A store the host names stays the one it named.
+      // A store the attempt names stays the one it named.
       expect(
         store(attempt({ env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: "/store" } })),
       ).toBe("/store");
+      // A host started from a chat's shell inherits its CLI's store, which
+      // names its sign-in over the host's config home...
+      process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "";
+      expect(store(attempt())).toBe("");
+      // ...but never over an agent's own home.
+      expect(
+        store(attempt({ env: { CLAUDE_CONFIG_DIR: "/agent-home" } })),
+      ).toBe("/agent-home");
+      // A member's sign-in is its own home, whatever the attempt names.
+      expect(
+        store(
+          attempt({
+            modelAccess: { kind: "sign_in", home: "/members/ada/claude" },
+            env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: "/elsewhere" },
+          }),
+        ),
+      ).toBe("/members/ada/claude");
       // The gateway's grant is no sign-in.
       expect(
         store(

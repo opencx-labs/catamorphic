@@ -161,9 +161,20 @@ it("a resumed thread's CLI takes up the sign-in another Claude Code renewed", as
         entry.item.kind === "assistant_message" && entry.item.text === "Noted.",
     ),
   ).toBe(true);
-  expect(model.requests.map((request) => request.authorization)).toEqual([
-    "Bearer first-token",
-    "Bearer revoked-token",
-    "Bearer renewed-token",
-  ]);
+  // Only fixture tokens are ever shown: were the CLI to reach the
+  // person's own sign-in, its token must not land in a test log.
+  const bearers = model.requests.map(
+    (request) =>
+      /^Bearer (first|revoked|renewed)-token$/.exec(
+        request.authorization ?? "",
+      )?.[0] ?? "another credential",
+  );
+  expect(bearers).not.toContain("another credential");
+  expect(bearers).toContain("Bearer revoked-token");
+  const last = model.requests.at(-1);
+  expect(last?.authorization).toBe("Bearer renewed-token");
+  // The resumed CLI held the conversation Work stored.
+  expect(JSON.stringify(last?.body.messages ?? null)).toContain(
+    "Remember the word mango",
+  );
 }, 90_000);

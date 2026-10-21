@@ -13,25 +13,27 @@ the same login kept working in a terminal. ADRs 0228 and 0269 read the
 missing refresh as contention between Claude Code processes and added
 retries, which also failed.
 
-Every failure was a resumed thread. Claude Code's transcript lives with
-Work (0198, the Agent SDK's `SessionStore`), so resuming one makes the SDK
-write it to a temporary config home (`claude-resume-*`) and start the CLI
-there. The SDK copies the sign-in into that home **without its refresh
-token**, so the copy cannot refresh, and the CLI reads only the copy. Once
-the copied access token expired (eight hours) or another Claude Code
-renewed the sign-in, the resumed CLI sent a dead token, never tried a
-refresh, and failed. A warm CLI started that way (0222) failed the same way
-when its token ran out. The debug logs of 0228's retries all show a
-`claude-resume-*` home and no refresh attempt. On macOS an agent signed in
-on its own home (`account`) fared worse: the SDK found no credentials file
-to copy, so its resumed CLI had none at all.
+Claude Code's transcript lives with Work (0198, the Agent SDK's
+`SessionStore`), so resuming a thread makes the SDK write it to a temporary
+config home (`claude-resume-*`) and start the CLI there. The SDK copies the
+sign-in into that home **without its refresh token**, and the CLI reads
+only the copy. Once the copied access token expired (eight hours) or
+another Claude Code renewed the sign-in, the resumed CLI sent a dead token,
+never tried a refresh, and failed. A warm CLI started that way (0222)
+failed the same way when its token ran out. Every failure that left a
+record (the debug logs of 0228's retries) ran from a `claude-resume-*` home
+with no refresh attempt, and the pinned CLI reproduces it. On macOS an
+agent signed in on a home of its own (the desktop's `account` agents) fared
+worse: the SDK found no credentials file to copy, so its resumed CLI had
+none at all.
 
 ## Decision
 
-**A CLI that runs on a sign-in keeps the sign-in's own store.** For host
-access and a member's `sign_in`, the Claude Code adapter sets
-`CLAUDE_SECURESTORAGE_CONFIG_DIR` to the sign-in's config home: the
-attempt's `CLAUDE_CONFIG_DIR` where it names one, else the empty string,
+**A CLI that runs on a sign-in keeps the sign-in's own store.** The Claude
+Code adapter sets `CLAUDE_SECURESTORAGE_CONFIG_DIR` to the home whose
+sign-in the CLI would use on a fresh thread: a member's `sign_in` home
+always; on the host, the store or `CLAUDE_CONFIG_DIR` the attempt names,
+else the ones the host itself was started with, else the empty string,
 which is the default home (the plain `Claude Code-credentials` Keychain
 item, or `~/.claude/.credentials.json`). The CLI takes its Keychain item,
 its credentials file and the lock it refreshes under from this setting, not
@@ -58,7 +60,12 @@ A chat resumed after any break signs in like a terminal session, so 0228's
 quiet retry and 0269's rerun on return are left for genuine contention and
 network failures. Gateway access is unchanged, since it uses no sign-in. A
 member's sign-in home on a machine of their own (`sign_in`) now refreshes
-from resumed threads too, as 0199 intended. The SDK still writes its stripped copy to
-the temporary home, which a process that dies without cleanup leaves
-behind. A native test drives the pinned CLI through a resumed thread whose
-token another Claude Code renewed.
+from resumed threads too, as 0199 intended.
+
+Every CLI hands the setting to what it runs. A Work started from a chat's
+shell inherits it, which is why the attempt's own names come first; a
+`claude` run from an agent's shell uses the chat's sign-in unless it sets
+the store too. The SDK still writes its stripped copy to the temporary
+home, which a process that dies without cleanup leaves behind. A native
+test drives the pinned CLI through a resumed thread whose token another
+Claude Code renewed.

@@ -25,7 +25,7 @@ export interface ScriptedRequest {
   /** 0-based order of the request among `/v1/messages` calls. */
   index: number;
   body: JsonObject;
-  /** The bearer a signed-in CLI sent (`Bearer <access token>`). */
+  /** The Authorization header the CLI sent, if any. */
   authorization?: string;
 }
 
