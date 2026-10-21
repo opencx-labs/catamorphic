@@ -374,4 +374,18 @@ describe("Work playbook", () => {
     expect(instructions).toContain("Other chats may be working");
     expect(instructions.endsWith("# Skills\n- notes")).toBe(true);
   });
+
+  it("tells every agent that a worktree it made goes once its pull request merged", () => {
+    for (const strategy of [
+      "shared-first",
+      "isolate-on-contention",
+      "isolation-required",
+    ] as const) {
+      const instructions = workspaceInstructions({ hasTools: true, strategy });
+      expect(instructions).toContain(
+        "A worktree you made with git is yours to remove",
+      );
+      expect(instructions).toContain("never one with uncommitted changes");
+    }
+  });
 });
