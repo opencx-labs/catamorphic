@@ -224,6 +224,8 @@ export interface ChatDockProps {
    * composer holds nothing else.
    */
   registerSkill?: (apply: (message: string) => void) => void;
+  /** Hands the host a way to give this chat's composer the keys. */
+  registerComposerFocus?: (focus: () => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
    * The agent the chat's session runs on and the harness it is bound to,

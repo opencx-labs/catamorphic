@@ -2587,6 +2587,8 @@ export function App({
   // The palette's skills (ADR 0270): each chat's skill sender, which takes
   // its composer's pills along.
   const chatSkillsRef = useRef(new Map<string, (message: string) => void>());
+  // Each chat's way to give its composer the keys ("Go to chat").
+  const composerFocusesRef = useRef(new Map<string, () => void>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -2802,12 +2804,12 @@ export function App({
 
   /**
    * An agent-held surface's "Go to chat": the chat comes on screen and its
-   * composer takes the keys (as a palette skill hands back), so the move
-   * shows even when the chat is already beside the surface in a split.
+   * composer takes the keys, so the move shows even when the chat is
+   * already beside the surface in a split.
    */
   const goToChat = (localId: string) => {
     revealChat(localId);
-    composerReturnsRef.current.get(localId)?.("");
+    composerFocusesRef.current.get(localId)?.();
   };
 
   const revealChatRef = useRef(revealChat);
@@ -2819,6 +2821,7 @@ export function App({
     chatClosersRef.current.delete(localId);
     chatMinimizersRef.current.delete(localId);
     chatSkillsRef.current.delete(localId);
+    composerFocusesRef.current.delete(localId);
     updateWorkspace((ws) => {
       const closing = ws.chats.find((chat) => chat.localId === localId);
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
@@ -8083,6 +8086,9 @@ export function App({
                       }
                       registerSkill={(apply) =>
                         chatSkillsRef.current.set(entry.localId, apply)
+                      }
+                      registerComposerFocus={(focus) =>
+                        composerFocusesRef.current.set(entry.localId, focus)
                       }
                       onSessionCreated={onSessionCreated}
                       onSessionAgent={onSessionAgent}

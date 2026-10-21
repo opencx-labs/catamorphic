@@ -508,6 +508,7 @@ function ChatDockContent({
   registerMinimize,
   registerSend,
   registerSkill,
+  registerComposerFocus,
   registerFocusChips,
   onSessionCreated,
   onSessionAgent,
@@ -1741,6 +1742,9 @@ function ChatDockContent({
   useEffect(() => {
     registerSkill?.((message) => applySkillRef.current(message));
   }, [registerSkill]);
+  useEffect(() => {
+    registerComposerFocus?.(() => composerRef.current?.focusToType());
+  }, [registerComposerFocus]);
 
   // The composer's "/" and "@" menus (ADR 0273): open while the caret ends
   // a word starting with either, anywhere in the message. Escape closes the

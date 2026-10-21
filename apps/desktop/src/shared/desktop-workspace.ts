@@ -131,10 +131,16 @@ export type WorkspaceEvent =
 
 /**
  * What a workspace asks of a chat it shows in a dock: close or minimize it,
- * send into it, focus its chips, or apply a palette skill with its
- * composer's pills (ADR 0270).
+ * send into it, focus its chips or its composer, or apply a palette skill
+ * with its composer's pills (ADR 0270).
  */
-export type DockAction = "close" | "minimize" | "send" | "focusChips" | "skill";
+export type DockAction =
+  | "close"
+  | "minimize"
+  | "send"
+  | "focusChips"
+  | "focusComposer"
+  | "skill";
 
 export interface ChatDraft {
   message: string;

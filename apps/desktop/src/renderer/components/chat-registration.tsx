@@ -80,6 +80,7 @@ export function ChatRegistration(
     current.current.registerMinimize?.(() => send("minimize"));
     current.current.registerSend?.((message) => send("send", message));
     current.current.registerSkill?.((message) => send("skill", message));
+    current.current.registerComposerFocus?.(() => send("focusComposer"));
     current.current.registerFocusChips?.(() => {
       send("focusChips");
       return true;

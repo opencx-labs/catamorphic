@@ -443,9 +443,10 @@ export class DesktopWorkspaces {
           this.detached(profileId) &&
           chat.data.entry.mode !== "tab";
         const target = inDock ? floating.webContents : event.sender;
-        // Keys follow the chips the shortcut focuses: the detached dock's
-        // window takes the keyboard first.
-        if (inDock && action === "focusChips") floating.focus();
+        // Keys follow the chips or composer an action focuses: the detached
+        // dock's window takes the keyboard first.
+        if (inDock && (action === "focusChips" || action === "focusComposer"))
+          floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",
           localId,

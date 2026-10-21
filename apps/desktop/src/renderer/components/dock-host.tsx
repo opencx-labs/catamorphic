@@ -113,6 +113,7 @@ export function DockHost({
         minimize?: () => void;
         send?: (message: string) => void;
         skill?: (message: string) => void;
+        focusComposer?: () => void;
         focusChips?: () => boolean;
       }
     >(),
@@ -264,6 +265,7 @@ export function DockHost({
         else if (event.action === "close") action?.close?.();
         else if (event.action === "minimize") action?.minimize?.();
         else if (event.action === "focusChips") action?.focusChips?.();
+        else if (event.action === "focusComposer") action?.focusComposer?.();
       }),
     [],
   );
@@ -858,6 +860,7 @@ export function DockHost({
           minimize?: () => void;
           send?: (message: string) => void;
           skill?: (message: string) => void;
+          focusComposer?: () => void;
           focusChips?: () => boolean;
         }) =>
           actions.current.set(entry.localId, {
@@ -961,6 +964,9 @@ export function DockHost({
                 registerMinimize={(minimize) => register({ minimize })}
                 registerSend={(send) => register({ send })}
                 registerSkill={(skill) => register({ skill })}
+                registerComposerFocus={(focusComposer) =>
+                  register({ focusComposer })
+                }
                 registerFocusChips={(focusChips) => register({ focusChips })}
                 onCustomizeChips={() =>
                   invoke(chat, { kind: "customizeChips" })
