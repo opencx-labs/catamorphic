@@ -38,6 +38,31 @@ immediately. Framed content independently controls the inset window and its bord
 Scope selectors wrap below headings when space is tight, and option controls
 shrink within their rows so both sidebars can remain open without horizontal scroll.
 
+## Shared profile settings
+
+A profile can import parts of another profile's settings, once or kept in sync
+(ADR 0272): Appearance, Workspace, Macros, Keyboard shortcuts and
+Notifications, the Settings categories `shared/profile-sync.ts` lists. A
+preference belongs to the part named by its Settings category
+(`settingCategory` in `shared/settings-catalog.ts`). `profiles.json` records
+`syncedFrom: { <part>: <owner id> }` per profile; followers always name the
+owner. A synced profile's theme, shortcut and workspace stores open the owner's
+`theme.json`, `keybindings.json` and `workspace.js`. Its `PrefsStore` and the
+profile settings layer read and write the part's preference keys in the owner's
+`prefs.json` (`SettingsFiles.synced`), while runtime state and other keys stay
+in its own. Per-project overrides (`settings-projects/`, `workspace-projects/`)
+are never shared.
+
+`ProfileConfigManager.syncSettings` links or copies parts;
+`stopSyncing` gives the follower a copy and ends the link; removing an owner
+hands its parts to the first follower and repoints the rest. Each swaps the
+affected profiles' stores in place and repaints their windows. A copy never
+overwrites an invalid `prefs.json`. The welcome screen and Profile settings
+mount the same `ProfileImportDialog`; Settings shows `SyncedNote` under a shared
+category; `desktop_settings` reports `sharedSettings`. Tests:
+`profile-sync.test.ts`, `desktop-settings-context.test.ts` and
+`profile-settings-screen.test.tsx`.
+
 ## Other families
 
 Settings > Workspace > Code review exposes `diffLayout`, `diffWrap`,

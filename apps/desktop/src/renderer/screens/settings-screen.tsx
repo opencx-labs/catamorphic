@@ -46,6 +46,7 @@ import { CopyButton } from "../components/copy-button.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
+import { SyncedNote } from "../components/profile-settings-sync.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
 import {
@@ -54,6 +55,8 @@ import {
   type AppPrefs,
   type ConnectionInfo,
   desktopApi,
+  type Profile,
+  type ProfilesData,
   type ThemePreset,
   type ThemeToken,
 } from "../lib/desktop-api.js";
@@ -73,6 +76,8 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 export function SettingsScreen({
   projectId,
   destination,
+  profile,
+  profiles,
   onSearch,
   onAddAgent,
   onCreateAssistant,
@@ -81,6 +86,9 @@ export function SettingsScreen({
 }: {
   projectId?: string;
   destination?: SettingsDestination;
+  /** The window's profile, to say which categories it shares (ADR 0272). */
+  profile?: Profile;
+  profiles?: ProfilesData | null;
   /** Opens the palette's settings scope: the one search surface (ADR 0123). */
   onSearch: () => void;
   onAddAgent: () => void;
@@ -353,6 +361,7 @@ export function SettingsScreen({
       );
     });
   };
+  const findKeys = useKeybindings();
   return (
     <div
       className="@container/settings flex min-h-0 min-w-0 flex-1 flex-col"
@@ -366,7 +375,10 @@ export function SettingsScreen({
             Make this workspace your own.
           </p>
         </div>
-        <ShortcutHint label="Search settings">
+        <ShortcutHint
+          label="Search settings"
+          shortcut={formatBinding(findKeys.find)}
+        >
           <button
             type="button"
             aria-label="Search settings"
@@ -458,6 +470,11 @@ export function SettingsScreen({
                   </h2>
                   {"action" in section ? section.action : null}
                 </div>
+                <SyncedNote
+                  profile={profile}
+                  data={profiles}
+                  part={section.id}
+                />
                 {section.content}
               </div>
             ))}
@@ -1354,14 +1371,14 @@ function LayoutSection({
                   <span
                     aria-hidden={!overridden}
                     data-source-current={overridden || undefined}
-                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-100" : "opacity-0"}`}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-standard ${overridden ? "opacity-100" : "opacity-0"}`}
                   >
                     Custom for {SETTING_SOURCE_LABELS[scope].toLowerCase()}
                   </span>
                   <span
                     aria-hidden={overridden}
                     data-source-current={!overridden || undefined}
-                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-0" : "opacity-100"}`}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-standard ${overridden ? "opacity-0" : "opacity-100"}`}
                   >
                     {SETTING_SOURCE_LABELS[scope]} · From{" "}
                     {SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}
@@ -1385,7 +1402,7 @@ function LayoutSection({
                     aria-hidden={!overridden}
                     inert={!overridden}
                     tabIndex={overridden ? undefined : -1}
-                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-standard hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
                     onClick={() => void save({ [key]: null })}
                   >
                     Reset

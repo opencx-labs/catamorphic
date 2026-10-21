@@ -1347,7 +1347,7 @@ export const ChipRail = memo(function ChipRail({
       </PopPanel>
       <div
         ref={sizerRef}
-        className="overflow-x-hidden overflow-y-hidden transition-[height] duration-200 ease-[cubic-bezier(0.2,0,0,1)] [scrollbar-width:thin]"
+        className="overflow-x-hidden overflow-y-hidden transition-[height] duration-200 ease-standard [scrollbar-width:thin]"
       >
         <div
           ref={flowRef}

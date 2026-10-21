@@ -27,10 +27,15 @@ export function desktopSettingsContext({
     };
   const stores = config.forProfile(profileId);
   const preferences = config.settingsFiles(profileId, project);
+  const sharedSettings = config.sharedSettings(profileId);
   return {
     access,
     projectId: project.id,
     profileId,
+    // Parts whose files this profile shares, with the other profiles' names.
+    sharedSettings: Object.keys(sharedSettings).length
+      ? sharedSettings
+      : undefined,
     personalFilesDirectory:
       access === "native" && project.rootPath
         ? path.join(project.rootPath, PROJECT_PERSONAL_DIR, profileId)
@@ -48,7 +53,7 @@ export function desktopSettingsContext({
       workspace: {
         profile: stores.workspace.file,
         personal: projectLocalWorkspaceFile(
-          path.dirname(stores.workspace.file),
+          config.profileDir(profileId),
           project.id,
         ),
         ...(project.rootPath

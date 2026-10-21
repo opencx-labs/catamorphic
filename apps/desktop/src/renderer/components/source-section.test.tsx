@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { CollectionChange } from "@catamorphic/app";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, type ReactNode } from "react";
+import { act, type ReactNode, useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -78,6 +78,46 @@ function memorySource(
   return source;
 }
 
+/** A section's chrome: what the list reports is the status it shows. */
+function Contributed({
+  section,
+  surface,
+  open,
+  onReport,
+  children,
+}: {
+  section: SidebarSectionConfig;
+  surface: SidebarSurface;
+  open: (url: string, mode: string) => void;
+  onReport: (status: SidebarStatus) => void;
+  children: ReactNode;
+}) {
+  const [status, setStatus] = useState<SidebarStatus>({ state: "loading" });
+  const report = useCallback(
+    (next: SidebarStatus) => {
+      onReport(next);
+      setStatus(next);
+    },
+    [onReport],
+  );
+  return (
+    <SidebarContribution
+      value={{
+        section,
+        surface,
+        visible: true,
+        relevant: true,
+        status,
+        report,
+        open,
+        registerRefresh: () => () => {},
+      }}
+    >
+      {children}
+    </SidebarContribution>
+  );
+}
+
 async function mount({
   source,
   section = { id: "things", source: ".work/things.ts" },
@@ -102,17 +142,11 @@ async function mount({
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <SidebarContribution
-          value={{
-            section,
-            surface,
-            visible: true,
-            relevant: true,
-            status: { state: "loading" },
-            report: (status) => reports.push(status),
-            open,
-            registerRefresh: () => () => {},
-          }}
+        <Contributed
+          section={section}
+          surface={surface}
+          open={open}
+          onReport={(status) => reports.push(status)}
         >
           {host ? (
             <SidebarHostProvider value={host}>
@@ -121,7 +155,7 @@ async function mount({
           ) : (
             <SourceSection projectId="p" source={source} />
           )}
-        </SidebarContribution>
+        </Contributed>
       </QueryClientProvider>,
     ),
   );
@@ -387,7 +421,7 @@ describe("every list draws one way (ADR 0234)", () => {
     }
   });
 
-  it("keeps an empty list's place to drop while the list is read again", async () => {
+  it("makes an empty list's sentence its place to drop, before and through a drag", async () => {
     let publish:
       | ((change: CollectionChange<SidebarSourceItem>) => void)
       | undefined;
@@ -401,7 +435,9 @@ describe("every list draws one way (ADR 0234)", () => {
     const view = await mount({ source });
     const place = () => view.node.querySelector('[data-drop-zone="things"]');
     try {
-      expect(place()).toBeNull();
+      // There before any drag: a drag never adds space to the sidebar.
+      expect(place()?.textContent).toBe("No things.");
+      const before = place();
       await act(async () => {
         const start = new Event("dragstart", { bubbles: true });
         Object.assign(start, {
@@ -410,9 +446,8 @@ describe("every list draws one way (ADR 0234)", () => {
         document.dispatchEvent(start);
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(place()).toBeTruthy();
-      // Shown for the drag, a section reads its list again: the place
-      // stays under the pointer while the read is out.
+      expect(place()).toBe(before);
+      // A read again keeps it under the pointer.
       const reads: Array<() => void> = [];
       source.load = () =>
         new Promise((resolve) => {

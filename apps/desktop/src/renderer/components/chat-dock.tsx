@@ -2589,7 +2589,7 @@ function ChatDockContent({
         splitResizing
           ? "transition-[padding]"
           : "transition-[padding,left,right]"
-      } duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+      } duration-250 ease-standard ${
         splitPane && slot === "left"
           ? "inset-y-0 left-0 border-r border-border p-0"
           : splitPane && slot === "right"
@@ -2682,7 +2682,7 @@ function ChatDockContent({
         // Growing into a tab, its card's edge (border, corners, shadow) and
         // colour ease into the tab's along with its size: nothing switches
         // off in the first frame.
-        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden duration-250 ease-standard ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
             : `${
@@ -2725,11 +2725,11 @@ function ChatDockContent({
           and its controls float over the timeline's top-right corner. */}
         <div
           data-testid="chat-status-chrome"
-          className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
+          className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-standard ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
         >
           <header
             // Fades with the header's collapse rather than vanishing first.
-            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold transition-[opacity,visibility] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "invisible opacity-0" : ""}`}
+            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold transition-[opacity,visibility] duration-150 ease-standard ${presentsAsTab ? "invisible opacity-0" : ""}`}
             aria-hidden={presentsAsTab}
           >
             <span className="flex min-w-0 items-center gap-2">
@@ -3211,7 +3211,7 @@ function ChatDockContent({
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
           <div
-            className={`flex w-full flex-col transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`flex w-full flex-col transition-[padding] duration-250 ease-standard ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"
@@ -3229,7 +3229,7 @@ function ChatDockContent({
               than unmounted so their motion state survives the lurk. */}
             {chipSession && (
               <div
-                className={`grid shrink-0 transition-[grid-template-rows,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                className={`grid shrink-0 transition-[grid-template-rows,opacity] duration-250 ease-standard ${
                   lurking
                     ? "grid-rows-[0fr] opacity-0"
                     : "grid-rows-[1fr] opacity-100"
@@ -3530,7 +3530,9 @@ function ChatDockContent({
             ) : (
               <form
                 ref={composerFormRef}
-                className="field @container/composer relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
+                // The buttons inside share the composer's corners: their
+                // radius is the composer's minus its inset (DESIGN.md).
+                className="field @container/composer relative m-3 mt-1 flex shrink-0 flex-col bg-bg-raised [--composer-inset:6px] [--composer-radius:12px] rounded-(--composer-radius) p-(--composer-inset)"
                 onSubmit={submit}
               >
                 <ComposerMenu
@@ -3560,7 +3562,7 @@ function ChatDockContent({
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-[calc(var(--composer-radius)-var(--composer-inset))] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
                       aria-label="Attach files"
                     >
                       {pendingTransfers > 0 ? (
@@ -3696,7 +3698,7 @@ function ChatDockContent({
                         accent, only its glyph changing while the agent works. */}
                       <button
                         type="button"
-                        className="button-primary size-8 rounded-lg p-0"
+                        className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0"
                         onClick={() => void chat.interrupt()}
                         aria-label="Stop the agent"
                         data-testid="chat-stop"
@@ -3718,7 +3720,7 @@ function ChatDockContent({
                     >
                       <button
                         type="submit"
-                        className="button-primary size-8 rounded-lg p-0 disabled:opacity-35"
+                        className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0 disabled:opacity-35"
                         disabled={
                           pendingTransfers > 0 ||
                           (!draft.trim() && pillCount === 0)

@@ -641,7 +641,7 @@ export function SidebarItemRow<
               data-row-disclosure=""
             >
               <ChevronRight
-                className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${disclosure.open ? "rotate-90" : ""}`}
+                className={`size-3 transition-transform duration-150 ease-standard ${disclosure.open ? "rotate-90" : ""}`}
               />
             </button>
           )}

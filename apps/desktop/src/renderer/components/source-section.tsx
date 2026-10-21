@@ -37,7 +37,6 @@ import {
   sidebarItemDragSpec,
 } from "../lib/sidebar-drag.js";
 import { TAB_DRAG_TYPE } from "../lib/tab-drag.js";
-import { useDraggingTab } from "../lib/use-dragging-tab.js";
 import type { SectionSource } from "../sources/contract.js";
 import { runRowAction } from "../sources/run.js";
 import {
@@ -60,6 +59,7 @@ import {
 import { useSidebarHost } from "./sidebar-host.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SidebarSessionInspector } from "./sidebar-session-inspector.js";
+import { emptySentence } from "./sidebar-status.js";
 
 const failure = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause));
@@ -561,16 +561,16 @@ function SourceView({
   const tileRows = tiles
     ? roots.filter((row) => !row.hasChildren && !hidden(row))
     : [];
-  // An empty list that takes drops offers a place to drop while something
-  // it takes is dragged: its tree has no rows to drop between. Read once,
-  // it stays through a read again: shown for the drag, the section reads
-  // its list again, and the place would vanish under the pointer.
-  const dragging = useDraggingTab();
+  // An empty list that takes drops has no rows to drop between: its empty
+  // sentence is the place to drop. It is there before the drag starts, so
+  // a drag never adds space to the sidebar.
+  // Drawn only once the section says it is empty, so its chrome and the
+  // list never disagree (a skeleton above a sentence).
   const emptyDrop =
     capabilities.drop &&
-    dragging &&
     root.status === "ready" &&
-    roots.length === 0;
+    roots.length === 0 &&
+    (contribution?.status.state ?? "empty") === "empty";
   return (
     <div
       className="sidebar-live-source"
@@ -580,7 +580,11 @@ function SourceView({
       {((tiles && tileRows.length > 0) || emptyDrop) && (
         <SourceTiles
           rows={tileRows}
-          empty={tileRows.length === 0}
+          empty={
+            tileRows.length === 0
+              ? emptySentence(section?.empty, source.empty)
+              : undefined
+          }
           sectionId={sectionId}
           accepts={accepts}
           onDrop={dropInto}
@@ -630,7 +634,7 @@ const opensFirst = (row: SidebarSourceItem) => row.collapsed === false;
 
 /**
  * Root rows as a grid of icons that reorder and take drops like the tree;
- * empty, the place to drop the first.
+ * empty, its sentence is the place to drop the first.
  */
 function SourceTiles({
   rows,
@@ -642,7 +646,8 @@ function SourceTiles({
   render,
 }: {
   rows: readonly SidebarSourceItem[];
-  empty: boolean;
+  /** The empty sentence, when there are no rows. */
+  empty?: string;
   sectionId: string;
   accepts: (
     types: readonly string[],
@@ -718,11 +723,12 @@ function SourceTiles({
       data-drop={over?.id === null ? over.position : undefined}
       {...handlers()}
       className={
-        empty
-          ? "mx-1 mb-2 h-9 rounded-md border border-dashed border-border transition-colors duration-150 data-[drop]:border-accent data-[drop]:bg-accent/10"
+        empty !== undefined
+          ? "sidebar-empty-state rounded-md transition-colors duration-150 data-[drop]:bg-accent/10 data-[drop]:text-fg"
           : "grid grid-cols-4 gap-2 px-1 pb-2"
       }
     >
+      {empty !== undefined && <li className="list-none">{empty}</li>}
       {rows.map((row) => (
         <li
           key={row.id}

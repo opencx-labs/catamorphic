@@ -275,6 +275,11 @@ file with their job, registry copies included.
 
 - Radii: `--radius-sm` 4px (inputs, chips), `--radius-md` 6px (buttons, list
   rows), `--radius-lg` 10px (panels, dialogs).
+- **Nested corners are concentric.** A rounded control sitting in a rounded
+  container's padding takes the container's radius minus that padding, and
+  the relation is written down rather than hand-tuned: the composer sets
+  `[--composer-radius:12px] [--composer-inset:6px]`, and its buttons use
+  `rounded-[calc(var(--composer-radius)-var(--composer-inset))]`.
 - Spacing on a 4px grid. Common paddings: 8 (compact), 12 (row), 16 (panel).
 - Sidebar rows are 28px tall; workspace tab rows are 32px; sidebar width
   260px; right panel 380px.
@@ -333,6 +338,10 @@ the animation is wrong, not the test.
 
 1. **One easing.** All motion uses `--ease-standard`
    (`cubic-bezier(0.2, 0, 0, 1)`). No `ease-in-out`, no springs, no bounces.
+   The theme points Tailwind's `--default-transition-timing-function` at it,
+   so a bare `transition-*` class is already on the curve; name it with
+   `ease-standard`, never a `cubic-bezier` literal. Registry source keeps the
+   literal, since a host may not define the token.
 2. **Duration bounds: 100–300ms.** Micro-feedback (hover, color) sits at
    100–150ms; structural motion (panels, tabs, docks) at 180–250ms. Anything
    longer reads as sluggish; anything shorter as a glitch.
@@ -746,6 +755,28 @@ from `/` is a pill in the message, like a mention, so "fix the login bug and
 still bar; a failed one leads the list, where Enter retries. The empty
 composer's hint reads `/ skills @ mention`, and steps aside when the
 composer is too narrow to hold it beside the placeholder.
+
+### 2026-10-21: Connectors reads like a catalog
+
+The Connectors dialog is a two-pane catalog in the shape of an app store.
+A rail holds Browse, Plugins and MCP servers, then everything installed by
+name, with a warning dot where a sign-in needs attention. Browse shelves
+the plugin catalog by the marketplaces' own categories, six to a shelf,
+vendor-named entries first; a shelf's title opens all of it under Plugins,
+whose category pills filter in place. A row is an icon tile, a name and
+one line, and a quiet round `+` that becomes a check once installed; the
+rest of the row opens the connector's page. Tiles show the registry icon
+or the favicon of a vendor's own site (never a code host's, which would
+give every entry the same mark), else the name's first letter.
+
+Each connector has a page: a large tile, the name with who publishes it,
+its one primary action, the full description and a row of facts. An
+installed connection's page holds its status, Test and Authorize, the
+"Available to agents" switch and its tool permissions; a plugin's lists
+its MCP servers, and an uninstalled one offers more from its category.
+Pages stack under a breadcrumb; the search pill stays in reach and typing
+returns to results, which list in one column and glide with the shared
+list motion. Native `title` tooltips on the old rows went with them.
 
 ### 2026-10-20: Skills live in the palette; "/" opens them from a chat
 
@@ -3548,3 +3579,15 @@ The voice assistant starts sessions with the same tool. Left without an
 agent, it starts the person's own agent, without the assistant's tools; a
 session it starts is still handed a brief that leads back to it, and it
 still passes on the session's notes. See ADR 0271.
+
+### 2026-10-21: A new profile can bring another profile's settings, and keep them in sync
+
+Setting up a second profile meant redoing the theme, shortcuts, sidebars and
+macros by hand, and the two drifted apart. A new profile's welcome screen now
+offers "Import from a profile" beside "Import from a browser": pick a profile,
+tick Appearance, Workspace, Macros, Keyboard shortcuts or Notifications, and
+keep them in sync or take a copy. Kept in sync, both profiles use the same
+files, so a change in either shows in both; Settings says so under each shared
+category. Profile settings lists what stays in sync, with Stop syncing, which
+leaves each profile with what it shows. Agents, passwords and browsing data
+always stay with their own profile. See ADR 0272.

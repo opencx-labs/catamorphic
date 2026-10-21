@@ -11,6 +11,8 @@ vi.mock("../lib/desktop-api", () => ({
     profilesUpdate: vi.fn().mockResolvedValue(undefined),
     profilesSetDefault: vi.fn().mockResolvedValue(undefined),
     profilesRemove: vi.fn().mockResolvedValue(true),
+    profilesSyncSettings: vi.fn().mockResolvedValue(undefined),
+    profilesStopSyncing: vi.fn().mockResolvedValue(undefined),
     vaultList: vi.fn().mockResolvedValue([]),
     vaultReveal: vi.fn().mockResolvedValue(null),
     vaultSave: vi.fn().mockResolvedValue(undefined),
@@ -177,5 +179,93 @@ describe("ProfileSettingsScreen", () => {
     );
     await act(async () => open?.click());
     expect(onOpenPasswords).toHaveBeenCalledOnce();
+  });
+
+  it("imports settings from another profile, kept in sync or copied", async () => {
+    const personal = {
+      id: "profile-2",
+      name: "Personal",
+      color: "#3b82f6",
+      projectIds: [],
+    };
+    await act(async () => {
+      root.render(
+        <ProfileSettingsScreen
+          profileId={personal.id}
+          activeProfileId={profile.id}
+          data={{ profiles: [profile, personal], defaultProfileId: profile.id }}
+          projects={[project]}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-profile-import"]',
+    );
+    expect(open?.disabled).toBe(false);
+    await act(async () => open?.click());
+    const dialog = document.querySelector(
+      '[data-testid="profile-import-dialog"]',
+    );
+    expect(dialog?.textContent).toContain(
+      "Bring another profile's settings into Personal.",
+    );
+    const source = dialog?.querySelector<HTMLSelectElement>(
+      '[aria-label="Import from profile"]',
+    );
+    expect(source?.value).toBe(profile.id);
+    const macros = dialog?.querySelector<HTMLInputElement>(
+      '[data-sync-part="macros"]',
+    );
+    await act(async () => macros?.click());
+    const start = dialog?.querySelector<HTMLButtonElement>(
+      '[data-testid="profile-import-start"]',
+    );
+    await act(async () => start?.click());
+    expect(desktopApi.profilesSyncSettings).toHaveBeenCalledWith({
+      profileId: personal.id,
+      from: profile.id,
+      parts: ["appearance", "workspace", "shortcuts", "notifications"],
+      keepInSync: true,
+    });
+  });
+
+  it("lists what stays in sync and stops it from either profile", async () => {
+    const personal = {
+      id: "profile-2",
+      name: "Personal",
+      color: "#3b82f6",
+      projectIds: [],
+      syncedFrom: { appearance: profile.id, shortcuts: profile.id },
+    };
+    const data = {
+      profiles: [profile, personal],
+      defaultProfileId: profile.id,
+    };
+    await act(async () => {
+      root.render(
+        <ProfileSettingsScreen
+          profileId={profile.id}
+          activeProfileId={profile.id}
+          data={data}
+          projects={[project]}
+          onClose={() => undefined}
+        />,
+      );
+    });
+    const row = container.querySelector(`[data-sync-partner="${personal.id}"]`);
+    expect(row?.textContent).toContain("Personal");
+    expect(row?.textContent).toContain(
+      "Appearance and Keyboard shortcuts, kept in sync",
+    );
+    const stop = [...(row?.querySelectorAll("button") ?? [])].find((button) =>
+      button.textContent?.includes("Stop syncing"),
+    );
+    await act(async () => stop?.click());
+    // The follower takes a copy, even when stopped from the owner's side.
+    expect(desktopApi.profilesStopSyncing).toHaveBeenCalledWith({
+      profileId: personal.id,
+      parts: ["appearance", "shortcuts"],
+    });
   });
 });

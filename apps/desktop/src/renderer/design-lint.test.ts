@@ -85,7 +85,7 @@ describe("design lint", () => {
       .flatMap(({ file, text }) =>
         [...text.matchAll(/\stitle=\{|\stitle="/g)].map(() => file),
       );
-    expect(titles.length).toBeLessThanOrEqual(56);
+    expect(titles.length).toBeLessThanOrEqual(33);
   });
   // DESIGN.md "Menus and popovers" (ADR 0221): one primitive owns each
   // kind of dismissal, presses inside pages and app frames included, which

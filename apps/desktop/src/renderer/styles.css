@@ -78,6 +78,10 @@
   --radius-lg: 10px;
 
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Bare transition utilities (transition, transition-colors, ...) take the
+     one easing too, so a class without an ease-* never falls back to
+     Tailwind's own curve. */
+  --default-transition-timing-function: var(--ease-standard);
 }
 
 /* Every element rests with the accent as its outline color, so a focus ring
@@ -2577,6 +2581,16 @@ html[data-surface="dock"] #root {
   .chrome-toggle-slot[data-chrome-toggle="right"][data-folded] {
   margin-inline-start: -4px;
 }
+/* A chat shown as a tab floats its controls in the same corner: while the
+   toggle is there, they stand beside it instead of under it. */
+/* (The dock lays chats over the surface from outside it.) */
+:root:has(.chrome-toggle-float:not([data-folded]))
+  [data-chat-tab]
+  [data-testid="chat-status-controls"] {
+  right: calc(0.5rem + 1.75rem + 0.375rem);
+  transition: right 200ms var(--ease-standard);
+}
+
 /* With the header in the sidebar, the right sidebar's toggle floats over
    the content's corner: pushing, it fades as the panel's own arrives. */
 .workspace-surface:has(~ [data-sidebar="right"][data-push])

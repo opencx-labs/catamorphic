@@ -90,6 +90,10 @@ import type {
   PullRequestStatus,
 } from "../../shared/pr-details.js";
 import type {
+  ProfileSync,
+  ProfileSyncPart,
+} from "../../shared/profile-sync.js";
+import type {
   CodexSignIn,
   CodexSignInStatus,
   RemoteMachine,
@@ -488,6 +492,8 @@ export interface ConnectorSearchData {
     description: string;
     version?: string;
     repositoryUrl?: string;
+    /** The server's https home page, when the entry names one. */
+    websiteUrl?: string;
     iconUrl?: string;
     /** Published under a DNS-verified vendor namespace (not io.github.*). */
     official: boolean;
@@ -504,8 +510,16 @@ export interface ConnectorSearchData {
   }>;
   plugins: Array<{
     name: string;
+    /** The catalog's display name, e.g. "HubSpot Sales". */
+    displayName?: string;
     description: string;
     version?: string;
+    /** Who publishes it, e.g. "Anthropic". */
+    author?: string;
+    /** The marketplace's grouping, lowercase, e.g. "productivity". */
+    category?: string;
+    /** The plugin's or its vendor's web page. */
+    homepage?: string;
     marketplace: string;
     installed: boolean;
     /** From an Anthropic-maintained marketplace. */
@@ -735,6 +749,8 @@ export interface Profile {
   color: string;
   projectIds: string[];
   defaultProjectId?: string;
+  /** Part → the profile whose settings it shares (ADR 0272). */
+  syncedFrom?: ProfileSync;
 }
 
 export interface ProfilesData {
@@ -1920,6 +1936,18 @@ export interface CatamorphicDesktopApi {
     patch: { name?: string; color?: string; defaultProjectId?: string },
   ) => Promise<Profile | undefined>;
   profilesSetDefault: (id: string) => Promise<void>;
+  /** Bring parts of another profile's settings in, shared or copied (ADR 0272). */
+  profilesSyncSettings: (input: {
+    profileId: string;
+    from: string;
+    parts: ProfileSyncPart[];
+    keepInSync: boolean;
+  }) => Promise<void>;
+  /** Stop sharing parts; the profile keeps what it shows now. */
+  profilesStopSyncing: (input: {
+    profileId: string;
+    parts: ProfileSyncPart[];
+  }) => Promise<void>;
   profilesRemove: (id: string) => Promise<boolean>;
   profilesClaimProject: (profileId: string, projectId: string) => Promise<void>;
   profilesForProject: (projectId: string) => Promise<Profile>;

@@ -17,6 +17,10 @@ export function SidebarSkeleton() {
   );
 }
 
+/** An empty section's sentence: its config's, else its source's. */
+export const emptySentence = (configured?: string, fromSource?: string) =>
+  configured ?? fromSource ?? "Nothing here yet.";
+
 /**
  * The one status presentation every sidebar section shares: skeleton rows
  * while loading, a muted sentence when empty, the error with Retry when a
@@ -50,10 +54,12 @@ export function SidebarStatusBody({
         )}
       </div>
     );
-  if (status.state === "empty")
+  // A list that takes drops draws its empty sentence itself, as the place
+  // to drop the first row.
+  if (status.state === "empty" && !status.droppable)
     return (
       <p className="sidebar-empty-state">
-        {empty ?? status.empty ?? "Nothing here yet."}
+        {emptySentence(empty, status.empty)}
       </p>
     );
   return null;

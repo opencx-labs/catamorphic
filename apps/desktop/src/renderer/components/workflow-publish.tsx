@@ -152,7 +152,7 @@ export function WorkflowPublishCallout({
             onClick={() => setFilesOpen(!filesOpen)}
           >
             <ChevronDown
-              className={`size-3 transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${filesOpen ? "" : "-rotate-90"}`}
+              className={`size-3 transition-transform duration-200 ease-standard ${filesOpen ? "" : "-rotate-90"}`}
             />
             {changedFiles.length === 1
               ? "1 changed file"

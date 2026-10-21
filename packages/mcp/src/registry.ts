@@ -44,7 +44,11 @@ interface RegistryPackage {
 
 export interface RegistryServerJson {
   name: string;
+  /** Human-readable name (2025-09-29 schema), e.g. "Apex AI Academy". */
+  title?: string;
   description?: string;
+  /** The server's home on the web, distinct from its repository. */
+  websiteUrl?: string;
   version?: string;
   repository?: { url?: string };
   remotes?: RegistryRemote[];
@@ -72,11 +76,13 @@ export interface SuggestedConnection {
 export interface McpRegistryEntry {
   /** Reverse-DNS registry name, e.g. "io.github.owner/server". */
   name: string;
-  /** Short display name (the part after the namespace). */
+  /** The entry's title, else the part of its name after the namespace. */
   displayName: string;
   description: string;
   version?: string;
   repositoryUrl?: string;
+  /** The server's https home page, when it names one. */
+  websiteUrl?: string;
   status?: string;
   /** Best displayable icon (https/data only), when the entry carries one. */
   iconUrl?: string;
@@ -119,17 +125,31 @@ export async function searchMcpRegistry(
   return entries;
 }
 
+/** An https address, or nothing: entries are third-party data. */
+function httpsUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    return new URL(value).protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function toEntry(
   server: RegistryServerJson,
   status?: string,
 ): McpRegistryEntry {
   const iconUrl = pickIcon(server.icons);
+  const title =
+    typeof server.title === "string" ? server.title.trim() : undefined;
+  const websiteUrl = httpsUrl(server.websiteUrl);
   return {
     name: server.name,
-    displayName: server.name.split("/").pop() ?? server.name,
+    displayName: title || (server.name.split("/").pop() ?? server.name),
     description: server.description ?? "",
     version: server.version,
     repositoryUrl: server.repository?.url,
+    ...(websiteUrl ? { websiteUrl } : {}),
     status,
     ...(iconUrl ? { iconUrl } : {}),
     suggested: suggestConnection(server),

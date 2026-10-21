@@ -1376,6 +1376,16 @@ const api = {
   ): Promise<unknown> => invoke("catamorphic:profiles-update", id, patch),
   profilesSetDefault: (id: string): Promise<void> =>
     invoke("catamorphic:profiles-set-default", id),
+  profilesSyncSettings: (input: {
+    profileId: string;
+    from: string;
+    parts: string[];
+    keepInSync: boolean;
+  }): Promise<void> => invoke("catamorphic:profiles-sync-settings", input),
+  profilesStopSyncing: (input: {
+    profileId: string;
+    parts: string[];
+  }): Promise<void> => invoke("catamorphic:profiles-stop-syncing", input),
   profilesRemove: (id: string): Promise<boolean> =>
     invoke("catamorphic:profiles-remove", id),
   profilesClaimProject: (profileId: string, projectId: string): Promise<void> =>
