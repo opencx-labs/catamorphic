@@ -99,6 +99,21 @@ describe("fadeEdges", () => {
     expect(list.element.hasAttribute("data-edge-faded")).toBe(true);
   });
 
+  it("reads again when a row's motion settles: a short list ends sharp", () => {
+    // A row sliding into place reaches past the end for a moment; neither
+    // the scroller's size nor its end marker move when it settles.
+    const list = scroller({ client: 32, content: 60 });
+    fadeEdges(list.element);
+    observed();
+    expect(list.fades()).toEqual(["0px", "24px"]);
+    list.grow(32);
+    list.element.firstElementChild?.dispatchEvent(
+      new Event("transitionend", { bubbles: true }),
+    );
+    expect(list.fades()).toEqual(["0px", "0px"]);
+    expect(list.element.hasAttribute("data-edge-faded")).toBe(false);
+  });
+
   it("does nothing without observers, or on a scroller it already fades", () => {
     const list = scroller({ client: 100, content: 400, top: 100 });
     fadeEdges(list.element);
