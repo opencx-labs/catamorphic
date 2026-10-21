@@ -81,8 +81,16 @@ export interface ConnectorSearchResult {
   >;
   plugins: Array<{
     name: string;
+    /** The catalog's display name, e.g. "HubSpot Sales". */
+    displayName?: string;
     description: string;
     version?: string;
+    /** Who publishes it, e.g. "Anthropic". */
+    author?: string;
+    /** The marketplace's grouping, lowercase, e.g. "productivity". */
+    category?: string;
+    /** The plugin's or its vendor's web page. */
+    homepage?: string;
     marketplace: string;
     installed: boolean;
     /** From Anthropic's own curated marketplace (the one trusted repo). */
@@ -254,8 +262,12 @@ export class ConnectorsService {
     trimCatalogCache(this.pluginEntries, 512);
     return plugins.map((entry) => ({
       name: entry.name,
+      displayName: entry.displayName,
       description: entry.description,
       version: entry.version,
+      author: entry.author,
+      category: entry.category,
+      homepage: entry.homepage,
       marketplace: entry.marketplace,
       installed: installed.has(entry.name),
       official: entry.marketplace === OFFICIAL_MARKETPLACE,
@@ -301,12 +313,15 @@ export class ConnectorsService {
       this.marketplaces(profileId).map((ref) => this.marketplaceEntries(ref)),
     );
     const entries = lists.flat();
-    if (!needle) return entries.slice(0, 20);
+    // No query browses: the whole catalog, which Connectors groups by
+    // category. Each list is already bounded (a marketplace over 1 MB is
+    // never cached).
+    if (!needle) return entries;
     return entries
-      .filter(
-        (entry) =>
-          entry.name.toLowerCase().includes(needle) ||
-          entry.description.toLowerCase().includes(needle),
+      .filter((entry) =>
+        [entry.name, entry.displayName, entry.author, entry.description].some(
+          (field) => field?.toLowerCase().includes(needle),
+        ),
       )
       .slice(0, 20);
   }
@@ -356,11 +371,17 @@ export class ConnectorsService {
     marketplace: string,
     pluginName: string,
   ): Promise<InstalledConnector> {
-    const entry = this.pluginEntries.get(`${marketplace}#${pluginName}`);
+    // Browsing holds more of the catalog than the entry cache keeps, so a
+    // miss reads the plugin from its (cached) marketplace list instead.
+    const entry =
+      this.pluginEntries.get(`${marketplace}#${pluginName}`) ??
+      (this.marketplaces(profileId).includes(marketplace)
+        ? (await this.marketplaceEntries(marketplace)).find(
+            (candidate) => candidate.name === pluginName,
+          )
+        : undefined);
     if (!entry) {
-      throw new Error(
-        `Plugin ${pluginName} is not in the last search results — search again.`,
-      );
+      throw new Error(`${pluginName} is not in the ${marketplace} catalog.`);
     }
     const targetDir = path.join(
       this.deps.connectorsDirFor(profileId),

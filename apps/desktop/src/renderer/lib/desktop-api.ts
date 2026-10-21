@@ -491,6 +491,8 @@ export interface ConnectorSearchData {
     description: string;
     version?: string;
     repositoryUrl?: string;
+    /** The server's https home page, when the entry names one. */
+    websiteUrl?: string;
     iconUrl?: string;
     /** Published under a DNS-verified vendor namespace (not io.github.*). */
     official: boolean;
@@ -507,8 +509,16 @@ export interface ConnectorSearchData {
   }>;
   plugins: Array<{
     name: string;
+    /** The catalog's display name, e.g. "HubSpot Sales". */
+    displayName?: string;
     description: string;
     version?: string;
+    /** Who publishes it, e.g. "Anthropic". */
+    author?: string;
+    /** The marketplace's grouping, lowercase, e.g. "productivity". */
+    category?: string;
+    /** The plugin's or its vendor's web page. */
+    homepage?: string;
     marketplace: string;
     installed: boolean;
     /** From an Anthropic-maintained marketplace. */
