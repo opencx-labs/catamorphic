@@ -74,8 +74,8 @@ import {
 } from "../voice/guidance.js";
 import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
-  ASSISTANT_DELEGATION,
   ASSISTANT_EAGER,
+  assistantDelegation,
   assistantHostTools,
   assistantWorkspaceTools,
   type FollowSession,
@@ -746,8 +746,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // assistant's tools and delegation grants: as configured, or as Work's
     // built-in assistant, with no instructions of its own and the
     // harness's default model: Claude Code's and Codex's own, while the
-    // built-in agent, which has none, keeps the model it names. A copy of
-    // it runs as that agent, without the assistant's tools (ADR 0271).
+    // built-in agent, which has none, keeps the model it names. The
+    // sessions it starts run on that agent unless it names another (ADR
+    // 0271); its own id is never listed, so no agent starts an assistant.
     const assistant = parseAssistantAgentId(id);
     const found = this.findConfig(assistant?.agentId ?? id);
     if (!found) return undefined;
@@ -761,11 +762,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : found.config;
     const built = this.build({ config, profileId, assistant: !!assistant });
     if (!built) return undefined;
-    const delegation = assistant ? ASSISTANT_DELEGATION : config.delegation;
+    const delegation = assistant
+      ? assistantDelegation(assistant.agentId)
+      : config.delegation;
     return {
       id,
       name: config.name,
-      ...(assistant ? { copiesAs: assistant.agentId } : {}),
       ...built,
       topology: "native",
       sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
@@ -1102,6 +1104,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             ),
             sessions: this.assistant.tools,
             follow: this.assistant.follow,
+            baseAgentId: config.id,
           })
         : workspace,
       toolPolicies: () => live().policies,
@@ -1839,6 +1842,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             assistantWorkspaceTools({
               tools,
               follow: this.assistant.follow,
+              baseAgentId: config.id,
             }),
             this.personsWindows(profileId),
           )

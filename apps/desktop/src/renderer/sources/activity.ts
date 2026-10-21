@@ -6,7 +6,11 @@ import { workflowKeys } from "@catamorphic/react";
 import type { PullRequestStatus } from "../../shared/pr-details.js";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { chatFolderView } from "../components/chat-folder.js";
-import { PULL_REQUEST_LOOKS, repositoryOf } from "../lib/chips.js";
+import {
+  PULL_REQUEST_LOOKS,
+  pullRequestsInOrder,
+  repositoryOf,
+} from "../lib/chips.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { prStatusQueryKey } from "../lib/pr-status.js";
 import { subscribeSidebarSessions } from "../lib/sidebar-sessions.js";
@@ -186,6 +190,10 @@ export function sessionSource(deps: WorkSourceDeps): SectionSource {
       const revealable = Boolean(
         checkout?.path && checkout.present && checkout.available,
       );
+      const statusOf = (url: string) =>
+        deps.queryClient.getQueryData<PullRequestStatus | null>(
+          prStatusQueryKey(url),
+        );
       return {
         items: [
           ...(folder
@@ -231,14 +239,10 @@ export function sessionSource(deps: WorkSourceDeps): SectionSource {
                 } satisfies SidebarSourceItem,
               ]
             : []),
-          ...sessionPullRequests(session.metadata).map((pr) =>
-            pullRequestRow(
-              pr,
-              deps.queryClient.getQueryData<PullRequestStatus | null>(
-                prStatusQueryKey(pr.url),
-              ),
-            ),
-          ),
+          ...pullRequestsInOrder({
+            pullRequests: sessionPullRequests(session.metadata),
+            statusOf,
+          }).map((pr) => pullRequestRow(pr, statusOf(pr.url))),
         ],
       };
     },

@@ -54,6 +54,7 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   let sessions: AgentSessionsService;
   /** The same services over another host's agent registry. */
   let sessionsWith: (registry: CodingAgentRegistry) => AgentSessionsService;
+  const services: AgentSessionsService[] = [];
   let capabilities: AgentCapabilitiesService;
   let projectId: string;
   const adapter = new RecordingAdapter();
@@ -145,8 +146,8 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       new ProjectEnvironmentsService(db, projectManager),
       testEnvironmentProvider(unusedSandboxProvider),
     );
-    sessionsWith = (codingAgents) =>
-      new AgentSessionsService(db, {
+    sessionsWith = (codingAgents) => {
+      const service = new AgentSessionsService(db, {
         hostId: "sandboxing-test-host",
         projectManager,
         codingAgents,
@@ -156,6 +157,9 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
           resolve: () => ({ path: rootPath, owned: false }),
         },
       });
+      services.push(service);
+      return service;
+    };
     sessions = sessionsWith(registry);
     const capability = (
       name: string,
@@ -211,6 +215,10 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   }, 120_000);
 
   afterAll(async () => {
+    // Subsessions' turns end before the schema they write to is dropped.
+    await Promise.all(
+      services.map((service) => service.stopLocalTurns({ timeoutMs: 2_000 })),
+    );
     if (db) {
       await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
       await db.destroy();
@@ -265,13 +273,34 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
     expect(refusal).toContain(`project:${projectId}:editor (Editor)`);
     // Wider than the lead: not among its choices.
     expect(refusal).not.toContain("Publisher");
+    // `*` admits what it lists, a copy of the lead included.
+    const reviewer = await sessions.createSubsession(root, projectId, lead.id, {
+      agentId: "project:reviewer",
+      task: "Review",
+    });
+    expect(reviewer.grant).toBe("*");
+    expect(reviewer.session.agentId).toBe(`project:${projectId}:reviewer`);
+    const copy = await sessions.createSubsession(root, projectId, lead.id, {
+      task: "The same again",
+    });
+    expect(copy.grant).toBe("*");
+    expect(copy.session.agentId).toBe(`project:${projectId}:lead`);
   });
 
   it("lists them too where the host resolves project agents by id, leaving out one that cannot run", async () => {
-    // Like Work's desktop: no factory, project agents come from get().
+    // Like Work's desktop: no factory, project agents come from get(). Like
+    // the Work server, a listed built-in is served by its project id too.
+    const builtIn = {
+      id: "assistant",
+      name: "Assistant",
+      harness: { placement: "host" as const, adapter },
+      topology: "native" as const,
+      sandboxing: "contained" as const,
+    };
     const byId = sessionsWith({
       defaultAgentId: () => undefined,
       get: (id) => {
+        if (id === "assistant") return builtIn;
         const slug = id.split(":").at(-1);
         if (!id.startsWith("project:") || !slug) return undefined;
         return {
@@ -293,7 +322,7 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
           ...(slug === "editor" ? { unavailable: "Needs approval" } : {}),
         };
       },
-      list: () => [],
+      list: () => [builtIn],
     });
     const lead = await byId.create(root, projectId, {
       agentId: `project:${projectId}:lead`,
@@ -309,6 +338,14 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       );
     expect(refusal).toContain(`project:${projectId}:reviewer (Reviewer)`);
     expect(refusal).not.toContain("Editor");
+    // The built-in, once, by the project's id; and `*` reaches it so.
+    expect(refusal).toContain(`project:${projectId}:assistant (Assistant)`);
+    expect(refusal).not.toMatch(/(: |, )assistant \(Assistant\)/);
+    const builtInChild = await byId.createSubsession(root, projectId, lead.id, {
+      agentId: `project:${projectId}:assistant`,
+      task: "Help",
+    });
+    expect(builtInChild.grant).toBe("*");
   });
 
   it("refuses capabilities above the agent's sandboxing with a readable reason", async () => {

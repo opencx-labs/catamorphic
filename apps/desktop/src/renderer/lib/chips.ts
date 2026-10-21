@@ -86,6 +86,31 @@ export const PULL_REQUEST_LOOKS: Record<
   closed: { icon: "GitPullRequestClosed", tone: "danger", label: "Closed" },
 };
 
+/** Open pull requests lead, then drafts, then merged and closed ones. */
+const PULL_REQUEST_ORDER: Record<SessionPullRequestState, number> = {
+  open: 0,
+  draft: 1,
+  merged: 2,
+  closed: 3,
+};
+
+/**
+ * A chat's pull requests as chips and sidebar rows list them: open ones
+ * first, then drafts, merged and closed ones, each kind in the order the
+ * chat recorded it. One moves when its host says it merged or closed.
+ */
+export function pullRequestsInOrder({
+  pullRequests,
+  statusOf,
+}: {
+  pullRequests: readonly SessionPullRequest[];
+  statusOf: (url: string) => PullRequestStatus | null | undefined;
+}): SessionPullRequest[] {
+  const rank = (pr: SessionPullRequest) =>
+    PULL_REQUEST_ORDER[statusOf(pr.url)?.state ?? pr.state ?? "open"];
+  return [...pullRequests].sort((a, b) => rank(a) - rank(b));
+}
+
 /** Where a pull request lives: `owner/name` on a forge, else the host. */
 export function repositoryOf(url: string): string {
   try {
@@ -318,9 +343,10 @@ export function workChips({
 }): Chip[] {
   const chips = groupChips([
     ...held,
-    ...pullRequests.map((pr) =>
-      pullRequestChip({ pr, status: statuses.get(pr.url) }),
-    ),
+    ...pullRequestsInOrder({
+      pullRequests,
+      statusOf: (url) => statuses.get(url),
+    }).map((pr) => pullRequestChip({ pr, status: statuses.get(pr.url) })),
     ...attachedChips(metadata),
   ]);
   return [

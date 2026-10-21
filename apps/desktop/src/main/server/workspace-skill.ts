@@ -6,7 +6,7 @@ import {
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
 name: desktop-workspace
-description: Work with the user's browser, terminals, background commands and watches, chats, worktrees, pull requests a chat records, connections and shared project state in Work. Load for desktop interaction or session coordination.
+description: Work with the user's browser, terminals, background commands and watches, chats, worktrees, pull requests a chat records, connections and shared project state in Work. Load for desktop interaction or session coordination, and when you open or merge a pull request or finish with a worktree.
 ---
 
 # Desktop workspace
@@ -191,6 +191,13 @@ away and the next turn checks it out again, so keep nothing there that Git
 ignores and the task cannot recreate. Shared checkouts share commits and
 rollback. Activity publication is optional when it adds useful peer context.
 
+A worktree you made with git is yours to remove: once its pull request has
+merged and you need it no longer, run git worktree remove on it and delete its
+branch, after returning this chat to the project folder (use_worktree with
+path: null) if it works there. Leave one with uncommitted changes, or one the
+person or another chat works in, and ask when unsure. A chat's own worktree is
+put away when the chat is archived.
+
 ## What a chat shows beside it
 
 A chat has metadata: named values its session holds, which Work shows
@@ -200,8 +207,9 @@ the metadata. ${SESSION_PULL_REQUESTS_CONTRACT} A sidebar section showing
 work:session lists them beside the chat; none does by default, so when the
 person wants to see them, offer one on the right sidebar: { id: "session",
 title: "This chat", source: "work:session", when: { session: true } }. A pull request you open, or are asked
-to work on, belongs in that list: read it first and include the ones already
-there, and write it again when you see one merged or closed. A person's own
+to work on, belongs in that list as soon as you open it, however you opened it:
+read it first and include the ones already there, and write it again when you
+see one merged, closed or retitled. A person's own
 sidebar modules receive the metadata of the chat they sit beside and can show
 other keys; keep the ones they ask for.
 

@@ -311,7 +311,7 @@ function coordinationNote(strategy: AgentCoordinationStrategy): string {
       : strategy === "isolate-on-contention"
         ? " Prefer a worktree when another active chat is likely to touch the same files."
         : "";
-  return `Other chats may be working in this project at the same time; the turn context lists them. Before editing, check whether one is changing the same files, and coordinate or wait (see the desktop-workspace skill).${rule}`;
+  return `Other chats may be working in this project at the same time; the turn context lists them. Before editing, check whether one is changing the same files, and coordinate or wait (see the desktop-workspace skill).${rule} A worktree you made with git is yours to remove, with its branch, once its pull request has merged and you need it no longer; never one with uncommitted changes, or one the person or another chat works in.`;
 }
 
 /** Other active chats in the project, as observed status data. */
