@@ -353,6 +353,7 @@ export function SettingsScreen({
       );
     });
   };
+  const findKeys = useKeybindings();
   return (
     <div
       className="@container/settings flex min-h-0 min-w-0 flex-1 flex-col"
@@ -366,7 +367,10 @@ export function SettingsScreen({
             Make this workspace your own.
           </p>
         </div>
-        <ShortcutHint label="Search settings">
+        <ShortcutHint
+          label="Search settings"
+          shortcut={formatBinding(findKeys.find)}
+        >
           <button
             type="button"
             aria-label="Search settings"

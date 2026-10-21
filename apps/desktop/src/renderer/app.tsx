@@ -92,7 +92,11 @@ import {
   sidebarSections,
   visibleWorkspaceConfig,
 } from "../shared/workspace-config.js";
-import { findSearchInput } from "./components/action-search-input.js";
+import {
+  activateSearch,
+  findSearchInput,
+  findSearchTarget,
+} from "./components/action-search-input.js";
 import {
   type AgentPointer,
   AgentPointers,
@@ -4364,7 +4368,10 @@ export function App({
     // Find in what is in front: a page's find bar, else a diff's search.
     find: () => {
       if (commandBrowserId()) runBrowserCommand("find");
-      else focusSearch("find");
+      else {
+        const target = findSearchTarget(workspaceRef.current.activeTabKey);
+        if (target) activateSearch(target);
+      }
     },
     "find-next": () => runBrowserCommand("findNext"),
     "find-previous": () => runBrowserCommand("findPrevious"),
@@ -4599,7 +4606,10 @@ export function App({
           (!PAGE_FIRST_ACTIONS.has(candidate) ||
             guestId !== undefined ||
             commandBrowserIdRef.current() !== undefined ||
-            (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
+            // Matched first: looking for a search on every key costs.
+            (candidate === "find" &&
+              matchesBinding(event, bindings[candidate]) &&
+              Boolean(findSearchTarget(workspaceRef.current.activeTabKey)))) &&
           // A text field keeps its caret keys (Cmd+Left and Cmd+Right go to
           // the line's start and end), whatever they are bound to.
           !(
