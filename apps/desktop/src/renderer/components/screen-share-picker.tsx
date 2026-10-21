@@ -84,6 +84,7 @@ function ScreenSharePicker({
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<ScreenShareKind>("tab");
   const [selected, setSelected] = useState<ScreenShareSource | null>(null);
+  const [loadingTabs, setLoadingTabs] = useState(true);
   const [loadingCapture, setLoadingCapture] = useState(true);
 
   // Tabs are instant; windows and screens can take the OS a few seconds
@@ -91,6 +92,7 @@ function ScreenSharePicker({
   useEffect(() => {
     let cancelled = false;
     const guestId = request.guestId;
+    setLoadingTabs(true);
     void desktopApi
       .screenShareSources({ guestId, kinds: ["tab"] })
       .then((next) => {
@@ -100,6 +102,9 @@ function ScreenSharePicker({
       })
       .catch(() => {
         if (!cancelled) setError("Could not list what you can share.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTabs(false);
       });
     setLoadingCapture(true);
     void desktopApi
@@ -247,7 +252,7 @@ function ScreenSharePicker({
             )}
             {list.length === 0 && (
               <p className="py-10 text-center text-[13px] text-fg-muted">
-                {!sources || (kind !== "tab" && loadingCapture)
+                {!sources || (kind === "tab" ? loadingTabs : loadingCapture)
                   ? (error ?? "Looking for what you can share…")
                   : kind === "tab"
                     ? "No browser tabs to share in this window."
