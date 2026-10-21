@@ -46,6 +46,7 @@ import { CopyButton } from "../components/copy-button.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
+import { SyncedNote } from "../components/profile-settings-sync.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
 import {
@@ -54,6 +55,8 @@ import {
   type AppPrefs,
   type ConnectionInfo,
   desktopApi,
+  type Profile,
+  type ProfilesData,
   type ThemePreset,
   type ThemeToken,
 } from "../lib/desktop-api.js";
@@ -73,6 +76,8 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 export function SettingsScreen({
   projectId,
   destination,
+  profile,
+  profiles,
   onSearch,
   onAddAgent,
   onCreateAssistant,
@@ -81,6 +86,9 @@ export function SettingsScreen({
 }: {
   projectId?: string;
   destination?: SettingsDestination;
+  /** The window's profile, to say which categories it shares (ADR 0272). */
+  profile?: Profile;
+  profiles?: ProfilesData | null;
   /** Opens the palette's settings scope: the one search surface (ADR 0123). */
   onSearch: () => void;
   onAddAgent: () => void;
@@ -458,6 +466,11 @@ export function SettingsScreen({
                   </h2>
                   {"action" in section ? section.action : null}
                 </div>
+                <SyncedNote
+                  profile={profile}
+                  data={profiles}
+                  part={section.id}
+                />
                 {section.content}
               </div>
             ))}

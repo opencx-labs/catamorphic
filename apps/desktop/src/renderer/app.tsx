@@ -21,6 +21,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   Columns2,
+  Copy,
   Download,
   FolderPlus,
   Link2,
@@ -123,6 +124,7 @@ import {
   type PreviewPortRequest,
 } from "./components/preview-port-dialog.js";
 import { ProfileBar } from "./components/profile-bar.js";
+import { ProfileImportDialog } from "./components/profile-settings-sync.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
 import { useRemoteProject } from "./components/project-authority-provider.js";
 import { ProjectModal } from "./components/project-modal.js";
@@ -7334,6 +7336,8 @@ export function App({
                             <SettingsScreen
                               destination={tab.destination}
                               projectId={projectId}
+                              profile={activeProfile}
+                              profiles={profilesData}
                               onSearch={settingsSearch}
                               onAddAgent={() => setWizardModalOpen(true)}
                               onCreateAssistant={createAssistant}
@@ -8017,6 +8021,8 @@ export function App({
               ) : activeTab?.kind === "settings" ? (
                 <SettingsScreen
                   destination={activeTab.destination}
+                  profile={activeProfile}
+                  profiles={profilesData}
                   onSearch={settingsSearch}
                   onAddAgent={() => setWizardModalOpen(true)}
                   onCreateAssistant={createAssistant}
@@ -8142,6 +8148,8 @@ export function App({
                   }
                   onStartWithAgent={startWithAgent}
                   profileId={activeProfile?.id}
+                  profile={activeProfile}
+                  profiles={profilesData}
                   importCompleted={Boolean(
                     activeProfile?.browserImportCompletedAt,
                   )}
@@ -8389,6 +8397,8 @@ export function App({
 
 function EmptyState({
   profileId,
+  profile,
+  profiles,
   importCompleted,
   loading,
   loadError,
@@ -8399,6 +8409,9 @@ function EmptyState({
   onStartWithAgent,
 }: {
   profileId?: string;
+  /** Another profile's settings can come in on the same screen (ADR 0272). */
+  profile?: Profile;
+  profiles?: ProfilesData | null;
   importCompleted: boolean;
   loading: boolean;
   loadError: boolean;
@@ -8411,6 +8424,11 @@ function EmptyState({
   const [importOpen, setImportOpen] = useState(false);
   const [justImported, setJustImported] = useState(false);
   const imported = importCompleted || justImported;
+  const [profileImportOpen, setProfileImportOpen] = useState(false);
+  const [settingsImported, setSettingsImported] = useState(false);
+  const canImportProfile = Boolean(
+    profile && profiles && profiles.profiles.length > 1,
+  );
   const [startingAgent, setStartingAgent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -8454,7 +8472,9 @@ function EmptyState({
               Make yourself at home
             </h1>
             <p className="mt-2 text-[13px] leading-5 text-fg-muted">
-              Bring your browser with you, then choose where to start.
+              {canImportProfile
+                ? "Bring your browser and settings with you, then choose where to start."
+                : "Bring your browser with you, then choose where to start."}
             </p>
             <div className="mt-5 flex flex-col gap-2">
               <PendingButton
@@ -8480,6 +8500,29 @@ function EmptyState({
                   Import from a browser
                 </span>
               </PendingButton>
+              {canImportProfile && (
+                <PendingButton
+                  pending={false}
+                  type="button"
+                  disabled={startingAgent}
+                  data-disabled-reason="Starting the agent"
+                  done={settingsImported || Boolean(profile?.syncedFrom)}
+                  doneLabel={
+                    <span className="inline-flex items-center gap-2">
+                      <Check className="size-3.5 text-success" />
+                      Settings imported
+                    </span>
+                  }
+                  onClick={() => setProfileImportOpen(true)}
+                  data-testid="onboarding-profile-import"
+                  className="browser-setup-action"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Copy className="size-3.5" />
+                    Import from a profile
+                  </span>
+                </PendingButton>
+              )}
               <DefaultBrowserButton />
               <div className="my-2 border-t border-border" />
               <PendingButton
@@ -8524,6 +8567,15 @@ function EmptyState({
                 profileId={profileId}
                 onClose={() => setImportOpen(false)}
                 onComplete={() => setJustImported(true)}
+              />
+            )}
+            {profile && profiles && canImportProfile && (
+              <ProfileImportDialog
+                open={profileImportOpen}
+                profile={profile}
+                data={profiles}
+                onClose={() => setProfileImportOpen(false)}
+                onComplete={() => setSettingsImported(true)}
               />
             )}
           </>

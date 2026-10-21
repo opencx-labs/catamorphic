@@ -48,6 +48,7 @@ import { matchesShortcut } from "../shared/keybindings.js";
 import type { PageContextMenu } from "../shared/menu.js";
 import { paletteUseSchema } from "../shared/palette.js";
 import type { PasswordFileImportResult } from "../shared/password-import.js";
+import { PROFILE_SYNC_PARTS } from "../shared/profile-sync.js";
 import {
   type ScreenShareAnswer,
   type ScreenShareRequest,
@@ -2213,6 +2214,33 @@ export function registerBrowserSupport(
       const profile = profiles.update(id, patch);
       broadcast("catamorphic:profiles-changed", profiles.list());
       return profile;
+    },
+  );
+  // Settings shared between profiles (ADR 0272).
+  const syncParts = z.array(z.enum(PROFILE_SYNC_PARTS)).min(1);
+  ipcMain.handle(
+    "catamorphic:profiles-sync-settings",
+    (_event, raw: unknown) => {
+      const input = z
+        .object({
+          profileId: z.string(),
+          from: z.string(),
+          parts: syncParts,
+          keepInSync: z.boolean(),
+        })
+        .parse(raw);
+      profileConfig.syncSettings(input);
+      broadcast("catamorphic:profiles-changed", profiles.list());
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:profiles-stop-syncing",
+    (_event, raw: unknown) => {
+      const input = z
+        .object({ profileId: z.string(), parts: syncParts })
+        .parse(raw);
+      profileConfig.stopSyncing(input);
+      broadcast("catamorphic:profiles-changed", profiles.list());
     },
   );
   ipcMain.handle("catamorphic:profiles-set-default", (_event, id: string) => {

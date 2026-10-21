@@ -35,6 +35,16 @@ desktop_settings (outside the repository), never the project's personal
 documents directory (.work/personal), which holds documents, not settings.
 A configuration file anywhere else is not read.
 
+Profiles can share settings (ADR 0272). When desktop_settings lists
+sharedSettings, those parts (appearance, workspace, macros, shortcuts,
+notifications) use another profile's files: the theme, shortcuts and workspace
+profile paths it returns then lie in that profile's folder, and
+files.preferences.synced lists the preference keys kept in that profile's
+prefs.json. Edit those keys there, not in the own profile file, and tell the
+person the change also applies to the profiles named. Never link or unlink
+profiles by editing profiles.json or copying files between profile folders;
+the person does that in Profile settings, "Settings from another profile".
+
 Paths are metadata, not permission grants. An agent whose sandboxing is
 contained may inspect but must not edit. Native harness filesystem permissions still apply outside the checkout.
 If host access is unavailable, explain that limitation. A file created inside a

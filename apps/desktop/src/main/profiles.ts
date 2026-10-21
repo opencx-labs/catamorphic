@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { ProfileSync, ProfileSyncPart } from "../shared/profile-sync.js";
 
 /**
  * Chrome-style profiles. Each profile owns:
@@ -21,6 +22,8 @@ export interface Profile {
   projectIds: string[];
   defaultProjectId?: string;
   browserImportCompletedAt?: number;
+  /** Parts of its settings this profile shares with an owner (ADR 0272). */
+  syncedFrom?: ProfileSync;
 }
 
 export interface ProfilesFile {
@@ -157,6 +160,42 @@ export class ProfilesStore {
       this.data.lastActiveProfileId = id;
       this.save();
     }
+  }
+
+  /**
+   * The profile whose files hold this profile's part. A link to a profile
+   * that no longer exists, or to itself, means the profile owns the part.
+   */
+  syncOwner(profileId: string, part: ProfileSyncPart): string {
+    const owner = this.get(profileId)?.syncedFrom?.[part];
+    return owner && owner !== profileId && this.get(owner) ? owner : profileId;
+  }
+
+  /** Profiles that name `ownerId` for a part, even after it was removed. */
+  syncFollowers(ownerId: string, part: ProfileSyncPart): string[] {
+    return this.data.profiles
+      .filter((profile) => profile.syncedFrom?.[part] === ownerId)
+      .map((profile) => profile.id);
+  }
+
+  /** Point parts at owners in one write; no owner means the profile owns it. */
+  setSyncOwners(
+    changes: Array<{
+      profileId: string;
+      part: ProfileSyncPart;
+      owner: string | undefined;
+    }>,
+  ): void {
+    for (const { profileId, part, owner } of changes) {
+      const profile = this.get(profileId);
+      if (!profile) continue;
+      const synced: ProfileSync = { ...profile.syncedFrom };
+      if (owner && owner !== profileId) synced[part] = owner;
+      else delete synced[part];
+      if (Object.keys(synced).length) profile.syncedFrom = synced;
+      else delete profile.syncedFrom;
+    }
+    this.save();
   }
 
   /** The last profile cannot be removed; its projects move to the default. */
