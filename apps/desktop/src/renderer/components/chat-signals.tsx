@@ -19,12 +19,13 @@ export type { ChatWaiting };
  * signals the same way, on two corners of the icon, so a chat can say what
  * it is doing and what needs the person at once.
  *
- * The lower corner says what it is doing:
+ * The lower corner says what it is doing (`activity`, decided by the chat):
  * - working:       a small spinner (the agent is busy); the icon stays,
  *                  so the surface keeps its identity
- * - waiting:       while not working, what it left running and waits on:
- *                  an eye for a watch, a bot for subagents, a terminal for
- *                  a background command
+ * - waiting:       what it waits on, whether its turn does nothing but wait
+ *                  or it rests with something left running: an eye for a
+ *                  watch, a bot for subagents, a terminal for a background
+ *                  command
  *
  * The upper corner says what needs the person:
  * - awaitingInput: pulsing accent "?" badge (the agent asked and is waiting)
@@ -35,18 +36,20 @@ export type { ChatWaiting };
  *                  editor tabs with unsaved changes)
  *
  * One mark shows per corner, most-urgent first: awaitingInput > attention >
- * unread > draft above, working > waiting below; a blocking question
- * stops the spinner. `SignalGlyph` renders the icon with its lower corner;
+ * unread > draft above; below, a blocking question stops the spinner.
+ * `SignalGlyph` renders the icon with its lower corner;
  * `SignalBadge` renders the upper corner's badge — hosts position it
  * (bubbles pin it to the button corner, tabs to the icon).
  */
 export interface ChatSignals {
+  /** A turn runs: its end is the agent finishing. */
   working?: boolean;
   unread?: boolean;
   draft?: boolean;
   awaitingInput?: boolean;
   attention?: boolean;
-  waiting?: ChatWaiting | null;
+  /** The lower corner's mark. */
+  activity?: SidebarActivity | null;
 }
 
 /** What a chat waits on, most telling first. */
@@ -65,18 +68,22 @@ export const firstWaiting = (
   WAITING_ORDER.find((kind) => list.includes(kind)) ?? null;
 
 /**
- * The mark on the icon's lower corner: working, unless a question holds
- * the turn; while not working, what it waits on.
+ * The mark on a chat's lower corner: while a turn runs, working, unless a
+ * question holds it or all it does is wait (`waitingNow`); while it rests,
+ * what it left running.
  */
-export const activityOf = ({
-  working = false,
-  awaitingInput = false,
-  waiting = null,
-}: Pick<
-  ChatSignals,
-  "working" | "awaitingInput" | "waiting"
->): SidebarActivity | null =>
-  working ? (awaitingInput ? null : "working") : (waiting ?? null);
+export const chatActivity = ({
+  working,
+  awaitingInput,
+  waitingNow,
+  leftRunning,
+}: {
+  working: boolean;
+  awaitingInput: boolean;
+  waitingNow: ChatWaiting | null;
+  leftRunning: ChatWaiting | null;
+}): SidebarActivity | null =>
+  working ? (awaitingInput ? null : (waitingNow ?? "working")) : leftRunning;
 
 /** What the lower corner says, in words (screen readers, hover cards). */
 export const ACTIVITY_LABELS: Record<SidebarActivity, string> = {
@@ -86,13 +93,20 @@ export const ACTIVITY_LABELS: Record<SidebarActivity, string> = {
   command: "Running a command",
 };
 
+/** Several chats as one icon: any at work spins, else the most telling wait. */
 export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
   working: list.some((signals) => signals.working),
   unread: list.some((signals) => signals.unread),
   draft: list.some((signals) => signals.draft),
   awaitingInput: list.some((signals) => signals.awaitingInput),
   attention: list.some((signals) => signals.attention),
-  waiting: firstWaiting(list.map((signals) => signals.waiting)),
+  activity: list.some((signals) => signals.activity === "working")
+    ? "working"
+    : firstWaiting(
+        list.map((signals) =>
+          signals.activity === "working" ? null : signals.activity,
+        ),
+      ),
 });
 
 /**
@@ -103,22 +117,18 @@ export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
  * is `SignalBadge`'s.
  */
 export function SignalGlyph({
-  working = false,
-  awaitingInput = false,
-  waiting = null,
+  activity = null,
   className = "size-4",
   children,
 }: {
-  working?: boolean;
-  awaitingInput?: boolean;
-  /** What it waits on while not working. */
-  waiting?: ChatWaiting | null;
+  /** The lower corner's mark, if any. */
+  activity?: SidebarActivity | null;
   /** Size of the icon box. */
   className?: string;
   /** The base icon (lucide icon, favicon img, …), sized to fill the box. */
   children: ReactNode;
 }) {
-  const mark = activityOf({ working, awaitingInput, waiting });
+  const mark = activity;
   const busy = mark === "working";
   const visibility = (kind: SidebarActivity) =>
     mark === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";

@@ -1,7 +1,12 @@
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  pointerOnPage,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Pages ask through Work's dialogs (ADR 0227): alert, confirm and prompt
@@ -133,6 +138,21 @@ const running = (id: string) =>
   app.eval<boolean>(`!window.__runs[${JSON.stringify(id)}].done`);
 const inPage = <T>(code: string) =>
   app.eval<T>(`${VIEW}.executeJavaScript(${JSON.stringify(code)})`);
+/** A press in the page as the person makes one, not a script's gesture. */
+const pressInPage = async () => {
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const box = ${VIEW}.getBoundingClientRect();
+    return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+  })()`);
+  await pointerOnPage(app, { view: VIEW, selector: "html", point });
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+};
 
 const dialogShows = (kind: string) =>
   app.waitFor(`${DIALOG}?.dataset.kind === ${JSON.stringify(kind)}`, {
@@ -471,10 +491,27 @@ describe("page dialogs", () => {
     expect(await inPage<string>("location.search")).toBe("?from=link");
   });
 
+  it("a tab whose page nobody touched closes at once, its beforeunload never asked", async () => {
+    await newTab();
+    await go(`${origin}/unload`);
+    await loaded("Unload");
+    const key = await app.eval<string>(ACTIVE_KEY);
+    const tab = `document.querySelector('[data-point-key=${JSON.stringify(key)}]')`;
+    const mark = await markDialogs();
+    await app.eval(
+      `${tab}.querySelector('button[aria-label^="Close"]').click(); true`,
+    );
+    await app.waitFor(`!${tab}`, { label: "the untouched tab closed" });
+    expect(
+      (await dialogsSince(mark)).filter((kinds) => kinds.length > 0),
+    ).toEqual([]);
+  });
+
   it("closing a tab asks its page, and Cancel keeps the tab", async () => {
     await go(`${origin}/unload`);
     await loaded("Unload");
-    await finished(await start("document.body.click()"));
+    // A real press: a tab whose page nobody touched closes without asking.
+    await pressInPage();
     // The click's own activation has passed (Chromium's lasts 5 seconds).
     await new Promise((resolve) => setTimeout(resolve, 5_500));
     expect(await inPage<boolean>("navigator.userActivation.isActive")).toBe(

@@ -258,6 +258,13 @@ export class VoiceEngine {
   /** They went down while the person was already speaking. */
   private heldMidSpeech = false;
   /**
+   * Words of a hold too long for one recognition, heard a piece at a time:
+   * said with its last piece, as one message, when the keys come up.
+   */
+  private heldWords: string[] = [];
+  /** A piece of the hold under way already dictated words. */
+  private heldDictated = false;
+  /**
    * Dictation: what the person says is written into a composer, nothing
    * is sent or spoken. Their words show while they talk.
    */
@@ -400,6 +407,7 @@ export class VoiceEngine {
     this.inSpeech = false;
     this.held = false;
     this.utterance = [];
+    this.heldWords = [];
     this.learning = null;
     // What it was saying is still said.
     this.resumeSpeech();
@@ -441,6 +449,7 @@ export class VoiceEngine {
     this.inSpeech = false;
     this.preroll.length = 0;
     this.utterance = [];
+    this.heldWords = [];
     this.speechPowers = [];
     this.speechSoFar = null;
     this.parts.activity.reset();
@@ -490,6 +499,8 @@ export class VoiceEngine {
   setDictation(enabled: boolean): void {
     if (this.dictation === enabled) return;
     this.dictation = enabled;
+    // A conversation's hold, still in pieces, is not dictated.
+    this.heldWords = [];
     this.stopSpeaking();
   }
 
@@ -506,6 +517,7 @@ export class VoiceEngine {
     this.held = held;
     if (held) {
       this.heldMidSpeech = this.inSpeech;
+      this.heldDictated = false;
       if (this.audible) {
         this.stopSpeaking();
         this.emit({ type: "barge-in" });
@@ -530,6 +542,10 @@ export class VoiceEngine {
           text: "",
           final: true,
         });
+      // Pieces of it already heard go with it, once recognized.
+      this.recognizing = this.recognizing.then(() => {
+        this.heldWords = [];
+      });
       return;
     }
     // What the hold heard is heard: speech after it starts afresh.
@@ -785,15 +801,18 @@ export class VoiceEngine {
       return;
     }
     // Keys held this long: what was said so far is heard, and the rest
-    // carries on as the next stretch.
+    // carries on as the next stretch, the same message.
     if (!this.held) return;
     const samples = concat(this.utterance);
     this.hear(samples, {
       pressed: true,
+      piece: true,
       speech: samples.length / SPEECH_SAMPLE_RATE,
     });
     this.speechPowers = [];
-    this.segment += 1;
+    // Dictation writes each piece as a stretch of its own; a conversation's
+    // hold stays one stretch, whose wait the agent's speech keeps to.
+    if (this.dictation) this.segment += 1;
     this.sincePartial = 0;
     this.utterance = [window];
   }
@@ -828,7 +847,7 @@ export class VoiceEngine {
    */
   private hear(
     samples: Float32Array,
-    how: { pressed: boolean; speech: number },
+    how: { pressed: boolean; piece?: boolean; speech: number },
   ): void {
     const segment = this.segment;
     const epoch = this.epoch;
@@ -856,10 +875,18 @@ export class VoiceEngine {
     samples: Float32Array,
     {
       pressed,
+      piece = false,
       speech,
       segment,
       epoch,
-    }: { pressed: boolean; speech: number; segment: number; epoch: number },
+    }: {
+      pressed: boolean;
+      /** A piece of a hold still going on: its words wait for the rest. */
+      piece?: boolean;
+      speech: number;
+      segment: number;
+      epoch: number;
+    },
   ): Promise<void> {
     if (!this.listening || epoch !== this.epoch) return;
     const dictated = (text: string) =>
@@ -867,6 +894,12 @@ export class VoiceEngine {
     if (this.learning) {
       this.learnFrom(samples);
       if (this.dictation) dictated("");
+      else if (pressed && !piece) {
+        // Learning hears no words: a hold that ended says so, and what it
+        // held goes with it.
+        this.heldWords = [];
+        this.emit({ type: "ignored" });
+      }
       return;
     }
     const heard = this.stretchOf(samples, speech);
@@ -899,25 +932,42 @@ export class VoiceEngine {
     if (this.dictation) {
       if (words) this.heardFrom(heard, { pressed });
       dictated(words ? text : "");
-      if (pressed && !words) this.emit({ type: "unheard" });
+      // A quiet piece of a hold still going on is no hold let go, and a
+      // hold whose pieces dictated words said something.
+      if (piece && words) this.heldDictated = true;
+      if (pressed && !piece && !words && !this.heldDictated)
+        this.emit({ type: "unheard" });
       return;
     }
+    // A hold too long for one recognition is one message: its pieces wait
+    // for the last, said as the keys come up, pauses and all.
+    if (piece) {
+      if (words) {
+        this.heardFrom(heard, { pressed });
+        this.heldWords.push(text);
+      }
+      return;
+    }
+    const said = [
+      ...(pressed ? this.heldWords.splice(0) : []),
+      ...(words ? [text] : []),
+    ].join(" ");
     // The agent may have started talking while this was recognized.
     const talking = !waited && (speaking || this.audible);
     // "Yeah" while it talks says go on: it neither stops nor answers it.
     // The keys held say the person means it.
     const goOn = talking && !pressed && isAcknowledgement(text);
-    if (!words || goOn || (talking && isEcho(text, this.recent))) {
+    if (!said || goOn || (talking && isEcho(said, this.recent))) {
       carryOn();
       if (pressed) this.emit({ type: "unheard" });
       return;
     }
-    this.heardFrom(heard, { pressed });
+    if (words) this.heardFrom(heard, { pressed });
     if (talking) {
       this.stopSpeaking();
       this.emit({ type: "barge-in" });
     } else carryOn();
-    this.emit({ type: "utterance", text, segment });
+    this.emit({ type: "utterance", text: said, segment });
   }
 
   /** Speech while learning: the agent's own voice is never learned. */

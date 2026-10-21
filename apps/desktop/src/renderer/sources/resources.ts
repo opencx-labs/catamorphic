@@ -2,7 +2,6 @@ import { workflowKeys } from "@catamorphic/react";
 import { PROJECT_STORE_DIR } from "@catamorphic/workflow/project-layout";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { appIconName } from "../components/app-icon.js";
-import { activityOf } from "../components/chat-signals.js";
 import { appsQuery } from "../lib/apps.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
@@ -230,7 +229,7 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
                   : tab.working
                     ? "working"
                     : undefined;
-            const activity = activityOf(tab);
+            const activity = tab.activity;
             const label = tab.label ?? tab.name;
             return {
               id,
@@ -270,7 +269,10 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
                 name: tab.name,
                 active: id === activeTabKey,
                 working: Boolean(tab.working),
-                waiting: tab.waiting ?? null,
+                waiting:
+                  tab.activity && tab.activity !== "working"
+                    ? tab.activity
+                    : null,
                 attention: Boolean(tab.attention || tab.awaitingInput),
                 unread: Boolean(tab.unread),
                 ...(tab.groupId ? { groupId: tab.groupId } : {}),

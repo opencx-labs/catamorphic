@@ -40,12 +40,7 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
-import {
-  ACTIVITY_LABELS,
-  activityOf,
-  SignalBadge,
-  SignalGlyph,
-} from "./chat-signals";
+import { ACTIVITY_LABELS, SignalBadge, SignalGlyph } from "./chat-signals";
 import type { FileTarget } from "./file-menu.js";
 import {
   OpenResourceButton,
@@ -70,7 +65,7 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
           ? "Unsaved changes"
           : "Unsent draft"
         : null;
-  const activity = activityOf(tab);
+  const activity = tab.activity;
   const doing =
     activity === "working"
       ? "Agent is working…"
@@ -749,12 +744,7 @@ function TabStrip({
                   on (the icon still names the tab); unread/draft/question
                   land as badges on its upper corner. */}
                   <span className="relative grid size-3.5 shrink-0 place-items-center">
-                    <SignalGlyph
-                      working={tab.working ?? false}
-                      awaitingInput={tab.awaitingInput}
-                      waiting={tab.waiting}
-                      className="size-3.5"
-                    >
+                    <SignalGlyph activity={tab.activity} className="size-3.5">
                       {tab.kind === "browser" && tab.faviconUrl ? (
                         <img
                           src={tab.faviconUrl}
@@ -781,7 +771,7 @@ function TabStrip({
                       what the chat is doing takes while it says anything. */}
                     {tab.kind === "chat" &&
                       hasCustomChatIcon(tab.chatIcon) &&
-                      !activityOf(tab) && (
+                      !tab.activity && (
                         <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
                           {tab.fork ? (
                             <GitFork className="size-1.5 text-fg-muted" />

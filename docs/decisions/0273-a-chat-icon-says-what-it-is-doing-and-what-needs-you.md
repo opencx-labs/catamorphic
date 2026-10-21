@@ -1,5 +1,11 @@
 # 0273 — A chat's icon says what it is doing and what needs you, at once
 
+> Amended 2026-10-21: a turn doing nothing but wait (`wait_for_subsessions`,
+> or `read_background_output` with a wait) shows what it waits on instead of
+> the spinner, and each chat reports its lower-corner mark as `activity`
+> (`working` still marks a running turn, for its notifications). The folded
+> bubble speaks for the chats in the dock only.
+
 - **Status:** Accepted (amends 0234's row `signal`)
 - **Date:** 2026-10-21
 
@@ -25,8 +31,9 @@ keeps a 14px icon legible; the transcript already uses these glyphs for
 the same tasks. A custom chat icon's chat marker gives the lower corner
 up while the chat says anything there.
 
-Each chat reports `waiting` with its other live signals (`ChatLiveSignals`),
-so tabs, bubbles and the folded bubble agree.
+Each chat decides its mark and reports it as `activity` with its other
+live signals (`ChatLiveSignals`), so tabs, bubbles and the folded bubble
+agree.
 
 **Rows gain `activity`.** A sidebar row or chip may set `activity`
 (`working`, `watch`, `subagent`, `command`) for its icon's lower corner;

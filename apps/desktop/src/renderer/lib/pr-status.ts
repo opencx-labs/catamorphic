@@ -1,5 +1,5 @@
-import { useQueries } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 import type { PullRequestStatus } from "../../shared/pr-details.js";
 import { desktopApi } from "./desktop-api.js";
 
@@ -43,6 +43,20 @@ export function usePullRequestStatuses({
       retry: 1,
     })),
   });
+  // Read again when the window comes back to the front, a read that failed
+  // meanwhile included. The query client listens to the document becoming
+  // visible, which switching apps never changes in a desktop window.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!enabled) return;
+    const onFocus = () =>
+      void queryClient.refetchQueries(
+        { queryKey: ["desktop", "pr-status"], type: "active", stale: true },
+        { cancelRefetch: false },
+      );
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [enabled, queryClient]);
   const key = results
     .map((result, index) => `${urls[index]}\u0000${result.dataUpdatedAt}`)
     .join("\n");

@@ -155,6 +155,49 @@ it("draws a recorded pull request as a wide chip that says where it stands", asy
        !!el.querySelector('[data-chip-main] svg.lucide-git-merge');`,
     { label: "merged chip" },
   );
+  // However long its title, a wide chip stays within the composer: the
+  // title gives way, the badges and buttons stay.
+  const long = "A pull request whose title runs on and on ".repeat(6).trim();
+  await tool("set_session_metadata", {
+    key: "pull_requests",
+    value: [
+      { url: "https://github.com/acme/widgets/pull/4", number: 4 },
+      {
+        url: "https://git.invalid/acme/web/pull/12",
+        number: 12,
+        title: long,
+        state: "merged",
+      },
+    ],
+  });
+  const edges = await wait<{
+    left: number;
+    right: number;
+    formLeft: number;
+    formRight: number;
+  }>(
+    `const el = chip('https://git.invalid/acme/web/pull/12');
+     const form = composer()?.closest('form');
+     if (!el || !form || !el.textContent.includes('runs on and on')) return false;
+     const c = el.getBoundingClientRect();
+     const f = form.getBoundingClientRect();
+     return { left: c.left, right: c.right, formLeft: f.left, formRight: f.right };`,
+    { label: "long-titled chip" },
+  );
+  expect(edges.left).toBeGreaterThanOrEqual(edges.formLeft - 1);
+  expect(edges.right).toBeLessThanOrEqual(edges.formRight + 1);
+  await tool("set_session_metadata", {
+    key: "pull_requests",
+    value: [
+      { url: "https://github.com/acme/widgets/pull/4", number: 4 },
+      {
+        url: "https://git.invalid/acme/web/pull/12",
+        number: 12,
+        title: "Recorded only",
+        state: "merged",
+      },
+    ],
+  });
 });
 
 it("takes the theme's surfaces, never a fixed black", async () => {

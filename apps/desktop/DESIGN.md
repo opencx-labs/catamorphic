@@ -738,6 +738,26 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-21: Tabs switch at once; a waiting chat shows what it waits on
+
+Switching to or from a chat tab played the floating chat's open and close
+(a quarter second of fade and scale): a chat tab behind another took the
+minimised pose. It now keeps its tab pose and hides at once, as a page
+does, so a switch shows the next tab in the frame after the press.
+Closing a page nobody touched closes at once too, without asking the page
+first. Measurements are in [Performance](docs/performance.md).
+
+A chat whose turn is doing nothing but wait (for its subagents, or on a
+watch or command it reads with a wait) shows what it waits on, not the
+spinner: the agent is waiting, not working. The folded bubble speaks for
+the chats in the dock only; a chat in a tab says what it is doing on its
+tab. A wide chip stays within the composer however long its title, and a
+pull request's chip reads its status again when the window comes back.
+
+Holding the key or the microphone sends one message, however long the
+hold: past 30 seconds the recognizer hears it in pieces, which now wait
+for the last and go together.
+
 ### 2026-10-21: A chat's icon says what it is doing and what needs you
 
 A chat's icon has two corners now (ADR 0273). The upper one says what

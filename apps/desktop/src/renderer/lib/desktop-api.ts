@@ -1786,6 +1786,10 @@ export interface CatamorphicDesktopApi {
   onBrowserCloseAnswer: (
     listener: (answer: { guestId: number; leave: boolean }) => void,
   ) => () => void;
+  /** The page first took a press or a key, in any of its frames. */
+  onBrowserPageActivated: (
+    listener: (event: { guestId: number }) => void,
+  ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
     listener: (request: SitePermissionRequest) => void,
@@ -2246,5 +2250,8 @@ export const desktopApi: CatamorphicDesktopApi = {
   onPageDialogs: shareEvent((publish) => nativeApi.onPageDialogs(publish)),
   onBrowserCloseAnswer: shareEvent((publish) =>
     nativeApi.onBrowserCloseAnswer(publish),
+  ),
+  onBrowserPageActivated: shareEvent((publish) =>
+    nativeApi.onBrowserPageActivated(publish),
   ),
 };

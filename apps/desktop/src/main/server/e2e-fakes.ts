@@ -2018,6 +2018,54 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // "wait on: <cmd>" → a background command, then a turn that does nothing
+  // but wait for it (read_background_output with a wait, a step of its
+  // own): its chat's icon shows the command it waits on, not the spinner.
+  const waitOn = /^wait on:\s*(.+)$/s.exec(message.trim());
+  if (waitOn?.[1]) {
+    const command = waitOn[1];
+    const description = "Run it to wait on";
+    yield { type: "title", content: "Wait exercise" };
+    yield {
+      type: "tool_call",
+      toolName: "run_background_command",
+      toolInput: { command, description },
+      description,
+    };
+    const started = z.object({ id: z.string(), status: z.string() }).parse(
+      await turn.tool("run_background_command", {
+        command,
+        description,
+        wake_on_exit: false,
+      }),
+    );
+    let status = started.status;
+    const deadline = Date.now() + 60_000;
+    for (let read = 0; status === "running" && Date.now() < deadline; read++) {
+      const toolUseId = `wait-${started.id}-${read}`;
+      const input = { id: started.id, wait_seconds: 60 };
+      yield {
+        type: "tool_call",
+        toolName: "mcp__workspace__read_background_output",
+        toolInput: input,
+        toolUseId,
+        description: "Wait for it",
+      };
+      const result = z
+        .object({ status: z.string() })
+        .parse(await turn.tool("read_background_output", input));
+      status = result.status;
+      yield {
+        type: "tool_call",
+        toolUseId,
+        status: "ended",
+        toolResult: result,
+      };
+    }
+    yield { type: "text", content: `Waited on it (${status}).` };
+    return;
+  }
+
   // "terminal: <cmd>" → the REAL run_background_command tool, then a
   // blocking read until it ends: e2e's path through the bridge with the
   // deterministic agent (chips, spinners, output). Its terminal ends with

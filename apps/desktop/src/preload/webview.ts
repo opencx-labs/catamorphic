@@ -41,6 +41,35 @@ installFieldDictation({
       ipcRenderer.removeListener("catamorphic:voice-dictation", handler);
   },
 });
+// The person's first press, key or typing in a document (each frame's own):
+// a tab whose pages never had one closes without asking them, as Chrome
+// shows no "Leave site?" to a page nobody touched (browser-screen.tsx).
+// First of the page's listeners, so a key voice takes still counts; main
+// reports what reaches the page in any frame too (main/browser.ts).
+let activationReported = false;
+/** Keys that touch nothing: Escape, and a modifier on its way to a shortcut. */
+const INERT_KEYS = new Set([
+  "Escape",
+  "Meta",
+  "Control",
+  "Alt",
+  "AltGraph",
+  "Shift",
+  "CapsLock",
+  "Fn",
+  "OS",
+]);
+const reportActivation = (event: Event) => {
+  if (activationReported || !event.isTrusted) return;
+  if (event instanceof KeyboardEvent && INERT_KEYS.has(event.key)) return;
+  activationReported = true;
+  ipcRenderer.sendToHost("catamorphic:page-activated");
+};
+for (const type of ["pointerdown", "keydown", "beforeinput"])
+  window.addEventListener(type, reportActivation, {
+    capture: true,
+    passive: true,
+  });
 // Voice's keys (ADR 0216, 0236): the main process hears them go down and
 // up; no frame of the page gets them, so a held Option+Space types nothing.
 // The host tells the top frame, one per line; an embedded frame asks as it
