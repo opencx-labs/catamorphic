@@ -1,6 +1,6 @@
 # 0269 — A turn that failed on its sign-in while the person was away runs again when they return
 
-- **Status:** Accepted
+- **Status:** Accepted (its diagnosis corrected by [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md): the failures were resumed threads whose CLI could not refresh)
 - **Date:** 2026-10-20
 - **Amends:** [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md)
 

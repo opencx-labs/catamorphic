@@ -230,6 +230,29 @@ export function hostProcessEnv(
 }
 
 /**
+ * The CLI keeps a sign-in in a store its config home names (the macOS
+ * Keychain item, else `.credentials.json` there) and refreshes it under a
+ * lock in that home, shared by every Claude Code using the sign-in. A
+ * resumed thread's CLI runs in another home: the SDK writes Work's stored
+ * transcript (ADR 0198) to a temporary one, with a copy of the sign-in it
+ * strips of the refresh token. From that copy the CLI cannot refresh, so
+ * it fails once the copied access token expires (eight hours) or another
+ * Claude Code renews the sign-in, and the person is asked to sign in again
+ * with a sign-in that was fine (ADR 0275). Naming the sign-in's own home
+ * as the store, as the SDK itself does on Windows, keeps the resumed CLI
+ * on the real sign-in: it refreshes it in place, under the shared lock,
+ * and takes up a token another process renewed. An empty name is the
+ * default home's store.
+ */
+function withSignInStore(env: Record<string, string>): Record<string, string> {
+  return {
+    ...env,
+    CLAUDE_SECURESTORAGE_CONFIG_DIR:
+      env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? env.CLAUDE_CONFIG_DIR ?? "",
+  };
+}
+
+/**
  * Where the CLI sends model calls: the `env` of its settings (managed over
  * local over project over user, as the CLI applies them) over its own
  * environment. Local settings are the repository's: from a worktree, the
@@ -518,7 +541,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     external[name] = mapMcpServer(spec);
 
   const host = access.kind === "host";
-  const env: Record<string, string> = {
+  const launch: Record<string, string> = {
     // On the host the CLI inherits the host's environment (its own
     // sign-in and settings) but not a stray API key; beside a sandbox's
     // workspace it gets the process basics and exactly what the attempt
@@ -557,6 +580,8 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     // The member's own sign-in, in the harness's own home (ADR 0199).
     ...(access.kind === "sign_in" ? { CLAUDE_CONFIG_DIR: access.home } : {}),
   };
+  const env =
+    host || access.kind === "sign_in" ? withSignInStore(launch) : launch;
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 

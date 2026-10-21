@@ -25,6 +25,8 @@ export interface ScriptedRequest {
   /** 0-based order of the request among `/v1/messages` calls. */
   index: number;
   body: JsonObject;
+  /** The bearer a signed-in CLI sent (`Bearer <access token>`). */
+  authorization?: string;
 }
 
 export interface ScriptedModel {
@@ -60,7 +62,12 @@ export async function startScriptedModel(input: {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? parsed
         : {};
-    const request = { index: requests.length, body };
+    const authorization = req.headers.authorization;
+    const request: ScriptedRequest = {
+      index: requests.length,
+      body,
+      ...(authorization ? { authorization } : {}),
+    };
     requests.push(request);
     let reply: ScriptedReply;
     try {

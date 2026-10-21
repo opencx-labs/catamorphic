@@ -159,6 +159,60 @@ describe("model access", () => {
     }
   });
 
+  it("keeps a sign-in's CLI on the sign-in's own store, whatever home the SDK resumes it in (ADR 0275)", () => {
+    const saved = {
+      configDir: process.env.CLAUDE_CONFIG_DIR,
+      store: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,
+    };
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+    const store = (start: AttemptStart) =>
+      options(start).env?.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+    try {
+      // The machine's own login: the default home's store.
+      expect(store(attempt())).toBe("");
+      // An agent signed in on a home of its own.
+      expect(
+        store(attempt({ env: { CLAUDE_CONFIG_DIR: "/agent-home" } })),
+      ).toBe("/agent-home");
+      // A member's sign-in, wherever it runs.
+      expect(
+        store(
+          attempt({
+            modelAccess: { kind: "sign_in", home: "/members/ada/claude" },
+          }),
+        ),
+      ).toBe("/members/ada/claude");
+      // A host started on a Claude home of its own.
+      process.env.CLAUDE_CONFIG_DIR = "/host-home";
+      expect(store(attempt())).toBe("/host-home");
+      // A store the host names stays the one it named.
+      expect(
+        store(attempt({ env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: "/store" } })),
+      ).toBe("/store");
+      // The gateway's grant is no sign-in.
+      expect(
+        store(
+          attempt({
+            modelAccess: {
+              kind: "gateway",
+              api: "anthropic",
+              baseUrl: "https://gateway.test/anthropic",
+              keyFile: "/state/grant",
+            },
+          }),
+        ),
+      ).toBeUndefined();
+    } finally {
+      for (const [name, value] of [
+        ["CLAUDE_CONFIG_DIR", saved.configDir],
+        ["CLAUDE_SECURESTORAGE_CONFIG_DIR", saved.store],
+      ] as const)
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+    }
+  });
+
   it("keeps an inherited API key from outranking the host's sign-in", () => {
     const saved = {
       key: process.env.ANTHROPIC_API_KEY,
