@@ -59,6 +59,7 @@ import {
 import { useSidebarHost } from "./sidebar-host.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SidebarSessionInspector } from "./sidebar-session-inspector.js";
+import { emptySentence } from "./sidebar-status.js";
 
 const failure = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause));
@@ -581,7 +582,7 @@ function SourceView({
           rows={tileRows}
           empty={
             tileRows.length === 0
-              ? (section?.empty ?? source.empty ?? "Nothing here yet.")
+              ? emptySentence(section?.empty, source.empty)
               : undefined
           }
           sectionId={sectionId}
@@ -727,9 +728,7 @@ function SourceTiles({
           : "grid grid-cols-4 gap-2 px-1 pb-2"
       }
     >
-      {empty !== undefined && rows.length === 0 && (
-        <li className="list-none">{empty}</li>
-      )}
+      {empty !== undefined && <li className="list-none">{empty}</li>}
       {rows.map((row) => (
         <li
           key={row.id}
