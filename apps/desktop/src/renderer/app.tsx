@@ -2586,9 +2586,10 @@ export function App({
   // queue behind an in-flight turn like composer sends.
   const chatSendersRef = useRef(new Map<string, (message: string) => void>());
   // The palette's skills (ADR 0270): each chat's skill sender, which takes
-  // its composer's pills along, and the way back into its composer.
+  // its composer's pills along.
   const chatSkillsRef = useRef(new Map<string, (message: string) => void>());
-  const composerReturnsRef = useRef(new Map<string, (text: string) => void>());
+  // Each chat's way to give its composer the keys ("Go to chat").
+  const composerFocusesRef = useRef(new Map<string, () => void>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -2804,12 +2805,12 @@ export function App({
 
   /**
    * An agent-held surface's "Go to chat": the chat comes on screen and its
-   * composer takes the keys (as a palette skill hands back), so the move
-   * shows even when the chat is already beside the surface in a split.
+   * composer takes the keys, so the move shows even when the chat is
+   * already beside the surface in a split.
    */
   const goToChat = (localId: string) => {
     revealChat(localId);
-    composerReturnsRef.current.get(localId)?.("");
+    composerFocusesRef.current.get(localId)?.();
   };
 
   const revealChatRef = useRef(revealChat);
@@ -2821,7 +2822,7 @@ export function App({
     chatClosersRef.current.delete(localId);
     chatMinimizersRef.current.delete(localId);
     chatSkillsRef.current.delete(localId);
-    composerReturnsRef.current.delete(localId);
+    composerFocusesRef.current.delete(localId);
     updateWorkspace((ws) => {
       const closing = ws.chats.find((chat) => chat.localId === localId);
       const chats = ws.chats.filter((chat) => chat.localId !== localId);
@@ -3469,47 +3470,25 @@ export function App({
     : undefined;
 
   // Palette skills (ADR 0052, 0270): applied here, the invocation lands in
-  // the chat whose composer opened the palette, else the focused chat (the
-  // border-accented target), and its composer has the keyboard back. A new
-  // chat starts exactly like "Send to agent".
+  // the focused chat (the border-accented target). A new chat starts
+  // exactly like "Send to agent". A composer's own "/" puts a skill in its
+  // message instead (ADR 0274).
   const runSkill: PaletteHost["onRunSkill"] = ({
     message,
     target,
-    composer,
     agentId,
   }) => {
-    const chat = composer ?? focusedChat?.localId;
+    const chat = focusedChat?.localId;
     const apply = chat ? chatSkillsRef.current.get(chat) : undefined;
     if (target === "chat" && chat && apply) {
       apply(message);
       revealChat(chat);
-      composerReturnsRef.current.get(chat)?.("");
       return;
     }
     sendToAgent(message, target === "tab" ? "tab" : "float", agentId, {
       inNewTab: true,
     });
   };
-  /**
-   * "/" in a chat's composer: the palette's Skills mode, aimed there. A chat
-   * of a project behind the one in front brings its project forward first;
-   * the palette opens once this workspace shows.
-   */
-  const [skillsFor, setSkillsFor] = useState<string | null>(null);
-  const openSkills = (localId: string) => {
-    revealChat(localId);
-    setSkillsFor(localId);
-  };
-  useEffect(() => {
-    if (!skillsFor || !runtime.visible) return;
-    setSkillsFor(null);
-    setPaletteOpen(true);
-    setModeRequest({
-      mode: "skills",
-      composer: skillsFor,
-      nonce: crypto.randomUUID(),
-    });
-  }, [skillsFor, runtime.visible]);
 
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);
@@ -6460,8 +6439,6 @@ export function App({
       sendToAgent(message, mode, agentId, { inNewTab: true }),
     startingActions,
     onRunSkill: runSkill,
-    onReturnToComposer: (chat, text) =>
-      composerReturnsRef.current.get(chat)?.(text),
     actionHandlers,
     terminalMacros: prefs?.terminalMacros ?? [],
     onRunTerminalMacro: runTerminalMacro,
@@ -8138,10 +8115,9 @@ export function App({
                       registerSkill={(apply) =>
                         chatSkillsRef.current.set(entry.localId, apply)
                       }
-                      registerComposerReturn={(resume) =>
-                        composerReturnsRef.current.set(entry.localId, resume)
+                      registerComposerFocus={(focus) =>
+                        composerFocusesRef.current.set(entry.localId, focus)
                       }
-                      onOpenSkills={() => openSkills(entry.localId)}
                       onSessionCreated={onSessionCreated}
                       onSessionAgent={onSessionAgent}
                       onSignalsChange={onSignalsChange}

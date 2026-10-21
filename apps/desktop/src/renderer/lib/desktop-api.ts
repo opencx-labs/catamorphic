@@ -142,6 +142,7 @@ import type {
   VoiceBubbleDrag,
   VoiceSpotsState,
 } from "../../shared/voice-bubble.js";
+import type { WorkspaceTabRef } from "../../shared/workspace-tab-ref.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
 
@@ -2097,6 +2098,8 @@ export interface CatamorphicDesktopApi {
   gitFileDiff: (input: GitDiffInput) => Promise<GitFileDiff>;
   cancelFileSearch: () => Promise<void>;
   fileSearch: (input: FileSearchInput) => Promise<FileSearchResult>;
+  /** The project's open tabs, as a composer's @ mention lists them. */
+  workspaceTabs: (projectId: string) => Promise<WorkspaceTabRef[]>;
   prComment: (input: PrCommentInput) => Promise<PrComment>;
   prDecision: (
     input: PrDecisionInput,

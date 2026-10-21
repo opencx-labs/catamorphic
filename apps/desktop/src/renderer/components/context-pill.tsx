@@ -3,12 +3,16 @@ import {
   ClipboardType,
   FileCode,
   FileText,
+  Folder,
   Globe,
+  LayoutGrid,
   Link2,
   type LucideIcon,
   MessageSquare,
+  Sparkles,
   SquareTerminal,
   TextQuote,
+  Workflow,
   X,
 } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useEffect, useRef } from "react";
@@ -45,6 +49,14 @@ const SOURCE_ICONS: Record<string, LucideIcon> = {
   selection: TextQuote,
   url: Link2,
   path: FileText,
+  skill: Sparkles,
+};
+
+/** Workspace links a mention makes (ADR 0274) read as what they open. */
+const LINK_ICONS: Record<string, LucideIcon> = {
+  workflow: Workflow,
+  app: LayoutGrid,
+  session: MessageSquare,
 };
 
 const TAB_KIND_ICONS: Record<string, LucideIcon> = {
@@ -60,12 +72,22 @@ const SOURCE_LABELS: Record<string, string> = {
   url: "Link",
   path: "File path",
   tab: "Open tab",
+  skill: "Skill",
 };
+
+/** The workspace kind a mentioned link names, e.g. "workflow" or "session". */
+const linkKind = (url: string) => /^(workflow|app|session):/.exec(url)?.[1];
 
 export function pillIcon(view: PillView): LucideIcon {
   if (view.kind === "text") {
     if (view.source.type === "tab") {
       return TAB_KIND_ICONS[view.source.kind] ?? Globe;
+    }
+    if (view.source.type === "path" && view.source.path.endsWith("/"))
+      return Folder;
+    if (view.source.type === "url") {
+      const kind = linkKind(view.source.url);
+      if (kind) return LINK_ICONS[kind] ?? Link2;
     }
     return SOURCE_ICONS[view.source.type] ?? FileText;
   }
@@ -74,10 +96,21 @@ export function pillIcon(view: PillView): LucideIcon {
 
 /** Short kind label for headers ("Selection", "Image", "PDF"…). */
 export function pillKindLabel(view: PillView): string {
-  if (view.kind === "text") return SOURCE_LABELS[view.source.type] ?? "Text";
+  if (view.kind === "text") {
+    if (view.source.type === "path" && view.source.path.endsWith("/"))
+      return "Folder";
+    if (view.source.type === "url") {
+      const kind = linkKind(view.source.url);
+      if (kind) return kind === "session" ? "Chat" : capitalize(kind);
+    }
+    return SOURCE_LABELS[view.source.type] ?? "Text";
+  }
   if (view.kind === "image") return "Image";
   return "Document";
 }
+
+const capitalize = (word: string) =>
+  `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
 
 const dataUrl = (view: MediaView) =>
   `data:${view.mediaType};base64,${view.dataBase64}`;
@@ -289,7 +322,11 @@ function TextBody({ view }: { view: TextView }) {
           : {
               kind: "unavailable",
               message:
-                view.source.type === "tab" ? `${view.source.kind} tab` : "Link",
+                view.source.type === "tab"
+                  ? `${view.source.kind} tab`
+                  : view.source.type === "skill"
+                    ? "The agent uses this skill for the message."
+                    : pillKindLabel(view),
             },
       }}
     />

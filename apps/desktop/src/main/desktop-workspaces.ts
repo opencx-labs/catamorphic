@@ -363,16 +363,9 @@ export class DesktopWorkspaces {
           return;
         const action = command.event;
         if (
-          [
-            "surface",
-            "mcpApp",
-            "link",
-            "file",
-            "focus",
-            "unsplit",
-            // The palette a composer's "/" opens is that window's.
-            "openSkills",
-          ].includes(action.kind) ||
+          ["surface", "mcpApp", "link", "file", "focus", "unsplit"].includes(
+            action.kind,
+          ) ||
           (action.kind === "entry" && action.entry.mode === "tab") ||
           // A verb that shows something in the chat's window (a rename or
           // subsession dialog, a terminal) brings that window forward.
@@ -450,10 +443,9 @@ export class DesktopWorkspaces {
           this.detached(profileId) &&
           chat.data.entry.mode !== "tab";
         const target = inDock ? floating.webContents : event.sender;
-        // Keys follow the chips the shortcut focuses, or the composer the
-        // palette hands typing back to: the detached dock's window takes
-        // the keyboard first.
-        if (inDock && (action === "focusChips" || action === "resume"))
+        // Keys follow the chips or composer an action focuses: the detached
+        // dock's window takes the keyboard first.
+        if (inDock && (action === "focusChips" || action === "focusComposer"))
           floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",

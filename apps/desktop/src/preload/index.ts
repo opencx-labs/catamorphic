@@ -1553,6 +1553,8 @@ const api = {
   cancelFileSearch: () => invoke("catamorphic:file-search-cancel"),
   fileSearch: (input: FileSearchInput) =>
     invoke("catamorphic:file-search", input),
+  workspaceTabs: (projectId: string) =>
+    invoke("catamorphic:workspace-tabs", projectId),
   prComment: (input: PrCommentInput): Promise<unknown> =>
     invoke("catamorphic:pr-comment", input),
   prDecision: (input: PrDecisionInput): Promise<unknown> =>

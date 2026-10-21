@@ -154,14 +154,7 @@ export type PaletteChoiceMode =
 export type PaletteModeId = BuiltinPaletteMode | PaletteChoiceMode;
 /** Open the palette inside a mode (a command run from anywhere, a sidebar search). */
 export type PaletteModeRequest = { nonce: string } & (
-  | {
-      mode: PaletteModeId;
-      /**
-       * The chat whose composer opened the palette ("/" in it, ADR 0270):
-       * closing without a skill hands the typing back to that composer.
-       */
-      composer?: string;
-    }
+  | { mode: PaletteModeId }
   | {
       mode: "section";
       label: string;

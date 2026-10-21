@@ -52,22 +52,15 @@ export interface PaletteHost {
   /** Project-authored, caller-resolved zero-state actions. Empty means no UI. */
   startingActions: Array<{ label: string; prompt: string; agentId?: string }>;
   /**
-   * A skill was committed (ADR 0270): its invocation goes into a chat —
-   * the composer's chat or the focused one ("chat"), else a new chat in a
-   * tab or floating. A new chat for an agent's own command runs that agent.
+   * A skill was committed (ADR 0270): its invocation goes into the focused
+   * chat ("chat"), else a new chat in a tab or floating. A new chat for an
+   * agent's own command runs that agent.
    */
   onRunSkill: (input: {
     message: string;
     target: "chat" | "tab" | "float";
-    /** The chat whose composer opened the palette, if one did. */
-    composer?: string;
     agentId?: string;
   }) => void;
-  /**
-   * The palette closed without a skill after a composer opened it: the
-   * typing goes back there ("/" and what followed, or nothing).
-   */
-  onReturnToComposer: (chat: string, text: string) => void;
   /** One handler per registry action — the same map the shortcuts use. */
   actionHandlers: Record<ActionId, (mode?: CommitMode) => void>;
   terminalMacros: TerminalMacro[];

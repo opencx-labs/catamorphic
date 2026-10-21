@@ -172,6 +172,8 @@ describe("design lint", () => {
         "bound to a page's field, closing with the field's blur",
       "components/password-prompt.tsx":
         "Chrome's password bubble: it waits for an answer",
+      "components/composer-menu.tsx":
+        "bound to the composer's word, closing as the caret leaves it, on Escape or blur",
     };
     const unclosed = appSources()
       .filter(({ file }) => !(file in ownDismissal))

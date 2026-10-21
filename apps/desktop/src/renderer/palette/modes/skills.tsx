@@ -1,9 +1,9 @@
 import { CircleDot, Sparkles, SquareSlash } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentCommandsResult } from "../../../shared/agent-commands.js";
 import type { OpenMode as CommitMode } from "../../../shared/open-mode.js";
 import { BUILTIN_PALETTE_TRIGGERS } from "../../../shared/palette.js";
-import { type AgentInfo, desktopApi } from "../../lib/desktop-api.js";
+import { useAgentCommands } from "../../lib/agent-commands.js";
+import type { AgentInfo } from "../../lib/desktop-api.js";
 import {
   entryInvocation,
   type SkillEntry,
@@ -30,82 +30,12 @@ export function skillTarget(
   return mode === "floating" ? "float" : "tab";
 }
 
-/**
- * The typing a dismissed Skills mode hands back to its composer: the "/"
- * that opened it, a chosen skill's name and whatever was typed after.
- */
-export function composerText(modeId: string | null, query: string): string {
-  const chosen = modeId?.startsWith(CHOSEN_PREFIX)
-    ? modeId.slice(CHOSEN_PREFIX.length)
-    : undefined;
-  return chosen ? `/${chosen} ${query}` : `/${query}`;
-}
-
 const entryIcon = (entry: SkillEntry) =>
   entry.kind === "status"
     ? CircleDot
     : entry.kind === "command"
       ? SquareSlash
       : Sparkles;
-
-/**
- * The chat agent's own commands and skills, fresh on every opening: Claude
- * Code's commands and plugin skills, Codex's skills, read in the chat's
- * checkout. A late answer for another agent or chat never shows.
- */
-function useAgentCommands({
-  projectId,
-  agentId,
-  sessionId,
-  active,
-  refresh,
-}: {
-  projectId: string | undefined;
-  agentId: string | undefined;
-  sessionId: string | null;
-  active: boolean;
-  refresh: number;
-}): AgentCommandsResult & { loading: boolean } {
-  const request = useMemo(
-    () => ({ projectId, agentId, sessionId, active, refresh }),
-    [projectId, agentId, sessionId, active, refresh],
-  );
-  const [catalog, setCatalog] = useState<
-    AgentCommandsResult & { request?: typeof request; loading: boolean }
-  >({ commands: [], loading: true });
-  useEffect(() => {
-    if (!request.active || !request.projectId || !request.agentId) return;
-    let cancelled = false;
-    setCatalog({ request, commands: [], loading: true });
-    void desktopApi
-      .agentCommands({
-        projectId: request.projectId,
-        agentId: request.agentId,
-        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
-      })
-      .then((result) => {
-        if (!cancelled) setCatalog({ ...result, request, loading: false });
-      })
-      .catch(() => {
-        if (!cancelled)
-          setCatalog({
-            request,
-            commands: [],
-            loading: false,
-            error: "Could not load the agent's commands.",
-          });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [request]);
-  // One empty list, so rows built from it keep their identity per render.
-  if (!projectId || !agentId) return { commands: NO_COMMANDS, loading: false };
-  return catalog.request === request
-    ? catalog
-    : { commands: NO_COMMANDS, loading: active };
-}
-const NO_COMMANDS: AgentCommandsResult["commands"] = [];
 
 /**
  * Skills as a palette mode (ADR 0270): Work's status for the chat, the
@@ -122,7 +52,6 @@ export function useSkillModes({
   skillsError,
   refresh,
   onRetry,
-  composer,
 }: {
   modeId: string | null;
   variant: "overlay" | "tab";
@@ -134,7 +63,6 @@ export function useSkillModes({
   /** Bumped on every opening: catalogs are files that change. */
   refresh: number;
   onRetry: () => void;
-  composer: string | undefined;
 }): PaletteMode[] {
   const { projectId, focusedChat, onRunSkill, actionHandlers } =
     usePaletteHost();
@@ -210,7 +138,6 @@ export function useSkillModes({
       handlersRef.current.onRunSkill({
         message: entryInvocation(entry, instructions),
         target,
-        ...(composer ? { composer } : {}),
         ...(target !== "chat" && own && agent ? { agentId: agent.id } : {}),
       });
     };
@@ -325,7 +252,6 @@ export function useSkillModes({
     entries,
     hasChat,
     variant,
-    composer,
     agent,
     skillsError,
     native.error,

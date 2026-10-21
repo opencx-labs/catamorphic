@@ -4,7 +4,7 @@ import { Sparkles } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import { EMPTY_PALETTE_SIGNALS } from "../../shared/palette.js";
 import { recentFirst } from "./load.js";
-import { composerText, skillTarget } from "./modes/skills.js";
+import { skillTarget } from "./modes/skills.js";
 import type { PaletteItem } from "./types.js";
 
 const row = (name: string): PaletteItem => ({
@@ -24,17 +24,6 @@ describe("skills in the palette", () => {
     expect(skillTarget("tab", true)).toBe("tab");
     expect(skillTarget("side", true)).toBe("tab");
     expect(skillTarget("floating", true)).toBe("float");
-  });
-
-  it("hands a dismissed composer back what was typed after its slash", () => {
-    expect(composerText("skills", "")).toBe("/");
-    expect(composerText("skills", "usr/bin is missing")).toBe(
-      "/usr/bin is missing",
-    );
-    expect(composerText("skill:review", "the auth change")).toBe(
-      "/review the auth change",
-    );
-    expect(composerText(null, "")).toBe("/");
   });
 
   it("opens with the most used skills under Recent, then the rest", () => {

@@ -11,6 +11,10 @@ import {
   waitForShellReady,
 } from "../shared/terminal-text.js";
 import {
+  type WorkspaceTabRef,
+  workspaceTabRef,
+} from "../shared/workspace-tab-ref.js";
+import {
   BackgroundCommands,
   type BackgroundCommandView,
   type BackgroundNotifier,
@@ -624,6 +628,18 @@ export function registerAgentBridge(
     }
   }
   ipcMain.handle("catamorphic:background-commands", () => backgroundWork());
+  // A composer's @ lists the project's open tabs (ADR 0274), from the same
+  // overview the agent reads, in whichever window the chat is.
+  ipcMain.handle(
+    "catamorphic:workspace-tabs",
+    async (_event, projectId: unknown): Promise<WorkspaceTabRef[]> => {
+      if (typeof projectId !== "string") return [];
+      const overview = await rpc<{ tabs?: unknown }>("overview", { projectId });
+      return Array.isArray(overview?.tabs)
+        ? overview.tabs.flatMap((tab) => workspaceTabRef(tab) ?? [])
+        : [];
+    },
+  );
 
   const bridge: WorkspaceBridge = {
     async overview(projectId) {
