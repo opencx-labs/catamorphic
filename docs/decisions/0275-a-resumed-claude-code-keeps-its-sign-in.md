@@ -29,9 +29,10 @@ none at all.
 
 ## Decision
 
-**A CLI that runs on a sign-in keeps the sign-in's own store.** The Claude
-Code adapter sets `CLAUDE_SECURESTORAGE_CONFIG_DIR` to the home whose
-sign-in the CLI would use on a fresh thread: a member's `sign_in` home
+**A CLI that runs on a sign-in keeps the sign-in's own store.** Every
+Claude Code CLI Work starts on a sign-in (a chat's, and the model and
+command probes) gets `CLAUDE_SECURESTORAGE_CONFIG_DIR` set to the home
+whose sign-in it would use on a fresh thread: a member's `sign_in` home
 always; on the host, the store or `CLAUDE_CONFIG_DIR` the attempt names,
 else the ones the host itself was started with, else the empty string,
 which is the default home (the plain `Claude Code-credentials` Keychain
@@ -65,7 +66,8 @@ from resumed threads too, as 0199 intended.
 Every CLI hands the setting to what it runs. A Work started from a chat's
 shell inherits it, which is why the attempt's own names come first; a
 `claude` run from an agent's shell uses the chat's sign-in unless it sets
-the store too. The SDK still writes its stripped copy to the temporary
-home, which a process that dies without cleanup leaves behind. A native
-test drives the pinned CLI through a resumed thread whose token another
-Claude Code renewed.
+the store too. Like `CLAUDE_CONFIG_DIR`, a sandbox secret may not set it.
+The SDK still writes its stripped copy to the temporary home, which a
+process that dies without cleanup leaves behind. A native test drives the
+pinned CLI through a resumed thread whose token another Claude Code
+renewed.

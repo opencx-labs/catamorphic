@@ -64,7 +64,11 @@ it("reads the applied model with session settings and names it from a concrete c
     strictMcpConfig: true,
     tools: [],
     persistSession: false,
-    env: { CLAUDE_CONFIG_DIR: "/account" },
+    // The account's own store, whatever home the CLI runs in (ADR 0275).
+    env: {
+      CLAUDE_CONFIG_DIR: "/account",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/account",
+    },
   });
   expect(mocks.return).toHaveBeenCalled();
 });

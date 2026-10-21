@@ -169,6 +169,7 @@ describe("what the agent is told about secrets it did not get", () => {
       "ANTHROPIC_BASE_URL",
       "OPENAI_BASE_URL",
       "CLAUDE_CONFIG_DIR",
+      "CLAUDE_SECURESTORAGE_CONFIG_DIR",
       "CODEX_HOME",
     ])
       expect(reservedSandboxVariable(name), name).toBe(true);

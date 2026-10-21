@@ -39,7 +39,11 @@ it("uses session settings and plugins, closes discovery without a model prompt",
     strictMcpConfig: true,
     tools: [],
     persistSession: false,
-    env: { CLAUDE_CONFIG_DIR: "/account" },
+    // The account's own store, whatever home the CLI runs in (ADR 0275).
+    env: {
+      CLAUDE_CONFIG_DIR: "/account",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/account",
+    },
   });
   expect(mocks.return).toHaveBeenCalled();
 });

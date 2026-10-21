@@ -208,7 +208,9 @@ const INHERITED_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
  * in the host's or the attempt's env or in Claude's settings) stays: the
  * sign-in is not for it. A host that means a key passes it in `env`. The
  * CLI hands its environment to what it runs (Bash commands, hooks, MCP
- * servers), so those do not see the dropped credential either.
+ * servers), so those do not see the dropped credential either. The
+ * sign-in's own credential store is named, whatever home the CLI ends up
+ * in (see {@link hostSignInStore}).
  */
 export function hostProcessEnv(
   input: {
@@ -226,6 +228,7 @@ export function hostProcessEnv(
     )
   )
     for (const name of INHERITED_CREDENTIALS) delete env[name];
+  env.CLAUDE_SECURESTORAGE_CONFIG_DIR = hostSignInStore(input.env ?? {});
   return env;
 }
 
@@ -548,7 +551,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     external[name] = mapMcpServer(spec);
 
   const host = access.kind === "host";
-  const launch: Record<string, string> = {
+  const env: Record<string, string> = {
     // On the host the CLI inherits the host's environment (its own
     // sign-in and settings) but not a stray API key; beside a sandbox's
     // workspace it gets the process basics and exactly what the attempt
@@ -584,20 +587,15 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
         }
       : {}),
-    // The member's own sign-in, in the harness's own home (ADR 0199).
-    ...(access.kind === "sign_in" ? { CLAUDE_CONFIG_DIR: access.home } : {}),
+    // The member's own sign-in, in the harness's own home (ADR 0199), and
+    // its store, whatever the attempt names (ADR 0275).
+    ...(access.kind === "sign_in"
+      ? {
+          CLAUDE_CONFIG_DIR: access.home,
+          CLAUDE_SECURESTORAGE_CONFIG_DIR: access.home,
+        }
+      : {}),
   };
-  // A member's sign-in is always its own home, whatever the attempt names.
-  const store =
-    access.kind === "sign_in"
-      ? access.home
-      : host
-        ? hostSignInStore(attempt.env)
-        : undefined;
-  const env =
-    store === undefined
-      ? launch
-      : { ...launch, CLAUDE_SECURESTORAGE_CONFIG_DIR: store };
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();
 
