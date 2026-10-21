@@ -117,6 +117,7 @@ function view(projectId = "paged") {
       agentName: () => "Claude",
       closeTab: () => {},
       reorderTab: () => {},
+      attachTab: () => {},
       sessionAction: mocks.actions,
       openTab: () => {},
       resourceTab: () => undefined,

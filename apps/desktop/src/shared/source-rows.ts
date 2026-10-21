@@ -281,6 +281,7 @@ export function sanitizeSidebarSourceItem(
     label: item.label.slice(0, 1000),
     parentId: typeof item.parentId === "string" ? item.parentId : null,
     hasChildren: item.hasChildren === true,
+    ...(item.acceptsChildren === true ? { acceptsChildren: true } : {}),
     url,
     // false opens a row with children the first time it loads.
     ...(typeof item.collapsed === "boolean"

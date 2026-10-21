@@ -184,4 +184,58 @@ describe("drag tabs and chats into bookmarks", () => {
     );
     expect(app.getRendererErrors()).toEqual([]);
   });
+  it("nests a tab dropped on a chat under it, and takes it out again", async () => {
+    const page = '[data-tree-id^="browser:"]';
+    const chat = '[data-tree-id^="chat:"]';
+    await app.waitFor(
+      `!!document.querySelector('${page}[aria-level="1"]') && !!document.querySelector('${chat}')`,
+    );
+    // The middle of a chat with nothing under it yet is "inside".
+    await drop(page, chat);
+    await app.waitFor(
+      `!!document.querySelector('${page}[aria-level="2"]') && document.querySelector('${chat}').getAttribute('aria-expanded')==='true'`,
+    );
+    // The top edge of the chat's row puts it back among the top tabs.
+    await drop(page, chat, "top");
+    await app.waitFor(`!!document.querySelector('${page}[aria-level="1"]')`);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+  it("nests a tab dropped on a chat's tab in the top strip, and takes it out at the strip's end", async () => {
+    await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
+    const strip = '[data-tab-orientation="horizontal"]';
+    const page = `${strip} [data-point-key^="browser:"]`;
+    const chat = `${strip} [data-point-key^="chat:"]`;
+    await app.waitFor(
+      `!!document.querySelector('${page}') && !!document.querySelector('${chat}')`,
+    );
+    /**
+     * Drag the page tab and drop it on `target`, `x` of the way across, once
+     * the strip knows a tab is being dragged.
+     */
+    const dragPage = async (target: string, x: number) => {
+      await app.eval(
+        `(()=>{window.__stripDrag=new DataTransfer();document.querySelector('${page}').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__stripDrag}))})()`,
+      );
+      await app.waitFor(
+        `document.querySelector('${strip}').hasAttribute('data-tab-dragging')`,
+      );
+      await app.eval(
+        `(()=>{const target=document.querySelector('${target}');const r=target.getBoundingClientRect();const init={bubbles:true,cancelable:true,dataTransfer:window.__stripDrag,clientX:r.left+r.width*${x},clientY:r.top+r.height/2};for(const type of ['dragover','drop'])target.dispatchEvent(new DragEvent(type,init));document.querySelector('${page}').dispatchEvent(new DragEvent('dragend',{bubbles:true}));delete window.__stripDrag})()`,
+      );
+    };
+    // Past a chat tab's leading edge is inside it: the page joins its group.
+    await app.waitFor(
+      `!document.querySelector('${page} [data-tab-group-eyebrow]')`,
+    );
+    await dragPage(chat, 0.7);
+    await app.waitFor(
+      `!!document.querySelector('${page} [data-tab-group-eyebrow]') && !!document.querySelector('${chat} [data-tab-group-eyebrow]')`,
+    );
+    // The strip's end is among the top tabs: it leaves the chat.
+    await dragPage(strip, 0.99);
+    await app.waitFor(
+      `!document.querySelector('${page} [data-tab-group-eyebrow]')`,
+    );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
 });

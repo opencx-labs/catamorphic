@@ -34,6 +34,13 @@ Opening here can reuse a compatible clean browser/editor. Preserve dirty buffers
 and running sessions. An existing surface retains identity when focused, tiled,
 floated or restored. A collapsed tab group affects the strip, not materialization.
 
+A chat open as a tab groups the tabs attached to it. Dragging a tab onto a chat
+(past its tab's leading edge in the strip, onto its row in the sidebar's tabs)
+attaches it, as if the chat had opened it, and opens a folded group; dropped
+among another group's tabs it joins that chat, and dropped among the top tabs it
+leaves its chat (`attach`, `attachBlocker`). A page an agent drives and an
+agent's or remote chat's terminal stay with their chat; chats never nest.
+
 A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on

@@ -248,6 +248,12 @@ export interface TabGroup {
   collapsed: boolean;
 }
 
+/** How far across a tab, 0 to 1, the pointer is. */
+function dropRatio(element: HTMLElement, clientX: number) {
+  const rect = element.getBoundingClientRect();
+  return (clientX - rect.left) / Math.max(1, rect.width);
+}
+
 export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
   // A tab whose page waits on its dialog says so (ADR 0227); one out of
   // sight also wears the waiting question's badge. A tab on screen shows
@@ -285,6 +291,8 @@ function TabStrip({
   onNew,
   onToggleGroup,
   onReorder,
+  onAttach,
+  attachable,
   onDragStateChange,
   tabFile,
   tabActions,
@@ -309,6 +317,18 @@ function TabStrip({
   onToggleGroup?: (chatLocalId: string) => void;
   /** Drag-reorder: move `key` before `beforeKey` (null = to the end). */
   onReorder?: (key: string, beforeKey: string | null) => void;
+  /**
+   * A tab dropped on a chat's tab, or among another group's tabs, joins
+   * that chat (`chatKey`); dropped among the top tabs, null, it leaves its
+   * chat. Lands before `beforeKey` (null: last).
+   */
+  onAttach?: (
+    key: string,
+    chatKey: string | null,
+    beforeKey: string | null,
+  ) => void;
+  /** Whether a tab may join that chat (or, with null, leave its own). */
+  attachable?: (key: string, chatKey: string | null) => boolean;
   /** A tab drag started (key) or ended (null) — hosts show drop zones. */
   onDragStateChange?: (key: string | null) => void;
   /** The file a tab shows (an editor's): its menu adds the file's actions. */
@@ -326,7 +346,11 @@ function TabStrip({
     setRendered((previous) => mergeRendered(previous, tabs));
   }
   const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dropBeforeKey, setDropBeforeKey] = useState<string | null>(null);
+  // Where a dragged tab would land: before a tab, or inside a chat's.
+  const [dropAt, setDropAt] = useState<{
+    key: string;
+    inside: boolean;
+  } | null>(null);
   // Hover card: armed by dwelling on a tab's body, disarmed by leaving,
   // clicking, or starting a drag.
   const [hoverCard, setHoverCard] = useState<{
@@ -411,6 +435,37 @@ function TabStrip({
         : [],
     ),
   );
+  const parentOf = new Map(
+    groups.flatMap((group) =>
+      group.memberKeys.map((key): [string, string] => [key, group.parentKey]),
+    ),
+  );
+  /** A chat's tab takes a tab dropped on all but its leading edge. */
+  const dropsInside = (dragged: string, tab: WorkspaceTab, x: number) =>
+    tab.kind === "chat" &&
+    !dragged.startsWith("chat:") &&
+    Boolean(onAttach && attachable?.(dragged, tabKey(tab))) &&
+    x > 0.3;
+  /**
+   * A dragged tab lands before another (null: last) among the tabs of the
+   * group it lands in, joining or leaving a chat on the way.
+   */
+  const land = (dragged: string, beforeKey: string | null) => {
+    const into = beforeKey ? (parentOf.get(beforeKey) ?? null) : null;
+    if (
+      onAttach &&
+      !dragged.startsWith("chat:") &&
+      (parentOf.get(dragged) ?? null) !== into &&
+      attachable?.(dragged, into)
+    )
+      onAttach(dragged, into, beforeKey);
+    else onReorder?.(dragged, beforeKey);
+  };
+  const endDrag = () => {
+    setDragKey(null);
+    setDropAt(null);
+    onDragStateChange?.(null);
+  };
   // The strip's spare room drags the window, as Chrome's does: the strip
   // takes presses for its tabs and their drops, so its empty ends hand
   // them back to the chrome. Centred tabs sit between two such ends, which
@@ -435,16 +490,14 @@ function TabStrip({
       onDragOver={(event) => {
         if (dragKey) {
           event.preventDefault();
-          setDropBeforeKey(null);
+          setDropAt(null);
         }
       }}
       onDrop={(event) => {
         if (!dragKey) return;
         event.preventDefault();
-        onReorder?.(dragKey, null);
-        setDragKey(null);
-        setDropBeforeKey(null);
-        onDragStateChange?.(null);
+        land(dragKey, null);
+        endDrag();
       }}
     >
       {alignment === "center" && windowHandle("start")}
@@ -549,30 +602,39 @@ function TabStrip({
                 setDragKey(key);
                 onDragStateChange?.(key);
               }}
-              onDragEnd={() => {
-                setDragKey(null);
-                setDropBeforeKey(null);
-                onDragStateChange?.(null);
-              }}
+              onDragEnd={endDrag}
               onDragOver={(event) => {
                 if (!dragKey || dragKey === key) return;
                 event.preventDefault();
                 event.stopPropagation();
-                setDropBeforeKey(key);
+                const inside = dropsInside(
+                  dragKey,
+                  tab,
+                  dropRatio(event.currentTarget, event.clientX),
+                );
+                setDropAt((current) =>
+                  current?.key === key && current.inside === inside
+                    ? current
+                    : { key, inside },
+                );
               }}
               onDragLeave={() =>
-                setDropBeforeKey((current) =>
-                  current === key ? null : current,
-                )
+                setDropAt((current) => (current?.key === key ? null : current))
               }
               onDrop={(event) => {
                 if (!dragKey || dragKey === key) return;
                 event.preventDefault();
                 event.stopPropagation();
-                onReorder?.(dragKey, key);
-                setDragKey(null);
-                setDropBeforeKey(null);
-                onDragStateChange?.(null);
+                if (
+                  dropsInside(
+                    dragKey,
+                    tab,
+                    dropRatio(event.currentTarget, event.clientX),
+                  )
+                )
+                  onAttach?.(dragKey, key, null);
+                else land(dragKey, key);
+                endDrag();
               }}
               onAnimationEnd={(event) => {
                 if (event.target !== event.currentTarget) return;
@@ -583,11 +645,18 @@ function TabStrip({
                   );
               }}
               data-tab-active={active || undefined}
+              data-tab-drop={
+                dropAt?.key === key && dropAt.inside ? "inside" : undefined
+              }
               className={`workspace-tab group relative flex h-8 shrink-0 items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 rounded-lg ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
                 dragKey === key ? "opacity-50 " : ""
-              }${dropBeforeKey === key ? "border-l-2 border-l-accent " : ""}${
+              }${
+                dropAt?.key === key && !dropAt.inside
+                  ? "border-l-2 border-l-accent "
+                  : ""
+              }${
                 exiting
                   ? "animate-tab-out pointer-events-none"
                   : entered.has(key)

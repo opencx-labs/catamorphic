@@ -443,7 +443,12 @@ function SourceView({
     types: readonly string[],
     target: TreeDropTarget<SidebarSourceItem>,
   ) => {
-    if (target.position === "inside" && target.item && !target.item.hasChildren)
+    if (
+      target.position === "inside" &&
+      target.item &&
+      !target.item.hasChildren &&
+      !target.item.acceptsChildren
+    )
       return false;
     if (isOwnSidebarDrag(types, sectionId)) {
       const drag = currentSidebarDrag();

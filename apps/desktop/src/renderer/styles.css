@@ -1452,6 +1452,11 @@ kbd {
   box-shadow: inset 0 0 0 1px var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
+/* A chat's tab in the strip takes a dragged tab inside, as a tree row does. */
+.workspace-tab[data-tab-drop="inside"] {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
 /* Tiles in a grid mark their slot on the side the drop will land. */
 [data-drop-zone] > [data-drop="before"] {
   box-shadow: -2px 0 0 var(--color-accent);

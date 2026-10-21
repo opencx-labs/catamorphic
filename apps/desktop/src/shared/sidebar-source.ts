@@ -26,6 +26,11 @@ export interface SidebarSourceItem extends SidebarItem {
   parentId?: string | null;
   hasChildren?: boolean;
   /**
+   * Rows dragged onto it may go inside while it holds none yet (a chat
+   * that has no tabs under it). A row with children always may.
+   */
+  acceptsChildren?: boolean;
+  /**
    * The record behind the row (a chat's fields, a file's path), for code
    * that reads Work's lists. Never drawn.
    */

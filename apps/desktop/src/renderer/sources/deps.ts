@@ -27,6 +27,15 @@ export interface WorkSourceHost {
   closeTab: (key: string) => void;
   /** Move a tab before another in the strip (null: to the end). */
   reorderTab: (key: string, beforeKey: string | null) => void;
+  /**
+   * Nest a tab under a chat's tab (null: back among the top tabs), before
+   * another tab (null: last). Throws, in a sentence, when it cannot move.
+   */
+  attachTab: (
+    key: string,
+    chatKey: string | null,
+    beforeKey: string | null,
+  ) => void;
   sessionAction: (sessionId: string, action: ChatSessionAction) => void;
   openTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
   /**
