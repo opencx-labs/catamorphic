@@ -13,8 +13,12 @@ vi.mock("@catamorphic/mcp", () => ({
   fetchMarketplace: async () => [
     {
       name: "example",
+      displayName: "Example",
       description: "Catalog description",
       version: "1.0",
+      author: "Example Inc.",
+      category: "productivity",
+      homepage: "https://example.com",
       marketplace: "example/plugins",
       source: { kind: "git", url: "https://example.com/plugin.git" },
     },
@@ -100,6 +104,48 @@ it("refreshes manifest-owned configuration without losing user policy and reject
     ).rejects.toThrow("Invalid plugin manifest");
     expect(store.list()).toEqual(before);
     expect(service.listInstalled("profile")).toEqual([refreshed]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("browses the whole catalog and installs from it without a search", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "connector-browse-"));
+  const store = new ConnectionsStore(path.join(root, "connections.json"));
+  const service = new ConnectorsService({
+    connectionsFor: () => store,
+    connectorsDirFor: () => path.join(root, "connectors"),
+  });
+  try {
+    expect(await service.searchPlugins("profile", "")).toEqual([
+      expect.objectContaining({
+        name: "example",
+        displayName: "Example",
+        author: "Example Inc.",
+        category: "productivity",
+        homepage: "https://example.com",
+        official: false,
+      }),
+    ]);
+    expect(await service.searchPlugins("profile", "example inc")).toHaveLength(
+      1,
+    );
+    readPlugin.mockResolvedValueOnce({
+      name: "example",
+      description: "",
+      mcpServers: {},
+      mcpOAuth: {},
+    });
+    const fresh = new ConnectorsService({
+      connectionsFor: () => store,
+      connectorsDirFor: () => path.join(root, "connectors"),
+    });
+    await expect(
+      fresh.installPlugin("profile", "example/plugins", "example"),
+    ).resolves.toMatchObject({ name: "example" });
+    await expect(
+      fresh.installPlugin("profile", "elsewhere/plugins", "example"),
+    ).rejects.toThrow("not in the elsewhere/plugins catalog");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

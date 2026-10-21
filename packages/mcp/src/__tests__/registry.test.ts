@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { searchMcpRegistry, suggestConnection } from "../registry.js";
+import { searchMcpRegistry, suggestConnection, toEntry } from "../registry.js";
 
 describe("suggestConnection", () => {
   it("prefers a streamable-http remote over sse and packages", () => {
@@ -118,5 +118,25 @@ describe("searchMcpRegistry", () => {
       transport: "http",
       url: "https://gh.example/mcp",
     });
+  });
+
+  it("names an entry by its title and keeps only an https website", () => {
+    expect(
+      toEntry({
+        name: "academy.apexai/apex-ai-academy",
+        title: " Apex AI Academy ",
+        websiteUrl: "https://apexai.academy/developers/",
+      }),
+    ).toMatchObject({
+      displayName: "Apex AI Academy",
+      websiteUrl: "https://apexai.academy/developers/",
+    });
+    const plain = toEntry({
+      name: "io.github.octo/tools",
+      title: "  ",
+      websiteUrl: "javascript:alert(1)",
+    });
+    expect(plain.displayName).toBe("tools");
+    expect(plain).not.toHaveProperty("websiteUrl");
   });
 });

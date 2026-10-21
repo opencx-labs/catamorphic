@@ -729,6 +729,28 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-21: Connectors reads like a catalog
+
+The Connectors dialog is a two-pane catalog in the shape of an app store.
+A rail holds Browse, Plugins and MCP servers, then everything installed by
+name, with a warning dot where a sign-in needs attention. Browse shelves
+the plugin catalog by the marketplaces' own categories, six to a shelf,
+vendor-named entries first; a shelf's title opens all of it under Plugins,
+whose category pills filter in place. A row is an icon tile, a name and
+one line, and a quiet round `+` that becomes a check once installed; the
+rest of the row opens the connector's page. Tiles show the registry icon
+or the favicon of a vendor's own site (never a code host's, which would
+give every entry the same mark), else the name's first letter.
+
+Each connector has a page: a large tile, the name with who publishes it,
+its one primary action, the full description and a row of facts. An
+installed connection's page holds its status, Test and Authorize, the
+"Available to agents" switch and its tool permissions; a plugin's lists
+its MCP servers, and an uninstalled one offers more from its category.
+Pages stack under a breadcrumb; the search pill stays in reach and typing
+returns to results, which list in one column and glide with the shared
+list motion. Native `title` tooltips on the old rows went with them.
+
 ### 2026-10-20: Skills live in the palette; "/" opens them from a chat
 
 The composer's `/` menu is gone (ADR 0270). Skills are a palette mode with
