@@ -7,7 +7,7 @@ import { type RefObject, useEffect } from "react";
  * and slid back while the frame grew.
  */
 export const GLIDING_FRAME =
-  "overflow-clip transition-[height] duration-150 ease-[cubic-bezier(0.2,0,0,1)]";
+  "overflow-clip transition-[height] duration-150 ease-standard";
 
 /**
  * Size changes glide instead of snapping: a frame around an auto-height

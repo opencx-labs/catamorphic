@@ -81,7 +81,7 @@ export function ConfiguredSection({
   section: SidebarSectionConfig;
   relevant: boolean;
   surface: SidebarSurface;
-  report: (state: SidebarContentState, droppable: boolean) => void;
+  report: (state: SidebarContentState) => void;
   visible: boolean;
   /** Hidden only for being empty: it keeps listening so it can come back. */
   observeEmpty?: boolean;
@@ -159,8 +159,8 @@ export function ConfiguredSection({
   );
   const [status, setStatus] = useState<SidebarStatus>({ state: "loading" });
   useEffect(() => {
-    report(status.state, Boolean(status.droppable));
-  }, [report, status.state, status.droppable]);
+    report(status.state);
+  }, [report, status.state]);
   const refreshers = useRef(new Set<() => unknown>());
   const registerRefresh = useCallback((refresh: () => unknown) => {
     refreshers.current.add(refresh);
@@ -464,7 +464,7 @@ function SidebarSection({
             className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:text-fg"
           >
             <ChevronRight
-              className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              className={`size-3 transition-transform duration-150 ease-standard ${
                 open ? "rotate-90" : ""
               }`}
             />

@@ -28,8 +28,16 @@ export const DEFAULT_MARKETPLACES = [
 
 export interface MarketplacePluginEntry {
   name: string;
+  /** The publisher's display name, e.g. "HubSpot Sales" for `hubspot-sales`. */
+  displayName?: string;
   description: string;
   version?: string;
+  /** Who publishes the plugin, e.g. "Anthropic" or "Google LLC". */
+  author?: string;
+  /** The marketplace's own grouping, e.g. "productivity" or "database". */
+  category?: string;
+  /** The plugin's or its vendor's web page. */
+  homepage?: string;
   /** Marketplace reference this entry came from (e.g. "owner/repo"). */
   marketplace: string;
   /** Where the plugin's files live, normalized for install. */
@@ -44,10 +52,39 @@ interface RawMarketplace {
   name?: string;
   plugins?: Array<{
     name?: string;
+    displayName?: unknown;
     description?: string;
     version?: string;
+    author?: unknown;
+    category?: unknown;
+    homepage?: unknown;
     source?: unknown;
   }>;
+}
+
+/** A non-empty trimmed string, or nothing. */
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** `author` is `{ name }` in the documented format; some lists use a string. */
+function authorName(value: unknown): string | undefined {
+  if (value && typeof value === "object" && "name" in value)
+    return text(value.name);
+  return text(value);
+}
+
+/** Only web pages: a homepage is shown and opened, never fetched as code. */
+function webPage(value: unknown): string | undefined {
+  const url = text(value);
+  if (!url) return undefined;
+  try {
+    return ["https:", "http:"].includes(new URL(url).protocol)
+      ? url
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** "owner/repo" GitHub shorthand, a full git URL, or a marketplace.json URL. */
@@ -109,10 +146,18 @@ export function parseMarketplace(
     if (!plugin.name) continue;
     const source = normalizeSource(ref, plugin.source);
     if (!source) continue;
+    const displayName = text(plugin.displayName);
+    const author = authorName(plugin.author);
+    const category = text(plugin.category)?.toLowerCase();
+    const homepage = webPage(plugin.homepage);
     entries.push({
       name: plugin.name,
+      ...(displayName ? { displayName } : {}),
       description: plugin.description ?? "",
       version: plugin.version,
+      ...(author ? { author } : {}),
+      ...(category ? { category } : {}),
+      ...(homepage ? { homepage } : {}),
       marketplace: ref,
       source,
     });

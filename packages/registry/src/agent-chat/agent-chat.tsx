@@ -124,7 +124,7 @@ export function AgentChat({
           (lastReply?.kind === "reply" ? lastReply.item.text : undefined)}
       </span>
       <div
-        className={`relative origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,transform,margin,border-width] duration-200 ease-out ${
+        className={`relative origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,transform,margin,border-width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
           isFull
             ? "mb-[-1px] min-h-0 flex-1 border"
             : expanded

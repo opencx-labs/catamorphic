@@ -101,7 +101,7 @@ export function VoiceSpots() {
             <span
               data-voice-spot={spot}
               data-active={spot === state.target || undefined}
-              className={`size-[50px] rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              className={`size-[50px] rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-standard ${
                 spot === state.target
                   ? "border-accent/70 bg-accent/10 opacity-100 shadow-[0_0_0_1px_var(--color-accent),0_0_18px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
                   : "border-dashed border-border-strong/60 bg-bg-raised/40 opacity-70"

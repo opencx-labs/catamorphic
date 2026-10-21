@@ -67,7 +67,8 @@ for external actions.
 
 ## Native Codex computer use
 
-Connectors has **Connect Codex Computer Use** when the runtime is installed in
+Connectors lists **Codex Computer Use** under Built in, connected from its row or
+its page, when the runtime is installed in
 the user's Codex home (`CODEX_HOME`, otherwise `~/.codex`). This references the
 installation in place, preserves its configured surfaces and exposes `js`/`js_reset`, and leaves OS and per-app access
 under the native service's control. The imported runtime exposes computer surfaces;

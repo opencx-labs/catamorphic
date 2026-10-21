@@ -1,27 +1,39 @@
 import { BUILTIN_ACTIONS, KEYBINDING_ACTIONS } from "./actions.js";
-import { SETTING_KEYS, SETTINGS } from "./settings.js";
+import { SETTING_KEYS, SETTINGS, type SettingKey } from "./settings.js";
 import { THEME_TOKENS, TOKEN_LABELS } from "./theme-tokens.js";
 
 export interface SettingsDestination {
   id: string;
   requestId: string;
 }
+export type SettingsCategory =
+  | "agents"
+  | "connections"
+  | "appearance"
+  | "workspace"
+  | "macros"
+  | "shortcuts"
+  | "notifications"
+  | "voice"
+  | "import";
 export interface SettingsEntry {
   id: string;
   label: string;
-  category:
-    | "agents"
-    | "connections"
-    | "appearance"
-    | "workspace"
-    | "macros"
-    | "shortcuts"
-    | "notifications"
-    | "voice"
-    | "import";
+  category: SettingsCategory;
   keywords: string[];
   /** Offered only on macOS. */
   macOnly?: boolean;
+}
+
+/** The Settings category that shows a preference; every preference has one. */
+export function settingCategory(key: SettingKey): SettingsCategory {
+  return key === "terminalMacros"
+    ? "macros"
+    : key === "terminalAppearance" || key === "codeTheme"
+      ? "appearance"
+      : key === "notificationSounds" || key === "desktopNotifications"
+        ? "notifications"
+        : "workspace";
 }
 
 /** Search metadata and stable navigation ids, shared by the UI and agent reference. */
@@ -37,14 +49,7 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     return {
       id: key,
       label: SETTINGS[key].label,
-      category:
-        key === "terminalMacros"
-          ? "macros"
-          : key === "terminalAppearance" || key === "codeTheme"
-            ? "appearance"
-            : key === "notificationSounds" || key === "desktopNotifications"
-              ? "notifications"
-              : "workspace",
+      category: settingCategory(key),
       keywords: [
         key,
         ...("options" in definition ? Object.values(definition.options) : []),

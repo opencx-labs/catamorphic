@@ -63,7 +63,8 @@ const helpers = `
     const dialog = search?.closest('[role="dialog"]');
     return dialog && !dialog.closest('[inert]') && !dialog.closest('[aria-hidden="true"]') ? dialog : null;
   };
-  const row = () => modal()?.querySelector('[data-testid="connection-row"]');
+  // The connection's own page in Connectors (opened from the rail).
+  const row = () => modal()?.querySelector('[data-testid="connection-detail"]');
 `;
 const run = <T>(body: string) =>
   app.eval<T>(`(() => { ${helpers}\n${body} })()`);
@@ -117,19 +118,26 @@ describe("connector OAuth", () => {
       { label: "run Manage connectors" },
     );
     await runWait(
-      `return !!modal() && !!row() && row().textContent.includes('Fake OAuth');`,
+      `return !!modal() && !!byText('[data-testid="installed-item"]', 'Fake OAuth');`,
       {
         timeoutMs: 30_000,
-        label: "connectors modal with the connection",
+        label: "connectors modal lists the connection as installed",
       },
     );
     expect(
       await run(
-        `return [...modal().querySelectorAll('button')].some(button => button.textContent.includes('Connect Codex Computer Use'));`,
+        `return !!modal().querySelector('[data-testid="codex-computer-use"] button[aria-label="Connect Codex Computer Use"]');`,
       ),
     ).toBe(true);
     await run(
-      `byText('[data-testid="connection-row"] button', 'Test').click(); return true;`,
+      `byText('[data-testid="installed-item"]', 'Fake OAuth').click(); return true;`,
+    );
+    await runWait(
+      `return !!row() && row().textContent.includes('Fake OAuth');`,
+      { label: "the connection's page" },
+    );
+    await run(
+      `byText('[data-testid="connection-detail"] button', 'Test').click(); return true;`,
     );
     await runWait(
       `return !!row() && row().textContent.includes('Needs authorization') &&
@@ -144,9 +152,9 @@ describe("connector OAuth", () => {
     );
     // The modal steps aside, the consent page opens as a browser tab, the
     // fake consents instantly (302 to the loopback callback), the tab
-    // closes and the modal returns — too fast to catch mid-flight on a
-    // poll, so assert the resting state: tokens could only have landed
-    // via that tab's navigation.
+    // closes and the modal returns on the connection's page, too fast to
+    // catch mid-flight on a poll, so assert the resting state: tokens
+    // could only have landed via that tab's navigation.
     await runWait(
       `return !!modal() && !$('input[aria-label="Address and search bar"]');`,
       {
@@ -154,7 +162,7 @@ describe("connector OAuth", () => {
         label: "callback served: tab closed, modal back",
       },
     );
-    await runWait(`return !!row() && row().textContent.includes('1 tools');`, {
+    await runWait(`return !!row() && /1 tool(?!s)/.test(row().textContent);`, {
       timeoutMs: 30_000,
       label: "probe after auth reports tools",
     });
@@ -167,9 +175,6 @@ describe("connector OAuth", () => {
   }, 120_000);
 
   it("Permissions lists the probed tools and saves per-tool rules on the connection", async () => {
-    await run(
-      `row().querySelector('[data-testid="connection-permissions"]').click(); return true;`,
-    );
     await runWait(
       `const item = row()?.querySelector('[data-testid="tool-policy-tools"] li[data-tool="hello"]');
        return !!item && item.dataset.effective === 'agent';`,

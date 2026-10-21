@@ -82,7 +82,7 @@ function SleepRing({ tab }: { tab: WorkspaceTab }) {
 }
 
 const sleepingGlyph = (tab: WorkspaceTab) =>
-  `transition-[opacity,filter,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+  `transition-[opacity,filter,scale] duration-200 ease-standard ${
     tab.kind === "browser" && tab.asleep ? "scale-80 opacity-50 grayscale" : ""
   }`;
 

@@ -72,7 +72,7 @@ function Reveal({
   }, [text]);
   return (
     <div
-      className={`grid transition-[grid-template-rows,opacity] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`grid transition-[grid-template-rows,opacity] duration-150 ease-standard ${
         open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
       }`}
       aria-hidden={!open}

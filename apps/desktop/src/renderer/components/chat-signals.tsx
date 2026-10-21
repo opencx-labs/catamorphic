@@ -67,7 +67,7 @@ export function SignalGlyph({
         {children}
       </span>
       <span
-        className={`absolute -right-1 -top-1 grid size-3 place-items-center transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`absolute -right-1 -top-1 grid size-3 place-items-center transition-[opacity,scale] duration-200 ease-standard ${
           busy ? "scale-100 opacity-100" : "scale-0 opacity-0"
         }`}
         aria-hidden="true"
@@ -115,7 +115,7 @@ export function SignalBadge({
   const visibility = (kind: string) =>
     active === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";
   const transition =
-    "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)]";
+    "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-standard";
   return (
     <span className="grid place-items-center">
       {/* Agent question waiting: the most urgent signal — it pulses

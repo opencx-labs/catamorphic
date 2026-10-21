@@ -63,6 +63,37 @@ describe("parseMarketplace", () => {
       subdir: "packages/plugin",
     });
   });
+
+  it("keeps the catalog's display name, author, category and web page", () => {
+    const [entry, bare] = parseMarketplace("acme/plugins", {
+      plugins: [
+        {
+          name: "hubspot-sales",
+          displayName: "HubSpot Sales",
+          description: "Pipeline tools",
+          author: { name: "HubSpot" },
+          category: "Productivity",
+          homepage: "https://www.hubspot.com",
+          source: "./hubspot",
+        },
+        {
+          name: "plain",
+          author: "  ",
+          homepage: "javascript:alert(1)",
+          source: "./plain",
+        },
+      ],
+    });
+    expect(entry).toMatchObject({
+      displayName: "HubSpot Sales",
+      author: "HubSpot",
+      category: "productivity",
+      homepage: "https://www.hubspot.com",
+    });
+    expect(bare).not.toHaveProperty("author");
+    expect(bare).not.toHaveProperty("homepage");
+    expect(bare).not.toHaveProperty("displayName");
+  });
 });
 
 describe("liftMcpServer", () => {

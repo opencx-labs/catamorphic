@@ -21,7 +21,7 @@ export function AnimatedHeight({ children }: { children: ReactNode }) {
   return (
     <div
       style={{ height }}
-      className="overflow-hidden transition-[height] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
+      className="overflow-hidden transition-[height] duration-200 ease-standard"
     >
       <div ref={innerRef}>{children}</div>
     </div>

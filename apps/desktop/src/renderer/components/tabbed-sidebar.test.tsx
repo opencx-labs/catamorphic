@@ -25,9 +25,9 @@ it("reports an empty section as invisible even when another section keeps its ta
     report,
   }: {
     visible: boolean;
-    report: (state: SidebarContentState, droppable: boolean) => void;
+    report: (state: SidebarContentState) => void;
   }) {
-    useEffect(() => report("empty", false), [report]);
+    useEffect(() => report("empty"), [report]);
     return <span data-testid="empty-widget" data-visible={visible} />;
   }
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -83,9 +83,9 @@ it("asks a section hidden for being empty to keep observing", async () => {
   }: {
     visible: boolean;
     observeEmpty: boolean;
-    report: (state: SidebarContentState, droppable: boolean) => void;
+    report: (state: SidebarContentState) => void;
   }) {
-    useEffect(() => report("empty", false), [report]);
+    useEffect(() => report("empty"), [report]);
     seen.push({ visible, observeEmpty });
     return null;
   }
@@ -141,9 +141,9 @@ function Probe({
   report,
 }: {
   state: SidebarContentState;
-  report: (state: SidebarContentState, droppable: boolean) => void;
+  report: (state: SidebarContentState) => void;
 }) {
-  useEffect(() => report(state, false), [state, report]);
+  useEffect(() => report(state), [state, report]);
   return <input aria-label="Retained widget draft" defaultValue="Draft" />;
 }
 it("separates relevance and content states while preserving a hidden widget and tab preference", async () => {
@@ -575,14 +575,10 @@ describe("contextual tabs (ADR 0226)", () => {
   });
 });
 
-it("shows a hidden empty section that takes drops while something it takes is dragged", async () => {
+it("keeps a hidden empty section hidden while a tab is dragged", async () => {
   vi.useFakeTimers();
-  function Pins({
-    report,
-  }: {
-    report: (state: SidebarContentState, droppable: boolean) => void;
-  }) {
-    useEffect(() => report("empty", true), [report]);
+  function Pins({ report }: { report: (state: SidebarContentState) => void }) {
+    useEffect(() => report("empty"), [report]);
     return <span>Drop a tab here</span>;
   }
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -625,28 +621,16 @@ it("shows a hidden empty section that takes drops while something it takes is dr
       await vi.advanceTimersByTimeAsync(300);
     });
     expect(slot()?.hidden).toBe(true);
-    // Something that is not a page, chat or row: nothing to take.
-    await act(async () => {
-      drag("dragstart", ["text/plain"]);
-      await vi.advanceTimersByTimeAsync(1);
-    });
-    expect(slot()?.hidden).toBe(true);
+    // A drag never adds space to the sidebar: the section stays hidden
+    // through the drag and after the drop.
     await act(async () => {
       drag("dragstart", ["application/x-catamorphic-tab"]);
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(slot()?.hidden).toBe(false);
+    expect(slot()?.hidden).toBe(true);
     await act(async () => {
       drag("dragend", []);
-      await vi.advanceTimersByTimeAsync(400);
-    });
-    // It waits a moment for what was dropped to arrive.
-    expect(slot()?.hidden).toBe(false);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(600);
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(1000);
     });
     expect(slot()?.hidden).toBe(true);
   } finally {
