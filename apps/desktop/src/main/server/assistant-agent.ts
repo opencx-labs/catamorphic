@@ -4,19 +4,22 @@ import { z } from "zod";
 
 /**
  * Sessions the assistant starts with spawn_subsession, like any agent's
- * (ADR 0271): copies of it, which run as the agent it is built on without
- * its tools, or any agent the person names, on any model and effort their
- * harness offers: a quick voice assistant hands hard work to a stronger
- * model.
+ * (ADR 0271): on the agent it is built on, or any agent the person names,
+ * on any model and effort their harness offers: a quick voice assistant
+ * hands hard work to a stronger model. It starts no copy of itself.
  */
-export const ASSISTANT_DELEGATION: AgentDelegationPolicy = {
-  enabled: true,
-  maxConcurrentChildren: 10,
-  agents: [
-    { agent: "self", model: "any", effort: "any", delegate: true },
-    { agent: "*", model: "any", effort: "any", delegate: true },
-  ],
-};
+export function assistantDelegation(
+  baseAgentId: string,
+): AgentDelegationPolicy {
+  return {
+    enabled: true,
+    maxConcurrentChildren: 10,
+    agents: [
+      { agent: baseAgentId, model: "any", effort: "any", delegate: true },
+      { agent: "*", model: "any", effort: "any", delegate: true },
+    ],
+  };
+}
 
 /**
  * What a session the assistant starts reads first (ADR 0216): where the
@@ -83,14 +86,35 @@ export type FollowSession = (input: {
   title: string;
 }) => Promise<void>;
 
+/** How the assistant's spawn_subsession reaches its sessions. */
+interface AssistantSpawn {
+  follow: FollowSession;
+  /** The agent it is built on: its sessions' agent unless one is named. */
+  baseAgentId: string;
+}
+
 /**
- * The assistant's spawn_subsession: Work's own, with the task in the brief
- * that leads back to the assistant, and the session's notes followed so
- * the assistant can pass them on.
+ * The assistant's spawn_subsession: Work's own, on the person's own agent
+ * unless it names another, with the task in the brief that leads back to
+ * the assistant, and the session's notes followed so the assistant can
+ * pass them on.
  */
-function briefedSpawn<T extends ExtraTool>(spawn: T, follow: FollowSession): T {
+function briefedSpawn<T extends ExtraTool>(
+  spawn: T,
+  { follow, baseAgentId }: AssistantSpawn,
+): T {
   return {
     ...spawn,
+    parameters: {
+      ...spawn.parameters,
+      agent: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "An agent id from your instructions' list; leave out for the person's own agent",
+        ),
+    },
     execute: async (input, context) => {
       const assistantSessionId = context.sessionId;
       if (!assistantSessionId) return spawn.execute(input, context);
@@ -100,7 +124,14 @@ function briefedSpawn<T extends ExtraTool>(spawn: T, follow: FollowSession): T {
         ...(typeof input.title === "string" ? { title: input.title } : {}),
         ...(input.read_only === true ? { readOnly: true } : {}),
       });
-      const child = await spawn.execute({ ...input, ...briefed }, context);
+      const agent =
+        typeof input.agent === "string" && input.agent !== "self"
+          ? input.agent
+          : baseAgentId;
+      const child = await spawn.execute(
+        { ...input, ...briefed, agent },
+        context,
+      );
       const sessionId =
         child && typeof child === "object" && "sessionId" in child
           ? child.sessionId
@@ -154,26 +185,23 @@ export function withoutReplacedTools<T extends { name: string }>(
  * Work's tools as the assistant has them, served or discovered: without
  * the session tools it replaces, and its spawn_subsession briefed.
  */
-export function assistantWorkspaceTools<T extends ExtraTool>(input: {
-  tools: readonly T[];
-  follow: FollowSession;
-}): T[] {
+export function assistantWorkspaceTools<T extends ExtraTool>(
+  input: AssistantSpawn & { tools: readonly T[] },
+): T[] {
   return withoutReplacedTools(input.tools).map((tool) =>
-    tool.name === "spawn_subsession" ? briefedSpawn(tool, input.follow) : tool,
+    tool.name === "spawn_subsession" ? briefedSpawn(tool, input) : tool,
   );
 }
 
 /** The base agent's tools, with the assistant's session tools. */
-export function assistantHostTools(input: {
-  workspace: readonly ExtraTool[];
-  sessions: readonly ExtraTool[];
-  follow: FollowSession;
-}): ExtraTool[] {
+export function assistantHostTools(
+  input: AssistantSpawn & {
+    workspace: readonly ExtraTool[];
+    sessions: readonly ExtraTool[];
+  },
+): ExtraTool[] {
   return [
-    ...assistantWorkspaceTools({
-      tools: input.workspace,
-      follow: input.follow,
-    }),
+    ...assistantWorkspaceTools({ ...input, tools: input.workspace }),
     ...input.sessions,
   ];
 }

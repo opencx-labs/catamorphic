@@ -586,7 +586,7 @@ sandbox is fast inside and changes nothing outside.
 \`delegation\` says which subagents an agent may start (ADR 0271). Without it
 an agent starts copies of itself on any model and effort. \`agents\` lists
 grants: \`agent\` is \`self\`, an agent id, \`project:<slug>\`, or \`*\` (any
-agent whose sandboxing is no wider); \`model\` is \`any\`, \`fixed\`, or a list;
+agent its instructions list, whose sandboxing is no wider); \`model\` is \`any\`, \`fixed\`, or a list;
 \`effort\` is \`any\`, \`fixed\`, \`at-most-parent\`, or a list; \`delegate\`
 says whether the child may start its own. For example
 \`{ "maxConcurrentChildren": 4, "agents": [{ "agent": "self", "effort":

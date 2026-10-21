@@ -21,11 +21,14 @@ workflow `spawn` action and the server API take the same, as `agentId`,
 (amending 0216).
 
 **Grants decide.** `delegation.agents` lists grants: `agent` (`self`, an id,
-`project:<slug>`, or `*`, whose sandboxing ceiling stands), `model` (`any`,
+`project:<slug>`, or `*`), `model` (`any`,
 `fixed`, or a list), `effort` (`any`, `fixed`, `at-most-parent`, or a
 list), `delegate`, and a `description`. Grants that name the target decide
 before `*`, so `*` never lifts one agent's limits; among them, the first
-that takes the settings applies. Refusals list the choices.
+that takes the settings applies. Refusals list the choices. `*` admits the
+agents the menu names: those the host lists, and the project's committed
+agents, no wider than the caller's sandboxing. An id the host resolves but
+does not list needs a grant that names it.
 
 **By default an agent starts copies of itself on any model and effort**;
 omitted grant fields mean `any`. Handing hard work to a stronger model is
@@ -39,13 +42,13 @@ A grant's list bounds what the child runs on: an unlisted inherited or
 default setting gives way to the first listed. `at-most-parent` caps the
 effort it runs on at the parent's, when the parent's is known.
 
-**A layered agent never runs as a subsession.** A registered agent may
-name `copiesAs`; its copies, and any spawn naming it, run as that agent.
-The voice assistant is one of the person's agents plus assistant tools, so
-its copy is that agent on the assistant chat's settings. The assistant's
-`spawn_subsession` is wrapped by Work: the task goes in a brief leading
-back to it, and it follows the child's notes. The menu names every agent a
-grant reaches, committed ones included, so the model matches spoken names.
+**The assistant stays Work's.** The voice assistant is one of the person's
+agents plus assistant tools, under an id of its own that Work never lists.
+Its grants name its base agent and `*`; it starts no copy of itself. Its
+`spawn_subsession` is Work's, wrapped: left without an agent it starts the
+base agent, the task goes in a brief leading back to it, and it follows
+the child's notes. The menu names every agent a grant reaches, committed
+ones included, so the model matches spoken names.
 
 **Narrowing needs no grant.** `delegate: false` and `read_only`. A read-only
 chat runs in its harness's read-only mode (Claude Code `plan`, without a
@@ -71,6 +74,9 @@ version it resolves to.
   work to a stronger model; it stays one setting away.
 - **A voice tool of its own.** `start_session` differed only in a brief,
   a default and fuzzy names, all the parent's, and lacked read-only.
+- **`copiesAs` on registered agents** (shipped briefly): a copy of the
+  assistant ran as its base agent through core. It put the host's
+  assistant into core's contract; listing decides instead.
 - **Read-only as an agent with `contained` sandboxing.** Needs a definition
   per reviewer; the session-level flag reuses `contained` for what Work
   enforces and adds only the harness's own mode.

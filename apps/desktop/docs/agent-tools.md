@@ -220,13 +220,13 @@ Its host instructions describe the tools (`ASSISTANT_INSTRUCTIONS` in
 `main/voice/guidance.ts`).
 
 It starts sessions with `spawn_subsession`, like any agent (ADR 0271). Its
-copies run as its base agent (`copiesAs`), without its tools, on the
-assistant chat's model and effort; its grants admit them and any agent the
-person names, on any model and effort, so a quick assistant hands hard work
-to a stronger model. Named by any agent, the assistant starts as its base
-agent too, never a second assistant. Its `spawn_subsession` is Work's, wrapped
-(`assistantWorkspaceTools` in `main/server/assistant-agent.ts`): it puts the
-task in a brief (`assistantSubsession`), and follows the session. The session
+grants name its base agent and `*`, on any model and effort, so a quick
+assistant hands hard work to a stronger model; it starts no copy of itself.
+Its id is never in the registry's list, and `*` admits only listed agents, so
+no agent starts a second assistant. Its `spawn_subsession` is Work's, wrapped
+(`assistantWorkspaceTools` in `main/server/assistant-agent.ts`): left without
+an agent it starts the base agent, on that agent's own model and effort; it
+puts the task in a brief (`assistantSubsession`), and follows the session. The session
 reads the assistant's chat with `read_project_session` for what was
 actually said, and reaches the person by sending it a message with
 `send_project_session_message`, starting with its title (the task's first

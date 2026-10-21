@@ -6,7 +6,7 @@ import {
   rosterAgentId,
 } from "../../shared/voice.js";
 import {
-  ASSISTANT_DELEGATION,
+  assistantDelegation,
   assistantHostTools,
   assistantSubsession,
   assistantWorkspaceTools,
@@ -36,9 +36,9 @@ describe("the assistant", () => {
     expect(rosterAgentId("project:p:s")).toBe("project:p:s");
   });
 
-  it("starts copies of itself, which run as its base agent, or one the person names, on any model", () => {
-    expect(ASSISTANT_DELEGATION.agents).toEqual([
-      { agent: "self", model: "any", effort: "any", delegate: true },
+  it("starts sessions on its base agent, or one the person names, on any model, and no copy of itself", () => {
+    expect(assistantDelegation("a1").agents).toEqual([
+      { agent: "a1", model: "any", effort: "any", delegate: true },
       { agent: "*", model: "any", effort: "any", delegate: true },
     ]);
   });
@@ -111,6 +111,7 @@ describe("the assistant", () => {
         ],
         sessions: [tool("list_sessions")],
         follow: async () => {},
+        baseAgentId: "a1",
       }).map((each) => each.name),
     ).toEqual(["open_surface", "spawn_subsession", "list_sessions"]);
   });
@@ -139,6 +140,7 @@ describe("the assistant", () => {
       workspace: [spawn],
       sessions: [],
       follow,
+      baseAgentId: "a1",
     });
     await served?.execute(
       {
@@ -148,7 +150,10 @@ describe("the assistant", () => {
       },
       context,
     );
+    // Left without an agent, it runs on the person's own: the one the
+    // assistant is built on, never a copy of the assistant.
     expect(spawned[0]).toMatchObject({
+      agent: "a1",
       model: "opus",
       context_mode: "fresh",
       title: "Count the lines in words.txt",
@@ -163,9 +168,18 @@ describe("the assistant", () => {
         title: "Count the lines in words.txt",
       },
     ]);
-    // Discovered, it is the same tool.
-    const [discovered] = assistantWorkspaceTools({ tools: [spawn], follow });
-    await discovered?.execute({ task: "Again", title: "Again" }, context);
+    expect(served?.parameters.agent).toBeDefined();
+    // Discovered, it is the same tool; an agent it names is kept.
+    const [discovered] = assistantWorkspaceTools({
+      tools: [spawn],
+      follow,
+      baseAgentId: "a1",
+    });
+    await discovered?.execute(
+      { task: "Again", title: "Again", agent: "reviewer" },
+      context,
+    );
+    expect(spawned[1]).toMatchObject({ agent: "reviewer" });
     expect(spawned[1]?.task).toContain('"Again:"');
   });
 
