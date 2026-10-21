@@ -17,7 +17,8 @@ const OTHER = "\0other";
  * The agent's model, picked from what its harness says it supports: Claude
  * Code's own catalog, Codex's (the models a ChatGPT sign-in or OpenAI key
  * can run), or the provider's for a built-in agent. Empty runs the harness
- * default. "Other model" takes any id; a model the catalog does not list
+ * default; a built-in agent on Anthropic or OpenAI keys has none, so it
+ * offers none. "Other model" takes any id; a model the catalog does not list
  * stays as typed. Without a catalog, the plain field.
  */
 export function HarnessModelField({
@@ -102,7 +103,17 @@ export function HarnessModelField({
             <option value={value}>Loading models…</option>
           ) : (
             <>
-              <option value="">{defaultModelLabel(agent, null)}</option>
+              {/* A built-in agent on Anthropic or OpenAI keys runs only a
+                  model it is given: no default to offer, only a prompt. */}
+              {agent.harness === "ai-sdk" ? (
+                value === "" && (
+                  <option value="" disabled>
+                    Choose a model
+                  </option>
+                )
+              ) : (
+                <option value="">{defaultModelLabel(agent, null)}</option>
+              )}
               {models.map((model) => {
                 const label = modelLabel(model, models);
                 return (

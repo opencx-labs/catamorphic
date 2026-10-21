@@ -73,6 +73,29 @@ describe("HarnessModelField", () => {
     expect(onChange).toHaveBeenCalledWith("gpt-5.5");
   });
 
+  it("offers no default to a built-in agent, which needs a model", async () => {
+    vi.mocked(desktopApi.agentModels).mockResolvedValue({
+      models: [{ id: "claude-sonnet-5" }],
+    });
+    await act(async () =>
+      root.render(
+        <HarnessModelField
+          agent={{ id: "builtin-1", harness: "ai-sdk", provider: "anthropic" }}
+          value=""
+          onChange={vi.fn()}
+          hint="Any model id your API key can access."
+        />,
+      ),
+    );
+    const options = [...(select()?.options ?? [])];
+    expect(options.map((o) => o.textContent)).toEqual([
+      "Choose a model",
+      "claude-sonnet-5",
+      "Other model…",
+    ]);
+    expect(options[0]?.disabled).toBe(true);
+  });
+
   it("keeps a model the catalog does not list as typed", async () => {
     vi.mocked(desktopApi.agentModels).mockResolvedValue({
       models: [{ id: "gpt-5.5" }],
