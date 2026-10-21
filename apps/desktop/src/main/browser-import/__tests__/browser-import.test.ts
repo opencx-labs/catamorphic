@@ -230,6 +230,36 @@ describe("index", () => {
     ]);
   });
 
+  it.runIf(process.platform === "darwin")(
+    "offers Aside's passwords and signed-in sessions, like Chrome's",
+    () => {
+      const home = makeTempDir();
+      const profile = path.join(
+        home,
+        "Library/Application Support/Aside/Default",
+      );
+      fs.mkdirSync(profile, { recursive: true });
+      for (const file of ["Login Data", "Cookies", "History"])
+        fs.writeFileSync(path.join(profile, file), "");
+      const original = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        const aside = BROWSER_IMPORTERS.find((entry) => entry.id === "aside");
+        expect(aside?.detect()?.profiles[0]).toMatchObject({
+          hasHistory: true,
+          hasPasswords: true,
+          hasSessions: true,
+        });
+        expect(aside?.passwordSource?.("Default")).toMatchObject({
+          keychainService: "Aside Safe Storage",
+          keychainAccount: "Aside",
+        });
+      } finally {
+        process.env.HOME = original;
+      }
+    },
+  );
+
   it("readBrowserBookmarks throws for an unknown browser id", () => {
     expect(() => readBrowserBookmarks("netscape", "Default")).toThrow(
       /unknown browser id/i,

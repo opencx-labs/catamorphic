@@ -63,6 +63,8 @@ export const BROWSER_IMPORTERS: BrowserImporter[] =
         }),
         chromiumImporter({
           id: "aside",
+          keychainService: "Aside Safe Storage",
+          keychainAccount: "Aside",
           label: "Aside",
           darwinDir: "Library/Application Support/Aside",
         }),
