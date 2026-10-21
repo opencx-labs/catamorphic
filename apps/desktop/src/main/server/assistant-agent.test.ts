@@ -1,5 +1,6 @@
 import type { ExtraTool } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   assistantAgentId,
   parseAssistantAgentId,
@@ -168,7 +169,11 @@ describe("the assistant", () => {
         title: "Count the lines in words.txt",
       },
     ]);
-    expect(served?.parameters.agent).toBeDefined();
+    // Its agent field says what leaving it out does.
+    const field = served?.parameters.agent;
+    expect(field instanceof z.ZodType ? field.description : undefined).toBe(
+      "An agent id from your instructions' list; leave out for the person's own agent",
+    );
     // Discovered, it is the same tool; an agent it names is kept.
     const [discovered] = assistantWorkspaceTools({
       tools: [spawn],

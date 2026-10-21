@@ -26,9 +26,10 @@ workflow `spawn` action and the server API take the same, as `agentId`,
 list), `delegate`, and a `description`. Grants that name the target decide
 before `*`, so `*` never lifts one agent's limits; among them, the first
 that takes the settings applies. Refusals list the choices. `*` admits the
-agents the menu names: those the host lists, and the project's committed
-agents, no wider than the caller's sandboxing. An id the host resolves but
-does not list needs a grant that names it.
+agents the menu names, no wider than the caller's sandboxing: those the host
+lists (also by project id, where the host serves them so) and the project's
+committed agents. An id the host resolves but does not list, or a
+definition not yet committed, needs a grant that names it.
 
 **By default an agent starts copies of itself on any model and effort**;
 omitted grant fields mean `any`. Handing hard work to a stronger model is

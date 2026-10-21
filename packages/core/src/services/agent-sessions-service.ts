@@ -167,6 +167,7 @@ import {
   effortFits,
   effortOf,
   grantAgentId,
+  namesTarget,
 } from "./delegation-grants.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
@@ -8956,9 +8957,11 @@ export class AgentSessionsService {
         : input.model;
     const parentEffort =
       effortOf(source.model_effort) ?? sourceAgent.defaults?.effort;
-    // A wildcard admits the agents the menu names: listed by the host,
-    // and no wider than the caller (ADR 0271).
+    // A wildcard decides only where no grant names the target, and admits
+    // the agents the menu names: listed by the host, and no wider than the
+    // caller (ADR 0271).
     const wildcardAdmits =
+      !namesTarget(policy, { targetAgentId, sourceAgentId, projectId }) &&
       policy.agents.some((grant) => grant.agent === "*") &&
       sandboxingRank(targetAgent.sandboxing) <=
         sandboxingRank(sourceAgent.sandboxing) &&
@@ -11450,7 +11453,12 @@ export class AgentSessionsService {
           .filter(
             (candidate) =>
               sandboxingRank(candidate.sandboxing) <=
-              sandboxingRank(sourceAgent.sandboxing),
+                sandboxingRank(sourceAgent.sandboxing) &&
+              // One name per agent: the project's, where it has one.
+              !accessible.some(
+                (other) =>
+                  other.id === formatProjectAgentId(projectId, candidate.id),
+              ),
           )
           .map((candidate) => ({
             id: candidate.id,
@@ -11473,14 +11481,32 @@ export class AgentSessionsService {
     projectId: string,
     policy: AgentDelegationPolicy,
   ): Promise<RegisteredCodingAgent[]> {
-    return [
-      ...this.codingAgents.list(),
-      ...(policy.agents.some(
-        (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
-      )
-        ? await this.committedAgents(projectId)
-        : []),
-    ].filter((candidate) => {
+    const listed = this.codingAgents.list();
+    const reached = policy.agents.some(
+      (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
+    );
+    const committed = reached ? await this.committedAgents(projectId) : [];
+    // A host may serve a listed agent by its project id too (a built-in
+    // with no definition), the way `resolveAgent` falls back.
+    const qualified = reached
+      ? listed.flatMap((agent) => {
+          const id = formatProjectAgentId(projectId, agent.id);
+          if (
+            parseProjectAgentId(agent.id) ||
+            committed.some((candidate) => candidate.id === id)
+          )
+            return [];
+          try {
+            const served = this.codingAgents.get(id);
+            return served && !served.unavailable
+              ? [{ ...served, id, name: served.name ?? agent.name }]
+              : [];
+          } catch {
+            return [];
+          }
+        })
+      : [];
+    return [...listed, ...committed, ...qualified].filter((candidate) => {
       try {
         this.assertAgentAccess(identity, projectId, candidate.id);
         return true;

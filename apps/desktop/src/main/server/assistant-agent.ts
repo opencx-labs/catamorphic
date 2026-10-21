@@ -124,10 +124,8 @@ function briefedSpawn<T extends ExtraTool>(
         ...(typeof input.title === "string" ? { title: input.title } : {}),
         ...(input.read_only === true ? { readOnly: true } : {}),
       });
-      const agent =
-        typeof input.agent === "string" && input.agent !== "self"
-          ? input.agent
-          : baseAgentId;
+      const named = typeof input.agent === "string" ? input.agent.trim() : "";
+      const agent = named && named !== "self" ? named : baseAgentId;
       const child = await spawn.execute(
         { ...input, ...briefed, agent },
         context,

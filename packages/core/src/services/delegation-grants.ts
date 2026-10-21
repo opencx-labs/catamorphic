@@ -62,8 +62,13 @@ export function grantAgentId(
     : grant.agent;
 }
 
+type Target = Pick<
+  DelegationRequest,
+  "targetAgentId" | "sourceAgentId" | "projectId"
+>;
+
 /** A grant that names the target: itself (`self`), or its id. */
-function names(grant: AgentDelegationGrant, request: DelegationRequest) {
+function names(grant: AgentDelegationGrant, request: Target) {
   if (grant.agent === "self")
     return request.targetAgentId === request.sourceAgentId;
   if (grant.agent === "*") return false;
@@ -111,6 +116,14 @@ function settingsRefusal(
       return `its effort is one of ${grant.effort.join(", ")}`;
   }
   return null;
+}
+
+/** Whether a grant names the target, so a wildcard does not decide. */
+export function namesTarget(
+  policy: AgentDelegationPolicy,
+  target: Target,
+): boolean {
+  return policy.agents.some((grant) => names(grant, target));
 }
 
 /**
