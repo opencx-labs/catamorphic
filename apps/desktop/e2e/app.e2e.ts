@@ -2097,6 +2097,10 @@ describe("subagents and background watchers", () => {
          '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,
       { label: "its terminal chip spins" },
     );
+    // The chat's own icon says what it left running while it rests.
+    await runWait(`return !!$('[data-activity="command"]');`, {
+      label: "the chat's icon shows its running command",
+    });
     // When it finishes, the chat gets a task notification row (ADR 0217),
     // never a message bubble, and the agent answers.
     await runWait(
@@ -2118,6 +2122,9 @@ describe("subagents and background watchers", () => {
            .some((el) => el.textContent === 'Ran command in background');`,
       { label: "the step says it ran" },
     );
+    await runWait(`return !$('[data-activity="command"]');`, {
+      label: "the chat's icon lets the ended command go",
+    });
     // Its terminal ended with it (ADR 0223): the chip left the chat, and
     // the notification has no terminal to open.
     await runWait(

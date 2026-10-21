@@ -1,5 +1,7 @@
 # 0234 — A sidebar section is a source; Work's lists are sources like any other
 
+> Rows gain `activity` beside `signal` ([ADR 0273](0273-a-chat-icon-says-what-it-is-doing-and-what-needs-you.md)): what a row is doing rides its icon's lower corner, so a chat can show it with what needs the person.
+
 - **Status:** Accepted
 - **Date:** 2026-10-16
 - **Amends:** [0132](0132-shared-contextual-sidebar-contributions.md), [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md), [0147](0147-uniform-sidebar-sections.md), [0186](0186-palette-modes-and-use-ranked-search.md), [0226](0226-session-metadata-and-this-session.md)

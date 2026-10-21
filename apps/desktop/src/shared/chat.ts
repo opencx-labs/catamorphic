@@ -1,5 +1,6 @@
 import type { AgentTextAttachment } from "@catamorphic/react";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
+import type { SidebarActivity } from "./sidebar.js";
 import type { SidebarSourceItem } from "./sidebar-source.js";
 
 /**
@@ -12,12 +13,21 @@ export interface PendingChatMessage {
   attachments?: AgentTextAttachment[];
 }
 
+/** What a chat left running and waits on: a watch, subagents, a command. */
+export type ChatWaiting = Exclude<SidebarActivity, "working">;
+
 export interface ChatSignals {
   working?: boolean;
   unread?: boolean;
   draft?: boolean;
   awaitingInput?: boolean;
+  waiting?: ChatWaiting | null;
 }
+
+/** What a chat reports of itself whenever it changes. */
+export type ChatLiveSignals = Required<
+  Pick<ChatSignals, "working" | "draft" | "awaitingInput" | "waiting">
+>;
 
 export type ChatMode = "min" | "partial" | "tab";
 
@@ -238,11 +248,9 @@ export interface ChatDockProps {
   ) => void;
   /**
    * The chat's live signals changed: the agent started/stopped working,
-   * the composer gained/lost an unsent draft, or a question is waiting.
-   * Drives every indicator surface (bubbles, tabs, notifications).
+   * the composer gained/lost an unsent draft, a question is waiting, or
+   * what it left running changed. Drives every indicator surface
+   * (bubbles, tabs, notifications).
    */
-  onSignalsChange: (
-    localId: string,
-    signals: Required<Pick<ChatSignals, "working" | "draft" | "awaitingInput">>,
-  ) => void;
+  onSignalsChange: (localId: string, signals: ChatLiveSignals) => void;
 }

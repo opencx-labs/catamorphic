@@ -40,7 +40,7 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
-import { SignalBadge, SignalGlyph } from "./chat-signals";
+import { activityOf, SignalBadge, SignalGlyph } from "./chat-signals";
 import type { FileTarget } from "./file-menu.js";
 import {
   OpenResourceButton,
@@ -728,12 +728,14 @@ function TabStrip({
                   aria-current={active || undefined}
                 >
                   {/* Same signal vocabulary as the chat bubbles: a spinner
-                  on the icon's corner while working (the icon still names
-                  the tab); unread/draft/question land as badges there. */}
+                  on the icon's lower corner while working, or what it waits
+                  on (the icon still names the tab); unread/draft/question
+                  land as badges on its upper corner. */}
                   <span className="relative grid size-3.5 shrink-0 place-items-center">
                     <SignalGlyph
                       working={tab.working ?? false}
                       awaitingInput={tab.awaitingInput}
+                      waiting={tab.waiting}
                       className="size-3.5"
                     >
                       {tab.kind === "browser" && tab.faviconUrl ? (
@@ -758,16 +760,19 @@ function TabStrip({
                     </SignalGlyph>
                     <SleepRing tab={tab} />
                     {/* A custom conversation icon still reads as a chat: a
-                      tiny chat marker rides the glyph's corner. */}
-                    {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (
-                      <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
-                        {tab.fork ? (
-                          <GitFork className="size-1.5 text-fg-muted" />
-                        ) : (
-                          <MessageSquare className="size-1.5 text-fg-muted" />
-                        )}
-                      </span>
-                    )}
+                      tiny chat marker rides the glyph's lower corner, which
+                      what the chat is doing takes while it says anything. */}
+                    {tab.kind === "chat" &&
+                      hasCustomChatIcon(tab.chatIcon) &&
+                      !activityOf(tab) && (
+                        <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
+                          {tab.fork ? (
+                            <GitFork className="size-1.5 text-fg-muted" />
+                          ) : (
+                            <MessageSquare className="size-1.5 text-fg-muted" />
+                          )}
+                        </span>
+                      )}
                     <span className="absolute -right-1 -top-1">
                       <SignalBadge
                         signals={{

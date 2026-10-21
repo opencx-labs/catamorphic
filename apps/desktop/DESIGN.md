@@ -738,6 +738,21 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-21: A chat's icon says what it is doing and what needs you
+
+A chat's icon has two corners now (ADR 0273). The upper one says what
+needs the person: the "?" of a question, the pulsing dot of attention,
+the dot of an unread reply, the pencil of a draft. It stays while the
+agent works again, so a reply that landed meanwhile is not lost. The lower
+one says what the chat is doing: the spinner while it works, and while it
+rests, what it left running: an eye for a watch, a bot for subagents at
+work, a terminal for a background command, quiet in the muted ink. One
+mark per corner; the eye before the bot before the terminal. Tabs,
+bubbles, the folded bubble, the sidebar's Tabs rows and chips all draw
+it, and the gap the mark cuts from the icon moved with it to the lower
+corner. A custom chat icon's little chat marker gives that corner up
+while it is in use.
+
 ### 2026-10-21: The composer keeps to the message; closing a tab goes back
 
 The composer shows the message and its controls, nothing else: the context

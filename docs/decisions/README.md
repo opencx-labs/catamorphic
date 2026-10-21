@@ -246,7 +246,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
 | [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |
 | [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |
-| [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226) |
+| [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226; row activity added by 0273) |
 | [0235](0235-pages-find-chromes-window-chrome.md) | Pages find Chrome's `window.chrome`; a daily check watches Google's sign-in | Accepted (amends 0150, 0203) |
 | [0236](0236-voice-hears-the-person-and-dictates-anywhere.md) | Voice hears the person, dictates anywhere, and its keys tap or hold | Accepted (amends 0216; amended by 0265, 0268) |
 | [0237](0237-lists-fade-where-they-continue.md) | Lists fade where they continue: one overflow hint, the sidebar thumb a section's choice | Accepted (refines 0218, 0234; amended by 0248) |
@@ -279,4 +279,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0270](0270-skills-live-in-the-palette.md) | Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat | Accepted (supersedes 0052's composer menu; builds on 0186; the composer's "/" superseded by 0274) |
 | [0271](0271-agents-delegate-by-naming-an-agent-and-its-settings.md) | Agents delegate by naming an agent and its settings (model, effort, read-only); grants decide, and copies of yourself with any model are the default | Accepted (amends 0090, 0216) |
 | [0272](0272-profiles-share-settings-with-another-profile.md) | Profiles share settings with another profile, once or kept in sync: appearance, workspace, macros, shortcuts and notifications use the owner's files | Accepted |
+| [0273](0273-a-chat-icon-says-what-it-is-doing-and-what-needs-you.md) | A chat's icon says what it is doing and what needs you, at once: two corners, rows gain `activity` | Accepted (amends 0234's row `signal`) |
 | [0274](0274-composer-menus-for-skills-and-mentions.md) | The composer's "/" and "@" menus: skills and mentions go in the message as pills | Accepted (supersedes 0270's composer "/"; builds on 0052, 0186, 0123) |

@@ -1,17 +1,21 @@
 export type { ChatDockEntry, ChatMode } from "../../shared/chat.js";
 
+import type { ChatWaiting } from "../../shared/chat.js";
 import type { GitDiffMode } from "../../shared/git.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
 
 /**
  * Live activity signals mirrored onto a tab's icon — the same vocabulary
- * as the chat bubbles (chat-signals.tsx): spinner while working, dot for
- * unread, pencil for a draft (chat composer text, editor unsaved changes),
- * pulsing "?" for a waiting agent question.
+ * as the chat bubbles (chat-signals.tsx): below, a spinner while working or
+ * what it waits on; above, a dot for unread, a pencil for a draft (chat
+ * composer text, editor unsaved changes), a pulsing "?" for a waiting agent
+ * question.
  */
 interface TabIndicators {
-  /** Agent working → a spinner rides the icon's corner. */
+  /** Agent working → a spinner rides the icon's lower corner. */
   working?: boolean;
+  /** What it left running, while not working → its glyph there instead. */
+  waiting?: ChatWaiting | null;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;
   /** A workflow requested user attention → pulsing dot on the icon. */

@@ -58,7 +58,7 @@ import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
-import type { PendingChatMessage } from "../shared/chat.js";
+import type { ChatLiveSignals, PendingChatMessage } from "../shared/chat.js";
 import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { type DownloadRecord, fileUrlFor } from "../shared/downloads.js";
 import type { HistoryEntry } from "../shared/history.js";
@@ -338,16 +338,11 @@ const DiffScreen = lazy(() =>
 );
 
 /** What a ChatDock reports live; `unread` is derived here in the host. */
-interface ChatLiveSignals {
-  working: boolean;
-  draft: boolean;
-  awaitingInput: boolean;
-}
-
 const NO_CHAT_SIGNALS: ChatLiveSignals = {
   working: false,
   draft: false,
   awaitingInput: false,
+  waiting: null,
 };
 
 const truncateLabel = (value: string): string =>
@@ -1891,9 +1886,11 @@ export function App({
               .filter(Boolean)
               .join(" · ") || undefined,
           // Same signals as the chat's bubble: spinner while the agent
-          // works, dot for a reply that landed while the tab was hidden,
-          // pencil for an unsent draft, "?" for a waiting question.
+          // works or what it waits on, dot for a reply that landed while
+          // the tab was hidden, pencil for an unsent draft, "?" for a
+          // waiting question.
           working: signalsByChat[chat.localId]?.working ?? false,
+          waiting: signalsByChat[chat.localId]?.waiting ?? null,
           unread: unreadByChat[chat.localId] ?? false,
           attention: attentionByChat[chat.localId] ?? false,
           draft: signalsByChat[chat.localId]?.draft ?? false,
@@ -3289,7 +3286,8 @@ export function App({
       if (
         before.working === next.working &&
         before.draft === next.draft &&
-        before.awaitingInput === next.awaitingInput
+        before.awaitingInput === next.awaitingInput &&
+        before.waiting === next.waiting
       ) {
         return;
       }

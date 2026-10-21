@@ -891,6 +891,7 @@ function SourceRow({
       progress={row.progress}
       trend={row.trend}
       signal={row.signal}
+      activity={row.activity}
       active={active}
       resource={Boolean(row.url)}
       defaultOpenMode={row.open ?? contribution?.section.open ?? "replace"}
