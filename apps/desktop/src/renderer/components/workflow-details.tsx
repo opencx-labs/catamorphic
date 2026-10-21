@@ -197,7 +197,7 @@ function TechnicalDetails({ node }: { node: WorkflowNode }) {
         onClick={() => setOpen(!open)}
       >
         <ChevronRight
-          className={`size-3 transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${open ? "rotate-90" : ""}`}
+          className={`size-3 transition-transform duration-200 ease-standard ${open ? "rotate-90" : ""}`}
         />
         Technical details
       </button>

@@ -786,7 +786,7 @@ export function InspectorPortal({
       onTransitionEnd={onGlide(false)}
       onTransitionCancel={onGlide(false)}
       // Over a window's drag row its buttons must still take clicks.
-      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${!shown ? "pointer-events-none opacity-0" : open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
+      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-standard motion-reduce:transition-none" : ""} ${!shown ? "pointer-events-none opacity-0" : open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
     >
       <InspectorPendingContext.Provider value={report}>
         <div ref={content}>{children}</div>

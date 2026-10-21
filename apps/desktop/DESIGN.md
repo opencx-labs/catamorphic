@@ -275,6 +275,11 @@ file with their job, registry copies included.
 
 - Radii: `--radius-sm` 4px (inputs, chips), `--radius-md` 6px (buttons, list
   rows), `--radius-lg` 10px (panels, dialogs).
+- **Nested corners are concentric.** A rounded control sitting in a rounded
+  container's padding takes the container's radius minus that padding, and
+  the relation is written down rather than hand-tuned: the composer sets
+  `[--composer-radius:12px] [--composer-inset:6px]`, and its buttons use
+  `rounded-[calc(var(--composer-radius)-var(--composer-inset))]`.
 - Spacing on a 4px grid. Common paddings: 8 (compact), 12 (row), 16 (panel).
 - Sidebar rows are 28px tall; workspace tab rows are 32px; sidebar width
   260px; right panel 380px.
@@ -333,6 +338,10 @@ the animation is wrong, not the test.
 
 1. **One easing.** All motion uses `--ease-standard`
    (`cubic-bezier(0.2, 0, 0, 1)`). No `ease-in-out`, no springs, no bounces.
+   The theme points Tailwind's `--default-transition-timing-function` at it,
+   so a bare `transition-*` class is already on the curve; name it with
+   `ease-standard`, never a `cubic-bezier` literal. Registry source keeps the
+   literal, since a host may not define the token.
 2. **Duration bounds: 100–300ms.** Micro-feedback (hover, color) sits at
    100–150ms; structural motion (panels, tabs, docks) at 180–250ms. Anything
    longer reads as sluggish; anything shorter as a glitch.

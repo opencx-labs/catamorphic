@@ -208,7 +208,7 @@ export function ShortcutHint({
             onTransitionEnd={() => {
               if (!visible) setPosition(null);
             }}
-            className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-standard ${
               visible
                 ? "translate-y-0 opacity-100"
                 : side === "bottom"

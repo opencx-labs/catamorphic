@@ -1656,7 +1656,7 @@ export function BrowserScreen({
             aria-pressed={Boolean(currentBookmark)}
           >
             <Star
-              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-standard ${
                 currentBookmark ? "scale-110 fill-current" : "scale-100"
               }`}
             />

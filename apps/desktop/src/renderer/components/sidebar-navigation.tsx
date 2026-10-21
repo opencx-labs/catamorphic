@@ -464,7 +464,7 @@ function SidebarSection({
             className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:text-fg"
           >
             <ChevronRight
-              className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              className={`size-3 transition-transform duration-150 ease-standard ${
                 open ? "rotate-90" : ""
               }`}
             />

@@ -5898,7 +5898,7 @@ export function App({
   // pointer 1:1.
   const paneGeometryTransition = dividerDragging
     ? ""
-    : " transition-[left,right] duration-200 ease-[cubic-bezier(0.2,0,0,1)]";
+    : " transition-[left,right] duration-200 ease-standard";
   const paneClass = (key: string) => {
     const slot = viewSlots[key];
     if (slot) return SLOT_CLASSES[slot] + paneGeometryTransition;
@@ -7761,7 +7761,7 @@ export function App({
                       className={`absolute inset-y-0 z-40 w-[7px] -translate-x-1/2 cursor-col-resize ${
                         dividerDragging
                           ? ""
-                          : "transition-[left] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
+                          : "transition-[left] duration-200 ease-standard"
                       }`}
                       style={{ left: `${splitRatio * 100}%` }}
                     >
@@ -8231,7 +8231,7 @@ export function App({
           popping in. */}
             {!bootVeilGone && (
               <div
-                className={`fixed inset-0 z-[400] bg-bg transition-opacity duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                className={`fixed inset-0 z-[400] bg-bg transition-opacity duration-250 ease-standard ${
                   bootRevealed ? "pointer-events-none opacity-0" : "opacity-100"
                 }`}
                 onTransitionEnd={() => {
