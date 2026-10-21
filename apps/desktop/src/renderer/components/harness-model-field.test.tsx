@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -11,6 +12,17 @@ vi.mock("../lib/desktop-api.js", () => ({
 }));
 
 const codex = { id: "codex-1", harness: "codex" as const };
+
+/** The catalog answers on the next tick, as a query does. */
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+const withQueries = (children: ReactNode) => (
+  <QueryClientProvider client={new QueryClient()}>
+    {children}
+  </QueryClientProvider>
+);
 
 describe("HarnessModelField", () => {
   let container: HTMLDivElement;
@@ -31,14 +43,17 @@ describe("HarnessModelField", () => {
   const render = async (value: string, onChange = vi.fn()) => {
     await act(async () =>
       root.render(
-        <HarnessModelField
-          agent={codex}
-          value={value}
-          onChange={onChange}
-          hint="Default uses the harness default."
-        />,
+        withQueries(
+          <HarnessModelField
+            agent={codex}
+            value={value}
+            onChange={onChange}
+            hint="Default uses the harness default."
+          />,
+        ),
       ),
     );
+    await settle();
     return onChange;
   };
   const select = () =>
@@ -79,14 +94,21 @@ describe("HarnessModelField", () => {
     });
     await act(async () =>
       root.render(
-        <HarnessModelField
-          agent={{ id: "builtin-1", harness: "ai-sdk", provider: "anthropic" }}
-          value=""
-          onChange={vi.fn()}
-          hint="Any model id your API key can access."
-        />,
+        withQueries(
+          <HarnessModelField
+            agent={{
+              id: "builtin-1",
+              harness: "ai-sdk",
+              provider: "anthropic",
+            }}
+            value=""
+            onChange={vi.fn()}
+            hint="Any model id your API key can access."
+          />,
+        ),
       ),
     );
+    await settle();
     const options = [...(select()?.options ?? [])];
     expect(options.map((o) => o.textContent)).toEqual([
       "Choose a model",

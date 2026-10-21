@@ -1,14 +1,11 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import {
   defaultModelLabel,
   modelLabel,
   sameModel,
 } from "../lib/agent-default-model.js";
-import {
-  type AgentInfo,
-  desktopApi,
-  type HarnessModelInfo,
-} from "../lib/desktop-api.js";
+import { type AgentInfo, desktopApi } from "../lib/desktop-api.js";
 
 /** The select's value for "type a model id". */
 const OTHER = "\0other";
@@ -34,30 +31,19 @@ export function HarnessModelField({
   placeholder?: string;
   hint: string;
 }) {
-  const [models, setModels] = useState<HarnessModelInfo[] | null>(null);
-  const [error, setError] = useState<string>();
   const [typing, setTyping] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    setModels(null);
-    setError(undefined);
-    desktopApi
-      .agentModels(agent.id)
-      .then((result) => {
-        if (cancelled) return;
-        setModels(result.models);
-        setError(result.error);
-      })
-      .catch(() => {
-        if (!cancelled) setModels([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agent.id]);
-
-  const listed = models?.some((model) => sameModel(model.id, value)) ?? false;
-  const custom = typing || (value !== "" && !listed);
+  // The same catalog the chat's model picker reads, from the same cache.
+  const catalog = useQuery({
+    queryKey: ["desktop", "agent-models", agent.id],
+    queryFn: () => desktopApi.agentModels(agent.id),
+    staleTime: 600_000,
+    retry: false,
+  });
+  // Unreadable is the same as empty: the model is typed.
+  const models = catalog.isError ? [] : (catalog.data?.models ?? null);
+  const error = catalog.data?.error;
+  const match = models?.find((model) => sameModel(model.id, value));
+  const custom = typing || (value !== "" && !match);
   const field = (
     <input
       value={value}
@@ -83,12 +69,7 @@ export function HarnessModelField({
       <label className="flex flex-col gap-1">
         Model
         <select
-          value={
-            custom
-              ? OTHER
-              : (models?.find((model) => sameModel(model.id, value))?.id ??
-                value)
-          }
+          value={custom ? OTHER : (match?.id ?? value)}
           disabled={models === null}
           data-disabled-reason="Loading the models this agent can run"
           onChange={(event) => {
