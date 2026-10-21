@@ -87,8 +87,8 @@ request's own 30 seconds.
 ## Sorted tabs
 
 With tabs placed in the sidebar, the default Tabs section lists `work:tabs`.
-Wrapping it sorts working and waiting chats first; rows slide as chats start
-and stop. A module path resolves inside the project, so this goes in a project
+Wrapping it sorts chats that need the person first, then working ones; rows
+slide as chats start and stop. A module path resolves inside the project, so this goes in a project
 layer beside the module (`.work/workspace.js` with the module committed, or the
 personal project file), copied from the resolved layout:
 

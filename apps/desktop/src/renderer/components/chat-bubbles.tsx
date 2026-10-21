@@ -805,8 +805,10 @@ export function ChatBubbles({
       >
         <MessageSquare className="size-4" />
       </SignalGlyph>
+      {/* The count takes the lower-left corner: the icon's own lower
+          corner says what the chats are doing. */}
       {stripEntries.length > 1 && (
-        <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
+        <span className="absolute -bottom-0.5 -left-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
           {stripEntries.length}
         </span>
       )}

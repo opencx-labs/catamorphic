@@ -212,6 +212,11 @@
   `agent_sessions.provider_session_id`; (d) per-subagent token
   attribution (Claude `isSidechain` records); (e) surface per-reply cost
   in the step log from `metadata.usage`.
+- **Chat icon waits (ADR 0273).** A chat's icon shows a watch, subagents
+  at work or a background command on its lower corner. Remaining: followed
+  sessions and session timers as waits; `activity` on the Chats list's
+  and subsessions' rows (`sources/chats.ts`), which need a chat's live
+  signals beyond its session fields.
 - **Review-deferred architecture cleanups (2026-08-21 code review).** Three
   confirmed-but-invasive findings deferred from the fix pass: (a) slash
   command listing as an optional provider capability (today: a Claude Code

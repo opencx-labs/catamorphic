@@ -40,7 +40,12 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
-import { activityOf, SignalBadge, SignalGlyph } from "./chat-signals";
+import {
+  ACTIVITY_LABELS,
+  activityOf,
+  SignalBadge,
+  SignalGlyph,
+} from "./chat-signals";
 import type { FileTarget } from "./file-menu.js";
 import {
   OpenResourceButton,
@@ -48,19 +53,31 @@ import {
 } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
-/** The card's status line — most urgent signal first. */
+/**
+ * The card's status line, as the icon's corners say it: what needs the
+ * person, then what the tab is doing.
+ */
 function tabStatusLine(tab: WorkspaceTab): string | null {
   if (tab.kind === "browser" && tab.pageDialog)
     return "The page is waiting for your answer";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
-  if (tab.working) return "Agent is working…";
-  if (tab.attention) return "Ready for you";
-  if (tab.unread) return "New reply";
-  if (tab.draft) {
-    return tab.kind === "editor" || tab.kind === "workflow"
-      ? "Unsaved changes"
-      : "Unsent draft";
-  }
+  const needs = tab.attention
+    ? "Ready for you"
+    : tab.unread
+      ? "New reply"
+      : tab.draft
+        ? tab.kind === "editor" || tab.kind === "workflow"
+          ? "Unsaved changes"
+          : "Unsent draft"
+        : null;
+  const activity = activityOf(tab);
+  const doing =
+    activity === "working"
+      ? "Agent is working…"
+      : activity
+        ? ACTIVITY_LABELS[activity]
+        : null;
+  if (needs || doing) return [needs, doing].filter(Boolean).join(" · ");
   if (tab.kind === "browser" && tab.asleep)
     return "Asleep to save memory. Opens where you left off";
   return null;

@@ -17,9 +17,10 @@ background command ran looked like one with nothing going on.
 **Two corners, one mark each.** The upper corner says what needs the
 person: question, attention, unread, draft, in that order, shown whether
 or not the agent works. The lower corner says what the chat is doing: the
-working spinner, or, while it is not working, what it left running and
-waits on: an eye for a command watch, a bot for subagents at work, a
-terminal for a background command, in that order. One glyph per corner
+working spinner (held back while a question waits), or, while it is not
+working, what it left running and waits on: an eye for a command watch, a
+bot for subagents at work, a terminal for a background command, in that
+order. One glyph per corner
 keeps a 14px icon legible; the transcript already uses these glyphs for
 the same tasks. A custom chat icon's chat marker gives the lower corner
 up while the chat says anything there.
@@ -43,4 +44,6 @@ would shift as they come and go); splitting `signal` into two fields
 
 - A module ranking tabs by `signal === "working"` sees a working chat with
   an unread reply as unread; the documented example ranks by `activity`.
-- Followed sessions and session timers are not yet waits the icon shows.
+- The folded bubble's chat count moves to its lower-left corner.
+- Followed sessions and session timers are not yet waits the icon shows,
+  and the Chats list's rows set no `activity` yet.

@@ -202,6 +202,35 @@ it("closing the tab in front goes back to the tab the person was on", () => {
   expect(ws.recentTabKeys).toEqual([]);
 });
 
+it("closing a tab skips a page its folded group hides", () => {
+  let ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    tabs: [{ kind: "run", name: "r" }],
+    chats: [{ localId: "c", mode: "tab", sessionId: "session" }],
+    browsers: [
+      {
+        localId: "b",
+        profileId: "p",
+        initialUrl: "https://example.com/",
+        url: "https://example.com/",
+        title: "Example",
+        faviconUrl: null,
+        chatLocalId: "c",
+      },
+    ],
+    activeTabKey: "chat:c",
+  };
+  ws = transitionWorkspace(ws, { type: "select", key: "browser:b" });
+  ws = transitionWorkspace(ws, { type: "select", key: "run:r" });
+  expect(ws.recentTabKeys).toEqual(["chat:c", "browser:b"]);
+  ws = reconcileWorkspace(ws, {
+    ...ws,
+    chats: ws.chats.map((chat) => ({ ...chat, surfacesCollapsed: true })),
+  });
+  ws = transitionWorkspace(ws, { type: "close", key: "run:r" });
+  expect(ws.activeTabKey).toBe("chat:c");
+});
+
 it("closes a New Tab nobody typed into once something else is shown in its place", () => {
   const ws: Workspace = {
     ...initial(),

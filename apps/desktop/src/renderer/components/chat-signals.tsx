@@ -78,6 +78,14 @@ export const activityOf = ({
 >): SidebarActivity | null =>
   working ? (awaitingInput ? null : "working") : (waiting ?? null);
 
+/** What the lower corner says, in words (screen readers, hover cards). */
+export const ACTIVITY_LABELS: Record<SidebarActivity, string> = {
+  working: "Working",
+  watch: "Watching",
+  subagent: "Waiting on subagents",
+  command: "Running a command",
+};
+
 export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
   working: list.some((signals) => signals.working),
   unread: list.some((signals) => signals.unread),

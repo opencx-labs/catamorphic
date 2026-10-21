@@ -32,7 +32,7 @@ import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { TONE_TEXT } from "../lib/tones.js";
 import { AnimatedTitle } from "./animated-title.js";
-import { SignalBadge, SignalGlyph } from "./chat-signals.js";
+import { ACTIVITY_LABELS, SignalBadge, SignalGlyph } from "./chat-signals.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -58,14 +58,6 @@ export function SidebarIcon({ name }: { name?: string }) {
 }
 
 /** Optional hover hint (e.g. a bookmark's URL) in the app-standard style. */
-/** What a row's lower corner says, for screen readers. */
-const ACTIVITY_LABELS: Record<SidebarActivity, string> = {
-  working: "Working",
-  watch: "Watching",
-  subagent: "Waiting on subagents",
-  command: "Running a command",
-};
-
 function TitleHint({
   title,
   children,

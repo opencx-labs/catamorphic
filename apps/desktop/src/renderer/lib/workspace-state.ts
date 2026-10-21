@@ -509,6 +509,10 @@ export const orderedTabKeys = (
   return result;
 };
 
+/**
+ * The tab in front once `closedKey` leaves: its split partner, else the
+ * newest tab the person left that is still shown, else the strip's last.
+ */
 export const nextActiveTabKey = (
   ws: Workspace,
   closedKey: string,
@@ -531,10 +535,12 @@ export const nextActiveTabKey = (
         ? ws.split.leftKey
         : undefined;
   if (partner && keys.includes(partner)) return partner;
-  // Otherwise back to the tab the person was on before this one.
+  // Otherwise back to the tab the person was on before this one, unless a
+  // folded group hides it now.
+  const shown = new Set(orderedTabKeys({ ...ws, chats }));
   for (let index = ws.recentTabKeys.length - 1; index >= 0; index -= 1) {
     const recent = ws.recentTabKeys[index];
-    if (recent && keys.includes(recent)) return recent;
+    if (recent && keys.includes(recent) && shown.has(recent)) return recent;
   }
   return keys.at(-1);
 };

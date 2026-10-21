@@ -3896,18 +3896,6 @@ export function App({
     );
   };
 
-  // Cmd+\ pairs the active tab with the previously focused one — track a
-  // one-deep focus history for that.
-  const previousActiveTabKeyRef = useRef<string | undefined>(undefined);
-  const lastActiveTabKeyRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const current = workspace.activeTabKey;
-    if (current !== lastActiveTabKeyRef.current) {
-      previousActiveTabKeyRef.current = lastActiveTabKeyRef.current;
-      lastActiveTabKeyRef.current = current;
-    }
-  });
-
   /** Cmd+\: tile the active tab beside the previously focused one. */
   const toggleSplit = () => {
     const ws = workspaceRef.current;
@@ -3921,7 +3909,7 @@ export function App({
       updateWorkspace((current) => ({ ...current, split: null }));
       return;
     }
-    const previous = previousActiveTabKeyRef.current;
+    const previous = ws.recentTabKeys.at(-1);
     const partner =
       previous && previous !== active && keys.includes(previous)
         ? previous
@@ -4006,7 +3994,7 @@ export function App({
     const anchor =
       ws.activeTabKey && ws.activeTabKey !== key
         ? ws.activeTabKey
-        : (previousActiveTabKeyRef.current ?? null);
+        : (ws.recentTabKeys.at(-1) ?? null);
     if (!anchor || anchor === key || !orderedTabKeys(ws).includes(anchor)) {
       return;
     }
@@ -4200,7 +4188,7 @@ export function App({
       transitionWorkspace(ws, {
         type: mode === "tab" ? "focus" : "side",
         key,
-        previous: previousActiveTabKeyRef.current,
+        previous: ws.recentTabKeys.at(-1),
       }),
     );
   };
@@ -4274,7 +4262,7 @@ export function App({
       transitionWorkspace(ws, {
         type: "float",
         key,
-        previous: previousActiveTabKeyRef.current,
+        previous: ws.recentTabKeys.at(-1),
       }),
     );
   };
@@ -5108,7 +5096,7 @@ export function App({
             split: ws.split,
             // What the user looked at before the active tab: when they open
             // a chat as its own tab to ask about "this", it is usually here.
-            previousTabKey: previousActiveTabKeyRef.current ?? null,
+            previousTabKey: ws.recentTabKeys.at(-1) ?? null,
           };
         }
         case "browserActivity": {

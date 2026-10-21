@@ -140,7 +140,8 @@ hasChildren?, acceptsChildren?, collapsed?, menu?, contextMenu?, actions?, data?
   (needs the person), unread. activity: what the row is doing, on its icon's
   lower corner whatever the signal: working (spinner), or what it waits on,
   watch (eye), subagent (bot) or command (terminal); without it a working
-  signal spins there. progress: 0 through 1. trend: { values (up to
+  signal spins there. (A chat's own activity text, which chats rows carry
+  in data, is a different thing.) progress: 0 through 1. trend: { values (up to
   60 readings from 0 through 1, oldest first), label? (the current reading,
   "12%"), tone? }, drawn as a sparkline at the row's end (chips draw it too). preview: { title,
   description, metadata: [{label, value}] up to six }. collapsed: false opens a
@@ -227,8 +228,8 @@ own 30 seconds.
 Modules never receive secrets or Work's server address. Committed project files
 run with the project's own authority: review a module before trusting it.
 
-Example: tabs in the sidebar, working and waiting chats first, the rest in
-strip order. In the project's layer (copied from the resolved layout), replace
+Example: tabs in the sidebar, chats that need the person first, then working
+ones, the rest in strip order. In the project's layer (copied from the resolved layout), replace
 the Tabs section's source and grant tabs:
 { id: "tabs", title: "Tabs", source: ".work/tabs.ts", collections: ["tabs"],
   when: { tabPlacement: "sidebar" },
