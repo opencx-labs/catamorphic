@@ -1,3 +1,4 @@
+import type { SessionPullRequestState } from "@catamorphic/agent-protocol";
 import { describe, expect, it } from "vitest";
 import type { PullRequestStatus } from "../../shared/pr-details.js";
 import { chipLines, shownChipCount } from "./chip-layout.js";
@@ -101,6 +102,46 @@ describe("pull request chips", () => {
       label: "Checks",
       value: "1 failing, 4 passed",
     });
+  });
+
+  it("take the host's title over the one the chat recorded", () => {
+    const chip = pullRequestChip({
+      pr: { url: "https://github.com/acme/web/pull/12", title: "Old" },
+      status: status({ title: "Renamed on GitHub" }),
+    });
+    expect(chip.description).toBe("Renamed on GitHub");
+  });
+
+  it("list open ones first, then drafts, merged and closed, each as recorded", () => {
+    const pr = (number: number, state: SessionPullRequestState) => ({
+      url: `https://github.com/acme/web/pull/${number}`,
+      number,
+      state,
+    });
+    const pullRequests = [
+      pr(1, "merged"),
+      pr(2, "open"),
+      pr(3, "closed"),
+      pr(4, "draft"),
+      pr(5, "open"),
+      pr(6, "merged"),
+    ];
+    const numbers = (statuses: ReadonlyMap<string, PullRequestStatus>) =>
+      workChips({ pullRequests, statuses, metadata: {}, held: [] }).map(
+        (chip) => chip.label,
+      );
+    expect(numbers(new Map())).toEqual(["#2", "#5", "#4", "#1", "#6", "#3"]);
+    // One its host says merged moves down among the merged.
+    expect(
+      numbers(
+        new Map([
+          [
+            pr(2, "open").url,
+            status({ number: 2, url: pr(2, "open").url, state: "merged" }),
+          ],
+        ]),
+      ),
+    ).toEqual(["#5", "#4", "#1", "#2", "#6", "#3"]);
   });
 });
 
