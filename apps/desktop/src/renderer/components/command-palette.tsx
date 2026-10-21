@@ -42,11 +42,7 @@ import {
 import { isChoiceMode } from "../palette/modes/choices.js";
 import { useTopLevelModeRows } from "../palette/modes/custom.js";
 import { usePaletteModes } from "../palette/modes/index.js";
-import {
-  composerText,
-  SKILLS_MODE,
-  useSkillModes,
-} from "../palette/modes/skills.js";
+import { SKILLS_MODE, useSkillModes } from "../palette/modes/skills.js";
 import { useProjectAgents } from "../palette/project-agents.js";
 import {
   createPaletteIndex,
@@ -200,7 +196,6 @@ export function CommandPalette({
     agents,
     defaultAgentId,
     actionAvailability,
-    onReturnToComposer,
   } = usePaletteHost();
   const [query, setQuery] = useState("");
   // Stays on a chosen row while late sources re-rank the list under it.
@@ -212,9 +207,6 @@ export function CommandPalette({
     PaletteModeRequest,
     { mode: "section" }
   > | null>(null);
-  // The chat whose composer opened the palette with "/" (ADR 0270): closing
-  // without a skill hands the typing back to it.
-  const [composer, setComposer] = useState<string>();
   // Exiting chip lingers to play chip-out; removed on animationend.
   const [exitingChip, setExitingChip] = useState<{
     icon: LucideIcon;
@@ -255,7 +247,6 @@ export function CommandPalette({
       setSelection(TOP_ROW);
       setModeId(null);
       setExitingChip(null);
-      setComposer(undefined);
       listMotionRef.current.reset();
     };
     if (open) {
@@ -295,9 +286,6 @@ export function CommandPalette({
   useEffect(() => {
     if (variant !== "overlay" || !modeRequest) return;
     if (modeRequest.mode === "section") setSectionSearch(modeRequest);
-    setComposer(
-      modeRequest.mode === "section" ? undefined : modeRequest.composer,
-    );
     enterMode(modeRequest.mode);
   }, [variant, modeRequest, enterMode]);
 
@@ -411,7 +399,6 @@ export function CommandPalette({
     skillsError: skillCatalog.error,
     refresh: skillsRefresh + skillsRetry,
     onRetry: retrySkills,
-    composer,
   });
   const { modes, customModes } = usePaletteModes({
     picker,
@@ -932,7 +919,7 @@ export function CommandPalette({
         return;
       }
     }
-    // "/" starts the Skills mode, as it does in a chat's composer.
+    // "/" starts the Skills mode.
     if (
       !activeMode &&
       event.key === "/" &&
@@ -966,12 +953,10 @@ export function CommandPalette({
         return;
       }
     }
-    // Backspace on empty input pops the chip (cmdk convention). Opened by
-    // a composer's "/", the Skills mode's Backspace takes the "/" back.
+    // Backspace on empty input pops the chip (cmdk convention).
     if (activeMode && event.key === "Backspace" && query === "") {
       event.preventDefault();
-      if (composer && !activeMode.parent) returnToComposer("");
-      else exitMode();
+      exitMode();
       return;
     }
     // ↑ and ↓ move the caret between the input's lines, like any text
@@ -1001,15 +986,8 @@ export function CommandPalette({
     }
   };
 
-  // Closed without a skill, a palette a composer opened gives the typing
-  // back: "/" and what followed it, so a message can start with a slash.
-  const returnToComposer = (text: string) => {
-    if (composer) onReturnToComposer(composer, text);
-    onClose();
-  };
   const dismissRef = useRef(onClose);
-  dismissRef.current = () =>
-    returnToComposer(composerText(activeMode?.id ?? null, query));
+  dismissRef.current = onClose;
 
   // Escape closes the overlay (capture-phase so the chat dock's window
   // listener defers to us — same etiquette as Modal). A palette tab
@@ -1194,13 +1172,7 @@ export function CommandPalette({
         {activeMode ? (
           <FooterHint
             keycap="⌫"
-            label={
-              activeMode.parent
-                ? "back"
-                : composer
-                  ? "back to chat"
-                  : "exit mode"
-            }
+            label={activeMode.parent ? "back" : "exit mode"}
           />
         ) : (
           <>

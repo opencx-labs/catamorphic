@@ -47,21 +47,41 @@ export function describeTextSource(attachment: AgentTextAttachment): string {
       return `Selected in ${source.filePath}${range}`;
     }
     case "url":
-      return `URL: ${source.url}`;
+      return describeLink(source.url);
     case "path":
-      return `File path: ${source.path}`;
+      return source.path.endsWith("/")
+        ? `Folder: ${source.path}`
+        : `File path: ${source.path}`;
     case "tab": {
       const where = source.url ?? source.filePath;
       return `Open ${source.kind} tab "${source.title}"${where ? ` (${where})` : ""} — key ${source.key}; read it with read_tab`;
     }
+    case "skill":
+      return source.path
+        ? `Skill "${source.name}" at ${JSON.stringify(source.path)}: follow it for this message`
+        : `Skill "${source.name}": use it for this message`;
   }
+}
+
+/**
+ * A link the person mentioned: a project's workflow, app or chat reads as
+ * what it is, any other address as a URL.
+ */
+function describeLink(url: string): string {
+  const [, scheme, name] = /^(workflow|app|session):(.+)$/.exec(url) ?? [];
+  if (scheme === "workflow") return `Workflow ${name} (link ${url})`;
+  if (scheme === "app") return `App ${name} (link ${url})`;
+  if (scheme === "session")
+    return `Chat session ${name} in this project; read it with read_project_session`;
+  return `URL: ${url}`;
 }
 
 /** Sources whose text IS the reference: no fence needed. */
 const isBareReference = (attachment: AgentTextAttachment): boolean =>
   attachment.source.type === "url" ||
   attachment.source.type === "path" ||
-  attachment.source.type === "tab";
+  attachment.source.type === "tab" ||
+  attachment.source.type === "skill";
 
 /** The minimal attachment shape the marker helpers need: a display name. */
 interface NamedAttachment {

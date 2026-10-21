@@ -184,14 +184,24 @@ pages, frequent destinations first, and rows picked earlier for a query. The
 empty palette shows starting actions, the focused site's settings, then up to
 six Frequent rows.
 
-Skills (ADR 0270) are the palette's, never a composer menu. `/` in a composer
-with no prose opens the Skills mode aimed at that chat; Escape hands back the
-slash and what followed it, Backspace on the empty mode an empty composer, and
-whatever the composer then sends goes as written. Enter applies a skill to the
-chat in front, ⌘↵ starts a chat with it, ⌥↵ a floating one. Tab, or Space after
-a full name, puts the skill in the chip and takes its instructions; Backspace on them returns
-to the list. Applied to its chat, a skill takes the pills of a composer with no
-prose along; a new chat starts with the skill alone.
+The palette's Skills mode (ADR 0270, Cmd+P then `/`): Enter applies a skill to
+the chat in front, ⌘↵ starts a chat with it, ⌥↵ a floating one. Tab, or Space
+after a full name, puts the skill in the chip and takes its instructions;
+Backspace on them returns to the list. Applied to its chat, a skill takes the
+pills of a composer with no prose along; a new chat starts with the skill alone.
+
+A composer has menus of its own (ADR 0272), opened by the word the caret ends:
+`/` or `@` starting any word, mid-message too, opens a one-line-per-row list
+above the composer, and typing goes on in the composer. A second `/` or `@` in
+the word (a path, an address) closes it. ↑/↓ move, Enter or Tab picks, Escape
+closes the menu for that word and keeps the typing; the next word opens it
+again. `/` lists the chat's commands (Status, Agent ›, Model ›, Effort ›,
+Permissions ›, Fork chat, Archive chat), which run at once and take their word
+away, and the skills, which become a skill pill where the word was (Space after
+a full name too). A harness's own commands are listed only when `/` starts an
+empty message: Enter sends them as written, Tab keeps them for arguments. `@`
+lists open tabs, the chat checkout's files and folders, chats, workflows and
+apps, each picked as a pill. Both rank with the palette's index and use.
 
 Find (`find`, Cmd+F) acts on what is in front: a web page opens its find bar,
 a diff focuses its own search, and anywhere else the key stays with what has

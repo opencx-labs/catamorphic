@@ -71,8 +71,7 @@ export type ChatEvent =
         | "editAgent"
         | "editModel"
         | "editEffort"
-        | "editPermissionMode"
-        | "openSkills";
+        | "editPermissionMode";
     }
   | { kind: "parent" | "focus" | "unsplit" | "escape" | "reveal" };
 export interface DockCommand {
@@ -132,16 +131,10 @@ export type WorkspaceEvent =
 
 /**
  * What a workspace asks of a chat it shows in a dock: close or minimize it,
- * send into it, focus its chips, apply a skill with its composer's pills,
- * or hand typing back to its composer (ADR 0270).
+ * send into it, focus its chips, or apply a palette skill with its
+ * composer's pills (ADR 0270).
  */
-export type DockAction =
-  | "close"
-  | "minimize"
-  | "send"
-  | "focusChips"
-  | "skill"
-  | "resume";
+export type DockAction = "close" | "minimize" | "send" | "focusChips" | "skill";
 
 export interface ChatDraft {
   message: string;

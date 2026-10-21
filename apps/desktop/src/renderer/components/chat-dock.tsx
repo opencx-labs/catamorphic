@@ -23,10 +23,16 @@ import { AgentEnvironmentControl } from "@catamorphic/ui";
 import { PROJECT_APPS_DIR } from "@catamorphic/workflow/project-layout";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Archive,
   ArrowUp,
+  Bot,
   Box,
+  CircleDot,
   Columns2,
+  Cpu,
+  Gauge,
   Ghost,
+  GitFork,
   Laptop,
   LoaderCircle,
   Maximize2,
@@ -35,6 +41,7 @@ import {
   PictureInPicture2,
   Radio,
   Server,
+  ShieldCheck,
   Sparkles,
   Square,
   X,
@@ -54,6 +61,7 @@ import { normalizePrefs } from "../../shared/app-prefs.js";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ChatDockProps, McpAppRef } from "../../shared/chat.js";
 import { modifiersForMode, type OpenMode } from "../../shared/open-mode.js";
+import { paletteCountsVisit } from "../../shared/palette.js";
 import { rosterAgentId } from "../../shared/voice.js";
 import {
   defaultModelLabel,
@@ -76,12 +84,29 @@ import {
   workChips,
 } from "../lib/chips.js";
 import { useClosingItems } from "../lib/closing-items.js";
+import { normalizeCommandQuery } from "../lib/command-score.js";
+import {
+  type ChatCommand,
+  type ComposerMenuRow,
+  firstPickable,
+  NO_MENU_ROWS,
+  skillMention,
+  stepPickable,
+  useMentionRows,
+  useSlashRows,
+} from "../lib/composer-menu-rows.js";
 import {
   filesFrom,
   isComposerTransfer,
   readComposerPaste,
   tabPillFromDrag,
 } from "../lib/composer-paste";
+import {
+  type ComposerTrigger,
+  sameTrigger,
+  triggerAtCaret,
+  triggerRange,
+} from "../lib/composer-trigger.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -134,6 +159,7 @@ import {
   ComposerInput,
   type ComposerInputHandle,
 } from "./composer-input";
+import { ComposerMenu } from "./composer-menu.js";
 import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { HarnessIcon, importedHarnessLabel } from "./harness-icon.js";
@@ -482,8 +508,6 @@ function ChatDockContent({
   registerMinimize,
   registerSend,
   registerSkill,
-  registerComposerReturn,
-  onOpenSkills,
   registerFocusChips,
   onSessionCreated,
   onSessionAgent,
@@ -1717,17 +1741,238 @@ function ChatDockContent({
   useEffect(() => {
     registerSkill?.((message) => applySkillRef.current(message));
   }, [registerSkill]);
-  // Back from the palette without a skill: the typing it took ("/" and
-  // what followed) returns, unless something was written here meanwhile.
+
+  // The composer's "/" and "@" menus (ADR 0272): open while the caret ends
+  // a word starting with either, anywhere in the message. Escape closes the
+  // menu for that word; the next word opens it again.
+  const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
+  const [dismissedTrigger, setDismissedTrigger] =
+    useState<ComposerTrigger | null>(null);
+  // Every opening reads the catalogs fresh: skills are files that change.
+  // Counted as the word starts, so the first read already asks for them.
+  const [menuOpenings, setMenuOpenings] = useState(0);
+  const openedCharRef = useRef<string | null>(null);
+  const readTrigger = useCallback(() => {
+    const root = composerRef.current?.element();
+    const next =
+      root && root.ownerDocument.activeElement === root
+        ? triggerAtCaret(root)
+        : null;
+    if (next && next.char !== openedCharRef.current)
+      setMenuOpenings((count) => count + 1);
+    openedCharRef.current = next?.char ?? null;
+    if (!next) setDismissedTrigger(null);
+    setTrigger((current) =>
+      current &&
+      next &&
+      sameTrigger(current, next) &&
+      current.query === next.query &&
+      current.end === next.end
+        ? current
+        : next,
+    );
+  }, []);
+  // The caret moving (arrows, a click) and focus leaving count as the word
+  // changing, not only typing.
   useEffect(() => {
-    registerComposerReturn?.((text) => {
-      const composer = composerRef.current;
-      if (!composer) return;
-      composer.focusToType();
-      if (text && composer.read({ trim: false }).text.trim() === "")
-        composer.insertText(text);
-    });
-  }, [registerComposerReturn]);
+    const onFocusOut = (event: FocusEvent) => {
+      if (event.target !== composerRef.current?.element()) return;
+      openedCharRef.current = null;
+      setTrigger(null);
+    };
+    document.addEventListener("selectionchange", readTrigger);
+    document.addEventListener("focusout", onFocusOut);
+    return () => {
+      document.removeEventListener("selectionchange", readTrigger);
+      document.removeEventListener("focusout", onFocusOut);
+    };
+  }, [readTrigger]);
+  const menuKind =
+    trigger && !sameTrigger(trigger, dismissedTrigger) ? trigger.char : null;
+  const [skillsRetry, setSkillsRetry] = useState(0);
+  const menuQuery = trigger?.query ?? "";
+  // "/" starting a message that holds nothing else: the agent's own
+  // commands apply, sent as written.
+  const slashAlone =
+    menuKind === "/" && pillCount === 0 && draft.trim() === `/${menuQuery}`;
+  // "/" starting the message, before any words (pills may come first).
+  const slashLeads =
+    menuKind === "/" && draft.trimStart().startsWith(`/${menuQuery}`);
+  // The chat's own commands, offered when the inspector offers them.
+  const turnBusy = Boolean(chat.isSending || chat.session?.running);
+  const editAgent = turnBusy || otherAgents === 0 ? undefined : onEditAgent;
+  const editModel = turnBusy || !activeAgent ? undefined : onEditModel;
+  const editEffort =
+    turnBusy || supportedEfforts(activeAgent, effortModel).length === 0
+      ? undefined
+      : onEditEffort;
+  const editPermissionMode =
+    agentPermissions.editable && !turnBusy ? onEditPermissionMode : undefined;
+  const forkCurrent = activeSessionId ? onForkCurrent : undefined;
+  const archiveChat = activeSessionId && !archived ? onArchive : undefined;
+  // Status opens this chat's inspector, as the palette's Status does.
+  const [ownInspectRequests, setOwnInspectRequests] = useState(0);
+  const hasSession = Boolean(chat.session);
+  // Hosts hand new callbacks every render; the rows change only when what
+  // is offered does, and run whatever the host gave last.
+  const commandRunsRef = useRef({
+    editAgent,
+    editModel,
+    editEffort,
+    editPermissionMode,
+    forkCurrent,
+    archiveChat,
+  });
+  commandRunsRef.current = {
+    editAgent,
+    editModel,
+    editEffort,
+    editPermissionMode,
+    forkCurrent,
+    archiveChat,
+  };
+  const offered = {
+    agent: Boolean(editAgent),
+    model: Boolean(editModel),
+    effort: Boolean(editEffort),
+    permissions: Boolean(editPermissionMode),
+    fork: Boolean(forkCurrent),
+    archive: Boolean(archiveChat),
+  };
+  const chatCommands = useMemo(() => {
+    const runs = commandRunsRef;
+    const commands: ChatCommand[] = [];
+    if (hasSession)
+      commands.push({
+        id: "session-status",
+        label: "Status",
+        detail: "Session details and actions",
+        icon: CircleDot,
+        keywords: ["session", "details", "inspector"],
+        run: () => setOwnInspectRequests((count) => count + 1),
+      });
+    if (offered.agent)
+      commands.push({
+        id: "switch-agent",
+        label: "Agent",
+        detail: "Switch this chat's agent",
+        icon: Bot,
+        keywords: ["switch agent"],
+        opens: true,
+        run: () => runs.current.editAgent?.(),
+      });
+    if (offered.model)
+      commands.push({
+        id: "switch-model",
+        label: "Model",
+        detail: "Change the model",
+        icon: Cpu,
+        keywords: ["change model"],
+        opens: true,
+        run: () => runs.current.editModel?.(),
+      });
+    if (offered.effort)
+      commands.push({
+        id: "change-effort",
+        label: "Effort",
+        detail: "Change how much the model reasons",
+        icon: Gauge,
+        keywords: ["reasoning", "thinking", "change effort"],
+        opens: true,
+        run: () => runs.current.editEffort?.(),
+      });
+    if (offered.permissions)
+      commands.push({
+        id: "change-permission-mode",
+        label: "Permissions",
+        detail: "Change what the agent does without asking",
+        icon: ShieldCheck,
+        keywords: ["permission mode", "approvals"],
+        opens: true,
+        run: () => runs.current.editPermissionMode?.(),
+      });
+    if (offered.fork)
+      commands.push({
+        id: "fork-chat",
+        label: "Fork chat",
+        detail: "Continue in a copy of this chat",
+        icon: GitFork,
+        keywords: ["fork", "copy", "branch"],
+        run: () => runs.current.forkCurrent?.(),
+      });
+    if (offered.archive)
+      commands.push({
+        id: "archive-chat",
+        label: "Archive chat",
+        detail: "Put this chat away, keeping its transcript",
+        icon: Archive,
+        keywords: ["archive", "hide"],
+        run: () => runs.current.archiveChat?.(),
+      });
+    return commands;
+  }, [
+    hasSession,
+    offered.agent,
+    offered.model,
+    offered.effort,
+    offered.permissions,
+    offered.fork,
+    offered.archive,
+  ]);
+  const slashRows = useSlashRows({
+    active: menuKind === "/",
+    refresh: menuOpenings + skillsRetry,
+    projectId,
+    agent: activeAgent,
+    sessionId: activeSessionId ?? null,
+    query: menuQuery,
+    alone: slashAlone,
+    leads: slashLeads,
+    commands: chatCommands,
+  });
+  // "@" searches where the chat works: its own worktree, or the project.
+  const mentionRows = useMentionRows({
+    active: menuKind === "@",
+    refresh: menuOpenings,
+    projectId,
+    selfTabKey: `chat:${entry.localId}`,
+    selfSessionId: activeSessionId ?? null,
+    worktreePath:
+      checkout && checkout.kind !== "primary" && checkout.present
+        ? checkout.path
+        : undefined,
+    query: menuQuery,
+  });
+  const menuRows =
+    menuKind === "/"
+      ? slashRows
+      : menuKind === "@"
+        ? mentionRows
+        : NO_MENU_ROWS;
+  const menuOpen = menuRows.length > 0;
+  // A new word, or another query, highlights its first row.
+  const [menuSelection, setMenuSelection] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the word and its query are the reset signal
+  useEffect(() => setMenuSelection(0), [menuKind, menuQuery]);
+  const menuSelected = firstPickable(
+    menuRows,
+    Math.min(menuSelection, menuRows.length - 1),
+  );
+  const composerFormRef = useRef<HTMLFormElement>(null);
+  const menuId = `composer-menu-${entry.localId}`;
+  // The composer keeps the keyboard and names the highlighted row.
+  useEffect(() => {
+    const root = composerRef.current?.element();
+    if (!root) return;
+    root.setAttribute("aria-autocomplete", "list");
+    if (menuOpen && menuSelected >= 0) {
+      root.setAttribute("aria-controls", menuId);
+      root.setAttribute("aria-activedescendant", `${menuId}-${menuSelected}`);
+    } else {
+      root.removeAttribute("aria-controls");
+      root.removeAttribute("aria-activedescendant");
+    }
+  }, [menuOpen, menuSelected, menuId]);
 
   // Complete the mode change from the animation event instead of starting
   // an unmount timer before React has committed the exit pose. The fallback
@@ -1776,25 +2021,116 @@ function ChatDockContent({
   /** ⌘↵ interrupts the running turn and sends the same way. */
   const submitNow = () => sendDraft(true);
 
+  /** Swap the menu's word for text, or remove it, as typing would (undoable). */
+  const replaceWord = (range: Range, text: string) => {
+    const root = composerRef.current?.element();
+    if (!root) return;
+    root.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.execCommand(text ? "insertText" : "delete", false, text);
+  };
+  /** What a pick teaches the palette's ranking: the same keys it learns. */
+  const recordPick = (row: ComposerMenuRow) => {
+    if (!row.usage) return;
+    const typed = normalizeCommandQuery(menuQuery).trim();
+    void desktopApi
+      .paletteRecord({
+        key: row.usage,
+        ...(typed ? { query: typed } : {}),
+        visit: paletteCountsVisit(row.usage),
+        projectId,
+      })
+      .catch(() => {});
+  };
+  /**
+   * A row picked: a skill or a mention becomes a pill where the word was,
+   * the chat's commands run and take the word away, and an agent's own
+   * command is sent as written (Tab keeps it for its arguments).
+   */
+  const pickMenuRow = (
+    row: ComposerMenuRow | undefined,
+    how: "enter" | "tab" | "click",
+  ) => {
+    if (!row || row.disabled || !trigger) return;
+    const range = triggerRange(trigger);
+    if (!range) return;
+    const { pick } = row;
+    if (pick.kind === "retry") {
+      setSkillsRetry((count) => count + 1);
+      return;
+    }
+    recordPick(row);
+    if (pick.kind === "action") {
+      replaceWord(range, "");
+      pick.run();
+      return;
+    }
+    if (pick.kind === "command") {
+      const command = `/${pick.entry.name}`;
+      if (how === "tab") {
+        replaceWord(range, `${command} `);
+        return;
+      }
+      replaceWord(range, command);
+      sendDraft(false);
+      return;
+    }
+    const attachment =
+      pick.kind === "skill" ? skillMention(pick.entry) : pick.attachment;
+    composerRef.current?.insertPills(
+      [{ ...attachment, id: crypto.randomUUID() }],
+      { range },
+    );
+  };
+  /** The menu's keys, before recall and sending: it leads while it is open. */
+  const menuKeyDown = (event: KeyboardEvent<HTMLDivElement>): boolean => {
+    if (!menuOpen || !trigger) return false;
+    const plain =
+      !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setMenuSelection(stepPickable(menuRows, menuSelected, step));
+      return true;
+    }
+    // Nothing to pick yet (a catalog still loading): the keys do as usual.
+    if (plain && (event.key === "Enter" || event.key === "Tab")) {
+      if (menuSelected < 0) return false;
+      pickMenuRow(
+        menuRows[menuSelected],
+        event.key === "Tab" ? "tab" : "enter",
+      );
+      return true;
+    }
+    if (event.key === "Escape") {
+      setDismissedTrigger(trigger);
+      return true;
+    }
+    // "/review the auth change" typed without looking: Space after a
+    // skill's whole name puts it in the message.
+    if (plain && event.key === " " && trigger.char === "/" && menuQuery) {
+      const typed = menuQuery.toLowerCase();
+      const exact = menuRows.find(
+        (row) =>
+          row.pick.kind === "skill" &&
+          row.pick.entry.name.toLowerCase() === typed,
+      );
+      if (exact) {
+        pickMenuRow(exact, "enter");
+        return true;
+      }
+    }
+    return false;
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
     const primaryModifier = /Mac/.test(navigator.platform)
       ? event.metaKey
       : event.ctrlKey;
-    // "/" with no prose yet is a skill (ADR 0270): the palette's Skills
-    // mode opens aimed at this chat, and the "/" comes back if it closes
-    // without one. Pills stay, for a skill applied here to take along.
-    if (
-      event.key === "/" &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      onOpenSkills &&
-      composerRef.current?.read({ trim: false }).text.trim() === ""
-    ) {
+    if (menuKeyDown(event)) {
       event.preventDefault();
-      setRecall(null);
-      onOpenSkills();
       return;
     }
     if (event.key === "PageUp") {
@@ -2548,37 +2884,17 @@ function ChatDockContent({
                     effortModel,
                   ) ?? "Unavailable"
                 }
-                onEditAgent={
-                  chat.isSending || chat.session?.running || otherAgents === 0
-                    ? undefined
-                    : onEditAgent
-                }
+                onEditAgent={editAgent}
                 agentDisabledReason={
                   otherAgents > 0 && (chat.isSending || chat.session?.running)
                     ? "Agent can be changed after the current turn finishes."
                     : undefined
                 }
-                onEditModel={
-                  chat.isSending || chat.session?.running || !activeAgent
-                    ? undefined
-                    : onEditModel
-                }
-                onEditEffort={
-                  chat.isSending ||
-                  chat.session?.running ||
-                  supportedEfforts(activeAgent, effortModel).length === 0
-                    ? undefined
-                    : onEditEffort
-                }
+                onEditModel={editModel}
+                onEditEffort={editEffort}
                 permissionMode={agentPermissions.permissionMode}
                 sandboxing={agentPermissions.sandboxing}
-                onEditPermissionMode={
-                  agentPermissions.editable &&
-                  !chat.isSending &&
-                  !chat.session?.running
-                    ? onEditPermissionMode
-                    : undefined
-                }
+                onEditPermissionMode={editPermissionMode}
                 permissionModeDisabledReason={
                   !agentPermissions.permissionMode
                     ? undefined
@@ -2620,7 +2936,7 @@ function ChatDockContent({
                   )
                 }
                 incognito={isIncognito}
-                openRequest={inspectRequestNonce ?? 0}
+                openRequest={(inspectRequestNonce ?? 0) + ownInspectRequests}
                 moving={moveState.moving}
                 moveError={moveState.canMove ? moveState.reason : undefined}
                 moveDisabledReason={
@@ -2660,7 +2976,7 @@ function ChatDockContent({
                       }
                     : undefined
                 }
-                onFork={activeSessionId ? onForkCurrent : undefined}
+                onFork={forkCurrent}
                 onArchive={activeSessionId ? onArchive : undefined}
                 archived={archived}
                 onOpenParent={onOpenParent}
@@ -3213,9 +3529,20 @@ function ChatDockContent({
               </div>
             ) : (
               <form
-                className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
+                ref={composerFormRef}
+                className="field @container/composer relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
                 onSubmit={submit}
               >
+                <ComposerMenu
+                  id={menuId}
+                  open={menuOpen}
+                  label={menuKind === "@" ? "Mention" : "Skills and commands"}
+                  anchorRef={composerFormRef}
+                  rows={menuRows}
+                  selected={menuSelected}
+                  onHover={setMenuSelection}
+                  onPick={(row) => pickMenuRow(row, "click")}
+                />
                 <div className="flex items-center gap-2">
                   {/* Any file attaches — as media when the agent takes it,
                   as a path pill otherwise — so the picker never filters
@@ -3284,6 +3611,7 @@ function ChatDockContent({
                       publishDraft();
                       setPillCount(state.pillCount);
                       setDraft(state.text);
+                      readTrigger();
                       // Typing (or pasting) exits history-recall mode; the
                       // dock's own rewrites (recall itself) don't count.
                       if (
@@ -3318,21 +3646,24 @@ function ChatDockContent({
                     }
                     ariaLabel="Message the assistant"
                   />
-                  {/* Skills live in the palette (ADR 0270); an empty
-                  composer says how to reach them. */}
-                  {onOpenSkills &&
-                    draft === "" &&
+                  {/* An empty composer says what its menus hold (ADR 0272),
+                  when there is room beside the placeholder. */}
+                  {draft.trim() === "" &&
                     pillCount === 0 &&
                     questionRequests.length === 0 && (
                       <span
                         aria-hidden="true"
-                        data-testid="composer-skills-hint"
-                        className="flex shrink-0 select-none items-center gap-1 text-[11px] text-fg-faint"
+                        data-testid="composer-menu-hint"
+                        className="flex shrink-0 select-none items-center gap-1 text-[11px] text-fg-faint @max-lg/composer:hidden"
                       >
                         <kbd className="rounded border border-border bg-bg-inset px-1 py-px font-sans text-[10px]">
                           /
                         </kbd>
                         skills
+                        <kbd className="ml-1.5 rounded border border-border bg-bg-inset px-1 py-px font-sans text-[10px]">
+                          @
+                        </kbd>
+                        mention
                       </span>
                     )}
                   {/* Context ring (ADR 0057): quiet until a harness reports

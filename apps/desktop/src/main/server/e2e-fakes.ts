@@ -1231,6 +1231,50 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     return;
   }
 
+  // A skill the person put in the message (ADR 0272) runs as its sentence
+  // does below: the REAL read_skill tool (or a harness's own skill file),
+  // the message's other words as its instructions. The rest of the
+  // attachments then echo as usual.
+  for (const attachment of turn.attachments) {
+    if (attachment.kind !== "text" || attachment.source.type !== "skill")
+      continue;
+    const { name, path: skillPath } = attachment.source;
+    const instructions = inlineAttachmentReferences(
+      message,
+      turn.attachments,
+      (_index, each) =>
+        each.kind === "text" && each.source.type === "skill"
+          ? ""
+          : `[${each.name}]`,
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (skillPath) {
+      yield {
+        type: "text",
+        content: `native skill loaded: ${fs.readFileSync(skillPath, "utf8").trim()} | ${instructions}`,
+      };
+      continue;
+    }
+    try {
+      const result = z
+        .object({
+          source: z.string().optional(),
+          content: z.string().optional(),
+        })
+        .parse(await turn.tool("read_skill", { name }));
+      yield {
+        type: "text",
+        content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)${instructions ? ` | ${instructions}` : ""}`,
+      };
+    } catch (error) {
+      yield {
+        type: "text",
+        content: `skill error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
   // Attachments echo what arrived (exercises the attachment path). Text
   // pills additionally echo their source and content so e2e can assert
   // the model-facing payload, not just the name.

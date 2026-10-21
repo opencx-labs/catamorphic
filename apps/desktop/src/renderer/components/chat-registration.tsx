@@ -80,7 +80,6 @@ export function ChatRegistration(
     current.current.registerMinimize?.(() => send("minimize"));
     current.current.registerSend?.((message) => send("send", message));
     current.current.registerSkill?.((message) => send("skill", message));
-    current.current.registerComposerReturn?.((text) => send("resume", text));
     current.current.registerFocusChips?.(() => {
       send("focusChips");
       return true;
@@ -150,9 +149,6 @@ export function ChatRegistration(
           break;
         case "editPermissionMode":
           p.onEditPermissionMode?.();
-          break;
-        case "openSkills":
-          p.onOpenSkills?.();
           break;
         case "fork":
           p.onFork?.(event.messageId);

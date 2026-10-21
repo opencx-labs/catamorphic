@@ -121,6 +121,15 @@ export type AgentTextSource =
       title: string;
       url?: string;
       filePath?: string;
+    }
+  | {
+      /**
+       * A skill the person put in the message (ADR 0272): the agent uses
+       * it for this message. `path` names a harness's own skill file.
+       */
+      type: "skill";
+      name: string;
+      path?: string;
     };
 
 /** A media file sent along with a user message. */

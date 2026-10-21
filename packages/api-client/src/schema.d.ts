@@ -17484,6 +17484,11 @@ export interface components {
                 title: string;
                 url?: string;
                 filePath?: string;
+            } | {
+                /** @enum {string} */
+                type: "skill";
+                name: string;
+                path?: string;
             };
         };
         InboundSenderInput: {
@@ -18358,6 +18363,11 @@ export interface components {
                 title: string;
                 url?: string;
                 filePath?: string;
+            } | {
+                /** @enum {string} */
+                type: "skill";
+                name: string;
+                path?: string;
             };
         };
         InboundSender: {

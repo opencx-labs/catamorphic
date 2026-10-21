@@ -729,6 +729,24 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-21: The composer's "/" and "@" menus
+
+`/` no longer leaves the composer (ADR 0272). `/` or `@` starting any word,
+mid-message included, opens a compact list right above the composer, as wide
+as it: one 32px row per entry with its icon, its name, a muted description
+that truncates, and a chevron when the row opens a picker. No header, no key
+hints, no second input; the composer keeps the caret and names the
+highlighted row as its active descendant. The list caps at twelve rows and
+scrolls, follows the palette's selection fade and list motion, and pops in
+and out as every popover does. `/` is alphabetical with the most used under
+Recent; `@` keeps quiet group labels (Open tabs, Files, Chats, Workflows,
+Apps), folders before files with their parent path muted. A skill picked
+from `/` is a pill in the message, like a mention, so "fix the login bug and
+⟨Code review⟩" reads as written. A catalog still loading holds a row with a
+still bar; a failed one leads the list, where Enter retries. The empty
+composer's hint reads `/ skills @ mention`, and steps aside when the
+composer is too narrow to hold it beside the placeholder.
+
 ### 2026-10-20: Skills live in the palette; "/" opens them from a chat
 
 The composer's `/` menu is gone (ADR 0270). Skills are a palette mode with

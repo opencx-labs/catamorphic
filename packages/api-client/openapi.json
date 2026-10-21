@@ -213,6 +213,25 @@
                       }
                     },
                     "required": ["type", "key", "kind", "title"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["skill"]
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 4096
+                      }
+                    },
+                    "required": ["type", "name"]
                   }
                 ]
               }
@@ -3501,6 +3520,26 @@
                       }
                     },
                     "required": ["type", "key", "kind", "title"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["skill"]
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 4096
+                      }
+                    },
+                    "required": ["type", "name"],
                     "additionalProperties": false
                   }
                 ]

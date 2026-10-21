@@ -1,7 +1,11 @@
 # 0270 — Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat
 
-- **Status:** Accepted
+- **Status:** Accepted; the composer's "/" superseded by [0272](0272-composer-menus-for-skills-and-mentions.md)
 - **Date:** 2026-10-20
+
+> A composer's `/` no longer opens the palette: it opens the composer's own
+> menu, where a skill goes in the message as a pill, anywhere in it (ADR
+> 0272). The palette's Skills mode below stands, reached by Cmd+P then `/`.
 - **Supersedes:** the composer `/` menu in 0052's "Renderer surfaces"
 - **Builds on:** 0052 (skills as commands), 0186 (palette modes)
 

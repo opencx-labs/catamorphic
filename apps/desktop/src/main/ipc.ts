@@ -3080,7 +3080,7 @@ export function registerIpcHandlers(
       if (
         !input ||
         typeof input.query !== "string" ||
-        !["files", "content"].includes(input.mode)
+        !["files", "content", "paths"].includes(input.mode)
       )
         throw new Error("Invalid search");
       activeSearches.get(event.sender.id)?.abort();

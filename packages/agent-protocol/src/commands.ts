@@ -78,6 +78,11 @@ const textSource = z.union([
     url: z.string().optional(),
     filePath: z.string().optional(),
   }),
+  z.object({
+    type: z.literal("skill"),
+    name: z.string().min(1).max(200),
+    path: z.string().max(4096).optional(),
+  }),
 ]);
 
 export const attachmentSchema = z.union([

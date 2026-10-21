@@ -111,6 +111,43 @@ describe("text attachments", () => {
     );
   });
 
+  it("describes mentioned folders, workspace links and skills", () => {
+    const describe = (
+      source: Extract<AgentAttachment, { kind: "text" }>["source"],
+    ) => describeTextSource({ kind: "text", name: "", text: "", source });
+    expect(describe({ type: "path", path: "src/lib/" })).toBe(
+      "Folder: src/lib/",
+    );
+    expect(describe({ type: "url", url: "workflow:triage" })).toBe(
+      "Workflow triage (link workflow:triage)",
+    );
+    expect(describe({ type: "url", url: "app:board" })).toBe(
+      "App board (link app:board)",
+    );
+    expect(describe({ type: "url", url: "session:s-1" })).toBe(
+      "Chat session s-1 in this project; read it with read_project_session",
+    );
+    expect(describe({ type: "skill", name: "review" })).toBe(
+      'Skill "review": use it for this message',
+    );
+    expect(
+      describe({ type: "skill", name: "lint", path: "/s/lint/SKILL.md" }),
+    ).toBe('Skill "lint" at "/s/lint/SKILL.md": follow it for this message');
+    // A skill reads as its reference, never as fenced text.
+    expect(
+      renderTextAttachments([
+        {
+          kind: "text",
+          name: "Code review",
+          text: 'Use the "review" skill.',
+          source: { type: "skill", name: "review" },
+        },
+      ]),
+    ).toBe(
+      '\n\n[Attachment 1: Code review — Skill "review": use it for this message]',
+    );
+  });
+
   it("renders nothing without text attachments", () => {
     expect(renderTextAttachments([])).toBe("");
     expect(renderTextAttachments([image])).toBe("");
