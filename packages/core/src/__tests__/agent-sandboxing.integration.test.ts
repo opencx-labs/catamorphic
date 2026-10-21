@@ -54,6 +54,7 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   let sessions: AgentSessionsService;
   /** The same services over another host's agent registry. */
   let sessionsWith: (registry: CodingAgentRegistry) => AgentSessionsService;
+  const services: AgentSessionsService[] = [];
   let capabilities: AgentCapabilitiesService;
   let projectId: string;
   const adapter = new RecordingAdapter();
@@ -145,8 +146,8 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
       new ProjectEnvironmentsService(db, projectManager),
       testEnvironmentProvider(unusedSandboxProvider),
     );
-    sessionsWith = (codingAgents) =>
-      new AgentSessionsService(db, {
+    sessionsWith = (codingAgents) => {
+      const service = new AgentSessionsService(db, {
         hostId: "sandboxing-test-host",
         projectManager,
         codingAgents,
@@ -156,6 +157,9 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
           resolve: () => ({ path: rootPath, owned: false }),
         },
       });
+      services.push(service);
+      return service;
+    };
     sessions = sessionsWith(registry);
     const capability = (
       name: string,
@@ -211,6 +215,10 @@ describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
   }, 120_000);
 
   afterAll(async () => {
+    // Subsessions' turns end before the schema they write to is dropped.
+    await Promise.all(
+      services.map((service) => service.stopLocalTurns({ timeoutMs: 2_000 })),
+    );
     if (db) {
       await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
       await db.destroy();
