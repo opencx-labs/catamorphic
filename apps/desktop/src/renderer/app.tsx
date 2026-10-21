@@ -474,6 +474,8 @@ function AgentControlOverlay({
         className={`${exiting || quiet ? "pointer-events-none" : "pointer-events-auto"} z-10 flex ${anim} cursor-grab touch-none select-none items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl transition-opacity duration-300 ease-[cubic-bezier(0.2,0,0,1)] active:cursor-grabbing ${quiet ? "opacity-0" : "opacity-100"}`}
         style={{ translate: `${offset.x}px ${offset.y}px` }}
         data-agent-control-pill
+        role="toolbar"
+        aria-label={`Agent owns this ${kind}`}
         onPointerEnter={wake}
         onPointerMove={wake}
         // Tabbing to its buttons brings it back too.
