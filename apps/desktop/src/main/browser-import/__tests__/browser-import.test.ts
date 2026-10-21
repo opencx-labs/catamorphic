@@ -255,7 +255,8 @@ describe("index", () => {
           keychainAccount: "Aside",
         });
       } finally {
-        process.env.HOME = original;
+        if (original === undefined) delete process.env.HOME;
+        else process.env.HOME = original;
       }
     },
   );
