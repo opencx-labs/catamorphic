@@ -262,6 +262,8 @@ export class VoiceEngine {
    * said with its last piece, as one message, when the keys come up.
    */
   private heldWords: string[] = [];
+  /** A piece of the hold under way already dictated words. */
+  private heldDictated = false;
   /**
    * Dictation: what the person says is written into a composer, nothing
    * is sent or spoken. Their words show while they talk.
@@ -515,6 +517,7 @@ export class VoiceEngine {
     this.held = held;
     if (held) {
       this.heldMidSpeech = this.inSpeech;
+      this.heldDictated = false;
       if (this.audible) {
         this.stopSpeaking();
         this.emit({ type: "barge-in" });
@@ -929,8 +932,11 @@ export class VoiceEngine {
     if (this.dictation) {
       if (words) this.heardFrom(heard, { pressed });
       dictated(words ? text : "");
-      // A quiet piece of a hold still going on is no hold let go.
-      if (pressed && !piece && !words) this.emit({ type: "unheard" });
+      // A quiet piece of a hold still going on is no hold let go, and a
+      // hold whose pieces dictated words said something.
+      if (piece && words) this.heldDictated = true;
+      if (pressed && !piece && !words && !this.heldDictated)
+        this.emit({ type: "unheard" });
       return;
     }
     // A hold too long for one recognition is one message: its pieces wait
