@@ -36,24 +36,33 @@ const visible = (element: HTMLElement) =>
   !element.closest("[inert]") &&
   element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
 
+const SEARCH_FIELDS =
+  'input[type="search"], [role="searchbox"], input[aria-label^="Search" i], input[placeholder^="Search" i], input[placeholder^="Filter" i]';
+const SEARCH_BUTTONS = '[data-search-trigger], button[aria-label^="Search" i]';
+
 /**
  * What Find (Cmd+F) opens outside a page: a search field marked for it,
  * else any search in the content in front, so a screen that can be
- * searched answers the key without wiring it. A search field comes before
- * a button that opens one.
+ * searched answers the key without wiring it. The surface in front
+ * (`activeKey`, its pane's `data-surface-key`) goes first, so a split
+ * searches the side being worked in. A search field comes before a button
+ * that opens one.
  */
-export function findSearchTarget(): HTMLElement | undefined {
+export function findSearchTarget(activeKey?: string): HTMLElement | undefined {
   const marked = findSearchInput("find");
   if (marked) return marked;
   const content = document.querySelector<HTMLElement>(".workspace-content");
   if (!content) return undefined;
-  const first = (selector: string) =>
-    [...content.querySelectorAll<HTMLElement>(selector)].find(visible);
-  return (
-    first(
-      'input[type="search"], [role="searchbox"], input[aria-label^="Search" i], input[placeholder^="Search" i], input[placeholder^="Filter" i]',
-    ) ?? first('[data-search-trigger], button[aria-label^="Search" i]')
-  );
+  const front = activeKey
+    ? [...content.querySelectorAll<HTMLElement>("[data-surface-key]")].find(
+        (pane) => pane.dataset.surfaceKey === activeKey,
+      )
+    : undefined;
+  const first = (scope: HTMLElement) => (selector: string) =>
+    [...scope.querySelectorAll<HTMLElement>(selector)].find(visible);
+  const within = (scope: HTMLElement) =>
+    first(scope)(SEARCH_FIELDS) ?? first(scope)(SEARCH_BUTTONS);
+  return (front && within(front)) || within(content);
 }
 
 /** Go to a search: a field takes the keys, a button opens its search. */

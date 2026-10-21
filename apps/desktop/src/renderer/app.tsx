@@ -4277,7 +4277,7 @@ export function App({
     find: () => {
       if (commandBrowserId()) runBrowserCommand("find");
       else {
-        const target = findSearchTarget();
+        const target = findSearchTarget(workspaceRef.current.activeTabKey);
         if (target) activateSearch(target);
       }
     },
@@ -4514,7 +4514,10 @@ export function App({
           (!PAGE_FIRST_ACTIONS.has(candidate) ||
             guestId !== undefined ||
             commandBrowserIdRef.current() !== undefined ||
-            (candidate === "find" && Boolean(findSearchTarget()))) &&
+            // Matched first: looking for a search on every key costs.
+            (candidate === "find" &&
+              matchesBinding(event, bindings[candidate]) &&
+              Boolean(findSearchTarget(workspaceRef.current.activeTabKey)))) &&
           // A text field keeps its caret keys (Cmd+Left and Cmd+Right go to
           // the line's start and end), whatever they are bound to.
           !(

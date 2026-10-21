@@ -42,6 +42,18 @@ describe("findSearchTarget", () => {
     expect(findSearchTarget()?.id).toBe("marked");
   });
 
+  it("searches the side of a split in front first", () => {
+    document.body.innerHTML = `
+      <div class="workspace-content">
+        <div data-surface-key="history:history"><input aria-label="Search history" id="left" /></div>
+        <div data-surface-key="settings:settings"><button aria-label="Search settings" id="right"></button></div>
+      </div>`;
+    expect(findSearchTarget("settings:settings")?.id).toBe("right");
+    expect(findSearchTarget("history:history")?.id).toBe("left");
+    // Nothing to search in front: anything in the content still answers.
+    expect(findSearchTarget("terminal:t1")?.id).toBe("left");
+  });
+
   it("leaves Find alone where nothing can be searched", () => {
     document.body.innerHTML = `
       <div class="workspace-content"><button aria-label="Send"></button></div>
