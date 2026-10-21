@@ -190,7 +190,7 @@ after a full name, puts the skill in the chip and takes its instructions;
 Backspace on them returns to the list. Applied to its chat, a skill takes the
 pills of a composer with no prose along; a new chat starts with the skill alone.
 
-A composer has menus of its own (ADR 0273), opened by the word the caret ends:
+A composer has menus of its own (ADR 0274), opened by the word the caret ends:
 `/` or `@` starting any word, mid-message too, opens a one-line-per-row list
 above the composer, and typing goes on in the composer. A second `/` or `@` in
 the word (a path, an address) closes it. ↑/↓ move, Enter or Tab picks, Escape

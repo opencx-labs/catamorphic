@@ -1,4 +1,4 @@
-# 0273 — The composer's "/" and "@" menus: skills and mentions go in the message as pills
+# 0274 — The composer's "/" and "@" menus: skills and mentions go in the message as pills
 
 - **Status:** Accepted
 - **Date:** 2026-10-21

@@ -740,7 +740,7 @@ the historical log explains how it arrived here.
 ## Design log
 ### 2026-10-21: The composer's "/" and "@" menus
 
-`/` no longer leaves the composer (ADR 0273). `/` or `@` starting any word,
+`/` no longer leaves the composer (ADR 0274). `/` or `@` starting any word,
 mid-message included, opens a compact list right above the composer, as wide
 as it: one 32px row per entry with its icon, its name, a muted description
 that truncates, and a chevron when the row opens a picker. No header, no key
@@ -753,8 +753,7 @@ Apps), folders before files with their parent path muted. A skill picked
 from `/` is a pill in the message, like a mention, so "fix the login bug and
 ⟨Code review⟩" reads as written. A catalog still loading holds a row with a
 still bar; a failed one leads the list, where Enter retries. The empty
-composer's hint reads `/ skills @ mention`, and steps aside when the
-composer is too narrow to hold it beside the placeholder.
+composer carries no hint: the placeholder and the message have the room.
 
 ### 2026-10-21: Connectors reads like a catalog
 

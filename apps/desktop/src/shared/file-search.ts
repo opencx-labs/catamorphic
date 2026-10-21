@@ -1,6 +1,6 @@
 /**
  * "files" finds filenames, "content" text inside files, and "paths" files
- * and the folders holding them (a composer's @ mention, ADR 0273); an
+ * and the folders holding them (a composer's @ mention, ADR 0274); an
  * empty "paths" query lists the top level.
  */
 export type FileSearchMode = "files" | "content" | "paths";

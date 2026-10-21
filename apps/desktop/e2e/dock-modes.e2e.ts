@@ -51,7 +51,7 @@ const helpers = `
   };
   const composerKey = (key) => composer().dispatchEvent(new KeyboardEvent('keydown', {
     key, bubbles: true, cancelable: true }));
-  // The composer's "/" and "@" menu (ADR 0273), while it is open.
+  // The composer's "/" and "@" menu (ADR 0274), while it is open.
   const composerMenu = () =>
     $$('[data-testid="composer-menu"]').find((el) => !el.inert);
   const menuRows = () =>
@@ -689,7 +689,7 @@ describe("dock modes", () => {
   }, 60_000);
 
   it("the built-in chat's / menu offers shared skills without inventing native commands", async () => {
-    // "/" opens the composer's own menu (ADR 0273), the slash typed.
+    // "/" opens the composer's own menu (ADR 0274), the slash typed.
     await run(`setComposer(''); composer().focus(); return true;`);
     await app.press("Slash");
     const rows = await runWait<string[]>(

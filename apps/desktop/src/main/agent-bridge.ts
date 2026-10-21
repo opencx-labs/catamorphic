@@ -628,7 +628,7 @@ export function registerAgentBridge(
     }
   }
   ipcMain.handle("catamorphic:background-commands", () => backgroundWork());
-  // A composer's @ lists the project's open tabs (ADR 0273), from the same
+  // A composer's @ lists the project's open tabs (ADR 0274), from the same
   // overview the agent reads, in whichever window the chat is.
   ipcMain.handle(
     "catamorphic:workspace-tabs",

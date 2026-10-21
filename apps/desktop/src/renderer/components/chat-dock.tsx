@@ -1746,7 +1746,7 @@ function ChatDockContent({
     registerComposerFocus?.(() => composerRef.current?.focusToType());
   }, [registerComposerFocus]);
 
-  // The composer's "/" and "@" menus (ADR 0273): open while the caret ends
+  // The composer's "/" and "@" menus (ADR 0274): open while the caret ends
   // a word starting with either, anywhere in the message. Escape closes the
   // menu for that word; the next word opens it again.
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
@@ -3536,7 +3536,7 @@ function ChatDockContent({
                 ref={composerFormRef}
                 // The buttons inside share the composer's corners: their
                 // radius is the composer's minus its inset (DESIGN.md).
-                className="field @container/composer relative m-3 mt-1 flex shrink-0 flex-col bg-bg-raised [--composer-inset:6px] [--composer-radius:12px] rounded-(--composer-radius) p-(--composer-inset)"
+                className="field relative m-3 mt-1 flex shrink-0 flex-col bg-bg-raised [--composer-inset:6px] [--composer-radius:12px] rounded-(--composer-radius) p-(--composer-inset)"
                 onSubmit={submit}
               >
                 <ComposerMenu
@@ -3652,26 +3652,6 @@ function ChatDockContent({
                     }
                     ariaLabel="Message the assistant"
                   />
-                  {/* An empty composer says what its menus hold (ADR 0273),
-                  when there is room beside the placeholder. */}
-                  {draft.trim() === "" &&
-                    pillCount === 0 &&
-                    questionRequests.length === 0 && (
-                      <span
-                        aria-hidden="true"
-                        data-testid="composer-menu-hint"
-                        className="flex shrink-0 select-none items-center gap-1 text-[11px] text-fg-faint @max-lg/composer:hidden"
-                      >
-                        <kbd className="rounded border border-border bg-bg-inset px-1 py-px font-sans text-[10px]">
-                          /
-                        </kbd>
-                        skills
-                        <kbd className="ml-1.5 rounded border border-border bg-bg-inset px-1 py-px font-sans text-[10px]">
-                          @
-                        </kbd>
-                        mention
-                      </span>
-                    )}
                   {/* Context ring (ADR 0057): quiet until a harness reports
                   occupancy and window size; danger red past 90%. */}
                   <ContextMeter turns={chat.timeline} />

@@ -1,7 +1,7 @@
 import { PILL_ATTR } from "./composer-serialize";
 
 /**
- * A composer's menus (ADR 0273) open from the word the caret ends: "/" for
+ * A composer's menus (ADR 0274) open from the word the caret ends: "/" for
  * skills and the chat's commands, "@" to mention a file, folder, tab, chat,
  * workflow or app. Either starts any word, mid-message too.
  */
