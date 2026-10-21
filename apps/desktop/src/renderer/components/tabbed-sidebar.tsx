@@ -30,7 +30,6 @@ import { motionMs } from "../lib/motion.js";
 import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
 import { ThemeBackdrop } from "../lib/theme.js";
-import { useDraggingTab } from "../lib/use-dragging-tab.js";
 import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { Collapsible } from "./collapsible.js";
 import { OverlayScrollbar } from "./overlay-scrollbar.js";
@@ -289,7 +288,7 @@ export function TabbedSidebar({
   renderSection: (
     section: SidebarSectionConfig,
     visible: boolean,
-    report: (state: SidebarContentState, droppable: boolean) => void,
+    report: (state: SidebarContentState) => void,
     relevant: boolean,
     /** Hidden only for being empty; see SidebarSlot. */
     observeEmpty: boolean,
@@ -370,26 +369,11 @@ export function TabbedSidebar({
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());
-  const [droppable, setDroppable] = useState<ReadonlySet<string>>(new Set());
-  const report = useCallback(
-    (id: string, state: SidebarContentState, takesDrops: boolean) => {
-      setContent((current) =>
-        current.get(id) === state ? current : new Map(current).set(id, state),
-      );
-      setDroppable((current) => {
-        if (current.has(id) === takesDrops) return current;
-        const next = new Set(current);
-        if (takesDrops) next.add(id);
-        else next.delete(id);
-        return next;
-      });
-    },
-    [],
-  );
-  // A section hidden for being empty that takes drops shows while something
-  // it could take is dragged (pinned pages: "Drop a tab here"), and a moment
-  // after the drop so what arrives lands in view.
-  const dragging = useDraggingTab();
+  const report = useCallback((id: string, state: SidebarContentState) => {
+    setContent((current) =>
+      current.get(id) === state ? current : new Map(current).set(id, state),
+    );
+  }, []);
   // A session-scoped section needs a chat's session: the chat in front, or
   // the chat that opened the page, file or terminal in front (ADR 0226).
   const sectionRelevant = (section: SidebarSectionConfig) =>
@@ -399,8 +383,9 @@ export function TabbedSidebar({
     if (!sectionRelevant(section)) return false;
     const state = content.get(section.id);
     if (state === "unavailable") return false;
-    if (!section.hideEmpty || state !== "empty") return true;
-    return dragging && droppable.has(section.id);
+    // Hidden for being empty, it stays hidden through a drag too: a section
+    // appearing mid-drag would push everything under the pointer down.
+    return !section.hideEmpty || state !== "empty";
   };
   // A section hidden only because it is empty must keep observing, or it
   // can never learn that it has something to show again (Changes after a
@@ -894,11 +879,11 @@ function SidebarSlot({
   visible: boolean;
   /** Hidden only for being empty. */
   observeEmpty?: boolean;
-  report: (id: string, state: SidebarContentState, droppable: boolean) => void;
+  report: (id: string, state: SidebarContentState) => void;
   renderSection: (
     section: SidebarSectionConfig,
     visible: boolean,
-    report: (state: SidebarContentState, droppable: boolean) => void,
+    report: (state: SidebarContentState) => void,
     relevant: boolean,
     /** Hidden for being empty; a section whose emptiness can change
      * behind its back keeps observing. Apps stay idle. */
@@ -910,8 +895,7 @@ function SidebarSlot({
     if (mounted && relevant) setVisited(true);
   }, [mounted, relevant]);
   const onState = useCallback(
-    (state: SidebarContentState, droppable: boolean) =>
-      report(section.id, state, droppable),
+    (state: SidebarContentState) => report(section.id, state),
     [report, section.id],
   );
   // A section that empties collapses before it hides, and one that fills

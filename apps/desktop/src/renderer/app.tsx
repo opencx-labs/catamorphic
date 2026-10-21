@@ -6669,7 +6669,7 @@ export function App({
     (
       section: SidebarSectionConfig,
       visible: boolean,
-      report: (state: SidebarContentState, droppable: boolean) => void,
+      report: (state: SidebarContentState) => void,
       relevant: boolean,
       observeEmpty: boolean,
     ) =>

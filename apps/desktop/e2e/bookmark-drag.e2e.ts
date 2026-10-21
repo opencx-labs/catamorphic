@@ -112,7 +112,16 @@ describe("drag tabs and chats into bookmarks", () => {
     const sessionId = await run<string>(
       "return $('aside [data-session-id]').dataset.sessionId",
     );
-    await drop("aside [data-session-id]", '[data-drop-zone="pinned"]');
+    // An empty Pinned section stays hidden through a drag (a drag never adds
+    // space to the sidebar): the first pin is a bookmark's "Pin across
+    // projects".
+    await drop("aside [data-session-id]", `[data-tree-id="${folderId}"]`);
+    await app.waitFor(
+      "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.some(b=>b.url.startsWith('catamorphic://chat')))",
+    );
+    await app.eval(
+      "(async()=>{const d=await window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope);const b=d.project.bookmarks.find(b=>b.url.startsWith('catamorphic://chat'));await window.catamorphicDesktop.bookmarksPin({...window.__bookmarkScope,id:b.id})})()",
+    );
     await app.waitFor(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===1)",
     );

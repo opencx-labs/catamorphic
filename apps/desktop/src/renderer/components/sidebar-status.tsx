@@ -50,7 +50,9 @@ export function SidebarStatusBody({
         )}
       </div>
     );
-  if (status.state === "empty")
+  // A list that takes drops draws its empty sentence itself, as the place
+  // to drop the first row.
+  if (status.state === "empty" && !status.droppable)
     return (
       <p className="sidebar-empty-state">
         {empty ?? status.empty ?? "Nothing here yet."}

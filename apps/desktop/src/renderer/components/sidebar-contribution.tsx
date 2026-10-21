@@ -40,8 +40,8 @@ export interface SidebarStatus {
   /** Default empty sentence; the section config's `empty` wins. */
   empty?: string;
   /**
-   * Its source takes drops: hidden only for being empty, the section shows
-   * while something it could take is dragged.
+   * Its source takes drops: empty, the section draws its own empty
+   * sentence as the place to drop, so the chrome draws none.
    */
   droppable?: boolean;
 }
