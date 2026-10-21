@@ -45,6 +45,7 @@ import { AgentSkillsField } from "./agent-skills-field.js";
 import { AgentToolPolicyField } from "./agent-tool-policy-field.js";
 import { ClaudeCodeInstall } from "./claude-code-install.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
+import { HarnessModelField } from "./harness-model-field.js";
 import { Modal } from "./modal.js";
 import { AnimatedHeight, ModalTab } from "./modal-tabs.js";
 import { OpenRouterModelField } from "./openrouter-model-field.js";
@@ -497,6 +498,20 @@ function ProfileAgentBody({
                 </p>
               ) : harness === "ai-sdk" && provider === "openrouter" ? (
                 <OpenRouterModelField value={model} onChange={setModel} />
+              ) : provider === (agent.provider ?? "anthropic") ? (
+                // The catalog is the saved agent's: a provider changed here
+                // and not saved yet types its model.
+                <HarnessModelField
+                  agent={agent}
+                  value={model}
+                  onChange={setModel}
+                  placeholder={MODEL_PLACEHOLDERS[harness]}
+                  hint={
+                    harness === "ai-sdk"
+                      ? "Any model id your API key can access."
+                      : "Default uses the harness default."
+                  }
+                />
               ) : (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
                   Model
