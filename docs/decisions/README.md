@@ -64,7 +64,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted (templates part superseded by 0051); paths superseded by 0142 |
 | [0050](0050-project-agent-definitions.md) | Project agent definitions: committed definitions, consent-bound credentials | Accepted; paths superseded by 0142 |
 | [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted; paths superseded by 0142 |
-| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142, composer menu by 0270, then 0272 |
+| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142, composer menu by 0270, then 0273 |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
 | [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
 | [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211 |
@@ -276,6 +276,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0267](0267-voice-waits-for-the-person-to-finish.md) | Voice waits for the person to finish: 0.8 s of silence ends a turn, and a reply ready while they talk plays after them | Accepted (amends 0216, 0265) |
 | [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md) | Voice lowers other apps' audio while it listens, and any reply can be read aloud from its button | Accepted (amends 0216, 0236) |
 | [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md) | A turn that failed on its sign-in while the person was away runs again when they return; a chat's own task's turns too | Accepted (amends 0228) |
-| [0270](0270-skills-live-in-the-palette.md) | Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat | Accepted (supersedes 0052's composer menu; builds on 0186; the composer's "/" superseded by 0272) |
+| [0270](0270-skills-live-in-the-palette.md) | Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat | Accepted (supersedes 0052's composer menu; builds on 0186; the composer's "/" superseded by 0273) |
 | [0271](0271-agents-delegate-by-naming-an-agent-and-its-settings.md) | Agents delegate by naming an agent and its settings (model, effort, read-only); grants decide, and copies of yourself with any model are the default | Accepted (amends 0090, 0216) |
-| [0272](0272-composer-menus-for-skills-and-mentions.md) | The composer's "/" and "@" menus: skills and mentions go in the message as pills | Accepted (supersedes 0270's composer "/"; builds on 0052, 0186, 0123) |
+| [0273](0273-composer-menus-for-skills-and-mentions.md) | The composer's "/" and "@" menus: skills and mentions go in the message as pills | Accepted (supersedes 0270's composer "/"; builds on 0052, 0186, 0123) |

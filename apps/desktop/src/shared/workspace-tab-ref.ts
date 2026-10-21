@@ -1,5 +1,5 @@
 /**
- * An open workspace tab as a composer's @ mention lists it (ADR 0272): the
+ * An open workspace tab as a composer's @ mention lists it (ADR 0273): the
  * key read_tab takes and what the tab shows, from the overview the agent
  * reads.
  */

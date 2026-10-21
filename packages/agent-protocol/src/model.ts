@@ -124,7 +124,7 @@ export type AgentTextSource =
     }
   | {
       /**
-       * A skill the person put in the message (ADR 0272): the agent uses
+       * A skill the person put in the message (ADR 0273): the agent uses
        * it for this message. `path` names a harness's own skill file.
        */
       type: "skill";

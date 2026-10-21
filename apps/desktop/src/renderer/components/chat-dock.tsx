@@ -1742,7 +1742,7 @@ function ChatDockContent({
     registerSkill?.((message) => applySkillRef.current(message));
   }, [registerSkill]);
 
-  // The composer's "/" and "@" menus (ADR 0272): open while the caret ends
+  // The composer's "/" and "@" menus (ADR 0273): open while the caret ends
   // a word starting with either, anywhere in the message. Escape closes the
   // menu for that word; the next word opens it again.
   const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
@@ -3646,7 +3646,7 @@ function ChatDockContent({
                     }
                     ariaLabel="Message the assistant"
                   />
-                  {/* An empty composer says what its menus hold (ADR 0272),
+                  {/* An empty composer says what its menus hold (ADR 0273),
                   when there is room beside the placeholder. */}
                   {draft.trim() === "" &&
                     pillCount === 0 &&

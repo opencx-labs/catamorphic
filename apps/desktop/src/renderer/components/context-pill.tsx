@@ -52,7 +52,7 @@ const SOURCE_ICONS: Record<string, LucideIcon> = {
   skill: Sparkles,
 };
 
-/** Workspace links a mention makes (ADR 0272) read as what they open. */
+/** Workspace links a mention makes (ADR 0273) read as what they open. */
 const LINK_ICONS: Record<string, LucideIcon> = {
   workflow: Workflow,
   app: LayoutGrid,

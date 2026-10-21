@@ -1231,7 +1231,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     return;
   }
 
-  // A skill the person put in the message (ADR 0272) runs as its sentence
+  // A skill the person put in the message (ADR 0273) runs as its sentence
   // does below: the REAL read_skill tool (or a harness's own skill file),
   // the message's other words as its instructions. The rest of the
   // attachments then echo as usual.

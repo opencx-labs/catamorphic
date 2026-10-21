@@ -731,7 +731,7 @@ the historical log explains how it arrived here.
 ## Design log
 ### 2026-10-21: The composer's "/" and "@" menus
 
-`/` no longer leaves the composer (ADR 0272). `/` or `@` starting any word,
+`/` no longer leaves the composer (ADR 0273). `/` or `@` starting any word,
 mid-message included, opens a compact list right above the composer, as wide
 as it: one 32px row per entry with its icon, its name, a muted description
 that truncates, and a chevron when the row opens a picker. No header, no key

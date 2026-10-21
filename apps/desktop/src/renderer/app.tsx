@@ -3370,7 +3370,7 @@ export function App({
   // Palette skills (ADR 0052, 0270): applied here, the invocation lands in
   // the focused chat (the border-accented target). A new chat starts
   // exactly like "Send to agent". A composer's own "/" puts a skill in its
-  // message instead (ADR 0272).
+  // message instead (ADR 0273).
   const runSkill: PaletteHost["onRunSkill"] = ({
     message,
     target,

@@ -47,7 +47,7 @@ import { skillsForAgent, useProjectSkillCatalog } from "./skills.js";
 import { textPill } from "./text-pills.js";
 
 /**
- * The rows of a composer's menus (ADR 0272). "/" lists the shared skills
+ * The rows of a composer's menus (ADR 0273). "/" lists the shared skills
  * the chat's agent may use, the agent's own commands (when "/" starts an
  * otherwise empty message) and the chat's commands; "@" lists what a
  * message can point at. Both rank with the palette's index and its use

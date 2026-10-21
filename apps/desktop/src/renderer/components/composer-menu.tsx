@@ -14,7 +14,7 @@ import { themeStyle, useTheme } from "../lib/theme.js";
 import { PopPanel } from "./pop-panel.js";
 
 /**
- * A composer's "/" and "@" menu (ADR 0272): one compact list above the
+ * A composer's "/" and "@" menu (ADR 0273): one compact list above the
  * composer while the caret ends a "/" or "@" word. The composer keeps the
  * keyboard (its textbox names the highlighted row as its active
  * descendant); this list only draws, follows the pointer and takes clicks.

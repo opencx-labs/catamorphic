@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Skills as commands (ADR 0052, 0270, 0272): the skill tiers (project
+ * Skills as commands (ADR 0052, 0270, 0273): the skill tiers (project
  * files, host skills) and the chat agent's own commands are listed by the
  * composer's "/" menu, which puts a skill in the message as a pill, and by
  * the palette's Skills mode, which sends its invocation. The e2e fake
@@ -63,7 +63,7 @@ const helpers = `
   const composerKey = (key, mods = {}) =>
     composer().dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));
-  // The composer's "/" and "@" menu (ADR 0272), while it is open.
+  // The composer's "/" and "@" menu (ADR 0273), while it is open.
   const composerMenu = () =>
     $$('[data-testid="composer-menu"]').find((el) => !el.inert);
   const menuIds = () =>

@@ -2,7 +2,7 @@
 
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
 >
-> The composer `/` menu in "Renderer surfaces" is superseded by [ADR 0270](0270-skills-live-in-the-palette.md), then [ADR 0272](0272-composer-menus-for-skills-and-mentions.md): the composer's `/` menu puts a skill in the message as a pill, anywhere in it, and the palette keeps a Skills mode.
+> The composer `/` menu in "Renderer surfaces" is superseded by [ADR 0270](0270-skills-live-in-the-palette.md), then [ADR 0273](0273-composer-menus-for-skills-and-mentions.md): the composer's `/` menu puts a skill in the message as a pill, anywhere in it, and the palette keeps a Skills mode.
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
