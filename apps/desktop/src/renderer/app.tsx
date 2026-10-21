@@ -353,7 +353,8 @@ const truncateLabel = (value: string): string =>
  * agent-held; the pill names the owner and offers the two moves that
  * make sense — jump to the owning chat, or take the keys. It steps aside
  * after a few seconds and comes back while the pointer moves over the
- * surface; dragged by its body, it stays where it is put. A press on the
+ * surface or focus reaches it; dragged by its body, it stays where it is
+ * put, inside the surface. A press on the
  * blocked surface (someone who missed the pill) shows the veil itself for
  * a moment, a tinted sheet that gives where it was touched.
  *
@@ -404,9 +405,14 @@ function AgentControlOverlay({
   }, [active, wake]);
   // Dragged by its body (not its buttons), the pill stays where it is put.
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const drag = useRef<{ x: number; y: number; from: typeof offset } | null>(
-    null,
-  );
+  // Where the drag began, and how far the pill may go each way and stay
+  // inside the surface it marks.
+  const drag = useRef<{
+    x: number;
+    y: number;
+    from: typeof offset;
+    room: { left: number; right: number; up: number; down: number };
+  } | null>(null);
   if (phase === "gone") return null;
   const exiting = phase === "out";
   const anim = exiting ? "animate-fade-out" : "animate-fade-in";
@@ -470,17 +476,42 @@ function AgentControlOverlay({
         data-agent-control-pill
         onPointerEnter={wake}
         onPointerMove={wake}
+        // Tabbing to its buttons brings it back too.
+        onFocus={wake}
         onPointerDown={(event) => {
           if ((event.target as HTMLElement).closest("button")) return;
+          const pill = event.currentTarget.getBoundingClientRect();
+          const area =
+            event.currentTarget.parentElement?.getBoundingClientRect() ?? pill;
           event.currentTarget.setPointerCapture(event.pointerId);
-          drag.current = { x: event.clientX, y: event.clientY, from: offset };
+          drag.current = {
+            x: event.clientX,
+            y: event.clientY,
+            from: offset,
+            room: {
+              left: pill.left - area.left,
+              right: area.right - pill.right,
+              up: pill.top - area.top,
+              down: area.bottom - pill.bottom,
+            },
+          };
         }}
         onPointerMoveCapture={(event) => {
           const start = drag.current;
           if (!start) return;
+          const clamp = (value: number, low: number, high: number) =>
+            Math.min(high, Math.max(low, value));
           setOffset({
-            x: start.from.x + event.clientX - start.x,
-            y: start.from.y + event.clientY - start.y,
+            x:
+              start.from.x +
+              clamp(
+                event.clientX - start.x,
+                -start.room.left,
+                start.room.right,
+              ),
+            y:
+              start.from.y +
+              clamp(event.clientY - start.y, -start.room.up, start.room.down),
           });
         }}
         onPointerUp={() => {
