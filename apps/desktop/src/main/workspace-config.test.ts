@@ -739,6 +739,7 @@ describe("module rows", () => {
           signal: "working",
           badges: ["Draft", { label: "main", icon: "GitBranch" }],
           collapsed: false,
+          acceptsChildren: true,
           data: { count: 1 },
         },
         { id: "b", label: "B", data: { blob: "x".repeat(140_000) } },
@@ -752,9 +753,11 @@ describe("module rows", () => {
       signal: "working",
       badges: ["Draft", { label: "main", icon: "GitBranch" }],
       collapsed: false,
+      acceptsChildren: true,
       data: { count: 1 },
     });
     expect(page.items[1]).not.toHaveProperty("data");
+    expect(page.items[1]).not.toHaveProperty("acceptsChildren");
     expect(() =>
       sanitizeSidebarSourcePage({
         items: [

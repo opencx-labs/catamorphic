@@ -105,6 +105,7 @@ function deps(host: Partial<WorkSourceHost> = {}): WorkSourceDeps {
     agentName: () => undefined,
     closeTab: vi.fn(),
     reorderTab: vi.fn(),
+    attachTab: vi.fn(),
     sessionAction: vi.fn(),
     openTab: vi.fn(),
     resourceTab: (owner) => (owner.kind === "page" ? "browser:b1" : undefined),

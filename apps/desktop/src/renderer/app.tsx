@@ -239,6 +239,7 @@ import {
 } from "./lib/workspace-customization.js";
 import {
   agentOpenInFront,
+  attachBlocker,
   attachedTabKeys,
   type BrowserEntry,
   browserTabKey,
@@ -3906,6 +3907,24 @@ export function App({
       transitionWorkspace(ws, { type: "reorder", key, beforeKey }),
     );
 
+  /** Drag a tab onto a chat (or off it): it joins or leaves that chat. */
+  const attachTab = (
+    key: string,
+    chatKey: string | null,
+    beforeKey: string | null,
+  ) => {
+    const chatLocalId = chatKey?.startsWith("chat:")
+      ? chatKey.slice("chat:".length)
+      : null;
+    if (chatKey && !chatLocalId)
+      throw new Error("A tab goes inside a chat, nowhere else.");
+    const blocker = attachBlocker(workspaceRef.current, key, chatLocalId);
+    if (blocker) throw new Error(blocker);
+    updateWorkspace((ws) =>
+      transitionWorkspace(ws, { type: "attach", key, chatLocalId, beforeKey }),
+    );
+  };
+
   /** Drop a dragged tab onto a side of the content area: tile it there. */
   const dropTabToSide = (key: string, side: "left" | "right") => {
     const ws = workspaceRef.current;
@@ -6598,6 +6617,7 @@ export function App({
       },
       closeTab: (key) => closeTab(key),
       reorderTab,
+      attachTab,
       sessionAction: applySessionAction,
       openTab,
       resourceTab: (owner) => {
@@ -6800,6 +6820,14 @@ export function App({
       onNew={openPaletteTab}
       onToggleGroup={toggleChatGroup}
       onReorder={reorderTab}
+      onAttach={attachTab}
+      attachable={(key, chatKey) =>
+        !attachBlocker(
+          workspaceRef.current,
+          key,
+          chatKey?.startsWith("chat:") ? chatKey.slice("chat:".length) : null,
+        )
+      }
       // An editor's tab acts on its file too (copy its path, show it, copy it).
       tabFile={(key) => {
         const filePath = workspace.editors.find(

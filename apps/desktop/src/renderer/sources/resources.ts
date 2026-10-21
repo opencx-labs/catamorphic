@@ -186,8 +186,10 @@ const TAB_ICONS: Partial<Record<WorkspaceTab["kind"], string>> = {
  * `work:tabs`: the window's open tabs in strip order, chats among them. A
  * row brings its tab forward, closes from its row, says what a chat is
  * doing (`signal`, also in `data` for sorting), and drags to reorder the
- * strip. A module that wraps it can sort and group tabs however the person
- * likes (working chats first); rows that change places slide there.
+ * strip; a tab dropped on a chat nests under it, and dropped among the top
+ * tabs leaves its chat. A module that wraps it can sort and group tabs
+ * however the person likes (working chats first); rows that change places
+ * slide there.
  */
 export function tabsSource(deps: WorkSourceDeps): SectionSource {
   const source: SectionSource = {
@@ -230,8 +232,11 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
               id,
               parentId,
               hasChildren: parents.has(id),
-              // A chat's pages show under it, as in the strip.
-              ...(parents.has(id) ? { collapsed: false } : {}),
+              // A chat's pages show under it, as in the strip; a tab dropped
+              // on a chat nests there.
+              ...(tab.kind === "chat"
+                ? { acceptsChildren: true, collapsed: false }
+                : {}),
               label,
               description: tab.detail,
               icon:
@@ -295,14 +300,15 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
       return undefined;
     },
     move: async ({ itemId, parentId, beforeId }) => {
-      // The strip keeps a chat's pages with it: a tab moves among its own
-      // group's (or the top level's) tabs.
-      const group = deps
-        .host()
-        .tabGroups.find((entry) => entry.memberKeys.includes(itemId));
-      if ((group?.parentKey ?? null) !== (parentId ?? null))
-        throw new Error("A tab moves among the tabs beside it.");
-      deps.host().reorderTab(itemId, beforeId ?? null);
+      // Among the tabs beside it, a tab only changes places; dropped on a
+      // chat (or out of one) it joins that chat's group, as in the strip.
+      const host = deps.host();
+      const group = host.tabGroups.find((entry) =>
+        entry.memberKeys.includes(itemId),
+      );
+      if ((group?.parentKey ?? null) === parentId)
+        host.reorderTab(itemId, beforeId ?? null);
+      else host.attachTab(itemId, parentId, beforeId ?? null);
     },
   };
   return source;

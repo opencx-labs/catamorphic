@@ -415,6 +415,48 @@ export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
 ];
 
 /**
+ * Why a tab cannot move into a tab chat (or, with null, out of its chat),
+ * in a sentence; undefined when it can. What an agent is using stays with
+ * its chat.
+ */
+export const attachBlocker = (
+  ws: Workspace,
+  key: string,
+  chatLocalId: string | null,
+): string | undefined => {
+  if (key.startsWith("chat:")) return "A chat can't go inside another chat.";
+  if (
+    chatLocalId &&
+    !ws.chats.some(
+      (chat) => chat.localId === chatLocalId && chat.mode === "tab",
+    )
+  )
+    return "Only a chat open as a tab holds tabs.";
+  const localId = key.slice(key.indexOf(":") + 1);
+  if (key.startsWith("browser:")) {
+    const browser = ws.browsers.find((entry) => entry.localId === localId);
+    if (!browser) return "That tab is closed.";
+    if (browser.agentControlled)
+      return "An agent is using this page. Take it over first.";
+    return undefined;
+  }
+  if (key.startsWith("terminal:")) {
+    const terminal = ws.terminals.find((entry) => entry.localId === localId);
+    if (!terminal) return "That tab is closed.";
+    if (terminal.attachSessionId || terminal.remoteSessionId)
+      return "This terminal belongs to its chat.";
+    return undefined;
+  }
+  if (key.startsWith("editor:"))
+    return ws.editors.some((entry) => entry.localId === localId)
+      ? undefined
+      : "That tab is closed.";
+  return ws.tabs.some((tab) => tabKey(tab) === key)
+    ? undefined
+    : "That tab is closed.";
+};
+
+/**
  * Tab-strip order, the single source for the strip AND keyboard cycling:
  * `tabOrder` (drag-arranged) first, unknown keys appended in per-kind
  * order — then tabs attached to a tab-mode chat are pulled out and
@@ -492,6 +534,13 @@ export type WorkspaceEvent =
   | { type: "reveal-chat"; localId: string }
   | { type: "cycle-chat"; direction: -1 | 1 }
   | { type: "reorder"; key: string; beforeKey: string | null }
+  /** A tab joins a tab chat's group (or, with null, leaves its chat). */
+  | {
+      type: "attach";
+      key: string;
+      chatLocalId: string | null;
+      beforeKey: string | null;
+    }
   | { type: "finish-expansion"; key: string; split: SplitView }
   | { type: "dismiss-floating"; key?: string }
   | TerminalEvent;
@@ -647,6 +696,17 @@ export function transitionWorkspace(
   event: WorkspaceEvent,
 ): Workspace {
   return reconcileWorkspace(ws, applyWorkspaceEvent(ws, event));
+}
+
+/** The strip's order with a tab moved before another (null: to the end). */
+function tabOrderWith(ws: Workspace, key: string, beforeKey: string | null) {
+  const order = orderedTabKeys(ws, { includeCollapsed: true }).filter(
+    (candidate) => candidate !== key,
+  );
+  const at = beforeKey ? order.indexOf(beforeKey) : -1;
+  if (at === -1) order.push(key);
+  else order.splice(at, 0, key);
+  return order;
 }
 
 function applyWorkspaceEvent(
@@ -1146,15 +1206,43 @@ function applyWorkspaceEvent(
         ),
       };
     }
-    case "reorder": {
-      const { key, beforeKey } = event;
-      const order = orderedTabKeys(ws, { includeCollapsed: true }).filter(
-        (candidate) => candidate !== key,
-      );
-      const at = beforeKey ? order.indexOf(beforeKey) : -1;
-      if (at === -1) order.push(key);
-      else order.splice(at, 0, key);
-      return { ...ws, tabOrder: order };
+    case "reorder":
+      return {
+        ...ws,
+        tabOrder: tabOrderWith(ws, event.key, event.beforeKey),
+      };
+    case "attach": {
+      const { key, chatLocalId, beforeKey } = event;
+      if (attachBlocker(ws, key, chatLocalId)) return original;
+      const owner = chatLocalId ?? undefined;
+      const attached: Workspace = {
+        ...ws,
+        tabs: ws.tabs.map((tab) =>
+          tabKey(tab) === key ? { ...tab, chatLocalId: owner } : tab,
+        ),
+        browsers: ws.browsers.map((browser) =>
+          browserTabKey(browser.localId) === key
+            ? { ...browser, chatLocalId: owner }
+            : browser,
+        ),
+        terminals: ws.terminals.map((terminal) =>
+          terminalTabKey(terminal.localId) === key
+            ? { ...terminal, chatLocalId: owner }
+            : terminal,
+        ),
+        editors: ws.editors.map((editor) =>
+          editorTabKey(editor.localId) === key
+            ? { ...editor, chatLocalId: owner }
+            : editor,
+        ),
+        // A folded group opens, so the tab it takes stays in sight.
+        chats: ws.chats.map((chat) =>
+          chat.localId === chatLocalId && chat.surfacesCollapsed
+            ? { ...chat, surfacesCollapsed: false }
+            : chat,
+        ),
+      };
+      return { ...attached, tabOrder: tabOrderWith(attached, key, beforeKey) };
     }
     case "float": {
       const { key } = event;

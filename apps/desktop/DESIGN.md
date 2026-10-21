@@ -3530,3 +3530,19 @@ The voice assistant starts sessions with the same tool. Left without an
 agent, it starts the person's own agent, without the assistant's tools; a
 session it starts is still handed a brief that leads back to it, and it
 still passes on the session's notes. See ADR 0271.
+
+### 2026-10-21: A tab dragged onto a chat goes with that chat
+
+A chat's tabs nested under it only when the chat itself opened them; a page
+the person opened for that work stayed at the top, and dragging it onto the
+chat did nothing. Now, in the sidebar's tabs, a tab dropped on a chat nests
+under it, even a chat with nothing under it yet, and becomes one of that
+chat's chips, as if the chat had opened it. The top strip does the same: past
+a chat tab's leading edge the tab lights up in the accent and takes the drop
+inside, while its leading edge still means "before"; a tab dropped among a
+group's tabs joins that chat. Closing it hides it behind its chip, and a folded
+group opens so the tab stays in sight. Dropped among the top tabs, it leaves
+its chat; dropped on another chat, it moves there. A page
+an agent is driving, and an agent's or a remote chat's terminal, stay with
+their chat and say so; a chat never goes inside another. The tree learned
+`acceptsChildren`, so any source's row can take its first child by a drop.

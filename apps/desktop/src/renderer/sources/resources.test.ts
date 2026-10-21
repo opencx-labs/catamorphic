@@ -70,6 +70,7 @@ function deps(host: Partial<WorkSourceHost> = {}, writesProgram = true) {
     agentName: () => undefined,
     closeTab: vi.fn(),
     reorderTab: vi.fn(),
+    attachTab: vi.fn(),
     sessionAction: vi.fn(),
     openTab: vi.fn(),
     resourceTab: () => undefined,
@@ -169,16 +170,41 @@ it("follows the window's tabs, a chat's pages included", () => {
   stop?.();
 });
 
-it("opens a chat's group, and keeps a tab among the tabs beside it", async () => {
+it("opens a chat's group, and nests a tab dropped on a chat there", async () => {
   const { value, host } = deps();
   const source = tabsSource(value);
   const roots = await source.load({ parentId: null, signal });
-  expect(roots.items[1]).toMatchObject({ id: "chat:c1", collapsed: false });
+  expect(roots.items[1]).toMatchObject({
+    id: "chat:c1",
+    collapsed: false,
+    acceptsChildren: true,
+  });
+  // A chat with nothing under it yet still takes a tab dropped on it.
+  expect(roots.items[2]).toMatchObject({
+    id: "chat:c2",
+    hasChildren: false,
+    acceptsChildren: true,
+  });
   expect(roots.items[0]).not.toHaveProperty("collapsed");
-  await expect(
-    source.move?.({ itemId: "browser:b2", parentId: null, signal }),
-  ).rejects.toThrow("among the tabs beside it");
+  expect(roots.items[0]).not.toHaveProperty("acceptsChildren");
+  await source.move?.({ itemId: "browser:b1", parentId: "chat:c2", signal });
+  expect(host.attachTab).toHaveBeenCalledWith("browser:b1", "chat:c2", null);
+  await source.move?.({
+    itemId: "browser:b2",
+    parentId: null,
+    beforeId: "chat:c2",
+    signal,
+  });
+  expect(host.attachTab).toHaveBeenLastCalledWith(
+    "browser:b2",
+    null,
+    "chat:c2",
+  );
   expect(host.reorderTab).not.toHaveBeenCalled();
+  // Among the tabs beside it, it only changes places.
+  await source.move?.({ itemId: "browser:b2", parentId: "chat:c1", signal });
+  expect(host.reorderTab).toHaveBeenCalledWith("browser:b2", null);
+  expect(host.attachTab).toHaveBeenCalledTimes(2);
   // A group folded in the strip has no pages in the window's tabs.
   const folded = tabsSource(
     deps({ tabs: tabs.filter((tab) => tab.name !== "b2") }).value,

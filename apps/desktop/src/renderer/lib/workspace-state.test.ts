@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   agentOpenInFront,
+  attachBlocker,
   emptyUtilityWorkspace,
   hydrateWorkspace,
   newTabInFront,
@@ -459,4 +460,92 @@ it("keeps shells and unsent chats only for a move to another window", () => {
   expect(
     hydrateWorkspace(JSON.parse(JSON.stringify(moving)))?.terminals,
   ).toEqual([]);
+});
+
+it("nests a dragged tab under a chat, opens a folded group for it, and takes it out again", () => {
+  const page = (localId: string, agentControlled = false) => ({
+    localId,
+    profileId: "p",
+    initialUrl: `https://example.com/${localId}`,
+    url: `https://example.com/${localId}`,
+    title: localId,
+    faviconUrl: null,
+    ...(agentControlled ? { agentControlled } : {}),
+  });
+  const ws: Workspace = {
+    ...initial(),
+    chats: [
+      {
+        localId: "c",
+        mode: "tab",
+        sessionId: "session",
+        surfacesCollapsed: true,
+      },
+      { localId: "d", mode: "tab", sessionId: "other" },
+    ],
+    browsers: [page("b"), page("held", true)],
+    terminals: [
+      {
+        localId: "agent",
+        title: "",
+        chatLocalId: "c",
+        attachSessionId: "pty",
+        background: true,
+      },
+    ],
+  };
+  const nested = transitionWorkspace(ws, {
+    type: "attach",
+    key: "browser:b",
+    chatLocalId: "c",
+    beforeKey: null,
+  });
+  expect(nested.browsers[0]?.chatLocalId).toBe("c");
+  expect(nested.chats[0]?.surfacesCollapsed).toBe(false);
+  expect(orderedTabKeys(nested)).toEqual([
+    "palette:a",
+    "palette:b",
+    "browser:held",
+    "chat:c",
+    "browser:b",
+    "chat:d",
+  ]);
+  // A New Tab goes with a chat too, and leaves it before another tab.
+  const left = transitionWorkspace(
+    transitionWorkspace(nested, {
+      type: "attach",
+      key: "palette:a",
+      chatLocalId: "d",
+      beforeKey: null,
+    }),
+    {
+      type: "attach",
+      key: "browser:b",
+      chatLocalId: null,
+      beforeKey: "palette:b",
+    },
+  );
+  expect(left.browsers[0]?.chatLocalId).toBeUndefined();
+  expect(left.tabs[0]?.chatLocalId).toBe("d");
+  expect(orderedTabKeys(left)).toEqual([
+    "browser:b",
+    "palette:b",
+    "browser:held",
+    "chat:c",
+    "chat:d",
+    "palette:a",
+  ]);
+  // What an agent uses stays with its chat; a chat never nests.
+  expect(attachBlocker(ws, "browser:held", "c")).toMatch(/agent is using/);
+  expect(attachBlocker(ws, "terminal:agent", null)).toMatch(/belongs to/);
+  expect(attachBlocker(ws, "chat:d", "c")).toMatch(/another chat/);
+  expect(attachBlocker(ws, "browser:gone", "c")).toMatch(/closed/);
+  expect(
+    transitionWorkspace(ws, {
+      type: "attach",
+      key: "browser:held",
+      chatLocalId: "c",
+      beforeKey: null,
+    }),
+  ).toBe(ws);
 });

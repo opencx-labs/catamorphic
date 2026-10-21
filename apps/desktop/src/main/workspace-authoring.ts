@@ -73,7 +73,9 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
   it, open. Rows carry signal and data {kind, name, active, working,
   attention (waiting for the person included), unread, groupId?, sessionId?,
   url?, faviconUrl?, path?}; actions close, and rename on a chat's tab (opens
-  the rename dialog); drag reorders the strip, a tab among the tabs beside it.
+  the rename dialog); drag reorders the strip, and a tab dropped on a chat
+  nests under it (the chat keeps it among its chips) or, dropped among the top
+  tabs, leaves its chat. Chat rows carry acceptsChildren.
 - remote: a connected project's server: a status row (its dialogs), a row per
   file changed on this device (upload, history, publish), files needing a
   proposal. Header actions sync and upload-all.
@@ -120,7 +122,7 @@ muted sentence when empty, the error with Retry. Never draw your own.
 
 Every row, whoever wrote it, is the same: { id, label, url?, icon?, description?,
 badges?, signal?, progress?, trend?, preview?, keywords?, hide?, parentId?, hasChildren?,
-collapsed?, menu?, contextMenu?, actions?, data? }.
+acceptsChildren?, collapsed?, menu?, contextMenu?, actions?, data? }.
 - url is where the row goes, opened by one resolver: a web page, a chat
   (catamorphic://chat?project=&session=, or session:<id>), workflow:<name>,
   app:<name>, run:<id>, file:<path>, an open tab's key (browser:<id>, chat:<id>,
@@ -197,8 +199,8 @@ keep apps. Every handler receives { projectRoot, signal, work, session? }.
 - move({itemId, parentId, beforeId?}) makes rows draggable to reorder and
   reparent (beforeId absent means last). drop({parentId, beforeId?,
   payload:{kind, label, url?}}) takes pages, chats, bookmarks and other
-  sections' rows. Only rows with hasChildren take "inside" drops; a row never
-  lands inside itself.
+  sections' rows. Only rows with hasChildren take "inside" drops, and rows with
+  acceptsChildren while they hold none yet; a row never lands inside itself.
 - reveal({url, after}) returns the row for something in front that no loaded
   page holds (shown past the loaded rows), or null.
 

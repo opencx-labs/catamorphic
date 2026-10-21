@@ -22,6 +22,8 @@ export interface TreeItem {
   id: string;
   parentId?: string | null;
   hasChildren?: boolean;
+  /** Takes rows dropped inside it while it holds none yet. */
+  acceptsChildren?: boolean;
   collapsed?: boolean;
 }
 export interface TreeRenderContext {
@@ -967,7 +969,7 @@ export function Tree<T extends TreeItem>({
         onDragEnd: clearDrop,
       }
     : {};
-  const rowDropHandlers = (item: T, hasChildren: boolean) =>
+  const rowDropHandlers = (item: T, takesInside: boolean) =>
     dragAndDrop
       ? {
           onDragOver: (event: DragEvent<HTMLElement>) => {
@@ -975,7 +977,7 @@ export function Tree<T extends TreeItem>({
               clientY: event.clientY,
               rect: event.currentTarget.getBoundingClientRect(),
               allowInside:
-                hasChildren &&
+                takesInside &&
                 dragAndDrop.accept(
                   event.dataTransfer.types,
                   dropTargetFor(item.id, "inside"),
@@ -1006,7 +1008,7 @@ export function Tree<T extends TreeItem>({
                 : dropPositionFor({
                     clientY: event.clientY,
                     rect: event.currentTarget.getBoundingClientRect(),
-                    allowInside: hasChildren,
+                    allowInside: takesInside,
                   });
             const target = dropTargetFor(item.id, position);
             if (!dragAndDrop.accept(event.dataTransfer.types, target)) return;
@@ -1364,7 +1366,10 @@ export function Tree<T extends TreeItem>({
                         : undefined
                     }
                     {...dragHandlers(item)}
-                    {...rowDropHandlers(item, hasChildren)}
+                    {...rowDropHandlers(
+                      item,
+                      hasChildren || Boolean(item.acceptsChildren),
+                    )}
                     aria-level={row.depth + 1}
                     aria-posinset={row.position}
                     // -1: more siblings exist than are loaded (ARIA 1.2).
@@ -1733,7 +1738,8 @@ export function CollectionTree<T extends CollectionItem>({
         item.hasChildren &&
         initiallyExpanded(item),
     );
-    for (const item of items) seen.current.add(item.id);
+    // A row seen only childless still opens when its first children come.
+    for (const item of items) if (item.hasChildren) seen.current.add(item.id);
     if (opened.length)
       setExpanded(
         (current) => new Set([...current, ...opened.map((item) => item.id)]),
