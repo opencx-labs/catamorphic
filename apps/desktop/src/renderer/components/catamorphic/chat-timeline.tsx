@@ -1438,14 +1438,14 @@ function JumpToPreviousUserMessage({
     register?.(jump);
   }, [register, jump]);
 
-  if (!scrollable) return null;
+  // One arrow at a time, in one place: away from the end, Scroll to latest
+  // takes it. The shortcut jumps either way.
+  if (!scrollable || !isAtBottom) return null;
   return (
     <Hint label="Jump to your previous message" shortcut={shortcut}>
       <button
         type="button"
-        className={`absolute bottom-4 grid size-8 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl transition-[right] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          isAtBottom ? "right-4" : "right-14"
-        }`}
+        className={CHAT_ARROW}
         onClick={jump}
         aria-label="Jump to your previous message"
         data-testid="chat-jump-previous"
@@ -3119,13 +3119,17 @@ function defaultAttachment(attachment: AgentAttachment): ReactNode {
   return <DefaultAttachment attachment={attachment} />;
 }
 
+/** The conversation's one scroll arrow, centered over it. */
+const CHAT_ARROW =
+  "absolute bottom-4 left-1/2 grid size-8 -translate-x-1/2 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl";
+
 function ScrollToLatest() {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
   if (isAtBottom) return null;
   return (
     <button
       type="button"
-      className="absolute bottom-4 right-4 grid size-8 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl"
+      className={CHAT_ARROW}
       onClick={() => scrollToBottom()}
       aria-label="Scroll to latest message"
     >
