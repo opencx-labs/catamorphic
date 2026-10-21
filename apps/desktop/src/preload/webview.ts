@@ -47,9 +47,21 @@ installFieldDictation({
 // First of the page's listeners, so a key voice takes still counts; main
 // reports what reaches the page in any frame too (main/browser.ts).
 let activationReported = false;
+/** Keys that touch nothing: Escape, and a modifier on its way to a shortcut. */
+const INERT_KEYS = new Set([
+  "Escape",
+  "Meta",
+  "Control",
+  "Alt",
+  "AltGraph",
+  "Shift",
+  "CapsLock",
+  "Fn",
+  "OS",
+]);
 const reportActivation = (event: Event) => {
   if (activationReported || !event.isTrusted) return;
-  if (event instanceof KeyboardEvent && event.key === "Escape") return;
+  if (event instanceof KeyboardEvent && INERT_KEYS.has(event.key)) return;
   activationReported = true;
   ipcRenderer.sendToHost("catamorphic:page-activated");
 };

@@ -1167,6 +1167,29 @@ describe("VoiceEngine dictation", () => {
     ]);
   });
 
+  it("dictates a long hold whose first piece was quiet without saying it heard nothing", async () => {
+    const said = ["", "the rest of it"];
+    const voice = harness([], (parts) => {
+      parts.recognize = async () => ({
+        text: said.shift() ?? "",
+        confidence: 0,
+      });
+    });
+    voice.engine.setDictation(true);
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    voice.frame(0.5, 4_000);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.filter((event) => event.type === "unheard")).toEqual(
+      [],
+    );
+    expect(dictated(voice).at(-1)).toMatchObject({
+      text: "the rest of it",
+      final: true,
+    });
+  });
+
   it("says a long hold that heard no words came to nothing, once", async () => {
     const voice = harness([], (parts) => {
       parts.recognize = async () => ({ text: "", confidence: 0 });

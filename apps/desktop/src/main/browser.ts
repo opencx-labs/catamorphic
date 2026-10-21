@@ -1341,27 +1341,22 @@ export function registerBrowserSupport(
         showNativePageMenu(popup, popup.webContents, params, contents),
       );
     });
-    // The person's first press or key in the page, whatever frame it
-    // reached (one without a preload too): its tab, closing, asks only a
-    // page someone touched (browser-screen.tsx).
-    let activationReported = false;
-    contents.on("input-event", (_event, input) => {
-      if (activationReported) return;
-      const press =
-        input.type === "mouseDown" ||
-        input.type === "touchStart" ||
-        input.type === "char" ||
-        ((input.type === "keyDown" || input.type === "rawKeyDown") &&
-          "key" in input &&
-          input.key !== "Escape");
-      if (!press) return;
+    // The person's first press in the page as main sees it reach the page
+    // (a frame that runs no preload included; the preload reports keys):
+    // its tab, closing, asks only a page someone touched (browser-screen.tsx).
+    const onPageInput = (
+      _event: Electron.Event,
+      input: Electron.InputEvent,
+    ) => {
+      if (input.type !== "mouseDown" && input.type !== "touchStart") return;
       const host = contents.hostWebContents;
       if (!host || host.isDestroyed()) return;
-      activationReported = true;
+      contents.off("input-event", onPageInput);
       host.send("catamorphic:browser-page-activated", {
         guestId: contents.id,
       });
-    });
+    };
+    contents.on("input-event", onPageInput);
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const browserDirection =

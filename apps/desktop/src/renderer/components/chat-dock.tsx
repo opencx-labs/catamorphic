@@ -2658,11 +2658,11 @@ function ChatDockContent({
     <div
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
         arriving
-          ? ""
+          ? "transition-none"
           : splitResizing
-            ? "transition-[padding]"
-            : "transition-[padding,left,right]"
-      } duration-250 ease-standard ${
+            ? "transition-[padding] duration-250 ease-standard"
+            : "transition-[padding,left,right] duration-250 ease-standard"
+      } ${
         splitPane && slot === "left"
           ? "inset-y-0 left-0 border-r border-border p-0"
           : splitPane && slot === "right"

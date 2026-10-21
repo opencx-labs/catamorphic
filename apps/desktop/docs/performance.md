@@ -260,12 +260,13 @@ content area changed):
 | A page to a page | 1 frame | 1 |
 
 Closing a tab whose pages nobody pressed, typed or keyed in closes at
-once: the page's preload reports its first activation in each frame
-(`catamorphic:page-activated`), and main the first press or key that
-reaches the page in any frame (`input-event`, for frames without a
-preload); without either there is nothing a `beforeunload` could hold, so
-the tab does not wait on the page and the main process to say so. Measured on a heavy GitHub page, the ask took up
-to its 400 ms limit before the next tab came forward.
+once. The page's preload reports its first press, key or typing in each
+frame it runs in (`catamorphic:page-activated`; Escape and a modifier
+alone do not count), and main the first press it sees reach the page
+(`input-event`), for frames that run no preload. Without either there is
+nothing a `beforeunload` could hold, so the tab does not wait on the page
+and the main process to say so. Measured on a heavy GitHub page, the ask
+took up to its 400 ms limit before the next tab came forward.
 
 ## Minimised chats
 

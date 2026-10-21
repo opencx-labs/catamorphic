@@ -546,14 +546,20 @@ export function BrowserScreen({
   registerGuestRef.current = registerGuest;
   // The page's guest, which extensions know as this tab (ADR 0203).
   const [guestId, setGuestId] = useState<number | null>(null);
-  // Main sees the page's input in every frame, a frame without a preload
-  // included: any press or key there counts as the person's touch.
-  useEffect(() => {
-    if (guestId === null) return;
-    return desktopApi.onBrowserPageActivated((event) => {
-      if (event.guestId === guestId) activatedRef.current = true;
-    });
-  }, [guestId]);
+  // Main sees presses reach the page, in a frame without a preload too.
+  // Listening from mount, a press before the page's dom-ready still counts.
+  useEffect(
+    () =>
+      desktopApi.onBrowserPageActivated((event) => {
+        try {
+          if (webviewRef.current?.getWebContentsId() === event.guestId)
+            activatedRef.current = true;
+        } catch {
+          // Not attached yet: the press was another tab's.
+        }
+      }),
+    [],
+  );
 
   /**
    * Replace the <webview> element with a fresh one pointed at the latest
