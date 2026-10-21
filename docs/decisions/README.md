@@ -69,7 +69,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
 | [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211 |
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142; normalized `mode` superseded by 0182 |
-| [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
+| [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted; composer context ring removed 2026-10-21 |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
 | [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099); paths superseded by 0142; one file by 0261 |
 | [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted (the loopback API guard by 0211) |

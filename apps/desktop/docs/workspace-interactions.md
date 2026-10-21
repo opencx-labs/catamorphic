@@ -56,6 +56,11 @@ sidebar's customization chat, a workflow's) keep their own placement; the dock's
 never takes a New Tab, it starts its chat in the dock; and a chat switched to
 another harness from a floating chat floats beside it.
 
+Closing the tab in front goes back to the tab the person was on before it, the
+newest one still open (`recentTabKeys`, kept with the workspace): Cmd+W on a page
+opened from a chat's link returns to that chat. Closing one pane of a split lands
+on the other pane first.
+
 The mouse's back and forward buttons move between the places a project's
 workspace was at: the focused tab and the chat or surface floating over it
 (ADR 0188, `lib/surface-history.ts`), selecting tabs as a click would. A

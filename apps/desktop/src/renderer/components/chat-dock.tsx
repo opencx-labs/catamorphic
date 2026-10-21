@@ -160,7 +160,6 @@ import {
   type ComposerInputHandle,
 } from "./composer-input";
 import { ComposerMenu } from "./composer-menu.js";
-import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { HarnessIcon, importedHarnessLabel } from "./harness-icon.js";
 import { Modal } from "./modal.js";
@@ -171,6 +170,7 @@ import {
   useRemoteAuthority,
 } from "./project-authority-provider.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
+import { latestReportedModel } from "./reported-model.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
 import { VoiceButton } from "./voice-button.js";
@@ -3652,9 +3652,6 @@ function ChatDockContent({
                     }
                     ariaLabel="Message the assistant"
                   />
-                  {/* Context ring (ADR 0057): quiet until a harness reports
-                  occupancy and window size; danger red past 90%. */}
-                  <ContextMeter turns={chat.timeline} />
                   {/* Voice in this chat (ADR 0216): talk to its agent, then
                   carry on typing. Company chats live on the server. */}
                   {!authority && (

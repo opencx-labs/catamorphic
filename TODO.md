@@ -202,16 +202,16 @@
   memory reference_t3_code.md; probe pattern in t3's
   apps/server/src/provider/Layers/ClaudeProvider.ts.
 - **Usage page follow-ups (ADR 0057, t3-code-inspired).** Shipped
-  2026-08-21: transcript-scanned usage tab + composer context ring.
+  2026-08-21: transcript-scanned usage tab (the composer context ring
+  shipped beside it was removed 2026-10-21).
   Remaining: (a) an e2e with seeded fixture transcripts (the IPC has no
   seam yet); (b) a Codex rate-limit/quota gauge — the rollouts'
   `token_count` lines already carry `rate_limits.primary.used_percent`
-  and `resets_at`, which the SDK stream never exposes; (c) a Codex
-  context ring — `model_context_window` is also transcript-only, so the
-  meter needs a transcript-side assist; (d) an app-only scope filter by
-  joining transcript session ids to `agent_sessions.provider_session_id`;
-  (e) per-subagent token attribution (Claude `isSidechain` records);
-  (f) surface per-reply cost in the step log from `metadata.usage`.
+  and `resets_at`, which the SDK stream never exposes; (c) an app-only
+  scope filter by joining transcript session ids to
+  `agent_sessions.provider_session_id`; (d) per-subagent token
+  attribution (Claude `isSidechain` records); (e) surface per-reply cost
+  in the step log from `metadata.usage`.
 - **Review-deferred architecture cleanups (2026-08-21 code review).** Three
   confirmed-but-invasive findings deferred from the fix pass: (a) slash
   command listing as an optional provider capability (today: a Claude Code

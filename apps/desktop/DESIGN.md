@@ -738,6 +738,19 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-21: The composer keeps to the message; closing a tab goes back
+
+The composer shows the message and its controls, nothing else: the context
+ring is gone, as the hint went with the "/" and "@" menus below. The Usage
+page still reads what turns report.
+
+Closing the tab in front returns to the tab the person was on before it,
+as a browser's history would, instead of the last tab in the strip:
+Cmd+W on a page a chat's link opened lands back on that chat. The
+workspace keeps the tabs left behind, newest last, with the rest of its
+state, so this holds after a relaunch; closing one pane of a split still
+lands on the other pane.
+
 ### 2026-10-21: The composer's "/" and "@" menus
 
 `/` no longer leaves the composer (ADR 0274). `/` or `@` starting any word,

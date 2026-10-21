@@ -1,5 +1,9 @@
 # 0057 — Agent usage and cost: transcript-scanned page, per-turn usage in metadata
 
+> The composer's context ring is removed (2026-10-21): the composer keeps to
+> the message. Per-turn usage still rides the turn, and the chat reads the
+> model a harness reported from it.
+
 - **Status:** Accepted
 - **Date:** 2026-08-21
 - **Builds on:** 0038 (coding-agent registry), 0044 (turn-settled metadata)
