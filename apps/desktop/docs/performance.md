@@ -246,7 +246,8 @@ from a chat played the floating chat's open or close (a 250 ms fade and
 scale) and resized its transcript every frame; the scroller's resize
 observer and scroll listeners then forced a layout of the whole
 transcript on each of them. The composer's clearance for the bubble strip
-also jumps, rather than eases, in the render that brings a chat forward.
+and a split pane's geometry jump, rather than ease, for the two frames
+after a chat comes forward.
 
 Measured 2026-10-21 in the dev app with five chats of a long fake
 answer and three web pages (a 30 fps screencast; frames in which the
@@ -259,10 +260,11 @@ content area changed):
 | A page to a page | 1 frame | 1 |
 
 Closing a tab whose pages nobody pressed, typed or keyed in closes at
-once: the page's preload reports its first activation
-(`catamorphic:page-activated`), and without one there is nothing a
-`beforeunload` could hold, so the tab does not wait on the page and the
-main process to say so. Measured on a heavy GitHub page, the ask took up
+once: the page's preload reports its first activation in each frame
+(`catamorphic:page-activated`), and main the first press or key that
+reaches the page in any frame (`input-event`, for frames without a
+preload); without either there is nothing a `beforeunload` could hold, so
+the tab does not wait on the page and the main process to say so. Measured on a heavy GitHub page, the ask took up
 to its 400 ms limit before the next tab came forward.
 
 ## Minimised chats
@@ -273,8 +275,8 @@ style, layout and paint for its whole transcript on every frame. Hidden,
 it now carries `content-visibility: hidden` (`chat-dock.tsx`): Chromium
 skips its subtree while keeping its rendering state. The value changes as
 a discrete step of the panel's transition (`transition-behavior:
-allow-discrete`), after the fade, so a chat leaving by its fade (Cmd+M, a
-tab switch, another chat opening) stays drawn until it is gone; skipped at
+allow-discrete`), after the fade, so a chat leaving by its fade (Cmd+M,
+another chat opening) stays drawn until it is gone; skipped at
 once, it showed as an empty card for its first frames. Only that state
 transitions the value, so a chat coming back is drawn at once, in time for
 its composer to take focus. Its height is explicit, so nothing about its

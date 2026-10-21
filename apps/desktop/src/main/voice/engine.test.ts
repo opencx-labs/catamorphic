@@ -1145,6 +1145,28 @@ describe("VoiceEngine dictation", () => {
     expect(lengths.reduce((sum, length) => sum + length, 0)).toBe(40 * 16_000);
   });
 
+  it("keeps a reply that came in during a long hold for after it", async () => {
+    const voice = harness(["the first thirty seconds", "and the rest"]);
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    voice.frame(0.5, 40);
+    // The reply waits for the person, however long they hold.
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 3_200);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    expect(voice.events).not.toContainEqual({ type: "barge-in" });
+    expect(voice.events.filter((event) => event.type === "utterance")).toEqual([
+      {
+        type: "utterance",
+        text: "the first thirty seconds and the rest",
+        segment: expect.any(Number),
+      },
+    ]);
+  });
+
   it("says a long hold that heard no words came to nothing, once", async () => {
     const voice = harness([], (parts) => {
       parts.recognize = async () => ({ text: "", confidence: 0 });

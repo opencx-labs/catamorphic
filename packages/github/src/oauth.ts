@@ -1,6 +1,7 @@
 import {
   type DeviceCodeGrant,
   type FetchLike,
+  GithubApiError,
   type GithubAppConfig,
   GithubAuthError,
   type GithubTokenSet,
@@ -34,6 +35,12 @@ async function postForm(
     body: new URLSearchParams(params).toString(),
   });
   if (!response.ok) {
+    // GitHub failing says nothing of the grant: only a refusal is one.
+    if (response.status >= 500)
+      throw new GithubApiError(
+        response.status,
+        `GitHub OAuth endpoint returned ${response.status}`,
+      );
     throw new GithubAuthError(
       "http_error",
       `GitHub OAuth endpoint returned ${response.status}`,

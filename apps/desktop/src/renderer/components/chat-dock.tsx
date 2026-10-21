@@ -825,14 +825,27 @@ function ChatDockContent({
   /** Outside a tab, the column the messages and the composer share. */
   const floatingColumn = isTab ? "" : "mx-auto w-full max-w-3xl";
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
-  // The render that brings the chat forward (a tab switch, an opening) shows
-  // it settled: what follows the bubble strip as it folds jumps there
-  // instead of easing, which would re-lay out the transcript every frame.
-  const frontBeforeRef = useRef(frontSurface);
-  const cameForward = frontSurface && !frontBeforeRef.current;
+  // Coming forward (a tab switch, an opening), the chat shows settled: for
+  // that render and two frames after it, what follows the bubble strip as
+  // it folds and a split pane's geometry jump there instead of easing,
+  // which would re-lay out the transcript every frame.
+  const [arriving, setArriving] = useState(false);
+  const [wasFront, setWasFront] = useState(frontSurface);
+  if (wasFront !== frontSurface) {
+    setWasFront(frontSurface);
+    setArriving(frontSurface);
+  }
   useEffect(() => {
-    frontBeforeRef.current = frontSurface;
-  });
+    if (!arriving) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setArriving(false));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [arriving]);
   // Questions, approvals and elicitations waiting on this person; any
   // client answers them, and the chat survives a restart around them.
   const questionRequests = chat.requests.filter(
@@ -2644,9 +2657,11 @@ function ChatDockContent({
   return (
     <div
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
-        splitResizing
-          ? "transition-[padding]"
-          : "transition-[padding,left,right]"
+        arriving
+          ? ""
+          : splitResizing
+            ? "transition-[padding]"
+            : "transition-[padding,left,right]"
       } duration-250 ease-standard ${
         splitPane && slot === "left"
           ? "inset-y-0 left-0 border-r border-border p-0"
@@ -3275,7 +3290,7 @@ function ChatDockContent({
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
           <div
-            className={`flex w-full flex-col ${cameForward ? "" : "transition-[padding] duration-250 ease-standard"} ${
+            className={`flex w-full flex-col ${arriving ? "" : "transition-[padding] duration-250 ease-standard"} ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"

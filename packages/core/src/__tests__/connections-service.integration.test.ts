@@ -999,6 +999,21 @@ describe("credential connections", () => {
     });
     expect(await status(offline.id)).toBe("ready");
 
+    // The provider's server failing says nothing of the grant either.
+    const outage = await expired("Outage");
+    refreshFailure = Object.assign(
+      new Error("GitHub OAuth endpoint returned 503"),
+      { status: 503 },
+    );
+    await expect(
+      connections.refreshIfNeeded({
+        identity: member,
+        connectionId: outage.id,
+      }),
+    ).rejects.toBeInstanceOf(ConnectionUnavailableError);
+    expect(await status(outage.id)).toBe("ready");
+    refreshFailure = null;
+
     // The provider refused the grant: it is spent.
     const refused = await expired("Refused");
     refreshFailure = new ConnectionAuthorizationExpiredError();

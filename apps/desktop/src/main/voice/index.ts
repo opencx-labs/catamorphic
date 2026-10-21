@@ -1017,12 +1017,15 @@ export function registerVoiceSupport(deps: {
     if (active !== voice) return;
     // What a hold said is in: voice may go idle again.
     if (
-      event.type === "utterance" ||
-      event.type === "unheard" ||
-      event.type === "ignored" ||
-      (event.type === "dictation" && event.final)
-    )
+      voice.awaitingWords &&
+      (event.type === "utterance" ||
+        event.type === "unheard" ||
+        event.type === "ignored" ||
+        (event.type === "dictation" && event.final))
+    ) {
       voice.awaitingWords = false;
+      settleIdle(voice);
+    }
     switch (event.type) {
       case "speech-start":
         voice.hearing = true;

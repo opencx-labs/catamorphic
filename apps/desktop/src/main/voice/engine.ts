@@ -497,6 +497,8 @@ export class VoiceEngine {
   setDictation(enabled: boolean): void {
     if (this.dictation === enabled) return;
     this.dictation = enabled;
+    // A conversation's hold, still in pieces, is not dictated.
+    this.heldWords = [];
     this.stopSpeaking();
   }
 
@@ -805,7 +807,9 @@ export class VoiceEngine {
       speech: samples.length / SPEECH_SAMPLE_RATE,
     });
     this.speechPowers = [];
-    this.segment += 1;
+    // Dictation writes each piece as a stretch of its own; a conversation's
+    // hold stays one stretch, whose wait the agent's speech keeps to.
+    if (this.dictation) this.segment += 1;
     this.sincePartial = 0;
     this.utterance = [window];
   }
@@ -887,6 +891,12 @@ export class VoiceEngine {
     if (this.learning) {
       this.learnFrom(samples);
       if (this.dictation) dictated("");
+      else if (pressed && !piece) {
+        // Learning hears no words: a hold that ended says so, and what it
+        // held goes with it.
+        this.heldWords = [];
+        this.emit({ type: "ignored" });
+      }
       return;
     }
     const heard = this.stretchOf(samples, speech);
