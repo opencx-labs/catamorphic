@@ -374,7 +374,6 @@ export function SettingsScreen({
           <button
             type="button"
             aria-label="Search settings"
-            data-search-trigger
             onClick={onSearch}
             className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           >

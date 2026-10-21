@@ -17,28 +17,25 @@ export function ActionSearchInput({
   );
 }
 
+/** On screen and reachable: not hidden, transparent, or behind inert. */
+const visible = (element: HTMLElement) =>
+  !element.closest("[inert]") &&
+  element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+
 export function findSearchInput(action: string): HTMLInputElement | undefined {
   const inputs = [
     ...document.querySelectorAll<HTMLInputElement>(
       `input[data-search-action="${action}"]`,
     ),
-  ].filter(
-    (input) =>
-      !input.closest("[inert]") &&
-      input.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
-  );
+  ].filter(visible);
   return (
     inputs.find((input) => input.closest(".workspace-content")) ?? inputs[0]
   );
 }
 
-const visible = (element: HTMLElement) =>
-  !element.closest("[inert]") &&
-  element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
-
 const SEARCH_FIELDS =
   'input[type="search"], [role="searchbox"], input[aria-label^="Search" i], input[placeholder^="Search" i], input[placeholder^="Filter" i]';
-const SEARCH_BUTTONS = '[data-search-trigger], button[aria-label^="Search" i]';
+const SEARCH_BUTTONS = 'button[aria-label^="Search" i]';
 
 /**
  * What Find (Cmd+F) opens outside a page: a search field marked for it,
@@ -58,10 +55,10 @@ export function findSearchTarget(activeKey?: string): HTMLElement | undefined {
         (pane) => pane.dataset.surfaceKey === activeKey,
       )
     : undefined;
-  const first = (scope: HTMLElement) => (selector: string) =>
+  const first = (scope: HTMLElement, selector: string) =>
     [...scope.querySelectorAll<HTMLElement>(selector)].find(visible);
   const within = (scope: HTMLElement) =>
-    first(scope)(SEARCH_FIELDS) ?? first(scope)(SEARCH_BUTTONS);
+    first(scope, SEARCH_FIELDS) ?? first(scope, SEARCH_BUTTONS);
   return (front && within(front)) || within(content);
 }
 

@@ -16,7 +16,7 @@ describe("findSearchTarget", () => {
     document.body.innerHTML = `
       <aside><input aria-label="Search files" /></aside>
       <div class="workspace-content">
-        <button aria-label="Search settings" data-search-trigger></button>
+        <button aria-label="Search settings"></button>
       </div>`;
     let opened = false;
     document.querySelector("button")?.addEventListener("click", () => {
