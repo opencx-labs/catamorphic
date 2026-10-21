@@ -378,6 +378,8 @@ export function BrowserScreen({
   const [dialogFocus, setDialogFocus] = useState(0);
   /** Closing the tab, waiting on the page's beforeunload. */
   const closeWaitRef = useRef<((leave: boolean) => void) | null>(null);
+  /** The person has pressed, typed or keyed in this tab's pages. */
+  const activatedRef = useRef(false);
 
   // Find in page, as Chrome's find bar does it. The query stays with the
   // tab for the next opening; a count belongs to the latest request only.
@@ -788,6 +790,10 @@ export function BrowserScreen({
           notePagePress();
           return;
         }
+        if (message.channel === "catamorphic:page-activated") {
+          activatedRef.current = true;
+          return;
+        }
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
           return;
@@ -1052,6 +1058,10 @@ export function BrowserScreen({
   const mayClose = useCallback(async (): Promise<boolean> => {
     const view = webviewRef.current;
     if (!view || !guestReadyRef.current) return true;
+    // Nobody pressed, typed or keyed in this tab's pages: nothing the page
+    // could hold on to, so it closes at once instead of waiting on a busy
+    // page (and the main process) to say so.
+    if (!activatedRef.current) return true;
     let id: number;
     try {
       id = view.getWebContentsId();

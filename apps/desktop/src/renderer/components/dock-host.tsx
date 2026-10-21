@@ -839,14 +839,16 @@ export function DockHost({
           (isTab && chat.tabActive) ||
           (isPresentation && chat === active && chat.entry.mode === "partial");
         // The owning workspace keeps a headless/minimized surface mounted for
-        // signals and queued sends; other projects are ordinary session subscribers.
+        // signals and queued sends; other projects are ordinary session
+        // subscribers. A tab chat behind another tab stays a tab: showing
+        // it again is a tab switch, not a chat opening.
         const entry = {
           ...chat.entry,
-          mode: visible
-            ? isTab
-              ? ("tab" as const)
-              : ("partial" as const)
-            : ("min" as const),
+          mode: isTab
+            ? ("tab" as const)
+            : visible
+              ? ("partial" as const)
+              : ("min" as const),
           pendingMessage:
             detachedWindow || !chat.local
               ? undefined

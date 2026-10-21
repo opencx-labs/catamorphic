@@ -208,6 +208,11 @@ interface ActiveVoice {
   window: number | null;
   windowPicked: boolean;
   idle: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * A hold came up and its words are still being recognized: voice stays
+   * on for them however long that takes, rather than going idle first.
+   */
+  awaitingWords: boolean;
   /** Dictation turned off, writing what it still heard: then it stops. */
   finishing: ReturnType<typeof setTimeout> | undefined;
   live: LiveStatus;
@@ -461,6 +466,7 @@ export function registerVoiceSupport(deps: {
     if (
       voice.handsFree ||
       voice.ending ||
+      voice.awaitingWords ||
       press?.profileId === voice.profileId ||
       voice.live.phase !== "listening"
     )
@@ -1009,6 +1015,14 @@ export function registerVoiceSupport(deps: {
 
   const onWorkerEvent = (voice: ActiveVoice, event: VoiceWorkerEvent) => {
     if (active !== voice) return;
+    // What a hold said is in: voice may go idle again.
+    if (
+      event.type === "utterance" ||
+      event.type === "unheard" ||
+      event.type === "ignored" ||
+      (event.type === "dictation" && event.final)
+    )
+      voice.awaitingWords = false;
     switch (event.type) {
       case "speech-start":
         voice.hearing = true;
@@ -1360,6 +1374,7 @@ export function registerVoiceSupport(deps: {
       window: options.window ?? windowFor(profileId)?.id ?? null,
       windowPicked: options.window !== undefined,
       idle: undefined,
+      awaitingWords: false,
       finishing: undefined,
       live: {
         phase: "preparing",
@@ -1512,6 +1527,8 @@ export function registerVoiceSupport(deps: {
     if (voice && connected(voice)) {
       // What was said for where voice was goes no further.
       send(voice, { type: "forget" });
+      // What it was still recognizing is dropped, so nothing is awaited.
+      voice.awaitingWords = false;
       voice.handsFree = false;
       send(voice, { type: "hands-free", enabled: false });
       send(voice, { type: "hold", held: true });
@@ -1543,7 +1560,10 @@ export function registerVoiceSupport(deps: {
       voice.handsFree = true;
       send(voice, { type: "hands-free", enabled: true });
       watchSend();
-    } else send(voice, { type: "hold", held: false });
+    } else {
+      voice.awaitingWords = true;
+      send(voice, { type: "hold", held: false });
+    }
     update(voice);
   };
 

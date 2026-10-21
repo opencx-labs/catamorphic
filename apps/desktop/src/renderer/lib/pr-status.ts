@@ -40,6 +40,9 @@ export function usePullRequestStatuses({
           ? PR_STATUS_REFRESH_MS
           : false,
       refetchIntervalInBackground: false,
+      // The client's default leaves focus alone; a chip is read again when
+      // the window comes back, as a failed read is on the next one.
+      refetchOnWindowFocus: true,
       retry: 1,
     })),
   });

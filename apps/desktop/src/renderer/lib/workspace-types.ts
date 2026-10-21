@@ -1,8 +1,8 @@
 export type { ChatDockEntry, ChatMode } from "../../shared/chat.js";
 
-import type { ChatWaiting } from "../../shared/chat.js";
 import type { GitDiffMode } from "../../shared/git.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
+import type { SidebarActivity } from "../../shared/sidebar.js";
 
 /**
  * Live activity signals mirrored onto a tab's icon — the same vocabulary
@@ -12,10 +12,10 @@ import type { SettingsDestination } from "../../shared/settings-catalog.js";
  * question.
  */
 interface TabIndicators {
-  /** Agent working → a spinner rides the icon's lower corner. */
+  /** A turn runs: the agent works, or waits within it. */
   working?: boolean;
-  /** What it left running, while not working → its glyph there instead. */
-  waiting?: ChatWaiting | null;
+  /** What the icon's lower corner says: working, or what it waits on. */
+  activity?: SidebarActivity | null;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;
   /** A workflow requested user attention → pulsing dot on the icon. */

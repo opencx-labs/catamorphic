@@ -476,11 +476,7 @@ export function SidebarItemRow<
                 previewEnabled && previewOpen ? previewId : undefined
               }
             >
-              <SignalGlyph
-                working={mark === "working"}
-                waiting={mark === "working" ? null : mark}
-                className="size-3.5"
-              >
+              <SignalGlyph activity={mark} className="size-3.5">
                 {IconComponent ? (
                   <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
                 ) : (

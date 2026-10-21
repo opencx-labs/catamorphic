@@ -30,7 +30,7 @@ import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import {
   type ChatSignals,
-  firstWaiting,
+  combineSignals,
   SignalBadge,
   SignalGlyph,
 } from "./chat-signals";
@@ -276,12 +276,7 @@ function Bubble({
           aria-label={expanded ? `Minimize ${label}` : `Open ${label}`}
           aria-expanded={expanded}
         >
-          <SignalGlyph
-            working={signals.working}
-            awaitingInput={signals.awaitingInput}
-            waiting={signals.waiting}
-            className="size-4"
-          >
+          <SignalGlyph activity={signals.activity} className="size-4">
             <ChatGlyph icon={icon} fork={fork} className="size-4" />
           </SignalGlyph>
           <span className="absolute -right-0.5 -top-0.5">
@@ -325,7 +320,8 @@ function Bubble({
  * Bottom-docked bubble per open chat. Clicking a bubble minimizes its chat
  * if it is the expanded one, otherwise restores it to its last size. The
  * whole strip can collapse into a single right-docked bubble that keeps
- * showing aggregate activity (spinner) and unread indicators.
+ * showing the docked chats' activity and unread indicators (chats in tabs
+ * show theirs on their tabs).
  */
 export function ChatBubbles({
   dragLeft = null,
@@ -474,25 +470,17 @@ export function ChatBubbles({
       exitingIds: current.exitingIds.filter((id) => id !== localId),
     }));
 
-  // Indicators aggregate across ALL chats (including tab-mode ones) so the
-  // collapsed bubble never hides activity.
   const signalsFor = (localId: string): ChatSignals => ({
     ...(signals[localId] ?? {}),
     unread: unread[localId] ?? false,
     attention: attention[localId] ?? false,
   });
-  const aggregate: ChatSignals = {
-    working: entries.some((entry) => signals[entry.localId]?.working),
-    unread: entries.some((entry) => unread[entry.localId]),
-    attention: entries.some((entry) => attention[entry.localId]),
-    draft: entries.some((entry) => signals[entry.localId]?.draft),
-    awaitingInput: entries.some(
-      (entry) => signals[entry.localId]?.awaitingInput,
-    ),
-    waiting: firstWaiting(
-      entries.map((entry) => signals[entry.localId]?.waiting),
-    ),
-  };
+  // The folded bubble speaks for the chats in the dock only: a chat put
+  // there (minimized) is one the person follows by its bubble, while a
+  // chat in a tab says what it is doing on its tab.
+  const aggregate = combineSignals(
+    stripEntries.map((entry) => signalsFor(entry.localId)),
+  );
 
   // The rail rests at a corner (collapsed) or at its placement (expanded),
   // anchored by its own edge so growing or shrinking never moves that edge.
@@ -798,9 +786,7 @@ export function ChatBubbles({
           but invisible, and a spinner or pulse there would keep the
           compositor drawing for nothing. */}
       <SignalGlyph
-        working={collapsed && aggregate.working}
-        awaitingInput={collapsed && aggregate.awaitingInput}
-        waiting={collapsed ? aggregate.waiting : null}
+        activity={collapsed ? aggregate.activity : null}
         className="size-4"
       >
         <MessageSquare className="size-4" />

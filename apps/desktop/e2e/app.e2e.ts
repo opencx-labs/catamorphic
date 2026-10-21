@@ -2146,6 +2146,33 @@ describe("subagents and background watchers", () => {
       ),
     ).toBe(true);
   });
+
+  it("a turn that only waits on its command shows the command on its icon, not the spinner", async () => {
+    await run(`
+      const ta = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'wait on: sleep 5 && echo waited');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    const ownMark = `(() => {
+      const id = floatingDock()?.closest('[data-chat-local-id]')?.dataset.chatLocalId;
+      const bubble = id && $('[data-chat-bubble="' + id + '"]');
+      return bubble ? (bubble.querySelector('[data-activity]')?.dataset.activity ?? 'none') : null;
+    })()`;
+    // The turn still runs (it can be stopped), yet all it does is wait.
+    await runWait(
+      `return ${ownMark} === 'command' &&
+         !!floatingDock()?.querySelector('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "the waiting turn shows its command" },
+    );
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('Waited on it'));`,
+      { timeoutMs: 30_000, label: "the wait ended" },
+    );
+    await runWait(`return ${ownMark} === 'none';`, {
+      label: "nothing left to show",
+    });
+  });
 });
 
 describe("news from a background command (ADR 0217)", () => {

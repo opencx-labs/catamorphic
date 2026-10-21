@@ -194,7 +194,7 @@ export function useWorkSources({
             ?.memberKeys.length,
           // What a chat is doing: a list sorted by it moves its rows.
           tab.working,
-          tab.waiting,
+          tab.activity,
           tab.attention,
           tab.awaitingInput,
           tab.unread,

@@ -1116,24 +1116,79 @@ describe("VoiceEngine dictation", () => {
     ]);
   });
 
-  it("hears a long hold in parts, losing nothing", async () => {
+  it("hears a long hold in parts, losing nothing, and says it as one message", async () => {
     const lengths: number[] = [];
+    const said = ["the first thirty seconds", "and the rest"];
     const voice = harness([], (parts) => {
       parts.recognize = async (samples) => {
         lengths.push(samples.length);
-        return { text: "more words", confidence: 0 };
+        return { text: said.shift() ?? "", confidence: 0 };
       };
     });
     voice.engine.setHandsFree(false);
     voice.engine.hold(true);
-    // Forty seconds held.
+    // Forty seconds held, pauses and all: nothing is said until it ends.
+    voice.frame(0.5, 4_000);
+    await voice.settle();
+    expect(voice.events.filter((event) => event.type === "utterance")).toEqual(
+      [],
+    );
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.filter((event) => event.type === "utterance")).toEqual([
+      {
+        type: "utterance",
+        text: "the first thirty seconds and the rest",
+        segment: expect.any(Number),
+      },
+    ]);
+    expect(lengths.reduce((sum, length) => sum + length, 0)).toBe(40 * 16_000);
+  });
+
+  it("says a long hold that heard no words came to nothing, once", async () => {
+    const voice = harness([], (parts) => {
+      parts.recognize = async () => ({ text: "", confidence: 0 });
+    });
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
     voice.frame(0.5, 4_000);
     voice.engine.hold(false);
     await voice.settle();
+    expect(voice.events.filter((event) => event.type === "utterance")).toEqual(
+      [],
+    );
     expect(
-      voice.events.filter((event) => event.type === "utterance"),
-    ).toHaveLength(2);
-    expect(lengths.reduce((sum, length) => sum + length, 0)).toBe(40 * 16_000);
+      voice.events.filter((event) => event.type === "unheard"),
+    ).toHaveLength(1);
+  });
+
+  it("drops a long hold's words with the chat voice moved away from", async () => {
+    const said = ["for the old chat", "for the new chat"];
+    const voice = harness([], (parts) => {
+      parts.recognize = async (samples) => ({
+        text: samples.length === 0 ? "" : (said.shift() ?? ""),
+        confidence: 0,
+      });
+    });
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    // A first piece is heard while the keys are still down…
+    voice.frame(0.5, 3_200);
+    await voice.settle();
+    // …then voice moves to another chat: what was said for the old one
+    // goes no further.
+    voice.engine.forget();
+    voice.engine.hold(false);
+    await voice.settle();
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(
+      voice.events.flatMap((event) =>
+        event.type === "utterance" ? [event.text] : [],
+      ),
+    ).toEqual(["for the new chat"]);
   });
 
   it("hears what the person is still saying as voice turns off, then nothing", async () => {

@@ -143,6 +143,8 @@ describe("ChatBubbles fold", () => {
     autoCollapse?: boolean;
     open?: boolean;
     working?: boolean;
+    /** A chat in a tab, working and unread: not one the dock speaks for. */
+    tabbed?: boolean;
   }
   /** The strip as the dock renders it: its fold derived by the host. */
   function Strip({
@@ -150,17 +152,24 @@ describe("ChatBubbles fold", () => {
     autoCollapse = false,
     open = false,
     working = false,
+    tabbed = false,
     onFoldedChange,
   }: StripProps & { onFoldedChange: (folded: boolean) => void }) {
     const fold = useStripFold({ autoCollapse, folded, chatOpen: open });
     return (
       <ChatBubbles
-        entries={[{ localId: "a", mode: open ? "partial" : "min" }]}
-        labels={{ a: "Launch plan" }}
+        entries={[
+          { localId: "a", mode: open ? "partial" : "min" },
+          ...(tabbed ? [{ localId: "t", mode: "tab" as const }] : []),
+        ]}
+        labels={{ a: "Launch plan", t: "In a tab" }}
         icons={{}}
         forks={{}}
-        signals={working ? { a: { working: true } } : {}}
-        unread={{}}
+        signals={{
+          ...(working ? { a: { working: true, activity: "working" } } : {}),
+          ...(tabbed ? { t: { working: true, activity: "working" } } : {}),
+        }}
+        unread={tabbed ? { t: true } : {}}
         attention={{}}
         menus={{}}
         activeLocalId="a"
@@ -216,6 +225,15 @@ describe("ChatBubbles fold", () => {
     expect(folded()).toBeNull();
     render({ folded: true, working: true });
     expect(folded()).not.toBeNull();
+  });
+
+  it("speaks for the chats in the dock only, not a chat in a tab", () => {
+    const { container } = strip({ folded: true, tabbed: true });
+    const bubble = container.querySelector(
+      'button[aria-label="Expand chat bubbles"]',
+    );
+    expect(bubble?.querySelector(".animate-spin")).toBeNull();
+    expect(bubble?.querySelector('[aria-hidden="false"]')).toBeNull();
   });
 
   it("folds behind a chat tab and returns to the person's choice after it", () => {

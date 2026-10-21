@@ -87,6 +87,21 @@ window.addEventListener(
   },
   { capture: true, passive: true },
 );
+// The person's first press, key or typing in a document (each frame's own):
+// a tab whose pages never had one closes without asking them, as Chrome
+// shows no "Leave site?" to a page nobody touched (browser-screen.tsx).
+let activationReported = false;
+const reportActivation = (event: Event) => {
+  if (activationReported || !event.isTrusted) return;
+  if (event instanceof KeyboardEvent && event.key === "Escape") return;
+  activationReported = true;
+  ipcRenderer.sendToHost("catamorphic:page-activated");
+};
+for (const type of ["pointerdown", "keydown", "beforeinput"])
+  window.addEventListener(type, reportActivation, {
+    capture: true,
+    passive: true,
+  });
 if (topFrame) installTopFrame();
 
 function installTopFrame(): void {

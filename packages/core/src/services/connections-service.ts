@@ -1400,8 +1400,11 @@ export class ConnectionsService {
             use: (material) => refresh({ material }),
           }),
       );
-    } catch {
-      if (connection.expires_at <= new Date()) {
+    } catch (error) {
+      // A refresh that never reached the provider (offline, a dropped
+      // connection) says nothing about the grant: the connection stays
+      // ready and its next use refreshes again. Refused, it is spent.
+      if (!unreachable(error) && connection.expires_at <= new Date()) {
         await this.markExpired(connection);
       }
       throw new ConnectionUnavailableError(connection.id, "Refresh failed");
@@ -2037,4 +2040,32 @@ function mapBindingPrincipal(
     account: row.account_summary,
     scopes: stringArray(row.scopes),
   };
+}
+
+/**
+ * The request failed before any answer came: the network was down, a name
+ * did not resolve, the connection dropped or timed out. Read through causes,
+ * as fetch wraps the socket's error.
+ */
+function unreachable(error: unknown): boolean {
+  let cause = error;
+  for (let depth = 0; cause instanceof Error && depth < 4; depth += 1) {
+    if (cause.name === "AbortError" || cause.name === "TimeoutError")
+      return true;
+    if (
+      cause instanceof TypeError &&
+      /fetch failed|network/i.test(cause.message)
+    )
+      return true;
+    const code = "code" in cause ? cause.code : undefined;
+    if (
+      typeof code === "string" &&
+      /^(ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN|EPIPE|UND_ERR_)/.test(
+        code,
+      )
+    )
+      return true;
+    cause = cause.cause;
+  }
+  return false;
 }

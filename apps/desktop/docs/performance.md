@@ -235,9 +235,39 @@ while a chat streamed in front and the pointer moved: 299 frames in 4 s at
 2.6 ms average (worst 9.6 ms), against 301 at 2.8 ms with the caret
 cleared. Hidden tabs stay out of the guard.
 
+## Tab switches and closes
+
+A tab switch shows the new tab in the frame after the press, a chat as a
+page: a chat tab behind another keeps its tab pose and is hidden at once
+(`visibility: hidden` and `content-visibility: hidden`, no transition), so
+bringing it forward changes nothing about its box and replays no dock-in.
+It used to take the minimised pose while behind, so every switch to or
+from a chat played the floating chat's open or close (a 250 ms fade and
+scale) and resized its transcript every frame; the scroller's resize
+observer and scroll listeners then forced a layout of the whole
+transcript on each of them. The composer's clearance for the bubble strip
+also jumps, rather than eases, in the render that brings a chat forward.
+
+Measured 2026-10-21 in the dev app with five chats of a long fake
+answer and three web pages (a 30 fps screencast; frames in which the
+content area changed):
+
+| Switch | Before | After |
+| --- | ---: | ---: |
+| A page to a chat | 10 frames | 2 |
+| A chat to a page | 8 frames | 1 |
+| A page to a page | 1 frame | 1 |
+
+Closing a tab whose pages nobody pressed, typed or keyed in closes at
+once: the page's preload reports its first activation
+(`catamorphic:page-activated`), and without one there is nothing a
+`beforeunload` could hold, so the tab does not wait on the page and the
+main process to say so. Measured on a heavy GitHub page, the ask took up
+to its 400 ms limit before the next tab came forward.
+
 ## Minimised chats
 
-A minimised chat, or a chat tab behind another, stays mounted at opacity 0
+A minimised chat stays mounted at opacity 0
 so its draft, scroll and queued sends survive, and it went on paying
 style, layout and paint for its whole transcript on every frame. Hidden,
 it now carries `content-visibility: hidden` (`chat-dock.tsx`): Chromium

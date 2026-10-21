@@ -11,6 +11,7 @@ import {
 } from "../services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
 import {
+  ConnectionAuthorizationExpiredError,
   type ConnectionProvider,
   ConnectionProviderRegistry,
 } from "../services/connection-providers.js";
@@ -20,6 +21,7 @@ import {
   ConnectionNameTakenError,
   ConnectionPermissionDeniedError,
   ConnectionsService,
+  ConnectionUnavailableError,
 } from "../services/connections-service.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -57,6 +59,8 @@ const invokedRevisions: string[] = [];
 const released: string[] = [];
 let refreshes = 0;
 let providerRevokeFails = false;
+/** What the provider's next refreshes throw, while set. */
+let refreshFailure: Error | null = null;
 /** A `slow` authorization waits here, as a device code being polled does. */
 let slowAuthorization: { started: boolean; finish: Promise<void> } = {
   started: false,
@@ -97,6 +101,7 @@ const provider: ConnectionProvider = {
     released.push(connectionId);
   },
   refresh: async () => {
+    if (refreshFailure) throw refreshFailure;
     refreshes += 1;
     return {
       material: new TextEncoder().encode(`refreshed-${refreshes}`),
@@ -954,6 +959,57 @@ describe("credential connections", () => {
         metadata: { providerRevocation: "failed_closed" },
       }),
     );
+  });
+
+  it("keeps a connection whose refresh never reached the provider, and expires one it refused", async () => {
+    const expired = (label: string) =>
+      connections.create({
+        identity: member,
+        projectId,
+        providerKind: "fake",
+        label,
+        material: new TextEncoder().encode("old-token"),
+        capabilities: ["users.list"],
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+    const status = async (connectionId: string) =>
+      (await connections.list({ identity: member })).find(
+        (candidate) => candidate.id === connectionId,
+      )?.status;
+
+    // Offline: fetch fails before any answer.
+    const offline = await expired("Offline");
+    refreshFailure = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("getaddrinfo ENOTFOUND auth.test"), {
+        code: "ENOTFOUND",
+      }),
+    });
+    await expect(
+      connections.refreshIfNeeded({
+        identity: member,
+        connectionId: offline.id,
+      }),
+    ).rejects.toBeInstanceOf(ConnectionUnavailableError);
+    expect(await status(offline.id)).toBe("ready");
+    // Back online, the next use refreshes it.
+    refreshFailure = null;
+    await connections.refreshIfNeeded({
+      identity: member,
+      connectionId: offline.id,
+    });
+    expect(await status(offline.id)).toBe("ready");
+
+    // The provider refused the grant: it is spent.
+    const refused = await expired("Refused");
+    refreshFailure = new ConnectionAuthorizationExpiredError();
+    await expect(
+      connections.refreshIfNeeded({
+        identity: member,
+        connectionId: refused.id,
+      }),
+    ).rejects.toBeInstanceOf(ConnectionUnavailableError);
+    expect(await status(refused.id)).toBe("expired");
+    refreshFailure = null;
   });
 
   it("never saves a personal connection whose authorization was cancelled", async () => {
