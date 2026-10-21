@@ -1079,7 +1079,7 @@ export function CommandPalette({
       </div>
       <div
         ref={listRef}
-        className="cat-edge-fade h-(--palette-list-height) max-h-[350px] overflow-y-auto overscroll-contain transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
+        className="cat-edge-fade h-(--palette-list-height) max-h-[350px] overflow-y-auto overscroll-contain transition-[height] duration-250 ease-standard"
         role="listbox"
         aria-label="Results"
       >
@@ -1133,7 +1133,7 @@ export function CommandPalette({
                     pointerChoseRef.current = true;
                     setSelection({ index, id: item.id });
                   }}
-                  className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
+                  className={`flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] transition-colors duration-100 ${
                     item.disabled
                       ? "cursor-default opacity-50"
                       : "cursor-pointer"
@@ -1261,7 +1261,7 @@ export function CommandPalette({
     >
       {/* biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-away; Escape covers keyboard */}
       <div
-        className={`absolute inset-0 bg-black/25 transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`absolute inset-0 bg-black/25 transition-opacity duration-200 ease-standard ${
           open ? "opacity-100" : "opacity-0"
         }`}
         onMouseDown={(event) => {
@@ -1272,7 +1272,7 @@ export function CommandPalette({
           eat clicks beside the panel (the panel re-enables pointer events),
           or click-away only worked above/below the panel's vertical band. */}
       <div
-        className={`pointer-events-none relative flex w-full origin-top justify-center transition-[opacity,translate,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-none relative flex w-full origin-top justify-center transition-[opacity,translate,scale] duration-200 ease-standard ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "-translate-y-2 scale-[0.98] opacity-0"

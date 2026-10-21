@@ -261,7 +261,7 @@ function Bubble({
                 }
               : undefined
           }
-          className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
+          className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-standard active:scale-95 ${
             asking ? "animate-bubble-ask " : ""
           }${
             expanded
@@ -635,7 +635,7 @@ export function ChatBubbles({
             aria-hidden="true"
             data-dock-target={target}
             data-active={target === dragTarget || undefined}
-            className={`pointer-events-none absolute bottom-3 h-11 rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`pointer-events-none absolute bottom-3 h-11 rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-standard ${
               target === "left"
                 ? "left-8"
                 : target === "right"
@@ -660,7 +660,7 @@ export function ChatBubbles({
     <div
       key="items"
       id={itemsId}
-      className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-standard ${
         collapsed ? "pointer-events-none opacity-0" : "opacity-100"
       }`}
       data-bubble-items
@@ -718,7 +718,7 @@ export function ChatBubbles({
     <div
       key="voice"
       data-dock-voice={voiceShown ? "shown" : "hidden"}
-      className={`flex transition-[max-width,margin,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`flex transition-[max-width,margin,opacity,scale] duration-200 ease-standard ${
         voiceShown
           ? "max-w-9 opacity-100"
           : `pointer-events-none max-w-0 overflow-hidden opacity-0 scale-40 ${side === "left" ? "-me-1.5" : "-ms-1.5"}`
@@ -733,7 +733,7 @@ export function ChatBubbles({
   const tools = (
     <div
       key="tools"
-      className={`flex items-center gap-1.5 transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`flex items-center gap-1.5 transition-[margin] duration-200 ease-standard ${
         side === "left"
           ? collapsed
             ? "ms-1 [&:has(>[data-dock-voice=hidden]:only-child)]:ms-0"
@@ -751,7 +751,7 @@ export function ChatBubbles({
   const arrowsSlot = (
     <div
       key="arrows"
-      className={`flex overflow-hidden transition-[max-width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`flex overflow-hidden transition-[max-width,opacity] duration-250 ease-standard ${
         collapsed
           ? "pointer-events-none max-w-0 opacity-0"
           : "max-w-9 opacity-100"
@@ -772,7 +772,7 @@ export function ChatBubbles({
       onContextMenu={openDockMenu}
       // Its edge is a ring, not a border: a border is never thinner than a
       // pixel, so the strip would snap 2px as the bubble comes and goes.
-      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full bg-bg-overlay text-fg-muted inset-ring inset-ring-border transition-[max-width,opacity,background-color,box-shadow] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg hover:inset-ring-border-strong ${
+      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full bg-bg-overlay text-fg-muted inset-ring inset-ring-border transition-[max-width,opacity,background-color,box-shadow] duration-250 ease-standard hover:text-fg hover:inset-ring-border-strong ${
         collapsed
           ? "size-9 max-w-9 opacity-100"
           : "pointer-events-none size-9 max-w-0 opacity-0"
@@ -829,7 +829,7 @@ export function ChatBubbles({
             ? undefined
             : { left: dragLeft, right: "auto", translate: "0" }
         }
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-standard ${spotClass} ${
           collapsed ? "gap-0 p-1" : "gap-1.5 p-1.5"
         }`}
       >

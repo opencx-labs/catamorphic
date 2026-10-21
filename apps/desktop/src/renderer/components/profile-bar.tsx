@@ -104,7 +104,7 @@ export function ProfileBar({
     <div ref={containerRef} className="relative min-w-0 flex-1">
       <div
         ref={popoverRef}
-        className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-standard ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"

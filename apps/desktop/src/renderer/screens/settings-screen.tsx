@@ -1358,14 +1358,14 @@ function LayoutSection({
                   <span
                     aria-hidden={!overridden}
                     data-source-current={overridden || undefined}
-                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-100" : "opacity-0"}`}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-standard ${overridden ? "opacity-100" : "opacity-0"}`}
                   >
                     Custom for {SETTING_SOURCE_LABELS[scope].toLowerCase()}
                   </span>
                   <span
                     aria-hidden={overridden}
                     data-source-current={!overridden || undefined}
-                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${overridden ? "opacity-0" : "opacity-100"}`}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-standard ${overridden ? "opacity-0" : "opacity-100"}`}
                   >
                     {SETTING_SOURCE_LABELS[scope]} · From{" "}
                     {SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}
@@ -1389,7 +1389,7 @@ function LayoutSection({
                     aria-hidden={!overridden}
                     inert={!overridden}
                     tabIndex={overridden ? undefined : -1}
-                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-standard hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
                     onClick={() => void save({ [key]: null })}
                   >
                     Reset

@@ -628,7 +628,7 @@ function Section({
           className="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-left transition-colors duration-150 hover:bg-bg-overlay"
         >
           <ChevronRight
-            className={`size-3.5 shrink-0 text-fg-faint transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`size-3.5 shrink-0 text-fg-faint transition-transform duration-150 ease-standard ${
               open ? "rotate-90" : ""
             }`}
           />

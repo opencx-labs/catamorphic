@@ -78,6 +78,10 @@
   --radius-lg: 10px;
 
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Bare transition utilities (transition, transition-colors, ...) take the
+     one easing too, so a class without an ease-* never falls back to
+     Tailwind's own curve. */
+  --default-transition-timing-function: var(--ease-standard);
 }
 
 /* Every element rests with the accent as its outline color, so a focus ring

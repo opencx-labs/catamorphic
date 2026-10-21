@@ -285,6 +285,31 @@ describe("design-system bounds (static sweep)", () => {
       expect(entry.ms, entry.selector).toBeLessThanOrEqual(MAX_MS);
     }
   });
+
+  it("transition utilities without an ease-* class use the standard easing", async () => {
+    // Every generated transition-* utility, resolved on a probe element so
+    // the theme's default curve is what gets measured, not the rule text.
+    const easings = await run<{ utility: string; easing: string }[]>(`
+      const utilities = allStyleRules()
+        .filter((rule) => rule.selectorText && /^\\.transition(-|$)/.test(rule.selectorText))
+        .filter((rule) => rule.style && rule.style.transitionTimingFunction)
+        .map((rule) => rule.selectorText.slice(1).replace(/\\\\(.)/g, '$1'));
+      const probe = document.createElement('div');
+      document.body.append(probe);
+      const measured = [...new Set(utilities)].map((utility) => {
+        probe.className = utility;
+        return { utility, easing: getComputedStyle(probe).transitionTimingFunction };
+      });
+      probe.remove();
+      return measured;
+    `);
+    expect(easings.map((entry) => entry.utility)).toEqual(
+      expect.arrayContaining(["transition", "transition-colors"]),
+    );
+    for (const entry of easings) {
+      expect(entry.easing, entry.utility).toBe(STANDARD_EASING);
+    }
+  });
 });
 
 describe("paired motion (enter/exit mirrors)", () => {
