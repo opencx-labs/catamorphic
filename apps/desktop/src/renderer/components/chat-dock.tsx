@@ -154,13 +154,13 @@ export type {
   McpAppRef,
 } from "../../shared/chat.js";
 
+import { firstWaiting } from "./chat-signals.js";
 import {
   type ComposerAttachment,
   ComposerInput,
   type ComposerInputHandle,
 } from "./composer-input";
 import { ComposerMenu } from "./composer-menu.js";
-import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { HarnessIcon, importedHarnessLabel } from "./harness-icon.js";
 import { Modal } from "./modal.js";
@@ -171,6 +171,7 @@ import {
   useRemoteAuthority,
 } from "./project-authority-provider.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
+import { latestReportedModel } from "./reported-model.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
 import { VoiceButton } from "./voice-button.js";
@@ -1546,13 +1547,40 @@ function ChatDockContent({
   const awaitingInput = chat.requests.some(
     (request) => request.blocking && request.answerable,
   );
+  // What the chat left running, for its icon to say while it is not
+  // working: a watch, subagents still at work, a background command.
+  const waiting = firstWaiting([
+    backgroundCommands.some(
+      (command) => command.kind === "watch" && command.status === "running",
+    )
+      ? "watch"
+      : null,
+    heldChips.some(
+      (chip) => chip.data?.kind === "subagent" && chip.signal === "working",
+    )
+      ? "subagent"
+      : null,
+    backgroundCommands.some(
+      (command) => command.kind === "command" && command.status === "running",
+    )
+      ? "command"
+      : null,
+  ]);
   useEffect(() => {
     onSignalsChange(entry.localId, {
       working: chat.isWorking,
       draft: hasDraft,
       awaitingInput,
+      waiting,
     });
-  }, [chat.isWorking, hasDraft, awaitingInput, entry.localId, onSignalsChange]);
+  }, [
+    chat.isWorking,
+    hasDraft,
+    awaitingInput,
+    waiting,
+    entry.localId,
+    onSignalsChange,
+  ]);
   const onSignalsChangeRef = useRef(onSignalsChange);
   onSignalsChangeRef.current = onSignalsChange;
   useEffect(
@@ -1561,6 +1589,7 @@ function ChatDockContent({
         working: false,
         draft: false,
         awaitingInput: false,
+        waiting: null,
       }),
     [entry.localId],
   );
@@ -3652,9 +3681,6 @@ function ChatDockContent({
                     }
                     ariaLabel="Message the assistant"
                   />
-                  {/* Context ring (ADR 0057): quiet until a harness reports
-                  occupancy and window size; danger red past 90%. */}
-                  <ContextMeter turns={chat.timeline} />
                   {/* Voice in this chat (ADR 0216): talk to its agent, then
                   carry on typing. Company chats live on the server. */}
                   {!authority && (

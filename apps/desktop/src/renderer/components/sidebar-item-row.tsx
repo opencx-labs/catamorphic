@@ -22,6 +22,7 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import type {
+  SidebarActivity,
   SidebarBadge,
   SidebarSignal,
   SidebarTrend,
@@ -31,7 +32,7 @@ import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { TONE_TEXT } from "../lib/tones.js";
 import { AnimatedTitle } from "./animated-title.js";
-import { SignalBadge, SignalGlyph } from "./chat-signals.js";
+import { ACTIVITY_LABELS, SignalBadge, SignalGlyph } from "./chat-signals.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -94,6 +95,7 @@ export function SidebarItemRow<
   progress,
   trend,
   signal,
+  activity,
   presentation = "row",
   expanded,
   resource = false,
@@ -133,6 +135,8 @@ export function SidebarItemRow<
   trend?: SidebarTrend;
   /** What the row is doing, drawn the same everywhere (ADR 0234). */
   signal?: SidebarSignal;
+  /** Its icon's lower corner; without it, a `working` signal spins there. */
+  activity?: SidebarActivity;
   presentation?: "row" | "tile";
   expanded?: boolean;
   resource?: boolean;
@@ -261,6 +265,8 @@ export function SidebarItemRow<
   progress = overrides.progress ?? progress;
   trend = overrides.trend ?? trend;
   signal = overrides.signal ?? signal;
+  activity = overrides.activity ?? activity;
+  const mark = activity ?? (signal === "working" ? "working" : undefined);
   preview = overrides.preview ?? preview;
   if (preview === false) previewContent = undefined;
   defaultOpenMode = overrides.open ?? defaultOpenMode;
@@ -470,7 +476,11 @@ export function SidebarItemRow<
                 previewEnabled && previewOpen ? previewId : undefined
               }
             >
-              <SignalGlyph working={signal === "working"} className="size-3.5">
+              <SignalGlyph
+                working={mark === "working"}
+                waiting={mark === "working" ? null : mark}
+                className="size-3.5"
+              >
                 {IconComponent ? (
                   <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
                 ) : (
@@ -547,9 +557,13 @@ export function SidebarItemRow<
                   </span>
                 </span>
               )}
-              {signal === "working" && (
-                <span data-signal="working" className="sr-only">
-                  Working
+              {mark && (
+                <span
+                  data-signal={mark === "working" ? "working" : undefined}
+                  data-activity={mark}
+                  className="sr-only"
+                >
+                  {ACTIVITY_LABELS[mark]}
                 </span>
               )}
               {end}

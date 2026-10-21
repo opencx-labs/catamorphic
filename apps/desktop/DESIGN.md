@@ -738,6 +738,37 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-21: A chat's icon says what it is doing and what needs you
+
+A chat's icon has two corners now (ADR 0273). The upper one says what
+needs the person: the "?" of a question, the pulsing dot of attention,
+the dot of an unread reply, the pencil of a draft. It stays while the
+agent works again, so a reply that landed meanwhile is not lost. The lower
+one says what the chat is doing: the spinner while it works, and while it
+rests, what it left running: an eye for a watch, a bot for subagents at
+work, a terminal for a background command, quiet in the muted ink. One
+mark per corner; the eye before the bot before the terminal, and a
+question holds the spinner back while it waits. Tabs, bubbles, the
+folded bubble and the sidebar's Tabs rows draw it, and any row or chip
+that sets `activity`; the gap the mark cuts from the icon moved with it
+to the lower corner. A custom chat icon's little chat marker gives that
+corner up while it is in use, and the folded bubble's count moved to its
+lower-left corner to leave it free. A tab's hover card says both: "New
+reply · Agent is working…".
+
+### 2026-10-21: The composer keeps to the message; closing a tab goes back
+
+The composer shows the message and its controls, nothing else: the context
+ring is gone, as the hint went with the "/" and "@" menus below. The Usage
+page still reads what turns report.
+
+Closing the tab in front returns to the tab the person was on before it,
+as a browser's history would, instead of the last tab in the strip:
+Cmd+W on a page a chat's link opened lands back on that chat. The
+workspace keeps the tabs left behind, newest last, with the rest of its
+state, so this holds after a relaunch; closing one pane of a split still
+lands on the other pane.
+
 ### 2026-10-21: The composer's "/" and "@" menus
 
 `/` no longer leaves the composer (ADR 0274). `/` or `@` starting any word,

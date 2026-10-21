@@ -1,6 +1,6 @@
 import type { TimelineTurn, Turn } from "@catamorphic/react";
 import { describe, expect, it } from "vitest";
-import { latestContextSnapshot, latestReportedModel } from "./context-meter.js";
+import { latestReportedModel } from "./reported-model.js";
 
 function settled(id: string, usage: Record<string, unknown>): TimelineTurn {
   const turn: Turn = {
@@ -85,15 +85,4 @@ describe("latestReportedModel", () => {
       ).toBeNull();
     },
   );
-});
-
-describe("latestContextSnapshot", () => {
-  it("reads the latest turn that reported its context", () => {
-    expect(
-      latestContextSnapshot([
-        settled("a", { contextTokens: 10, contextWindow: 100 }),
-        settled("b", {}),
-      ]),
-    ).toEqual({ usedTokens: 10, windowTokens: 100 });
-  });
 });

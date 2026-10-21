@@ -42,7 +42,9 @@ Rows are one shape for everyone: `id`, `label`, `url` (any workspace target:
 a page, a chat, `workflow:`, `app:`, `run:`, `file:`, an open tab's key,
 `command:<id>`), `icon` (a Lucide name, `<chat icon>:<color>`, or an image
 address), `description`, `badges` (strings or `{ label, icon }`), `signal`
-(`working`, `attention`, `unread`), `progress`, `trend` (a sparkline:
+(`working`, `attention`, `unread`), `activity` (on the icon's lower corner
+whatever the signal: `working`, or what it waits on: `watch`, `subagent`,
+`command`; without it a `working` signal spins there), `progress`, `trend` (a sparkline:
 `{ values, label?, tone? }`, ADR 0266), `preview`, `collapsed`,
 `menu`/`contextMenu`/`actions`, and `data` (the record behind the row, for code
 that reads it). A row opens its `url`; it is active when that target is in front,
@@ -85,8 +87,8 @@ request's own 30 seconds.
 ## Sorted tabs
 
 With tabs placed in the sidebar, the default Tabs section lists `work:tabs`.
-Wrapping it sorts working and waiting chats first; rows slide as chats start
-and stop. A module path resolves inside the project, so this goes in a project
+Wrapping it sorts chats that need the person first, then working ones; rows
+slide as chats start and stop. A module path resolves inside the project, so this goes in a project
 layer beside the module (`.work/workspace.js` with the module committed, or the
 personal project file), copied from the resolved layout:
 
@@ -99,7 +101,7 @@ personal project file), copied from the resolved layout:
 
 ```ts
 // .work/tabs.ts
-const rank = (row) => (row.signal === "attention" ? 0 : row.signal === "working" ? 1 : 2);
+const rank = (row) => (row.signal === "attention" ? 0 : row.activity === "working" ? 1 : 2);
 export default {
   async load({ work, parentId, cursor }) {
     const page = await work.read({ source: "tabs", parentId, cursor });

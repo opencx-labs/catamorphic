@@ -28,7 +28,12 @@ import {
 } from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
-import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
+import {
+  type ChatSignals,
+  firstWaiting,
+  SignalBadge,
+  SignalGlyph,
+} from "./chat-signals";
 import { type MenuAt, MenuPortal, menuAtPointer } from "./menu.js";
 import { ShortcutHint } from "./shortcut-hint";
 
@@ -274,6 +279,7 @@ function Bubble({
           <SignalGlyph
             working={signals.working}
             awaitingInput={signals.awaitingInput}
+            waiting={signals.waiting}
             className="size-4"
           >
             <ChatGlyph icon={icon} fork={fork} className="size-4" />
@@ -482,6 +488,9 @@ export function ChatBubbles({
     draft: entries.some((entry) => signals[entry.localId]?.draft),
     awaitingInput: entries.some(
       (entry) => signals[entry.localId]?.awaitingInput,
+    ),
+    waiting: firstWaiting(
+      entries.map((entry) => signals[entry.localId]?.waiting),
     ),
   };
 
@@ -791,12 +800,15 @@ export function ChatBubbles({
       <SignalGlyph
         working={collapsed && aggregate.working}
         awaitingInput={collapsed && aggregate.awaitingInput}
+        waiting={collapsed ? aggregate.waiting : null}
         className="size-4"
       >
         <MessageSquare className="size-4" />
       </SignalGlyph>
+      {/* The count takes the lower-left corner: the icon's own lower
+          corner says what the chats are doing. */}
       {stripEntries.length > 1 && (
-        <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
+        <span className="absolute -bottom-0.5 -left-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
           {stripEntries.length}
         </span>
       )}

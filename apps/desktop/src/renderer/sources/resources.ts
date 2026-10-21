@@ -2,6 +2,7 @@ import { workflowKeys } from "@catamorphic/react";
 import { PROJECT_STORE_DIR } from "@catamorphic/workflow/project-layout";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { appIconName } from "../components/app-icon.js";
+import { activityOf } from "../components/chat-signals.js";
 import { appsQuery } from "../lib/apps.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
@@ -184,12 +185,12 @@ const TAB_ICONS: Partial<Record<WorkspaceTab["kind"], string>> = {
 
 /**
  * `work:tabs`: the window's open tabs in strip order, chats among them. A
- * row brings its tab forward, closes from its row, says what a chat is
- * doing (`signal`, also in `data` for sorting), and drags to reorder the
- * strip; a tab dropped on a chat nests under it, and dropped among the top
- * tabs leaves its chat. A module that wraps it can sort and group tabs
- * however the person likes (working chats first); rows that change places
- * slide there.
+ * row brings its tab forward, closes from its row, says what needs the
+ * person (`signal`) and what a chat is doing (`activity`), both also in
+ * `data` for sorting, and drags to reorder the strip; a tab dropped on a
+ * chat nests under it, and dropped among the top tabs leaves its chat. A
+ * module that wraps it can sort and group tabs however the person likes
+ * (working chats first); rows that change places slide there.
  */
 export function tabsSource(deps: WorkSourceDeps): SectionSource {
   const source: SectionSource = {
@@ -219,14 +220,17 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
           .filter((tab) => (parentOf.get(tabKey(tab)) ?? null) === parentId)
           .map((tab): SidebarSourceItem => {
             const id = tabKey(tab);
+            // What needs the person comes first; what the chat is doing
+            // rides its icon either way.
             const signal =
               tab.awaitingInput || tab.attention
                 ? "attention"
-                : tab.working
-                  ? "working"
-                  : tab.unread
-                    ? "unread"
+                : tab.unread
+                  ? "unread"
+                  : tab.working
+                    ? "working"
                     : undefined;
+            const activity = activityOf(tab);
             const label = tab.label ?? tab.name;
             return {
               id,
@@ -249,6 +253,7 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
                       : (TAB_ICONS[tab.kind] ?? "PanelTop"),
               url: id,
               ...(signal ? { signal } : {}),
+              ...(activity ? { activity } : {}),
               // Close on hover, and in its menus beside the open modes.
               actions: [
                 { label: `Close ${label}`, action: "close", icon: "X" },
@@ -265,6 +270,7 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
                 name: tab.name,
                 active: id === activeTabKey,
                 working: Boolean(tab.working),
+                waiting: tab.waiting ?? null,
                 attention: Boolean(tab.attention || tab.awaitingInput),
                 unread: Boolean(tab.unread),
                 ...(tab.groupId ? { groupId: tab.groupId } : {}),

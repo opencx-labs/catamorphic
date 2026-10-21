@@ -2,7 +2,7 @@ import type { ResolvedTheme } from "../main/theme.js";
 import type {
   ChatDockEntry,
   ChatDockProps,
-  ChatSignals,
+  ChatLiveSignals,
   McpAppRef,
 } from "./chat.js";
 import type { ChatSessionMenuEntry } from "./chat-session-actions.js";
@@ -46,12 +46,7 @@ export type ChatEvent =
   | { kind: "close" | "closing" }
   | { kind: "session"; sessionId: string }
   | { kind: "sessionAgent"; agentId: string; harness?: string }
-  | {
-      kind: "signals";
-      signals: Required<
-        Pick<ChatSignals, "working" | "draft" | "awaitingInput">
-      >;
-    }
+  | { kind: "signals"; signals: ChatLiveSignals }
   | { kind: "surface"; key: string; mode: OpenMode | "split" }
   | { kind: "removeSurface"; key: string }
   | { kind: "customizeChips" }

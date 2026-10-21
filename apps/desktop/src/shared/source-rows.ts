@@ -5,6 +5,7 @@ import {
   isSidebarTone,
   rowTargetAllowed,
   type SidebarActionInput,
+  type SidebarActivity,
   type SidebarBadge,
   type SidebarItemPresentation,
   type SidebarMenuEntry,
@@ -191,6 +192,14 @@ const asSignal = (value: unknown): SidebarSignal | undefined =>
     ? value
     : undefined;
 
+const asActivity = (value: unknown): SidebarActivity | undefined =>
+  value === "working" ||
+  value === "watch" ||
+  value === "subagent" ||
+  value === "command"
+    ? value
+    : undefined;
+
 export function sanitizePresentation(
   record: Record<string, unknown>,
 ): SidebarItemPresentation {
@@ -213,6 +222,7 @@ export function sanitizePresentation(
         : undefined,
     trend: sanitizeTrend(record.trend),
     signal: asSignal(record.signal),
+    activity: asActivity(record.activity),
     open: asOpenMode(record.open),
     menu: sanitizeMenu(record.menu),
     contextMenu: sanitizeMenu(record.contextMenu),

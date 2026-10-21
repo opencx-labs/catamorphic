@@ -70,12 +70,13 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
 - files: the project folder as a tree, folders first (members of a server
   project: their files and the store).
 - tabs: the window's open tabs in strip order; a chat's opened tabs nest under
-  it, open. Rows carry signal and data {kind, name, active, working,
-  attention (waiting for the person included), unread, groupId?, sessionId?,
-  url?, faviconUrl?, path?}; actions close, and rename on a chat's tab (opens
-  the rename dialog); drag reorders the strip, and a tab dropped on a chat
-  nests under it (the chat keeps it among its chips) or, dropped among the top
-  tabs, leaves its chat. Chat rows carry acceptsChildren.
+  it, open. Rows carry signal (attention, then unread, then working), activity
+  and data {kind, name, active, working, waiting (watch, subagent, command or
+  null), attention (waiting for the person included), unread, groupId?,
+  sessionId?, url?, faviconUrl?, path?}; actions close, and rename on a chat's
+  tab (opens the rename dialog); drag reorders the strip, and a tab dropped on
+  a chat nests under it (the chat keeps it among its chips) or, dropped among
+  the top tabs, leaves its chat. Chat rows carry acceptsChildren.
 - remote: a connected project's server: a status row (its dialogs), a row per
   file changed on this device (upload, history, publish), files needing a
   proposal. Header actions sync and upload-all.
@@ -121,8 +122,8 @@ muted sentence when empty, the error with Retry. Never draw your own.
 ## Rows
 
 Every row, whoever wrote it, is the same: { id, label, url?, icon?, description?,
-badges?, signal?, progress?, trend?, preview?, keywords?, hide?, parentId?, hasChildren?,
-acceptsChildren?, collapsed?, menu?, contextMenu?, actions?, data? }.
+badges?, signal?, activity?, progress?, trend?, preview?, keywords?, hide?, parentId?,
+hasChildren?, acceptsChildren?, collapsed?, menu?, contextMenu?, actions?, data? }.
 - url is where the row goes, opened by one resolver: a web page, a chat
   (catamorphic://chat?project=&session=, or session:<id>), workflow:<name>,
   app:<name>, run:<id>, file:<path>, an open tab's key (browser:<id>, chat:<id>,
@@ -136,7 +137,11 @@ acceptsChildren?, collapsed?, menu?, contextMenu?, actions?, data? }.
   rocket:blue), or an image address. Without one the url picks it (a favicon,
   a chat glyph).
 - badges: strings or { label, icon }. signal: working (spinner), attention
-  (needs the person), unread. progress: 0 through 1. trend: { values (up to
+  (needs the person), unread. activity: what the row is doing, on its icon's
+  lower corner whatever the signal: working (spinner), or what it waits on,
+  watch (eye), subagent (bot) or command (terminal); without it a working
+  signal spins there. (A chat's own activity text, which chats rows carry
+  in data, is a different thing.) progress: 0 through 1. trend: { values (up to
   60 readings from 0 through 1, oldest first), label? (the current reading,
   "12%"), tone? }, drawn as a sparkline at the row's end (chips draw it too). preview: { title,
   description, metadata: [{label, value}] up to six }. collapsed: false opens a
@@ -223,8 +228,8 @@ own 30 seconds.
 Modules never receive secrets or Work's server address. Committed project files
 run with the project's own authority: review a module before trusting it.
 
-Example: tabs in the sidebar, working and waiting chats first, the rest in
-strip order. In the project's layer (copied from the resolved layout), replace
+Example: tabs in the sidebar, chats that need the person first, then working
+ones, the rest in strip order. In the project's layer (copied from the resolved layout), replace
 the Tabs section's source and grant tabs:
 { id: "tabs", title: "Tabs", source: ".work/tabs.ts", collections: ["tabs"],
   when: { tabPlacement: "sidebar" },
@@ -232,7 +237,7 @@ the Tabs section's source and grant tabs:
     url: "command:new-tab" }] }
 .work/tabs.ts:
 const rank = (row) =>
-  row.signal === "attention" ? 0 : row.signal === "working" ? 1 : 2;
+  row.signal === "attention" ? 0 : row.activity === "working" ? 1 : 2;
 export default {
   async load({ work, parentId, cursor }) {
     const page = await work.read({ source: "tabs", parentId, cursor });
@@ -355,7 +360,8 @@ with the open grammar (Cmd-click a new tab, Cmd-Shift-click to the side,
 Option-click floating). actions are its buttons; menu or contextMenu its
 right-click entries, after the open modes and before Customize chips. preview
 is its hover card (false for none); without one, Work's chips show what they
-stand for live. signal: working spins its icon; attention and unread dot it.
+stand for live. signal: working spins its icon; attention and unread dot it;
+activity marks its icon's lower corner as on a row.
 trend draws its sparkline after the label and badges, compact or wide, and on a
 group's members. A chip with hasChildren is a group: a click opens its members upward. data is
 the record behind it: Work's chips say what they are in data.kind

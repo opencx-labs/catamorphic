@@ -40,7 +40,12 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
-import { SignalBadge, SignalGlyph } from "./chat-signals";
+import {
+  ACTIVITY_LABELS,
+  activityOf,
+  SignalBadge,
+  SignalGlyph,
+} from "./chat-signals";
 import type { FileTarget } from "./file-menu.js";
 import {
   OpenResourceButton,
@@ -48,19 +53,31 @@ import {
 } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
-/** The card's status line — most urgent signal first. */
+/**
+ * The card's status line, as the icon's corners say it: what needs the
+ * person, then what the tab is doing.
+ */
 function tabStatusLine(tab: WorkspaceTab): string | null {
   if (tab.kind === "browser" && tab.pageDialog)
     return "The page is waiting for your answer";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
-  if (tab.working) return "Agent is working…";
-  if (tab.attention) return "Ready for you";
-  if (tab.unread) return "New reply";
-  if (tab.draft) {
-    return tab.kind === "editor" || tab.kind === "workflow"
-      ? "Unsaved changes"
-      : "Unsent draft";
-  }
+  const needs = tab.attention
+    ? "Ready for you"
+    : tab.unread
+      ? "New reply"
+      : tab.draft
+        ? tab.kind === "editor" || tab.kind === "workflow"
+          ? "Unsaved changes"
+          : "Unsent draft"
+        : null;
+  const activity = activityOf(tab);
+  const doing =
+    activity === "working"
+      ? "Agent is working…"
+      : activity
+        ? ACTIVITY_LABELS[activity]
+        : null;
+  if (needs || doing) return [needs, doing].filter(Boolean).join(" · ");
   if (tab.kind === "browser" && tab.asleep)
     return "Asleep to save memory. Opens where you left off";
   return null;
@@ -728,12 +745,14 @@ function TabStrip({
                   aria-current={active || undefined}
                 >
                   {/* Same signal vocabulary as the chat bubbles: a spinner
-                  on the icon's corner while working (the icon still names
-                  the tab); unread/draft/question land as badges there. */}
+                  on the icon's lower corner while working, or what it waits
+                  on (the icon still names the tab); unread/draft/question
+                  land as badges on its upper corner. */}
                   <span className="relative grid size-3.5 shrink-0 place-items-center">
                     <SignalGlyph
                       working={tab.working ?? false}
                       awaitingInput={tab.awaitingInput}
+                      waiting={tab.waiting}
                       className="size-3.5"
                     >
                       {tab.kind === "browser" && tab.faviconUrl ? (
@@ -758,16 +777,19 @@ function TabStrip({
                     </SignalGlyph>
                     <SleepRing tab={tab} />
                     {/* A custom conversation icon still reads as a chat: a
-                      tiny chat marker rides the glyph's corner. */}
-                    {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (
-                      <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
-                        {tab.fork ? (
-                          <GitFork className="size-1.5 text-fg-muted" />
-                        ) : (
-                          <MessageSquare className="size-1.5 text-fg-muted" />
-                        )}
-                      </span>
-                    )}
+                      tiny chat marker rides the glyph's lower corner, which
+                      what the chat is doing takes while it says anything. */}
+                    {tab.kind === "chat" &&
+                      hasCustomChatIcon(tab.chatIcon) &&
+                      !activityOf(tab) && (
+                        <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
+                          {tab.fork ? (
+                            <GitFork className="size-1.5 text-fg-muted" />
+                          ) : (
+                            <MessageSquare className="size-1.5 text-fg-muted" />
+                          )}
+                        </span>
+                      )}
                     <span className="absolute -right-1 -top-1">
                       <SignalBadge
                         signals={{

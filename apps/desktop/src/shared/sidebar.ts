@@ -186,6 +186,14 @@ export interface SidebarTrend {
  */
 export type SidebarSignal = "working" | "attention" | "unread";
 
+/**
+ * What a row is doing, on its icon's lower corner: working (a spinner), or
+ * waiting on what it left running: a watch (an eye), subagents (a bot), a
+ * background command (a terminal). A notification keeps the upper corner,
+ * so a chat can say both.
+ */
+export type SidebarActivity = "working" | "watch" | "subagent" | "command";
+
 export interface SidebarItemPresentation {
   label?: string;
   description?: string;
@@ -203,6 +211,8 @@ export interface SidebarItemPresentation {
   progress?: number;
   trend?: SidebarTrend;
   signal?: SidebarSignal;
+  /** Without it, a `working` signal is the activity. */
+  activity?: SidebarActivity;
   open?: OpenMode;
   menu?: SidebarMenuEntry[];
   /** Omit to inherit overflow; [] disables the right-click menu. */

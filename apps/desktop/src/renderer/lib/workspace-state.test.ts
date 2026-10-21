@@ -162,6 +162,75 @@ it("keeps a browser tab's way back through close, reopen and persistence", () =>
   ).toMatchObject({ url: "https://example.com/two", history });
 });
 
+it("closing the tab in front goes back to the tab the person was on", () => {
+  let ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    tabs: [{ kind: "run", name: "r" }],
+    chats: [
+      { localId: "c", mode: "tab", sessionId: "session" },
+      { localId: "d", mode: "tab", sessionId: "other" },
+    ],
+    browsers: [
+      {
+        localId: "b",
+        profileId: "p",
+        initialUrl: "https://example.com/",
+        url: "https://example.com/",
+        title: "Example",
+        faviconUrl: null,
+        chatLocalId: "c",
+        background: true,
+      },
+    ],
+    activeTabKey: "run:r",
+  };
+  ws = transitionWorkspace(ws, { type: "select", key: "chat:c" });
+  // A link clicked in the chat brings its page to the front.
+  ws = transitionWorkspace(ws, { type: "focus", key: "browser:b" });
+  expect(ws.recentTabKeys).toEqual(["run:r", "chat:c"]);
+  // Back to the chat, not the last tab in the strip (chat:d).
+  ws = transitionWorkspace(ws, { type: "close", key: "browser:b" });
+  expect(ws.activeTabKey).toBe("chat:c");
+  expect(ws.recentTabKeys).toEqual(["run:r"]);
+  // Tabs closed meanwhile drop out, and it survives a relaunch.
+  const restored = hydrateWorkspace(
+    serializeWorkspace({ ...ws, recentTabKeys: ["gone:x", "run:r"] }),
+  );
+  expect(restored?.recentTabKeys).toEqual(["run:r"]);
+  ws = transitionWorkspace(ws, { type: "close", key: "chat:c" });
+  expect(ws.activeTabKey).toBe("run:r");
+  expect(ws.recentTabKeys).toEqual([]);
+});
+
+it("closing a tab skips a page its folded group hides", () => {
+  let ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    tabs: [{ kind: "run", name: "r" }],
+    chats: [{ localId: "c", mode: "tab", sessionId: "session" }],
+    browsers: [
+      {
+        localId: "b",
+        profileId: "p",
+        initialUrl: "https://example.com/",
+        url: "https://example.com/",
+        title: "Example",
+        faviconUrl: null,
+        chatLocalId: "c",
+      },
+    ],
+    activeTabKey: "chat:c",
+  };
+  ws = transitionWorkspace(ws, { type: "select", key: "browser:b" });
+  ws = transitionWorkspace(ws, { type: "select", key: "run:r" });
+  expect(ws.recentTabKeys).toEqual(["chat:c", "browser:b"]);
+  ws = reconcileWorkspace(ws, {
+    ...ws,
+    chats: ws.chats.map((chat) => ({ ...chat, surfacesCollapsed: true })),
+  });
+  ws = transitionWorkspace(ws, { type: "close", key: "run:r" });
+  expect(ws.activeTabKey).toBe("chat:c");
+});
+
 it("closes a New Tab nobody typed into once something else is shown in its place", () => {
   const ws: Workspace = {
     ...initial(),

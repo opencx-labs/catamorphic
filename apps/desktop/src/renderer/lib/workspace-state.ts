@@ -134,6 +134,11 @@ export interface Workspace {
    * mutations write it.
    */
   tabOrder: string[];
+  /**
+   * Open tabs the person left, newest last: when the tab in front closes,
+   * the newest one still open comes back to the front.
+   */
+  recentTabKeys: string[];
   /** Recently closed tabs, newest last (Cmd+Shift+T restores). */
   closedTabs: ClosedTab[];
 }
@@ -166,6 +171,7 @@ export const emptyWorkspace = (): Workspace => {
     editors: [],
     split: null,
     tabOrder: [],
+    recentTabKeys: [],
     closedTabs: [],
   };
 };
@@ -183,6 +189,7 @@ export const emptyUtilityWorkspace = (): Workspace => ({
   editors: [],
   split: null,
   tabOrder: [],
+  recentTabKeys: [],
   closedTabs: [],
 });
 
@@ -318,6 +325,7 @@ export const serializeWorkspace = (
         ? ws.split
         : null,
     tabOrder: ws.tabOrder.filter((key) => keys.has(key)),
+    recentTabKeys: ws.recentTabKeys.filter((key) => keys.has(key)),
     closedTabs: ws.closedTabs.filter((record) => record.kind !== "terminal"),
   };
 };
@@ -353,6 +361,9 @@ export const hydrateWorkspace = (
     editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
     split: snapshot.split ?? null,
     tabOrder: Array.isArray(snapshot.tabOrder) ? snapshot.tabOrder : [],
+    recentTabKeys: Array.isArray(snapshot.recentTabKeys)
+      ? snapshot.recentTabKeys
+      : [],
     closedTabs: Array.isArray(snapshot.closedTabs) ? snapshot.closedTabs : [],
     ...(typeof snapshot.activeTabKey === "string"
       ? { activeTabKey: snapshot.activeTabKey }
@@ -498,6 +509,10 @@ export const orderedTabKeys = (
   return result;
 };
 
+/**
+ * The tab in front once `closedKey` leaves: its split partner, else the
+ * newest tab the person left that is still shown, else the strip's last.
+ */
 export const nextActiveTabKey = (
   ws: Workspace,
   closedKey: string,
@@ -520,6 +535,13 @@ export const nextActiveTabKey = (
         ? ws.split.leftKey
         : undefined;
   if (partner && keys.includes(partner)) return partner;
+  // Otherwise back to the tab the person was on before this one, unless a
+  // folded group hides it now.
+  const shown = new Set(orderedTabKeys({ ...ws, chats }));
+  for (let index = ws.recentTabKeys.length - 1; index >= 0; index -= 1) {
+    const recent = ws.recentTabKeys[index];
+    if (recent && keys.includes(recent) && shown.has(recent)) return recent;
+  }
   return keys.at(-1);
 };
 
@@ -683,11 +705,42 @@ export function reconcileWorkspace(
     updated.activeTabKey && keys.includes(updated.activeTabKey)
       ? updated.activeTabKey
       : undefined;
+  const recentTabKeys = leftTabs(previous, updated, activeTabKey, keys);
   return floatingKey === updated.floatingKey &&
     layout.split === updated.split &&
-    activeTabKey === updated.activeTabKey
+    activeTabKey === updated.activeTabKey &&
+    recentTabKeys === updated.recentTabKeys
     ? updated
-    : { ...updated, floatingKey, split: layout.split, activeTabKey };
+    : {
+        ...updated,
+        floatingKey,
+        split: layout.split,
+        activeTabKey,
+        recentTabKeys,
+      };
+}
+
+/**
+ * The tab that was in front, once another takes its place, becomes the
+ * newest tab left; tabs since closed, and the one in front, drop out.
+ */
+function leftTabs(
+  previous: Workspace,
+  updated: Workspace,
+  activeTabKey: string | undefined,
+  keys: readonly string[],
+): string[] {
+  const left = previous.activeTabKey;
+  const visited =
+    left && left !== activeTabKey
+      ? [...updated.recentTabKeys.filter((key) => key !== left), left]
+      : updated.recentTabKeys;
+  const open = new Set(keys);
+  const kept = visited.filter((key) => key !== activeTabKey && open.has(key));
+  return kept.length === updated.recentTabKeys.length &&
+    kept.every((key, index) => key === updated.recentTabKeys[index])
+    ? updated.recentTabKeys
+    : kept;
 }
 
 /** Pure navigation. IO, permission prompts and motion scheduling stay in the host. */

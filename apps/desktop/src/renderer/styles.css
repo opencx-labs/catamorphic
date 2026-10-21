@@ -1219,9 +1219,10 @@ kbd {
   }
 }
 
-/* The working spinner on an icon's corner (SignalGlyph) cuts a gap
-   out of the icon under it, so it reads on any row background. The gap
-   opens and closes with the spinner, centred where it turns. */
+/* What a chat is doing, on its icon's lower corner (SignalGlyph: the
+   working spinner, or what it waits on), cuts a gap out of the icon under
+   it, so it reads on any row background. The gap opens and closes with the
+   mark, centred where it sits. */
 @property --signal-cutout {
   syntax: "<length>";
   inherits: false;
@@ -1229,7 +1230,7 @@ kbd {
 }
 .signal-cutout {
   mask-image: radial-gradient(
-    circle at calc(100% - 2px) 2px,
+    circle at calc(100% - 2px) calc(100% - 2px),
     transparent calc(var(--signal-cutout) - 0.5px),
     #000 var(--signal-cutout)
   );

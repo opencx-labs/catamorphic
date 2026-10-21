@@ -58,7 +58,7 @@ import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
-import type { PendingChatMessage } from "../shared/chat.js";
+import type { ChatLiveSignals, PendingChatMessage } from "../shared/chat.js";
 import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { type DownloadRecord, fileUrlFor } from "../shared/downloads.js";
 import type { HistoryEntry } from "../shared/history.js";
@@ -338,16 +338,11 @@ const DiffScreen = lazy(() =>
 );
 
 /** What a ChatDock reports live; `unread` is derived here in the host. */
-interface ChatLiveSignals {
-  working: boolean;
-  draft: boolean;
-  awaitingInput: boolean;
-}
-
 const NO_CHAT_SIGNALS: ChatLiveSignals = {
   working: false,
   draft: false,
   awaitingInput: false,
+  waiting: null,
 };
 
 const truncateLabel = (value: string): string =>
@@ -1891,9 +1886,11 @@ export function App({
               .filter(Boolean)
               .join(" · ") || undefined,
           // Same signals as the chat's bubble: spinner while the agent
-          // works, dot for a reply that landed while the tab was hidden,
-          // pencil for an unsent draft, "?" for a waiting question.
+          // works or what it waits on, dot for a reply that landed while
+          // the tab was hidden, pencil for an unsent draft, "?" for a
+          // waiting question.
           working: signalsByChat[chat.localId]?.working ?? false,
+          waiting: signalsByChat[chat.localId]?.waiting ?? null,
           unread: unreadByChat[chat.localId] ?? false,
           attention: attentionByChat[chat.localId] ?? false,
           draft: signalsByChat[chat.localId]?.draft ?? false,
@@ -3289,7 +3286,8 @@ export function App({
       if (
         before.working === next.working &&
         before.draft === next.draft &&
-        before.awaitingInput === next.awaitingInput
+        before.awaitingInput === next.awaitingInput &&
+        before.waiting === next.waiting
       ) {
         return;
       }
@@ -3898,18 +3896,6 @@ export function App({
     );
   };
 
-  // Cmd+\ pairs the active tab with the previously focused one — track a
-  // one-deep focus history for that.
-  const previousActiveTabKeyRef = useRef<string | undefined>(undefined);
-  const lastActiveTabKeyRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const current = workspace.activeTabKey;
-    if (current !== lastActiveTabKeyRef.current) {
-      previousActiveTabKeyRef.current = lastActiveTabKeyRef.current;
-      lastActiveTabKeyRef.current = current;
-    }
-  });
-
   /** Cmd+\: tile the active tab beside the previously focused one. */
   const toggleSplit = () => {
     const ws = workspaceRef.current;
@@ -3923,7 +3909,7 @@ export function App({
       updateWorkspace((current) => ({ ...current, split: null }));
       return;
     }
-    const previous = previousActiveTabKeyRef.current;
+    const previous = ws.recentTabKeys.at(-1);
     const partner =
       previous && previous !== active && keys.includes(previous)
         ? previous
@@ -4008,7 +3994,7 @@ export function App({
     const anchor =
       ws.activeTabKey && ws.activeTabKey !== key
         ? ws.activeTabKey
-        : (previousActiveTabKeyRef.current ?? null);
+        : (ws.recentTabKeys.at(-1) ?? null);
     if (!anchor || anchor === key || !orderedTabKeys(ws).includes(anchor)) {
       return;
     }
@@ -4202,7 +4188,7 @@ export function App({
       transitionWorkspace(ws, {
         type: mode === "tab" ? "focus" : "side",
         key,
-        previous: previousActiveTabKeyRef.current,
+        previous: ws.recentTabKeys.at(-1),
       }),
     );
   };
@@ -4276,7 +4262,7 @@ export function App({
       transitionWorkspace(ws, {
         type: "float",
         key,
-        previous: previousActiveTabKeyRef.current,
+        previous: ws.recentTabKeys.at(-1),
       }),
     );
   };
@@ -5110,7 +5096,7 @@ export function App({
             split: ws.split,
             // What the user looked at before the active tab: when they open
             // a chat as its own tab to ask about "this", it is usually here.
-            previousTabKey: previousActiveTabKeyRef.current ?? null,
+            previousTabKey: ws.recentTabKeys.at(-1) ?? null,
           };
         }
         case "browserActivity": {
