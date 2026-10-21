@@ -351,13 +351,18 @@ const truncateLabel = (value: string): string =>
  * surface stays fully visible — watch the agent work live) until the
  * user takes control. A hairline accent ring marks the surface as
  * agent-held; the pill names the owner and offers the two moves that
- * make sense — jump to the owning chat, or take the keys. A press on the
+ * make sense — jump to the owning chat, or take the keys. It steps aside
+ * after a few seconds and comes back while the pointer moves over the
+ * surface; dragged by its body, it stays where it is put. A press on the
  * blocked surface (someone who missed the pill) shows the veil itself for
  * a moment, a tinted sheet that gives where it was touched.
  *
  * Stays mounted after `active` flips false to play fade-out (the mirror
  * of its fade-in enter) before disappearing, per the motion contract.
  */
+/** How long the agent-control pill stays before it steps aside. */
+const PILL_QUIET_MS = 4_000;
+
 function AgentControlOverlay({
   kind,
   active,
@@ -384,6 +389,24 @@ function AgentControlOverlay({
     setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
     if (!active) setTouch(null);
   }, [active]);
+  // The pill steps aside after a few seconds so the surface reads whole;
+  // the pointer moving over the surface brings it back for a while.
+  const [quiet, setQuiet] = useState(false);
+  const quietTimer = useRef<number | undefined>(undefined);
+  const wake = useCallback(() => {
+    setQuiet(false);
+    window.clearTimeout(quietTimer.current);
+    quietTimer.current = window.setTimeout(() => setQuiet(true), PILL_QUIET_MS);
+  }, []);
+  useEffect(() => {
+    if (active) wake();
+    return () => window.clearTimeout(quietTimer.current);
+  }, [active, wake]);
+  // Dragged by its body (not its buttons), the pill stays where it is put.
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number; from: typeof offset } | null>(
+    null,
+  );
   if (phase === "gone") return null;
   const exiting = phase === "out";
   const anim = exiting ? "animate-fade-out" : "animate-fade-in";
@@ -410,7 +433,9 @@ function AgentControlOverlay({
         <div
           className="pointer-events-auto absolute inset-0"
           aria-hidden
+          onPointerMove={wake}
           onPointerDown={(event) => {
+            wake();
             const box = event.currentTarget.getBoundingClientRect();
             setTouch((previous) => ({
               id: (previous?.id ?? 0) + 1,
@@ -440,7 +465,30 @@ function AgentControlOverlay({
         />
       )}
       <div
-        className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl`}
+        className={`${exiting || quiet ? "pointer-events-none" : "pointer-events-auto"} z-10 flex ${anim} cursor-grab touch-none select-none items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl transition-opacity duration-300 ease-[cubic-bezier(0.2,0,0,1)] active:cursor-grabbing ${quiet ? "opacity-0" : "opacity-100"}`}
+        style={{ translate: `${offset.x}px ${offset.y}px` }}
+        data-agent-control-pill
+        onPointerEnter={wake}
+        onPointerMove={wake}
+        onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest("button")) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          drag.current = { x: event.clientX, y: event.clientY, from: offset };
+        }}
+        onPointerMoveCapture={(event) => {
+          const start = drag.current;
+          if (!start) return;
+          setOffset({
+            x: start.from.x + event.clientX - start.x,
+            y: start.from.y + event.clientY - start.y,
+          });
+        }}
+        onPointerUp={() => {
+          drag.current = null;
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
       >
         <span className="relative flex size-2">
           <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
@@ -2712,6 +2760,24 @@ export function App({
     updateWorkspace((ws) =>
       transitionWorkspace(ws, { type: "reveal-chat", localId }),
     );
+
+  /**
+   * An agent-held surface's "Go to chat": the chat comes on screen and its
+   * composer takes the keys, so the move shows even when the chat is
+   * already beside the surface in a split.
+   */
+  const goToChat = (localId: string) => {
+    revealChat(localId);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLElement>(
+            `[data-chat-local-id="${CSS.escape(localId)}"] [data-composer-input]`,
+          )
+          ?.focus(),
+      ),
+    );
+  };
 
   const revealChatRef = useRef(revealChat);
   revealChatRef.current = revealChat;
@@ -7571,7 +7637,7 @@ export function App({
                           }
                           onGoToChat={
                             browser.chatLocalId
-                              ? () => revealChat(browser.chatLocalId as string)
+                              ? () => goToChat(browser.chatLocalId as string)
                               : undefined
                           }
                         />
@@ -7662,7 +7728,7 @@ export function App({
                           }
                           onGoToChat={
                             terminal.chatLocalId
-                              ? () => revealChat(terminal.chatLocalId as string)
+                              ? () => goToChat(terminal.chatLocalId as string)
                               : undefined
                           }
                         />
