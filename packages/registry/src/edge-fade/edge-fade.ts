@@ -24,8 +24,8 @@ export function edgeFadeLength(scroller: HTMLElement): number {
  * fully a fade's length in, following the scroll as it goes. The mask
  * applies only while an edge fades (`data-edge-faded`).
  *
- * What moves an edge is a scroll, the scroller's own size, and, for the
- * bottom, the content's end: a marker one fade tall laid over the content's
+ * What moves an edge is a scroll, the scroller's own size, motion inside
+ * it settling, and, for the bottom, the content's end: a marker one fade tall laid over the content's
  * last stretch (kept last), whose share in view an intersection observer
  * reads pixel by pixel. Observing the content's size instead would put a
  * box above the content's own observers into every resize pass, and a
@@ -95,8 +95,13 @@ export function fadeEdges(scroller: HTMLElement): () => void {
   const size = new ResizeObserver(update);
   size.observe(scroller);
   scroller.addEventListener("scroll", update, { passive: true });
+  // A row sliding to its place, or in or out, can reach past the end for a
+  // moment without moving the end itself: read again once motion settles.
+  const settled = ["transitionend", "transitioncancel", "animationend"];
+  for (const name of settled) scroller.addEventListener(name, update);
   return () => {
     scroller.removeEventListener("scroll", update);
+    for (const name of settled) scroller.removeEventListener(name, update);
     size.disconnect();
     near.disconnect();
     children.disconnect();
