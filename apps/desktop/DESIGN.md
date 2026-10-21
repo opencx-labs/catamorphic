@@ -3526,7 +3526,7 @@ or read-only. Now `spawn_subsession` names an agent (left out, a copy of
 yourself on this chat's model and effort) and its model, effort,
 read-only and onward delegation. The agent's settings list whom it may
 start and what it may choose: by default, copies of itself on any model.
-The voice assistant starts sessions with the same tool. A copy of it is
-the person's own agent, without the assistant's tools; a session it starts is
-still handed a brief that leads back to it, and it still passes on the
-session's notes. See ADR 0271.
+The voice assistant starts sessions with the same tool. Left without an
+agent, it starts the person's own agent, without the assistant's tools; a
+session it starts is still handed a brief that leads back to it, and it
+still passes on the session's notes. See ADR 0271.

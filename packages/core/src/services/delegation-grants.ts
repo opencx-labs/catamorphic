@@ -35,15 +35,17 @@ export function effortOf(
 /** What a parent asks for: whom to start and with what. */
 export interface DelegationRequest {
   targetAgentId: string;
-  /** A copy of the parent: the agent it is, or the one it copies as. */
-  copy: boolean;
+  sourceAgentId: string;
   projectId: string;
   /** Requested, not inherited: only a choice is a grant's business. */
   model?: string;
   effort?: AgentEffort;
   /** The parent chat's effort now, for `at-most-parent`. */
   parentEffort?: AgentEffort;
-  /** A wildcard grant admits the target: its sandboxing is no wider. */
+  /**
+   * A wildcard grant admits the target: the host lists it, and its
+   * sandboxing is no wider.
+   */
   wildcardAdmits: boolean;
   /** The names a model goes by: its catalog id and the one it resolves to. */
   modelNames?(model: string): readonly string[];
@@ -60,9 +62,15 @@ export function grantAgentId(
     : grant.agent;
 }
 
+type Target = Pick<
+  DelegationRequest,
+  "targetAgentId" | "sourceAgentId" | "projectId"
+>;
+
 /** A grant that names the target: itself (`self`), or its id. */
-function names(grant: AgentDelegationGrant, request: DelegationRequest) {
-  if (grant.agent === "self") return request.copy;
+function names(grant: AgentDelegationGrant, request: Target) {
+  if (grant.agent === "self")
+    return request.targetAgentId === request.sourceAgentId;
   if (grant.agent === "*") return false;
   return grantAgentId(grant, request.projectId) === request.targetAgentId;
 }
@@ -110,6 +118,14 @@ function settingsRefusal(
   return null;
 }
 
+/** Whether a grant names the target, so a wildcard does not decide. */
+export function namesTarget(
+  policy: AgentDelegationPolicy,
+  target: Target,
+): boolean {
+  return policy.agents.some((grant) => names(grant, target));
+}
+
 /**
  * The grant that admits the target and takes the requested settings, or
  * why none does. Grants that name the target decide before a wildcard,
@@ -127,9 +143,10 @@ export function chooseGrant(
       : request.wildcardAdmits
         ? policy.agents.filter((grant) => grant.agent === "*")
         : [];
-  const who = request.copy
-    ? "a copy of yourself"
-    : `agent ${request.targetAgentId}`;
+  const who =
+    request.targetAgentId === request.sourceAgentId
+      ? "a copy of yourself"
+      : `agent ${request.targetAgentId}`;
   if (candidates.length === 0) return { refusal: `You may not start ${who}.` };
   const reasons: string[] = [];
   for (const grant of candidates) {
@@ -286,8 +303,6 @@ function effortText(grant: AgentDelegationGrant): string {
 interface MenuInput {
   policy: AgentDelegationPolicy;
   projectId: string;
-  /** The agent a copy runs as, when it is another (`copiesAs`). */
-  copiesAs?: string;
   /** Agents a wildcard grant admits, with their names. */
   wildcardAgents: readonly { id: string; name?: string }[];
   /** An agent's display name, when the host knows it. */
@@ -295,11 +310,7 @@ interface MenuInput {
 }
 
 function grantWho(grant: AgentDelegationGrant, input: MenuInput): string {
-  if (grant.agent === "self") {
-    if (!input.copiesAs) return "A copy of yourself (leave agent out)";
-    const name = input.nameOf(input.copiesAs);
-    return `A copy of yourself (leave agent out), which runs as agent ${input.copiesAs}${name ? ` (${name})` : ""}`;
-  }
+  if (grant.agent === "self") return "A copy of yourself (leave agent out)";
   if (grant.agent === "*")
     return `Any of: ${
       input.wildcardAgents.length > 0
@@ -317,8 +328,8 @@ function grantWho(grant: AgentDelegationGrant, input: MenuInput): string {
 
 /**
  * The agent's menu: whom it may start and what it may set, one line per
- * grant. A copy of yourself is started by leaving `agent` out; its id is
- * named only when it runs as another agent (`copiesAs`).
+ * grant. It names no id for a copy of yourself: leaving `agent` out is
+ * the way.
  */
 export function delegationMenu(input: MenuInput): string[] {
   return input.policy.agents.map(

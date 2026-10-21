@@ -130,12 +130,6 @@ export interface RegisteredCodingAgent {
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
   /**
-   * The agent a copy of this one runs as (ADR 0271), when it is another:
-   * an agent layered on one of the person's, like a voice assistant, has
-   * its copies run as that agent, without the layer. Omitted: itself.
-   */
-  copiesAs?: string;
-  /**
    * What a turn whose machine stopped does (ADR 0198): `continue` queues a
    * continuation when the native thread can resume exactly; `stop` leaves
    * it interrupted. Default `continue`. A turn its harness had not begun

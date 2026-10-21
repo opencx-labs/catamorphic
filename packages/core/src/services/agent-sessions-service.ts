@@ -119,6 +119,7 @@ import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
   type AgentDefinition,
   AgentDefinitionsService,
+  type AgentDelegationPolicy,
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
@@ -166,6 +167,7 @@ import {
   effortFits,
   effortOf,
   grantAgentId,
+  namesTarget,
 } from "./delegation-grants.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
@@ -8912,8 +8914,7 @@ export class AgentSessionsService {
         : named.match(/^project:([^:]+)$/)
           ? grantAgentId({ agent: named }, projectId)
           : named;
-    // A copy of an agent layered on another runs as that one (ADR 0271).
-    const copyAgentId = sourceAgent.copiesAs ?? sourceAgentId;
+    const targetAgentId = requested ?? sourceAgentId;
     const choices = () =>
       this.delegationChoices(identity, projectId, sourceAgent, "Your choices:");
     const resolveTarget = async (agentId: string) => {
@@ -8931,19 +8932,8 @@ export class AgentSessionsService {
         throw error;
       }
     };
-    const other =
-      requested === undefined || requested === sourceAgentId
-        ? undefined
-        : await resolveTarget(requested);
-    // A layered agent never runs as a subsession: whoever names it starts
-    // the agent beneath, never a second layer.
-    const targetAgentId =
-      other === undefined
-        ? copyAgentId
-        : (other.copiesAs ?? requested ?? copyAgentId);
-    const targetAgent =
-      other && !other.copiesAs ? other : await resolveTarget(targetAgentId);
-    const copy = targetAgentId === copyAgentId;
+    const targetAgent = await resolveTarget(targetAgentId);
+    const copy = targetAgentId === sourceAgentId;
     // The harness's own catalog, only when the parent names a setting.
     const catalog =
       input.model || input.effort
@@ -8967,16 +8957,25 @@ export class AgentSessionsService {
         : input.model;
     const parentEffort =
       effortOf(source.model_effort) ?? sourceAgent.defaults?.effort;
+    // A wildcard decides only where no grant names the target, and admits
+    // the agents the menu names: listed by the host, and no wider than the
+    // caller (ADR 0271).
+    const wildcardAdmits =
+      !namesTarget(policy, { targetAgentId, sourceAgentId, projectId }) &&
+      policy.agents.some((grant) => grant.agent === "*") &&
+      sandboxingRank(targetAgent.sandboxing) <=
+        sandboxingRank(sourceAgent.sandboxing) &&
+      (await this.delegationCandidates(identity, projectId, policy)).some(
+        (candidate) => candidate.id === targetAgentId,
+      );
     const choice = chooseGrant(policy, {
       targetAgentId,
-      copy,
+      sourceAgentId,
       projectId,
       ...(model ? { model } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(parentEffort ? { parentEffort } : {}),
-      wildcardAdmits:
-        sandboxingRank(targetAgent.sandboxing) <=
-        sandboxingRank(sourceAgent.sandboxing),
+      wildcardAdmits,
       modelNames,
     });
     if ("refusal" in choice)
@@ -11440,34 +11439,26 @@ export class AgentSessionsService {
     header = "You may start:",
   ): Promise<string> {
     const policy = delegationPolicy(sourceAgent.delegation);
-    const accessible = [
-      ...this.codingAgents.list(),
-      // The project's own agents are listed only where a grant can reach
-      // them, by `*` or by name, with their names.
-      ...(policy.agents.some(
-        (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
-      )
-        ? await this.committedAgents(projectId)
-        : []),
-    ].filter((candidate) => {
-      try {
-        this.assertAgentAccess(identity, projectId, candidate.id);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    const accessible = await this.delegationCandidates(
+      identity,
+      projectId,
+      policy,
+    );
     return [
       header,
       ...delegationMenu({
         policy,
         projectId,
-        ...(sourceAgent.copiesAs ? { copiesAs: sourceAgent.copiesAs } : {}),
         wildcardAgents: accessible
           .filter(
             (candidate) =>
               sandboxingRank(candidate.sandboxing) <=
-              sandboxingRank(sourceAgent.sandboxing),
+                sandboxingRank(sourceAgent.sandboxing) &&
+              // One name per agent: the project's, where it has one.
+              !accessible.some(
+                (other) =>
+                  other.id === formatProjectAgentId(projectId, candidate.id),
+              ),
           )
           .map((candidate) => ({
             id: candidate.id,
@@ -11477,6 +11468,52 @@ export class AgentSessionsService {
           accessible.find((candidate) => candidate.id === agentId)?.name,
       }),
     ].join("\n");
+  }
+
+  /**
+   * The agents a grant can reach (ADR 0271): those the host lists, and the
+   * project's committed agents where a grant reaches them, that this
+   * identity may use. The menu names them, and a wildcard admits no other:
+   * an id the host resolves but does not list needs a grant naming it.
+   */
+  private async delegationCandidates(
+    identity: Identity,
+    projectId: string,
+    policy: AgentDelegationPolicy,
+  ): Promise<RegisteredCodingAgent[]> {
+    const listed = this.codingAgents.list();
+    const reached = policy.agents.some(
+      (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
+    );
+    const committed = reached ? await this.committedAgents(projectId) : [];
+    // A host may serve a listed agent by its project id too (a built-in
+    // with no definition), the way `resolveAgent` falls back.
+    const qualified = reached
+      ? listed.flatMap((agent) => {
+          const id = formatProjectAgentId(projectId, agent.id);
+          if (
+            parseProjectAgentId(agent.id) ||
+            committed.some((candidate) => candidate.id === id)
+          )
+            return [];
+          try {
+            const served = this.codingAgents.get(id);
+            return served && !served.unavailable
+              ? [{ ...served, id, name: served.name ?? agent.name }]
+              : [];
+          } catch {
+            return [];
+          }
+        })
+      : [];
+    return [...listed, ...committed, ...qualified].filter((candidate) => {
+      try {
+        this.assertAgentAccess(identity, projectId, candidate.id);
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 
   /**
