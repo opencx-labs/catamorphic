@@ -13,10 +13,10 @@
         "vitest": "^4.1.11",
       },
       "optionalDependencies": {
-        "node-bin-darwin-arm64": "24.13.0",
-        "node-darwin-x64": "24.13.0",
-        "node-linux-arm64": "24.13.0",
-        "node-linux-x64": "24.13.0",
+        "node-bin-darwin-arm64": "24.22.1",
+        "node-darwin-x64": "24.22.1",
+        "node-linux-arm64": "24.22.1",
+        "node-linux-x64": "24.22.1",
       },
     },
     "apps/desktop": {
@@ -2603,17 +2603,17 @@
 
     "node-api-version": ["node-api-version@0.2.1", "", { "dependencies": { "semver": "^7.3.5" } }, "sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q=="],
 
-    "node-bin-darwin-arm64": ["node-bin-darwin-arm64@24.13.0", "", { "os": "darwin", "cpu": "arm64", "bin": { "node": "bin/node" } }, "sha512-W3h+6nfX6aBrczeVTpBagWwz44rYmPodDpDAWwrC4YyCOLnk8Bacl+9vx90aCt5HOBGPd9lOTyoNEYmEPOIffw=="],
+    "node-bin-darwin-arm64": ["node-bin-darwin-arm64@24.22.1", "", { "os": "darwin", "cpu": "arm64", "bin": { "node": "bin/node" } }, "sha512-inPrtFY7avq/pz29qohjBBzqNtOSms8EMmB5V4aipjXyYZaAfwLPexAAubMv5ofobuD4cK0N24JjOMo5MZ5Mrw=="],
 
-    "node-darwin-x64": ["node-darwin-x64@24.13.0", "", { "os": "darwin", "cpu": "x64", "bin": { "node": "bin/node" } }, "sha512-gr/ABsXAwgwf53X5RebojkjUtjU/HAHic8unX/KwjQmA4i2FyNzeLedC47yVdJv3wrB/jPYN/dVPCS5ZwQSUFg=="],
+    "node-darwin-x64": ["node-darwin-x64@24.22.1", "", { "os": "darwin", "cpu": "x64", "bin": { "node": "bin/node" } }, "sha512-8BV/sryf3NzYrNWi+h37g1qwWMHTbR3zAMXz4YrtIER+cT2S9//R/EFC2c4elIFaqMsmQmvNPYUewRf5i8Xzdg=="],
 
     "node-gyp": ["node-gyp@12.4.0", "", { "dependencies": { "env-paths": "^2.2.0", "exponential-backoff": "^3.1.1", "graceful-fs": "^4.2.6", "nopt": "^9.0.0", "proc-log": "^6.0.0", "semver": "^7.3.5", "tar": "^7.5.4", "tinyglobby": "^0.2.12", "undici": "^6.25.0", "which": "^6.0.0" }, "bin": { "node-gyp": "bin/node-gyp.js" } }, "sha512-OMcPNvqTCFUnNaBlmdgq+lfNqY7gTiSmNRDjY3uAXRyudeKZEZxu3CLtjMQrx4zZxCX2b/mpNqTtwuCJgXhHkw=="],
 
     "node-int64": ["node-int64@0.4.0", "", {}, "sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw=="],
 
-    "node-linux-arm64": ["node-linux-arm64@24.13.0", "", { "os": "linux", "cpu": "arm64", "bin": { "node": "bin/node" } }, "sha512-b4XV161VOuo8+CCl6gFCYmMIqk9ct/ySU9TvjULK1BjnInAYFeUl5djaBpF5IhhLpzrSabXyRo9lU+8JOF4dnA=="],
+    "node-linux-arm64": ["node-linux-arm64@24.22.1", "", { "os": "linux", "cpu": "arm64", "bin": { "node": "bin/node" } }, "sha512-1uD+Qvcu14ZJ6JVhsAiOeAiCQI0Nnu+y60VJnwhq8nGr+1l7XKFnNlZ42f619d+h5UzRQtO3pwpBEM2FYR/83Q=="],
 
-    "node-linux-x64": ["node-linux-x64@24.13.0", "", { "os": "linux", "cpu": "x64", "bin": { "node": "bin/node" } }, "sha512-aUuFIsiqSfiF6C0nQgrgoB4DBQJdjLsSFYmOKj2h/ALtq7GThFwokviHOrFichPUhDXqLhiLqGYMWyiaqo9wBA=="],
+    "node-linux-x64": ["node-linux-x64@24.22.1", "", { "os": "linux", "cpu": "x64", "bin": { "node": "bin/node" } }, "sha512-ogMoFZRQLCX7VpzQAtfs7q0DVFa7D79LKhmttHZNGJrz0Yp5/LtU0MISM7gvThSo6AbVelac9uVu9Jfm1464ow=="],
 
     "node-releases": ["node-releases@2.0.53", "", {}, "sha512-D9UOmYG3UH1V+ENW56t5QXBwJw1YEY18ruVeus89Rw+SyIgjPkCO84bRzO3uNIYosJbNwiabWVn48o3uJLjxFQ=="],
 
@@ -2642,8 +2642,6 @@
     "openapi-fetch": ["openapi-fetch@0.17.0", "", { "dependencies": { "openapi-typescript-helpers": "^0.1.0" } }, "sha512-PsbZR1wAPcG91eEthKhN+Zn92FMHxv+/faECIwjXdxfTODGSGegYv0sc1Olz+HYPvKOuoXfp+0pA2XVt2cI0Ig=="],
 
     "openapi-types": ["openapi-types@12.1.3", "", {}, "sha512-N4YtSYJqghVu4iek2ZUvcN/0aqH1kRDuNqzcycDxhOUpg7GdvLa2F3DgS6yBNhInhv2r/6I0Flkn7CqL8+nIcw=="],
-
-    "openapi-typescript": ["openapi-typescript@7.13.0", "", { "dependencies": { "@redocly/openapi-core": "^1.34.6", "ansi-colors": "^4.1.3", "change-case": "^5.4.4", "parse-json": "^8.3.0", "supports-color": "^10.2.2", "yargs-parser": "^21.1.1" }, "peerDependencies": { "typescript": "^5.x" }, "bin": { "openapi-typescript": "bin/cli.js" } }, "sha512-EFP392gcqXS7ntPvbhBzbF8TyBA+baIYEm791Hy5YkjDYKTnk/Tn5OQeKm5BIZvJihpp8Zzr4hzx0Irde1LNGQ=="],
 
     "openapi-typescript-helpers": ["openapi-typescript-helpers@0.1.0", "", {}, "sha512-OKTGPthhivLw/fHz6c3OPtg72vi86qaMlqbJuVJ23qOvQ+53uw1n7HdmkJFibloF7QEjDrDkzJiOJuockM/ljw=="],
 
@@ -3206,6 +3204,8 @@
     "@babel/helper-compilation-targets/lru-cache": ["lru-cache@5.1.1", "", { "dependencies": { "yallist": "^3.0.2" } }, "sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w=="],
 
     "@babel/helper-compilation-targets/semver": ["semver@6.3.1", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
+
+    "@catamorphic/api-client/openapi-typescript": ["openapi-typescript@7.13.0", "", { "dependencies": { "@redocly/openapi-core": "^1.34.6", "ansi-colors": "^4.1.3", "change-case": "^5.4.4", "parse-json": "^8.3.0", "supports-color": "^10.2.2", "yargs-parser": "^21.1.1" }, "peerDependencies": { "typescript": "^5.x" }, "bin": { "openapi-typescript": "bin/cli.js" } }, "sha512-EFP392gcqXS7ntPvbhBzbF8TyBA+baIYEm791Hy5YkjDYKTnk/Tn5OQeKm5BIZvJihpp8Zzr4hzx0Irde1LNGQ=="],
 
     "@catamorphic/api-client/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 

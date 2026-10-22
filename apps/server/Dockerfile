@@ -27,7 +27,7 @@
 # sign-in stays in /data:
 #
 #   docker exec -it <worker> work worker sign-in codex --member <id>
-FROM oven/bun:1.4.3
+FROM oven/bun:1.4.4
 
 # The local-process execution provider (ADR 0047) runs agent/workflow
 # commands as plain processes: the container IS the sandbox. bash + git

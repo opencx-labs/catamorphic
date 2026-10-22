@@ -23,7 +23,7 @@ import { type ContainerRuntime, probeContainerSupport } from "../support.js";
 // (scripts/test-in-docker.sh sets one up). WORK_TEST_CONTAINER_RUNTIME=runc
 // runs the same tests under runc.
 const enabled = process.env.WORK_TEST_CONTAINER === "1";
-const IMAGE = process.env.WORK_TEST_CONTAINER_IMAGE ?? "oven/bun:1.4.3-alpine";
+const IMAGE = process.env.WORK_TEST_CONTAINER_IMAGE ?? "oven/bun:1.4.4-alpine";
 // Pinned, as every image these tests pull: an upstream release never
 // changes a run.
 const DIND_IMAGE = "docker:29.8.2-dind";

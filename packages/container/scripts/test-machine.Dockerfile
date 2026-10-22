@@ -6,7 +6,7 @@
 # move them forward deliberately, gVisor with the CI job's.
 FROM docker:29.8.2-dind AS docker
 
-FROM node:24.13.0-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bzip2 ca-certificates curl git iptables procps \
   && rm -rf /var/lib/apt/lists/*
@@ -30,7 +30,7 @@ RUN set -e; \
   chmod a+rx /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1; \
   rm -f gvisor.tar.bz2; \
   runsc --version
-RUN npm install -g bun@1.4.3 && bun --version
+RUN npm install -g bun@1.4.4 && bun --version
 # Work's runtime arguments (ADR 0204): host sockets for the egress proxy,
 # raw sockets for nested Docker.
 RUN mkdir -p /etc/docker && printf '%s\n' \
