@@ -208,7 +208,9 @@ const INHERITED_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
  * in the host's or the attempt's env or in Claude's settings) stays: the
  * sign-in is not for it. A host that means a key passes it in `env`. The
  * CLI hands its environment to what it runs (Bash commands, hooks, MCP
- * servers), so those do not see the dropped credential either.
+ * servers), so those do not see the dropped credential either. The
+ * sign-in's own credential store is named, whatever home the CLI ends up
+ * in (see {@link hostSignInStore}).
  */
 export function hostProcessEnv(
   input: {
@@ -226,7 +228,38 @@ export function hostProcessEnv(
     )
   )
     for (const name of INHERITED_CREDENTIALS) delete env[name];
+  env.CLAUDE_SECURESTORAGE_CONFIG_DIR = hostSignInStore(input.env ?? {});
   return env;
+}
+
+/**
+ * The CLI keeps a sign-in in a store its config home names (the macOS
+ * Keychain item, else `.credentials.json` there) and refreshes it under a
+ * lock in that home, shared by every Claude Code using the sign-in. A
+ * resumed thread's CLI runs in another home: the SDK writes Work's stored
+ * transcript (ADR 0198) to a temporary one, with a copy of the sign-in it
+ * strips of the refresh token. From that copy the CLI cannot refresh, so
+ * it fails once the copied access token expires (eight hours) or another
+ * Claude Code renews the sign-in, and the person is asked to sign in again
+ * with a sign-in that was fine (ADR 0275). Naming the sign-in's own home
+ * as the store, as the SDK itself does on Windows, keeps the resumed CLI
+ * on the real sign-in: it refreshes it in place, under the shared lock,
+ * and takes up a token another process renewed.
+ *
+ * The host's sign-in is the one its CLI would use on a fresh thread, with
+ * the attempt's names first: every CLI hands this setting to what it runs,
+ * so a host started from a chat's shell inherits one, and an agent signed
+ * in on a home of its own keeps that home. An empty name is the default
+ * home's store.
+ */
+function hostSignInStore(env: Record<string, string>): string {
+  return (
+    env.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
+    env.CLAUDE_CONFIG_DIR ??
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ??
+    process.env.CLAUDE_CONFIG_DIR ??
+    ""
+  );
 }
 
 /**
@@ -554,8 +587,14 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
         }
       : {}),
-    // The member's own sign-in, in the harness's own home (ADR 0199).
-    ...(access.kind === "sign_in" ? { CLAUDE_CONFIG_DIR: access.home } : {}),
+    // The member's own sign-in, in the harness's own home (ADR 0199), and
+    // its store, whatever the attempt names (ADR 0275).
+    ...(access.kind === "sign_in"
+      ? {
+          CLAUDE_CONFIG_DIR: access.home,
+          CLAUDE_SECURESTORAGE_CONFIG_DIR: access.home,
+        }
+      : {}),
   };
   const command = options.command ?? (host ? undefined : "claude");
   const systemPrompt = attempt.systemPrompt.trim();

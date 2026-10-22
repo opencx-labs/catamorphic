@@ -1,6 +1,6 @@
 # 0228 — A sign-in that can still refresh is retried, and a fixed one runs the turn again
 
-- **Status:** Accepted (amends [0222](0222-desktop-harnesses-stay-warm-between-turns.md)); turns a chat's own task started, and failures seen while the person was away, amended by [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md)
+- **Status:** Accepted (amends [0222](0222-desktop-harnesses-stay-warm-between-turns.md)); turns a chat's own task started, and failures seen while the person was away, amended by [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md); its diagnosis corrected by [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md): the failures were resumed threads whose CLI could not refresh
 - **Date:** 2026-10-13
 
 ## Context
