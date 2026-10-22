@@ -1017,6 +1017,12 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-close-answer", handler);
   },
+  onBrowserPageActivated: (listener: (event: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:browser-page-activated", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-page-activated", handler);
+  },
   sitePermissionAnswer: (input: {
     id: string;
     decision: string;

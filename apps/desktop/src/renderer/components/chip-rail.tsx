@@ -186,11 +186,7 @@ function ChipGlyph({
     : (chip.activity ?? (chip.signal === "working" ? "working" : undefined));
   return (
     <span className={`relative grid shrink-0 place-items-center ${size}`}>
-      <SignalGlyph
-        working={mark === "working"}
-        waiting={mark === "working" ? null : mark}
-        className={size}
-      >
+      <SignalGlyph activity={mark} className={size}>
         <span className="grid size-full place-items-center">
           {leaving && (
             <span

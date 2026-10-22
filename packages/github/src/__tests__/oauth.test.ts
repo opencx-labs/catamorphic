@@ -7,7 +7,7 @@ import {
   refreshAccessToken,
   requestDeviceCode,
 } from "../oauth.js";
-import { GithubAuthError } from "../types.js";
+import { GithubApiError, GithubAuthError } from "../types.js";
 
 const APP = { clientId: "Iv1_test" };
 const NOW = 1_750_000_000_000;
@@ -125,6 +125,17 @@ describe("refreshAccessToken", () => {
     expect(tokens.refreshToken).toBe("ghr_new");
     expect(capture.body).toContain("grant_type=refresh_token");
     expect(capture.body).not.toContain("client_secret");
+  });
+
+  it("tells GitHub failing from a refused grant", async () => {
+    const answering = (status: number) =>
+      (async () => new Response("", { status })) as typeof fetch;
+    await expect(
+      refreshAccessToken(APP, "ghr_old", { fetch: answering(503) }),
+    ).rejects.toBeInstanceOf(GithubApiError);
+    await expect(
+      refreshAccessToken(APP, "ghr_old", { fetch: answering(401) }),
+    ).rejects.toBeInstanceOf(GithubAuthError);
   });
 });
 

@@ -154,7 +154,8 @@ export type {
   McpAppRef,
 } from "../../shared/chat.js";
 
-import { firstWaiting } from "./chat-signals.js";
+import { currentWait } from "../lib/chat-activity.js";
+import { chatActivity, firstWaiting } from "./chat-signals.js";
 import {
   type ComposerAttachment,
   ComposerInput,
@@ -449,6 +450,10 @@ const emptyChatPromptFor = (localId: string) => {
  * so queued sends and drafts survive; the panel morphs between a floating
  * partial dock and a full workspace tab (the bubble hides while tabbed).
  */
+/** A chat on screen, floating or in its tab: dock-in plays once. */
+const EXPANDED_POSE =
+  "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-in";
+
 export function ChatDock(props: ChatDockProps) {
   return (
     <ProjectAuthorityProvider
@@ -820,6 +825,27 @@ function ChatDockContent({
   /** Outside a tab, the column the messages and the composer share. */
   const floatingColumn = isTab ? "" : "mx-auto w-full max-w-3xl";
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
+  // Coming forward (a tab switch, an opening), the chat shows settled: for
+  // that render and two frames after it, what follows the bubble strip as
+  // it folds and a split pane's geometry jump there instead of easing,
+  // which would re-lay out the transcript every frame.
+  const [arriving, setArriving] = useState(false);
+  const [wasFront, setWasFront] = useState(frontSurface);
+  if (wasFront !== frontSurface) {
+    setWasFront(frontSurface);
+    setArriving(frontSurface);
+  }
+  useEffect(() => {
+    if (!arriving) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setArriving(false));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [arriving]);
   // Questions, approvals and elicitations waiting on this person; any
   // client answers them, and the chat survives a restart around them.
   const questionRequests = chat.requests.filter(
@@ -1547,9 +1573,9 @@ function ChatDockContent({
   const awaitingInput = chat.requests.some(
     (request) => request.blocking && request.answerable,
   );
-  // What the chat left running, for its icon to say while it is not
-  // working: a watch, subagents still at work, a background command.
-  const waiting = firstWaiting([
+  // What the chat left running, for its icon to say while it rests: a
+  // watch, subagents still at work, a background command.
+  const leftRunning = firstWaiting([
     backgroundCommands.some(
       (command) => command.kind === "watch" && command.status === "running",
     )
@@ -1566,18 +1592,30 @@ function ChatDockContent({
       ? "command"
       : null,
   ]);
+  // A turn whose every running step only waits shows what it waits on:
+  // the agent is doing nothing but wait.
+  const waitingNow = useMemo(
+    () => (chat.isWorking ? currentWait(chat.state, activeTurnId) : null),
+    [chat.isWorking, chat.state, activeTurnId],
+  );
+  const iconActivity = chatActivity({
+    working: chat.isWorking,
+    awaitingInput,
+    waitingNow,
+    leftRunning,
+  });
   useEffect(() => {
     onSignalsChange(entry.localId, {
       working: chat.isWorking,
       draft: hasDraft,
       awaitingInput,
-      waiting,
+      activity: iconActivity,
     });
   }, [
     chat.isWorking,
     hasDraft,
     awaitingInput,
-    waiting,
+    iconActivity,
     entry.localId,
     onSignalsChange,
   ]);
@@ -1589,7 +1627,7 @@ function ChatDockContent({
         working: false,
         draft: false,
         awaitingInput: false,
-        waiting: null,
+        activity: null,
       }),
     [entry.localId],
   );
@@ -2619,10 +2657,12 @@ function ChatDockContent({
   return (
     <div
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
-        splitResizing
-          ? "transition-[padding]"
-          : "transition-[padding,left,right]"
-      } duration-250 ease-standard ${
+        arriving
+          ? "transition-none"
+          : splitResizing
+            ? "transition-[padding] duration-250 ease-standard"
+            : "transition-[padding,left,right] duration-250 ease-standard"
+      } ${
         splitPane && slot === "left"
           ? "inset-y-0 left-0 border-r border-border p-0"
           : splitPane && slot === "right"
@@ -2727,17 +2767,23 @@ function ChatDockContent({
           closing || minimizing
             ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-out"
             : expanded
-              ? "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-in"
-              : // Minimized or behind another tab: kept (drafts, scroll,
-                // queued sends) but skipped by style, layout and paint,
-                // which a long transcript otherwise pays on every frame
-                // while it streams (docs/performance.md). The skip is a
-                // discrete step after the fade, so content stays drawn
-                // through it, whichever exit led here. Only this
-                // state transitions it: coming back, a transition's first
-                // frame would still skip the chat as it focuses its
-                // composer.
-                "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow,content-visibility] transition-discrete [content-visibility:hidden]"
+              ? EXPANDED_POSE
+              : presentsAsTab
+                ? // Behind another tab: hidden at once, as a page is, in its
+                  // own pose. Nothing about its box changes and its dock-in
+                  // stays played, so bringing it forward shows it in the
+                  // same frame, without re-laying out its transcript.
+                  `${EXPANDED_POSE} invisible pointer-events-none [content-visibility:hidden]`
+                : // Minimized: kept (drafts, scroll,
+                  // queued sends) but skipped by style, layout and paint,
+                  // which a long transcript otherwise pays on every frame
+                  // while it streams (docs/performance.md). The skip is a
+                  // discrete step after the fade, so content stays drawn
+                  // through it, whichever exit led here. Only this
+                  // state transitions it: coming back, a transition's first
+                  // frame would still skip the chat as it focuses its
+                  // composer.
+                  "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow,content-visibility] transition-discrete [content-visibility:hidden]"
         }`}
         aria-label={title}
         aria-hidden={!expanded}
@@ -3244,7 +3290,7 @@ function ChatDockContent({
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
           <div
-            className={`flex w-full flex-col transition-[padding] duration-250 ease-standard ${
+            className={`flex w-full flex-col ${arriving ? "" : "transition-[padding] duration-250 ease-standard"} ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"
@@ -3261,15 +3307,19 @@ function ChatDockContent({
               few rows belong to the latest activity), CSS-folded rather
               than unmounted so their motion state survives the lurk. */}
             {chipSession && (
+              // One column no wider than the composer: an auto column
+              // would grow to a wide chip's whole title and spill past it.
               <div
-                className={`grid shrink-0 transition-[grid-template-rows,opacity] duration-250 ease-standard ${
+                className={`grid shrink-0 grid-cols-1 transition-[grid-template-rows,opacity] duration-250 ease-standard ${
                   lurking
                     ? "grid-rows-[0fr] opacity-0"
                     : "grid-rows-[1fr] opacity-100"
                 }`}
                 inert={lurking ? true : undefined}
               >
-                <div className={`min-h-0 ${lurking ? "overflow-hidden" : ""}`}>
+                <div
+                  className={`min-h-0 min-w-0 ${lurking ? "overflow-hidden" : ""}`}
+                >
                   <ChipRail
                     chips={chipView.chips}
                     source={chipView.source}

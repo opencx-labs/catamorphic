@@ -342,7 +342,7 @@ const NO_CHAT_SIGNALS: ChatLiveSignals = {
   working: false,
   draft: false,
   awaitingInput: false,
-  waiting: null,
+  activity: null,
 };
 
 const truncateLabel = (value: string): string =>
@@ -1890,7 +1890,7 @@ export function App({
           // the tab was hidden, pencil for an unsent draft, "?" for a
           // waiting question.
           working: signalsByChat[chat.localId]?.working ?? false,
-          waiting: signalsByChat[chat.localId]?.waiting ?? null,
+          activity: signalsByChat[chat.localId]?.activity ?? null,
           unread: unreadByChat[chat.localId] ?? false,
           attention: attentionByChat[chat.localId] ?? false,
           draft: signalsByChat[chat.localId]?.draft ?? false,
@@ -3287,7 +3287,7 @@ export function App({
         before.working === next.working &&
         before.draft === next.draft &&
         before.awaitingInput === next.awaitingInput &&
-        before.waiting === next.waiting
+        before.activity === next.activity
       ) {
         return;
       }

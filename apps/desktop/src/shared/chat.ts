@@ -17,16 +17,21 @@ export interface PendingChatMessage {
 export type ChatWaiting = Exclude<SidebarActivity, "working">;
 
 export interface ChatSignals {
+  /** A turn runs (an agent working or waiting within it). */
   working?: boolean;
   unread?: boolean;
   draft?: boolean;
   awaitingInput?: boolean;
-  waiting?: ChatWaiting | null;
+  /**
+   * What its icon's lower corner says: working, or what it waits on (within
+   * a turn or left running beside it); null for nothing.
+   */
+  activity?: SidebarActivity | null;
 }
 
 /** What a chat reports of itself whenever it changes. */
 export type ChatLiveSignals = Required<
-  Pick<ChatSignals, "working" | "draft" | "awaitingInput" | "waiting">
+  Pick<ChatSignals, "working" | "draft" | "awaitingInput" | "activity">
 >;
 
 export type ChatMode = "min" | "partial" | "tab";

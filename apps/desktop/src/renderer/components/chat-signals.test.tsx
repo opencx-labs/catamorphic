@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  activityOf,
+  chatActivity,
   combineSignals,
   SignalBadge,
   SignalGlyph,
@@ -43,7 +43,7 @@ it("stops all status animations when a chat settles", () => {
     act(() =>
       root.render(
         <>
-          <SignalGlyph working={working}>
+          <SignalGlyph activity={working ? "working" : null}>
             <span>Chat</span>
           </SignalGlyph>
           <SignalBadge signals={{ attention }} />
@@ -68,7 +68,14 @@ it("shows a question instead of a spinner while a running turn awaits input", ()
   act(() =>
     root.render(
       <>
-        <SignalGlyph working awaitingInput>
+        <SignalGlyph
+          activity={chatActivity({
+            working: true,
+            awaitingInput: true,
+            waitingNow: null,
+            leftRunning: null,
+          })}
+        >
           <span>Chat</span>
         </SignalGlyph>
         <SignalBadge signals={{ working: true, awaitingInput: true }} />
@@ -88,7 +95,7 @@ it("keeps the icon while working, with the spinner on its corner", () => {
   const render = (working: boolean) =>
     act(() =>
       root.render(
-        <SignalGlyph working={working}>
+        <SignalGlyph activity={working ? "working" : null}>
           <span data-testid="icon">Chat</span>
         </SignalGlyph>,
       ),
@@ -111,7 +118,7 @@ it("keeps a reply's dot while the agent works again", () => {
   act(() =>
     root.render(
       <>
-        <SignalGlyph working>
+        <SignalGlyph activity="working">
           <span>Chat</span>
         </SignalGlyph>
         <SignalBadge signals={{ working: true, unread: true }} size="sm" />
@@ -133,7 +140,7 @@ it("says what a chat waits on while it is not working", () => {
   const render = (working: boolean) =>
     act(() =>
       root.render(
-        <SignalGlyph working={working} waiting="watch">
+        <SignalGlyph activity={working ? "working" : "watch"}>
           <span>Chat</span>
         </SignalGlyph>,
       ),
@@ -150,16 +157,32 @@ it("says what a chat waits on while it is not working", () => {
 });
 
 it("names one mark per corner, the most telling first", () => {
-  expect(activityOf({ working: true, waiting: "watch" })).toBe("working");
-  expect(activityOf({ working: true, awaitingInput: true })).toBeNull();
-  expect(activityOf({ waiting: "command" })).toBe("command");
-  expect(activityOf({})).toBeNull();
+  const mark = (
+    working: boolean,
+    rest: Partial<Parameters<typeof chatActivity>[0]> = {},
+  ) =>
+    chatActivity({
+      working,
+      awaitingInput: false,
+      waitingNow: null,
+      leftRunning: null,
+      ...rest,
+    });
+  expect(mark(true, { leftRunning: "watch" })).toBe("working");
+  expect(mark(true, { awaitingInput: true })).toBeNull();
+  // A turn that only waits shows what it waits on, not the spinner.
+  expect(mark(true, { waitingNow: "subagent" })).toBe("subagent");
+  expect(mark(false, { leftRunning: "command" })).toBe("command");
+  expect(mark(false)).toBeNull();
   expect(
     combineSignals([
-      { waiting: "command" },
-      { waiting: "subagent" },
-      { waiting: "watch" },
-    ]).waiting,
+      { activity: "command" },
+      { activity: "subagent" },
+      { activity: "watch" },
+    ]).activity,
   ).toBe("watch");
-  expect(combineSignals([{ working: true }, {}]).waiting).toBeNull();
+  expect(
+    combineSignals([{ activity: "watch" }, { activity: "working" }]).activity,
+  ).toBe("working");
+  expect(combineSignals([{ working: true }, {}]).activity).toBeNull();
 });
