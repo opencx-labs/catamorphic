@@ -6636,8 +6636,10 @@ export function App({
             ),
         )
       : undefined);
-  const sidebarTab = presentedTabs.find(
-    (tab) => tabKey(tab) === sidebarSurfaceKey,
+  // Pages are not among presentedTabs (the screens): the page in front is
+  // found among every tab.
+  const sidebarPage = allTabs.find(
+    (tab) => tab.kind === "browser" && tabKey(tab) === sidebarSurfaceKey,
   );
   const sidebarSurface: SidebarSurface = {
     tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
@@ -6645,15 +6647,13 @@ export function App({
       ? "chat"
       : sidebarEditor
         ? "editor"
-        : (sidebarTab?.kind ?? "none"),
+        : (presentedTabs.find((tab) => tabKey(tab) === sidebarSurfaceKey)
+            ?.kind ?? "none"),
     key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
     projectId,
     sessionId: sidebarSessionChat?.sessionId ?? undefined,
     path: sidebarEditor?.filePath ?? undefined,
-    url:
-      !sidebarChat && sidebarTab?.kind === "browser"
-        ? sidebarTab.bookmarkUrl
-        : undefined,
+    url: sidebarChat ? undefined : sidebarPage?.bookmarkUrl,
     selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
   const openProjectFile = (filePath: string, mode?: CommitMode) => {
