@@ -99,8 +99,7 @@
 [data-lurking] * {
   scrollbar-width: none;
 }
-[data-lurking] button[aria-label="Scroll to latest message"],
-[data-lurking] button[aria-label="Jump to your previous message"] {
+[data-lurking] button[aria-label="Scroll to latest message"] {
   display: none;
 }
 

@@ -830,7 +830,6 @@ describe("ChatTimeline for embedders", () => {
       onFork: () => undefined,
       onRollback: () => true,
       registerJumpToPreviousUserMessage: register,
-      jumpShortcut: "⇞",
     });
     expect(hints.map((hint) => hint.label)).toEqual(
       expect.arrayContaining([

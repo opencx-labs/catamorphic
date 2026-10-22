@@ -20,7 +20,6 @@ import {
 } from "@catamorphic/react";
 import {
   ArrowDown,
-  ArrowUp,
   Check,
   ChevronRight,
   ClipboardType,
@@ -270,12 +269,10 @@ export interface ChatTimelineProps {
     text: string,
   ) => { lead: ReactNode; text: string } | undefined;
   /**
-   * Hands the host the "jump to my previous message" scroll action, so a
-   * composer shortcut triggers the same move as the button.
+   * Hands the host the "jump to my previous message" scroll action, for a
+   * composer shortcut: the conversation shows no button for it.
    */
   registerJumpToPreviousUserMessage?: (jump: () => void) => void;
-  /** That shortcut's display form (e.g. "⇞"), shown in the button's hint. */
-  jumpShortcut?: string;
 }
 
 /**
@@ -577,7 +574,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
     Hint = TitleHint,
     presentUserMessage,
     registerJumpToPreviousUserMessage,
-    jumpShortcut,
   } = props;
   const latest = useRef(props);
   latest.current = props;
@@ -969,7 +965,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
                     {hasUserMessages && (
                       <JumpToPreviousUserMessage
                         register={registerJumpToPreviousUserMessage}
-                        shortcut={jumpShortcut}
                       />
                     )}
                     <FocusMessage
@@ -1349,32 +1344,17 @@ function useFoldingNotes(views: TurnView[]): {
  * where its answer starts. The everyday use: "what did I even ask?"
  * while multitasking. A host's composer shortcut can do the same move.
  */
+/**
+ * The "jump to my previous message" move, handed to the host for its
+ * shortcut. It draws nothing: the conversation's one arrow is Scroll to
+ * latest.
+ */
 function JumpToPreviousUserMessage({
   register,
-  shortcut,
 }: {
   register?: (jump: () => void) => void;
-  shortcut?: string;
 }) {
-  const { Hint } = useContext(HostContext);
-  const { scrollRef, contentRef, isAtBottom, stopScroll } =
-    useStickToBottomContext();
-  // A chat short enough to see whole needs no jump affordance; watch both
-  // the scroller and its content so the button appears the moment the
-  // conversation outgrows the viewport (and goes away if it shrinks).
-  const [scrollable, setScrollable] = useState(false);
-  useEffect(() => {
-    const scroller = scrollRef.current;
-    const content = contentRef.current;
-    if (!scroller || !content) return;
-    const measure = () =>
-      setScrollable(scroller.scrollHeight > scroller.clientHeight + 16);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(scroller);
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [scrollRef, contentRef]);
+  const { scrollRef, contentRef, stopScroll } = useStickToBottomContext();
   const settling = useRef<(() => void) | undefined>(undefined);
   useEffect(() => () => settling.current?.(), []);
   const jump = useCallback(() => {
@@ -1438,22 +1418,7 @@ function JumpToPreviousUserMessage({
     register?.(jump);
   }, [register, jump]);
 
-  // One arrow at a time, in one place: away from the end, Scroll to latest
-  // takes it. The shortcut jumps either way.
-  if (!scrollable || !isAtBottom) return null;
-  return (
-    <Hint label="Jump to your previous message" shortcut={shortcut}>
-      <button
-        type="button"
-        className={CHAT_ARROW}
-        onClick={jump}
-        aria-label="Jump to your previous message"
-        data-testid="chat-jump-previous"
-      >
-        <ArrowUp className="size-4" />
-      </button>
-    </Hint>
-  );
+  return null;
 }
 
 /**
@@ -3120,16 +3085,13 @@ function defaultAttachment(attachment: AgentAttachment): ReactNode {
 }
 
 /** The conversation's one scroll arrow, centered over it. */
-const CHAT_ARROW =
-  "absolute bottom-4 left-1/2 grid size-8 -translate-x-1/2 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl";
-
 function ScrollToLatest() {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
   if (isAtBottom) return null;
   return (
     <button
       type="button"
-      className={CHAT_ARROW}
+      className="absolute bottom-4 left-1/2 grid size-8 -translate-x-1/2 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl"
       onClick={() => scrollToBottom()}
       aria-label="Scroll to latest message"
     >

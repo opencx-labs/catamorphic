@@ -101,7 +101,7 @@ that list only shrinks.
 
 Desktop behavior enters through the timeline's host surface, never an edit to
 the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
-(`ShortcutHint`, with `jumpShortcut` for PageUp), `renderLink` and `onLinkClick`,
+(`ShortcutHint`), `registerJumpToPreviousUserMessage` for PageUp, `renderLink` and `onLinkClick`,
 `sourceHref`, `resolveToolIcon`, `onReauth`, `backgroundCommands`,
 `workDisplay` and `presentUserMessage` (a sent skill leads its message as a
 chip, `presentSkillMessage`). Rows are memoized: keep render-affecting slots stable

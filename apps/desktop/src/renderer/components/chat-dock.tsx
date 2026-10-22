@@ -3236,7 +3236,6 @@ function ChatDockContent({
               renderAttachment={sentPill}
               presentUserMessage={presentSkillMessage}
               Hint={ShortcutHint}
-              jumpShortcut="⇞"
               error={
                 chat.connectionLost
                   ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
