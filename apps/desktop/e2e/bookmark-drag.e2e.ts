@@ -99,7 +99,15 @@ describe("drag tabs and chats into bookmarks", () => {
     // Saved, the page is listed once: its bookmark stands for the open tab
     // and closes it, and the tab leaves Tabs.
     await app.waitFor(
-      `!document.querySelector('aside [data-tree-id^="browser:"]') && !!document.querySelector('aside [data-tree-id="${saved?.id}"] button[aria-label^="Close"]')`,
+      `!document.querySelector('aside [data-tree-id^="browser:"]')`,
+      { label: "the saved page leaves Tabs" },
+    );
+    // Its folder opens on it: the bookmark closes the tab.
+    if (!(await run(`return !!$('[data-tree-id="${saved?.id}"]')`)))
+      await run(`$('[data-tree-id="${folderId}"] button').click()`);
+    await app.waitFor(
+      `!!document.querySelector('aside [data-tree-id="${saved?.id}"] button[aria-label^="Close"]')`,
+      { label: "the bookmark closes the open page" },
     );
   });
   it("pins a saved chat and reopens the same conversation after its tab closes", async () => {
@@ -152,7 +160,7 @@ describe("drag tabs and chats into bookmarks", () => {
       "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
     await app.waitFor(
-      "!!document.querySelector('aside [data-point-key^=\"chat:\"]') && document.body.textContent.includes('remember this pinned conversation')",
+      `!!document.querySelector('${close}') && document.body.textContent.includes('remember this pinned conversation')`,
     );
     await drop(
       "[data-drop-zone=pinned] li[draggable]",

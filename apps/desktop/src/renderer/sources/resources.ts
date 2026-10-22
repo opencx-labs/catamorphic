@@ -199,7 +199,8 @@ const TAB_ICONS: Partial<Record<WorkspaceTab["kind"], string>> = {
 export function tabsSource(deps: WorkSourceDeps): SectionSource {
   const source: SectionSource = {
     title: "Tabs",
-    empty: "No open tabs.",
+    // A tab its bookmark stands for is open, and listed there.
+    empty: "No other tabs open.",
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId }) => {
       const { tabs, activeTabKey, tabGroups } = deps.host();

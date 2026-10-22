@@ -6636,18 +6636,24 @@ export function App({
             ),
         )
       : undefined);
+  const sidebarTab = presentedTabs.find(
+    (tab) => tabKey(tab) === sidebarSurfaceKey,
+  );
   const sidebarSurface: SidebarSurface = {
     tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
     kind: sidebarChat
       ? "chat"
       : sidebarEditor
         ? "editor"
-        : (presentedTabs.find((tab) => tabKey(tab) === sidebarSurfaceKey)
-            ?.kind ?? "none"),
+        : (sidebarTab?.kind ?? "none"),
     key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
     projectId,
     sessionId: sidebarSessionChat?.sessionId ?? undefined,
     path: sidebarEditor?.filePath ?? undefined,
+    url:
+      !sidebarChat && sidebarTab?.kind === "browser"
+        ? sidebarTab.bookmarkUrl
+        : undefined,
     selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
   const openProjectFile = (filePath: string, mode?: CommitMode) => {
