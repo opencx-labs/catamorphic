@@ -105,12 +105,12 @@ describe("toolRuntime", () => {
       const name = path
         .relative("/repo/node_modules", nodePath)
         .split(path.sep)[0];
-      expect(pinned).toHaveProperty([name ?? ""], "24.13.0");
+      expect(pinned).toHaveProperty([name ?? ""], "24.22.1");
     }
     expect("node" in pinned).toBe(false);
   });
 
-  it("selects repository Node 24.13.0 ahead of an older ambient Node", () => {
+  it("selects repository Node 24.22.1 ahead of an older ambient Node", () => {
     const ambientRoot = temporaryDirectory();
     const ambientNode = writeFakeNode({
       rootPath: ambientRoot,
@@ -134,7 +134,7 @@ describe("toolRuntime", () => {
         encoding: "utf8",
         env: runtime.env,
       }).trim(),
-    ).toBe("v24.13.0");
+    ).toBe("v24.22.1");
   });
 
   it("rejects a repository Node with a different version", () => {
@@ -143,7 +143,7 @@ describe("toolRuntime", () => {
 
     expect(() =>
       toolRuntime({ rootPath: repository, env: { PATH: "/usr/bin" } }),
-    ).toThrow("Expected repository Node v24.13.0, received v24.12.0");
+    ).toThrow("Expected repository Node v24.22.1, received v24.12.0");
   });
 
   it("runs the checked-in Turbo entry point through pinned Node", () => {

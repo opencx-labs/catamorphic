@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-const EXPECTED_NODE_VERSION = "v24.13.0";
+const EXPECTED_NODE_VERSION = "v24.22.1";
 
 export interface ToolRuntime {
   nodePath: string;

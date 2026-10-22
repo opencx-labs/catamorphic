@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "engines": {
-    "bun": ">=1.4.3",
+    "bun": ">=1.4.4",
     "node": ">=22.12.0"
   },
   "workspaces": [
@@ -44,10 +44,10 @@
     "vitest": "^4.1.11"
   },
   "optionalDependencies": {
-    "node-bin-darwin-arm64": "24.13.0",
-    "node-darwin-x64": "24.13.0",
-    "node-linux-arm64": "24.13.0",
-    "node-linux-x64": "24.13.0"
+    "node-bin-darwin-arm64": "24.22.1",
+    "node-darwin-x64": "24.22.1",
+    "node-linux-arm64": "24.22.1",
+    "node-linux-x64": "24.22.1"
   },
   "overrides": {
     "@xmldom/xmldom": "^0.8.15",
