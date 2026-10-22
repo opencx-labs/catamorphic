@@ -138,6 +138,19 @@ describe("agent-first onboarding", () => {
       "leave me alone\n",
     );
 
+    expect(
+      await run(`
+      return ['claude-code', 'codex', 'free', 'hermes', 'api-key'].map(id =>
+        $('[data-testid="agent-wizard-' + id + '"] [data-harness-icon]')?.dataset.harnessIcon);
+    `),
+    ).toEqual(["claude", "openai", "openrouter", "default", "default"]);
+
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "agent-wizard-choices.png",
+      ),
+    );
     // Both detected-login branches must fit inside a narrow dialog. In
     // the old shared row, the long labels wrapped outside 32px buttons.
     for (const provider of ["codex", "claude-code"]) {
@@ -147,6 +160,18 @@ describe("agent-first onboarding", () => {
       `);
       await runWait(
         `return $$('[data-testid="agent-wizard-back"]').some(el => !el.closest('[inert]'));`,
+      );
+      expect(await run(`return $('input[name="agentName"]').value;`)).toBe(
+        provider === "codex" ? "ChatGPT" : "Claude",
+      );
+      await app.waitFor(
+        `!document.getAnimations().some(animation => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity)`,
+      );
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+          `agent-wizard-${provider}-name.png`,
+        ),
       );
       for (const width of [440, 280]) {
         const fits = await run<boolean>(`

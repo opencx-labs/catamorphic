@@ -227,3 +227,19 @@ Native session ownership conflicts must explain which client to close and retain
 manual retry. Do not automatically fork history, steal a writer lock, or present
 this as an authentication failure. Local-auth Codex sessions can also be opened
 by the Codex desktop app, which then owns the native writer lock.
+
+## Switching agents
+
+Choosing an agent updates the same session even when its harness differs
+(ADR 0276). Core checks access and Environment admission and holds the idle
+session lock. The next turn resumes or creates that harness's native thread;
+a recorded bounded context handoff carries the turns it missed. Returning to
+another harness resumes its thread with the intervening turns. Imported and
+forked sessions follow the same rule. Model and effort overrides reset with
+an agent change, including on unsent drafts. Rename opens with the complete
+current name selected; typing replaces it without first clearing the input.
+
+Subsession chips carry the child agent's harness/provider identity and use the
+shared HarnessIcon, including the generic fallback. A custom chip icon retains
+precedence. Disabled model values use the shared disabled-control hint to explain
+why they cannot change, while idle model selection continues through the palette.

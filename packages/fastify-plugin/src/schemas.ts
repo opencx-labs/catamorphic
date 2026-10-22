@@ -1171,7 +1171,7 @@ export const AgentSessionSchema = z.object({
   environment: z.string().nullable(),
   allocationId: z.string().uuid().nullable(),
   agentId: z.string().nullable(),
-  /** The harness its first turn bound; another harness needs a new chat. */
+  /** The harness used by the latest bound turn; null before it starts. */
   harness: z.string().nullable(),
   model: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
@@ -1180,7 +1180,7 @@ export const AgentSessionSchema = z.object({
   title: z.string().nullable(),
   icon: z.string().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
-  /** Imported from another tool (ADR 0233); only an agent of that tool continues it. */
+  /** Provenance of a chat imported from another tool (ADR 0233). */
   imported: ImportedSessionSchema.nullable(),
   parentSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
@@ -2638,23 +2638,8 @@ export const ErrorSchema = z.object({
  */
 export const SessionConflictSchema = z.object({
   error: z.string(),
-  code: z.enum([
-    "session_closed",
-    "authority_required",
-    "handoff_pending",
-    "imported",
-  ]),
+  code: z.enum(["session_closed", "authority_required", "handoff_pending"]),
   authorityRevision: z.number().int().optional(),
-});
-
-/**
- * A started chat stays on the harness its first turn bound (ADR 0214): an
- * agent on another one starts a new chat.
- */
-export const HarnessFixedSchema = z.object({
-  error: z.string(),
-  code: z.literal("harness_fixed"),
-  harness: z.string(),
 });
 
 /** A 403 may be project scope denial or a structured Environment denial. */

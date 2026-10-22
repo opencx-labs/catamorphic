@@ -202,7 +202,7 @@ describe("Hermes as the person's own agent", () => {
       { timeoutMs: 30_000, label: "Hermes' reply" },
     );
     await runWait(
-      `return !!hermesDock().querySelector('[data-harness-icon="hermes"]');`,
+      `return !!hermesDock().querySelector('[data-harness-icon="default"]');`,
       { label: "the chat marked as Hermes'" },
     );
     await settle();

@@ -194,7 +194,9 @@ the desktop or in a Work server's sandbox), selectable
 per session and switchable mid-session, with a normalized effort scale.
 Agents run either in a sandbox or directly on the host filesystem.
 `ask_user` questions, durable sessions that survive restarts, and
-per-profile agent rosters work across harnesses. MCP goes both directions:
+per-profile agent rosters work across harnesses. A chat can change agents across
+harnesses while keeping its history, with a bounded handoff of missing context.
+MCP goes both directions:
 agents consume MCP connectors (registry search, plugin marketplaces,
 elicitation via `@catamorphic/mcp`), and a project's workflows are served
 *as* MCP tools to any MCP client. In the desktop, agents also drive the
@@ -288,7 +290,8 @@ listed, diffed, assignable by agents when concurrent work needs isolation,
 and a chat's own worktree is a palette command away, set up before its first
 turn and brought back from the chat's status popup. Chats you start in Claude
 Code or Codex outside Work can appear among the project's chats, ready to
-continue on an agent of the same tool. Checkout management is harness-neutral, so Claude Code, Codex,
+continue with any agent, including another harness through a context handoff.
+Checkout management is harness-neutral, so Claude Code, Codex,
 and the built-in agent follow the same policy. Diff tabs render in Monaco;
 changed files and pull requests are sources any sidebar section or palette
 mode can list (Find changed files searches them); PR review opens per-file

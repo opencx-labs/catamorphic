@@ -7007,13 +7007,8 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
+                            code: "session_closed" | "authority_required" | "handoff_pending";
                             authorityRevision?: number;
-                        } | {
-                            error: string;
-                            /** @enum {string} */
-                            code: "harness_fixed";
-                            harness: string;
                         } | {
                             error: string;
                         };
@@ -7326,7 +7321,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
+                            code: "session_closed" | "authority_required" | "handoff_pending";
                             authorityRevision?: number;
                         };
                     };
@@ -8896,7 +8891,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
+                            code: "session_closed" | "authority_required" | "handoff_pending";
                             authorityRevision?: number;
                         };
                     };
@@ -8979,7 +8974,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
+                            code: "session_closed" | "authority_required" | "handoff_pending";
                             authorityRevision?: number;
                         };
                     };
@@ -9086,7 +9081,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
+                            code: "session_closed" | "authority_required" | "handoff_pending";
                             authorityRevision?: number;
                         };
                     };

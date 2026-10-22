@@ -19,8 +19,8 @@ export const HERMES = {
 } as const;
 
 /**
- * The harness a chat on an ACP agent binds: one per agent, so a chat stays
- * with the agent it began on and never reopens its session in another.
+ * Each ACP agent has its own harness identity, so switching agents never
+ * resumes a different ACP agent's native thread.
  */
 export function acpHarnessId(agentId: string): string {
   return `acp:${agentId}`;

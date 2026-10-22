@@ -51,6 +51,7 @@ import { AnimatedTitle } from "./animated-title.js";
 import { ChatGlyph } from "./chat-icon.js";
 import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import { ChipPreview } from "./chip-preview.js";
+import { HarnessIcon } from "./harness-icon.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -97,6 +98,22 @@ const isImage = (icon: string) => /^(https?:|data:image\/)/i.test(icon);
 function ToneIcon({ chip, className }: { chip: Chip; className: string }) {
   const icon = chip.icon;
   const tone = chip.tone ? TONE_TEXT[chip.tone] : "";
+  // Subsessions carry the same harness/provider identity as their status
+  // popup. A module's explicit icon override still takes precedence.
+  if (chip.data?.kind === "subagent" && icon === "Bot")
+    return (
+      <HarnessIcon
+        harness={
+          typeof chip.data.harness === "string" ? chip.data.harness : undefined
+        }
+        provider={
+          typeof chip.data.provider === "string"
+            ? chip.data.provider
+            : undefined
+        }
+        className={`${className} ${tone}`}
+      />
+    );
   if (icon && isImage(icon))
     return (
       <SiteFavicon
@@ -137,7 +154,12 @@ function ChipGlyph({
   still?: boolean;
 }) {
   const size = wide ? "size-3.5" : "size-3";
-  const look = `${chip.icon ?? ""}\u0000${chip.url ?? ""}`;
+  const look = JSON.stringify([
+    chip.icon,
+    chip.url,
+    chip.data?.harness,
+    chip.data?.provider,
+  ]);
   const previous = useRef({ look, chip });
   const [leaving, setLeaving] = useState<Chip | null>(null);
   // Before paint: the replaced icon is drawn under the new one from the

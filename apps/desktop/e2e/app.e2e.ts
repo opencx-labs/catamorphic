@@ -915,12 +915,19 @@ describe("chat flows", () => {
     const rename = async (from: string, to: string) => {
       await runWait(
         `const field = document.querySelector('form input[name="title"]');
-         return field?.value === ${JSON.stringify(from)};`,
+         return field?.value === ${JSON.stringify(from)} && document.activeElement === field &&
+                field.selectionStart === 0 && field.selectionEnd === field.value.length;`,
         { label: `rename form filled with ${from}` },
       );
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+          "rename-chat-selection.png",
+        ),
+      );
+      await app.insertText(to);
       await run(`
         const field = document.querySelector('form input[name="title"]');
-        setReactValue(field, ${JSON.stringify(to)});
         field.closest('form').requestSubmit();
         return true;
       `);

@@ -54,6 +54,9 @@ it("opens with the chat's name and renames it to what was typed", async () => {
   const { onClose } = mount(onRename);
   expect(document.body.textContent).toContain("Rename chat");
   expect(field()?.value).toBe("Plan the offsite");
+  expect(document.activeElement).toBe(field());
+  expect(field()?.selectionStart).toBe(0);
+  expect(field()?.selectionEnd).toBe("Plan the offsite".length);
   const input = field();
   if (!input) throw new Error("No name field");
   type(input, "  Offsite   2027 ");

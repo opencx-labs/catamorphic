@@ -979,23 +979,12 @@ export class TurnEngine {
       identity: ctx.identity,
       session: ctx.session,
     });
-    // The conversation stays on the harness its first turn bound (ADR
-    // 0214). Its agent reaches another only by a change outside the chat
-    // (a project agent's definition, say): the turn fails rather than
-    // hand the conversation to that harness. An agent that cannot run says
-    // why first, and binds nothing. Read now, not with the drive's
-    // session: an earlier attempt of this turn may have bound it.
     const { harness: bound } = await db
       .selectFrom("agent_sessions")
       .select("harness")
       .where("id", "=", turn.sessionId)
       .executeTakeFirstOrThrow();
-    const refusal =
-      local.refusal ??
-      harness.unavailable ??
-      (bound !== null && bound !== harness.harness
-        ? `This chat runs on ${bound}, and its agent now runs on ${harness.harness}. Start a new chat to use it.`
-        : null);
+    const refusal = local.refusal ?? harness.unavailable ?? null;
     if (refusal !== null) {
       await this.settle(local, {
         identity: ctx.identity,
@@ -1013,7 +1002,7 @@ export class TurnEngine {
       turn,
       attempt,
       harness: harness.harness,
-      bound: bound !== null,
+      bound: bound === harness.harness,
       local,
     });
     turn = binding.turn;
@@ -1387,14 +1376,14 @@ export class TurnEngine {
    * The native thread this attempt runs on (ADR 0198): the session's
    * thread for this harness, resumed (or restored from stored state); a
    * fork of a source thread for a forked session's first turn; else a fresh
-   * one, told what it missed by a recorded handoff. The first binds the
-   * session to the harness (ADR 0214).
+   * one, told what it missed by a recorded handoff. Each bound turn records the
+   * harness it runs on, including when the agent changes harness.
    */
   private async bindThread(input: {
     turn: Turn;
     attempt: Attempt;
     harness: string;
-    /** The session is already bound to this harness. */
+    /** The session's latest bound turn used this harness. */
     bound: boolean;
     local: LocalTurn;
   }): Promise<{
@@ -1432,6 +1421,13 @@ export class TurnEngine {
         ...(fork.throughTurnRef ? { throughTurnRef: fork.throughTurnRef } : {}),
         ...(fork.statePath ? { statePath: fork.statePath } : {}),
       };
+      if (
+        thread.lastTurnOrdinal !== null &&
+        thread.lastTurnOrdinal < input.turn.ordinal - 1
+      ) {
+        handoffFrom = thread.lastTurnOrdinal + 1;
+        strategy = "delta";
+      }
     } else if (sameHarness?.native_ref) {
       thread = providerThreadFromRow(sameHarness);
       const nativeRef = sameHarness.native_ref as unknown as NativeRef;
@@ -1479,6 +1475,12 @@ export class TurnEngine {
           };
       binding = { mode: "fresh", providerThreadId: thread.id };
       if (input.turn.ordinal > 1) handoffFrom = 1;
+    }
+    // A native thread can exist before any turn started on it. Resuming
+    // that empty thread still needs all conversation context.
+    if (thread.lastTurnOrdinal === null && input.turn.ordinal > 1) {
+      handoffFrom = 1;
+      strategy = "full";
     }
     const handoff =
       handoffFrom !== null
@@ -3139,7 +3141,7 @@ export class TurnEngine {
       // sign-in) is never handed back to the thread that did the work.
       const seen =
         input.attempt.providerThreadId !== null &&
-        (input.status !== "failed" ||
+        (input.status === "completed" ||
           (
             await trx
               .selectFrom("agent_turn_attempts")

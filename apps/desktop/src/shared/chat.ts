@@ -85,8 +85,7 @@ export interface ChatDockEntry {
    */
   agentId?: string;
   /**
-   * The harness the session's first turn bound (ADR 0214), as the dock
-   * last saw it: an agent on another one starts a new chat.
+   * The harness used by the latest bound turn, as the dock last saw it.
    */
   harness?: string;
   model?: string;
@@ -243,7 +242,7 @@ export interface ChatDockProps {
   registerComposerFocus?: (focus: () => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
-   * The agent the chat's session runs on and the harness it is bound to,
+   * The agent the chat's session runs on and the harness its latest turn used,
    * recorded on its entry so pickers target them. Never activates the chat
    * or changes how it shows.
    */

@@ -8,7 +8,6 @@ import {
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
-  type ImportedHarness,
   type ImportedSession,
   type ImportedTranscript,
   INPUT_ITEM_KINDS,
@@ -419,8 +418,8 @@ export interface AgentSession {
   /** Host-registry key of the agent this session runs on; null = default. */
   agentId: string | null;
   /**
-   * The harness its first turn bound (ADR 0214): agents on another harness
-   * cannot take the session over. Null until the conversation starts.
+   * The harness used by the latest bound turn. Null before the conversation
+   * starts; switching agents can select a different harness for the next turn.
    */
   harness: string | null;
   /** Per-session model override; null = the agent harness's configured default. */
@@ -605,23 +604,6 @@ export class AgentSessionClosedError extends Error {
   }
 }
 
-/**
- * The session was imported from another tool's transcript (ADR 0233): only
- * an agent on that tool's harness continues it.
- */
-export class AgentSessionImportedError extends Error {
-  constructor(
-    readonly sessionId: string,
-    readonly harness: ImportedHarness,
-  ) {
-    const tool = harness === "codex" ? "Codex" : "Claude Code";
-    super(
-      `This chat came from ${tool}. Switch it to a ${tool} agent to continue it.`,
-    );
-    this.name = "AgentSessionImportedError";
-  }
-}
-
 export class AgentSessionAuthorityRequiredError extends Error {
   constructor(
     readonly sessionId: string,
@@ -687,35 +669,6 @@ export class AgentNotConfiguredError extends Error {
     );
     this.name = "AgentNotConfiguredError";
   }
-}
-
-/**
- * The session's conversation runs on another harness (ADR 0214): an agent on
- * this one starts a new chat instead.
- */
-export class AgentHarnessFixedError extends Error {
-  constructor(
-    readonly sessionId: string,
-    readonly harness: string,
-    readonly requested: string,
-  ) {
-    super(
-      `This chat runs on ${harness}. Start a new chat to use an agent on ${requested}.`,
-    );
-    this.name = "AgentHarnessFixedError";
-  }
-}
-
-/** A started chat takes only an agent on its harness (ADR 0214). */
-function assertKeepsHarness(input: {
-  sessionId: string;
-  /** The harness its first turn bound; null before it starts. */
-  bound: string | null;
-  /** The new agent's harness; null when it cannot run yet. */
-  next: string | null;
-}): void {
-  if (input.bound !== null && input.next !== null && input.bound !== input.next)
-    throw new AgentHarnessFixedError(input.sessionId, input.bound, input.next);
 }
 
 /** The session has a turn executing right now; retry after it settles. */
@@ -2780,22 +2733,6 @@ export class AgentSessionsService {
     return { messageId: itemId, turnId, mode: dispatch, created: true };
   }
 
-  /**
-   * A chat imported from another tool (ADR 0233) takes messages only while
-   * its agent runs on that tool's harness: Claude Code's chat on a Claude
-   * Code agent, Codex's on a Codex agent.
-   */
-  private async assertContinuesImported(session: SessionRow): Promise<void> {
-    const imported = importedSessionFromRow(session.imported);
-    if (!imported) return;
-    const agent = await this.resolveAgent(
-      session.agent_id,
-      session.project_id,
-    ).catch(() => undefined);
-    if (!agent || agent.unavailable || harnessIdOf(agent) !== imported.harness)
-      throw new AgentSessionImportedError(session.id, imported.harness);
-  }
-
   /** Refuse input a session cannot take here: closed, moving, or another host's. */
   private assertAcceptsInput(session: SessionRow): void {
     if (session.status !== "active")
@@ -2924,7 +2861,6 @@ export class AgentSessionsService {
     // owner's own sign-in answers only their own doing (ADR 0199).
     const deliveredBy = identity.externalUserId;
     const session = await this.requireSession(identity, projectId, sessionId);
-    await this.assertContinuesImported(session);
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
     if (
@@ -3183,8 +3119,6 @@ export class AgentSessionsService {
       command.type === "respond"
         ? await this.sessionInTenant(identity, projectId, sessionId)
         : await this.requireSession(identity, projectId, sessionId);
-    // Another tool's chat goes on only on an agent of that tool (ADR 0233).
-    if (command.type === "send") await this.assertContinuesImported(session);
     // Who may answer is settled before anything moves, authority included.
     if (command.type === "respond")
       await this.assertMayRespond({
@@ -4511,22 +4445,32 @@ export class AgentSessionsService {
       .orderBy("ordinal", "desc")
       .limit(1)
       .executeTakeFirst();
-    const threadRow = target.providerThreadId
+    // Every harness may have seen the discarded turns. None may resume its
+    // old thread after the rewind; only the retained history can be forked.
+    const activeThreads = await trx
+      .selectFrom("agent_provider_threads")
+      .selectAll()
+      .where("session_id", "=", session.id)
+      .where("status", "=", "active")
+      .execute();
+    events.push(
+      ...activeThreads.map((thread) => ({
+        type: "provider_thread.changed" as const,
+        thread: {
+          ...providerThreadFromRow(thread),
+          status: "closed" as const,
+          updatedAt: now,
+        },
+      })),
+    );
+    const threadRow = previous?.provider_thread_id
       ? await trx
           .selectFrom("agent_provider_threads")
           .selectAll()
-          .where("id", "=", target.providerThreadId)
+          .where("id", "=", previous.provider_thread_id)
           .executeTakeFirst()
       : undefined;
     if (threadRow) {
-      events.push({
-        type: "provider_thread.changed",
-        thread: {
-          ...providerThreadFromRow(threadRow),
-          status: "closed",
-          updatedAt: now,
-        },
-      });
       const endRef = previous?.active_attempt_id
         ? ((
             await trx
@@ -8062,9 +8006,10 @@ export class AgentSessionsService {
   /**
    * Re-point a session at another registered agent and/or change its
    * model and reasoning-effort overrides (`null` clears an override back to
-   * the agent's default). Switching agents drops the model override. Once
-   * the conversation has started, only an agent on its harness can take it
-   * over (ADR 0214); the next turn resumes the same native thread.
+   * the agent's default). Switching agents drops model and effort overrides.
+   * The next turn resumes
+   * this harness's native thread, or starts one, with a context handoff for
+   * conversation turns it has not seen.
    */
   async update(
     identity: Identity,
@@ -8098,25 +8043,14 @@ export class AgentSessionsService {
       sandbox_id: null;
     }> = {};
     let reallocatedRow: SessionRow | undefined;
-    // The harness the new agent runs on, when the agent changes and can run.
-    let nextHarness: string | null = null;
 
     if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
       this.assertAgentAccess(identity, projectId, patch.agentId);
       const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
-      // Another harness would be handed this conversation and keep it in
-      // its own history, out of the person's sight: it is a new chat. An
-      // agent that cannot run yet has no harness to compare; a turn on it
-      // once it can still keeps the chat's (ADR 0214).
-      nextHarness = agent.unavailable ? null : harnessIdOf(agent);
-      assertKeepsHarness({
-        sessionId,
-        bound: session.harness,
-        next: nextHarness,
-      });
       updates.agent_id = patch.agentId;
       updates.model = null;
+      updates.model_effort = null;
     }
     if (patch.model !== undefined) {
       updates.model = patch.model;
@@ -8166,19 +8100,6 @@ export class AgentSessionsService {
         .transaction()
         .execute(async (transaction) => {
           await this.lockIdleSession({ sessionId, transaction });
-          // A first turn may have bound the chat since it was read.
-          if (nextHarness !== null)
-            assertKeepsHarness({
-              sessionId,
-              bound: (
-                await transaction
-                  .selectFrom("agent_sessions")
-                  .select("harness")
-                  .where("id", "=", sessionId)
-                  .executeTakeFirstOrThrow()
-              ).harness,
-              next: nextHarness,
-            });
           if (previousAllocationId)
             await this.executionAllocations.release({
               identity,
@@ -8303,8 +8224,7 @@ export class AgentSessionsService {
   /**
    * Import a session another tool ran (ADR 0233): Claude Code's or Codex's
    * transcript, as the host read it, becomes a session of the caller's
-   * bound to that tool's harness, or brings theirs up to date. An agent on
-   * that harness continues it; Claude Code's native transcript is stored
+   * or brings theirs up to date. Claude Code's native transcript is stored
    * with the import, so the first turn resumes the tool's own session. A
    * content hash already imported writes nothing; once Work ran a turn in
    * it the file is no longer read (`taken_over`); a native session one of
@@ -8453,8 +8373,7 @@ export class AgentSessionsService {
             existing || !prepared ? undefined : await prepared.insert(trx);
           const sessionId = existing?.id ?? created?.id ?? "";
           if (created)
-            // Bound to the tool's harness from the start (ADR 0214): only
-            // its agents continue it.
+            // The source tool ran the imported turns on this harness.
             await trx
               .updateTable("agent_sessions")
               .set({
@@ -8755,8 +8674,7 @@ export class AgentSessionsService {
           await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
             trx,
           );
-          // The fork continues the source's conversation, so it is bound to
-          // the source's harness from the start (ADR 0214).
+          // The copied history last ran on the source's harness.
           if (session.harness !== null)
             await this.log.append(trx, {
               sessionId: forkId,

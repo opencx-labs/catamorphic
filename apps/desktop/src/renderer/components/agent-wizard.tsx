@@ -1,4 +1,4 @@
-import { ArrowLeft, Bot, ChevronRight, KeyRound, Sparkles } from "lucide-react";
+import { ArrowLeft, Bot, ChevronRight } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { HERMES } from "../../shared/acp-agents.js";
 import {
@@ -8,6 +8,7 @@ import {
 } from "../lib/desktop-api.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
 import { CopyButton } from "./copy-button.js";
+import { HarnessIcon } from "./harness-icon.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 
@@ -96,8 +97,7 @@ export function AgentWizard({
   const [busyFlow, setBusyFlow] = useState<Flow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Optional custom agent name, shared by the detail steps (each step
-  // resets it on entry via goto).
+  // Each detail step starts with an editable name, submitted as shown.
   const [name, setName] = useState("");
 
   // Which of the profile's MCP connections the new agent gets: all current
@@ -236,7 +236,17 @@ export function AgentWizard({
     setError(null);
     setBusy(false);
     setBusyFlow(null);
-    setName("");
+    setName(
+      next === "claude-code"
+        ? "Claude"
+        : next === "codex"
+          ? "ChatGPT"
+          : next === "hermes"
+            ? HERMES.name
+            : next === "api-key"
+              ? "Built-in"
+              : "",
+    );
     setConnections({ mode: "all" });
     setCcCommand(null);
     setCcStarted(false);
@@ -398,8 +408,8 @@ export function AgentWizard({
     }
   };
 
-  /** Optional agent name, offered on every detail step. */
-  const nameField = (placeholder: string) => (
+  /** Editable agent name, offered on every detail step. */
+  const nameField = () => (
     <label className="flex flex-col gap-1 text-xs text-fg-muted">
       Name
       <input
@@ -407,7 +417,6 @@ export function AgentWizard({
         name="agentName"
         value={name}
         onChange={(event) => setName(event.target.value)}
-        placeholder={placeholder}
         autoComplete="off"
         className="field h-9 min-w-0 px-2 text-sm text-fg placeholder:text-fg-faint max-sm:text-base"
       />
@@ -472,13 +481,12 @@ export function AgentWizard({
                     className="group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border bg-bg-raised px-3 py-2.5 text-left transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay disabled:cursor-default disabled:opacity-60"
                   >
                     <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border bg-bg-overlay text-fg-muted">
-                      {option.id === "free" ? (
-                        <Sparkles className="size-3.5" />
-                      ) : option.id === "api-key" ? (
-                        <KeyRound className="size-3.5" />
-                      ) : (
-                        <Bot className="size-3.5" />
-                      )}
+                      <HarnessIcon
+                        harness={option.id}
+                        provider={
+                          option.id === "free" ? "openrouter" : undefined
+                        }
+                      />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-medium text-fg">
@@ -532,7 +540,7 @@ export function AgentWizard({
                   Claude Code is already set up on this machine. Use that
                   account, or sign in with another account for this agent.
                 </p>
-                <div className="mt-3">{nameField("Claude")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 {commandBlock}
                 {ccStarted ? (
@@ -582,7 +590,7 @@ export function AgentWizard({
                   it here, finish it there, and you're set on this machine for
                   good.
                 </p>
-                <div className="mt-3">{nameField("Claude")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 {commandBlock}
                 <div className="mt-4 flex flex-col gap-2">
@@ -626,7 +634,7 @@ export function AgentWizard({
                   Codex is already signed in on this machine. Use that account,
                   or sign in with another ChatGPT account for this agent.
                 </p>
-                <div className="mt-3">{nameField("ChatGPT")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 <div className="mt-4 flex flex-col gap-2">
                   <PendingButton
@@ -667,7 +675,7 @@ export function AgentWizard({
                   Codex runs locally via the Codex CLI and signs in with your
                   ChatGPT account in the browser.
                 </p>
-                <div className="mt-3">{nameField("ChatGPT")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 <PendingButton
                   type="button"
@@ -702,7 +710,7 @@ export function AgentWizard({
                 >
                   {status.hermes}
                 </p>
-                <div className="mt-3">{nameField(HERMES.name)}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 <PendingButton
                   type="button"
@@ -764,7 +772,7 @@ export function AgentWizard({
               <h2 className="text-balance text-base font-semibold">
                 Bring an API key
               </h2>
-              {nameField("Built-in")}
+              {nameField()}
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Provider
                 <select

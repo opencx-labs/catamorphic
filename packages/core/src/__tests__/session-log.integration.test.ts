@@ -31,10 +31,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import {
-  AgentHarnessFixedError,
-  AgentSessionsService,
-} from "../services/agent-sessions-service.js";
+import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -419,7 +416,52 @@ describe("session log", () => {
         adapter: {
           id: "elsewhere",
           capabilities: () => inner.capabilities(),
-          start: (attempt, host) => inner.start(attempt, host),
+          start: (attempt, host) => {
+            if (
+              attempt.thread.mode !== "fresh" ||
+              !attempt.input?.text.endsWith("[[reject-before-start]]")
+            )
+              return inner.start(attempt, host);
+            host.emit({
+              type: "thread",
+              ref: { id: randomUUID(), strength: "strong" },
+            });
+            host.emit({
+              type: "turn.completed",
+              status: "failed",
+              error: { message: "Turn start refused" },
+            });
+            return {
+              steer: async () => false,
+              interrupt: () => {},
+              finished: Promise.resolve(),
+            };
+          },
+        },
+      },
+    };
+    const interruptedStart: RegisteredCodingAgent = {
+      ...elsewhere,
+      id: "interrupted-start",
+      harness: {
+        placement: "host",
+        adapter: {
+          id: "elsewhere",
+          capabilities: () => inner.capabilities(),
+          start: (attempt, host) => {
+            if (!attempt.input?.text.endsWith("[[interrupt-before-start]]"))
+              return inner.start(attempt, host);
+            host.emit({
+              type: "thread",
+              ref: { id: randomUUID(), strength: "strong" },
+            });
+            host.emit({ type: "turn.completed", status: "interrupted" });
+            return {
+              steer: async () => false,
+              interrupt: () => {},
+              finished: Promise.resolve(),
+            };
+          },
         },
       },
     };
@@ -471,6 +513,7 @@ describe("session log", () => {
               forger,
               lingering,
               elsewhere,
+              interruptedStart,
               blocked,
               recording,
               hesitant,
@@ -1962,79 +2005,250 @@ describe("session log", () => {
       .execute();
   });
 
-  it("keeps a started chat on its harness: another one is a new chat", async () => {
-    const { projectId, sessionId } = await chat("OneHarness");
-    // Before the first turn, an agent on any harness can take the chat.
-    const unbound = await sessions.update(identity, projectId, sessionId, {
+  it("switches harnesses in one session, handing over history and resuming each native thread", async () => {
+    const { projectId, sessionId } = await chat("SwitchHarness");
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    const first = await folded(projectId, sessionId);
+    const originalThread = orderedTurns(first)[0]?.providerThreadId;
+    await sessions.update(identity, projectId, sessionId, {
+      model: "old-model",
+      effort: "high",
+    });
+    const switched = await sessions.update(identity, projectId, sessionId, {
       agentId: "elsewhere",
     });
-    expect(unbound.harness).toBeNull();
-    await sessions.update(identity, projectId, sessionId, { agentId: "echo" });
-    await sessions.sendMessage(identity, projectId, sessionId, "hello");
-    const started = await sessions.get(identity, projectId, sessionId);
-    expect(started.snapshot.session.harness).toBe("echo");
-    // Its first turn bound it: another harness is refused, this one is not.
-    await expect(
-      sessions.update(identity, projectId, sessionId, { agentId: "elsewhere" }),
-    ).rejects.toBeInstanceOf(AgentHarnessFixedError);
-    const same = await sessions.update(identity, projectId, sessionId, {
-      agentId: "guarded",
+    expect(switched).toMatchObject({
+      id: sessionId,
+      agentId: "elsewhere",
+      model: null,
+      modelEffort: null,
     });
-    expect(same).toMatchObject({ agentId: "guarded", harness: "echo" });
-    const { reply } = await sessions.sendMessage(
+    const second = await sessions.sendMessage(
       identity,
       projectId,
       sessionId,
-      "again",
+      "second words",
     );
-    // The same native thread goes on.
-    expect(reply?.kind === "assistant_message" && reply.text).toBe(
-      "Echo: again (turn 2)",
+    expect(second.turn.status).toBe("completed");
+    expect(
+      second.reply?.kind === "assistant_message" && second.reply.text,
+    ).toContain("Person: first words");
+    const away = await folded(projectId, sessionId);
+    expect(away.session.harness).toBe("elsewhere");
+    const awayThread = orderedTurns(away)[1]?.providerThreadId;
+    expect(awayThread).not.toBe(originalThread);
+    await sessions.update(identity, projectId, sessionId, { agentId: "echo" });
+    const third = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "third words",
     );
-    // No turn hands the conversation to another harness.
-    const items = await db
-      .selectFrom("agent_items")
-      .select("kind")
-      .where("session_id", "=", sessionId)
-      .execute();
-    expect(items.map((item) => item.kind)).not.toContain("context_handoff");
+    expect(third.turn.status).toBe("completed");
+    expect(
+      third.reply?.kind === "assistant_message" && third.reply.text,
+    ).toContain("Person: second words");
+    const back = await folded(projectId, sessionId);
+    expect(back.session.harness).toBe("echo");
+    expect(orderedTurns(back)[2]?.providerThreadId).toBe(originalThread);
+    expect(
+      back.items.filter((item) => item.kind === "context_handoff"),
+    ).toMatchObject([
+      {
+        strategy: "full",
+        coveredTurnOrdinals: { from: 1, to: 1 },
+        toProviderThreadId: awayThread,
+      },
+      {
+        strategy: "delta",
+        coveredTurnOrdinals: { from: 2, to: 2 },
+        toProviderThreadId: originalThread,
+      },
+    ]);
   });
 
-  it("binds a fork to its source's harness from the start", async () => {
+  it("hands over earlier context again when the new harness made a thread but could not start", async () => {
+    const { projectId, sessionId } = await chat("Failed first harness turn");
+    await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "earlier conversation",
+    );
+    await sessions.update(identity, projectId, sessionId, {
+      agentId: "elsewhere",
+    });
+    const refused = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[reject-before-start]]",
+    );
+    expect(refused.turn.status).toBe("failed");
+    const empty = await db
+      .selectFrom("agent_provider_threads")
+      .selectAll()
+      .where("session_id", "=", sessionId)
+      .where("harness", "=", "elsewhere")
+      .executeTakeFirstOrThrow();
+    expect(empty.native_ref).not.toBeNull();
+    expect(empty.last_turn_ordinal).toBeNull();
+    const fork = await sessions.fork(identity, projectId, sessionId, {});
+    const forked = await sessions.sendMessage(
+      identity,
+      projectId,
+      fork.id,
+      "continue the failed-start fork",
+    );
+    expect(forked.turn.status).toBe("completed");
+    expect(
+      forked.reply?.kind === "assistant_message" && forked.reply.text,
+    ).toContain("Person: earlier conversation");
+
+    const resumed = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "try now",
+    );
+    expect(resumed.turn.status).toBe("completed");
+    expect(resumed.turn.providerThreadId).toBe(empty.id);
+    const afterResume = await folded(projectId, sessionId);
+    const failedMessage = afterResume.items.find(
+      (item) => item.turnId === refused.turn.id && item.kind === "user_message",
+    );
+    if (!failedMessage) throw new Error("Expected the failed turn's message");
+    const historicalFork = await sessions.fork(identity, projectId, sessionId, {
+      messageId: failedMessage.id,
+    });
+    const historical = await sessions.sendMessage(
+      identity,
+      projectId,
+      historicalFork.id,
+      "continue only through the failed turn",
+    );
+    expect(historical.turn.status).toBe("completed");
+    expect(
+      historical.reply?.kind === "assistant_message" && historical.reply.text,
+    ).toContain("Person: earlier conversation");
+    expect(
+      historical.reply?.kind === "assistant_message" && historical.reply.text,
+    ).not.toContain("Person: try now");
+    expect(
+      resumed.reply?.kind === "assistant_message" && resumed.reply.text,
+    ).toContain("Person: earlier conversation");
+    expect((await folded(projectId, sessionId)).items).toContainEqual(
+      expect.objectContaining({
+        kind: "context_handoff",
+        turnId: resumed.turn.id,
+        strategy: "full",
+        coveredTurnOrdinals: { from: 1, to: 2 },
+      }),
+    );
+  });
+
+  it("does not advance native coverage when the new harness stops before starting", async () => {
+    const { projectId, sessionId } = await chat(
+      "Interrupted first harness turn",
+    );
+    await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "earlier conversation",
+    );
+    await sessions.update(identity, projectId, sessionId, {
+      agentId: "interrupted-start",
+    });
+    const stopped = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[interrupt-before-start]]",
+    );
+    expect(stopped.turn.status).toBe("interrupted");
+    const empty = await db
+      .selectFrom("agent_provider_threads")
+      .select("last_turn_ordinal")
+      .where("session_id", "=", sessionId)
+      .where("harness", "=", "elsewhere")
+      .executeTakeFirstOrThrow();
+    expect(empty.last_turn_ordinal).toBeNull();
+    const resumed = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "try after stopping",
+    );
+    expect(resumed.turn.status).toBe("completed");
+    expect(
+      resumed.reply?.kind === "assistant_message" && resumed.reply.text,
+    ).toContain("Person: earlier conversation");
+  });
+
+  it("lets a fork switch harnesses while its source keeps its agent and thread", async () => {
     const { projectId, sessionId } = await chat("ForkHarness");
     await sessions.sendMessage(identity, projectId, sessionId, "hello");
     const fork = await sessions.fork(identity, projectId, sessionId, {});
     expect(fork.harness).toBe("echo");
-    await expect(
-      sessions.update(identity, projectId, fork.id, { agentId: "elsewhere" }),
-    ).rejects.toBeInstanceOf(AgentHarnessFixedError);
+    await sessions.update(identity, projectId, fork.id, {
+      agentId: "elsewhere",
+    });
+    const { turn, reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      fork.id,
+      "continue the fork",
+    );
+    expect(turn.status).toBe("completed");
+    expect(reply?.kind === "assistant_message" && reply.text).toContain(
+      "Person: hello",
+    );
+    expect((await folded(projectId, fork.id)).session.harness).toBe(
+      "elsewhere",
+    );
+    expect((await folded(projectId, sessionId)).session.harness).toBe("echo");
+    await sessions.update(identity, projectId, fork.id, { agentId: "echo" });
+    const returned = await sessions.sendMessage(
+      identity,
+      projectId,
+      fork.id,
+      "back to the fork's source harness",
+    );
+    expect(returned.turn.status).toBe("completed");
+    expect(
+      returned.reply?.kind === "assistant_message" && returned.reply.text,
+    ).toContain("Person: continue the fork");
+    expect((await folded(projectId, fork.id)).items).toContainEqual(
+      expect.objectContaining({
+        kind: "context_handoff",
+        strategy: "delta",
+        coveredTurnOrdinals: { from: 2, to: 2 },
+      }),
+    );
   });
 
-  it("fails a turn whose agent moved to another harness outside the chat", async () => {
+  it("hands the conversation to a harness changed in its agent definition", async () => {
     const { projectId, sessionId } = await chat("MovedHarness");
     await sessions.sendMessage(identity, projectId, sessionId, "hello");
-    // As when a project agent's definition changes its harness.
     await db
       .updateTable("agent_sessions")
       .set({ agent_id: "elsewhere" })
       .where("id", "=", sessionId)
       .execute();
-    const { turn } = await sessions.sendMessage(
+    const { turn, reply } = await sessions.sendMessage(
       identity,
       projectId,
       sessionId,
       "still there?",
     );
-    expect(turn.status).toBe("failed");
-    expect(turn.error?.message).toBe(
-      "This chat runs on echo, and its agent now runs on elsewhere. Start a new chat to use it.",
+    expect(turn.status).toBe("completed");
+    expect(reply?.kind === "assistant_message" && reply.text).toContain(
+      "Person: hello",
     );
-    const threads = await db
-      .selectFrom("agent_provider_threads")
-      .select("harness")
-      .where("session_id", "=", sessionId)
-      .execute();
-    expect(threads.map((thread) => thread.harness)).toEqual(["echo"]);
+    expect((await folded(projectId, sessionId)).session.harness).toBe(
+      "elsewhere",
+    );
   });
 
   it("fails a turn on an agent that cannot run with its reason, binding nothing", async () => {
@@ -2722,6 +2936,81 @@ describe("session log", () => {
     expect(reply?.kind === "assistant_message" && reply.text).toContain(
       "Echo: four",
     );
+  });
+
+  it("rolls back every harness's native history without mixing provider fork references", async () => {
+    const { projectId, sessionId } = await chat("Rollback harnesses");
+    await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "retained words",
+    );
+    await sessions.update(identity, projectId, sessionId, {
+      agentId: "elsewhere",
+    });
+    await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "discard on elsewhere",
+    );
+    await sessions.update(identity, projectId, sessionId, { agentId: "echo" });
+    await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "discard on echo",
+    );
+    const before = await folded(projectId, sessionId);
+    const [first, second] = orderedTurns(before);
+    const originalThreads = Object.values(before.providerThreads).map(
+      (thread) => thread.id,
+    );
+    const receipt = await sessions.command(identity, projectId, sessionId, {
+      type: "rollback",
+      commandId: randomUUID(),
+      turnId: second?.id ?? "",
+    });
+    expect(receipt.status).toBe("accepted");
+    const closed = await db
+      .selectFrom("agent_provider_threads")
+      .select(["id", "status"])
+      .where("id", "in", originalThreads)
+      .execute();
+    expect(closed.every((thread) => thread.status === "closed")).toBe(true);
+    const fork = await db
+      .selectFrom("agent_provider_threads")
+      .select(["harness", "fork_source"])
+      .where("session_id", "=", sessionId)
+      .where("status", "=", "active")
+      .executeTakeFirstOrThrow();
+    expect(fork.harness).toBe("echo");
+    expect(fork.fork_source).toMatchObject({
+      threadId: first?.providerThreadId,
+    });
+    const resumed = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "after rollback",
+    );
+    expect(resumed.turn.status).toBe("completed");
+    expect(resumed.turn.providerThreadId).not.toBe(first?.providerThreadId);
+    await sessions.update(identity, projectId, sessionId, {
+      agentId: "elsewhere",
+    });
+    const other = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "after rollback elsewhere",
+    );
+    expect(other.turn.status).toBe("completed");
+    expect(other.turn.providerThreadId).not.toBe(second?.providerThreadId);
+    expect(
+      other.reply?.kind === "assistant_message" && other.reply.text,
+    ).not.toContain("Person: discard on");
   });
 
   it("stops a turn waiting to retry as interrupted, and retries it by hand", async () => {

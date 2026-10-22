@@ -23,6 +23,7 @@ export function RenameChatDialog({
 }) {
   return (
     <ActionInputDialog
+      selectInitialValue
       request={
         chat && {
           label: "Rename chat",

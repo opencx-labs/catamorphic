@@ -1133,7 +1133,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // E2E: same registry mechanics, scripted harness, so renderer flows
     // (agent lists, switching, effort) exercise the real plumbing. It
     // answers to the configured harness's name, so a chat binds the harness
-    // it would in production (ADR 0214). Friendly errors stay on so tests
+    // it would in production (ADR 0276). Friendly errors stay on so tests
     // cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
       const fake = new E2eFakeAdapter({

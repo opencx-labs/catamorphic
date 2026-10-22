@@ -83,6 +83,8 @@ const server = http.createServer((request, response) => {
   }
   if (url.startsWith("/dialogs")) {
     response.end(`<title>Dialogs</title><p>Dialogs lab</p>
+      <button onclick="window.answer = confirm('Proceed?')">Ask confirmation</button>
+      <button onclick="window.named = prompt('Name?', 'Ada')">Ask name</button>
       <iframe id="same" src="/frame"></iframe>
       <iframe id="other" src="${otherOrigin}/frame"></iframe>`);
     return;
@@ -658,11 +660,30 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
       }),
     ).toEqual({ found: true });
 
+    const buttonUid = async (label: string) => {
+      const snapshot = await tool("browser_snapshot", { key });
+      const button = Array.isArray(snapshot.elements)
+        ? snapshot.elements.find(
+            (element: unknown): element is { uid: string } =>
+              typeof element === "object" &&
+              element !== null &&
+              "label" in element &&
+              element.label === label &&
+              "uid" in element &&
+              typeof element.uid === "string",
+          )
+        : undefined;
+      if (!button) throw new Error(`Page button not found: ${label}`);
+      return button.uid;
+    };
+
     // What opens a dialog reports it instead of hanging on the page.
+    // Page-owned handlers keep waiting while the agent inspects the dialog;
+    // an agent's bounded Runtime.evaluate would time out after 10 seconds.
     const opened = await tool("browser_act", {
       key,
-      action: "evaluate",
-      expression: "window.answer = confirm('Proceed?')",
+      action: "click",
+      uid: await buttonUid("Ask confirmation"),
     });
     expect(opened.dialog).toMatchObject({
       kind: "confirm",
@@ -692,8 +713,8 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
     // A prompt's field takes fill, and Enter sends it.
     const prompt = await tool("browser_act", {
       key,
-      action: "evaluate",
-      expression: "window.named = prompt('Name?', 'Ada')",
+      action: "click",
+      uid: await buttonUid("Ask name"),
     });
     expect(prompt.dialog).toMatchObject({
       kind: "prompt",

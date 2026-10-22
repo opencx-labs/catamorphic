@@ -187,6 +187,7 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
+  projectAgentAsInfo,
   type RemoteFeatures,
   type RemoteProjectStatus,
   type SidebarSectionConfig,
@@ -2932,7 +2933,7 @@ export function App({
                 ...ws,
                 chats: ws.chats.map((chat) =>
                   chat.localId === active.localId
-                    ? { ...chat, agentId, model: undefined }
+                    ? { ...chat, agentId, model: undefined, effort: undefined }
                     : chat,
                 ),
               }
@@ -3605,34 +3606,56 @@ export function App({
   const [projectDefaultSlug, setProjectDefaultSlug] = useState<string | null>(
     null,
   );
-  const [projectAgentNames, setProjectAgentNames] = useState<
-    Record<string, string>
-  >({});
-  // biome-ignore lint/correctness/useExhaustiveDependencies: agentsData is a deliberate refetch trigger — a defaults edit broadcasts agents-changed
+  const [projectAgentInfos, setProjectAgentInfos] = useState<
+    ProjectAgentInfo[]
+  >([]);
+  const projectAgentNames = useMemo(
+    () =>
+      Object.fromEntries(
+        projectAgentInfos.map((agent) => [agent.id, agent.name]),
+      ),
+    [projectAgentInfos],
+  );
+  const sessionAgentIdentities = JSON.stringify(
+    [...sessionsById.values()]
+      .map((session) => [session.id, session.agentId, session.harness])
+      .sort(([left], [right]) => (left ?? "").localeCompare(right ?? "")),
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: roster and session identities trigger a refresh when agents are added or switched
   useEffect(() => {
     if (!projectId) {
       setProjectDefaultSlug(null);
-      setProjectAgentNames({});
+      setProjectAgentInfos([]);
       return;
     }
     let cancelled = false;
-    void desktopApi
-      .projectAgentsList(projectId)
-      .then((data) => {
-        if (!cancelled) {
-          setProjectDefaultSlug(data.projectDefaultSlug);
-          setProjectAgentNames(
-            Object.fromEntries(
-              data.agents.map((agent) => [agent.id, agent.name]),
-            ),
-          );
-        }
-      })
-      .catch(() => {});
+    let request = 0;
+    const refresh = () => {
+      const current = ++request;
+      void desktopApi
+        .projectAgentsList(projectId)
+        .then((data) => {
+          if (!cancelled && current === request) {
+            setProjectDefaultSlug(data.projectDefaultSlug);
+            setProjectAgentInfos(data.agents);
+          }
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const unsubscribe = desktopApi.onGitChanged((change) => {
+      if (change.projectId === projectId) refresh();
+    });
+    // Definitions can also be edited outside Work without a checkpoint.
+    const timer = window.setInterval(() => {
+      if (visibleRef.current) refresh();
+    }, LOCAL_CHATS_POLL_MS);
     return () => {
       cancelled = true;
+      unsubscribe();
+      window.clearInterval(timer);
     };
-  }, [projectId, agentsData]);
+  }, [projectId, agentsData, sessionAgentIdentities]);
   const projectOverrideAgentId = projectId
     ? (agentsData?.projectDefaults?.[projectId] ?? null)
     : null;
@@ -3668,26 +3691,7 @@ export function App({
     );
     if (!chat) return;
     if (chat.sessionId) {
-      updateSession.mutate(
-        { sessionId: chat.sessionId, agentId },
-        {
-          // Its first turn bound another harness since the picker read the
-          // chat (ADR 0214): the agent gets the new chat the picker offers
-          // now, beside this one, and the refusal is no error to show.
-          onError: (error) => {
-            const details = error.details;
-            if (
-              typeof details === "object" &&
-              details !== null &&
-              "code" in details &&
-              details.code === "harness_fixed"
-            ) {
-              updateSession.reset();
-              startChatWithAgent(agentId, chat);
-            }
-          },
-        },
-      );
+      updateSession.mutate({ sessionId: chat.sessionId, agentId });
       return;
     }
     // No session yet: remember the choice; lazy creation sends it along.
@@ -3695,29 +3699,10 @@ export function App({
       ...ws,
       chats: ws.chats.map((candidate) =>
         candidate.localId === chat.localId
-          ? { ...candidate, agentId, model: undefined }
+          ? { ...candidate, agentId, model: undefined, effort: undefined }
           : candidate,
       ),
     }));
-  };
-
-  /**
-   * A new chat with this agent, where the chat it was picked for is (the
-   * focused one unless named): the agent runs on another harness than that
-   * chat, which keeps its own (ADR 0214, lib/agent-switch).
-   */
-  const startChatWithAgent = (
-    agentId: string,
-    from = workspaceRef.current.chats.find(
-      (candidate) => candidate.localId === workspaceRef.current.activeChatId,
-    ),
-  ) => {
-    addChat(from?.mode === "tab" ? "tab" : undefined, {
-      agentId,
-      incognito: from?.incognito,
-      // Picked for a floating chat, it floats beside it.
-      inNewTab: from?.mode !== "partial",
-    });
   };
 
   /** Change the focused session's model override, or the default agent config. */
@@ -3756,7 +3741,6 @@ export function App({
     target: ProjectAgentTarget,
   ) => {
     if (target === "default") pickDefaultAgent(agent.id);
-    else if (target === "chat") startChatWithAgent(agent.id);
     else pickSessionAgent(agent.id);
   };
   const pickProjectAgent = (
@@ -6155,6 +6139,14 @@ export function App({
           );
           const key = open ? chatTabKey(open.localId) : `session:${session.id}`;
           const forked = Boolean(session.forkedFromSessionId);
+          const agentId = session.agentId ?? effectiveDefaultAgentId;
+          const projectAgent = projectAgentInfos.find(
+            (candidate) => candidate.id === agentId,
+          );
+          const agent =
+            agentsData?.agents.find((candidate) => candidate.id === agentId) ??
+            (projectAgent ? projectAgentAsInfo(projectAgent) : undefined);
+          const harness = agent?.harness ?? session.harness;
           return {
             id: key,
             label: sessionLabel(session),
@@ -6169,7 +6161,12 @@ export function App({
                     : session.running,
                 )),
             actions: [OPEN_SIDE_CHIP],
-            data: { kind: forked ? "chat" : "subagent", sessionId: session.id },
+            data: {
+              kind: forked ? "chat" : "subagent",
+              sessionId: session.id,
+              ...(harness ? { harness } : {}),
+              ...(agent?.provider ? { provider: agent.provider } : {}),
+            },
           };
         }),
       ...presentedTabs
@@ -6460,7 +6457,6 @@ export function App({
       : null,
     onPickDefaultAgent: pickDefaultAgent,
     onPickSessionAgent: pickSessionAgent,
-    onStartChatWithAgent: startChatWithAgent,
     onPickProjectAgent: pickProjectAgent,
     onConfigureAgent: openConfigureAgent,
     voiceAssistant: prefs?.voiceAssistant ?? null,
