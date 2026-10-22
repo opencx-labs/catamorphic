@@ -29,6 +29,19 @@ timelines, sessions, editors, runs) must be ported back to the installable
 packages/registry so embedders get it too. A desktop-only improvement to a
 shared surface is a process bug, not a win. See the [historical log](DESIGN-HISTORY.md) for its rationale.
 
+## Agent setup and conversation controls
+
+Agent setup shows the shared harness or provider logo where one exists, with the
+generic agent mark otherwise. Names begin as actual editable text. Subsession chips use the same harness or
+provider icon as their chat's status popup, and follow agent changes. Renaming a
+chat focuses its name with the whole value selected, so typing replaces it.
+
+Picking another agent continues the same chat, including across harnesses
+(ADR 0276). Each harness keeps its native thread and receives a bounded context
+handoff for turns it missed. Agent changes clear conversation model and effort
+overrides. A working turn must settle before the agent can change. A model value that
+cannot change explains why on hover; the idle model picker uses the palette.
+
 ## Contained project workspace
 
 Project capabilities live in `.work/`, including the independent Bun

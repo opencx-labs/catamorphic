@@ -1,6 +1,6 @@
 # 0214 — A chat runs on one harness
 
-- **Status:** Accepted
+- **Status:** Superseded by [0276](0276-a-chat-can-switch-agents-and-harnesses.md)
 - **Date:** 2026-10-08
 - **Amends:** [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md)
 

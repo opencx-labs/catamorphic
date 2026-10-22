@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { SidebarActionInput } from "../../shared/sidebar.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -11,6 +11,7 @@ import { PendingButton } from "./pending-button.js";
 export function ActionInputDialog({
   request,
   onClose,
+  selectInitialValue = false,
 }: {
   request: {
     label: string;
@@ -18,6 +19,8 @@ export function ActionInputDialog({
     run: (values: Record<string, string>) => Promise<unknown>;
   } | null;
   onClose: () => void;
+  /** Select the first field's existing value when the dialog opens. */
+  selectInitialValue?: boolean;
 }) {
   // The dialog fades out with the form it showed, not an emptied panel.
   const last = useRef(request);
@@ -30,6 +33,8 @@ export function ActionInputDialog({
           key={JSON.stringify(shown.input)}
           request={shown}
           onClose={onClose}
+          active={request !== null}
+          selectInitialValue={selectInitialValue}
         />
       )}
     </Modal>
@@ -39,11 +44,21 @@ export function ActionInputDialog({
 function ActionInputForm({
   request,
   onClose,
+  active,
+  selectInitialValue,
 }: {
   request: NonNullable<Parameters<typeof ActionInputDialog>[0]["request"]>;
   onClose: () => void;
+  active: boolean;
+  selectInitialValue: boolean;
 }) {
   const titleId = useId();
+  const firstField = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!active || !selectInitialValue) return;
+    firstField.current?.focus({ preventScroll: true });
+    firstField.current?.select();
+  }, [active, selectInitialValue]);
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       request.input.fields.map((field) => [field.name, field.value ?? ""]),
@@ -84,6 +99,7 @@ function ActionInputForm({
         <label key={field.name} className="flex flex-col gap-1.5 text-sm">
           {field.label}
           <input
+            ref={index === 0 ? firstField : undefined}
             name={field.name}
             value={values[field.name] ?? ""}
             onChange={(event) =>

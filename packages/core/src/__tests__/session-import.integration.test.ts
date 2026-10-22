@@ -18,10 +18,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
-import {
-  AgentSessionImportedError,
-  AgentSessionsService,
-} from "../services/agent-sessions-service.js";
+import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -32,7 +29,7 @@ import { testEnvironmentProvider } from "./test-environment.js";
 /*
  * Sessions imported from Claude Code and Codex (ADR 0233): another tool's
  * transcript becomes a session kept up to date as the tool writes, that
- * only an agent of that tool continues, resuming the tool's own session.
+ * an agent continues, resuming its own thread or receiving a context handoff.
  */
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
@@ -371,7 +368,7 @@ describe("imported sessions", () => {
     expect(after.snapshot.turns.map((turn) => turn.ordinal)).toEqual([1, 2]);
   });
 
-  it("takes messages only on an agent of its tool, then stops reading the file", async () => {
+  it("continues imported history on a different harness, then stops reading the file", async () => {
     const project = await projects.create(identity, { name: "Codex" });
     const codex = transcript([firstTurn({ done: true })], {
       harness: "codex",
@@ -380,29 +377,9 @@ describe("imported sessions", () => {
     });
     const { sessionId } = await importInto(project.id, codex, "sha-r");
     const id = sessionId ?? "";
-    // The default agent is not Codex: the chat waits for one that is.
-    await expect(
-      sessions.command(identity, project.id, id, {
-        type: "send",
-        commandId: randomUUID(),
-        text: "Keep going",
-      }),
-    ).rejects.toBeInstanceOf(AgentSessionImportedError);
-    await expect(
-      sessions.deliver(identity, project.id, id, {
-        content: "Keep going",
-        author: { kind: "user", externalUserId: identity.externalUserId },
-        mode: "queue",
-      }),
-    ).rejects.toBeInstanceOf(AgentSessionImportedError);
-    // Another tool's agent cannot take it over (ADR 0214).
-    await expect(
-      sessions.update(identity, project.id, id, {
-        agentId: "claude-code-agent",
-      }),
-    ).rejects.toThrow();
-
-    await sessions.update(identity, project.id, id, { agentId: "codex-agent" });
+    await sessions.update(identity, project.id, id, {
+      agentId: "claude-code-agent",
+    });
     await sessions.sendMessage(identity, project.id, id, "Keep going");
     const after = await sessions.get(identity, project.id, id);
     expect(after.snapshot.turns.map((turn) => turn.status)).toEqual([

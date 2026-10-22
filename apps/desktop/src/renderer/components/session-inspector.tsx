@@ -37,7 +37,6 @@ export function SessionInspector({
   agentName,
   harness,
   provider,
-  command,
   environmentControl,
   environmentLabel,
   onManageConnections,
@@ -77,8 +76,6 @@ export function SessionInspector({
   agentName: string;
   harness?: string;
   provider?: string;
-  /** What an ACP agent runs (ADR 0241), which its icon reflects. */
-  command?: readonly string[];
   environmentControl?: ReactNode;
   /** The environment's name as its control shows it, for its row's copy. */
   environmentLabel?: string;
@@ -103,7 +100,7 @@ export function SessionInspector({
   permissionMode?: string | null;
   /** What may leave the agent's sandbox (ADR 0182), as a label. */
   sandboxing?: string | null;
-  /** Open the chat's agent picker (lib/agent-switch). */
+  /** Open the chat's agent picker. */
   onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
@@ -259,7 +256,6 @@ export function SessionInspector({
           <HarnessIcon
             harness={harness}
             provider={provider}
-            command={command}
             className="size-3.5"
           />
           <span className="truncate">{agentName}</span>
@@ -334,7 +330,7 @@ export function SessionInspectorContent({
   permissionMode?: string | null;
   /** What may leave the agent's sandbox (ADR 0182), as a label. */
   sandboxing?: string | null;
-  /** Open the chat's agent picker (lib/agent-switch). */
+  /** Open the chat's agent picker. */
   onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
@@ -541,25 +537,24 @@ function InspectorRow({
   ) : null;
   // The copy button keeps its place: a long value truncates, and its hint
   // shows it whole, as the project popup's paths do.
-  const shown = (
+  // Disabled controls use the shared delegated hint, so hovering the value
+  // explains why it cannot change instead of repeating the model name.
+  const shown = disabledReason ? (
+    <span className="min-w-0 truncate">{value}</span>
+  ) : (
     <ShortcutHint label={value} className="min-w-0">
       <span className="min-w-0 truncate">{value}</span>
     </ShortcutHint>
   );
   return (
-    <InspectorFact
-      term={label}
-      copy={value}
-      copyLabel={copyLabel}
-      oneLine
-      valueProps={{ "data-disabled-reason": disabledReason }}
-    >
+    <InspectorFact term={label} copy={value} copyLabel={copyLabel} oneLine>
       {onEdit || disabledReason ? (
         <button
           type="button"
           aria-label={`Change ${label.toLowerCase()}`}
           onClick={onEdit}
           disabled={Boolean(disabledReason)}
+          data-disabled-reason={disabledReason}
           className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-standard hover:bg-bg-raised focus-ring-inset"
         >
           <span className="flex min-w-0 flex-1 items-baseline gap-1.5">

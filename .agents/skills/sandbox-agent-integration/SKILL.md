@@ -119,6 +119,12 @@ const agent: RegisteredCodingAgent = {
 };
 ```
 
+Sessions can switch agents across harnesses while idle (ADR 0276). Each harness
+keeps its native provider thread; the next turn resumes it or starts one, with
+the existing bounded context handoff for turns it has not seen. `harness` on a
+session is its latest bound turn's harness. Forks and imported chats follow the
+same rule. Agent changes clear model and effort overrides unless supplied anew.
+
 Sessions are an event log of turns (ADR 0197): `SessionLog.append` is the one
 writer of `agent_session_events` and its projections (turns, attempts, items,
 runtime requests, provider threads), and every mutating command carries a

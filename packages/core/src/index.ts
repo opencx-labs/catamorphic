@@ -97,7 +97,6 @@ export {
 export {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
-  AgentHarnessFixedError,
   AgentNotConfiguredError,
   type AgentSession,
   AgentSessionArchiveConfirmationRequiredError,
@@ -106,7 +105,6 @@ export {
   AgentSessionClosedError,
   type AgentSessionDetail,
   AgentSessionHandoffPendingError,
-  AgentSessionImportedError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
   AgentSessionRewindingError,

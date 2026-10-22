@@ -1,6 +1,6 @@
 # 0233 — Sessions imported from Claude Code and Codex
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0276](0276-a-chat-can-switch-agents-and-harnesses.md): any agent may continue an imported session)
 - **Date:** 2026-10-15
 - **Relates to:** [0062](0062-session-privacy-and-fork-ux.md) (local-only chats), [0197](0197-agent-sessions-are-an-event-log-of-turns.md) (the log, fork), [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) (handoffs), [0229](0229-idle-pollers-wait-for-hints.md) (hints, not polling)
 

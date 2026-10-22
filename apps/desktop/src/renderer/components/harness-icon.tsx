@@ -1,40 +1,26 @@
-import { Bot, Feather } from "lucide-react";
-import { runsHermes } from "../../shared/acp-agents.js";
+import { Bot } from "lucide-react";
 import claude from "../assets/harnesses/claude.svg";
 import openai from "../assets/harnesses/openai.svg";
 import openrouter from "../assets/harnesses/openrouter.svg";
 
-/** Native harness brands; the built-in AI SDK keeps the generic agent mark. */
+/** Recognized harness/provider brands; unknown backends keep the agent mark. */
 export function HarnessIcon({
   harness,
   provider,
-  command,
   className = "size-3.5",
 }: {
   harness?: string;
   provider?: string;
-  /** What an ACP agent runs (ADR 0241). */
-  command?: readonly string[];
   className?: string;
 }) {
   const brand =
-    harness === "codex"
+    harness === "codex" || provider === "openai"
       ? "openai"
-      : harness === "claude-code"
+      : harness === "claude-code" || provider === "anthropic"
         ? "claude"
         : provider === "openrouter"
           ? "openrouter"
           : "default";
-  // An ACP agent running Hermes (ADR 0241): its winged sandals, not a
-  // brand mark. Other ACP agents keep the generic agent mark.
-  if (harness === "acp" && runsHermes(command))
-    return (
-      <Feather
-        aria-hidden="true"
-        data-harness-icon="hermes"
-        className={`shrink-0 ${className}`}
-      />
-    );
   if (brand === "default")
     return (
       <Bot

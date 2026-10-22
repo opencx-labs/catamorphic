@@ -605,7 +605,7 @@ describe("skills as commands", () => {
     expect(stale.commands).toEqual([]);
   });
 
-  it("lists each harness's own native rows, another harness in a new chat", async () => {
+  it("lists each harness's own native rows after switching the same chat", async () => {
     const nativeDir = path.join(projectRoot, ".codex/skills/native-notes");
     fs.mkdirSync(nativeDir, { recursive: true });
     fs.writeFileSync(path.join(nativeDir, "SKILL.md"), "Native notes fixture.");
@@ -635,12 +635,11 @@ describe("skills as commands", () => {
       await runWait(
         `const row = paletteRows().find(el => el.textContent.includes(${JSON.stringify(name)})); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true})); return true;`,
       );
-      // A chat that ran on another harness keeps it: the agent starts a
-      // new chat (ADR 0214). One on its harness switches in place.
+      // Every harness takes the same chat and updates its native commands.
       await runWait(
         `const dock = visibleDock();
-         return !!dock && (dock.dataset.chatLocalId !== ${JSON.stringify(chat)} ||
-           !!byText('[role="log"] div', ${JSON.stringify(`Switched to ${name}`)}));`,
+         return !!dock && dock.dataset.chatLocalId === ${JSON.stringify(chat)} &&
+           !!byText('[role="log"] div', ${JSON.stringify(`Switched to ${name}`)});`,
         { label: `${name} picked` },
       );
       await runWait(`return overlayClosed();`, { label: "palette put away" });

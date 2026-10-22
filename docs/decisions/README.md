@@ -210,7 +210,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted (amended by 0197; Other answers return by 0244) |
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
 | [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217) |
-| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0214: a chat keeps its harness; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in) |
+| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0276: a chat can switch harnesses; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in) |
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
@@ -226,7 +226,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0211](0211-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
 | [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md) | HTTP APIs reach code in sandboxes through the gateway | Accepted (refines 0162, 0175, 0206; renewal overlap by 0255) |
 | [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199) |
-| [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Accepted (amends 0198) |
+| [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Superseded by 0276 |
 | [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
 | [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217; amended by 0236, 0265, 0267, 0268, 0271) |
 | [0217](0217-only-people-write-user-messages.md) | Only people write user messages: inbound messages and task notifications | Accepted (amends 0074, 0155, 0197, 0216; delivery fields typed by 0219) |
@@ -282,3 +282,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0273](0273-a-chat-icon-says-what-it-is-doing-and-what-needs-you.md) | A chat's icon says what it is doing and what needs you, at once: two corners, rows gain `activity` | Accepted (amends 0234's row `signal`) |
 | [0274](0274-composer-menus-for-skills-and-mentions.md) | The composer's "/" and "@" menus: skills and mentions go in the message as pills | Accepted (supersedes 0270's composer "/"; builds on 0052, 0186, 0123) |
 | [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md) | A resumed Claude Code keeps its sign-in: the CLI's credential store stays the sign-in's own home, not the SDK's temporary resume home | Accepted (amends 0198, 0228, 0269) |
+| [0276](0276-a-chat-can-switch-agents-and-harnesses.md) | A chat can switch agents and harnesses | Accepted (supersedes 0214; amends 0233) |

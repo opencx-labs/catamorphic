@@ -471,6 +471,11 @@ change is an event in the session's gapless log, committed with the rows it
 changes, so a client folds the same history wherever it reads it. The types
 and the pure reducer are `@catamorphic/agent-protocol`.
 
+- `PATCH /projects/:id/agent/sessions/:sid` changes an idle session's agent,
+  including across harnesses (ADR 0276). Model and effort overrides clear on an
+  agent change unless supplied in the patch. The next turn resumes or creates
+  that harness's thread with a bounded context handoff for turns it missed.
+  `harness` reports the latest bound turn, not a permanent restriction.
 - `GET /projects/:id/agent/sessions/:sid` returns the session with a bounded
   `snapshot` (recent turns, their items, open requests, threads) and its
   `sequence`; `GET .../items?before` pages older items.

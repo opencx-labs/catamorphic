@@ -7,13 +7,11 @@ import {
   AccessDeniedError,
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
-  AgentHarnessFixedError,
   AgentNotConfiguredError,
   AgentSessionArchiveConfirmationRequiredError,
   AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
   AgentSessionHandoffPendingError,
-  AgentSessionImportedError,
   AgentSessionNotFoundError,
   AgentSessionRewindingError,
   AgentTurnInProgressError,
@@ -61,7 +59,6 @@ import {
   EnvironmentErrorSchema,
   ErrorSchema,
   ForkAgentSessionSchema,
-  HarnessFixedSchema,
   KeyedChatParamsSchema,
   KeyedChatQuerySchema,
   ListSchema,
@@ -207,7 +204,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         400: ErrorSchema,
         403: EnvironmentAccessErrorSchema,
         404: ErrorSchema,
-        409: z.union([SessionConflictSchema, HarnessFixedSchema, ErrorSchema]),
+        409: z.union([SessionConflictSchema, ErrorSchema]),
         422: EnvironmentErrorSchema,
         428: AuthenticationRequiredSchema,
         503: ErrorSchema,
@@ -246,12 +243,6 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         const conflict = sessionConflict(err);
         if (conflict) return reply.status(409).send(conflict);
-        if (err instanceof AgentHarnessFixedError)
-          return reply.status(409).send({
-            error: err.message,
-            code: "harness_fixed",
-            harness: err.harness,
-          });
         if (err instanceof AgentTurnInProgressError) {
           return reply.status(409).send({
             error: "A turn is in progress; try again when it settles",
@@ -1530,8 +1521,6 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
 function sessionConflict(
   err: unknown,
 ): z.infer<typeof SessionConflictSchema> | null {
-  if (err instanceof AgentSessionImportedError)
-    return { error: err.message, code: "imported" };
   if (err instanceof AgentSessionClosedError)
     return { error: "Session is closed", code: "session_closed" };
   if (err instanceof AgentSessionAuthorityRequiredError)

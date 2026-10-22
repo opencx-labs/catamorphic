@@ -99,7 +99,12 @@ export function copySettledHistory(input: {
       olderBefore: null,
     },
     forkPoint:
-      sourceThread?.nativeRef && sourceThread.nativeRef.strength !== "none"
+      sourceThread?.nativeRef &&
+      sourceThread.nativeRef.strength !== "none" &&
+      sourceThread.lastTurnOrdinal !== null &&
+      sourceThread.lastTurnOrdinal >= (last?.ordinal ?? 0) &&
+      (sourceThread.lastTurnOrdinal === last?.ordinal ||
+        lastAttempt?.nativeTurnRef)
         ? {
             threadId: sourceThread.id,
             harness: sourceThread.harness,

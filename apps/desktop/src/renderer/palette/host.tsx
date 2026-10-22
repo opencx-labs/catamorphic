@@ -22,9 +22,9 @@ import type {
 
 /**
  * What a picked project agent becomes: the default, the focused chat's
- * agent, or a new chat's (one its harness cannot take, ADR 0214).
+ * agent.
  */
-export type ProjectAgentTarget = "default" | "session" | "chat";
+export type ProjectAgentTarget = "default" | "session";
 
 /**
  * Everything the palette reads from the app: data, the focused context and
@@ -74,7 +74,7 @@ export interface PaletteHost {
   focusedChat: {
     /** Its checkout can carry its own harness settings. */
     sessionId: string | null;
-    /** The harness its first turn bound (ADR 0214); null before it starts. */
+    /** The harness its latest bound turn used; null before it starts. */
     harness: string | null;
     agentId: string | null;
     model: string | null;
@@ -82,12 +82,10 @@ export interface PaletteHost {
   } | null;
   onPickDefaultAgent: (agentId: string) => void;
   onPickSessionAgent: (agentId: string) => void;
-  /** A new chat with an agent the focused chat's harness cannot take. */
-  onStartChatWithAgent: (agentId: string) => void;
   /**
    * A project agent was picked. The app runs the consent flow first when
    * the definition isn't approved (or approval went stale), then applies
-   * the same default, session or new-chat pick the profile-agent handlers
+   * the same default or session pick the profile-agent handlers
    * do.
    */
   onPickProjectAgent: (

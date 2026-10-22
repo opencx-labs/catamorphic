@@ -237,12 +237,14 @@ describe("project agents", () => {
 
   it("gates a profile-credentialed project agent behind the consent dialog", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat still open" });
+    const chatId = await run<string>(
+      `return visibleDock().dataset.chatLocalId;`,
+    );
     await openPicker("Switch agent for this chat", "Chat agent");
-    // The chat ran on the built-in harness and Reviewer runs on Claude
-    // Code, so it would start a new chat (ADR 0214); approval comes first.
+    // Changing harness keeps the chat, and still requires consent first.
     await runWait(
       `const row = paletteRows().find((el) => el.textContent.includes('Reviewer'));
-       return !!row && row.textContent.includes('needs approval · starts a new chat');`,
+       return !!row && row.textContent.includes('needs approval') && !row.textContent.includes('new chat');`,
       { label: "Reviewer row marked as needing approval" },
     );
     await runWait(pickOption("Reviewer"), { label: "pick Reviewer" });
@@ -258,12 +260,13 @@ describe("project agents", () => {
     await run(
       `$('[data-testid="project-agent-approve"]').click(); return true;`,
     );
-    // Approved, it gets a new chat of its own; the picker there shows it
-    // approved and current: consent is recorded.
+    // Approval records consent and switches the same conversation.
     await runWait(
       `const dock = visibleDock();
-       return !!dock && !dock.querySelector('[role="log"]')?.textContent.includes('Switched to');`,
-      { timeoutMs: 15_000, label: "a new chat for the approved agent" },
+       return !!dock && dock.dataset.chatLocalId === ${JSON.stringify(chatId)} &&
+         dock.querySelector('[role="log"]')?.textContent.includes('Switched to Reviewer') &&
+         dock.querySelector('[role="log"]')?.textContent.includes('You said: hello project agent');`,
+      { timeoutMs: 15_000, label: "the same chat on the approved agent" },
     );
     await openPicker("Switch agent for this chat", "Chat agent");
     await runWait(
@@ -272,7 +275,7 @@ describe("project agents", () => {
          !row.textContent.includes('new chat') && !!row.querySelector('[data-testid="palette-current"]');`,
       {
         timeoutMs: 15_000,
-        label: "Reviewer approved and current in the new chat",
+        label: "Reviewer approved and current in the same chat",
       },
     );
     await run(paletteEscape);
@@ -333,10 +336,13 @@ describe("project agents", () => {
       { timeoutMs: 15_000, label: "a chat on the approved ACP agent" },
     );
     await send("hello acp");
+    // The echo fixture receives both the missing history and this request.
     await runWait(
       `return [...${echoDock}.querySelectorAll('[role="log"] article')]
-        .some((el) => el.textContent.includes('Echo: hello acp'));`,
-      { timeoutMs: 30_000, label: "reply from the ACP agent" },
+        .some((el) => el.textContent.includes('Echo: ') &&
+          el.textContent.includes('hello project agent') &&
+          el.textContent.includes('hello acp'));`,
+      { timeoutMs: 30_000, label: "ACP reply with conversation handoff" },
     );
     // An ACP agent is its own, never presented as Hermes.
     await runWait(

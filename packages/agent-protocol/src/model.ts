@@ -802,8 +802,8 @@ export interface SessionFields {
   icon: string | null;
   agentId: string | null;
   /**
-   * The harness the conversation runs on: its first turn binds it and it
-   * stays (ADR 0214). Null until then. Each copy binds its own (ADR 0197).
+   * The harness used by the latest bound turn (ADR 0276). Null before the
+   * conversation starts. Each copy records its own (ADR 0197).
    */
   harness: string | null;
   model: string | null;

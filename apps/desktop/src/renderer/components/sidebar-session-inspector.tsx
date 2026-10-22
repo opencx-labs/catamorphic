@@ -54,8 +54,7 @@ export function SidebarSessionInspector({
     projectAgents.data?.agents
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
-  // Another agent to pick for the session (lib/agent-switch: one on another
-  // harness starts a new chat). Committed agents whose definition fails are
+  // Another agent to pick for the session. Committed agents whose definition fails are
   // listed in the picker, never picked. A connected project's session runs
   // on the server's agents, not these.
   const remote = useRemoteProject(projectId);
@@ -150,6 +149,11 @@ export function SidebarSessionInspector({
         }
         onEditModel={
           !session.running && agent ? () => onCommand("model") : undefined
+        }
+        modelDisabledReason={
+          session.running
+            ? "Finish the current turn to change the model."
+            : undefined
         }
         onEditEffort={
           !session.running && supportedEfforts(agent, effortModel).length

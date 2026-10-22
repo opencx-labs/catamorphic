@@ -21545,8 +21545,7 @@
                           "enum": [
                             "session_closed",
                             "authority_required",
-                            "handoff_pending",
-                            "imported"
+                            "handoff_pending"
                           ]
                         },
                         "authorityRevision": {
@@ -21556,23 +21555,6 @@
                         }
                       },
                       "required": ["error", "code"],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "error": {
-                          "type": "string"
-                        },
-                        "code": {
-                          "type": "string",
-                          "enum": ["harness_fixed"]
-                        },
-                        "harness": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["error", "code", "harness"],
                       "additionalProperties": false
                     },
                     {
@@ -23077,8 +23059,7 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending",
-                        "imported"
+                        "handoff_pending"
                       ]
                     },
                     "authorityRevision": {
@@ -27259,8 +27240,7 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending",
-                        "imported"
+                        "handoff_pending"
                       ]
                     },
                     "authorityRevision": {
@@ -27388,8 +27368,7 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending",
-                        "imported"
+                        "handoff_pending"
                       ]
                     },
                     "authorityRevision": {
@@ -27552,8 +27531,7 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending",
-                        "imported"
+                        "handoff_pending"
                       ]
                     },
                     "authorityRevision": {
