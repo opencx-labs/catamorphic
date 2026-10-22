@@ -11,6 +11,11 @@ import {
 } from "../lib/project-file-tree.js";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
 import {
+  onBookmarksChange,
+  readBookmarks,
+  savedAddresses,
+} from "./bookmarks.js";
+import {
   capabilitiesOf,
   childrenOf,
   invalidateBranches,
@@ -198,6 +203,13 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
     capabilities: () => capabilitiesOf(source),
     load: async ({ parentId }) => {
       const { tabs, activeTabKey, tabGroups } = deps.host();
+      // A tab open on a bookmark or a pinned page is listed there instead.
+      const saved = deps.profileId
+        ? await readBookmarks(deps, deps.profileId).then(
+            savedAddresses,
+            () => new Set<string>(),
+          )
+        : new Set<string>();
       const parentOf = new Map(
         tabGroups.flatMap((group) =>
           group.memberKeys.map((key): [string, string] => [
@@ -235,6 +247,12 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
               id,
               parentId,
               hasChildren: parents.has(id),
+              // Its bookmark stands for it; a chat with pages under it stays.
+              ...(tab.bookmarkUrl &&
+              saved.has(tab.bookmarkUrl) &&
+              !parents.has(id)
+                ? { hide: true }
+                : {}),
               // A chat's pages show under it, as in the strip; a tab dropped
               // on a chat nests there.
               ...(tab.kind === "chat"
@@ -290,10 +308,16 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
           }),
       };
     },
-    subscribe: (publish, { branches }) =>
-      deps.onWindowChange("tabs", () =>
-        invalidateBranches(publish, branches()),
-      ),
+    subscribe: (publish, { branches }) => {
+      const reread = () => invalidateBranches(publish, branches());
+      const stops = [
+        deps.onWindowChange("tabs", reread),
+        onBookmarksChange(deps, reread),
+      ];
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
     action: async ({ itemId, action }) => {
       const host = deps.host();
       const tab = host.tabs.find((candidate) => tabKey(candidate) === itemId);
