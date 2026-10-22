@@ -2325,6 +2325,29 @@ kbd {
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
 }
+/* A chat in a tab lies over the content from outside its frame, which
+   clips nothing of it: it takes the frame's corners where they meet
+   (--content-frame-radius, 0 with the frame off). Below, always; above,
+   only when nothing sits over the content (the header in the sidebar). A
+   split's side by the divider stays square. */
+[data-dock-host]:not([data-dock-native])
+[data-chat-tab]:not([data-split-slot="right"]) {
+  border-bottom-left-radius: var(--content-frame-radius, 0px);
+}
+[data-dock-host]:not([data-dock-native])
+  [data-chat-tab]:not([data-split-slot="left"]) {
+  border-bottom-right-radius: var(--content-frame-radius, 0px);
+}
+:root:has([data-workspace-visible="true"] [data-header-placement="sidebar"])
+  [data-dock-host]:not([data-dock-native])
+  [data-chat-tab]:not([data-split-slot="right"]) {
+  border-top-left-radius: var(--content-frame-radius, 0px);
+}
+:root:has([data-workspace-visible="true"] [data-header-placement="sidebar"])
+  [data-dock-host]:not([data-dock-native])
+  [data-chat-tab]:not([data-split-slot="left"]) {
+  border-top-right-radius: var(--content-frame-radius, 0px);
+}
 [data-dock-placement="left"] [data-floating-chat] {
   align-self: flex-start;
 }
