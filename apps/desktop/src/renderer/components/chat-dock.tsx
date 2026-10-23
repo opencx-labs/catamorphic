@@ -2768,6 +2768,9 @@ function ChatDockContent({
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         data-floating-chat={entry.mode === "partial" || undefined}
         data-chat-tab={(presentsAsTab && tabActive) || undefined}
+        // Which half of a split it fills: its side by the divider stays
+        // square when it takes the frame's corners (styles.css).
+        data-split-slot={splitPane ? slot : undefined}
         data-lurking={lurking || undefined}
         data-chat-local-id={entry.localId}
         data-chat-project={projectId}
