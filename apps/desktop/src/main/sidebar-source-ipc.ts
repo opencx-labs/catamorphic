@@ -8,7 +8,6 @@ import {
   accessBeyond,
   accessText,
   type CodeAccess,
-  describeAccess,
   isEmptyAccess,
   type ModuleAccessRequest,
 } from "../shared/code-access.js";
@@ -27,7 +26,7 @@ import {
 } from "../shared/workspace-config.js";
 import type { CodeApprovals } from "./code-approvals.js";
 import type { WindowProfileRegistry } from "./index.js";
-import { readModuleAccess } from "./module-access.js";
+import { describeModuleAccess, readModuleAccess } from "./module-access.js";
 import { launchConfinedModule } from "./module-sandbox.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
@@ -328,8 +327,11 @@ export function registerSidebarSources(deps: {
       ? null
       : {
           module,
-          beyond: describeAccess(beyond),
-          all: describeAccess(declared.access),
+          beyond: describeModuleAccess({ access: beyond, projectRoot: root }),
+          all: describeModuleAccess({
+            access: declared.access,
+            projectRoot: root,
+          }),
           network: Boolean(declared.access.hosts?.length),
           fingerprint: accessText(declared.access),
         };

@@ -54,7 +54,7 @@ export function hostTrusted(hosts: readonly string[], host: string): boolean {
 export interface TrustedHosts {
   /** Work's own list. */
   defaults: readonly string[];
-  /** The project's committed list (`trustedHosts` in `.work/project.json`). */
+  /** The approved published list (`trustedHosts` in `.work/project.json`). */
   project: readonly string[];
   /** The person's own, kept in their approvals. */
   mine: readonly string[];

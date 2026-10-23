@@ -1,3 +1,4 @@
+import dns from "node:dns/promises";
 import http from "node:http";
 import net from "node:net";
 import { hostAllowed } from "../shared/code-access.js";
@@ -19,11 +20,20 @@ const HOP_HEADERS = new Set([
 
 /** Every module's proxy port: no module reaches another's way out. */
 const livePorts = new Set<number>();
+const localAddresses = new net.BlockList();
+localAddresses.addSubnet("127.0.0.0", 8, "ipv4");
+localAddresses.addAddress("0.0.0.0", "ipv4");
+localAddresses.addAddress("::1", "ipv6");
+localAddresses.addAddress("::", "ipv6");
 
 /** An address on this machine's loopback. */
 export function isLoopback(host: string): boolean {
   const name = host.toLowerCase().replace(/^\[|\]$/g, "");
-  return name === "localhost" || name === "::1" || /^127\./.test(name);
+  const family = net.isIP(name);
+  return (
+    name === "localhost" ||
+    (family !== 0 && localAddresses.check(name, family === 6 ? "ipv6" : "ipv4"))
+  );
 }
 
 export interface EgressProxy {
@@ -44,22 +54,60 @@ export async function startEgressProxy({
   hosts,
   blocked = () => false,
   onRefused,
+  lookup = (host) => dns.lookup(host, { all: true, verbatim: true }),
 }: {
   hosts: readonly string[];
   /** Addresses never reachable whatever is declared: Work's own servers. */
   blocked?: (host: string, port: number) => boolean;
   /** A connection the declaration does not allow, for the module's error. */
   onRefused?: (address: string) => void;
+  /** Resolve once; connections use the checked address rather than resolving again. */
+  lookup?: (
+    host: string,
+  ) => Promise<readonly { address: string; family: number }[]>;
 }): Promise<EgressProxy> {
   const sockets = new Set<net.Socket>();
-  const allowed = (host: string, port: number) =>
-    hostAllowed(hosts, host, port) &&
-    !blocked(host.toLowerCase(), port) &&
-    !(isLoopback(host) && livePorts.has(port));
+  let closed = false;
+  const forbidden = (host: string, port: number) =>
+    blocked(host.toLowerCase(), port) ||
+    (isLoopback(host) && livePorts.has(port));
+  const destination = async (host: string, port: number) => {
+    if (
+      closed ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65_535 ||
+      !hostAllowed(hosts, host, port) ||
+      forbidden(host, port)
+    )
+      return null;
+    const family = net.isIP(host);
+    const addresses = family
+      ? [{ address: host, family }]
+      : await lookup(host).catch(() => []);
+    if (
+      closed ||
+      !addresses.length ||
+      addresses.some(
+        ({ address }) => net.isIP(address) === 0 || forbidden(address, port),
+      )
+    )
+      return null;
+    // Prefer IPv4 when both are available, including local services bound to 127.0.0.1.
+    return (
+      addresses.find((entry) => entry.family === 4) ?? addresses[0] ?? null
+    );
+  };
+  const track = (socket: net.Socket) => {
+    sockets.add(socket);
+    socket.setTimeout(IDLE_MS, () => socket.destroy());
+    socket.on("close", () => sockets.delete(socket));
+    if (closed) socket.destroy();
+  };
   const refuse = (address: string) => {
     onRefused?.(address);
   };
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
     let target: URL;
     try {
       target = new URL(request.url ?? "");
@@ -70,7 +118,12 @@ export async function startEgressProxy({
     const port = Number(
       target.port || (target.protocol === "https:" ? 443 : 80),
     );
-    if (target.protocol !== "http:" || !allowed(target.hostname, port)) {
+    const address =
+      target.protocol === "http:" && sockets.size <= MAX_CONNECTIONS
+        ? await destination(target.hostname, port)
+        : null;
+    if (request.destroyed || response.destroyed || closed) return;
+    if (!address) {
       refuse(`${target.hostname}:${port}`);
       response.writeHead(403, { "content-type": "text/plain" });
       response.end(
@@ -85,17 +138,19 @@ export async function startEgressProxy({
     );
     const upstream = http.request(
       {
-        host: target.hostname,
+        host: address.address,
+        family: address.family,
         port,
         method: request.method,
         path: `${target.pathname}${target.search}`,
-        headers,
+        headers: { ...headers, host: target.host },
       },
       (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers);
         answer.pipe(response);
       },
     );
+    upstream.on("socket", track);
     upstream.setTimeout(IDLE_MS, () => upstream.destroy());
     upstream.on("error", () => {
       if (!response.headersSent) response.writeHead(502);
@@ -103,32 +158,38 @@ export async function startEgressProxy({
     });
     request.pipe(upstream);
   });
-  server.on("connect", (request, client: net.Socket, head: Buffer) => {
+  server.on("connect", async (request, client: net.Socket, head: Buffer) => {
     const match = /^\[?([^\]]+?)\]?:(\d{1,5})$/.exec(request.url ?? "");
     const host = match?.[1];
     const port = Number(match?.[2]);
-    if (!host || !allowed(host, port) || sockets.size >= MAX_CONNECTIONS) {
+    const address =
+      host && sockets.size <= MAX_CONNECTIONS
+        ? await destination(host, port)
+        : null;
+    if (client.destroyed || closed) return;
+    if (!address) {
       if (host) refuse(`${host}:${port}`);
       client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }
-    const upstream = net.connect(port, host, () => {
-      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length) upstream.write(head);
-      upstream.pipe(client);
-      client.pipe(upstream);
-    });
+    const upstream = net.connect(
+      { port, host: address.address, family: address.family },
+      () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) upstream.write(head);
+        upstream.pipe(client);
+        client.pipe(upstream);
+      },
+    );
     for (const socket of [client, upstream]) {
-      sockets.add(socket);
-      socket.setTimeout(IDLE_MS, () => socket.destroy());
-      socket.on("close", () => sockets.delete(socket));
+      track(socket);
     }
     upstream.on("error", () => client.destroy());
     client.on("error", () => upstream.destroy());
   });
   server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
+    if (sockets.size >= MAX_CONNECTIONS) socket.destroy();
+    else track(socket);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -146,6 +207,7 @@ export async function startEgressProxy({
     port,
     close: () => {
       closing ??= new Promise<void>((resolve) => {
+        closed = true;
         livePorts.delete(port);
         for (const socket of sockets) socket.destroy();
         sockets.clear();

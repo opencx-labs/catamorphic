@@ -29,10 +29,13 @@ export function LinkTrustDialog({
       labelledBy="link-trust-title"
     >
       <div className="px-5 pt-5" data-testid="link-trust-dialog">
-        <h2 id="link-trust-title" className="text-sm font-semibold text-fg">
+        <h2
+          id="link-trust-title"
+          className="break-all text-sm font-semibold text-fg"
+        >
           Open a link to {ask?.host}?
         </h2>
-        <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
+        <p className="mt-2 break-words text-[13px] leading-relaxed text-fg-muted">
           An agent wrote this link. Opening it sends the whole address to{" "}
           {ask?.host}, and an address can carry anything the agent read.
         </p>
@@ -41,7 +44,7 @@ export function LinkTrustDialog({
         </p>
         {error ? <p className="mt-3 text-xs text-danger">{error}</p> : null}
       </div>
-      <footer className="mt-4 flex justify-end gap-2 border-t border-border px-5 py-3.5">
+      <footer className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3.5">
         <button type="button" onClick={onClose} className="button-ghost">
           Cancel
         </button>
@@ -64,7 +67,7 @@ export function LinkTrustDialog({
             );
           }}
         >
-          Always open links from {ask?.host}
+          Always open
         </button>
         <button
           type="button"

@@ -24,6 +24,14 @@ export function useTrustedHosts(
       ),
     [client],
   );
+  useEffect(
+    () =>
+      desktopApi.onGitChanged(({ projectId: changed }) => {
+        if (changed === projectId)
+          void client.invalidateQueries({ queryKey: [KEY, projectId ?? ""] });
+      }),
+    [client, projectId],
+  );
   const { data } = useQuery({
     queryKey: [KEY, projectId ?? ""],
     queryFn: async () =>

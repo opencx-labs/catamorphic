@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import type { CodeAccess } from "../shared/code-access.js";
+import { accessText, type CodeAccess } from "../shared/code-access.js";
 import { startEgressProxy } from "./egress-proxy.js";
+import { canonicalModuleAccess } from "./module-access.js";
 
 /** How a confined module's process starts, and what to release after. */
 export interface ModuleLaunch {
@@ -44,12 +44,6 @@ function onPath(command: string, searchPath: string | undefined): string {
     }
   }
   return command;
-}
-
-function fromHome(entry: string): string {
-  return entry === "~" || entry.startsWith("~/")
-    ? path.join(os.homedir(), entry.slice(2))
-    : entry;
 }
 
 /** A Seatbelt string literal. */
@@ -121,6 +115,7 @@ export async function launchConfinedModule({
   workerPath: string;
   modulePath: string;
   projectRoot: string;
+  /** Canonical destinations already compared with the person's approval. */
   access: CodeAccess;
   /** Work's toolchain environment; only PATH and CATAMORPHIC_BUN are kept. */
   toolchain: Record<string, string>;
@@ -137,6 +132,11 @@ export async function launchConfinedModule({
       "Sidebar modules run confined, which Work does on macOS only for now.",
     );
   const root = real(projectRoot);
+  const canonical = canonicalModuleAccess({ access, projectRoot: root });
+  if (accessText(canonical) !== accessText(access))
+    throw new Error(
+      "This module's access paths changed. Review its access before running it.",
+    );
   const scratch = path.join(
     scratchRoot,
     createHash("sha256")
@@ -148,8 +148,8 @@ export async function launchConfinedModule({
   const temp = path.join(scratch, "tmp");
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(temp, { recursive: true });
-  const proxy = access.hosts?.length
-    ? await startEgressProxy({ hosts: access.hosts, blocked, onRefused })
+  const proxy = canonical.hosts?.length
+    ? await startEgressProxy({ hosts: canonical.hosts, blocked, onRefused })
     : null;
   const proxyUrl = proxy ? `http://127.0.0.1:${proxy.port}` : null;
   const env: Record<string, string> = {
@@ -183,17 +183,14 @@ export async function launchConfinedModule({
     path.basename(path.dirname(bun)) === "bin"
       ? path.dirname(path.dirname(bun))
       : path.dirname(bun);
-  const writes = (access.writes ?? []).map((entry) =>
-    real(path.resolve(root, fromHome(entry))),
-  );
   const profile = moduleProfile({
     projectRoot: root,
     readable: [
       bunRoot,
       real(path.dirname(workerPath)),
-      ...(access.reads ?? []).map((entry) => real(fromHome(entry))),
+      ...(canonical.reads ?? []),
     ],
-    writable: [real(scratch), ...writes],
+    writable: [real(scratch), ...(canonical.writes ?? [])],
     proxyPort: proxy?.port ?? null,
   });
   return {

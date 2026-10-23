@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { nativeGit } from "@catamorphic/git";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * Links and images an agent writes reach only hosts the chat trusts without
- * asking (ADR 0277): Work's list, the project's committed list, and hosts
+ * asking (ADR 0277): Work's list, the project's published list, and hosts
  * the person trusted.
  */
 let app: AppHandle;
@@ -51,6 +53,42 @@ beforeAll(async () => {
     manifest,
     JSON.stringify({ ...existing, trustedHosts: ["docs.acme.test"] }),
   );
+  // The project approved this list by publishing it. Checkpoints and the
+  // working copy below can change without widening the shared approval.
+  await nativeGit(root, ["init", "--initial-branch=main"]);
+  await nativeGit(root, ["add", ".work/project.json"]);
+  await nativeGit(root, [
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.test",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "Publish trusted hosts",
+  ]);
+  const approved = (await nativeGit(root, ["rev-parse", "HEAD"])).trim();
+  await nativeGit(root, ["update-ref", publishedRef(), approved]);
+  fs.writeFileSync(
+    manifest,
+    JSON.stringify({
+      ...existing,
+      trustedHosts: ["docs.acme.test", "attacker.example"],
+    }),
+  );
+  await nativeGit(root, ["add", ".work/project.json"]);
+  await nativeGit(root, [
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.test",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "Agent checkpoint proposes another host",
+  ]);
   await app.reload();
   await app.waitFor(
     `!!document.querySelector('[data-dock-rail] button[aria-label="New chat"]')`,

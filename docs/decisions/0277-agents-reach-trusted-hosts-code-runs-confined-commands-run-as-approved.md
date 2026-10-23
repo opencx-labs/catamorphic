@@ -29,8 +29,12 @@ once) and Always show. A web link a chat opens (a reply's, a step's, an
 agent's chip) to an untrusted host asks first, showing the whole address;
 Always open trusts the host. One list serves both: Work's (hosts where only
 the host sees requests and nothing sends a visitor onward: GitHub's,
-Wikimedia's, MDN, this machine), the project's committed `trustedHosts` in
-`.work/project.json`, and the person's own, kept in their signed approvals.
+Wikimedia's, MDN, this machine), the approved published program's `trustedHosts`
+in `.work/project.json`, and the person's own, kept in their signed approvals.
+The project's published list is trusted automatically by every member, with
+no per-person re-approval. Local drafts and checkpoint commits grant no host
+trust. A project without a published list contributes no shared hosts; reads
+never fall back to its working file or `HEAD`.
 Files, notes, pull request comments and theme pictures load as before.
 
 **Project code Work runs by itself is confined and declares what it
@@ -51,6 +55,13 @@ workflows keep microVMs, a run's egress being its program's hosts within its
 Environment's policy, closed when neither names any. The layout only places
 code: a section's `collections` and `workflows` are gone, and a module several
 sections show has one access.
+
+File grants bind resolved filesystem destinations, including the existing
+ancestors of new files, before they are compared or signed. Parent traversal
+is rejected, and launch refuses a destination that changed since approval.
+The proxy resolves each admitted name once, checks every returned address
+against Work's protected listeners and other module proxies, then connects
+to the checked IP. A different DNS answer cannot change that connection.
 
 **Commands that run as the person run only as approved.** Claude Code project
 hooks and settings that run commands, ACP agent commands, MCP stdio servers
@@ -83,12 +94,18 @@ chat, and a reshaped secret passes any scanner).
 
 ## Consequences
 
-An injected agent can no longer leak through a reply, a chip or a layout, and
-code it writes reaches only what the person approved. Other people's code no
-longer runs on open. Confined modules lose what lives outside the project:
+The target closes implicit requests to untrusted hosts from agent-written
+content and limits project code to its approved reach. Confined modules lose
+what lives outside the project:
 keys from the shell environment (use a connection), command-line tools that
 read the home folder or keychain (`gh`, `aws`: use a connection or a
 workflow), and redirect targets they did not declare. Workflows that call APIs
 declare their hosts. Confinement is macOS's; Linux needs bubblewrap or Landlock
 before the desktop ships there. A full-access local agent can still send data
 out during its own turn; the same proxy can confine agents' shells later.
+
+This change delivers desktop chat link and image gates, safe row and chip
+icons, confined source modules, and signed module and app approvals. Workflow
+egress, content approvals for hooks, ACP commands and macros, module gateway
+connections, the approvals management screen and mobile link prompts remain
+follow-up implementation of the target above.

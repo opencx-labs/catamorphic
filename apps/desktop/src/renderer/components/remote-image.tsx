@@ -16,6 +16,26 @@ const REVEAL_MS = 200;
  */
 export function RemoteImage({ src, alt }: { src: string; alt: string }) {
   const projectId = useContext(FilePreviewProjectContext);
+  return (
+    <ImageConsent
+      key={JSON.stringify([projectId, src])}
+      src={src}
+      alt={alt}
+      projectId={projectId}
+    />
+  );
+}
+
+/** Consent and reveal state belong to this exact address in this project. */
+function ImageConsent({
+  src,
+  alt,
+  projectId,
+}: {
+  src: string;
+  alt: string;
+  projectId: string | undefined;
+}) {
   const trusted = useTrustedHosts(projectId);
   const [shown, setShown] = useState(false);
   const [trusting, setTrusting] = useState(false);
@@ -28,10 +48,10 @@ export function RemoteImage({ src, alt }: { src: string; alt: string }) {
   return (
     <span
       data-remote-image="waiting"
-      className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-1.5 py-0.5 align-middle text-xs text-fg-muted"
+      className="inline-flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md border border-border px-1.5 py-0.5 align-middle text-xs text-fg-muted"
     >
       <ImageIcon aria-hidden className="size-3.5 shrink-0" />
-      <span className="min-w-0 truncate">
+      <span className="min-w-0 break-all">
         {alt ? `${alt} from ${host}` : `Image from ${host}`}
       </span>
       <button
@@ -44,7 +64,7 @@ export function RemoteImage({ src, alt }: { src: string; alt: string }) {
       <button
         type="button"
         disabled={trusting}
-        className="shrink-0 cursor-pointer rounded px-1 text-fg hover:bg-bg-inset disabled:opacity-60"
+        className="max-w-full cursor-pointer break-all rounded px-1 text-left text-fg hover:bg-bg-inset disabled:opacity-60"
         onClick={() => {
           setTrusting(true);
           // Shown now; the list catches up for every other image from it.

@@ -39,6 +39,8 @@ describe("code access (ADR 0277)", () => {
       [{ hosts: ["*"] }, "hosts are names"],
       [{ lists: ["work:chats"] }, "lists name Work's lists"],
       [{ reads: ["notes"] }, "from / or ~/"],
+      [{ writes: ["output/../.git/hooks"] }, "writes name"],
+      [{ reads: ["~/notes/../.ssh"] }, "reads name"],
       [{ workflows: "all" }, "workflows name"],
       [["hosts"], "must be an object"],
     ] as const)
@@ -87,6 +89,17 @@ describe("code access (ADR 0277)", () => {
     expect(hostAllowed(hosts, "localhost", 11434)).toBe(true);
     expect(hostAllowed(hosts, "localhost", 443)).toBe(false);
     expect(hostAllowed(undefined, "api.linear.app", 443)).toBe(false);
+  });
+
+  it("never treats parent traversal as a narrower file grant", () => {
+    expect(
+      accessBeyond(
+        { writes: ["output"] },
+        {
+          writes: ["output/../.git/hooks"],
+        },
+      ),
+    ).toEqual({ writes: ["output/../.git/hooks"] });
   });
 
   it("is the same text whatever order it was written in", () => {

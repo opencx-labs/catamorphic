@@ -13,7 +13,7 @@ const SUBJECT = "trusted-hosts";
 
 /**
  * The hosts a chat opens and shows without asking (ADR 0277): Work's list,
- * the project's committed one, and the person's own. Theirs lives in the
+ * the project's approved published one, and the person's own. Theirs lives in the
  * signed approvals, so an agent that writes a file trusts nothing; only a
  * person's answer in Work's own window adds to it.
  */
@@ -64,7 +64,7 @@ export function registerTrustedHosts({
           : null;
       return {
         defaults: DEFAULT_TRUSTED_HOSTS,
-        project: root ? projectTrustedHosts(root) : [],
+        project: root ? await projectTrustedHosts(root) : [],
         mine: await mine(profileId),
       };
     },

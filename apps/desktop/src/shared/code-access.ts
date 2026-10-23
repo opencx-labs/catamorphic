@@ -49,6 +49,7 @@ function validEntry(key: AccessKey, entry: string): boolean {
   if (key === "hosts") return parseHost(entry) !== null;
   if (entry.length === 0 || entry.length > 1024 || entry.includes("\0"))
     return false;
+  if (entry.split(/[\\/]/).includes("..")) return false;
   // Outside the project: where it starts must be said.
   if (key === "reads") return entry.startsWith("/") || entry.startsWith("~/");
   return true;
@@ -126,6 +127,11 @@ function hostCovers(approved: string, wanted: string): boolean {
 }
 
 function pathCovers(approved: string, wanted: string): boolean {
+  if (
+    approved.split(/[\\/]/).includes("..") ||
+    wanted.split(/[\\/]/).includes("..")
+  )
+    return false;
   if (approved === wanted) return true;
   const folder = approved.endsWith("/") ? approved : `${approved}/`;
   return wanted.startsWith(folder);

@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
+import { hasLocalGit, nativeGit } from "@catamorphic/git";
+import {
+  PROJECT_MANIFEST_PATH,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import {
   matchesProjectExperience,
   type ProjectExperienceContext,
@@ -94,13 +98,25 @@ export function projectAllowsIncognito(rootPath: string): boolean {
 }
 
 /**
- * The hosts this project trusts in its chats (ADR 0277): `"trustedHosts":
- * ["docs.acme.com", "*.acme.dev"]`, committed, so everyone who works in it
- * opens their links and sees their images without asking. Entries that are
- * not a host are left out.
+ * The published program's approved hosts (ADR 0277), trusted by everyone.
+ * Working files and checkpoint commits cannot grant trust. A project with
+ * no publication has no shared approved list; never fall back to HEAD.
  */
-export function projectTrustedHosts(rootPath: string): string[] {
-  const value = readManifest(rootPath).trustedHosts;
+export async function projectTrustedHosts(rootPath: string): Promise<string[]> {
+  let value: unknown;
+  try {
+    if (!(await hasLocalGit({ path: rootPath }))) return [];
+    const text = await nativeGit(rootPath, [
+      "--no-replace-objects",
+      "show",
+      `${publishedRef()}:${PROJECT_MANIFEST_PATH}`,
+    ]);
+    const manifest: unknown = JSON.parse(text);
+    value = isRecord(manifest) ? manifest.trustedHosts : undefined;
+  } catch {
+    // Missing publication or malformed policy grants nothing.
+    return [];
+  }
   if (!Array.isArray(value)) return [];
   return [
     ...new Set(

@@ -6,7 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CodeAccess } from "../shared/code-access.js";
-import { readModuleAccess } from "./module-access.js";
+import { canonicalModuleAccess, readModuleAccess } from "./module-access.js";
 import { launchConfinedModule, moduleProfile } from "./module-sandbox.js";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -40,6 +40,7 @@ async function loadConfined(
   source: string,
   access: CodeAccess,
   project = folder("module-project"),
+  blocked?: (host: string, port: number) => boolean,
 ) {
   const modulePath = path.join(project, "module.ts");
   fs.writeFileSync(modulePath, source);
@@ -48,9 +49,10 @@ async function loadConfined(
     workerPath: path.join(import.meta.dirname, "sidebar-source-worker.ts"),
     modulePath,
     projectRoot: project,
-    access,
+    access: canonicalModuleAccess({ access, projectRoot: project }),
     toolchain: { PATH: process.env.PATH ?? "" },
     scratchRoot: folder("module-scratch"),
+    blocked,
   });
   cleanups.push(() => launch.close());
   const child = spawn(launch.command, launch.args, {
@@ -58,7 +60,14 @@ async function loadConfined(
     env: launch.env,
     stdio: ["pipe", "ignore", "pipe", "pipe"],
   });
-  cleanups.push(() => void child.kill("SIGKILL"));
+  cleanups.push(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) =>
+      child.once("exit", () => resolve()),
+    );
+    child.kill("SIGTERM");
+    await exited;
+  });
   let stderr = "";
   child.stderr?.on("data", (data) => {
     stderr += data;
@@ -119,6 +128,125 @@ export default {
 `;
 
 describe("confined modules (ADR 0277)", () => {
+  it.skipIf(process.platform !== "darwin")(
+    "cannot read another process's environment",
+    async () => {
+      const fixture = spawn(
+        process.execPath,
+        ["-e", "setInterval(() => {}, 1000)"],
+        {
+          env: { DUMMY_MODULE_SECRET: "module-process-probe" },
+          stdio: "ignore",
+        },
+      );
+      cleanups.push(async () => {
+        if (fixture.exitCode !== null || fixture.signalCode !== null) return;
+        const exited = new Promise<void>((resolve) =>
+          fixture.once("exit", () => resolve()),
+        );
+        fixture.kill("SIGTERM");
+        await exited;
+      });
+      const rows = await loadConfined(
+        `
+        import {execFileSync} from "node:child_process";
+        export default {async load(){
+          let label="blocked";
+          try { if(execFileSync("/bin/ps",["eww","-p",${JSON.stringify(String(fixture.pid))}],{encoding:"utf8",stdio:["ignore","pipe","ignore"]}).includes("module-process-probe"))label="escaped"; } catch {}
+          return {items:[{id:"environment",label}]};
+        }};
+      `,
+        {},
+      );
+      expect(rows.environment).toBe("blocked");
+    },
+    30_000,
+  );
+
+  it("refuses a canonical directory replaced by a symlink before launch", async () => {
+    const project = folder("module-project");
+    const output = path.join(project, "output");
+    const outside = folder("unapproved-output");
+    fs.mkdirSync(output);
+    const access = canonicalModuleAccess({
+      access: { writes: ["output"] },
+      projectRoot: project,
+    });
+    fs.rmdirSync(output);
+    fs.symlinkSync(outside, output, "dir");
+    await expect(
+      launchConfinedModule({
+        executable: "bun",
+        workerPath: "/worker.mjs",
+        modulePath: path.join(project, "module.ts"),
+        projectRoot: project,
+        access,
+        toolchain: {},
+        scratchRoot: folder("module-scratch"),
+        platform: "linux",
+        unconfined: true,
+      }),
+    ).rejects.toThrow("access paths changed");
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "cannot write through a symlink retargeted after its destination was approved",
+    async () => {
+      const project = folder("module-project");
+      const first = folder("approved-output");
+      const second = folder("unapproved-output");
+      const link = path.join(project, "output");
+      fs.symlinkSync(first, link, "dir");
+      const approved = canonicalModuleAccess({
+        access: { writes: ["output"] },
+        projectRoot: project,
+      });
+      fs.unlinkSync(link);
+      fs.symlinkSync(second, link, "dir");
+      const rows = await loadConfined(
+        `
+        import fs from "node:fs";
+        export default { async load() {
+          let label = "escaped";
+          try { fs.writeFileSync("output/hook", "dummy"); } catch { label = "blocked"; }
+          return { items: [{id:"write", label}] };
+        } };
+      `,
+        approved,
+        project,
+      );
+      expect(rows.write).toBe("blocked");
+      expect(fs.existsSync(path.join(second, "hook"))).toBe(false);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "cannot tunnel to a blocked Work port through 0.0.0.0",
+    async () => {
+      const port = await server("escaped");
+      const rows = await loadConfined(
+        `
+        import http from "node:http";
+        export default { async load() {
+          const proxy = new URL(process.env.HTTP_PROXY);
+          const label = await new Promise((resolve, reject) => {
+            http.get({ host: proxy.hostname, port: Number(proxy.port),
+              path: "http://0.0.0.0:${port}/api/private", headers: {host:"127.0.0.1:${port}"} },
+              res => { res.resume(); res.on("end", () => resolve(String(res.statusCode))); }).on("error", reject);
+          });
+          return {items:[{id:"api", label}]};
+        } };
+      `,
+        { hosts: [`0.0.0.0:${port}`] },
+        folder("module-project"),
+        (_host, targetPort) => targetPort === port,
+      );
+      expect(rows.api).toBe("403");
+    },
+    30_000,
+  );
+
   it.skipIf(process.platform !== "darwin")(
     "reach only declared hosts and files, with an environment of their own",
     async () => {

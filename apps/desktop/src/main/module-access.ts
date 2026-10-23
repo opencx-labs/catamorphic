@@ -1,12 +1,94 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { type CodeAccess, parseCodeAccess } from "../shared/code-access.js";
+import {
+  type CodeAccess,
+  describeAccess,
+  parseCodeAccess,
+} from "../shared/code-access.js";
 
 /** A module's declared reach, and the file that declares it. */
 export interface ModuleAccess {
+  /** Canonical filesystem destinations, shared by approval and enforcement. */
   access: CodeAccess;
   /** The package.json naming it; null when the module has none. */
   file: string | null;
+}
+
+/** Resolve existing ancestors too, so a new file cannot hide a symlink. */
+function canonicalPath(file: string): string {
+  let current = path.resolve(file);
+  const suffix: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(current), ...suffix);
+    } catch (cause) {
+      if (
+        !(cause instanceof Error) ||
+        !("code" in cause) ||
+        cause.code !== "ENOENT"
+      )
+        throw cause;
+      // A dangling symlink is not a new file beneath a safe ancestor.
+      if (fs.lstatSync(current, { throwIfNoEntry: false }))
+        throw new Error(`Cannot resolve the access path ${file}.`);
+      const parent = path.dirname(current);
+      if (parent === current) throw cause;
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** The exact destinations that are compared, signed, and sandboxed. */
+export function canonicalModuleAccess({
+  access,
+  projectRoot,
+}: {
+  access: CodeAccess;
+  projectRoot: string;
+}): CodeAccess {
+  const checked = parseCodeAccess(access, "module access");
+  const paths = (entries: readonly string[]) =>
+    [
+      ...new Set(
+        entries.map((entry) =>
+          canonicalPath(
+            path.resolve(
+              projectRoot,
+              entry === "~" || entry.startsWith("~/")
+                ? path.join(os.homedir(), entry.slice(2))
+                : entry,
+            ),
+          ),
+        ),
+      ),
+    ].sort();
+  return {
+    ...checked,
+    ...(checked.reads ? { reads: paths(checked.reads) } : {}),
+    ...(checked.writes ? { writes: paths(checked.writes) } : {}),
+  };
+}
+
+/** Keep project paths readable while the approval binds their real targets. */
+export function describeModuleAccess({
+  access,
+  projectRoot,
+}: {
+  access: CodeAccess;
+  projectRoot: string;
+}): string[] {
+  const root = canonicalPath(projectRoot);
+  const display = (file: string) => {
+    const relative = path.relative(root, file);
+    return relative === "" ? "." : insideProject(root, file) ? relative : file;
+  };
+  return describeAccess({
+    ...access,
+    ...(access.reads ? { reads: access.reads.map(display) } : {}),
+    ...(access.writes ? { writes: access.writes.map(display) } : {}),
+  });
 }
 
 /** The module is a file of the project, never outside it. */
@@ -60,7 +142,13 @@ export function readModuleAccess({
         typeof catamorphic === "object" && catamorphic !== null
           ? Reflect.get(catamorphic, "access")
           : undefined;
-      return { access: parseCodeAccess(declared, where), file };
+      return {
+        access: canonicalModuleAccess({
+          access: parseCodeAccess(declared, where),
+          projectRoot,
+        }),
+        file,
+      };
     }
     if (path.resolve(folder) === path.resolve(projectRoot))
       return { access: {}, file: null };
