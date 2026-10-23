@@ -50,7 +50,7 @@ let app: AppHandle;
 let port: number;
 
 beforeAll(async () => {
-  await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string")
     throw new Error("No fixture port");
@@ -87,7 +87,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 const bounds = () =>
   app.eval<Rect[]>(`(() => {${helpers} return geometry();})()`);
 
-async function ask(name: string, host: number) {
+async function ask(name: string) {
   await app.waitFor(
     "!!document.querySelector('[data-dock-rail] button[aria-label=\"New chat\"]')",
   );
@@ -97,7 +97,10 @@ async function ask(name: string, host: number) {
   await app.waitFor(
     `[...document.querySelectorAll('[data-composer-input]')].some(el => !el.closest('[inert]'))`,
   );
-  const text = `Here is the weekly chart.\n\n![Weekly progress](https://127.0.0.${host}:${port}/chart.svg?case=${name})\n\nThe caption stays below the chart.`;
+  // Chromium resolves *.localhost to loopback on every supported platform;
+  // macOS does not route unconfigured 127.0.0.2-style aliases to this server.
+  // Each name is untrusted independently, so the last test can save its host.
+  const text = `Here is the weekly chart.\n\n![Weekly progress](https://${name}.localhost:${port}/chart.svg?case=${name})\n\nThe caption stays below the chart.`;
   await app.eval(`(() => {
     ${setReactValueJs}
     const input=[...document.querySelectorAll('[data-composer-input]')].find(el=>!el.closest('[inert]'));
@@ -146,6 +149,31 @@ async function unchangedWhileLoading(before: Rect[]) {
   ).toBe(true);
 }
 
+async function requestArrived(name: string, count = 1) {
+  // Rendering an <img> does not mean its DNS/TLS handshake has finished.
+  // Hold the response after arrival, then measure a genuinely pending load.
+  if ((requests.get(name) ?? 0) < count) {
+    await new Promise<void>((resolve, reject) => {
+      const arrived = () => {
+        if ((requests.get(name) ?? 0) < count) return;
+        clearTimeout(timeout);
+        server.off("request", arrived);
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        server.off("request", arrived);
+        reject(
+          new Error(
+            `Image fixture did not receive request ${count} for ${name}`,
+          ),
+        );
+      }, 15_000);
+      server.on("request", arrived);
+    });
+  }
+  expect(requests.get(name)).toBe(count);
+}
+
 async function release(name: string, failed = false) {
   const response = pending.get(name);
   expect(response, "image request reached the fixture").toBeDefined();
@@ -163,15 +191,15 @@ async function release(name: string, failed = false) {
 }
 
 it("holds every approval box until the image is ready, then reveals from those exact dimensions", async () => {
-  await ask("once", 2);
+  await ask("once");
   expect(requests.get("once")).toBeUndefined();
   const before = await bounds();
   await approve();
   await app.waitFor(
     `!!document.querySelector('[data-remote-image="loading"] img')`,
   );
+  await requestArrived("once");
   await unchangedWhileLoading(before);
-  expect(requests.get("once")).toBe(1);
   await app.eval(`(() => {${helpers}
     window.imageReveal = new Promise(resolve=>{
       const watch=()=>{
@@ -204,9 +232,10 @@ it("holds every approval box until the image is ready, then reveals from those e
 });
 
 it("keeps the same pill on failure and retries from it", async () => {
-  await ask("retry", 3);
+  await ask("retry");
   const before = await bounds();
   await approve();
+  await requestArrived("retry");
   await unchangedWhileLoading(before);
   await release("retry", true);
   const failed = await bounds();
@@ -215,8 +244,8 @@ it("keeps the same pill on failure and retries from it", async () => {
       expect(Math.abs(box[axis] - before[index]![axis])).toBeLessThan(0.75);
   expect(await app.eval(`${pill}.textContent`)).toContain("Image unavailable");
   await approve();
+  await requestArrived("retry", 2);
   await unchangedWhileLoading(before);
-  expect(requests.get("retry")).toBe(2);
   await release("retry");
 });
 
@@ -230,10 +259,11 @@ it("holds a wrapped pill in a narrow layout, including with reduced motion", asy
   await app.cdp("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
-  await ask("narrow", 4);
+  await ask("narrow");
   const before = await bounds();
   expect(before[0]!.width).toBeLessThan(340);
   await approve();
+  await requestArrived("narrow");
   await unchangedWhileLoading(before);
   await release("narrow");
   expect(
@@ -246,14 +276,14 @@ it("holds a wrapped pill in a narrow layout, including with reduced motion", asy
 });
 
 it("keeps the pill through host saving and the shared trust refresh", async () => {
-  await ask("always", 5);
+  await ask("always");
   const before = await bounds();
   await approve(true);
   await app.waitFor(
     `!!document.querySelector('[data-remote-image="loading"] img')`,
   );
+  await requestArrived("always");
   await unchangedWhileLoading(before);
-  expect(requests.get("always")).toBe(1);
   await release("always");
   expect(app.getRendererErrors()).toEqual([]);
 });
