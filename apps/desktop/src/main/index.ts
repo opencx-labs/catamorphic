@@ -10,6 +10,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  MenuItem,
   type MenuItemConstructorOptions,
   nativeTheme,
   powerMonitor,
@@ -497,6 +498,22 @@ let desktopWorkspaces: DesktopWorkspaces | null = null;
 // the command palette, and toggle-sidebar are window-level shortcuts handled
 // in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
+  // Keep Electron's platform-specific edit commands. Build the plain-paste
+  // item with our shortcut rather than mutating a native menu item's fields.
+  const edit = Menu.buildFromTemplate([{ role: "editMenu" }]).items[0]?.submenu;
+  const plainPaste = new MenuItem({
+    role: "pasteAndMatchStyle",
+    accelerator: "CmdOrCtrl+Shift+V",
+  });
+  const editItems = (edit?.items ?? []).map((item) =>
+    item.role?.toLowerCase() === "pasteandmatchstyle" ? plainPaste : item,
+  );
+  if (!editItems.includes(plainPaste))
+    editItems.splice(
+      editItems.findIndex((item) => item.role === "paste") + 1,
+      0,
+      plainPaste,
+    );
   const checkForUpdates = () => {
     // A macOS app can have no windows while its menu is still reachable.
     // The new renderer reads the latest updater state after loading.
@@ -537,7 +554,7 @@ function buildMenu(bindings: Keybindings): Menu {
           : []),
       ],
     },
-    { role: "editMenu" },
+    { role: "editMenu", submenu: Menu.buildFromTemplate(editItems) },
     {
       // Custom View menu: the stock viewMenu role binds Cmd+R /
       // Cmd+Shift+R to reloading the whole app window, which must belong

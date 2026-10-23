@@ -237,6 +237,30 @@ cleared. Hidden tabs stay out of the guard.
 
 ## Tab switches and closes
 
+### Local changes stay local, 2026-10-23
+
+Opening and dismissing a chat in an installed alpha.27 with long retained
+transcripts triggered style passes over 32,000 to 50,000 elements. Individual
+passes took 50 to 160 ms. The expensive geometry and focus calls were paying
+for that style work, rather than spending that time in their own scripts.
+
+Chromium's invalidation trace identified two broad selectors: Tailwind's
+`group-has-[:focus-visible]` output put a descendant wildcard inside `:is`,
+invalidating the document after unrelated insertions and inline style changes;
+the corner-control rule's `:root:has` searched across every retained chat.
+The time and webhook copy button now use row-scoped selectors. The visible
+project publishes the corner toggle's clearance on the existing workspace
+frame, so chat controls do not need a document-wide lookup.
+
+In a reversible live-window comparison at about 39,000 elements, eight
+identical local insertions each took 88 to 124 ms before, 3 to 8 ms with the
+scoped rules, and 84 to 98 ms again after restoring the original rules.
+This measures the forced style pass, not total interaction latency. The
+native `style-invalidation.e2e.ts` regression adds 12,000 transcript rows and
+checks the trace's element counts for insertions in the workspace, dock and
+document, avoiding timing thresholds. Keyboard timestamp reveal remains
+covered by `chat-motion.e2e.ts`.
+
 A tab switch shows the new tab in the frame after the press, a chat as a
 page: a chat tab behind another keeps its tab pose and is hidden at once
 (`visibility: hidden` and `content-visibility: hidden`, no transition), so

@@ -227,6 +227,12 @@ export interface ChatDockProps {
    * shortcut), unfolding them; it says false when there is none.
    */
   registerFocusChips?: (focus: () => boolean) => void;
+  registerMessageNavigation?: (
+    navigation: {
+      previous: (repeat?: boolean) => void;
+      next: (repeat?: boolean) => void;
+    } | null,
+  ) => void;
   /**
    * Hands the host this chat's live sender (post-auth continuations).
    * Sends queue behind an in-flight turn like composer sends do.

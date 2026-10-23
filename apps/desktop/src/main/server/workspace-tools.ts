@@ -428,7 +428,7 @@ export function buildWorkspaceToolkit(
     {
       name: "send_project_session_message",
       description:
-        "Send a message to another session in this project. steer (the default) reaches the other agent at its next step while it works, or starts a turn when it is idle: use it for a question, a decision or anything it must see now. message_only is context that should not start work. queue is work for after its current turn ends, however long that is. interrupt stops what it is doing, only when it must change course at once. A message to your parent session reaches it as steer even if you choose queue.",
+        "Send a message to another session in this project. steer (the default) reaches the other agent at its next step while it works, or starts a turn when it is idle. message_only is context that should not start work. queue is work for after its current turn ends. interrupt stops a peer, only when it must change course at once. Messages to your working parent always reach its next step without stopping it, including message_only updates. Routine updates appear in its activity log; questions and attention requests stay visible.",
       parameters: {
         session_id: z.string().min(1).describe("Target session id"),
         message: z.string().min(1).describe("Message to send"),

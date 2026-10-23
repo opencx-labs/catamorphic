@@ -1,7 +1,13 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * A running turn's live chrome holds still while its words change, frame
@@ -35,13 +41,16 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  */
 
 let app: AppHandle;
+const paceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "chat-motion-pace-"));
+const paceGate = path.join(paceRoot, "hold-answer");
 
 beforeAll(async () => {
-  app = await launchApp();
+  app = await launchApp({ env: { CATAMORPHIC_E2E_PACE_GATE: paceGate } });
 }, 180_000);
 
 afterAll(async () => {
   await app?.stop();
+  fs.rmSync(paceRoot, { recursive: true, force: true });
 });
 
 const helpers = `
@@ -64,8 +73,11 @@ const helpers = `
     return !!s && s.scrollHeight - s.clientHeight - s.scrollTop < 2 &&
       s.firstElementChild.hasAttribute('data-pinned');
   };
-  const toLatest = () =>
-    frontDock().querySelector('[aria-label="Scroll to latest message"]')?.click();
+  const toLatest = () => {
+    const dock = frontDock();
+    for (let i = 0; i <= dock.querySelectorAll('[data-user-message]').length; i++)
+      dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',repeat:true,bubbles:true,cancelable:true}));
+  };
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
   // A real leave: the pointer moves somewhere outside the dock first.
@@ -87,6 +99,8 @@ const runWait = <T = unknown>(
 
 type Box = [number, number, number, number] | null;
 interface Frame {
+  /** Captured before React handles the real CSS animation's completion. */
+  beats: { kind: "activity" | "count"; opacity: number; text: string }[];
   t: number;
   /** The spinner's center: it turns, so its box breathes. */
   spinner: [number, number] | null;
@@ -143,6 +157,17 @@ const RECORDER = `(() => {
     return [round(r.x), round(r.y), round(r.width), round(r.height)];
   };
   const frames = [];
+  const beats = [];
+  const onBeat = (event) => {
+    if (event.animationName !== 'catamorphic-swap-out') return;
+    const node = event.target;
+    const live = frontDock()?.querySelector('[data-live-work]');
+    const activity = frontDock()?.querySelector('[data-testid="activity-text"]');
+    const kind = node === activity ? 'activity' :
+      live?.querySelector('[data-testid="chat-turn-steps-count"] .cat-swap-text') === node ? 'count' : null;
+    if (kind) beats.push({kind, opacity: +getComputedStyle(node).opacity, text: node.textContent});
+  };
+  document.addEventListener('animationend', onBeat, true);
   let on = true;
   const sample = () => {
     const dock = frontDock();
@@ -161,6 +186,7 @@ const RECORDER = `(() => {
     const articles = log ? [...log.querySelectorAll('article')] : [];
     frames.push({
       t: round(performance.now()),
+      beats: beats.splice(0),
       spinner: spinner ? [round(spinner.x + spinner.width / 2), round(spinner.y + spinner.height / 2)] : null,
       text: box(text), textS: text?.textContent ?? null,
       textO: text ? +getComputedStyle(text).opacity : null,
@@ -194,10 +220,11 @@ const RECORDER = `(() => {
   };
   requestAnimationFrame(sample);
   window.__chatMotion = {
-    stop() { on = false; return frames; },
+    stop() { on = false; document.removeEventListener('animationend', onBeat, true); return frames; },
     // Frames sampled since a moment: a window waits for enough of them,
     // whatever stalls the renderer meanwhile.
     since(t) { return frames.filter((frame) => frame.t >= t).length; },
+    workFrames() { return frames.filter(frame => /^([2-9]|[0-9]{2}) steps$/.test(frame.toggleS ?? '') && frame.spinner).length; },
   };
   return true;
 })()`;
@@ -286,7 +313,11 @@ async function recordTurn(
   name: string,
   prompt: string,
   during?: () => Promise<void>,
-  options: { cpuSlowdown?: number; stalls?: boolean } = {},
+  options: {
+    cpuSlowdown?: number;
+    stalls?: boolean;
+    minWorkFrames?: number;
+  } = {},
 ): Promise<Frame[]> {
   // A renderer this many times slower: frames come late, and what mounted
   // between two of them starts its motion only at the later one.
@@ -324,8 +355,16 @@ async function recordTurn(
     await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
   }
   try {
-    return await sampleTurn(name, prompt, holding, options.stalls);
+    if (options.minWorkFrames) fs.writeFileSync(paceGate, "hold");
+    return await sampleTurn(
+      name,
+      options.minWorkFrames ? `${prompt} measured frames` : prompt,
+      holding,
+      options.stalls,
+      options.minWorkFrames,
+    );
   } finally {
+    fs.rmSync(paceGate, { force: true });
     if (options.cpuSlowdown)
       await app.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
     if (options.stalls) {
@@ -340,6 +379,7 @@ async function sampleTurn(
   prompt: string,
   during?: () => Promise<void>,
   stalls = false,
+  minWorkFrames?: number,
 ): Promise<Frame[]> {
   await run(RECORDER);
   if (stalls) await run(`return ${STALLS};`);
@@ -349,6 +389,16 @@ async function sampleTurn(
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     return true;`);
   await during?.();
+  if (minWorkFrames) {
+    await runWait(
+      `return window.__chatMotion.workFrames() >= ${minWorkFrames};`,
+      {
+        label: "enough rendered work frames to measure geometry",
+        timeoutMs: 60_000,
+      },
+    );
+    fs.rmSync(paceGate, { force: true });
+  }
   await runWait(
     `const log = frontDock()?.querySelector('[role="log"]');
      return !!log && [...log.querySelectorAll('article')].some((a) => a.textContent.includes('health check.')) &&
@@ -578,29 +628,16 @@ describe("chat motion", () => {
     expectStill(frames);
     expectHandOver(frames);
 
-    // Each new activity first fades the old words away, then shows its own.
-    let swaps = 0;
-    for (let i = 1; i < live.length; i++) {
-      const before = live[i - 1];
-      const after = live[i];
-      if (!before || !after || before.textS === after.textS) continue;
-      swaps++;
-      expect(before.textO, `faded before "${after.textS}"`).toBeLessThanOrEqual(
-        0.35,
-      );
+    // Observe the real animation's end before React swaps the words. The
+    // last RAF before it can be arbitrarily far from that end on a busy
+    // renderer, so its sampled opacity cannot stand in for the endpoint.
+    const ended = frames.flatMap((frame) => frame.beats);
+    for (const kind of ["activity", "count"] as const) {
+      const faded = ended.filter((beat) => beat.kind === kind);
+      expect(faded.length, `${kind} fades completed`).toBeGreaterThanOrEqual(5);
+      for (const beat of faded)
+        expect(beat.opacity, `faded before replacing "${beat.text}"`).toBe(0);
     }
-    expect(swaps).toBeGreaterThanOrEqual(5);
-
-    // The count changes on a beat: its number dims before each new one.
-    let counts = 0;
-    for (let i = 1; i < live.length; i++) {
-      const before = live[i - 1];
-      const after = live[i];
-      if (!before || !after || before.toggleS === after.toggleS) continue;
-      counts++;
-      expect(before.countO, `dimmed before ${after.toggleS}`).toBeLessThan(0.5);
-    }
-    expect(counts).toBeGreaterThanOrEqual(5);
 
     // "steps" slides right as the count reaches ten (counts that arrive
     // mid-beat collapse into the latest, so it may skip a number): it
@@ -652,10 +689,11 @@ describe("chat motion", () => {
   it("holds the live chrome still on a slow renderer, whose frames come late", async () => {
     await setDisplay("notes");
     await newChat();
-    // At the even pace, not quickly: a slowed renderer on a busy machine
-    // drew only 14 frames of a quick turn's work, too few to judge by.
+    // The fake holds its answer until enough work frames have actually
+    // rendered, so a busy runner still supplies a meaningful sample.
     const frames = await recordTurn("notes-slow", "pace the work", undefined, {
       cpuSlowdown: 6,
+      minWorkFrames: 32,
     });
     for (const frame of frames.filter((f) => f.rowParts.length > 0))
       expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
@@ -668,6 +706,7 @@ describe("chat motion", () => {
     expectRowsInPlace(
       await recordTurn("all-slow", "pace the work quickly", undefined, {
         cpuSlowdown: 6,
+        minWorkFrames: 32,
       }),
     );
   }, 120_000);
@@ -826,9 +865,7 @@ describe("chat motion", () => {
         await mark("scrolled");
         await new Promise((resolve) => setTimeout(resolve, 1200));
         await mark("back");
-        await run(
-          `frontDock().querySelector('[aria-label="Scroll to latest message"]')?.click(); return true;`,
-        );
+        await run(`toLatest(); return true;`);
       },
     );
     const marks = await readMarks();
@@ -937,11 +974,7 @@ describe("chat motion", () => {
         await sleep(800);
         await mark("after");
         // A selection lets go of the latest words: they wait below.
-        expect(
-          await run<boolean>(
-            `return !!frontDock().querySelector('[aria-label="Scroll to latest message"]');`,
-          ),
-        ).toBe(true);
+        expect(await run<boolean>(`return !following();`)).toBe(true);
         await run(
           `document.getSelection()?.removeAllRanges(); toLatest(); return true;`,
         );
@@ -1013,7 +1046,7 @@ describe("chat motion", () => {
             timeoutMs: 10_000,
           });
         }
-        // PageUp with focus on a control in the conversation.
+        // An ordinary scroll key, with focus on a conversation control.
         expect(
           await run<string | undefined>(
             `logScroller().querySelector('[data-testid="chat-turn-steps-toggle"]')?.focus({ preventScroll: true });
@@ -1021,16 +1054,17 @@ describe("chat motion", () => {
           ),
         ).toBe("chat-turn-steps-toggle");
         const pageUp = {
-          key: "PageUp",
-          code: "PageUp",
-          windowsVirtualKeyCode: 33,
-          nativeVirtualKeyCode: 33,
+          key: "ArrowUp",
+          code: "ArrowUp",
+          windowsVirtualKeyCode: 38,
         };
-        await app.cdp("Input.dispatchKeyEvent", {
-          type: "rawKeyDown",
-          ...pageUp,
-        });
-        await app.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...pageUp });
+        for (let i = 0; i < 6; i++) {
+          await app.cdp("Input.dispatchKeyEvent", {
+            type: "rawKeyDown",
+            ...pageUp,
+          });
+          await app.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...pageUp });
+        }
         await mark("key");
         await sampled("key");
         await mark("keyed");
@@ -1191,6 +1225,19 @@ describe("chat motion", () => {
     // Away again, it goes.
     await app.movePointer(await point("composer()"));
     await lookWhen("0", "the time hidden again");
+    // Keyboard focus on the message or a control inside it reveals the
+    // time too, without a broad group-has selector over the document.
+    await app.press("Tab");
+    await run(`${latest}.focus({ preventScroll: true }); return true;`);
+    await lookWhen("1", "the time shown for keyboard focus");
+    await app.press("Tab");
+    await runWait(
+      `return ${latest}.contains(document.activeElement) && document.activeElement !== ${latest};`,
+      { label: "keyboard focus inside the message" },
+    );
+    await lookWhen("1", "the time stays for a focused message control");
+    await run("composer().focus(); return true;");
+    await lookWhen("0", "the time hidden after keyboard focus leaves");
     // A phone-narrow column: the time hangs under the message's corner,
     // inside the conversation.
     await run(`
@@ -1294,4 +1341,109 @@ describe("chat motion", () => {
     }
     expect(await run<boolean>("return following();")).toBe(true);
   }, 120_000);
+
+  it("navigates messages with configurable PageUp and PageDown, including held keys", async () => {
+    await newChat();
+    for (let i = 1; i <= 4; i++) {
+      const text =
+        `Navigation message ${i}.\n\n` +
+        Array.from({ length: 20 }, (_, j) => `Paragraph ${j + 1}.`).join(
+          "\n\n",
+        );
+      await run(
+        `setReactValue(composer(), ${JSON.stringify(text)}); composer().closest('form').requestSubmit(); return true;`,
+      );
+      await runWait(
+        `return frontDock().textContent.includes('You said: Navigation message ${i}.') && !frontDock().querySelector('[aria-label="Stop the agent"]') && following();`,
+      );
+    }
+    expect(
+      await run(
+        `return !!frontDock().querySelector('[aria-label="Scroll to latest message"], [data-testid="chat-jump-previous"]');`,
+      ),
+    ).toBe(false);
+    await run(
+      `setReactValue(composer(), 'Keep this draft'); composer().focus(); return true;`,
+    );
+    await focusWindow(app);
+    await runWait(
+      "return document.hasFocus() && document.activeElement === composer();",
+      { label: "navigation composer has native focus" },
+    );
+    const key = async (
+      name: "PageUp" | "PageDown" | "ArrowUp" | "ArrowDown",
+      repeat = false,
+      modifiers = 0,
+    ) => {
+      const code = { PageUp: 33, PageDown: 34, ArrowUp: 38, ArrowDown: 40 }[
+        name
+      ];
+      await app.cdp("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: name,
+        code: name,
+        windowsVirtualKeyCode: code,
+        modifiers,
+        autoRepeat: repeat,
+      });
+      if (!repeat)
+        await app.cdp("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: name,
+          code: name,
+          windowsVirtualKeyCode: code,
+          modifiers,
+        });
+    };
+    const atMessage = (index: number) =>
+      runWait(
+        `const s=logScroller(); const m=s.querySelectorAll('[data-user-message]')[${index}]; const top=m?.getBoundingClientRect().top-s.getBoundingClientRect().top; return top >= 0 && top < 80;`,
+        { label: `navigation message ${index + 1} at the top` },
+      );
+    await key("PageUp");
+    await atMessage(3);
+    // Repeats arrive before the first smooth scroll could finish. Each
+    // must advance a message rather than continually restart that move.
+    for (let i = 0; i < 8; i++) await key("PageUp", true);
+    await app.cdp("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "PageUp",
+      code: "PageUp",
+      windowsVirtualKeyCode: 33,
+    });
+    await atMessage(0);
+    const oldest = await run<number>("return logScroller().scrollTop;");
+    await key("PageUp");
+    await key("PageUp", true);
+    await run(`return new Promise(resolve => setTimeout(resolve, 300));`);
+    expect(
+      Math.abs((await run<number>("return logScroller().scrollTop;")) - oldest),
+    ).toBeLessThan(2);
+    await key("PageDown");
+    await atMessage(1);
+    for (let i = 0; i < 8; i++) await key("PageDown", true);
+    await app.cdp("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "PageDown",
+      code: "PageDown",
+      windowsVirtualKeyCode: 34,
+    });
+    await runWait("return following();", {
+      label: "held PageDown reaches the latest response",
+    });
+    // The normal preference store rebinds both actions live.
+    await app.eval(`new Promise((resolve, reject) => {
+      const api=window.catamorphicDesktop;
+      const stop=api.onKeybindingsChanged(value => { stop(); requestAnimationFrame(() => resolve(value)); });
+      api.getKeybindings().then(current => api.setKeybindings({...current,
+        'chat-previous-message':'Alt+ArrowUp', 'chat-next-message':'Alt+ArrowDown'
+      })).catch(reject);
+    })`);
+    await key("ArrowUp", false, 1);
+    await atMessage(3);
+    await key("ArrowDown", false, 1);
+    await runWait("return following();");
+    expect(await run(`return composer().textContent;`)).toBe("Keep this draft");
+    expect(app.getRendererErrors()).toEqual([]);
+  });
 });

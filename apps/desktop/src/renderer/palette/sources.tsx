@@ -281,6 +281,7 @@ export function sourcePaletteRow({
         <SiteFavicon url={url} faviconUrl={faviconUrl} className="size-4" />
       ) : undefined,
     label,
+    url,
     detail: view.detail(item),
     keywords: [label, ...view.keywords(item)],
     category: view.category,

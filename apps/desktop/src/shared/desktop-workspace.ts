@@ -135,6 +135,8 @@ export type DockAction =
   | "send"
   | "focusChips"
   | "focusComposer"
+  | "previousMessage"
+  | "nextMessage"
   | "skill";
 
 export interface ChatDraft {

@@ -206,6 +206,12 @@ export function ContextPill({
           <button
             {...previewProps}
             type="button"
+            data-link-url={
+              view.kind === "text" &&
+              (view.source.type === "url" || view.source.type === "tab")
+                ? view.source.url
+                : undefined
+            }
             onClick={(event) => {
               previewProps.onClick();
               onOpen?.(openModeFromEvent(event));

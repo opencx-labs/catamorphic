@@ -643,20 +643,17 @@ describe("stopDevProcessGroup", () => {
       pid: process.pid,
     });
     await lock.bindProcessGroup(processGroupId);
-    let groupObservable = true;
+    const killed = Promise.withResolvers<void>();
     const signals: Array<string | number | undefined> = [];
     const kill = vi
       .spyOn(process, "kill")
       .mockImplementation((_pid, signal) => {
         signals.push(signal);
-        if (signal === 0 && !groupObservable) {
-          const error = new Error("gone") as NodeJS.ErrnoException;
-          error.code = "ESRCH";
-          throw error;
-        }
+        if (signal === "SIGKILL") killed.resolve();
         return true;
       });
 
+    vi.useFakeTimers();
     const stopping = settleDevProcessGroup({
       processGroupId,
       signal: "SIGTERM",
@@ -664,23 +661,16 @@ describe("stopDevProcessGroup", () => {
       killWaitMs: 25,
       lock,
     });
-    const outcome = await Promise.race([
-      stopping.then(
-        () => "unexpected shutdown",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("shutdown did not stop"), 100),
-      ),
-    ]);
-    if (outcome === "shutdown did not stop") {
-      groupObservable = false;
-      await stopping;
-    }
+    const outcome = stopping.then(
+      () => "unexpected shutdown",
+      (error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+    );
 
     try {
-      expect(outcome).toBe(
+      await killed.promise;
+      await vi.advanceTimersByTimeAsync(40);
+      expect(await outcome).toBe(
         `Development process groups ${processGroupId} remained observable after SIGKILL for 25ms. Stop them manually before retrying development; the instance lock was retained.`,
       );
       expect(signals).toContain("SIGTERM");
@@ -690,6 +680,7 @@ describe("stopDevProcessGroup", () => {
         processGroupId,
       });
     } finally {
+      vi.useRealTimers();
       kill.mockRestore();
       await lock.release();
     }

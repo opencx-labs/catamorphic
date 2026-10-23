@@ -44,6 +44,7 @@ export function useHistoryRows({
       bookmarked: bookmarkedUsage.has(entry.id),
       label: entry.title,
       detail: historyDetail(entry),
+      url: entry.target.kind === "web" ? entry.target.url : undefined,
       keywords:
         entry.target.kind === "web"
           ? [hostOf(entry.target.url)]

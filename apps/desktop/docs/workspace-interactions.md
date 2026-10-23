@@ -16,6 +16,16 @@ folder disclosure are not navigation. Context menus expose the same four labels;
 a link's menu in a web page offers the three that open elsewhere, since a click
 opens it here. There is no shortcut for converting the current surface to floating.
 
+Web links also offer **Copy link**, which copies their complete destination,
+including a query and fragment. This applies to chat links, inline URL and
+browser-tab pills, ordinary links in Work, browser tabs, palette web rows and
+history rows; a web page's own menu offers the same copy as **Copy link address**.
+File links keep their file actions.
+
+Cmd+Shift+V (Ctrl+Shift+V outside macOS) pastes without formatting using the
+same native paste-and-match-style command as the context menu. Work preserves
+the platform's other native Edit menu commands.
+
 An open menu holds the window, as a native one does (ADR 0221): the next press
 anywhere else, a web page included, only closes it, and a right-click elsewhere
 opens that place's menu. Escape, focus leaving it, the window losing focus, and
@@ -75,7 +85,10 @@ Full-tab chats stay in the tab bar when another resource takes focus, with no do
 bubble; switching to or from one is as instant as switching pages. Floating and
 minimized chats have bubbles, and only they speak through the dock: the folded
 bubble shows their activity and what needs the person, while a chat in a tab says
-so on its tab. A normal link from a floating
+so on its tab. Maximizing a floating chat makes it a normal tab, removes its
+bubble, and keeps it visible when the dock collapses. Chat controls show their
+applicable shortcut on hover, using the configured binding; returning a tabbed
+chat to floating shows Escape. A normal link from a floating
 chat preserves that chat over the page; a floating resource preview minimizes it.
 Its bubble restores the same conversation and draft.
 
@@ -272,3 +285,16 @@ complete and keeps the existing next actions. Imports preserve existing accounts
 cookie scope and expiry, source visit dates and bookmark folders. Repeat imports
 merge without duplicates. Unsupported individual items are omitted quietly.
 Whole-operation errors are retryable and cancellation never marks import complete.
+
+
+## Keyboard and chat identity
+
+Browser pages receive shortcuts that belong to another surface. In particular,
+Cmd+Enter (Ctrl+Enter outside macOS) belongs to a focused review comment form only
+while that form is focused; a page or embedded frame keeps it for its own submit
+action. Work's window and navigation shortcuts retain their configured bindings.
+
+The palette's Ask agent mode shows the default agent's harness mark and its name,
+model name and reasoning effort, separated by middle dots. Unpinned models resolve
+from the harness for the current project; focused-chat overrides do not change the
+identity of a new chat. Unsupported reasoning controls are omitted.

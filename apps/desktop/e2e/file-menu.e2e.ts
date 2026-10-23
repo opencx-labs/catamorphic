@@ -57,7 +57,12 @@ const MENU_AT_REST = `(() => { const menu = document.querySelector('[role="menui
  * can take key status from the window then). Exactly on it, or anywhere
  * on its tab.
  */
-async function rightClick(selector: string, across = 0.5, exactly = false) {
+async function rightClick(
+  selector: string,
+  across = 0.5,
+  exactly = false,
+  listed = MENU,
+) {
   const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; const hit = document.elementFromPoint(x, y); return el.contains(hit) || (!${exactly} && el.closest('[data-point-key]')?.contains(hit)) ? { x, y } : false; })()`;
   for (let attempt = 0; ; attempt += 1) {
     const point = await app.waitFor<{ x: number; y: number }>(at, {
@@ -72,7 +77,7 @@ async function rightClick(selector: string, across = 0.5, exactly = false) {
       });
     try {
       await app.waitFor(
-        `document.querySelectorAll('[role="menuitem"]').length === ${MENU.length}`,
+        `document.querySelectorAll('[role="menuitem"]').length === ${listed.length}`,
         {
           label: `menu on ${selector}`,
           timeoutMs: attempt < 2 ? 3_000 : 15_000,
@@ -207,4 +212,66 @@ it("lists the same on a file link in a chat's reply", async () => {
   });
   expect(await rightClick(link)).toEqual(MENU);
   expect(await copied("Copy path")).toBe(`${root}/notes/plan.md`);
+});
+
+it("copies the address of a URL in chat and an ordinary link elsewhere", async () => {
+  const url = "https://docs.example.test/guide?view=full#paste";
+  await app.eval(`(() => { ${setReactValueJs};
+    const input = document.querySelector('[data-floating-chat] [data-composer-input]');
+    setReactValue(input, ${JSON.stringify(`[Read the guide](${url})`)});
+    input.closest('form').requestSubmit(); return true;
+  })()`);
+  const link = `a[data-response-link="web"][href="${url}"]`;
+  await app.waitFor(`!!document.querySelector(${JSON.stringify(link)})`, {
+    label: "web link in the reply",
+  });
+  const actions = [...MENU.slice(0, 4), "Copy link"];
+  expect(await rightClick(link, 0.5, true, actions)).toEqual(actions);
+  expect(await copied("Copy link")).toBe(url);
+  await app.waitFor(`!document.querySelector('[role="menuitem"]')`);
+
+  // Inline URL and browser-tab pills expose the same address as links.
+  await app.eval(`(() => {
+    const input = document.querySelector('[data-floating-chat] [data-composer-input]');
+    const data = new DataTransfer();
+    data.setData('text/plain', ${JSON.stringify(url)});
+    input.dispatchEvent(new ClipboardEvent('paste', {bubbles:true,cancelable:true,clipboardData:data}));
+  })()`);
+  const pill = "[data-composer-input] [data-link-url]";
+  await app.waitFor(`!!document.querySelector(${JSON.stringify(pill)})`);
+  expect(await rightClick(pill, 0.5, true, ["Copy link"])).toEqual([
+    "Copy link",
+  ]);
+  expect(await copied("Copy link")).toBe(url);
+  await app.waitFor(`!document.querySelector('[role="menuitem"]')`);
+
+  // Ordinary host links need the same copy action even outside a chat.
+  await app.eval(`(() => {
+    const anchor = document.createElement('a');
+    anchor.id = 'ordinary-url'; anchor.href = ${JSON.stringify(url)};
+    anchor.textContent = 'Read the guide';
+    anchor.style.cssText = 'position:fixed;left:300px;top:60px;z-index:100';
+    document.querySelector('[data-workspace-ready]').append(anchor);
+  })()`);
+  expect(await rightClick("#ordinary-url", 0.5, true, ["Copy link"])).toEqual([
+    "Copy link",
+  ]);
+  expect(await copied("Copy link")).toBe(url);
+  await app.eval(`document.querySelector('#ordinary-url').remove()`);
+  await app.waitFor(`!document.querySelector('[role="menuitem"]')`);
+  await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
+    key:'p',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,
+  }))`);
+  const palette = '[data-palette="overlay"] textarea';
+  await app.waitFor(
+    `document.activeElement === document.querySelector('${palette}')`,
+  );
+  await app.eval(
+    `(() => { ${setReactValueJs}; setReactValue(document.querySelector('${palette}'),${JSON.stringify(url)}); })()`,
+  );
+  await app.waitFor(`!!document.querySelector('[data-item-id="web"]')`);
+  expect(await rightClick('[data-item-id="web"]', 0.5, true, actions)).toEqual(
+    actions,
+  );
+  expect(await copied("Copy link")).toBe(url);
 });

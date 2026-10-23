@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { WorkerNodesService } from "@catamorphic/core";
+import {
+  cleanupWorkerAllocations,
+  WorkerNodesService,
+} from "@catamorphic/core";
 import { expect, it } from "vitest";
 import {
   agentsReachMachine,
@@ -444,6 +447,22 @@ it("a full managed machine preserves existing work and restores an archived sess
     ).resolves.toMatchObject({ content: "Echo: still works" });
     const originalAllocation = first.allocationId;
     await sessions.archive(identity, project.id, first.id);
+    const health = (
+      await server.app.inject({ method: "GET", url: "/healthz" })
+    ).json();
+    const node = await core.db
+      .selectFrom("worker_nodes")
+      .select(["authority_id", "lease_token"])
+      .where("id", "=", health.machine.id)
+      .executeTakeFirstOrThrow();
+    if (!core.sandboxProvider) throw Error("Missing sandbox provider");
+    // Cleanup is the capacity fence. Invoke it explicitly instead of
+    // spending the test's budget waiting for a periodic scheduler tick.
+    await cleanupWorkerAllocations({
+      db: core.db,
+      workerNode: { id: health.machine.id, token: node.lease_token },
+      provider: core.sandboxProvider,
+    });
     await expect
       .poll(
         async () => {
@@ -469,14 +488,6 @@ it("a full managed machine preserves existing work and restores an archived sess
       }),
     ).resolves.toMatchObject({ content: "Echo: restored (turn 2)" });
     const nodes = new WorkerNodesService(core.db);
-    const health = (
-      await server.app.inject({ method: "GET", url: "/healthz" })
-    ).json();
-    const node = await core.db
-      .selectFrom("worker_nodes")
-      .select("authority_id")
-      .where("id", "=", health.machine.id)
-      .executeTakeFirstOrThrow();
     const inventory = await nodes.workspaces({
       tenantId: SERVER_TENANT_ID,
       authorityId: node.authority_id,

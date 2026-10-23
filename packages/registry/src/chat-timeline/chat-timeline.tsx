@@ -19,8 +19,6 @@ import {
   waitsToRun,
 } from "@catamorphic/react";
 import {
-  ArrowDown,
-  ArrowUp,
   Check,
   ChevronRight,
   ClipboardType,
@@ -121,6 +119,11 @@ type LinkModifiers = InputLinkModifiers;
 /** Where a sent attachment shows: in place in the words, or in a strip. */
 export type AttachmentPlace = "inline" | "strip";
 
+export interface ChatMessageNavigation {
+  previous: (repeat?: boolean) => void;
+  next: (repeat?: boolean) => void;
+}
+
 export interface ChatTimelineProps {
   /** The conversation as turns, oldest first: `useAgentChat().timeline`. */
   timeline: TimelineTurn[];
@@ -219,6 +222,8 @@ export interface ChatTimelineProps {
   // The host's own surface.
   /** Names an agent id (agent-change notices, senders). */
   resolveAgentName?: (agentId: string) => string | undefined;
+  /** The host's mark for an inbound agent, falling back to the agent glyph. */
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
   /**
    * The host's address for where an input came from (ADR 0217): a chat in
    * another project, a terminal. Defaults to `session:`, `run:` and keys.
@@ -269,13 +274,10 @@ export interface ChatTimelineProps {
   presentUserMessage?: (
     text: string,
   ) => { lead: ReactNode; text: string } | undefined;
-  /**
-   * Hands the host the "jump to my previous message" scroll action, so a
-   * composer shortcut triggers the same move as the button.
-   */
-  registerJumpToPreviousUserMessage?: (jump: () => void) => void;
-  /** That shortcut's display form (e.g. "⇞"), shown in the button's hint. */
-  jumpShortcut?: string;
+  /** The host binds conversation navigation to its own configurable keys. */
+  registerMessageNavigation?: (
+    navigation: ChatMessageNavigation | null,
+  ) => void;
 }
 
 /**
@@ -289,6 +291,7 @@ interface TimelineHost {
   Hint: HintComponent;
   resolveToolIcon?: ChatTimelineProps["resolveToolIcon"];
   resolveAgentName?: ChatTimelineProps["resolveAgentName"];
+  renderAgentIcon?: ChatTimelineProps["renderAgentIcon"];
   presentUserMessage?: ChatTimelineProps["presentUserMessage"];
   sourceHref?: SourceHref;
   /** Which callbacks the host gave: their controls show only then. */
@@ -567,6 +570,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     onResendFailed,
     onDismissFailed,
     resolveAgentName,
+    renderAgentIcon,
     sourceHref,
     onLinkClick,
     renderLink,
@@ -576,8 +580,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     renderAttachment = defaultAttachment,
     Hint = TitleHint,
     presentUserMessage,
-    registerJumpToPreviousUserMessage,
-    jumpShortcut,
+    registerMessageNavigation,
   } = props;
   const latest = useRef(props);
   latest.current = props;
@@ -626,6 +629,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       Hint,
       resolveToolIcon,
       resolveAgentName,
+      renderAgentIcon,
       presentUserMessage,
       sourceHref,
       opensLinks,
@@ -639,6 +643,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       Hint,
       resolveToolIcon,
       resolveAgentName,
+      renderAgentIcon,
       presentUserMessage,
       sourceHref,
       opensLinks,
@@ -709,11 +714,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
   const latestTurnId = [...timeline].reverse().find((group) => group.turn)
     ?.turn?.id;
   const working = Boolean(activeId);
-  const hasUserMessages =
-    pending.length > 0 ||
-    timeline.some((group) =>
-      group.entries.some((entry) => entry.kind === "input"),
-    );
   // Paired again as the timeline changes, and handed down only when a
   // pairing differs: every step reads it, and most events change none.
   const pairedBackground = useRef(NO_BACKGROUND);
@@ -955,6 +955,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                             <QueuedInputLine
                               queued={queued}
                               resolveAgentName={resolveAgentName}
+                              renderAgentIcon={renderAgentIcon}
                             />
                           )}
                         />
@@ -966,12 +967,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                       )}
                       <div aria-hidden className="cat-scroll-anchor" />
                     </StickToBottom.Content>
-                    {hasUserMessages && (
-                      <JumpToPreviousUserMessage
-                        register={registerJumpToPreviousUserMessage}
-                        shortcut={jumpShortcut}
-                      />
-                    )}
+                    <ChatNavigation register={registerMessageNavigation} />
                     <FocusMessage
                       messageId={focusMessageId}
                       ready={Boolean(
@@ -987,7 +983,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
                           ),
                       )}
                     />
-                    <ScrollToLatest />
                     <FollowScrollerResize />
                     <PinToBottom />
                     <FadeEdges />
@@ -1186,6 +1181,7 @@ function TurnRowBody({
         <AgentMessage
           item={reply?.item}
           steps={row.steps}
+          focusMessageId={focusMessageId}
           live={view.live}
           answer={reply?.answer ?? false}
           openWork={
@@ -1212,6 +1208,7 @@ function TurnRowBody({
           item={entry.item}
           onOpen={onOpen}
           resolveAgentName={host.resolveAgentName}
+          renderAgentIcon={host.renderAgentIcon}
           sourceHref={host.sourceHref}
           focused={entry.item.id === focusMessageId}
         />
@@ -1343,117 +1340,94 @@ function useFoldingNotes(views: TurnView[]): {
   return { folding, folded };
 }
 
-/**
- * Walks the conversation upward one user message per click: each press
- * scrolls the nearest user message above the current view to the top,
- * where its answer starts. The everyday use: "what did I even ask?"
- * while multitasking. A host's composer shortcut can do the same move.
- */
-function JumpToPreviousUserMessage({
+/** Conversation navigation is headless; the host owns its shortcut bindings. */
+function ChatNavigation({
   register,
-  shortcut,
 }: {
-  register?: (jump: () => void) => void;
-  shortcut?: string;
+  register?: (navigation: ChatMessageNavigation | null) => void;
 }) {
-  const { Hint } = useContext(HostContext);
-  const { scrollRef, contentRef, isAtBottom, stopScroll } =
+  const { scrollRef, contentRef, stopScroll, scrollToBottom } =
     useStickToBottomContext();
-  // A chat short enough to see whole needs no jump affordance; watch both
-  // the scroller and its content so the button appears the moment the
-  // conversation outgrows the viewport (and goes away if it shrinks).
-  const [scrollable, setScrollable] = useState(false);
-  useEffect(() => {
-    const scroller = scrollRef.current;
-    const content = contentRef.current;
-    if (!scroller || !content) return;
-    const measure = () =>
-      setScrollable(scroller.scrollHeight > scroller.clientHeight + 16);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(scroller);
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [scrollRef, contentRef]);
   const settling = useRef<(() => void) | undefined>(undefined);
+  const anchor = useRef<HTMLElement | null>(null);
   useEffect(() => () => settling.current?.(), []);
-  const jump = useCallback(() => {
-    const scroller = scrollRef.current;
-    const content = contentRef.current;
-    if (!scroller || !content) return;
-    const targets = [
-      ...content.querySelectorAll<HTMLElement>("[data-user-message]"),
-    ];
-    if (targets.length === 0) return;
-    const viewTop = scroller.getBoundingClientRect().top;
-    // The nearest user message strictly above the view top; from the
-    // bottom of the chat the first press lands on the newest one.
-    const above = targets.filter(
-      (element) => element.getBoundingClientRect().top < viewTop - 8,
-    );
-    const target = above.at(-1) ?? targets.at(-1);
-    if (!target) return;
-    const offset = target.getBoundingClientRect().top - viewTop;
-    if (above.length === 0 && offset <= 8) return; // already at the oldest
-    settling.current?.();
-    // Moving up lets go of the latest message, streaming or not.
-    stopScroll();
-    // Clear of the top edge's fade.
-    const off = () =>
-      target.getBoundingClientRect().top -
-      scroller.getBoundingClientRect().top -
-      12 -
-      edgeFadeLength(scroller);
-    scroller.scrollTo({ top: scroller.scrollTop + off(), behavior: "smooth" });
-    // Turns skipped while out of view take their real height as the
-    // scroll brings them in, which moves the message after its place was
-    // read: once the scroll ends, finish the way there. A reader's own
-    // scroll, or the next jump, has the last word.
-    const interrupts = ["wheel", "touchstart", "pointerdown", "keydown"];
-    const stop = () => {
-      settling.current = undefined;
-      window.clearTimeout(fallback);
-      scroller.removeEventListener("scrollend", settle);
+  const jump = useCallback(
+    (direction: -1 | 1, repeat = false) => {
+      const scroller = scrollRef.current;
+      const content = contentRef.current;
+      if (!scroller || !content) return;
+      const targets = [
+        ...content.querySelectorAll<HTMLElement>("[data-user-message]"),
+      ];
+      const clearance = 12 + edgeFadeLength(scroller);
+      const viewTop = scroller.getBoundingClientRect().top + clearance;
+      // A held key advances from the destination of the preceding press,
+      // even while that press's smooth scroll has not reached it yet.
+      const current = anchor.current;
+      const index = current ? targets.indexOf(current) : -1;
+      const target =
+        index >= 0
+          ? targets[index + direction]
+          : direction < 0
+            ? targets
+                .filter(
+                  (element) =>
+                    element.getBoundingClientRect().top < viewTop - 4,
+                )
+                .at(-1)
+            : targets.find(
+                (element) => element.getBoundingClientRect().top > viewTop + 4,
+              );
+      const instant =
+        repeat || matchMedia("(prefers-reduced-motion: reduce)").matches;
+      settling.current?.();
+      if (!target) {
+        if (direction > 0)
+          void scrollToBottom({ animation: instant ? "instant" : "smooth" });
+        return;
+      }
+      stopScroll();
+      anchor.current = target;
+      const off = () =>
+        target.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top -
+        clearance;
+      const behavior = instant ? "instant" : "smooth";
+      scroller.scrollTo({ top: scroller.scrollTop + off(), behavior });
+      // Virtualized turns take their measured heights as they come into
+      // view. Finish at the destination after that layout, unless another
+      // navigation or the reader's pointer/scroll has taken over.
+      const interrupts = ["wheel", "touchstart", "pointerdown"];
+      const stop = () => {
+        settling.current = undefined;
+        anchor.current = null;
+        window.clearTimeout(fallback);
+        scroller.removeEventListener("scrollend", settle);
+        for (const name of interrupts)
+          scroller.removeEventListener(name, stop, true);
+      };
+      const settle = () => {
+        stop();
+        const rest = off();
+        if (Math.abs(rest) > 2)
+          scroller.scrollTo({ top: scroller.scrollTop + rest, behavior });
+      };
+      const fallback = window.setTimeout(settle, 1_000);
+      settling.current = stop;
+      scroller.addEventListener("scrollend", settle);
       for (const name of interrupts)
-        scroller.removeEventListener(name, stop, true);
-    };
-    const settle = () => {
-      stop();
-      const rest = off();
-      if (Math.abs(rest) > 2)
-        scroller.scrollTo({
-          top: scroller.scrollTop + rest,
-          behavior: "smooth",
-        });
-    };
-    // Where scrollend is missing, about as long as a long smooth scroll.
-    const fallback = window.setTimeout(settle, 1_000);
-    settling.current = stop;
-    scroller.addEventListener("scrollend", settle);
-    for (const name of interrupts)
-      scroller.addEventListener(name, stop, { capture: true, passive: true });
-  }, [scrollRef, contentRef, stopScroll]);
-
-  useEffect(() => {
-    register?.(jump);
-  }, [register, jump]);
-
-  // One arrow at a time, in one place: away from the end, Scroll to latest
-  // takes it. The shortcut jumps either way.
-  if (!scrollable || !isAtBottom) return null;
-  return (
-    <Hint label="Jump to your previous message" shortcut={shortcut}>
-      <button
-        type="button"
-        className={CHAT_ARROW}
-        onClick={jump}
-        aria-label="Jump to your previous message"
-        data-testid="chat-jump-previous"
-      >
-        <ArrowUp className="size-4" />
-      </button>
-    </Hint>
+        scroller.addEventListener(name, stop, { capture: true, passive: true });
+    },
+    [scrollRef, contentRef, stopScroll, scrollToBottom],
   );
+  useEffect(() => {
+    register?.({
+      previous: (repeat) => jump(-1, repeat),
+      next: (repeat) => jump(1, repeat),
+    });
+    return () => register?.(null);
+  }, [register, jump]);
+  return null;
 }
 
 /**
@@ -1500,7 +1474,7 @@ const ICON_BUTTON =
  * passes through it to whatever it covers.
  */
 const SENT_TIME =
-  "opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 group-focus-visible/msg:opacity-100 group-has-[:focus-visible]/msg:opacity-100 pointer-coarse:group-focus-within/msg:opacity-100 pointer-coarse:pointer-events-none";
+  "cat-sent-time opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 pointer-coarse:group-focus-within/msg:opacity-100 pointer-coarse:pointer-events-none";
 
 /**
  * A narrow row (a phone, a slim pane) leaves no room beside a long
@@ -2091,6 +2065,7 @@ interface AgentMessageProps {
   answer?: boolean;
   openWork?: boolean;
   focused?: boolean;
+  focusMessageId?: string;
   requests: Readonly<Record<string, RuntimeRequest>>;
   /** Steps stay behind their line until opened (see `foldsSteps`). */
   foldSteps: boolean;
@@ -2109,6 +2084,7 @@ const AgentMessage = memo(function AgentMessage({
   answer = false,
   openWork = false,
   focused = false,
+  focusMessageId,
   requests,
   foldSteps,
   clock = false,
@@ -2130,7 +2106,12 @@ const AgentMessage = memo(function AgentMessage({
   const [joined] = useState(
     () => !still && !placed && live && onScreen.current,
   );
-  const built = turnStepsOf(steps, { requests, sourceHref: host.sourceHref });
+  const built = turnStepsOf(steps, {
+    requests,
+    sourceHref: host.sourceHref,
+    resolveAgentName: host.resolveAgentName,
+    focusMessageId,
+  });
   const shown = live && !item ? markRunning(built) : built;
   const text = item?.text ?? "";
   const writing = item?.status === "in_progress";
@@ -2187,8 +2168,9 @@ const AgentMessage = memo(function AgentMessage({
         clock={clock}
         enter={joined}
         placed={inPlace}
-        defaultExpanded={openWork}
+        defaultExpanded={openWork || built.some((step) => step.focused)}
         resolveToolIcon={host.resolveToolIcon}
+        renderAgentIcon={host.renderAgentIcon}
         onFileClick={host.opensFiles ? actions.openFile : undefined}
         onLinkClick={host.opensLinks ? actions.openLink : undefined}
         renderMarkdown={host.opensLinks ? linkedMarkdown : plainMarkdown}
@@ -2315,6 +2297,7 @@ function sameAgentMessage(
     previous.answer === next.answer &&
     previous.openWork === next.openWork &&
     previous.focused === next.focused &&
+    previous.focusMessageId === next.focusMessageId &&
     previous.requests === next.requests &&
     previous.foldSteps === next.foldSteps &&
     previous.clock === next.clock &&
@@ -3117,25 +3100,6 @@ function DefaultAttachment({ attachment }: { attachment: AgentAttachment }) {
 
 function defaultAttachment(attachment: AgentAttachment): ReactNode {
   return <DefaultAttachment attachment={attachment} />;
-}
-
-/** The conversation's one scroll arrow, centered over it. */
-const CHAT_ARROW =
-  "absolute bottom-4 left-1/2 grid size-8 -translate-x-1/2 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl";
-
-function ScrollToLatest() {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-  if (isAtBottom) return null;
-  return (
-    <button
-      type="button"
-      className={CHAT_ARROW}
-      onClick={() => scrollToBottom()}
-      aria-label="Scroll to latest message"
-    >
-      <ArrowDown className="size-4" />
-    </button>
-  );
 }
 
 /**

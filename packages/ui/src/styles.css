@@ -2090,6 +2090,15 @@
    One easing, 150 to 220ms, nothing loops. The timeline also moves on with
    timers, so a host without these rules shows the same states unanimated. */
 
+/* Keep :has on its owning row. Tailwind's group-has variant puts the
+   descendant relation inside :is(... *), which makes Chromium invalidate
+   the document's styles on unrelated insertions and inline style changes. */
+[data-user-message]:focus-visible .cat-sent-time,
+[data-user-message]:has(:focus-visible) .cat-sent-time,
+.cat-webhook-url:has(:focus-visible) .cat-webhook-copy {
+  opacity: 1;
+}
+
 /* What appears in place: an outcome, prose born live, a timer. */
 @keyframes catamorphic-fade-in {
   from {

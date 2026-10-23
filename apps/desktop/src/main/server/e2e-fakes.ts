@@ -870,6 +870,59 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
   const prompt = message.toLowerCase();
 
+  if (prompt.includes("agent activity parent")) {
+    yield { type: "text", content: "Checking the delegated review." };
+    await turn.tool("spawn_subsession", {
+      task: `Agent activity child ${turn.sessionId}`,
+      title: "Delegated review",
+    });
+    const reports = new Set<string>();
+    let carryOn = false;
+    while (!turn.interrupted() && (reports.size < 5 || !carryOn)) {
+      const update = await turn.steerWithin(1_000);
+      if (!update) continue;
+      const report = /Progress report ([1-5])/.exec(update.text)?.[1];
+      if (report) reports.add(report);
+      if (update.text.includes("Continue after the updates")) carryOn = true;
+    }
+    if (!turn.interrupted())
+      yield {
+        type: "text",
+        content:
+          "All five updates reached this turn. Continued with your message.",
+      };
+    return;
+  }
+  const activityChild = /agent activity child ([a-z0-9-]+)/.exec(prompt)?.[1];
+  if (activityChild) {
+    for (let i = 1; i <= 5; i++) {
+      await turn.pause(350);
+      await turn.tool("send_project_session_message", {
+        session_id: activityChild,
+        message: `Progress report ${i}: check passed.`,
+        delivery_mode: "message_only",
+      });
+    }
+    yield { type: "text", content: "Subagent checks passed." };
+    return;
+  }
+
+  if (prompt.includes("agent activity blocker parent")) {
+    await turn.tool("spawn_subsession", {
+      task: "Agent activity failed child",
+      title: "Blocked review",
+    });
+    while (!turn.interrupted()) {
+      const update = await turn.steerWithin(1_000);
+      if (update?.text.includes("failed")) break;
+    }
+    if (!turn.interrupted())
+      yield { type: "text", content: "The delegated review needs attention." };
+    return;
+  }
+  if (prompt.includes("agent activity failed child"))
+    throw new Error("The fixture needs a decision before publishing.");
+
   // A message the person sends while the question waits releases it (core
   // keeps it open beside the chat) and steers this turn (ADR 0195).
   if (prompt.includes("blocking question") && !prompt.includes("nonblocking")) {
@@ -1822,6 +1875,17 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       yield { type: "command", content: command, description, toolUseId };
       await turn.pause(pace);
       yield { type: "command", toolUseId, status: "ended", toolResult: "ok" };
+    }
+    // A throttled renderer measures actual frames, not how many frames a
+    // fixed server-side sleep happened to permit on this runner.
+    const paceGate = process.env.CATAMORPHIC_E2E_PACE_GATE;
+    if (prompt.includes("measured frames") && paceGate) {
+      const deadline = Date.now() + 60_000;
+      while (fs.existsSync(paceGate) && !turn.interrupted()) {
+        if (Date.now() > deadline)
+          throw new Error("The motion sampler did not release the answer");
+        await turn.pause(20);
+      }
     }
     if (prompt.includes("then go quiet")) await turn.pause(33_000);
     if (turn.interrupted()) return;

@@ -829,8 +829,7 @@ describe("ChatTimeline for embedders", () => {
       Hint,
       onFork: () => undefined,
       onRollback: () => true,
-      registerJumpToPreviousUserMessage: register,
-      jumpShortcut: "⇞",
+      registerMessageNavigation: register,
     });
     expect(hints.map((hint) => hint.label)).toEqual(
       expect.arrayContaining([
@@ -839,6 +838,9 @@ describe("ChatTimeline for embedders", () => {
         "Restore to here: undo this message and everything after it",
       ]),
     );
-    expect(register).toHaveBeenCalledWith(expect.any(Function));
+    expect(register).toHaveBeenCalledWith({
+      previous: expect.any(Function),
+      next: expect.any(Function),
+    });
   });
 });

@@ -4446,6 +4446,14 @@ export function App({
       chipFocusersRef.current.get(chat.localId)?.();
     },
     "chat-to-tab": expandChatToTab,
+    "chat-previous-message": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (chat) void desktopApi.dockAction(chat.localId, "previousMessage");
+    },
+    "chat-next-message": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (chat) void desktopApi.dockAction(chat.localId, "nextMessage");
+    },
     "prev-chat": () => cycleChat(-1),
     "next-chat": () => cycleChat(1),
     "prev-tab": () => cycleTab(-1),
@@ -4572,6 +4580,16 @@ export function App({
       const bindings = keybindingsRef.current;
       const action = KEYBINDING_ACTIONS.find(
         (candidate) =>
+          (!(
+            candidate === "chat-previous-message" ||
+            candidate === "chat-next-message"
+          ) ||
+            (guestId === undefined &&
+              Boolean(
+                document.activeElement?.closest(
+                  "[data-chat-local-id]:not([inert])",
+                ),
+              ))) &&
           (candidate !== "submit-pr-comment" ||
             (guestId === undefined &&
               Boolean(
@@ -6819,12 +6837,17 @@ export function App({
               (remoteSurfaceResolved && remoteSurfaceStatus === null)))),
     );
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
+  // The dock is a sibling of project runtimes. Publish its frame and
+  // corner-control clearance here instead of searching every retained chat.
   useLayoutEffect(() => {
     if (!runtime.visible) return;
-    document
-      .querySelector("[data-workspace-root]")
-      ?.toggleAttribute("data-chat-header-in-sidebar", headerInSidebar);
-  }, [runtime.visible, headerInSidebar]);
+    const frame = document.querySelector("[data-workspace-root]");
+    frame?.toggleAttribute("data-chat-header-in-sidebar", headerInSidebar);
+    frame?.toggleAttribute(
+      "data-chat-controls-inset",
+      headerInSidebar && !rightSidebarMotion.docked,
+    );
+  }, [runtime.visible, headerInSidebar, rightSidebarMotion.docked]);
   const compactWindow = headerInSidebar && !sidebarOpen;
   // The chrome keeps the window buttons' corner free while they show. Only
   // macOS draws them in the page; elsewhere the preference changes nothing.

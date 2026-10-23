@@ -1,5 +1,6 @@
 import type {
   AssistantMessageItem,
+  InboundMessageItem,
   Item,
   ItemCommon,
   RuntimeRequest,
@@ -125,6 +126,29 @@ export function userMessage(
     text,
     attachments: [],
     dispatch: "queue",
+    attention: null,
+    idempotencyKey: null,
+    deliveredBy: null,
+    causation: [],
+    ...overrides,
+  };
+}
+
+/** A routine report another agent sends into the session. */
+export function inboundMessage(
+  id: string,
+  position: number,
+  turnId: string | null,
+  text: string,
+  overrides: Partial<InboundMessageItem> = {},
+): InboundMessageItem {
+  return {
+    ...common(id, position, turnId),
+    kind: "inbound_message",
+    from: { kind: "agent", sessionId: "child", agentId: "reviewer" },
+    text,
+    attachments: [],
+    dispatch: "steer",
     attention: null,
     idempotencyKey: null,
     deliveredBy: null,

@@ -409,6 +409,7 @@ export function CommandPalette({
     sectionSearch,
     projectAgents,
     skillModes,
+    agentModeActive: modeId === "agent" && (variant === "tab" || open),
   });
   const namedModes = useMemo(
     () => modes.filter((candidate) => candidate.names?.length),
@@ -643,6 +644,7 @@ export function CommandPalette({
           detail: urlish ? undefined : "Google Search",
           keywords: [],
           kind: "navigate",
+          url: resolveInput(trimmed),
           run: (mode) => onOpenUrl(resolveInput(trimmed), mode),
         };
 
@@ -671,6 +673,7 @@ export function CommandPalette({
           keywords: [],
           kind: "navigate",
           usage: webUsageKey(`${origin}/`),
+          url: `${origin}/`,
           run: (mode) => onOpenUrl(`${origin}/`, mode),
         }),
       );
@@ -1086,6 +1089,7 @@ export function CommandPalette({
                 )}
                 <OpenResourceButton
                   isResource={item.kind === "navigate"}
+                  url={item.url}
                   openOnMouseDown
                   data-item-id={item.id}
                   type="button"
@@ -1124,7 +1128,9 @@ export function CommandPalette({
                   {/* A long label truncates before a short detail ("Chat",
                       "Workflow"); a long detail keeps at most half the row. */}
                   {item.detail && (
-                    <span className="min-w-0 max-w-[45%] shrink-0 truncate text-[12px] text-fg-faint">
+                    <span
+                      className={`min-w-0 truncate text-[12px] text-fg-faint ${item.id === "mode:agent" ? "" : "max-w-[45%] shrink-0"}`}
+                    >
                       {item.detail}
                     </span>
                   )}
