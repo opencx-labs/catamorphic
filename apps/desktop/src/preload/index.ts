@@ -132,8 +132,8 @@ const api = {
     invoke("catamorphic:workspace-handoff-take", projectId),
   workspaceReady: (projectId: string): Promise<void> =>
     invoke("catamorphic:workspace-ready", projectId),
-  workspaceActive: (projectId: string): Promise<void> =>
-    invoke("catamorphic:workspace-active", projectId),
+  workspaceActive: (projectId: string, tabDragging?: boolean): Promise<void> =>
+    invoke("catamorphic:workspace-active", projectId, tabDragging),
   dockPublish: (data: DockData): Promise<void> =>
     invoke("catamorphic:dock-publish", data),
   dockRemove: (projectId: string, localId: string): Promise<void> =>

@@ -618,3 +618,104 @@ it("nests a dragged tab under a chat, opens a folded group for it, and takes it 
     }),
   ).toBe(ws);
 });
+
+it("records resource-opening provenance while a chat floats, preserving order and grouping on return", () => {
+  const ws: Workspace = {
+    ...initial(),
+    chats: [
+      {
+        localId: "c",
+        mode: "partial",
+        sessionId: "session",
+        surfacesCollapsed: true,
+      },
+    ],
+    activeTabKey: "palette:b",
+    editors: [{ localId: "e", filePath: "notes.md", dirty: true }],
+    tabOrder: ["palette:b", "editor:e", "palette:a"],
+  };
+  const opened = ["editor:e", "palette:a"].reduce(
+    (state, key) =>
+      transitionWorkspace(state, {
+        type: "attach",
+        key,
+        chatLocalId: "c",
+        beforeKey: null,
+        source: "open",
+      }),
+    ws,
+  );
+  expect(opened.editors[0]).toEqual({ ...ws.editors[0], chatLocalId: "c" });
+  expect(opened.tabs.find((tab) => tab.name === "a")?.chatLocalId).toBe("c");
+  expect(opened.tabOrder).toEqual(ws.tabOrder);
+  expect(opened.activeTabKey).toBe(ws.activeTabKey);
+  expect(opened.chats[0]).toEqual({
+    localId: "c",
+    mode: "partial",
+    sessionId: "session",
+    surfacesCollapsed: false,
+  });
+  // Reopening an owned surface, including a floating preview, only records
+  // provenance once. It preserves a group the person has since folded.
+  const folded = {
+    ...opened,
+    chats: opened.chats.map((chat) => ({ ...chat, surfacesCollapsed: true })),
+  };
+  expect(
+    transitionWorkspace(folded, {
+      type: "attach",
+      key: "editor:e",
+      chatLocalId: "c",
+      beforeKey: null,
+      source: "open",
+    }),
+  ).toBe(folded);
+  const restored = hydrateWorkspace(serializeWorkspace(opened));
+  expect(restored?.editors[0]?.chatLocalId).toBe("c");
+  expect(
+    orderedTabKeys({ ...opened, chats: [{ localId: "c", mode: "tab" }] }),
+  ).toEqual(["palette:b", "chat:c", "palette:a", "editor:e"]);
+});
+
+it("resource opens keep another agent's live browser and remote shell with their owner", () => {
+  const ws: Workspace = {
+    ...initial(),
+    chats: [...initial().chats, { localId: "d", mode: "partial" }],
+    browsers: [
+      {
+        localId: "held",
+        profileId: "p",
+        initialUrl: "",
+        url: "",
+        title: "",
+        faviconUrl: null,
+        chatLocalId: "c",
+        agentControlled: true,
+      },
+    ],
+    terminals: [
+      {
+        localId: "remote",
+        title: "Shell",
+        remoteSessionId: "session",
+        chatLocalId: "c",
+      },
+    ],
+  };
+  for (const key of [
+    "browser:held",
+    "terminal:remote",
+    "chat:c",
+    "editor:closed",
+  ]) {
+    expect(
+      transitionWorkspace(ws, {
+        type: "attach",
+        key,
+        chatLocalId: "d",
+        beforeKey: null,
+        source: "open",
+      }),
+    ).toBe(ws);
+  }
+});

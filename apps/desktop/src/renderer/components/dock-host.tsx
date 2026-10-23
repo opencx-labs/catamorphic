@@ -154,6 +154,7 @@ export function DockHost({
   const isPresentation = detachedWindow
     ? snapshot.detached
     : !snapshot.detached;
+  const tabDragging = snapshot.tabDragging ?? false;
   // What the dock shows, for the broadcasts below to compare against.
   const shownSnapshot = useRef(remoteSnapshot);
   shownSnapshot.current = remoteSnapshot;
@@ -883,6 +884,7 @@ export function DockHost({
                 entry={entry}
                 refreshWhileIdle={visible}
                 tabActive={isTab && chat.tabActive}
+                tabDragging={tabDragging}
                 bubbleClearance={collapsed ? "corner" : "strip"}
                 backdropTab={!detachedWindow && chat.backdropTab}
                 nativeWindow={detachedWindow}

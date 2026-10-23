@@ -72,6 +72,7 @@ export class DesktopWorkspaces {
     { owner: WebContents; data: DockData }
   >();
   private readonly activeProjects = new Map<number, string>();
+  private readonly tabDrags = new Set<number>();
   private readonly activeChats = new Map<string, string>();
   private readonly floating = new Map<string, BrowserWindow>();
   private readonly lastWindows = new Map<string, BrowserWindow>();
@@ -294,9 +295,13 @@ export class DesktopWorkspaces {
     );
     ipcMain.handle(
       "catamorphic:workspace-active",
-      (event, projectId: string) => {
+      (event, projectId: string, tabDragging?: boolean) => {
         if (this.owner(projectId) !== event.sender) return;
-        this.activeProjects.set(event.sender.id, projectId);
+        if (tabDragging === undefined)
+          this.activeProjects.set(event.sender.id, projectId);
+        else if (this.activeProjects.get(event.sender.id) !== projectId) return;
+        if (tabDragging === true) this.tabDrags.add(event.sender.id);
+        else this.tabDrags.delete(event.sender.id);
         this.broadcast(options.windows.profileFor(event.sender));
       },
     );
@@ -656,6 +661,7 @@ export class DesktopWorkspaces {
     for (const [projectId, owner] of this.owners)
       if (owner === sender) this.owners.delete(projectId);
     this.activeProjects.delete(sender.id);
+    this.tabDrags.delete(sender.id);
     this.initialProjects.delete(sender.id);
     if (this.lastWindows.get(previousProfileId)?.webContents === sender)
       this.lastWindows.delete(previousProfileId);
@@ -724,6 +730,7 @@ export class DesktopWorkspaces {
     const contentsId = window.webContents.id;
     window.on("closed", () => {
       this.dockRegions.delete(contentsId);
+      this.tabDrags.delete(contentsId);
       for (const [projectId, owner] of this.owners)
         if (owner.isDestroyed()) this.owners.delete(projectId);
       for (const [localId, chat] of this.chats)
@@ -931,6 +938,12 @@ export class DesktopWorkspaces {
             !chat.owner.isDestroyed() && this.sameProfile(sender, chat.owner),
         )
         .map((chat) => ({ ...chat.data, local: chat.owner === sender })),
+      tabDragging: this.options.windows
+        .windowsFor(profileId)
+        .some(
+          (window) =>
+            !window.isDestroyed() && this.tabDrags.has(window.webContents.id),
+        ),
       activeProjectId: this.activeProjects.get(
         currentWindow?.webContents.id ?? sender.id,
       ),

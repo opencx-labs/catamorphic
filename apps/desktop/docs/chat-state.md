@@ -61,6 +61,13 @@ Files that cannot be passed as model media still reach the agent as paths. The
 host persists pathless clipboard bytes under the current project. Preserve text,
 caret insertion, selection pills, undo and draft contents while preparation runs.
 Resource links use the [workspace opening contract](workspace-interactions.md).
+Dragging a workspace tab onto a chat reuses the composer's tab attachment and
+preview. All visible chats show a compact target from drag start, with the same
+waiting and highlighted treatment as the dock's resting targets. Hover highlights
+the target; release or cancellation clears it. Draft text and existing pills
+survive. Split-drop targets sit below visible chats. Resource opens from the
+agent or its chat's chips retain that chat's tab-group ownership when reusing an
+existing surface as well as when creating one.
 
 ## Attachment and response previews
 
