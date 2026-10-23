@@ -1294,4 +1294,107 @@ describe("chat motion", () => {
     }
     expect(await run<boolean>("return following();")).toBe(true);
   }, 120_000);
+
+  it("keeps both navigation arrows at the lower right while reading earlier messages", async () => {
+    await newChat();
+    const text = Array.from(
+      { length: 36 },
+      (_, index) => `Navigation paragraph ${index + 1}.`,
+    ).join("\n\n");
+    await run(
+      `setReactValue(composer(), ${JSON.stringify(text)}); composer().closest('form').requestSubmit(); return true;`,
+    );
+    await runWait(
+      `return frontDock().textContent.includes('You said: Navigation paragraph 1.') && !frontDock().querySelector('[aria-label="Stop the agent"]') && following();`,
+      {
+        label: "a scrollable chat at its latest reply",
+      },
+    );
+    await run(
+      `setReactValue(composer(), ${JSON.stringify(`Next navigation message.\n\n${text}`)}); composer().closest('form').requestSubmit(); return true;`,
+    );
+    await runWait(
+      `return frontDock().textContent.includes('You said: Next navigation message.') && !frontDock().querySelector('[aria-label="Stop the agent"]') && following();`,
+    );
+    const clickArrow = async (selector: string) => {
+      const point = await runWait<{ x: number; y: number }>(`
+        const button = frontDock().querySelector(${JSON.stringify(selector)});
+        if (!button) return false;
+        const rect = button.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };`);
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        ...point,
+      });
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        button: "left",
+        clickCount: 1,
+        ...point,
+      });
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        button: "left",
+        clickCount: 1,
+        ...point,
+      });
+    };
+    await clickArrow('[data-testid="chat-jump-previous"]');
+    await runWait(
+      `const view = logScroller().getBoundingClientRect();
+      const message = logScroller().querySelectorAll('[data-user-message]')[1]?.getBoundingClientRect();
+      return message && message.top >= view.top && message.top < view.top + 80;`,
+      { label: "the latest user message at the top" },
+    );
+    await runWait(
+      `return !!frontDock().querySelector('[aria-label="Scroll to latest message"]');`,
+      { label: "both arrows above the end" },
+    );
+    await runWait(
+      `return !document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+    );
+    const arrows = await run<{
+      up: number;
+      down: number;
+      right: number;
+      bottomDifference: number;
+    }>(`
+      const up = frontDock().querySelector('[data-testid="chat-jump-previous"]').getBoundingClientRect();
+      const down = frontDock().querySelector('[aria-label="Scroll to latest message"]').getBoundingClientRect();
+      return { up: up.right, down: down.left, right: frontDock().getBoundingClientRect().right - down.right, bottomDifference: Math.abs(up.bottom - down.bottom) };`);
+    expect(arrows.up).toBeLessThan(arrows.down);
+    expect(arrows.right).toBeLessThan(30);
+    expect(arrows.bottomDifference).toBeLessThan(1);
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp",
+        "chat-restored-navigation.png",
+      ),
+    );
+    await clickArrow('[data-testid="chat-jump-previous"]');
+    await runWait(
+      `const view = logScroller().getBoundingClientRect();
+      const message = logScroller().querySelector('[data-user-message]').getBoundingClientRect();
+      return message.top >= view.top && message.top < view.top + 80;`,
+      { label: "the oldest message" },
+    );
+    await run(`return new Promise(resolve => setTimeout(resolve, 600));`);
+    const oldest = await run<number>(`return logScroller().scrollTop;`);
+    await clickArrow('[data-testid="chat-jump-previous"]');
+    await clickArrow('[data-testid="chat-jump-previous"]');
+    await run(`return new Promise(resolve => setTimeout(resolve, 600));`);
+    expect(
+      Math.abs((await run<number>(`return logScroller().scrollTop;`)) - oldest),
+    ).toBeLessThan(2);
+    await clickArrow('[aria-label="Scroll to latest message"]');
+    await runWait(
+      `return following() && !frontDock().querySelector('[aria-label="Scroll to latest message"]');`,
+      { label: "back at the end" },
+    );
+    expect(
+      await run(
+        `return !!frontDock().querySelector('[data-testid="chat-jump-previous"]');`,
+      ),
+    ).toBe(true);
+  });
 });

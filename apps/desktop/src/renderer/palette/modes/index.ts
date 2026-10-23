@@ -32,10 +32,12 @@ export function usePaletteModes({
   sectionSearch,
   projectAgents,
   skillModes,
+  agentModeActive,
 }: {
   picker: PaletteChoiceMode | null;
   /** Skills and a chosen skill's instructions (modes/skills.tsx). */
   skillModes: readonly PaletteMode[];
+  agentModeActive: boolean;
   projectAgents: readonly ProjectAgentInfo[];
   historyRow: (entry: HistoryEntry) => PaletteItem;
   settingItems: readonly PaletteItem[];
@@ -56,7 +58,7 @@ export function usePaletteModes({
   const history = useHistoryMode(historyRow);
   const files = useFileModes();
   const sites = useSitesMode();
-  const input = useInputModes({ projectAgents });
+  const input = useInputModes({ projectAgents, agentModeActive });
   const errorRef = useRef(onError);
   errorRef.current = onError;
   const customModes = useMemo(

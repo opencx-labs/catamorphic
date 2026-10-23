@@ -145,6 +145,7 @@ import { ChipRail, type ChipRailHandle } from "./chip-rail.js";
 import { ClosingCollapsible } from "./closing-collapsible.js";
 import { ContextPill, PILL_SURFACE } from "./context-pill";
 import { FilePreviewProjectContext } from "./file-preview";
+import { HarnessIcon } from "./harness-icon.js";
 import { renderResponseLink } from "./response-link";
 
 export type {
@@ -1245,6 +1246,21 @@ function ChatDockContent({
   const resolveAgentName = useCallback(
     (agentId: string) =>
       roster.agents.find((agent) => agent.id === rosterAgentId(agentId))?.name,
+    [roster.agents],
+  );
+  const renderAgentIcon = useCallback(
+    (agentId: string | null) => {
+      const agent = roster.agents.find(
+        (candidate) => candidate.id === rosterAgentId(agentId ?? ""),
+      );
+      return agent ? (
+        <HarnessIcon
+          harness={agent.harness}
+          provider={agent.provider}
+          className="size-3.5 text-fg-faint"
+        />
+      ) : undefined;
+    },
     [roster.agents],
   );
   // Response links preview what the chat holds as its chips do.
@@ -3235,6 +3251,7 @@ function ChatDockContent({
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
               resolveAgentName={resolveAgentName}
+              renderAgentIcon={renderAgentIcon}
               sourceHref={sourceHref}
               renderAttachment={sentPill}
               presentUserMessage={presentSkillMessage}

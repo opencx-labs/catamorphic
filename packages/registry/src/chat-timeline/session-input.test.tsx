@@ -101,6 +101,35 @@ it("names a workflow by its display name, or readably without one", async () => 
   );
 });
 
+it("uses the host's harness icon for an agent update and keeps other sender icons", async () => {
+  const renderAgentIcon = vi.fn((agentId: string | null) => (
+    <span data-harness-icon={agentId} />
+  ));
+  await act(async () =>
+    root.render(
+      <InboundMessageRow
+        item={inbound({ kind: "agent", sessionId: "s2", agentId: "codex" })}
+        renderAgentIcon={renderAgentIcon}
+      />,
+    ),
+  );
+  expect(renderAgentIcon).toHaveBeenCalledWith("codex");
+  expect(container.querySelector('[data-harness-icon="codex"]')).not.toBeNull();
+  expect(container.querySelector(".lucide-bot")).toBeNull();
+
+  renderAgentIcon.mockClear();
+  await act(async () =>
+    root.render(
+      <InboundMessageRow
+        item={inbound({ kind: "workflow", runId: "r", workflowName: "review" })}
+        renderAgentIcon={renderAgentIcon}
+      />,
+    ),
+  );
+  expect(renderAgentIcon).not.toHaveBeenCalled();
+  expect(container.querySelector(".lucide-workflow")).not.toBeNull();
+});
+
 it("opens to the whole message and links to where it came from", async () => {
   const onOpen = vi.fn();
   await act(async () =>

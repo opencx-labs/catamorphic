@@ -201,3 +201,34 @@ describe("Cmd+Left and Cmd+Right", () => {
     await loaded("Second");
   });
 });
+
+it("delivers Cmd+Enter to a page and its embedded frame instead of claiming a review shortcut", async () => {
+  for (const frame of [false, true]) {
+    await inGuest(`(() => {
+      const doc = ${frame ? "document.querySelector('iframe').contentDocument" : "document"};
+      doc.defaultView.__submitKeys = 0;
+      doc.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          doc.defaultView.__submitKeys += 1;
+        }
+      });
+      doc.querySelector('input').focus();
+      return true;
+    })()`);
+    await pageKey("Enter");
+    await app.waitFor(
+      `${view}.executeJavaScript(${JSON.stringify(
+        frame
+          ? "document.querySelector('iframe').contentWindow.__submitKeys === 1"
+          : "window.__submitKeys === 1",
+      )})`,
+      {
+        label: frame
+          ? "frame received the submit shortcut"
+          : "page received the submit shortcut",
+      },
+    );
+  }
+  expect(app.getRendererErrors()).toEqual([]);
+});

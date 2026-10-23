@@ -272,3 +272,16 @@ complete and keeps the existing next actions. Imports preserve existing accounts
 cookie scope and expiry, source visit dates and bookmark folders. Repeat imports
 merge without duplicates. Unsupported individual items are omitted quietly.
 Whole-operation errors are retryable and cancellation never marks import complete.
+
+
+## Keyboard and chat identity
+
+Browser pages receive shortcuts that belong to another surface. In particular,
+Cmd+Enter (Ctrl+Enter outside macOS) belongs to a focused review comment form only
+while that form is focused; a page or embedded frame keeps it for its own submit
+action. Work's window and navigation shortcuts retain their configured bindings.
+
+The palette's Ask agent mode shows the default agent's harness mark and its name,
+model name and reasoning effort, separated by middle dots. Unpinned models resolve
+from the harness for the current project; focused-chat overrides do not change the
+identity of a new chat. Unsupported reasoning controls are omitted.

@@ -219,6 +219,8 @@ export interface ChatTimelineProps {
   // The host's own surface.
   /** Names an agent id (agent-change notices, senders). */
   resolveAgentName?: (agentId: string) => string | undefined;
+  /** The host's mark for an inbound agent, falling back to the agent glyph. */
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
   /**
    * The host's address for where an input came from (ADR 0217): a chat in
    * another project, a terminal. Defaults to `session:`, `run:` and keys.
@@ -289,6 +291,7 @@ interface TimelineHost {
   Hint: HintComponent;
   resolveToolIcon?: ChatTimelineProps["resolveToolIcon"];
   resolveAgentName?: ChatTimelineProps["resolveAgentName"];
+  renderAgentIcon?: ChatTimelineProps["renderAgentIcon"];
   presentUserMessage?: ChatTimelineProps["presentUserMessage"];
   sourceHref?: SourceHref;
   /** Which callbacks the host gave: their controls show only then. */
@@ -567,6 +570,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     onResendFailed,
     onDismissFailed,
     resolveAgentName,
+    renderAgentIcon,
     sourceHref,
     onLinkClick,
     renderLink,
@@ -626,6 +630,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       Hint,
       resolveToolIcon,
       resolveAgentName,
+      renderAgentIcon,
       presentUserMessage,
       sourceHref,
       opensLinks,
@@ -639,6 +644,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       Hint,
       resolveToolIcon,
       resolveAgentName,
+      renderAgentIcon,
       presentUserMessage,
       sourceHref,
       opensLinks,
@@ -955,6 +961,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                             <QueuedInputLine
                               queued={queued}
                               resolveAgentName={resolveAgentName}
+                              renderAgentIcon={renderAgentIcon}
                             />
                           )}
                         />
@@ -966,12 +973,11 @@ export function ChatTimeline(props: ChatTimelineProps) {
                       )}
                       <div aria-hidden className="cat-scroll-anchor" />
                     </StickToBottom.Content>
-                    {hasUserMessages && (
-                      <JumpToPreviousUserMessage
-                        register={registerJumpToPreviousUserMessage}
-                        shortcut={jumpShortcut}
-                      />
-                    )}
+                    <ChatNavigation
+                      showPrevious={hasUserMessages}
+                      register={registerJumpToPreviousUserMessage}
+                      shortcut={jumpShortcut}
+                    />
                     <FocusMessage
                       messageId={focusMessageId}
                       ready={Boolean(
@@ -987,7 +993,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
                           ),
                       )}
                     />
-                    <ScrollToLatest />
                     <FollowScrollerResize />
                     <PinToBottom />
                     <FadeEdges />
@@ -1212,6 +1217,7 @@ function TurnRowBody({
           item={entry.item}
           onOpen={onOpen}
           resolveAgentName={host.resolveAgentName}
+          renderAgentIcon={host.renderAgentIcon}
           sourceHref={host.sourceHref}
           focused={entry.item.id === focusMessageId}
         />
@@ -1349,15 +1355,17 @@ function useFoldingNotes(views: TurnView[]): {
  * where its answer starts. The everyday use: "what did I even ask?"
  * while multitasking. A host's composer shortcut can do the same move.
  */
-function JumpToPreviousUserMessage({
+function ChatNavigation({
+  showPrevious,
   register,
   shortcut,
 }: {
+  showPrevious: boolean;
   register?: (jump: () => void) => void;
   shortcut?: string;
 }) {
   const { Hint } = useContext(HostContext);
-  const { scrollRef, contentRef, isAtBottom, stopScroll } =
+  const { scrollRef, contentRef, isAtBottom, stopScroll, scrollToBottom } =
     useStickToBottomContext();
   // A chat short enough to see whole needs no jump affordance; watch both
   // the scroller and its content so the button appears the moment the
@@ -1391,10 +1399,8 @@ function JumpToPreviousUserMessage({
     const above = targets.filter(
       (element) => element.getBoundingClientRect().top < viewTop - 8,
     );
-    const target = above.at(-1) ?? targets.at(-1);
-    if (!target) return;
-    const offset = target.getBoundingClientRect().top - viewTop;
-    if (above.length === 0 && offset <= 8) return; // already at the oldest
+    const target = above.at(-1);
+    if (!target) return; // Already at the oldest; never wrap to a newer one.
     settling.current?.();
     // Moving up lets go of the latest message, streaming or not.
     stopScroll();
@@ -1438,21 +1444,37 @@ function JumpToPreviousUserMessage({
     register?.(jump);
   }, [register, jump]);
 
-  // One arrow at a time, in one place: away from the end, Scroll to latest
-  // takes it. The shortcut jumps either way.
-  if (!scrollable || !isAtBottom) return null;
   return (
-    <Hint label="Jump to your previous message" shortcut={shortcut}>
-      <button
-        type="button"
-        className={CHAT_ARROW}
-        onClick={jump}
-        aria-label="Jump to your previous message"
-        data-testid="chat-jump-previous"
-      >
-        <ArrowUp className="size-4" />
-      </button>
-    </Hint>
+    <>
+      {showPrevious && scrollable && (
+        <Hint label="Jump to your previous message" shortcut={shortcut}>
+          <button
+            type="button"
+            className={`absolute bottom-4 grid size-8 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl transition-[right] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              isAtBottom ? "right-4" : "right-14"
+            }`}
+            onClick={jump}
+            aria-label="Jump to your previous message"
+            data-testid="chat-jump-previous"
+          >
+            <ArrowUp className="size-4" />
+          </button>
+        </Hint>
+      )}
+      {!isAtBottom && (
+        <button
+          type="button"
+          className="absolute bottom-4 right-4 grid size-8 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl"
+          onClick={() => {
+            settling.current?.();
+            scrollToBottom();
+          }}
+          aria-label="Scroll to latest message"
+        >
+          <ArrowDown className="size-4" />
+        </button>
+      )}
+    </>
   );
 }
 
@@ -3117,25 +3139,6 @@ function DefaultAttachment({ attachment }: { attachment: AgentAttachment }) {
 
 function defaultAttachment(attachment: AgentAttachment): ReactNode {
   return <DefaultAttachment attachment={attachment} />;
-}
-
-/** The conversation's one scroll arrow, centered over it. */
-const CHAT_ARROW =
-  "absolute bottom-4 left-1/2 grid size-8 -translate-x-1/2 place-items-center rounded-full border border-border-strong bg-bg-overlay text-fg shadow-xl";
-
-function ScrollToLatest() {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-  if (isAtBottom) return null;
-  return (
-    <button
-      type="button"
-      className={CHAT_ARROW}
-      onClick={() => scrollToBottom()}
-      aria-label="Scroll to latest message"
-    >
-      <ArrowDown className="size-4" />
-    </button>
-  );
 }
 
 /**

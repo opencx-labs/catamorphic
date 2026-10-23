@@ -243,3 +243,14 @@ Subsession chips carry the child agent's harness/provider identity and use the
 shared HarnessIcon, including the generic fallback. A custom chip icon retains
 precedence. Disabled model values use the shared disabled-control hint to explain
 why they cannot change, while idle model selection continues through the palette.
+
+
+Only visible editors contribute a live selection when a chat opens or regains
+focus. A hidden tab or another project's retained editor cannot attach its old
+selection to a new conversation. Copying a selection still carries its provenance
+when it is explicitly pasted.
+
+The chat keeps its two scroll controls at the lower right: up jumps through the
+person's earlier messages, and down returns to the latest response. While reading
+above the end both are available. Incoming agent messages use the sender's harness
+mark through the timeline's optional `renderAgentIcon` host slot.

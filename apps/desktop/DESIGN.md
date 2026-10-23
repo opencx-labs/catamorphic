@@ -3670,3 +3670,17 @@ its chat; dropped on another chat, it moves there. A page
 an agent is driving, and an agent's or a remote chat's terminal, stay with
 their chat and say so; a chat never goes inside another. The tree learned
 `acceptsChildren`, so any source's row can take its first child by a drop.
+
+
+### 2026-10-23: Chat identity and navigation
+
+The Ask agent palette row names what the new chat will use: the harness mark,
+agent name, model name and reasoning effort. Incoming agent updates use that same
+harness identity. The two chat navigation arrows return to the lower right: up
+keeps moving through earlier messages while down offers the latest reply beside
+it. This restores the controls from before the centered, alternating arrow.
+
+Retained editors contribute selected text only while visible. A selection left
+in another tab or project cannot become a pill in an unrelated new chat. Browser
+pages likewise retain shortcuts scoped to other Work surfaces, including the
+review comment form's submit key.

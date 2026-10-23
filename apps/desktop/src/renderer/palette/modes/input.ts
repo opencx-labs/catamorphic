@@ -1,7 +1,16 @@
+import { useQuery } from "@tanstack/react-query";
 import { Bot, Search } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { createElement, useCallback, useMemo } from "react";
 import { BUILTIN_PALETTE_TRIGGERS } from "../../../shared/palette.js";
+import { HarnessIcon } from "../../components/harness-icon.js";
 import {
+  defaultModelLabel,
+  modelLabel,
+  useAgentDefaultModel,
+} from "../../lib/agent-default-model.js";
+import { effectiveEffort } from "../../lib/agent-effort.js";
+import {
+  desktopApi,
   type ProjectAgentInfo,
   projectAgentAsInfo,
 } from "../../lib/desktop-api.js";
@@ -11,11 +20,48 @@ import type { PaletteItem, PaletteMode } from "../types.js";
 /** Modes that send the whole input somewhere: the agent or the web. */
 export function useInputModes({
   projectAgents,
+  agentModeActive,
 }: {
   projectAgents: readonly ProjectAgentInfo[];
+  agentModeActive: boolean;
 }): PaletteMode[] {
   const { projectId, onOpenUrl, onSendToAgent, agents, defaultAgentId } =
     usePaletteHost();
+  const agent = useMemo(
+    () =>
+      [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
+        (candidate) => candidate.id === defaultAgentId,
+      ),
+    [agents, projectAgents, defaultAgentId],
+  );
+  const catalog = useQuery({
+    queryKey: ["desktop", "agent-models", agent?.id],
+    queryFn: () =>
+      agent
+        ? desktopApi.agentModels(agent.id)
+        : Promise.resolve({ models: [] }),
+    enabled: agentModeActive && Boolean(agent),
+    staleTime: 600_000,
+  });
+  const harnessDefault = useAgentDefaultModel({
+    projectId,
+    agent,
+    enabled: agentModeActive && Boolean(agent && !agent.model),
+  });
+  const modelId = agent?.model || harnessDefault.data?.model?.id;
+  const model = catalog.data?.models.find(
+    (candidate) => candidate.id === modelId || candidate.resolvedId === modelId,
+  );
+  const modelName = model
+    ? modelLabel(model, catalog.data?.models).title
+    : agent?.model ||
+      harnessDefault.data?.model?.name ||
+      defaultModelLabel(agent, harnessDefault.data?.model);
+  const detail = agent
+    ? [agent.name, modelName, effectiveEffort(agent, agent.effort, model)]
+        .filter(Boolean)
+        .join(" · ")
+    : undefined;
   // One row that sends the whole input somewhere: the agent or the web.
   const inputRows = useCallback(
     (target: "agent" | "web", query: string): PaletteItem[] => {
@@ -25,11 +71,13 @@ export function useInputModes({
           {
             id: "mode:agent",
             icon: Bot,
+            iconNode: createElement(HarnessIcon, {
+              harness: agent?.harness,
+              provider: agent?.provider,
+              className: "size-4 text-fg-faint",
+            }),
             label: "Ask agent",
-            detail:
-              [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
-                (agent) => agent.id === defaultAgentId,
-              )?.name ?? (typed ? undefined : "Type a message"),
+            detail: detail ?? (typed ? undefined : "Type a message"),
             keywords: [],
             kind: "navigate",
             ...(typed ? {} : { commit: "stay" as const }),
@@ -58,7 +106,7 @@ export function useInputModes({
         },
       ];
     },
-    [agents, projectAgents, defaultAgentId, onSendToAgent, onOpenUrl],
+    [agent, detail, onSendToAgent, onOpenUrl],
   );
 
   return useMemo(

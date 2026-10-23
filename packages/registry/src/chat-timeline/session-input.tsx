@@ -168,6 +168,22 @@ const SENDER_ICONS: Record<InboundSender["kind"], LucideIcon> = {
   workflow: Workflow,
 };
 
+/** The sender's mark, shared by delivered messages and waiting inputs. */
+function SenderIcon({
+  from,
+  renderAgentIcon,
+}: {
+  from: InboundSender;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
+}) {
+  const Icon = SENDER_ICONS[from.kind];
+  return (
+    (from.kind === "agent" && renderAgentIcon?.(from.agentId)) || (
+      <Icon className="size-3.5 shrink-0 text-fg-faint" />
+    )
+  );
+}
+
 const TASK_ICONS: Record<string, LucideIcon> = {
   background_command: SquareTerminal,
   command_watch: Eye,
@@ -314,6 +330,7 @@ export function InboundMessageRow({
   item,
   onOpen,
   resolveAgentName,
+  renderAgentIcon,
   sourceHref,
   renderContent,
   focused = false,
@@ -321,13 +338,13 @@ export function InboundMessageRow({
   item: InboundMessageItem;
   onOpen?: OpenLink;
   resolveAgentName?: (agentId: string) => string | undefined;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
   sourceHref?: SourceHref;
   /** The message body; defaults to its text. */
   renderContent?: (item: InboundMessageItem) => ReactNode;
   /** Outlined and open: a deep link to it (a reminder's alert). */
   focused?: boolean;
 }) {
-  const Icon = SENDER_ICONS[item.from.kind];
   const source = senderSource(item.from);
   // Attachments read by name, where they were placed in the words.
   const text = messageWithAttachmentNames(item.text, item.attachments);
@@ -360,7 +377,7 @@ export function InboundMessageRow({
       focused={focused}
       testId="chat-inbound-message"
       data={{ "data-sender-kind": item.from.kind }}
-      icon={<Icon className="size-3.5 shrink-0 text-fg-faint" />}
+      icon={<SenderIcon from={item.from} renderAgentIcon={renderAgentIcon} />}
       label={senderName(item.from, resolveAgentName)}
       preview={firstLine}
       attention={item.attention === "required"}
@@ -392,9 +409,11 @@ export function InboundMessageRow({
 export function QueuedInputLine({
   queued,
   resolveAgentName,
+  renderAgentIcon,
 }: {
   queued: QueuedMessage;
   resolveAgentName?: (agentId: string) => string | undefined;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
 }) {
   const { item } = queued;
   if (item?.kind === "task_notification") {
@@ -413,10 +432,9 @@ export function QueuedInputLine({
     );
   }
   if (item?.kind === "inbound_message") {
-    const Icon = SENDER_ICONS[item.from.kind];
     return (
       <span className="flex min-w-0 items-center gap-1.5">
-        <Icon className="size-3.5 shrink-0 text-fg-faint" />
+        <SenderIcon from={item.from} renderAgentIcon={renderAgentIcon} />
         <span className="shrink-0 font-medium">
           {senderName(item.from, resolveAgentName)}
         </span>
