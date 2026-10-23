@@ -2097,6 +2097,21 @@ export function App({
   };
 
   const [linkError, setLinkError] = useState<string | null>(null);
+  const attachOpenedSurface = useCallback(
+    (key: string, chatLocalId?: string) => {
+      if (!chatLocalId) return;
+      updateWorkspace((ws) =>
+        transitionWorkspace(ws, {
+          type: "attach",
+          key,
+          chatLocalId,
+          beforeKey: null,
+          source: "open",
+        }),
+      );
+    },
+    [updateWorkspace],
+  );
   /** One resolver for clicked links, file chips, sidebar files, and agent tools. */
   const openLinkedSurface = async (
     value: string,
@@ -2164,7 +2179,10 @@ export function App({
       browserUrl && opts.clicked && intent === "replace" && !opts.background
         ? switchToOpenPage(browserUrl)
         : null;
-    if (openTab) return openTab;
+    if (openTab) {
+      attachOpenedSurface(openTab, opts.chatLocalId);
+      return openTab;
+    }
     if (
       browserUrl &&
       intent === "replace" &&
@@ -2173,6 +2191,7 @@ export function App({
     ) {
       const navigate = browserNavigatorsRef.current.get(focusedKey.slice(8));
       if (navigate) {
+        attachOpenedSurface(focusedKey, opts.chatLocalId);
         navigate(browserUrl);
         return focusedKey;
       }
@@ -2289,6 +2308,7 @@ export function App({
     }));
     // Materialize first, then use the same placement rules as sidebar rows and
     // chips. Reusing the focused editor keeps its floating/split frame.
+    attachOpenedSurface(key, opts.chatLocalId);
     if (!opts.background && !(intent === "replace" && key === focusedKey))
       openSurface(key, intent);
     return key;
@@ -4055,6 +4075,13 @@ export function App({
 
   // The tab being dragged from the strip (drop targets render while set).
   const [tabDragKey, setTabDragKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!projectId || !runtime.visible) return;
+    void desktopApi.workspaceActive(projectId, Boolean(tabDragKey));
+    return () => {
+      if (tabDragKey) void desktopApi.workspaceActive(projectId, false);
+    };
+  }, [projectId, runtime.visible, tabDragKey]);
   const [dropSideHover, setDropSideHover] = useState<"left" | "right" | null>(
     null,
   );
@@ -5303,6 +5330,7 @@ export function App({
               targetInFront: ws.activeTabKey === key,
             });
           const background = (key: string) => {
+            attachOpenedSurface(key, requesterId);
             if (requester) {
               setChipAttention((current) => {
                 const keys = current[requester.localId] ?? [];
@@ -5359,6 +5387,7 @@ export function App({
           };
           const showTab = (key: string) =>
             show(key, () => {
+              attachOpenedSurface(key, requesterId);
               openSurfaceRef.current(key, "replace");
               return key;
             });
@@ -5644,7 +5673,7 @@ export function App({
         .catch((error: Error) => ({ error: error.message }))
         .then((result) => desktopApi.bridgeRespond({ id, result }));
     });
-  }, [updateWorkspace, wakeTab]);
+  }, [updateWorkspace, wakeTab, attachOpenedSurface]);
 
   // Foreground-command activity from main: chip spinners spin while a
   // command runs, not for the shell's whole lifetime.
@@ -7947,7 +7976,10 @@ export function App({
                           : undefined
                       }
                       onCustomizeChips={openChipsCustomization}
-                      onOpenSurface={openSurface}
+                      onOpenSurface={(key, mode) => {
+                        attachOpenedSurface(key, entry.localId);
+                        openSurface(key, mode);
+                      }}
                       onRemoveSurface={removeSurface}
                       onOpenMcpApp={(view, mode) => {
                         const name = view.toolUseId;
@@ -7959,9 +7991,11 @@ export function App({
                             toolKey: view.toolKey,
                             toolInput: view.toolInput,
                             toolResult: view.toolResult,
+                            chatLocalId: entry.localId,
                           },
                           mode === "split" ? "side" : mode,
                         );
+                        attachOpenedSurface(`mcpapp:${name}`, entry.localId);
                       }}
                       onLinkClick={(url, modifiers) =>
                         openMessageLink(url, entry, modifiers)

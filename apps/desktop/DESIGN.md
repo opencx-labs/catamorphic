@@ -490,6 +490,10 @@ that friction is intentional.
   dragged, the strip's end is its drop target.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
+- A tab drag offers a small resting target above every visible chat composer,
+  using the dock's waiting outline and active glow. Agent and chip opens keep
+  their chat's tab-group ownership, including when they reuse an open surface
+  ([workspace contract](docs/workspace-interactions.md)).
 - Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
 
 ## Page surfaces

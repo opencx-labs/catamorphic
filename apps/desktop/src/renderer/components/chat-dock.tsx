@@ -479,6 +479,7 @@ function ChatDockContent({
   projectName,
   placeholder,
   tabActive,
+  tabDragging = false,
   refreshWhileIdle = false,
   slot = "full",
   splitRatio = 0.5,
@@ -2797,17 +2798,6 @@ function ChatDockContent({
         <span className="sr-only" aria-live="polite">
           {activity ?? lastReplyText(chat.timeline)}
         </span>
-        {/* The same drop cue for files and workspace tabs. */}
-        {dropActive && (
-          <div
-            data-testid="chat-drop-target"
-            className="pointer-events-none absolute inset-2 z-20 grid animate-fade-in place-items-center rounded-xl border-2 border-dashed border-accent/60 bg-accent/5"
-          >
-            <span className="rounded-full border border-border bg-bg-raised px-3 py-1.5 text-xs text-fg">
-              Drop to attach
-            </span>
-          </div>
-        )}
         {/* The tab already names the chat — in tab mode the header collapses
           and its controls float over the timeline's top-right corner. */}
         <div
@@ -3605,6 +3595,20 @@ function ChatDockContent({
               className="field relative m-3 mt-1 flex shrink-0 flex-col bg-bg-raised [--composer-inset:6px] [--composer-radius:12px] rounded-(--composer-radius) p-(--composer-inset)"
               onSubmit={submit}
             >
+              {expanded && (tabDragging || dropActive) && (
+                <span
+                  aria-hidden="true"
+                  data-testid="chat-drop-target"
+                  data-active={dropActive || undefined}
+                  className={`pointer-events-none absolute bottom-full left-1/2 z-20 mb-3 grid h-11 -translate-x-1/2 animate-fade-in place-items-center whitespace-nowrap rounded-full border px-4 text-xs transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-standard ${
+                    dropActive
+                      ? "border-accent/70 bg-accent/10 text-fg opacity-100 shadow-[0_0_0_1px_var(--color-accent),0_0_18px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
+                      : "border-dashed border-border-strong/60 bg-bg-raised/80 text-fg-muted opacity-70"
+                  }`}
+                >
+                  Drop to attach
+                </span>
+              )}
               <ComposerMenu
                 id={menuId}
                 open={menuOpen}

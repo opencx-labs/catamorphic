@@ -562,6 +562,8 @@ export type WorkspaceEvent =
       key: string;
       chatLocalId: string | null;
       beforeKey: string | null;
+      /** Resource opening records provenance even while its chat floats. */
+      source?: "open";
     }
   | { type: "finish-expansion"; key: string; split: SplitView }
   | { type: "dismiss-floating"; key?: string }
@@ -1266,7 +1268,30 @@ function applyWorkspaceEvent(
       };
     case "attach": {
       const { key, chatLocalId, beforeKey } = event;
-      if (attachBlocker(ws, key, chatLocalId)) return original;
+      if (event.source === "open") {
+        if (
+          !chatLocalId ||
+          !ws.chats.some((chat) => chat.localId === chatLocalId)
+        )
+          return original;
+        const resource =
+          ws.tabs.find((tab) => tabKey(tab) === key) ??
+          ws.browsers.find(
+            (browser) => browserTabKey(browser.localId) === key,
+          ) ??
+          ws.terminals.find(
+            (terminal) => terminalTabKey(terminal.localId) === key,
+          ) ??
+          ws.editors.find((editor) => editorTabKey(editor.localId) === key);
+        if (!resource || resource.chatLocalId === chatLocalId) return original;
+        // Opening another chat's live page or shell does not transfer its
+        // execution ownership. An ordinary tab can join the opening chat.
+        const held =
+          ("agentControlled" in resource && resource.agentControlled) ||
+          ("attachSessionId" in resource && resource.attachSessionId) ||
+          ("remoteSessionId" in resource && resource.remoteSessionId);
+        if (held && resource.chatLocalId !== chatLocalId) return original;
+      } else if (attachBlocker(ws, key, chatLocalId)) return original;
       const owner = chatLocalId ?? undefined;
       const attached: Workspace = {
         ...ws,
@@ -1295,7 +1320,9 @@ function applyWorkspaceEvent(
             : chat,
         ),
       };
-      return { ...attached, tabOrder: tabOrderWith(attached, key, beforeKey) };
+      return event.source === "open"
+        ? attached
+        : { ...attached, tabOrder: tabOrderWith(attached, key, beforeKey) };
     }
     case "float": {
       const { key } = event;

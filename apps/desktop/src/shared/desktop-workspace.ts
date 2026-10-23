@@ -76,6 +76,8 @@ export interface DockCommand {
 }
 export interface DockSnapshot {
   chats: DockData[];
+  /** A workspace window in this profile is dragging one of its tabs. */
+  tabDragging?: boolean;
   activeProjectId?: string;
   activeChatId?: string;
   detached: boolean;

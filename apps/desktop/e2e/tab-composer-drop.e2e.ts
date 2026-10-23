@@ -35,7 +35,7 @@ const wait = (body: string, label: string, surface: DragSurface = app) =>
  */
 async function startTabDrag() {
   const items = await run<{ mimeType: string; data: string }[]>(`
-    const source = $('[data-point-key^="browser:"]');
+    const source = $('[data-workspace-visible="true"] [data-point-key^="browser:"]');
     window.__tabDropSource = source;
     const transfer = new DataTransfer();
     source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer }));
@@ -45,6 +45,16 @@ async function startTabDrag() {
     items.some((item) => item.mimeType === "application/x-catamorphic-tab"),
   ).toBe(true);
   await wait("!!$('[data-tab-dragging]')", "tab drag started");
+  await app.waitFor(
+    `(() => {
+    const visible = [...document.querySelectorAll('[data-chat-local-id]')].filter(el => !el.closest('[inert]'));
+    return visible.every(el => {
+      const cue = el.querySelector('[data-testid="chat-drop-target"]');
+      return cue && cue.offsetHeight === 44 && cue.offsetWidth < 180 && !cue.hasAttribute('data-active');
+    });
+  })()`,
+    { label: "compact targets on visible chats before pointer entry" },
+  );
   return { items, dragOperationsMask: 17 };
 }
 async function pointInChat(composerTarget = false, surface: DragSurface = app) {
@@ -62,6 +72,11 @@ async function endTabDrag() {
 }
 async function dropTab(composerTarget = false, surface: DragSurface = app) {
   const data = await startTabDrag();
+  await wait(
+    "!!chat()?.querySelector('[data-testid=chat-drop-target]:not([data-active])')",
+    "chat offers attachment before pointer entry",
+    surface,
+  );
   const point = await pointInChat(composerTarget, surface);
   await surface.cdp("Input.dispatchDragEvent", {
     type: "dragEnter",
@@ -74,7 +89,7 @@ async function dropTab(composerTarget = false, surface: DragSurface = app) {
     data,
   });
   await wait(
-    "chat()?.textContent.includes('Drop to attach')",
+    "!!chat()?.querySelector('[data-testid=chat-drop-target][data-active]')",
     "chat drop cue at the native hit target",
     surface,
   );
@@ -343,5 +358,118 @@ describe("workspace tab attachments", () => {
     }
     await wait("!!composer()", "attached chat restored");
     expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("offers compact targets on both split chats and the floating chat, excluding minimized chats", async () => {
+    const first = await run<string>("return chat().dataset.chatLocalId");
+    await run(
+      "chat().querySelector('button[aria-label=\"Open as tab\"]').click()",
+    );
+    await wait("chat()?.hasAttribute('data-chat-tab')", "first chat tab");
+    await run(
+      "window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',bubbles:true,[/Mac/.test(navigator.platform)?'metaKey':'ctrlKey']:true}))",
+    );
+    await wait("!!$('[data-floating-chat]:not([inert])')", "second chat");
+    const second = await run<string>(
+      "return $('[data-floating-chat]:not([inert])').dataset.chatLocalId",
+    );
+    await run(
+      "$('[data-floating-chat]:not([inert]) button[aria-label=\"Open as tab\"]').click()",
+    );
+    await wait(
+      `!!$('[data-chat-local-id="${second}"][data-chat-tab]:not([inert])')`,
+      "second chat tab",
+    );
+    await run(
+      `window.catamorphicDesktop.dockCommand({projectId:chat().dataset.chatProject,localId:${JSON.stringify(second)},event:{kind:'surface',key:${JSON.stringify(`chat:${first}`)},mode:'side'}})`,
+    );
+    await wait(
+      "document.querySelectorAll('[data-chat-tab]:not([inert])').length === 2",
+      "two chat panes",
+    );
+    // The next floating chat is then minimized by another new chat.
+    for (let index = 0; index < 2; index++) {
+      await run(
+        "window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',bubbles:true,[/Mac/.test(navigator.platform)?'metaKey':'ctrlKey']:true}))",
+      );
+      await wait(
+        "!!$('[data-floating-chat]:not([inert])')",
+        "floating chat above split",
+      );
+      if (index === 0)
+        await run(
+          "setReactValue($('[data-floating-chat]:not([inert]) [data-composer-input]'), 'Keep this hidden draft')",
+        );
+    }
+    await wait(
+      "document.querySelectorAll('[data-chat-local-id]:not([inert])').length === 3",
+      "three visible chats",
+    );
+    await startTabDrag();
+    expect(
+      await run(
+        "return document.querySelectorAll('[data-chat-local-id]:not([inert]) [data-testid=chat-drop-target]').length",
+      ),
+    ).toBe(3);
+    expect(
+      await run(
+        "return document.querySelectorAll('[inert] [data-testid=chat-drop-target]').length",
+      ),
+    ).toBe(0);
+    await endTabDrag();
+    await wait(
+      "!$('[data-testid=chat-drop-target]')",
+      "all targets clear at drag end",
+    );
+  });
+
+  it("announces a drag from a chatless project to the other-project chat and detached dock", async () => {
+    await app.eval(
+      "window.catamorphicDesktop.setPrefs({dockMultiProject:true})",
+    );
+    const project = await app.eval<{ id: string }>(
+      `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Tab source", rootPath: path.join(app.userDataDir, "chatless-source") })})`,
+    );
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify({ projectId: project.id, surface: { url: origin, title: "Reference", mode: "tab", nonce: crypto.randomUUID(), open: "browser" } })})`,
+    );
+    await app.waitFor(
+      `!!document.querySelector('[data-workspace-visible="true"][data-project-runtime="${project.id}"] [data-point-key^="browser:"]')`,
+    );
+    await wait(
+      "!!$('[data-floating-chat]:not([inert])')",
+      "other-project chat remains visible",
+    );
+    await startTabDrag();
+    await wait(
+      "!!$('[data-floating-chat]:not([inert]) [data-testid=chat-drop-target]')",
+      "other-project target before pointer entry",
+    );
+    await endTabDrag();
+    await wait(
+      "!$('[data-testid=chat-drop-target]')",
+      "other-project target clears",
+    );
+    await app.movePointer({ x: 1, y: 1 });
+    await app.eval("window.catamorphicDesktop.dockDetach(true)");
+    const dock = await app.connectToFrame("surface=dock");
+    try {
+      await wait("!!composer()", "detached other-project chat", dock);
+      await startTabDrag();
+      await wait(
+        "!!$('[data-testid=chat-drop-target]')",
+        "detached target from chatless workspace",
+        dock,
+      );
+      await endTabDrag();
+      await wait(
+        "!$('[data-testid=chat-drop-target]')",
+        "detached target clears",
+        dock,
+      );
+    } finally {
+      await app.eval("window.catamorphicDesktop.dockDetach(false)");
+      dock.close();
+    }
   });
 });

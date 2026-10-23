@@ -106,6 +106,8 @@ export interface ChatDockProps {
   placeholder?: string;
   /** Whether this chat's workspace tab occupies a view slot (tab mode). */
   tabActive: boolean;
+  /** A workspace tab is being dragged: visible chats offer an attachment target. */
+  tabDragging?: boolean;
   /** Keep this visible chat fresh when another client writes while it is idle. */
   refreshWhileIdle?: boolean;
   /**

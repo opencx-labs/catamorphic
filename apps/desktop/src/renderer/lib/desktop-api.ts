@@ -1273,7 +1273,7 @@ export interface CatamorphicDesktopApi {
   workspaceHandoffTake: (projectId: string) => Promise<unknown>;
   /** This window has opened `projectId`'s workspace (restored). */
   workspaceReady: (projectId: string) => Promise<void>;
-  workspaceActive: (projectId: string) => Promise<void>;
+  workspaceActive: (projectId: string, tabDragging?: boolean) => Promise<void>;
   dockPublish: (data: DockData) => Promise<void>;
   dockRemove: (projectId: string, localId: string) => Promise<void>;
   dockSnapshot: () => Promise<DockSnapshot>;
