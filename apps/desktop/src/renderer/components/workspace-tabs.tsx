@@ -724,6 +724,7 @@ function TabStrip({
               <span className="relative flex min-w-0 items-center self-stretch">
                 <OpenResourceButton
                   type="button"
+                  url={tab.kind === "browser" ? tab.bookmarkUrl : undefined}
                   file={tabFile?.(key)}
                   actions={tabActions?.(key)}
                   onOpen={(mode) => {

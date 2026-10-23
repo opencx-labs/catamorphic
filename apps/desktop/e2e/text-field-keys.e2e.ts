@@ -15,7 +15,7 @@ const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
   if (request.url === "/frame") {
     response.end(
-      `<input id="inner" value="inside"><button id="plain">plain</button>`,
+      `<input id="inner" value="inside"><button id="plain">plain</button><div id="rich" contenteditable></div>`,
     );
     return;
   }
@@ -28,7 +28,7 @@ const server = http.createServer((request, response) => {
   }
   const page = request.url?.startsWith("/second") ? "Second" : "First";
   response.end(
-    `<title>${page}</title><h1>${page}</h1><input id="field" value="hello world"><a id="next" href="/second">next</a><a id="slow" href="/slow">slow</a><iframe src="/frame"></iframe>`,
+    `<title>${page}</title><h1>${page}</h1><input id="field" value="hello world"><a id="next" href="/second">next</a><a id="slow" href="/slow">slow</a><b id="copy-source">Rich clipboard text</b><div id="rich" contenteditable></div><iframe src="/frame"></iframe>`,
   );
 });
 
@@ -57,13 +57,13 @@ const windowKey = (key: string, focus: string) =>
  * The same key pressed inside the page, through its real input path, which
  * needs the window focused.
  */
-const pageKey = async (keyCode: string) => {
+const pageKey = async (keyCode: string, shift = false) => {
   await focusWindow(app);
   return app.eval(`(() => {
     const page = ${view};
     page.focus();
     for (const type of ['keyDown', 'keyUp'])
-      page.sendInputEvent({ type, keyCode: ${JSON.stringify(keyCode)}, modifiers: [${JSON.stringify(mac ? "meta" : "control")}] });
+      page.sendInputEvent({ type, keyCode: ${JSON.stringify(keyCode)}, modifiers: [${JSON.stringify(mac ? "meta" : "control")}, ...(${shift} ? ['shift'] : [])] });
     return true;
   })()`);
 };
@@ -230,5 +230,61 @@ it("delivers Cmd+Enter to a page and its embedded frame instead of claiming a re
       },
     );
   }
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("pastes without formatting with Cmd+Shift+V in a page, a frame and Work's fields", async () => {
+  await inGuest(`(() => {
+    const range = document.createRange(); range.selectNode(document.getElementById('copy-source'));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+    return document.execCommand('copy');
+  })()`);
+  // First prove this is a rich clipboard, rather than an already plain one.
+  await inGuest(`document.getElementById('rich').focus(); true`);
+  await pageKey("V");
+  await app.waitFor(
+    `${view}.executeJavaScript("!!document.querySelector('#rich b')")`,
+    {
+      label: "ordinary paste keeps formatting",
+    },
+  );
+  for (const frame of [false, true]) {
+    await inGuest(`(() => {
+      const doc = ${frame ? "document.querySelector('iframe').contentDocument" : "document"};
+      const field = doc.getElementById('rich'); field.replaceChildren(); field.focus();
+      return true;
+    })()`);
+    await pageKey("V", true);
+    await app.waitFor(
+      `${view}.executeJavaScript(${JSON.stringify(`(() => {
+      const doc = ${frame ? "document.querySelector('iframe').contentDocument" : "document"};
+      const field = doc.getElementById('rich');
+      return field.textContent === 'Rich clipboard text' && field.childElementCount === 0;
+    })()`)})`,
+      { label: frame ? "frame plain paste" : "page plain paste" },
+    );
+  }
+  await app.eval(`(() => {
+    const field = document.createElement('div'); field.id = 'plain-paste-probe';
+    field.contentEditable = 'true'; field.style.cssText = 'position:fixed;left:300px;top:60px;z-index:100';
+    document.querySelector('[data-workspace-ready]').append(field); field.focus();
+  })()`);
+  await focusWindow(app);
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      key: "V",
+      code: "KeyV",
+      windowsVirtualKeyCode: 86,
+      modifiers: (mac ? 4 : 2) | 8,
+    });
+  await app.waitFor(
+    `(() => {
+    const field = document.getElementById('plain-paste-probe');
+    return field.textContent === 'Rich clipboard text' && field.childElementCount === 0;
+  })()`,
+    { label: "host field plain paste" },
+  );
+  await app.eval(`document.getElementById('plain-paste-probe').remove()`);
   expect(app.getRendererErrors()).toEqual([]);
 });

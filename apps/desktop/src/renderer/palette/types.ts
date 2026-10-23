@@ -11,6 +11,8 @@ export interface PaletteItem {
   label: string;
   /** Muted inline text, e.g. a URL host or the item's type. */
   detail?: string;
+  /** The destination of a web row, for its Copy link action. */
+  url?: string;
   keywords: string[];
   /** Preformatted chip, e.g. "⌘B". */
   shortcut?: string;

@@ -184,6 +184,9 @@ export function HistoryScreen({
                   className="group flex min-w-0 items-center gap-1 rounded-md transition-colors duration-150 hover:bg-bg-overlay focus-within:bg-bg-overlay"
                 >
                   <OpenResourceButton
+                    url={
+                      entry.target.kind === "web" ? entry.target.url : undefined
+                    }
                     onOpen={(mode) => void open(entry, mode)}
                     className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-left"
                   >

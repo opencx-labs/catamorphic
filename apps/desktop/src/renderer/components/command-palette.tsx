@@ -644,6 +644,7 @@ export function CommandPalette({
           detail: urlish ? undefined : "Google Search",
           keywords: [],
           kind: "navigate",
+          url: resolveInput(trimmed),
           run: (mode) => onOpenUrl(resolveInput(trimmed), mode),
         };
 
@@ -672,6 +673,7 @@ export function CommandPalette({
           keywords: [],
           kind: "navigate",
           usage: webUsageKey(`${origin}/`),
+          url: `${origin}/`,
           run: (mode) => onOpenUrl(`${origin}/`, mode),
         }),
       );
@@ -1087,6 +1089,7 @@ export function CommandPalette({
                 )}
                 <OpenResourceButton
                   isResource={item.kind === "navigate"}
+                  url={item.url}
                   openOnMouseDown
                   data-item-id={item.id}
                   type="button"

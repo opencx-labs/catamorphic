@@ -16,6 +16,16 @@ folder disclosure are not navigation. Context menus expose the same four labels;
 a link's menu in a web page offers the three that open elsewhere, since a click
 opens it here. There is no shortcut for converting the current surface to floating.
 
+Web links also offer **Copy link**, which copies their complete destination,
+including a query and fragment. This applies to chat links, inline URL and
+browser-tab pills, ordinary links in Work, browser tabs, palette web rows and
+history rows; a web page's own menu offers the same copy as **Copy link address**.
+File links keep their file actions.
+
+Cmd+Shift+V (Ctrl+Shift+V outside macOS) pastes without formatting using the
+same native paste-and-match-style command as the context menu. Work preserves
+the platform's other native Edit menu commands.
+
 An open menu holds the window, as a native one does (ADR 0221): the next press
 anywhere else, a web page included, only closes it, and a right-click elsewhere
 opens that place's menu. Escape, focus leaving it, the window losing focus, and

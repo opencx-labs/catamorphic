@@ -3684,3 +3684,13 @@ Retained editors contribute selected text only while visible. A selection left
 in another tab or project cannot become a pill in an unrelated new chat. Browser
 pages likewise retain shortcuts scoped to other Work surfaces, including the
 review comment form's submit key.
+
+### 2026-10-23: Plain paste and copying web links
+
+Cmd+Shift+V uses the native paste-and-match-style command on macOS too. Keep
+the platform's Edit menu and its other commands; only give plain paste the
+same shortcut across platforms. A URL's resource menu adds Copy link after
+the ways to open it, copying the full address. Ordinary host links use that
+same menu primitive with only the copy action. Inline URL and browser-tab pills,
+browser tabs, palette web rows and history rows pass their actual destinations
+to it. File links retain their file actions.

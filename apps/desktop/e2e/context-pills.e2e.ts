@@ -845,6 +845,13 @@ describe("context pills", () => {
     expect(await run(`return timelineText();`)).not.toContain("/attachments/");
   });
   it("does not pull a hidden editor's old selection into a new chat", async () => {
+    // The native-image test selects a local Codex agent. This regression
+    // needs an editable composer, independent of that agent's sign-in probe.
+    await app.eval(`(async () => {
+      const { agents } = await window.catamorphicDesktop.agentsList();
+      const fake = agents.find((agent) => agent.name === 'Fake Agent');
+      await window.catamorphicDesktop.agentsSetDefault(fake.id);
+    })()`);
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(`return !frontDock();`, { label: "selection chat parked" });
     // Keep a real selection in the retained document, then leave it.
@@ -863,10 +870,12 @@ describe("context pills", () => {
       window.__selectionPane.style.opacity = '0';
       pressKey('n', { metaKey: true }); return true;
     `);
-    await runWait(
-      `return !!frontDock() && composer() === document.activeElement;`,
-      { label: "chat over a transparent editor" },
-    );
+    await runWait(`return !!frontDock() && composer()?.isContentEditable;`, {
+      label: "chat over a transparent editor",
+    });
+    // The synthetic opacity change leaves the retained editor's native focus
+    // intact. Wait for the chat's selection-pull effect, not that focus state.
+    await run(`return settleFrames();`);
     expect(
       await run(`return pills().filter(p => p.source === 'selection').length;`),
     ).toBe(0);

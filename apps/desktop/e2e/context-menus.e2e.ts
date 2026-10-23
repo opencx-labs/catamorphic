@@ -468,6 +468,23 @@ describe("page menus", () => {
     await fieldHolds(`${origin}/next`);
   });
 
+  it("copy a browser tab's current address", async () => {
+    const address = await app.eval<string>(`${view}.getURL()`);
+    const point = await app.waitFor<{ x: number; y: number }>(`(() => {
+      const tab = document.querySelector('[data-point-key^="browser:"] .workspace-tab-label');
+      if (!tab) return false;
+      const rect = tab.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    await mouse(point, "right");
+    await app.waitFor(`!!${menu}`, { label: "browser tab menu" });
+    await settled();
+    expect(await entries()).toContain("Copy link");
+    await pick("Copy link");
+    await pasteIntoField();
+    await fieldHolds(address);
+  });
+
   it("copy an email address and a phone number without their schemes", async () => {
     await pageMenuAt("#mail");
     await expectLinkMenu(["Send email", "Copy email address"]);

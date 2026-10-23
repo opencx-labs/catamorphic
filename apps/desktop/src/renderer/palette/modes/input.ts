@@ -93,6 +93,9 @@ export function useInputModes({
           icon: Search,
           label: typed ? `Search the web for "${typed}"` : "Search the web",
           detail: typed ? "Google Search" : "Type a query",
+          url: typed
+            ? `https://www.google.com/search?q=${encodeURIComponent(typed)}`
+            : undefined,
           keywords: [],
           kind: "navigate",
           ...(typed ? {} : { commit: "stay" as const }),
