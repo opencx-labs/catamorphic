@@ -851,8 +851,14 @@ once) and Always show from the host; a web link to such a host opens a
 dialog with the whole address, Open, and Always open links from the host.
 One list answers both: Work's (GitHub's hosts, Wikimedia, MDN, this
 machine), the project's committed `trustedHosts`, and the person's own. A
-trusted image grows into its place as it loads: the line its name held opens
-to the picture's height while the picture fades in. Rows' and chips' icons
+trusted image grows into its place once it is ready. The consent pill keeps
+its position, width, height and controls through approval, a slow response,
+and retry. Its actions use PendingButton; the host is named once and the
+actions stay Show and Always show. One persistent frame then changes from
+the pill's measured size to the picture's size over 200 ms on the standard
+curve, fading the pill out as the picture fades in. Reduced motion settles
+at once. A failed image or host save stays in the same pill with a visible
+reason and retry. Rows' and chips' icons
 come from main, only for sites a tab of this profile showed. Files, notes,
 pull request comments and theme pictures load as they did.
 

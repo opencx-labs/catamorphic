@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import Markdown from "react-markdown";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { desktopApi } from "../lib/desktop-api.js";
 import { FilePreviewProjectContext } from "./file-preview.js";
 import { RemoteImage } from "./remote-image.js";
 
@@ -20,7 +21,7 @@ vi.mock("../lib/desktop-api.js", () => ({
         gitChanges.delete(listener);
       };
     },
-    trustHost: async () => {},
+    trustHost: vi.fn(async () => {}),
   },
 }));
 const components = {
@@ -31,6 +32,7 @@ let node: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
 beforeEach(() => {
+  vi.mocked(desktopApi.trustHost).mockReset().mockResolvedValue(undefined);
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   node = document.createElement("div");
   document.body.append(node);
@@ -127,4 +129,49 @@ it("loads from approved hosts and resets failed-image state for a new URL", asyn
     "https://first.example/working.png",
   );
   expect(node.querySelector('[data-remote-image="failed"]')).toBeNull();
+});
+
+it("keeps the consent controls mounted and disables repeated requests until the image loads", async () => {
+  await render("![chart](https://first.example/chart.png)");
+  const pill = node.querySelector("[data-remote-image-placeholder]");
+  const buttons = [...node.querySelectorAll("button")];
+  await show();
+  expect(node.querySelector("[data-remote-image-placeholder]")).toBe(pill);
+  expect(buttons.every((button) => button.disabled)).toBe(true);
+  expect(buttons[0]?.getAttribute("aria-busy")).toBe("true");
+  expect(node.querySelector("img")).not.toBeNull();
+  await act(async () =>
+    node.querySelector("img")?.dispatchEvent(new Event("error")),
+  );
+  expect(node.querySelector("[data-remote-image-placeholder]")).toBe(pill);
+  expect(node.textContent).toContain("Image unavailable");
+  expect(buttons.every((button) => !button.disabled)).toBe(true);
+  await show();
+  expect(node.querySelector("img")).not.toBeNull();
+});
+
+it("keeps the host action pending until it is saved, and offers retry when saving fails", async () => {
+  let reject!: (cause: Error) => void;
+  vi.mocked(desktopApi.trustHost).mockImplementationOnce(
+    () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  await render("![chart](https://first.example/chart.png)");
+  const pill = node.querySelector("[data-remote-image-placeholder]");
+  const always = node.querySelector<HTMLButtonElement>(
+    'button[aria-label="Always show images from first.example"]',
+  )!;
+  await act(async () => always.click());
+  expect(node.querySelector("img")).toBeNull();
+  expect(always.getAttribute("aria-busy")).toBe("true");
+  await act(async () => reject(new Error("fixture save failure")));
+  expect(node.querySelector("[data-remote-image-placeholder]")).toBe(pill);
+  expect(always.disabled).toBe(false);
+  expect(node.textContent).toContain("Host could not be saved");
+  await act(async () => always.click());
+  expect(vi.mocked(desktopApi.trustHost)).toHaveBeenCalledTimes(2);
+  expect(node.querySelector("[data-remote-image-placeholder]")).toBe(pill);
+  expect(node.querySelector("img")).not.toBeNull();
 });
