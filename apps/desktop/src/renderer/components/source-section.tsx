@@ -283,15 +283,32 @@ function SourceView({
     return sessionId ? refetchSession() : undefined;
   }, [collection, awaitingSession, sessionId, refetchSession]);
   useSidebarRefresh(refresh);
+  // A module that wants more than the person allowed is not running; its
+  // section shows Work's request (ADR 0277).
+  const asked =
+    root.status === "ready" || root.status === "error"
+      ? (source.access?.() ?? null)
+      : null;
+  const access = asked
+    ? {
+        request: asked.request,
+        allow: async () => {
+          await asked.allow();
+          await refresh();
+        },
+      }
+    : undefined;
   useSidebarContent({
-    state:
-      sessionFailed || root.status === "error" || subscriptionError
+    state: access
+      ? "access"
+      : sessionFailed || root.status === "error" || subscriptionError
         ? "error"
         : root.status === "idle" || root.status === "loading"
           ? "loading"
           : roots.length
             ? "ready"
             : "empty",
+    ...(access ? { access } : {}),
     refreshing: root.fetching && root.ids.length > 0,
     idle: awaitingSession ? !sessionId : !root.fetching,
     error: sessionFailed

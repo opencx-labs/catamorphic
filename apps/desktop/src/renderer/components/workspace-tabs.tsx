@@ -31,12 +31,20 @@ import {
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentType,
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
+import { useWindowImage } from "../lib/window-images";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
@@ -175,6 +183,27 @@ const TAB_ICONS = {
   diff: FileDiff,
   mcpapp: AppWindow,
 } as const;
+
+/**
+ * The icon the tab's page showed, from main (ADR 0277), or the tab's own
+ * glyph while there is none.
+ */
+function PageIcon({
+  icon,
+  className,
+  fallback: Fallback,
+}: {
+  icon: string | null;
+  className: string;
+  fallback: ComponentType<{ className?: string }>;
+}) {
+  const source = useWindowImage(icon ? { site: { icon } } : null);
+  return source ? (
+    <img src={source} alt="" className={`${className} rounded-[3px]`} />
+  ) : (
+    <Fallback className={className} />
+  );
+}
 
 interface RenderedTab {
   tab: WorkspaceTab;
@@ -745,14 +774,12 @@ function TabStrip({
                   land as badges on its upper corner. */}
                   <span className="relative grid size-3.5 shrink-0 place-items-center">
                     <SignalGlyph activity={tab.activity} className="size-3.5">
-                      {tab.kind === "browser" && tab.faviconUrl ? (
-                        <img
-                          src={tab.faviconUrl}
-                          alt=""
-                          className={`size-3.5 rounded-[3px] ${sleepingGlyph(tab)}`}
+                      {tab.kind === "browser" ? (
+                        <PageIcon
+                          icon={tab.faviconUrl ?? null}
+                          className={`size-3.5 ${sleepingGlyph(tab)}`}
+                          fallback={Icon}
                         />
-                      ) : tab.kind === "browser" ? (
-                        <Icon className={`size-3.5 ${sleepingGlyph(tab)}`} />
                       ) : tab.kind === "app" ? (
                         <AppGlyph icon={tab.appIcon} className="size-3.5" />
                       ) : tab.kind === "chat" ? (

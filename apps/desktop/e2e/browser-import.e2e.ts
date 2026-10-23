@@ -12,7 +12,10 @@ let profileId: string;
 let origin: string;
 let receivedCookie = "";
 const server = http.createServer((request, response) => {
-  receivedCookie = request.headers.cookie ?? "";
+  // The page's own request carries the imported session. Work fetches a
+  // site's icon itself, without cookies (ADR 0277), and that is not it.
+  if (request.url !== "/favicon.ico")
+    receivedCookie = request.headers.cookie ?? "";
   response.setHeader("Content-Type", "text/html");
   response.end(
     "<title>Fixture signed-in page</title><h1>Imported browser session</h1>",

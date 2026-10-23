@@ -1,4 +1,4 @@
-import { type LucideIcon, Search } from "lucide-react";
+import { type LucideIcon, Search, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { OpenMode as CommitMode } from "../../../shared/open-mode.js";
 import { webUsageKey } from "../../../shared/palette.js";
@@ -115,7 +115,33 @@ async function paletteRows({
   onError: (message: string) => void;
   keep?: (item: SidebarSourceItem) => boolean;
 }): Promise<PaletteItem[]> {
-  return (await sourceRows({ source, query, signal }))
+  const rows = await sourceRows({ source, query, signal });
+  // A module that wants more than the person allowed is not running: the
+  // mode offers Work's request instead of rows (ADR 0277).
+  const asked = source.access?.();
+  if (asked)
+    return [
+      {
+        id: `mode:${owner.id}:access`,
+        icon: ShieldCheck,
+        label: `Allow ${asked.request.module} to ${asked.request.beyond
+          .map((line) => line.charAt(0).toLowerCase() + line.slice(1))
+          .join(", ")}`,
+        detail: asked.request.network
+          ? "It can read this project's files and send them to these addresses."
+          : asked.request.module,
+        keywords: ["allow", "access"],
+        category: "command",
+        kind: "action",
+        run: () =>
+          void asked
+            .allow()
+            .catch((cause: unknown) =>
+              onError(cause instanceof Error ? cause.message : String(cause)),
+            ),
+      },
+    ];
+  return rows
     .filter(({ item }) => keep(item) && (item.url || !item.hasChildren))
     .map(({ item, parent }): PaletteItem => {
       const url = item.url;

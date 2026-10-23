@@ -686,6 +686,10 @@ app.whenReady().then(async () => {
     ...(e2eDataDir
       ? { catalogFetch: async () => new Response(null, { status: 404 }) }
       : {}),
+    images: {
+      list: (url) => browserSupport?.images.list(url),
+      inline: async (url) => (await browserSupport?.images.inline(url)) ?? null,
+    },
   });
   // MCP Apps host: which connection tools carry a ui:// view, their
   // templates, and the view-initiated tool calls. Elicitation from those
@@ -757,6 +761,20 @@ app.whenReady().then(async () => {
     async () =>
       (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     (window) => desktopWorkspaces?.isDock(window) ?? false,
+    {
+      // Linux has no confinement yet; only throwaway E2E profiles run
+      // modules there (as they keep secrets in plain text, ADR 0129).
+      unconfined: e2eDataDir !== undefined && process.platform !== "darwin",
+      workPorts: () => {
+        const url = state.current?.url;
+        if (!url) return [];
+        try {
+          return [Number(new URL(url).port)];
+        } catch {
+          return [];
+        }
+      },
+    },
   );
   voiceSupport = registerVoiceSupport({
     state,

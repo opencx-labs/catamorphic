@@ -1,3 +1,4 @@
+import { AccessRequest } from "./access-request.js";
 import type { SidebarStatus } from "./sidebar-contribution.js";
 
 /** Three quiet placeholder rows shown before a section's first result. */
@@ -24,7 +25,7 @@ export const emptySentence = (configured?: string, fromSource?: string) =>
 /**
  * The one status presentation every sidebar section shares: skeleton rows
  * while loading, a muted sentence when empty, the error with Retry when a
- * read failed. Ready and refreshing draw nothing here; the header spinner
+ * read failed, and Work's request when its module wants more access. Ready and refreshing draw nothing here; the header spinner
  * covers refreshing while the rows stay on screen.
  */
 export function SidebarStatusBody({
@@ -37,6 +38,13 @@ export function SidebarStatusBody({
   retry?: () => unknown;
 }) {
   if (status.state === "loading") return <SidebarSkeleton />;
+  if (status.state === "access" && status.access)
+    return (
+      <AccessRequest
+        request={status.access.request}
+        allow={status.access.allow}
+      />
+    );
   if (status.state === "error")
     return (
       <div role="alert" className="sidebar-empty-state">

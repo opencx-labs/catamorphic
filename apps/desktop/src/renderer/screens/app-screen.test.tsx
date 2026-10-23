@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { DEFAULT_PREFS } from "../../shared/app-prefs.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { AppScreen } from "./app-screen.js";
 
@@ -46,9 +45,8 @@ vi.mock("../lib/theme.js", () => ({
 }));
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
-    getPrefs: vi.fn().mockResolvedValue({}),
-    onPrefsChanged: vi.fn(() => () => {}),
-    setPrefs: vi.fn(),
+    appAccessApproved: vi.fn(),
+    appAccessAllow: vi.fn(),
   },
 }));
 
@@ -67,15 +65,19 @@ async function mount(appName: string) {
       </QueryClientProvider>,
     ),
   );
-  await act(async () => {});
+  // The app list and the answer arrive on React Query's own schedule.
+  await vi.waitFor(() => expect(node.textContent).not.toContain("Loading app"));
   return { node, root };
 }
 
-it("asks once before an app that reads chats mounts, and records the answer", async () => {
-  vi.mocked(desktopApi.getPrefs).mockResolvedValue({ ...DEFAULT_PREFS });
-  vi.mocked(desktopApi.setPrefs).mockResolvedValue({
-    ...DEFAULT_PREFS,
-    appAccessApprovals: ["p1/activity"],
+it("asks once before an app that reads chats mounts, and records the answer in main", async () => {
+  // Main keeps the answer, signed (ADR 0277); the window only asks.
+  let approved = false;
+  vi.mocked(desktopApi.appAccessApproved).mockImplementation(
+    async () => approved,
+  );
+  vi.mocked(desktopApi.appAccessAllow).mockImplementation(async () => {
+    approved = true;
   });
   const { node, root } = await mount("activity");
   try {
@@ -89,22 +91,12 @@ it("asks once before an app that reads chats mounts, and records the answer", as
         .querySelector<HTMLButtonElement>('[data-testid="app-access-allow"]')
         ?.click(),
     );
-    expect(desktopApi.setPrefs).toHaveBeenCalledWith({
-      appAccessApprovals: ["p1/activity"],
+    expect(desktopApi.appAccessAllow).toHaveBeenCalledWith({
+      projectId: "p1",
+      app: "activity",
     });
-  } finally {
-    await act(async () => root.unmount());
-    node.remove();
-  }
-});
-
-it("mounts an app without access declarations straight away", async () => {
-  vi.mocked(desktopApi.getPrefs).mockResolvedValue({ ...DEFAULT_PREFS });
-  const { node, root } = await mount("notes");
-  try {
-    expect(node.querySelector('[data-testid="app-access-consent"]')).toBeNull();
-    expect(node.querySelector('[data-testid="app-mount"]')?.textContent).toBe(
-      "notes",
+    await vi.waitFor(() =>
+      expect(node.querySelector('[data-testid="app-mount"]')).not.toBeNull(),
     );
   } finally {
     await act(async () => root.unmount());
@@ -112,11 +104,25 @@ it("mounts an app without access declarations straight away", async () => {
   }
 });
 
+it("mounts an app without access declarations straight away", async () => {
+  const { node, root } = await mount("notes");
+  try {
+    expect(node.querySelector('[data-testid="app-access-consent"]')).toBeNull();
+    expect(node.querySelector('[data-testid="app-mount"]')?.textContent).toBe(
+      "notes",
+    );
+    expect(desktopApi.appAccessApproved).not.toHaveBeenCalledWith({
+      projectId: "p1",
+      app: "notes",
+    });
+  } finally {
+    await act(async () => root.unmount());
+    node.remove();
+  }
+});
+
 it("skips the question once the profile approved the app", async () => {
-  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
-    ...DEFAULT_PREFS,
-    appAccessApprovals: ["p1/activity"],
-  });
+  vi.mocked(desktopApi.appAccessApproved).mockResolvedValue(true);
   const { node, root } = await mount("activity");
   try {
     expect(node.querySelector('[data-testid="app-access-consent"]')).toBeNull();

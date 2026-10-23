@@ -7,6 +7,7 @@ import type {
   SidebarSourceCapabilities,
   SidebarSourceRequest,
 } from "../shared/sidebar-source.js";
+import type { ModuleLaunch } from "./module-sandbox.js";
 import { registerProcessOwner } from "./process-owners.js";
 
 const responseSchema = z.object({
@@ -36,6 +37,8 @@ export class SidebarSourceRuntime {
     reveal: false,
   };
   private child?: ChildProcess;
+  /** What the running process was started with; released when it ends. */
+  private launched?: ModuleLaunch;
   private starting?: Promise<ChildProcess>;
   private idle?: ReturnType<typeof setTimeout>;
   private watcher?: FSWatcher;
@@ -60,13 +63,16 @@ export class SidebarSourceRuntime {
     private readonly opts: {
       modulePath: string;
       projectRoot: string;
-      workerPath: string;
-      executable: () => Promise<string>;
       /**
-       * What the module's process starts with beyond Electron's own
-       * environment: Work's Bun first on PATH, as agent terminals get.
+       * How the module's process starts (ADR 0277): confined to its
+       * declared access, with an environment of its own, never Electron's.
        */
-      env?: () => Promise<Record<string, string>>;
+      launch: () => Promise<ModuleLaunch>;
+      /**
+       * Files whose change restarts the module besides itself: the
+       * package.json declaring its access.
+       */
+      watchFiles?: readonly string[];
       /**
        * Answer a module asking Work for something while it serves
        * `requestId` (ADR 0234); the owner routes it to that window.
@@ -103,26 +109,22 @@ export class SidebarSourceRuntime {
         clearTimeout(startup);
         reject(error);
       };
-      Promise.all([
-        this.opts.executable(),
-        this.opts.env?.() ?? Promise.resolve({}),
-      ]).then(([executable, env]) => {
-        if (expired) return;
-        if (this.disposed || generation !== this.generation) {
-          fail(new Error("Sidebar source changed. Retry loading it."));
+      this.opts.launch().then((launch) => {
+        if (expired || this.disposed || generation !== this.generation) {
+          void launch.close();
+          if (!expired)
+            fail(new Error("Sidebar source changed. Retry loading it."));
           return;
         }
-        const spawned = spawn(
-          executable,
-          [this.opts.workerPath, this.opts.modulePath],
-          {
-            cwd: this.opts.projectRoot,
-            env: { ...process.env, ...env },
-            stdio: ["pipe", "ignore", "pipe", "pipe"],
-          },
-        );
+        const spawned = spawn(launch.command, launch.args, {
+          cwd: this.opts.projectRoot,
+          env: launch.env,
+          stdio: ["pipe", "ignore", "pipe", "pipe"],
+        });
         child = spawned;
         this.child = spawned;
+        this.launched = launch;
+        spawned.once("exit", () => void launch.close());
         this.attach(spawned, (error) => {
           if (error) return fail(error);
           clearTimeout(startup);
@@ -275,6 +277,8 @@ export class SidebarSourceRuntime {
     const child = this.child;
     this.child = undefined;
     this.starting = undefined;
+    void this.launched?.close();
+    this.launched = undefined;
     child?.kill();
     // An infinite synchronous loop must not keep a retired worker alive.
     if (child) {
@@ -350,13 +354,17 @@ export class SidebarSourceRuntime {
     clearTimeout(this.idle);
     if (this.listeners.size === 1) {
       this.send({ method: "subscribe" });
-      const readSource = () => {
-        try {
-          return readFileSync(this.opts.modulePath, "utf8");
-        } catch {
-          return "";
-        }
-      };
+      // The module and what declares its access: either changing reloads.
+      const readSource = () =>
+        [this.opts.modulePath, ...(this.opts.watchFiles ?? [])]
+          .map((file) => {
+            try {
+              return readFileSync(file, "utf8");
+            } catch {
+              return "";
+            }
+          })
+          .join("\0");
       let source = readSource();
       // macOS coalesces directory events, and atomic replacement may report
       // a temporary filename. Compare the entry's contents so those edits
@@ -400,6 +408,14 @@ export class SidebarSourceRuntime {
         this.scheduleIdle();
       }
     };
+  }
+  /**
+   * Start again with what is declared and allowed now (ADR 0277), and have
+   * every view of the module read again.
+   */
+  reload() {
+    this.stop(new Error("Sidebar source restarted."));
+    for (const listener of this.listeners) listener();
   }
   dispose() {
     this.disposed = true;

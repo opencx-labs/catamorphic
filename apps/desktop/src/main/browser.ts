@@ -11,6 +11,7 @@ import {
   Notification,
   nativeTheme,
   type Session,
+  safeStorage,
   screen,
   session,
   shell,
@@ -58,6 +59,7 @@ import {
   screenShareAnswerSchema,
   tabSourceWebContentsId,
 } from "../shared/screen-share.js";
+import { type SidebarSectionConfig, sectionModule } from "../shared/sidebar.js";
 import {
   ALWAYS_GRANTED_PERMISSIONS,
   decideSitePermission,
@@ -76,6 +78,8 @@ import {
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
 import { isVoiceAction } from "../shared/voice.js";
+import { windowImageRequestSchema } from "../shared/window-images.js";
+import type { WorkspaceConfig } from "../shared/workspace-config.js";
 import { pageClosing, registerBrowserDialogs } from "./browser-dialogs.js";
 import { HistoryStore } from "./browser-history.js";
 import {
@@ -109,11 +113,14 @@ import {
 } from "./browser-sleep.js";
 import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
+import { registerCodeApprovals } from "./code-approvals.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
+import { isLoopback } from "./egress-proxy.js";
 import { ExtensionsHost } from "./extensions/host.js";
 import { restoreGuestHistory } from "./history-restore.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
+import { readModuleAccess } from "./module-access.js";
 import { popupNativeMenu } from "./native-menu.js";
 import {
   menuActions,
@@ -136,6 +143,8 @@ import {
   SitePermissionBroker,
   SiteSettingsStore,
 } from "./site-settings.js";
+import { registerTrustedHosts } from "./trusted-hosts.js";
+import { WindowImages } from "./window-images.js";
 import { DEFAULT_WORKSPACE_FILE } from "./workspace-config.js";
 
 /**
@@ -390,6 +399,8 @@ async function doPrepareProfileSession(
 
 export interface BrowserSupport {
   history: HistoryStore;
+  /** Every image the window shows from outside it (ADR 0277). */
+  images: WindowImages;
   dispose: () => void;
 }
 
@@ -407,16 +418,48 @@ export function registerBrowserSupport(
   sidebarToolchain: () => Promise<Record<string, string>>,
   /** The detached chat dock is no browser window (ADR 0203 tab reports). */
   isDock: (window: BrowserWindow) => boolean,
+  /** How sidebar modules are confined (ADR 0277). */
+  moduleSandbox: {
+    /** A throwaway E2E profile on a platform Work cannot confine. */
+    unconfined: boolean;
+    /** Ports of Work's own loopback servers, which no module reaches. */
+    workPorts: () => number[];
+  },
 ): BrowserSupport {
+  const userData = app.getPath("userData");
+  const profilesDir = path.join(userData, "profiles");
+  // What the person approved code to reach (ADR 0277), sealed with a key
+  // only this app can unseal from the keychain.
+  const approvals = registerCodeApprovals({
+    profilesDir,
+    profileFor: (sender) => windows.profileFor(sender),
+    keyring: {
+      // Never the synchronous check: it blocks main on a keychain prompt.
+      available: () => safeStorage.isAsyncEncryptionAvailable(),
+      encrypt: (text) => safeStorage.encryptStringAsync(text),
+      decrypt: async (data) =>
+        (await safeStorage.decryptStringAsync(data)).result,
+    },
+  });
+  // Hosts a chat opens and shows without asking (ADR 0277).
+  const disposeTrustedHosts = registerTrustedHosts({
+    approvalsFor: approvals.approvalsFor,
+    profileFor: (sender) => windows.profileFor(sender),
+    rootFor: projectRootFor,
+    windowsFor: (profileId) => windows.windowsFor(profileId),
+  });
   const disposeSidebarSources = registerSidebarSources({
     windows,
     profiles,
     config: profileConfig,
     rootFor: projectRootFor,
     toolchain: sidebarToolchain,
+    approvals: approvals.approvalsFor,
+    scratchRoot: path.join(userData, "sidebar-runtime", "scratch"),
+    unconfined: moduleSandbox.unconfined,
+    blocked: (host, port) =>
+      isLoopback(host) && moduleSandbox.workPorts().includes(port),
   });
-  const userData = app.getPath("userData");
-  const profilesDir = path.join(userData, "profiles");
   const history = new HistoryStore(profilesDir);
   const paletteUsage = new PaletteUsageStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
@@ -460,6 +503,30 @@ export function registerBrowserSupport(
     origin: string,
     historyIcon?: string | null,
   ) => siteIcons.get(profileId, origin, colorScheme()) ?? historyIcon ?? null;
+  // A session of its own, kept in memory: image fetches carry no cookies
+  // and leave nothing in the browsing profiles.
+  const imageSession = session.fromPartition("work-window-images");
+  const images = new WindowImages({
+    siteIcons: (profileId, origin) => {
+      const seen = siteIcons.get(profileId, origin, colorScheme());
+      const visited = history.siteFavicons(profileId, origin);
+      return seen
+        ? [seen, ...visited.filter((icon) => icon !== seen)]
+        : visited;
+    },
+    seenIcon: (profileId, icon) =>
+      siteIcons.has(profileId, icon) || history.seenFavicon(profileId, icon),
+    fetch: (url, init) =>
+      imageSession.fetch(url, { ...init, credentials: "omit" }),
+  });
+  ipcMain.handle("catamorphic:window-image", (event, raw: unknown) => {
+    // Work's own windows only: a page in a tab has its own network.
+    if (event.sender.getType() !== "window") return null;
+    const request = windowImageRequestSchema.safeParse(raw);
+    return request.success
+      ? images.image(windows.profileFor(event.sender), request.data)
+      : null;
+  });
   // Guest id → OS refusals already explained for the page it shows.
   const mediaRefusalsShown = new Map<number, Set<string>>();
   const screenShareBroker = new PromptBroker<
@@ -2702,10 +2769,14 @@ export function registerBrowserSupport(
     async (event, projectId?: string) => {
       const profileId = windows.profileFor(event.sender);
       if (!projectId) return profileConfig.resolveWorkspace(profileId);
-      return profileConfig.resolveWorkspace(profileId, {
+      const rootPath = await projectRootFor(projectId);
+      const resolved = profileConfig.resolveWorkspace(profileId, {
         id: projectId,
-        rootPath: await projectRootFor(projectId),
+        rootPath,
       });
+      return rootPath
+        ? { ...resolved, config: withModuleLists(resolved.config, rootPath) }
+        : resolved;
     },
   );
   ipcMain.handle(
@@ -3110,7 +3181,11 @@ export function registerBrowserSupport(
 
   return {
     history,
+    images,
     dispose: () => {
+      ipcMain.removeHandler("catamorphic:window-image");
+      approvals.dispose();
+      disposeTrustedHosts();
       unwatchBookmarks();
       disposeSidebarSources();
       disposePasskeys();
@@ -3167,6 +3242,42 @@ export function registerBrowserSupport(
       ])
         ipcMain.removeHandler(channel);
       preparedSessions.clear();
+    },
+  };
+}
+
+/**
+ * The layout as the window gets it: each module section carries the lists
+ * its package.json declares (ADR 0277), so the window knows which list a
+ * module shows (a module over Work's tabs takes them out of the top bar).
+ */
+function withModuleLists(
+  config: WorkspaceConfig,
+  projectRoot: string,
+): WorkspaceConfig {
+  const annotate = (section: SidebarSectionConfig): SidebarSectionConfig => {
+    const module = sectionModule(section);
+    if (!module) return section;
+    try {
+      const { access } = readModuleAccess({
+        modulePath: path.resolve(projectRoot, module),
+        projectRoot,
+      });
+      return access.lists?.length
+        ? { ...section, moduleLists: access.lists }
+        : section;
+    } catch {
+      // Its section shows what is wrong when it loads.
+      return section;
+    }
+  };
+  const side = (tabs: WorkspaceConfig["sidebars"]["left"]) =>
+    tabs.map((tab) => ({ ...tab, sections: tab.sections.map(annotate) }));
+  return {
+    ...config,
+    sidebars: {
+      left: side(config.sidebars.left),
+      right: side(config.sidebars.right),
     },
   };
 }

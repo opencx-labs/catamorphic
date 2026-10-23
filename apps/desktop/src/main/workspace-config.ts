@@ -294,8 +294,6 @@ function stableId(value: unknown): value is string {
   );
 }
 
-const WORKFLOW_NAME = /^[a-zA-Z_$][a-zA-Z0-9_$-]{0,99}$/;
-
 /** `work:<name>`, or a module path; nothing else is a source. */
 function sanitizeSourceName(value: unknown, where: string): string {
   if (typeof value !== "string" || !value.trim())
@@ -315,42 +313,31 @@ function sanitizeSourceName(value: unknown, where: string): string {
   return value;
 }
 
-/** Grants name Work lists (bare) and workflows a module may use. */
+/** Where a module's reach is declared, for layouts that still grant it. */
+const ACCESS_HELP =
+  "a module declares what it reaches in catamorphic.access in its package.json (lists, workflows, hosts), not in the layout";
+
+/** Work lists an app widget reads (bare names); modules take no grants. */
 function sanitizeGrants(
   record: Record<string, unknown>,
   where: string,
-  module: boolean,
-  app = false,
-): { collections?: string[]; workflows?: string[] } {
-  const list = (key: "collections" | "workflows", valid: RegExp | null) => {
-    const raw = record[key];
-    if (raw === undefined) return undefined;
-    if (!Array.isArray(raw))
-      throw new Error(`${where}: ${key} must be an array of names.`);
-    return raw.map((name) => {
-      if (
-        typeof name !== "string" ||
-        (valid ? !valid.test(name) : !isWorkSourceName(name))
-      )
+  app: boolean,
+): { collections?: string[] } {
+  if (record.workflows !== undefined)
+    throw new Error(`${where}: ${ACCESS_HELP}.`);
+  const raw = record.collections;
+  if (raw === undefined) return {};
+  if (!app) throw new Error(`${where}: ${ACCESS_HELP}.`);
+  if (!Array.isArray(raw))
+    throw new Error(`${where}: collections must be an array of names.`);
+  return {
+    collections: raw.map((name) => {
+      if (typeof name !== "string" || !isWorkSourceName(name))
         throw new Error(
-          key === "collections"
-            ? `${where}: collections name Work's lists without work: (chats, files, ...).`
-            : `${where}: workflows name the project's workflows.`,
+          `${where}: collections name Work's lists without work: (chats, files, ...).`,
         );
       return name;
-    });
-  };
-  const collections = list("collections", null);
-  const workflows = list("workflows", WORKFLOW_NAME);
-  if (collections && !module && !app)
-    throw new Error(
-      `${where}: only apps and modules take a collections grant.`,
-    );
-  if (workflows && !module)
-    throw new Error(`${where}: only modules take a workflows grant.`);
-  return {
-    ...(collections ? { collections } : {}),
-    ...(workflows ? { workflows } : {}),
+    }),
   };
 }
 
@@ -408,8 +395,7 @@ function sanitizeSection(
     raw.presentation !== "tiles"
   )
     throw new Error(`${where}: presentation is "rows" or "tiles".`);
-  const module = source !== undefined && !name;
-  const grants = sanitizeGrants(raw, where, module, raw.app !== undefined);
+  const grants = sanitizeGrants(raw, where, raw.app !== undefined);
   return [
     {
       id: raw.id,
@@ -537,51 +523,29 @@ function sanitize(raw: unknown): WorkspaceConfig {
 
 /**
  * chips (ADR 0239): Work's own list, or a module that reads it and returns
- * the chats' chips, with the grants a section's module takes.
+ * the chats' chips; what it reaches is declared beside it (ADR 0277).
  */
 function sanitizeChips(raw: unknown): ChipsConfig | undefined {
   if (raw === undefined) return undefined;
   if (!isRecord(raw))
     throw new Error('chips must be { source: "work:chips" } or a module.');
   const where = "chips";
-  const extra = Object.keys(raw).filter(
-    (key) => !["source", "collections", "workflows"].includes(key),
-  );
+  if (raw.collections !== undefined || raw.workflows !== undefined)
+    throw new Error(
+      `${where}: ${ACCESS_HELP}; a chips module's lists are ["${CHIPS_OWNER_ID}"].`,
+    );
+  const extra = Object.keys(raw).filter((key) => key !== "source");
   if (extra.length)
     throw new Error(
-      `${where}: unknown keys ${extra.join(", ")}; chips take source, collections and workflows.`,
+      `${where}: unknown keys ${extra.join(", ")}; chips take source.`,
     );
-  if (raw.source === WORK_CHIPS_SOURCE) {
-    if (raw.collections !== undefined || raw.workflows !== undefined)
-      throw new Error(`${where}: only a chips module takes grants.`);
-    return { source: WORK_CHIPS_SOURCE };
-  }
+  if (raw.source === WORK_CHIPS_SOURCE) return { source: WORK_CHIPS_SOURCE };
   const source = sanitizeSourceName(raw.source, where);
   if (source.startsWith("work:"))
     throw new Error(
       `${where}: source is "${WORK_CHIPS_SOURCE}" or a module path; Work's other lists are not chips.`,
     );
-  const collections = raw.collections;
-  if (
-    collections !== undefined &&
-    (!Array.isArray(collections) ||
-      collections.some((name) => name !== CHIPS_OWNER_ID))
-  )
-    throw new Error(
-      `${where}: a chips module reads its chat's chips only: collections: ["${CHIPS_OWNER_ID}"].`,
-    );
-  const { workflows } = sanitizeGrants(
-    { workflows: raw.workflows },
-    where,
-    true,
-  );
-  return {
-    source,
-    ...(Array.isArray(collections) && collections.length
-      ? { collections: [CHIPS_OWNER_ID] }
-      : {}),
-    ...(workflows ? { workflows } : {}),
-  };
+  return { source };
 }
 
 /**
@@ -679,7 +643,7 @@ function sanitizePaletteModes({
       throw new Error(
         `${where}: topLevel rows must be loaded once; use search "palette".`,
       );
-    const grants = sanitizeGrants(mode, where, source !== undefined && !listed);
+    sanitizeGrants(mode, where, false);
     let when: SidebarWhen | undefined;
     if (mode.when !== undefined) {
       if (
@@ -704,7 +668,6 @@ function sanitizePaletteModes({
       source,
       section: section?.id,
       items,
-      ...grants,
       search: mode.search === "source" ? "source" : "palette",
       topLevel: mode.topLevel === true,
       when,

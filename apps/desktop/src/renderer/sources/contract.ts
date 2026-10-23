@@ -1,4 +1,5 @@
 import type { CollectionChange, CollectionPage } from "@catamorphic/app";
+import type { ModuleAccessRequest } from "../../shared/code-access.js";
 import type { SidebarSourceEffect } from "../../shared/sidebar.js";
 import type {
   SidebarDropPayload,
@@ -20,9 +21,21 @@ export interface SourceRequest {
   signal: AbortSignal;
 }
 
+/**
+ * A module that wants more than the person allowed (ADR 0277): it is not
+ * running, and its views show Work's request in place of rows.
+ */
+export interface SourceAccess {
+  request: ModuleAccessRequest;
+  /** The person allows what they were shown; views read again after. */
+  allow: () => Promise<void>;
+}
+
 export interface SectionSource {
   /** The heading a section shows when its layout gives none. */
   title: string;
+  /** What the module asks before it runs, since its last read; else null. */
+  access?: () => SourceAccess | null;
   /** The sentence an empty section shows when its layout gives none. */
   empty: string;
   load: (

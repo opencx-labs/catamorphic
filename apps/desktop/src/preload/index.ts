@@ -2,6 +2,8 @@ import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
 import type { ResourceSnapshot } from "../shared/resources.js";
+import type { TrustedHosts } from "../shared/trusted-hosts.js";
+import type { WindowImageRequest } from "../shared/window-images.js";
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -1142,6 +1144,8 @@ const api = {
     url: string;
     faviconUrl: string;
   }): Promise<void> => invoke("catamorphic:browser-history-favicon", input),
+  windowImage: (input: WindowImageRequest): Promise<string | null> =>
+    invoke("catamorphic:window-image", input),
   browserSuggest: (input: {
     profileId: string;
     query: string;
@@ -1578,6 +1582,17 @@ const api = {
 
   sidebarSourceRequest: (input: SidebarSourceRequest): Promise<unknown> =>
     invoke("catamorphic:sidebar-source-request", input),
+  sidebarSourceAllow: (input: {
+    projectId: string;
+    sectionId: string;
+    fingerprint: string;
+  }): Promise<void> => invoke("catamorphic:sidebar-source-allow", input),
+  appAccessApproved: (input: {
+    projectId: string;
+    app: string;
+  }): Promise<boolean> => invoke("catamorphic:app-access-approved", input),
+  appAccessAllow: (input: { projectId: string; app: string }): Promise<void> =>
+    invoke("catamorphic:app-access-allow", input),
   sidebarSourceCancel: (id: string): Promise<void> =>
     invoke("catamorphic:sidebar-source-cancel", id),
   sidebarSourceSubscribe: (input: {
@@ -1587,6 +1602,18 @@ const api = {
   }): Promise<void> => invoke("catamorphic:sidebar-source-subscribe", input),
   sidebarSourceUnsubscribe: (id: string): Promise<void> =>
     invoke("catamorphic:sidebar-source-unsubscribe", id),
+  trustedHosts: (projectId?: string): Promise<TrustedHosts> =>
+    invoke("catamorphic:trusted-hosts", projectId),
+  trustHost: (host: string): Promise<void> =>
+    invoke("catamorphic:trusted-hosts-add", host),
+  untrustHost: (host: string): Promise<void> =>
+    invoke("catamorphic:trusted-hosts-remove", host),
+  onTrustedHostsChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:trusted-hosts-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:trusted-hosts-changed", handler);
+  },
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => {

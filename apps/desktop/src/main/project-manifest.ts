@@ -6,6 +6,7 @@ import {
   type ProjectExperienceContext,
   sanitizeProjectExperienceWhen,
 } from "../shared/project-experience.js";
+import { trustedHostEntry } from "../shared/trusted-hosts.js";
 
 /**
  * The project manifest (`.work/project.json`) is the committed home
@@ -90,6 +91,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function projectAllowsIncognito(rootPath: string): boolean {
   return readManifest(rootPath).allowIncognito !== false;
+}
+
+/**
+ * The hosts this project trusts in its chats (ADR 0277): `"trustedHosts":
+ * ["docs.acme.com", "*.acme.dev"]`, committed, so everyone who works in it
+ * opens their links and sees their images without asking. Entries that are
+ * not a host are left out.
+ */
+export function projectTrustedHosts(rootPath: string): string[] {
+  const value = readManifest(rootPath).trustedHosts;
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.flatMap((entry) => {
+        const host = typeof entry === "string" ? trustedHostEntry(entry) : null;
+        return host ? [host] : [];
+      }),
+    ),
+  ].slice(0, 200);
 }
 
 /** The committed default agent's slug, when the manifest declares one. */

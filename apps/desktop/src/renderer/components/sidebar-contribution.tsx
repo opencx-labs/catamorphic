@@ -14,13 +14,16 @@ import type {
   SidebarSurface,
 } from "../../shared/sidebar.js";
 import type { SidebarSourceSession } from "../../shared/sidebar-source.js";
+import type { SourceAccess } from "../sources/contract.js";
 
 export type SidebarContentState =
   | "loading"
   | "empty"
   | "ready"
   | "error"
-  | "unavailable";
+  | "unavailable"
+  /** Its module wants more than the person allowed (ADR 0277). */
+  | "access";
 /**
  * What a section reports; the section chrome draws every status the same way.
  * Sections render rows and nothing else: no loading text, no empty copy, no
@@ -44,6 +47,8 @@ export interface SidebarStatus {
    * sentence as the place to drop, so the chrome draws none.
    */
   droppable?: boolean;
+  /** What its module asks before it runs, with state "access". */
+  access?: SourceAccess;
 }
 export interface SidebarContributionContext {
   section: SidebarSectionConfig;
@@ -94,7 +99,10 @@ export function useSidebarContent(input: SidebarContentState | SidebarStatus) {
     error,
     empty,
     droppable = false,
+    access,
   } = status;
+  const asking = access?.request.fingerprint;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the request's fingerprint names it; a new object for the same request is not a change.
   useEffect(() => {
     report?.({
       state,
@@ -103,9 +111,10 @@ export function useSidebarContent(input: SidebarContentState | SidebarStatus) {
       error,
       empty,
       droppable,
+      ...(access ? { access } : {}),
       retry: () => retry.current?.(),
     });
-  }, [report, state, refreshing, idle, error, empty, droppable]);
+  }, [report, state, refreshing, idle, error, empty, droppable, asking]);
 }
 
 export function sidebarItemPresentation({

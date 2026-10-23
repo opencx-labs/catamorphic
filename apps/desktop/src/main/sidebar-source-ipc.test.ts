@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ app: {}, ipcMain: {} }));
 const { parseWorkCall } = await import("./sidebar-source-ipc.js");
 
-describe("a module's requests of Work (ADR 0234)", () => {
-  const grants = { collections: ["tabs"], workflows: ["listTickets"] };
+describe("a module's requests of Work (ADR 0234, 0272)", () => {
+  const grants = { lists: ["tabs"], workflows: ["listTickets"] };
 
-  it("allows what its section grants", () => {
+  it("allows what its access declares", () => {
     expect(parseWorkCall({ op: "read", source: "tabs" }, grants)).toEqual({
       op: "read",
       source: "tabs",
@@ -25,25 +25,39 @@ describe("a module's requests of Work (ADR 0234)", () => {
     ).toEqual({ op: "call", workflow: "listTickets", input: { mine: true } });
   });
 
-  it("refuses lists and workflows the section does not grant", () => {
+  it("refuses lists and workflows its access does not declare", () => {
     expect(() =>
       parseWorkCall({ op: "read", source: "chats" }, grants),
-    ).toThrow("add it to collections");
+    ).toThrow("add it to lists in catamorphic.access");
     expect(() =>
       parseWorkCall(
         { op: "execute", source: "chats", itemId: "s1", action: "archive" },
         grants,
       ),
-    ).toThrow("add it to collections");
+    ).toThrow("add it to lists in catamorphic.access");
     expect(() =>
       parseWorkCall({ op: "call", workflow: "deleteEverything" }, grants),
-    ).toThrow("add it to workflows");
+    ).toThrow("add it to workflows in catamorphic.access");
+    expect(() => parseWorkCall({ op: "read", source: "tabs" }, {})).toThrow(
+      "does not include",
+    );
+  });
+
+  it("lets a chips module read its chat's chips only", () => {
+    expect(
+      parseWorkCall(
+        { op: "read", source: "chips" },
+        { lists: ["chips"] },
+        "chips",
+      ),
+    ).toEqual({ op: "read", source: "chips" });
     expect(() =>
       parseWorkCall(
-        { op: "read", source: "tabs" },
-        { collections: [], workflows: [] },
+        { op: "read", source: "chats" },
+        { lists: ["chats", "chips"] },
+        "chips",
       ),
-    ).toThrow("does not grant");
+    ).toThrow("chips only");
   });
 
   it("refuses what is not a request at all", () => {

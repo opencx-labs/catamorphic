@@ -611,9 +611,19 @@ In the Work desktop app, a project may ship a shared
 condition must match, invalid conditions fail closed, and omitted configuration
 leaves no empty UI behind.
 
+Links and images an agent writes in a chat reach only hosts the chat
+trusts without the person's answer: an image from another host waits to be
+shown, and a link to one asks before it opens. Work trusts GitHub's hosts,
+Wikimedia, MDN and this machine. A project that links to its own docs or
+serves images from its own hosts lists them under \`trustedHosts\` (a host,
+or \`*.host\` for its subdomains), committed, so everyone who works in it
+opens them without asking; list only hosts the team runs or that nobody else
+can read requests to.
+
 \`\`\`jsonc
 // .work/project.json
 {
+  "trustedHosts": ["docs.acme.com", "*.acme-cdn.net"],
   "startingActions": [
     {
       "label": "Review onboarding",

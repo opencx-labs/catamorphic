@@ -48,10 +48,10 @@ sidebar's own, while the list scrolls, and widens that sidebar's outer padding b
 8px to hold it; off by default), rowHeight, open (default open
 mode: replace, tab, side, floating), when, headerActions, menu, contextMenu,
 actions, itemDefaults and itemOverrides (presentation for every row, or by row
-id). Grants: collections (Work lists an app or module may read) and workflows
-(workflows a module may call).
+id). Grants: collections (Work lists an app widget may read). A module declares
+what it reaches beside it, never in the layout (Source modules, below).
 
-Work's lists (bare names in grants and work.read; work:<name> in source):
+Work's lists (bare names in access lists, app grants and work.read; work:<name> in source):
 - pinned: pages pinned across this profile's projects (pin, unpin, edit,
   remove, rename-folder; drop and drag to reorder). The default draws it as
   tiles with no title.
@@ -110,7 +110,7 @@ Other conditions: pathPrefix, selection (boolean), tabPlacement ("top" or
 "sidebar", where the person placed the window's tabs), permissions. Surface
 kinds include chat, editor, browser, terminal, workflow, app and diff. Tabs
 leave the top bar only while a sidebar section lists them (work:tabs, or a
-module granted tabs); otherwise they stay on top whatever the setting says.
+module whose access lists tabs); otherwise they stay on top whatever the setting says.
 An invalid when (surface: "chat" instead of ["chat"], an unknown
 tabPlacement) hides its tab, section or item without an error: after editing,
 check that it appears.
@@ -186,9 +186,34 @@ put a section that names one in a project layer, beside the module (the shared
 .work/workspace.js with the module committed, or the personal project file);
 in the profile file it shows an error in every project without that file.
 { load, subscribe?, action?, move?, drop?, reveal? }. It runs in a lazy Bun
-process, cwd the project root, with full filesystem, fetch, subprocess and npm
-access and Work's Bun first on PATH. Local projects only; connected projects
-keep apps. Every handler receives { projectRoot, signal, work, session? }.
+process, cwd the project root, with its npm packages and Work's Bun first on
+PATH, confined to what it declares: it reads the project folder and reaches
+nothing else unless the nearest package.json from its folder up to the project
+root declares it under catamorphic.access:
+{ "name": "linear", "private": true, "catamorphic": { "access": {
+  "lists": ["tabs"], "workflows": ["listTickets"],
+  "hosts": ["api.linear.app", "*.example.com", "localhost:11434"],
+  "reads": ["~/notes"], "writes": ["todos.json"] } } }
+lists: Work's lists it reads and acts on (work.read, work.execute). workflows:
+project workflows it calls (work.call). hosts: the only addresses fetch reaches
+(a name, *.name for its subdomains, name:port; no scheme; without a port, 80
+and 443). reads: files or folders outside the project it reads (from / or ~/).
+writes: files or folders it changes (in the project unless from / or ~/), so a
+module that saves todos.json declares it, and its temporary file too. A module
+directly in .work/ shares .work/package.json's declaration; give a module that
+reaches something of its own a folder with its own package.json
+(.work/linear/index.ts beside .work/linear/package.json).
+Its process gets nothing of Work's environment (no keys from the person's
+shell; HOME and TMPDIR are its own), no DNS or sockets but a proxy to the
+declared hosts, and no clipboard, keychain or other apps, so command-line tools
+that read the home folder (gh, aws) fail inside it: use a workflow for anything
+behind a credential. Before a module that declares anything runs, its section
+asks the person in Work's own words, and asks again whenever the declaration
+grows, naming only what is new; equal or narrower access runs at once, however
+the code changed. A module with no declaration runs without asking. Work
+confines modules on macOS; elsewhere they do not run yet. Local projects only;
+connected projects keep apps. Every handler receives { projectRoot, signal,
+work, session? }.
 - load({parentId, cursor, query?}) returns { items, cursor? }: one parent's
   page, at most 1000 rows, ids unique and stable (never positions). Throw on
   failure; old rows stay and Retry shows. query is set only for a palette mode
@@ -209,33 +234,36 @@ keep apps. Every handler receives { projectRoot, signal, work, session? }.
 - reveal({url, after}) returns the row for something in front that no loaded
   page holds (shown past the loaded rows), or null.
 
-work is Work, as the section grants it:
+work is Work, as the module's access declares it:
 - work.read({source, parentId?, cursor?}) reads a page of one of Work's lists
   (bare name), in the same row shape, so you can filter, sort, group and pass
-  rows through; needs collections: ["<name>"]. A section that read a list reads
+  rows through; needs the list in its access lists. A section that read a list reads
   again whenever that list changes, so sorted rows follow live; rows that move
   slide to their new place.
 - work.execute({source, itemId, action, values?}) runs a row's action as its
-  menu would (archive a chat, close a tab); same grant.
+  menu would (archive a chat, close a tab); the same declaration.
 - work.call({workflow, input?}) runs a project workflow and returns its output;
-  needs workflows: ["<name>"]. This is how a module reaches secrets, company
+  needs it in its access workflows. This is how a module reaches secrets, company
   APIs through the gateway and brokered connections: the workflow holds them,
   under its own authorization and audit, and the module never does. A workflow
   that waits (a durable pause) is an error here.
 work answers while the module serves a load or an action (not in subscribe),
 eight calls at a time; waiting on Work does not count against the request's
 own 30 seconds.
-Modules never receive secrets or Work's server address. Committed project files
-run with the project's own authority: review a module before trusting it.
+Modules never receive secrets, Work's environment or its server address, and
+reach none of Work's own servers whatever they declare.
 
-Example: tabs in the sidebar, chats that need the person first, then working
-ones, the rest in strip order. In the project's layer (copied from the resolved layout), replace
-the Tabs section's source and grant tabs:
-{ id: "tabs", title: "Tabs", source: ".work/tabs.ts", collections: ["tabs"],
+Example: tabs in the sidebar, chats that need the person first, then working ones, the rest in
+strip order. In the project's layer (copied from the resolved layout), replace
+the Tabs section's source:
+{ id: "tabs", title: "Tabs", source: ".work/tabs/index.ts",
   when: { tabPlacement: "sidebar" },
   headerActions: [{ label: "New tab", action: "open", icon: "Plus",
     url: "command:new-tab" }] }
-.work/tabs.ts:
+.work/tabs/package.json:
+{ "name": "tabs", "private": true,
+  "catamorphic": { "access": { "lists": ["tabs"] } } }
+.work/tabs/index.ts:
 const rank = (row) =>
   row.signal === "attention" ? 0 : row.activity === "working" ? 1 : 2;
 export default {
@@ -255,9 +283,13 @@ reaches the tabs list through action. Omit move: a sorted list does not take
 manual order. When a chat starts working its row slides up.
 
 Example: a todo list over a file, with input and an inline action:
-{ id: "todos", source: ".work/todos.ts", title: "Todos",
+{ id: "todos", source: ".work/todos/index.ts", title: "Todos",
   headerActions: [{ label: "Add todo", action: "add", icon: "Plus",
     input: { title: "Add todo", fields: [{ name: "text", label: "Todo" }] } }] }
+.work/todos/package.json:
+{ "name": "todos", "private": true, "catamorphic": { "access": {
+  "writes": ["todos.json", "todos.json.tmp"] } } }
+.work/todos/index.ts:
 import { watch } from "node:fs";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
@@ -271,7 +303,8 @@ const read = async (root) => {
   }
 };
 const save = async (root, todos) => {
-  const temporary = file(root) + "." + crypto.randomUUID() + ".tmp";
+  // Work runs one action at a time, so one temporary name is enough.
+  const temporary = file(root) + ".tmp";
   await writeFile(temporary, JSON.stringify(todos, null, 2));
   await rename(temporary, file(root));
 };
@@ -321,9 +354,11 @@ Example: a company API behind the gateway, through a workflow. Write the
 workflow with writing-workflows (its steps hold the secret or brokered
 connection), save and deploy it (workflow-lifecycle), and have it return an
 array of plain records. Name it as work:workflows lists it (its row id):
-{ id: "tickets", title: "My tickets", source: ".work/tickets.ts",
-  workflows: ["listTickets"] }
-.work/tickets.ts:
+{ id: "tickets", title: "My tickets", source: ".work/tickets/index.ts" }
+.work/tickets/package.json:
+{ "name": "tickets", "private": true,
+  "catamorphic": { "access": { "workflows": ["listTickets"] } } }
+.work/tickets/index.ts:
 export default {
   async load({ work, parentId }) {
     if (parentId) return { items: [] };
@@ -334,8 +369,9 @@ export default {
   },
 };
 A call waits for the workflow to finish (up to 100 seconds); one that pauses
-is an error here. For an open HTTP API, fetch(url, { signal }) directly, check
-response.ok, and return the API's next cursor. Never put credentials in rows.
+is an error here. For an open HTTP API, declare its host in hosts and
+fetch(url, { signal }) directly, check response.ok, and return the API's next
+cursor. Never put credentials in rows.
 
 ## Chips
 
@@ -375,8 +411,9 @@ closes them), on recorded pull requests and on every attached chip (it takes
 them off the chat); other chips of Work's have no X.
 
 To rank, filter, group, restyle or add chips, write a module and name it:
-chips: { source: ".work/chips.ts", collections: ["chips"], workflows: [...] },
-in a project layer beside the module (the project's .work/workspace.js or the
+chips: { source: ".work/chips/index.ts" }, its package.json declaring
+"lists": ["chips"] (and the workflows it calls), in a project layer beside the
+module (the project's .work/workspace.js or the
 personal project file; in the profile file it would fail in every project
 without the module). It is a source module (below) with one
 list to read: work.read({ source: "chips", parentId? }) gives the chat's chips
@@ -389,7 +426,9 @@ last to fold). To group, give members parentId and add the group chip
 members may come in the same page or when load is asked for their parentId.
 Your own chips take your own actions, which reach action(). A chips module runs
 beside its chat, in whichever window shows it, so it reads no other Work list;
-call a workflow (its workflows grant) for anything behind a credential.
+call a workflow (declared in its workflows) for anything behind a credential.
+Until the person allows its declaration, Work's chips show with the request
+under them.
 Connected projects run no modules: their chats show Work's chips.
 
 Agents attach chips without code: the session metadata key chips is a list of
@@ -404,9 +443,11 @@ gives buttons.
 
 Example: pull requests first, then a wide chip per deploy the agent recorded
 under deploys, with a button that calls a workflow:
-chips: { source: ".work/chips.ts", collections: ["chips"],
-  workflows: ["redeploy"] }
-.work/chips.ts:
+chips: { source: ".work/chips/index.ts" }
+.work/chips/package.json:
+{ "name": "chips", "private": true, "catamorphic": { "access": {
+  "lists": ["chips"], "workflows": ["redeploy"] } } }
+.work/chips/index.ts:
 const rank = (chip) => (chip.data?.kind === "pull-request" ? 0 : 1);
 export default {
   async load({ work, parentId, session }) {
@@ -459,7 +500,8 @@ items) or items:
 { id: "todo", trigger: "todo", title: "Todos", section: "todos" }
 { id: "runbooks", trigger: "runbook", title: "Runbooks",
   items: [{ label: "Deploy", url: "https://wiki.example.com/deploy" }] }
-A module mode takes collections and workflows grants like a section. Lists of
+A module mode runs with its module's declared access, allowed once for the
+module wherever it shows (an unanswered request is the mode's one row). Lists of
 the chat in front (subsessions, session, when.session sections) have no chat in
 the palette and are refused. A mode id shares the section id namespace. trigger
 and aliases are 1 to 32 lowercase letters, digits or dashes, unique, and not a

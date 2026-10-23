@@ -1,18 +1,6 @@
 import { Plug, Puzzle } from "lucide-react";
 import { useState } from "react";
-
-/** The address's own favicon: a manual connection's best likeness. */
-function faviconFor(url: string | undefined): string | undefined {
-  if (!url) return undefined;
-  try {
-    const { protocol } = new URL(url);
-    return protocol === "https:"
-      ? new URL("/favicon.ico", url).href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
+import { useWindowImage } from "../lib/window-images";
 
 /** Catalog tiles: a rounded square the mark sits inside, app-icon style. */
 const TILES = {
@@ -21,11 +9,11 @@ const TILES = {
 } as const;
 
 /**
- * A connection's likeness: its registry icon (the spec's `icons` field;
- * only https/data urls reach here, validated server-side), else the
- * favicon of its https address. Without one, list sizes show a neutral
- * glyph (a plug for MCP servers, a puzzle piece for plugins) and catalog
- * tiles show the name's first letter.
+ * A connection's likeness: its registry icon (kept as data when it was
+ * installed, or listed by the catalog Work searched), else the icon its
+ * server's site showed in a tab, else a neutral glyph: a plug for MCP
+ * servers, a puzzle piece for plugins. The window fetches none of them
+ * itself (ADR 0277).
  */
 export function ConnectorIcon({
   iconUrl,
@@ -41,12 +29,14 @@ export function ConnectorIcon({
   kind?: "mcp" | "plugin";
   size?: "sm" | "md" | "lg" | "xl";
 }) {
-  const sources = [iconUrl, faviconFor(url)].filter(
-    (source): source is string => Boolean(source),
-  );
+  const registry = useWindowImage(iconUrl ? { url: iconUrl } : null);
+  const site = useWindowImage(url ? { site: { page: url } } : null);
   const [failed, setFailed] = useState<string[]>([]);
   const [loaded, setLoaded] = useState<string | null>(null);
-  const source = sources.find((candidate) => !failed.includes(candidate));
+  const source = [registry, site].find(
+    (candidate): candidate is string =>
+      Boolean(candidate) && !failed.includes(candidate ?? ""),
+  );
   if (size === "lg" || size === "xl") {
     const tile = TILES[size];
     const letter = name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?";

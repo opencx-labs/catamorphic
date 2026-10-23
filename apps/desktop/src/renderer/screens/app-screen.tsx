@@ -8,9 +8,9 @@ import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useRemoteProject } from "../components/project-authority-provider.js";
 import { type AppSummary, appsQuery } from "../lib/apps.js";
+import { desktopApi } from "../lib/desktop-api.js";
 import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { appHostTheme, useTheme } from "../lib/theme.js";
-import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 // Must match DESKTOP_TENANT_ID / DESKTOP_USER_ID injected by the embedded
 // server (src/main/server/boot.ts) for the single-tenant desktop identity.
@@ -56,13 +56,18 @@ export function AppScreen({
   const app = apps.data?.find((entry) => entry.name === appName);
   const sourceExists = app !== undefined;
   // An app that reads this profile's chats waits for a one-time answer
-  // before it mounts (ADR 0148). The answer is per project and app, and it
-  // is only known once the app list and the profile's answers have loaded:
-  // nothing mounts before then, so an unanswered app never runs early and
-  // an answered one never flashes the question.
-  const { prefs, loaded, update } = useAppPreferences();
-  const approvalKey = `${projectId}/${appName}`;
-  if (apps.isPending || (app?.access.sessions === "read" && !loaded)) {
+  // before it mounts (ADR 0148). The answer is per project and app, kept in
+  // main's signed record (ADR 0277), and only known once the app list and
+  // the answer have loaded: nothing mounts before then, so an unanswered
+  // app never runs early and an answered one never flashes the question.
+  const readsChats = app?.access.sessions === "read";
+  const approval = useQuery({
+    queryKey: ["app-access-approved", projectId, appName],
+    queryFn: () => desktopApi.appAccessApproved({ projectId, app: appName }),
+    enabled: readsChats,
+  });
+  const loaded = approval.isSuccess;
+  if (apps.isPending || (readsChats && !loaded)) {
     return (
       <div
         className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}
@@ -73,18 +78,16 @@ export function AppScreen({
       </div>
     );
   }
-  const needsConsent =
-    app?.access.sessions === "read" &&
-    !prefs.appAccessApprovals.includes(approvalKey);
+  const needsConsent = readsChats && approval.data !== true;
   if (needsConsent && app) {
     return (
       <AppAccessConsent
         app={app}
         compact={compact}
         onAllow={() =>
-          void update({
-            appAccessApprovals: [...prefs.appAccessApprovals, approvalKey],
-          })
+          void desktopApi
+            .appAccessAllow({ projectId, app: appName })
+            .then(() => approval.refetch())
         }
       />
     );
