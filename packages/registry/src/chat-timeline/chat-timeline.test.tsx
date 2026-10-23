@@ -47,6 +47,70 @@ describe("ChatTimeline queue editing", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
+  it("folds repeated agent reports into one expandable activity with its harness mark", async () => {
+    const from = {
+      kind: "agent" as const,
+      sessionId: "child",
+      agentId: "reviewer",
+    };
+    const turns = timelineOf({
+      turns: [turn("t1", 1)],
+      items: [
+        input("t1", "Review the change"),
+        inbound("p1", "t1", "First check passed", { from, dispatch: "steer" }),
+        toolCall("read", "t1"),
+        inbound("p2", "t1", "Second check passed", { from, dispatch: "steer" }),
+        inbound("attention", "t1", "Which release?", {
+          from,
+          dispatch: "steer",
+          attention: "required",
+        }),
+        reply("done", "t1", "Waiting for your choice"),
+      ],
+    });
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          timeline={turns}
+          resolveAgentName={() => "Reviewer"}
+          renderAgentIcon={(id) => <span data-agent-mark={id}>C</span>}
+        />,
+      ),
+    );
+    const reports = container.querySelectorAll('[data-step-kind="agent"]');
+    expect(reports).toHaveLength(1);
+    const report = reports[0];
+    expect(report?.textContent).toContain("Reviewer · 2 updates");
+    expect(
+      report?.querySelector('[data-agent-mark="reviewer"]'),
+    ).not.toBeNull();
+    const toggle = report?.querySelector("button");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => toggle?.click());
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      report?.querySelector('[data-testid="chat-step-detail"]')?.textContent,
+    ).toBe("First check passed\n\nSecond check passed");
+    expect(report?.querySelector("a")?.getAttribute("href")).toBe(
+      "session:child",
+    );
+    const visible = container.querySelectorAll(
+      '[data-testid="chat-inbound-message"]',
+    );
+    expect(visible).toHaveLength(1);
+    expect(visible[0]?.textContent).toContain("Which release?");
+    expect(visible[0]?.textContent).toContain("Attention requested");
+    await act(async () => toggle?.click());
+    await act(async () =>
+      root.render(<ChatTimeline timeline={turns} focusMessageId="p2" />),
+    );
+    const linked = container.querySelector('[data-message-id="p2"]');
+    expect(linked?.querySelector("button")?.getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(linked?.textContent).toContain("Second check passed");
+  });
+
   it("keeps the edit held when focus is lost without a destination", async () => {
     const holds: Array<string | null> = [];
     await act(async () => {

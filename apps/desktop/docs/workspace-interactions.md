@@ -85,7 +85,10 @@ Full-tab chats stay in the tab bar when another resource takes focus, with no do
 bubble; switching to or from one is as instant as switching pages. Floating and
 minimized chats have bubbles, and only they speak through the dock: the folded
 bubble shows their activity and what needs the person, while a chat in a tab says
-so on its tab. A normal link from a floating
+so on its tab. Maximizing a floating chat makes it a normal tab, removes its
+bubble, and keeps it visible when the dock collapses. Chat controls show their
+applicable shortcut on hover, using the configured binding; returning a tabbed
+chat to floating shows Escape. A normal link from a floating
 chat preserves that chat over the page; a floating resource preview minimizes it.
 Its bubble restores the same conversation and draft.
 

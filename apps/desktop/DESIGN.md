@@ -751,6 +751,25 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-23: Chat navigation uses configurable keys
+
+Remove the up/down buttons from the conversation. PageUp and PageDown move
+between the person's messages, then to the latest response. Holding the keys
+continues through the conversation. These are ordinary actions in Keyboard
+shortcuts, so people can change or disable either binding; they apply while
+focus is in a chat. The timeline exposes navigation actions to its host and
+owns no shortcut keys or visible navigation controls.
+
+### 2026-10-23: A local change does not restyle every chat
+
+Chat times and webhook copy buttons keep their hover and keyboard reveal,
+with focus selectors scoped to their own rows. The visible workspace carries
+the corner toggle's clearance for tabbed chats. Document-wide relational
+selectors made each small insertion or style change revisit long retained
+transcripts and stall opening and dismissing chats. Keep those queries local;
+the measurements and regression workload live in
+[Performance](docs/performance.md#local-changes-stay-local-2026-10-23).
+
 ### 2026-10-21: Tabs switch at once; a waiting chat shows what it waits on
 
 Switching to or from a chat tab played the floating chat's open and close
@@ -3676,9 +3695,8 @@ their chat and say so; a chat never goes inside another. The tree learned
 
 The Ask agent palette row names what the new chat will use: the harness mark,
 agent name, model name and reasoning effort. Incoming agent updates use that same
-harness identity. The two chat navigation arrows return to the lower right: up
-keeps moving through earlier messages while down offers the latest reply beside
-it. This restores the controls from before the centered, alternating arrow.
+harness identity. Message navigation uses the configurable PageUp and PageDown
+shortcuts described above, without buttons in the conversation.
 
 Retained editors contribute selected text only while visible. A selection left
 in another tab or project cannot become a pill in an unrelated new chat. Browser
@@ -3694,3 +3712,12 @@ the ways to open it, copying the full address. Ordinary host links use that
 same menu primitive with only the copy action. Inline URL and browser-tab pills,
 browser tabs, palette web rows and history rows pass their actual destinations
 to it. File links retain their file actions.
+
+### 2026-10-23: Subagent delivery and display are independent
+
+A child's reports reach its parent's working turn automatically, through the
+existing steer and acknowledgement path. Routine reports read as one expandable
+activity status per child, with the harness mark, all reports and a link to the
+source chat. They do not fill the person's conversation with delivery receipts.
+Failures, questions and explicit attention requests stay in the conversation.
+The person's messages keep steering immediately. See ADR 0278.

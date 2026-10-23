@@ -199,6 +199,24 @@ export const BUILTIN_ACTIONS = [
     keywords: ["chips", "focus", "keyboard", "pull request", "attached"],
   },
   {
+    id: "chat-previous-message",
+    label: "Previous message in chat",
+    icon: "ArrowUp",
+    description:
+      "move to the previous message you sent in the focused chat; hold to keep moving up",
+    defaultBinding: "PageUp",
+    keywords: ["chat", "message", "previous", "scroll", "history"],
+  },
+  {
+    id: "chat-next-message",
+    label: "Next message in chat",
+    icon: "ArrowDown",
+    description:
+      "move to the next message you sent in the focused chat, then the latest response; hold to keep moving down",
+    defaultBinding: "PageDown",
+    keywords: ["chat", "message", "next", "scroll", "latest"],
+  },
+  {
     id: "split-view",
     label: "Split with previous tab",
     icon: "Columns2",

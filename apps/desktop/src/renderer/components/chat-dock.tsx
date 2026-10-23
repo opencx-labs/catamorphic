@@ -114,6 +114,11 @@ import {
 } from "../lib/desktop-api";
 import { focusMovedByPerson, pointerLeft } from "../lib/dock-attention.js";
 import { readEditorSelection } from "../lib/editor-selection";
+import {
+  formatBinding,
+  matchesBinding,
+  useKeybindings,
+} from "../lib/keybindings.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { usePullRequestStatuses } from "../lib/pr-status.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
@@ -136,6 +141,7 @@ import { ApprovalCard } from "./catamorphic/approval-card.js";
 import { stepToolName } from "./catamorphic/chat-steps.js";
 import {
   answerSentHere,
+  type ChatMessageNavigation,
   ChatTimeline,
   type ChatTimelineProps,
 } from "./catamorphic/chat-timeline";
@@ -522,6 +528,7 @@ function ChatDockContent({
   registerSkill,
   registerComposerFocus,
   registerFocusChips,
+  registerMessageNavigation,
   onSessionCreated,
   onSessionAgent,
   onSignalsChange,
@@ -1195,9 +1202,17 @@ function ChatDockContent({
     return true;
   };
 
-  // PageUp jumps the timeline to your previous message (same action as
-  // the timeline's ↑ button); the timeline registers the scroll here.
-  const jumpToPreviousRef = useRef<(() => void) | null>(null);
+  const keybindings = useKeybindings();
+  const messageNavigation = useRef<ChatMessageNavigation | null>(null);
+  const navigationHost = useRef(registerMessageNavigation);
+  navigationHost.current = registerMessageNavigation;
+  const registerNavigation = useCallback(
+    (navigation: ChatMessageNavigation | null) => {
+      messageNavigation.current = navigation;
+      navigationHost.current?.(navigation);
+    },
+    [],
+  );
 
   // The agent roster drives composer capabilities (what media this agent
   // accepts), marker names, and the auth-error re-connect action.
@@ -2215,11 +2230,6 @@ function ChatDockContent({
       event.preventDefault();
       return;
     }
-    if (event.key === "PageUp") {
-      event.preventDefault();
-      jumpToPreviousRef.current?.();
-      return;
-    }
     if (
       event.key === "ArrowUp" &&
       !event.metaKey &&
@@ -2692,6 +2702,29 @@ function ChatDockContent({
     >
       <section
         ref={sectionRef}
+        onKeyDown={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.nativeEvent.isComposing ||
+            (event.target instanceof Element &&
+              event.target.closest(
+                '[role="dialog"], [role="menu"], [role="listbox"]',
+              ))
+          )
+            return;
+          const navigation = messageNavigation.current;
+          const move = matchesBinding(
+            event,
+            keybindings["chat-previous-message"],
+          )
+            ? navigation?.previous
+            : matchesBinding(event, keybindings["chat-next-message"])
+              ? navigation?.next
+              : undefined;
+          if (!move) return;
+          event.preventDefault();
+          move(event.repeat);
+        }}
         onMouseEnter={() => setDockHovered(true)}
         onMouseLeave={(event) => {
           // Only a pointer that actually went elsewhere ends the hover;
@@ -3073,7 +3106,10 @@ function ChatDockContent({
                 onOpenParent={onOpenParent}
               />
               {isTab && onUnsplit && (
-                <ShortcutHint label="Full width">
+                <ShortcutHint
+                  label="Full width"
+                  shortcut={formatBinding(keybindings["split-view"])}
+                >
                   <button
                     type="button"
                     className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
@@ -3086,6 +3122,9 @@ function ChatDockContent({
               )}
               <ShortcutHint
                 label={isTab ? "Pop out to floating chat" : "Open as tab"}
+                shortcut={
+                  isTab ? "Esc" : formatBinding(keybindings["chat-to-tab"])
+                }
               >
                 <button
                   type="button"
@@ -3104,6 +3143,9 @@ function ChatDockContent({
               </ShortcutHint>
               <ShortcutHint
                 label={isEmpty ? "Close chat" : "Minimize to bubble"}
+                shortcut={formatBinding(
+                  keybindings[isEmpty ? "close-tab" : "toggle-chat-minimized"],
+                )}
               >
                 <button
                   type="button"
@@ -3256,7 +3298,6 @@ function ChatDockContent({
               renderAttachment={sentPill}
               presentUserMessage={presentSkillMessage}
               Hint={ShortcutHint}
-              jumpShortcut="⇞"
               error={
                 chat.connectionLost
                   ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
@@ -3270,9 +3311,7 @@ function ChatDockContent({
               onFork={entry.sessionId ? onFork : undefined}
               onReadAloud={readAloud}
               readingAloud={readingAloud}
-              registerJumpToPreviousUserMessage={(jump) => {
-                jumpToPreviousRef.current = jump;
-              }}
+              registerMessageNavigation={registerNavigation}
             />
           </ResourceLinkBoundary>
           {/* The strip has room for one line: what the agent is doing now

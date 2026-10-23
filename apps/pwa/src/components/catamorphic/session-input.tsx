@@ -302,7 +302,13 @@ function TaskNotificationRow({
       label={latest.summary}
       meta={items.length > 1 ? `${items.length} times` : undefined}
       attention={items.some((item) => item.attention === "required")}
-      unread={items.some((item) => item.status === "in_progress")}
+      unread={
+        items.some((item) => item.status === "in_progress")
+          ? latest.dispatch === "message_only"
+            ? "For the next turn"
+            : "Waiting for agent"
+          : undefined
+      }
       detail={
         detail ? (
           <pre className="max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted">
@@ -381,7 +387,13 @@ export function InboundMessageRow({
       label={senderName(item.from, resolveAgentName)}
       preview={firstLine}
       attention={item.attention === "required"}
-      unread={item.status === "in_progress"}
+      unread={
+        item.status === "in_progress"
+          ? item.dispatch === "message_only"
+            ? "For the next turn"
+            : "Waiting for agent"
+          : undefined
+      }
       detail={
         <div className="flex flex-col gap-1.5">
           <div className="select-text whitespace-pre-wrap break-words text-xs leading-5 text-fg">
@@ -466,7 +478,7 @@ function InputRow({
   preview,
   meta,
   attention = false,
-  unread = false,
+  unread,
   detail,
   links,
   onOpen,
@@ -482,8 +494,8 @@ function InputRow({
   /** A quiet count or note at the end of the row. */
   meta?: string;
   attention?: boolean;
-  /** Delivered without waking the agent, and not read yet. */
-  unread?: boolean;
+  /** Where an input waits, until the harness acknowledges reading it. */
+  unread?: string;
   detail?: ReactNode;
   links: readonly { href: string; label: string }[];
   onOpen?: OpenLink;
@@ -511,9 +523,7 @@ function InputRow({
         </span>
       )}
       {unread && (
-        <span className="shrink-0 text-[11px] text-fg-faint">
-          For the next turn
-        </span>
+        <span className="shrink-0 text-[11px] text-fg-faint">{unread}</span>
       )}
       {meta && (
         <span className="shrink-0 text-[11px] text-fg-faint">{meta}</span>

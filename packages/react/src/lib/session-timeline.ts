@@ -32,11 +32,7 @@ import {
  */
 export type WorkItem = Exclude<
   Item,
-  | UserMessageItem
-  | InboundMessageItem
-  | AssistantMessageItem
-  | NoticeItem
-  | ContextHandoffItem
+  UserMessageItem | AssistantMessageItem | NoticeItem | ContextHandoffItem
 >;
 
 /**
@@ -143,6 +139,7 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
   // Items outside the loaded turns: deliveries and notices between turns,
   // and older pages whose turns the snapshot no longer carries.
   const others: { key: string; at: string; items: Item[] }[] = [];
+  let looseActivity: (typeof others)[number] | undefined;
   const unknownTurns = new Map<string, Item[]>();
   for (const item of state.items) {
     // A message answers in its request's place only once it shows: one
@@ -153,10 +150,12 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
     if (questionRequestId && !(itemTurn && hiddenTurn(itemTurn, starting)))
       answeredByMessage.add(questionRequestId);
     if (item.turnId && state.turns[item.turnId]) {
+      looseActivity = undefined;
       const list = turnItems.get(item.turnId);
       if (list) list.push(item);
       else turnItems.set(item.turnId, [item]);
     } else if (item.turnId) {
+      looseActivity = undefined;
       const list = unknownTurns.get(item.turnId);
       if (list) list.push(item);
       else {
@@ -164,7 +163,16 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
         unknownTurns.set(item.turnId, items);
         others.push({ key: item.turnId, at: item.createdAt, items });
       }
-    } else others.push({ key: item.id, at: item.createdAt, items: [item] });
+    } else if (isAgentActivity(item)) {
+      if (looseActivity) looseActivity.items.push(item);
+      else {
+        looseActivity = { key: item.id, at: item.createdAt, items: [item] };
+        others.push(looseActivity);
+      }
+    } else {
+      looseActivity = undefined;
+      others.push({ key: item.id, at: item.createdAt, items: [item] });
+    }
   }
   const context = { state, answeredByMessage };
   const turns = orderedTurns(state).filter(
@@ -329,12 +337,21 @@ function entriesOf(
         break;
       }
       case "inbound_message":
+        if (isAgentActivity(item)) {
+          steps.push(item);
+          break;
+        }
         flushSteps();
         entries.push({ kind: "inbound", item });
         break;
       case "task_notification": {
         // Reached the working turn: part of its work, like a tool's result.
-        if (item.dispatch === "steer") {
+        if (
+          item.dispatch === "steer" &&
+          item.attention !== "required" &&
+          item.task.status !== "failed" &&
+          item.task.status !== "needs_input"
+        ) {
           steps.push(item);
           break;
         }
@@ -377,6 +394,15 @@ function entriesOf(
   }
   flushSteps();
   return entries;
+}
+
+/** Routine agent reports are work, not messages addressed to the person. */
+function isAgentActivity(item: Item): item is InboundMessageItem {
+  return (
+    item.kind === "inbound_message" &&
+    item.from.kind === "agent" &&
+    item.attention !== "required"
+  );
 }
 
 function answerFromRequest(

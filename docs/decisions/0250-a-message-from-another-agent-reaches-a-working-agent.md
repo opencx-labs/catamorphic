@@ -1,6 +1,6 @@
 # 0250 — A message from another agent reaches a working agent
 
-- **Status:** Accepted (extends [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) to messages between agents)
+- **Status:** Accepted (extends [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) to messages between agents; parent delivery rule superseded by [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md))
 - **Date:** 2026-10-19
 
 ## Context

@@ -28,6 +28,24 @@ Logs, JUnit results, and Electron screenshots are retained under
 Delete old diagnostics when no longer needed. Missing Docker is an error;
 the runner never falls back to Electron on the developer's desktop.
 
+## Synchronizing fixtures
+
+Wait for the state a check measures rather than a fixed startup delay. Tests of
+lease deadlines and clock transitions advance a controlled clock after their
+operation has started; database and worker tests still exercise real storage
+and cleanup, including the capacity fence. Streaming checks use a gated fake
+upstream for first-byte delivery and a controlled stream for pull backpressure,
+so socket buffer sizes do not decide whether they pass.
+
+The slow-renderer motion test holds the fake agent's answer behind a private
+file gate until the renderer has sampled enough work frames. It keeps CPU
+throttling and the geometry assertions, and fails after a bounded wait if the
+renderer cannot produce those frames. The gate is removed on success or failure.
+Fade endpoints are captured from the actual CSS animation-end event, before
+React changes the text; the last animation frame before that event may have
+been missed. A voice shortcut tap queues its down and up edges together, so
+host round-trip latency cannot accidentally turn it into a hold.
+
 ## CI
 
 The same tests run across independent jobs:

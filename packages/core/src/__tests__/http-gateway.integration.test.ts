@@ -60,14 +60,23 @@ interface Seen {
 }
 const seen: Seen[] = [];
 /** Bytes the fake API has handed its socket for `/big`. */
-const big = { written: 0 };
+const big = { written: 0, resume: () => {} };
 
 function fakeApi(): http.Server {
   return http.createServer((request, response) => {
     if (request.url === "/big") {
       const chunk = Buffer.alloc(64 * 1024, 120);
       response.writeHead(200, { "content-type": "application/octet-stream" });
+      // The rest does not exist until the downstream reader sees the first
+      // chunk. Kernel and fetch buffers cannot determine this assertion.
+      const gate = new Promise<void>((resolve) => {
+        big.resume = resolve;
+      });
+      response.once("close", big.resume);
+      big.written += chunk.length;
+      response.write(chunk);
       const pump = () => {
+        if (response.destroyed) return;
         while (big.written < BIG_BYTES) {
           big.written += chunk.length;
           if (!response.write(chunk)) {
@@ -77,7 +86,7 @@ function fakeApi(): http.Server {
         }
         response.end();
       };
-      pump();
+      void gate.then(pump);
       return;
     }
     const parts: Buffer[] = [];
@@ -686,17 +695,63 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
     expect(response.status).toBe(200);
     if (response.body instanceof Uint8Array) throw new Error("Not streamed");
     const iterator = response.body[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    expect(first.done).toBe(false);
-    // The API waits on the reader: far less than the whole answer left it.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(big.written).toBeLessThan(BIG_BYTES / 2);
-    let total = first.value?.byteLength ?? 0;
-    for (;;) {
-      const next = await iterator.next();
-      if (next.done) break;
-      total += next.value.byteLength;
+    try {
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      expect(big.written).toBe(64 * 1024);
+      big.resume();
+      let total = first.value?.byteLength ?? 0;
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) break;
+        total += next.value.byteLength;
+      }
+      expect(total).toBe(BIG_BYTES);
+    } finally {
+      big.resume();
+      await iterator.return?.();
     }
-    expect(total).toBe(BIG_BYTES);
   }, 60_000);
+
+  it("pulls upstream only as the reader advances, and cancels when it stops", async () => {
+    const grant = await issue("logs");
+    let pulls = 0;
+    let cancelled = false;
+    const source = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls++;
+          controller.enqueue(new Uint8Array([pulls]));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const streamed = new HttpGatewayService({
+      store: dbHttpGatewayStore(db),
+      broker,
+      fetch: async () => new Response(source),
+    });
+    const response = await streamed.handle({
+      alias: "logs",
+      method: "GET",
+      path: "/big",
+      headers: bearer(grant),
+    });
+    if (response.body instanceof Uint8Array) throw new Error("Not streamed");
+    const iterator = response.body[Symbol.asyncIterator]();
+    try {
+      expect(pulls).toBe(0);
+      expect((await iterator.next()).value).toEqual(new Uint8Array([1]));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(pulls).toBe(1);
+      expect((await iterator.next()).value).toEqual(new Uint8Array([2]));
+      expect(pulls).toBe(2);
+    } finally {
+      await iterator.return?.();
+    }
+    expect(cancelled).toBe(true);
+  });
 });

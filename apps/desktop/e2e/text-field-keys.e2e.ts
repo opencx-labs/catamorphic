@@ -1,6 +1,7 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import { pressNativeMacKey } from "./native-pointer.js";
 
 /**
  * Cmd+Left and Cmd+Right go back and forward in a browser tab, but a text
@@ -59,6 +60,12 @@ const windowKey = (key: string, focus: string) =>
  */
 const pageKey = async (keyCode: string, shift = false) => {
   await focusWindow(app);
+  // macOS editing accelerators run through AppKit's menu. Injecting a
+  // Chromium key event alone does not exercise that native edit command.
+  if (mac && keyCode === "V") {
+    await app.eval(`${view}.focus(); true`);
+    return pressNativeMacKey("v", shift ? ["command", "shift"] : ["command"]);
+  }
   return app.eval(`(() => {
     const page = ${view};
     page.focus();
@@ -234,16 +241,22 @@ it("delivers Cmd+Enter to a page and its embedded frame instead of claiming a re
 });
 
 it("pastes without formatting with Cmd+Shift+V in a page, a frame and Work's fields", async () => {
-  await inGuest(`(() => {
+  expect(
+    await inGuest(`(() => {
     const range = document.createRange(); range.selectNode(document.getElementById('copy-source'));
     getSelection().removeAllRanges(); getSelection().addRange(range);
     return document.execCommand('copy');
-  })()`);
+  })()`),
+  ).toBe(true);
   // First prove this is a rich clipboard, rather than an already plain one.
   await inGuest(`document.getElementById('rich').focus(); true`);
   await pageKey("V");
   await app.waitFor(
-    `${view}.executeJavaScript("!!document.querySelector('#rich b')")`,
+    `${view}.executeJavaScript(${JSON.stringify(`(() => {
+      const field = document.getElementById('rich');
+      return field.textContent === 'Rich clipboard text' &&
+        [...field.querySelectorAll('*')].some(node => Number(getComputedStyle(node).fontWeight) >= 600);
+    })()`)})`,
     {
       label: "ordinary paste keeps formatting",
     },
@@ -270,14 +283,16 @@ it("pastes without formatting with Cmd+Shift+V in a page, a frame and Work's fie
     document.querySelector('[data-workspace-ready]').append(field); field.focus();
   })()`);
   await focusWindow(app);
-  for (const type of ["keyDown", "keyUp"])
-    await app.cdp("Input.dispatchKeyEvent", {
-      type,
-      key: "V",
-      code: "KeyV",
-      windowsVirtualKeyCode: 86,
-      modifiers: (mac ? 4 : 2) | 8,
-    });
+  if (mac) await pressNativeMacKey("v", ["command", "shift"]);
+  else
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "V",
+        code: "KeyV",
+        windowsVirtualKeyCode: 86,
+        modifiers: 2 | 8,
+      });
   await app.waitFor(
     `(() => {
     const field = document.getElementById('plain-paste-probe');
@@ -287,4 +302,25 @@ it("pastes without formatting with Cmd+Shift+V in a page, a frame and Work's fie
   );
   await app.eval(`document.getElementById('plain-paste-probe').remove()`);
   expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("leaves PageUp and PageDown with browser pages", async () => {
+  await inGuest(`(() => {
+    window.__pageKeys = [];
+    document.addEventListener('keydown', event => {
+      if (event.key === 'PageUp' || event.key === 'PageDown') window.__pageKeys.push(event.key);
+    });
+    document.getElementById('field').focus();
+    return true;
+  })()`);
+  await focusWindow(app);
+  await app.eval(`(() => {
+    const page = ${view}; page.focus();
+    for (const keyCode of ['PageUp', 'PageDown'])
+      for (const type of ['keyDown', 'keyUp']) page.sendInputEvent({ type, keyCode });
+    return true;
+  })()`);
+  await app.waitFor(
+    `${view}.executeJavaScript("JSON.stringify(window.__pageKeys) === JSON.stringify(['PageUp','PageDown'])")`,
+  );
 });

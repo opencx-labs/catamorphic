@@ -143,8 +143,16 @@ const recordPhases = () =>
  * DevTools never take.
  */
 async function tapTalkKeys() {
-  await holdTalkKeys("keyDown");
-  await holdTalkKeys("keyUp");
+  const cmd = process.platform === "darwin" ? "meta" : "control";
+  // Queue both edges in one renderer call. A round trip between them can
+  // exceed TAP_MS on a busy native runner and turn this tap into a hold.
+  await app.eval(`(() => {
+    const view = document.querySelector('webview');
+    view.focus();
+    for (const type of ['keyDown', 'keyUp'])
+      view.sendInputEvent({ type, keyCode: 'Space', modifiers: ['${cmd}', 'shift'] });
+    return true;
+  })()`);
 }
 
 /**

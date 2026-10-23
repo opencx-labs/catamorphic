@@ -115,6 +115,8 @@ export function DockHost({
         skill?: (message: string) => void;
         focusComposer?: () => void;
         focusChips?: () => boolean;
+        previousMessage?: (repeat?: boolean) => void;
+        nextMessage?: (repeat?: boolean) => void;
       }
     >(),
   );
@@ -266,6 +268,9 @@ export function DockHost({
         else if (event.action === "minimize") action?.minimize?.();
         else if (event.action === "focusChips") action?.focusChips?.();
         else if (event.action === "focusComposer") action?.focusComposer?.();
+        else if (event.action === "previousMessage")
+          action?.previousMessage?.();
+        else if (event.action === "nextMessage") action?.nextMessage?.();
       }),
     [],
   );
@@ -864,6 +869,8 @@ export function DockHost({
           skill?: (message: string) => void;
           focusComposer?: () => void;
           focusChips?: () => boolean;
+          previousMessage?: (repeat?: boolean) => void;
+          nextMessage?: (repeat?: boolean) => void;
         }) =>
           actions.current.set(entry.localId, {
             ...actions.current.get(entry.localId),
@@ -970,6 +977,12 @@ export function DockHost({
                   register({ focusComposer })
                 }
                 registerFocusChips={(focusChips) => register({ focusChips })}
+                registerMessageNavigation={(navigation) =>
+                  register({
+                    previousMessage: navigation?.previous,
+                    nextMessage: navigation?.next,
+                  })
+                }
                 onCustomizeChips={() =>
                   invoke(chat, { kind: "customizeChips" })
                 }
@@ -1135,7 +1148,7 @@ export function DockHost({
                 void desktopApi.dockNewChat();
               }}
               onCollapse={() => {
-                if (active)
+                if (active?.entry.mode === "partial")
                   actions.current.get(active.entry.localId)?.minimize?.();
               }}
             />

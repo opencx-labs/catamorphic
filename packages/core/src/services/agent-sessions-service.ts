@@ -2430,7 +2430,7 @@ export class AgentSessionsService {
    * otherwise joins the one turn waiting for notifications, so they never
    * stack up. A `message_only` input waits, `in_progress`, for the next turn
    * to take it in, unless it is only for people to read (`forAgent: false`).
-   * A subagent's queued message to its own parent steers (ADR 0250).
+   * A subagent's message joins its working parent without stopping it (ADR 0278).
    * Idempotent by `idempotencyKey`. The session row must be locked by the
    * caller.
    */
@@ -2505,12 +2505,11 @@ export class AgentSessionsService {
           const runner = row?.runner as { ownerOnly?: boolean } | null;
           return runner !== null && runner !== undefined && !runner.ownerOnly;
         }));
-    // A subagent's message to its own parent reaches the parent's working
-    // turn at its next step (ADR 0250), whichever of queue or steer it
-    // chose: queued behind a turn that waits on the subagent, each would
-    // wait on the other.
-    const requested: DispatchMode =
-      delivery.dispatch === "queue" &&
+    // A child's context is work its parent is coordinating (ADR 0278):
+    // deliver it during that work, never hold it for another turn or stop
+    // the current one. Context-only messages still wake nothing when idle.
+    const fromChild =
+      delivery.forAgent !== false &&
       input.kind === "inbound_message" &&
       input.from.kind === "agent" &&
       (await trx
@@ -2518,7 +2517,11 @@ export class AgentSessionsService {
         .select("id")
         .where("id", "=", input.from.sessionId)
         .where("parent_session_id", "=", sessionId)
-        .executeTakeFirst()) !== undefined
+        .executeTakeFirst()) !== undefined;
+    const requested: DispatchMode =
+      fromChild &&
+      ((active !== undefined && active.status !== "finalizing") ||
+        delivery.dispatch === "queue")
         ? "steer"
         : delivery.dispatch;
     // A person's message while the turn waits on a question joins that

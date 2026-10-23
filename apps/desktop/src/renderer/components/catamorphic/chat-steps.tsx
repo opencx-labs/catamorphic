@@ -7,6 +7,7 @@ import type {
   Turn,
   WorkItem,
 } from "@catamorphic/react";
+import { messageWithAttachmentNames } from "@catamorphic/react";
 import {
   Bell,
   Bot,
@@ -37,6 +38,8 @@ import {
   hrefOf,
   type InputLinkModifiers,
   type SourceHref,
+  senderName,
+  senderSource,
   sourceLabel,
   taskIcon,
   taskTone,
@@ -164,13 +167,18 @@ export interface TurnStep {
     | "reasoning"
     | "plan"
     | "request"
-    | "notification";
+    | "notification"
+    | "agent";
+  /** Agent activity uses the same harness mark as its chat. */
+  agentId?: string | null;
   /** Its own glyph and color (a task notification's), instead of the kind's. */
   icon?: { Icon: LucideIcon; className: string };
   /** Where its expanded detail links to: a notification's task. */
   link?: { href: string; label: string };
   /** A folded note's message id, so focus and deep links still find it. */
   messageId?: string;
+  /** A deep link names an input folded into this status. */
+  focused?: boolean;
   /** Notes expand to rendered Markdown instead of a preformatted payload. */
   markdown?: boolean;
   /** Row header: the technical detail lives here, not on the live line. */
@@ -215,6 +223,7 @@ const STEP_ICONS = {
   plan: ListChecks,
   request: MessageCircleQuestionMark,
   notification: Bell,
+  agent: Bot,
 } as const;
 
 /**
@@ -613,6 +622,8 @@ export function turnStepsOf(
   context: {
     requests: Readonly<Record<string, RuntimeRequest>>;
     sourceHref?: SourceHref;
+    resolveAgentName?: (agentId: string) => string | undefined;
+    focusMessageId?: string;
   },
 ): TurnStep[] {
   const nested = new Map<string, WorkItem[]>();
@@ -623,6 +634,7 @@ export function turnStepsOf(
     nested.set(source.item.parentItemId, list);
   }
   const steps: TurnStep[] = [];
+  const reports = new Map<string, { step: TurnStep; count: number }>();
   for (const source of sources) {
     if (source.kind === "note") {
       steps.push(noteStep(source.item));
@@ -632,9 +644,38 @@ export function turnStepsOf(
     const step = stepOf(source.item, {
       requests: context.requests,
       sourceHref: context.sourceHref,
+      resolveAgentName: context.resolveAgentName,
       nested: nested.get(source.item.id) ?? [],
     });
-    if (step) steps.push(step);
+    if (!step) continue;
+    if (source.item.id === context.focusMessageId) {
+      step.messageId = source.item.id;
+      step.focused = true;
+    }
+    if (step.kind !== "agent") {
+      steps.push(step);
+      continue;
+    }
+    // One status per source chat. Its reports remain in the disclosure,
+    // without adding a conversation row whenever the child sends news.
+    const earlier = reports.get(step.key);
+    if (!earlier) {
+      reports.set(step.key, { step, count: 1 });
+      steps.push(step);
+    } else {
+      earlier.count += 1;
+      earlier.step.label = `${step.label} · ${earlier.count} updates`;
+      earlier.step.detail = [earlier.step.detail, step.detail]
+        .filter(Boolean)
+        .join("\n\n");
+      earlier.step.status = step.status;
+      earlier.step.agentId ??= step.agentId;
+      earlier.step.icon = step.icon;
+      if (step.focused) {
+        earlier.step.messageId = step.messageId;
+        earlier.step.focused = true;
+      }
+    }
   }
   return steps;
 }
@@ -644,12 +685,30 @@ function stepOf(
   context: {
     requests: Readonly<Record<string, RuntimeRequest>>;
     sourceHref?: SourceHref;
+    resolveAgentName?: (agentId: string) => string | undefined;
     nested: WorkItem[];
   },
 ): TurnStep | undefined {
   const timing = itemTiming(item);
   const key = item.id;
   switch (item.kind) {
+    case "inbound_message": {
+      const source = senderSource(item.from);
+      const href = source ? hrefOf(source, context.sourceHref) : null;
+      return {
+        key:
+          item.from.kind === "agent" ? `agent:${item.from.sessionId}` : item.id,
+        kind: "agent",
+        agentId: item.from.kind === "agent" ? item.from.agentId : null,
+        label: senderName(item.from, context.resolveAgentName),
+        detail: messageWithAttachmentNames(item.text, item.attachments),
+        status: item.status,
+        finished: true,
+        ...(href && source
+          ? { link: { href, label: sourceLabel(source) } }
+          : {}),
+      };
+    }
     case "command": {
       const description = item.description?.trim() ?? "";
       const first = firstLineOf(item.command);
@@ -780,10 +839,10 @@ function stepOf(
         ? hrefOf(item.source, context.sourceHref)
         : undefined;
       return {
-        key,
+        key: item.task.type === "subsession" ? `agent:${item.task.id}` : key,
         status: item.status,
         finished: true,
-        kind: "notification",
+        kind: item.task.type === "subsession" ? "agent" : "notification",
         label: item.summary,
         icon: {
           Icon: taskIcon(item.task.type),
@@ -1045,6 +1104,7 @@ export function plainLine(line: string): string {
 /** What the step rows need from the timeline. */
 interface StepHandlers {
   resolveToolIcon?: (toolName: string) => string | undefined;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
   /** An edited file's row was clicked; without it those rows stay text. */
   onFileClick?: (path: string, modifiers?: InputLinkModifiers) => void;
   /** A step's source link (a notification's task) was clicked. */
@@ -1392,11 +1452,15 @@ const StepRow = memo(function StepRow({
   step,
   enter = false,
   resolveToolIcon,
+  renderAgentIcon,
   onFileClick,
   onLinkClick,
   renderMarkdown,
 }: StepRowProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(step.focused ?? false);
+  useEffect(() => {
+    if (step.focused) setOpen(true);
+  }, [step.focused]);
   // Read once: a row that was already there never gains the entrance.
   const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
@@ -1406,6 +1470,8 @@ const StepRow = memo(function StepRow({
   const pulsing = background?.status === "running" || step.running === true;
   const note = step.kind === "note";
   const Icon = step.icon?.Icon ?? STEP_ICONS[step.kind];
+  const agentIcon =
+    step.kind === "agent" ? renderAgentIcon?.(step.agentId ?? null) : null;
   const iconUrl = step.toolName ? resolveToolIcon?.(step.toolName) : undefined;
   const expandable = Boolean(step.detail || step.link);
   // Edited-file rows click through to the file.
@@ -1454,26 +1520,27 @@ const StepRow = memo(function StepRow({
           }`}
           aria-expanded={expandable ? open : undefined}
         >
-          {iconUrl ? (
-            <img
-              src={iconUrl}
-              alt=""
-              className="size-3.5 shrink-0 rounded-sm"
-            />
-          ) : (
-            // A command running in the background breathes: nothing else
-            // says it still runs. The turn's running step only takes the
-            // accent; the activity line already breathes for it.
-            <Icon
-              className={`size-3.5 shrink-0 transition-colors duration-200 ${
-                background?.status === "running"
-                  ? "animate-pulse text-accent"
-                  : pulsing
-                    ? "text-accent"
-                    : (step.icon?.className ?? "text-fg-faint")
-              }`}
-            />
-          )}
+          {agentIcon ||
+            (iconUrl ? (
+              <img
+                src={iconUrl}
+                alt=""
+                className="size-3.5 shrink-0 rounded-sm"
+              />
+            ) : (
+              // A command running in the background breathes: nothing else
+              // says it still runs. The turn's running step only takes the
+              // accent; the activity line already breathes for it.
+              <Icon
+                className={`size-3.5 shrink-0 transition-colors duration-200 ${
+                  background?.status === "running"
+                    ? "animate-pulse text-accent"
+                    : pulsing
+                      ? "text-accent"
+                      : (step.icon?.className ?? "text-fg-faint")
+                }`}
+              />
+            ))}
           {step.background ? (
             <span className="flex min-w-0 items-baseline gap-1.5 truncate">
               <span
@@ -1564,12 +1631,14 @@ const SAME_STEP: {
   [K in keyof TurnStep]-?: (a: TurnStep, b: TurnStep) => boolean;
 } = {
   key: sameField("key"),
+  agentId: sameField("agentId"),
   kind: sameField("kind"),
   icon: (a, b) =>
     a.icon?.Icon === b.icon?.Icon && a.icon?.className === b.icon?.className,
   link: (a, b) =>
     a.link?.href === b.link?.href && a.link?.label === b.link?.label,
   messageId: sameField("messageId"),
+  focused: sameField("focused"),
   markdown: sameField("markdown"),
   label: sameField("label"),
   mono: sameField("mono"),
@@ -1596,6 +1665,7 @@ function sameStepRow(previous: StepRowProps, next: StepRowProps): boolean {
     (previous.step === next.step ||
       STEP_COMPARISONS.every((same) => same(previous.step, next.step))) &&
     previous.resolveToolIcon === next.resolveToolIcon &&
+    previous.renderAgentIcon === next.renderAgentIcon &&
     previous.onFileClick === next.onFileClick &&
     previous.onLinkClick === next.onLinkClick &&
     previous.renderMarkdown === next.renderMarkdown

@@ -44,15 +44,24 @@ the person's assistant's and a workflow's words are `inbound_message` items
 with a `from`; Work's reports on tasks an agent started (background
 commands, watches, subsessions, followed chats) are `task_notification`
 items with the task, a `summary`, the `detail` the agent read and a `source`.
-`sessionTimeline` gives them `inbound` and `notifications` entries; a
-notification steered into a working turn is one of its steps instead.
-Timelines render both through the shared `session-input` rows, whose
-expanded details end in a link to the source; hosts map sources they own
+Routine agent messages and successful subagent results read as activity,
+grouped into one expandable status per source chat. Full reports, harness
+icons and source links remain available inside it. Failures, questions and
+attention requests stay visible in the conversation. Other inbound inputs
+and notifications use the shared `session-input` rows. Hosts map sources they own
 (a chat in another project) with `sourceHref` and fall back to the default
 `session:`, `run:` and surface keys. Queues edit only `user_message` turns.
 Never key behavior meant for the person (undo, recall, edits) on anything
 but `user_message`; a chat's provisional title comes from a person's or an
 inbound message, never a notification.
+
+A direct child's reports join its parent's working turn through steer even
+when sent as context-only or interrupt. Existing harness acknowledgements
+mark them read automatically; the parent does not fetch a transcript to
+receive them. With no working parent, context-only reports remain context.
+Peer delivery retains its requested mode and all owner checks still apply
+(ADR 0278). Unconsumed steered inputs say "Waiting for agent"; only deferred
+context says "For the next turn".
 
 ## Composer and resource integration
 
@@ -101,7 +110,7 @@ that list only shrinks.
 
 Desktop behavior enters through the timeline's host surface, never an edit to
 the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
-(`ShortcutHint`, with `jumpShortcut` for PageUp), `renderLink` and `onLinkClick`,
+(`ShortcutHint`), `renderLink` and `onLinkClick`,
 `sourceHref`, `resolveToolIcon`, `onReauth`, `backgroundCommands`,
 `workDisplay` and `presentUserMessage` (a sent skill leads its message as a
 chip, `presentSkillMessage`). Rows are memoized: keep render-affecting slots stable
@@ -250,7 +259,11 @@ focus. A hidden tab or another project's retained editor cannot attach its old
 selection to a new conversation. Copying a selection still carries its provenance
 when it is explicitly pasted.
 
-The chat keeps its two scroll controls at the lower right: up jumps through the
-person's earlier messages, and down returns to the latest response. While reading
-above the end both are available. Incoming agent messages use the sender's harness
+Chats have no scroll-arrow buttons. The regular configurable actions Previous
+message in chat and Next message in chat default to PageUp and PageDown. They
+step through the person's messages while focus is in the chat; holding either
+key continues to the oldest message or latest response. Repeated keys advance
+from the preceding destination while scrolling is still in motion. A wheel,
+touch gesture or scrollbar press takes over. These keys stay with browser pages
+and other surfaces outside chat. Incoming agent messages use the sender's harness
 mark through the timeline's optional `renderAgentIcon` host slot.

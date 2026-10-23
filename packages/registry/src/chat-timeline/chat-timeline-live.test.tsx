@@ -121,6 +121,7 @@ describe("ChatTimeline live chrome", () => {
     });
 
   it("stays with the latest note's steps until more work follows it", async () => {
+    vi.useFakeTimers();
     const answered = working.slice(0, 4);
     await render({
       timeline: timelineOf({ turns: [running()], items: answered }),
@@ -136,7 +137,7 @@ describe("ChatTimeline live chrome", () => {
     expect(
       $('[data-message-id="n1"] [data-testid="chat-turn-clock"]')?.className,
     ).toContain("opacity-0");
-    await wait(250);
+    await act(async () => vi.advanceTimersByTimeAsync(250));
     expect(clockRows()).toEqual(["live work"]);
   });
 
