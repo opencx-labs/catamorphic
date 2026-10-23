@@ -63,6 +63,8 @@ function navigating(error: unknown): boolean {
 }
 
 export interface FrameHandle {
+  /** Native input for another renderer, including the detached dock window. */
+  cdp: (method: string, params?: unknown) => Promise<unknown>;
   getRendererErrors: () => string[];
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
   eval: <T = unknown>(expression: string) => Promise<T>;
@@ -280,6 +282,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
                 attachTimeoutMs: 5_000,
               });
               return {
+                cdp: frameClient.cdp,
                 eval: frameClient.eval,
                 waitFor: frameClient.waitFor,
                 getRendererErrors: frameClient.getRendererErrors,

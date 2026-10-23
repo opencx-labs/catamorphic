@@ -7300,6 +7300,7 @@ export function App({
               {projectId ? (
                 <div
                   data-workspace-chat-region
+                  data-tab-dragging={tabDragKey ? "" : undefined}
                   className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""}`}
                 >
                   {/* Every tab pane lives in this wrapper so keyboard cycling
@@ -7865,22 +7866,10 @@ export function App({
                     <div className="absolute inset-0 z-50 cursor-col-resize" />
                   )}
 
-                  {/* Dragging a tab: side drop zones tile it left or right. While
-                a chat is in front, the bottom band stays clear of the zones
-                so the tab can be dropped on the chat's composer instead
-                (it becomes a tab pill there). */}
+                  {/* Side drop zones tile a tab. The dock host stays above them
+                  during a tab drag, so a visible chat takes its own drops. */}
                   {tabDragKey && (
-                    <div
-                      className={`absolute inset-x-0 top-0 z-50 flex ${
-                        workspace.chats.some(
-                          (entry) =>
-                            entry.mode === "partial" ||
-                            Boolean(viewSlots[chatTabKey(entry.localId)]),
-                        )
-                          ? "bottom-40"
-                          : "bottom-0"
-                      }`}
-                    >
+                    <div className="absolute inset-0 z-50 flex">
                       {(["left", "right"] as const).map((side) => (
                         // biome-ignore lint/a11y/noStaticElementInteractions: drop target for an in-progress HTML5 drag only
                         <div

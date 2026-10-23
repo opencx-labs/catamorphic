@@ -41,6 +41,15 @@ among another group's tabs it joins that chat, and dropped among the top tabs it
 leaves its chat (`attach`, `attachBlocker`). A page an agent drives and an
 agent's or remote chat's terminal stay with their chat; chats never nest.
 
+Dragging a workspace tab over a visible chat shows "Drop to attach". Dropping
+anywhere on the chat adds that tab as an inline composer pill, with the same
+preview and context as picking it from `@`. Prose and existing attachments stay
+in place. A drop on the composer inserts at the pointer; elsewhere on the chat
+it inserts at the caret or end. This works in tabbed, floating and detached
+chats. The tab stays where it was. Dropping on the tab strip or sidebar tab row
+still groups or reorders it; dropping outside a chat on a workspace side tiles
+it. The split targets never cover a visible chat, even with a tall draft.
+
 A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on

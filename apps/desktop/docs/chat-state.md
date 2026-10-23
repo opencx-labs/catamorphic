@@ -61,6 +61,9 @@ Files that cannot be passed as model media still reach the agent as paths. The
 host persists pathless clipboard bytes under the current project. Preserve text,
 caret insertion, selection pills, undo and draft contents while preparation runs.
 Resource links use the [workspace opening contract](workspace-interactions.md).
+Dragging a workspace tab onto a chat reuses the composer's tab attachment and
+preview. The chat's drop cue clears on release, leaving the chat, or cancellation;
+draft text and existing pills survive. Split-drop targets sit below visible chats.
 
 ## Attachment and response previews
 

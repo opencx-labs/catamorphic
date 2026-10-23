@@ -2322,6 +2322,13 @@ kbd {
   bottom: anchor(bottom, 0px);
   left: anchor(left, 0px);
 }
+/* A tab dragged over a chat attaches to its composer. Keep the actual
+   chat's footprint above the split targets, at every height and placement;
+   the dock's transparent room still lets a drop tile the tab behind it. */
+body:has([data-workspace-visible="true"] [data-tab-dragging])
+[data-dock-host]:not([data-dock-native]) {
+  z-index: 60;
+}
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
 }

@@ -2515,6 +2515,15 @@ function ChatDockContent({
   // dragging an image in is the first thing many people try.
   const [dropActive, setDropActive] = useState(false);
   const dragDepthRef = useRef(0);
+  useEffect(() => {
+    if (!dropActive) return;
+    const end = () => {
+      dragDepthRef.current = 0;
+      setDropActive(false);
+    };
+    window.addEventListener("dragend", end);
+    return () => window.removeEventListener("dragend", end);
+  }, [dropActive]);
 
   // Expanding (bubble click, new chat) should land the user ready to type.
   // rAF waits out the `inert` removal — focus() is a no-op on inert subtrees.
@@ -2700,6 +2709,7 @@ function ChatDockContent({
         onDragOver={(event) => {
           if (!isComposerTransfer(event.dataTransfer)) return;
           event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
         }}
         onDragLeave={() => {
           dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
@@ -2787,9 +2797,12 @@ function ChatDockContent({
         <span className="sr-only" aria-live="polite">
           {activity ?? lastReplyText(chat.timeline)}
         </span>
-        {/* Drop cue: an accent dashed veil while files hover the chat. */}
+        {/* The same drop cue for files and workspace tabs. */}
         {dropActive && (
-          <div className="pointer-events-none absolute inset-2 z-20 grid animate-fade-in place-items-center rounded-xl border-2 border-dashed border-accent/60 bg-accent/5">
+          <div
+            data-testid="chat-drop-target"
+            className="pointer-events-none absolute inset-2 z-20 grid animate-fade-in place-items-center rounded-xl border-2 border-dashed border-accent/60 bg-accent/5"
+          >
             <span className="rounded-full border border-border bg-bg-raised px-3 py-1.5 text-xs text-fg">
               Drop to attach
             </span>
