@@ -768,6 +768,17 @@ export function App({
   const prefsScope = `${activeProfileId}:${activeProjectId}`;
   const prefs =
     projectPrefs?.key === prefsScope ? projectPrefs.values : profilePrefs;
+  // The dock lays a chat in a tab over the content from outside its frame,
+  // which clips nothing of it: the workspace in front hands the frame's
+  // corners to the window for it (styles.css).
+  const frameRadius = prefs?.contentFrame ? (prefs.contentRadius ?? 0) : 0;
+  useLayoutEffect(() => {
+    if (!runtime.visible) return;
+    document.documentElement.style.setProperty(
+      "--content-frame-radius",
+      `${frameRadius}px`,
+    );
+  }, [runtime.visible, frameRadius]);
   const [browserNavigationHost, setBrowserNavigationHost] =
     useState<HTMLDivElement | null>(null);
   const [browserToolbarHost, setBrowserToolbarHost] =
@@ -6808,6 +6819,12 @@ export function App({
               (remoteSurfaceResolved && remoteSurfaceStatus === null)))),
     );
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
+  useLayoutEffect(() => {
+    if (!runtime.visible) return;
+    document
+      .querySelector("[data-workspace-root]")
+      ?.toggleAttribute("data-chat-header-in-sidebar", headerInSidebar);
+  }, [runtime.visible, headerInSidebar]);
   const compactWindow = headerInSidebar && !sidebarOpen;
   // The chrome keeps the window buttons' corner free while they show. Only
   // macOS draws them in the page; elsewhere the preference changes nothing.
