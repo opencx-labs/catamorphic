@@ -6819,6 +6819,12 @@ export function App({
               (remoteSurfaceResolved && remoteSurfaceStatus === null)))),
     );
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
+  useLayoutEffect(() => {
+    if (!runtime.visible) return;
+    document
+      .querySelector("[data-workspace-root]")
+      ?.toggleAttribute("data-chat-header-in-sidebar", headerInSidebar);
+  }, [runtime.visible, headerInSidebar]);
   const compactWindow = headerInSidebar && !sidebarOpen;
   // The chrome keeps the window buttons' corner free while they show. Only
   // macOS draws them in the page; elsewhere the preference changes nothing.

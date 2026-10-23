@@ -2338,12 +2338,12 @@ kbd {
   [data-chat-tab]:not([data-split-slot="left"]) {
   border-bottom-right-radius: var(--content-frame-radius, 0px);
 }
-:root:has([data-workspace-visible="true"] [data-header-placement="sidebar"])
+[data-chat-header-in-sidebar]
   [data-dock-host]:not([data-dock-native])
   [data-chat-tab]:not([data-split-slot="right"]) {
   border-top-left-radius: var(--content-frame-radius, 0px);
 }
-:root:has([data-workspace-visible="true"] [data-header-placement="sidebar"])
+[data-chat-header-in-sidebar]
   [data-dock-host]:not([data-dock-native])
   [data-chat-tab]:not([data-split-slot="left"]) {
   border-top-right-radius: var(--content-frame-radius, 0px);
