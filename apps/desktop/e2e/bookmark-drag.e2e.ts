@@ -91,13 +91,24 @@ describe("drag tabs and chats into bookmarks", () => {
     await app.waitFor(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.length===1)",
     );
-    expect((await bookmarks()).project.bookmarks[0]).toMatchObject({
+    const saved = (await bookmarks()).project.bookmarks[0];
+    expect(saved).toMatchObject({
       url: "https://example.test/reference",
       folderId,
     });
-    expect(
-      await run("return !!$('aside [data-point-key^=\"browser:\"]')"),
-    ).toBe(true);
+    // Saved, the page is listed once: its bookmark stands for the open tab
+    // and closes it, and the tab leaves Tabs.
+    await app.waitFor(
+      `!document.querySelector('aside [data-tree-id^="browser:"]')`,
+      { label: "the saved page leaves Tabs" },
+    );
+    // Its folder opens on it: the bookmark closes the tab.
+    if (!(await run(`return !!$('[data-tree-id="${saved?.id}"]')`)))
+      await run(`$('[data-tree-id="${folderId}"] button').click()`);
+    await app.waitFor(
+      `!!document.querySelector('aside [data-tree-id="${saved?.id}"] button[aria-label^="Close"]')`,
+      { label: "the bookmark closes the open page" },
+    );
   });
   it("pins a saved chat and reopens the same conversation after its tab closes", async () => {
     await run(
@@ -134,23 +145,22 @@ describe("drag tabs and chats into bookmarks", () => {
     await app.waitFor(
       "!!document.querySelector('[data-drop-zone=pinned] button[aria-label=\"Saved conversation\"]') || [...document.querySelectorAll('[data-drop-zone=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",
     );
+    // Pinned, the chat is listed by its tile alone: open, the tile closes it.
+    const close =
+      '[data-drop-zone=pinned] button[aria-label="Close Saved conversation"]';
     await run(
       "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
     await app.waitFor(
-      "!!document.querySelector('aside [data-point-key^=\"chat:\"]')",
+      `!!document.querySelector('${close}') && !document.querySelector('aside [data-tree-id^="chat:"]')`,
     );
-    await run(
-      '$(\'aside [data-point-key^="chat:"] button[aria-label^="Close"]\').click()',
-    );
-    await app.waitFor(
-      "!document.querySelector('aside [data-point-key^=\"chat:\"]')",
-    );
+    await run(`$('${close}').click()`);
+    await app.waitFor(`!document.querySelector('${close}')`);
     await run(
       "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
     await app.waitFor(
-      "!!document.querySelector('aside [data-point-key^=\"chat:\"]') && document.body.textContent.includes('remember this pinned conversation')",
+      `!!document.querySelector('${close}') && document.body.textContent.includes('remember this pinned conversation')`,
     );
     await drop(
       "[data-drop-zone=pinned] li[draggable]",
@@ -185,6 +195,10 @@ describe("drag tabs and chats into bookmarks", () => {
     expect(app.getRendererErrors()).toEqual([]);
   });
   it("nests a tab dropped on a chat under it, and takes it out again", async () => {
+    // Saved nowhere, the page and the chat are listed under Tabs again.
+    await app.eval(
+      "(async()=>{const api=window.catamorphicDesktop;const d=await api.bookmarksGet(window.__bookmarkScope);for(const b of d.project.bookmarks)await api.bookmarksRemove({...window.__bookmarkScope,scope:'project',id:b.id})})()",
+    );
     const page = '[data-tree-id^="browser:"]';
     const chat = '[data-tree-id^="chat:"]';
     await app.waitFor(

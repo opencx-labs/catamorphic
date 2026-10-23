@@ -312,7 +312,7 @@ function SourceView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: the keys are what frontKeys reads.
   const front = useMemo(
     () => frontKeys(surface),
-    [surface.sessionId, surface.path, surface.key],
+    [surface.sessionId, surface.path, surface.url, surface.key],
   );
   const frontUrl = surface.sessionId
     ? chatBookmarkUrl({ projectId, sessionId: surface.sessionId })
