@@ -168,6 +168,22 @@ const SENDER_ICONS: Record<InboundSender["kind"], LucideIcon> = {
   workflow: Workflow,
 };
 
+/** The sender's mark, shared by delivered messages and waiting inputs. */
+function SenderIcon({
+  from,
+  renderAgentIcon,
+}: {
+  from: InboundSender;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
+}) {
+  const Icon = SENDER_ICONS[from.kind];
+  return (
+    (from.kind === "agent" && renderAgentIcon?.(from.agentId)) || (
+      <Icon className="size-3.5 shrink-0 text-fg-faint" />
+    )
+  );
+}
+
 const TASK_ICONS: Record<string, LucideIcon> = {
   background_command: SquareTerminal,
   command_watch: Eye,
@@ -286,7 +302,13 @@ function TaskNotificationRow({
       label={latest.summary}
       meta={items.length > 1 ? `${items.length} times` : undefined}
       attention={items.some((item) => item.attention === "required")}
-      unread={items.some((item) => item.status === "in_progress")}
+      unread={
+        items.some((item) => item.status === "in_progress")
+          ? latest.dispatch === "message_only"
+            ? "For the next turn"
+            : "Waiting for agent"
+          : undefined
+      }
       detail={
         detail ? (
           <pre className="max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted">
@@ -314,6 +336,7 @@ export function InboundMessageRow({
   item,
   onOpen,
   resolveAgentName,
+  renderAgentIcon,
   sourceHref,
   renderContent,
   focused = false,
@@ -321,13 +344,13 @@ export function InboundMessageRow({
   item: InboundMessageItem;
   onOpen?: OpenLink;
   resolveAgentName?: (agentId: string) => string | undefined;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
   sourceHref?: SourceHref;
   /** The message body; defaults to its text. */
   renderContent?: (item: InboundMessageItem) => ReactNode;
   /** Outlined and open: a deep link to it (a reminder's alert). */
   focused?: boolean;
 }) {
-  const Icon = SENDER_ICONS[item.from.kind];
   const source = senderSource(item.from);
   // Attachments read by name, where they were placed in the words.
   const text = messageWithAttachmentNames(item.text, item.attachments);
@@ -360,11 +383,17 @@ export function InboundMessageRow({
       focused={focused}
       testId="chat-inbound-message"
       data={{ "data-sender-kind": item.from.kind }}
-      icon={<Icon className="size-3.5 shrink-0 text-fg-faint" />}
+      icon={<SenderIcon from={item.from} renderAgentIcon={renderAgentIcon} />}
       label={senderName(item.from, resolveAgentName)}
       preview={firstLine}
       attention={item.attention === "required"}
-      unread={item.status === "in_progress"}
+      unread={
+        item.status === "in_progress"
+          ? item.dispatch === "message_only"
+            ? "For the next turn"
+            : "Waiting for agent"
+          : undefined
+      }
       detail={
         <div className="flex flex-col gap-1.5">
           <div className="select-text whitespace-pre-wrap break-words text-xs leading-5 text-fg">
@@ -392,9 +421,11 @@ export function InboundMessageRow({
 export function QueuedInputLine({
   queued,
   resolveAgentName,
+  renderAgentIcon,
 }: {
   queued: QueuedMessage;
   resolveAgentName?: (agentId: string) => string | undefined;
+  renderAgentIcon?: (agentId: string | null) => ReactNode;
 }) {
   const { item } = queued;
   if (item?.kind === "task_notification") {
@@ -413,10 +444,9 @@ export function QueuedInputLine({
     );
   }
   if (item?.kind === "inbound_message") {
-    const Icon = SENDER_ICONS[item.from.kind];
     return (
       <span className="flex min-w-0 items-center gap-1.5">
-        <Icon className="size-3.5 shrink-0 text-fg-faint" />
+        <SenderIcon from={item.from} renderAgentIcon={renderAgentIcon} />
         <span className="shrink-0 font-medium">
           {senderName(item.from, resolveAgentName)}
         </span>
@@ -448,7 +478,7 @@ function InputRow({
   preview,
   meta,
   attention = false,
-  unread = false,
+  unread,
   detail,
   links,
   onOpen,
@@ -464,8 +494,8 @@ function InputRow({
   /** A quiet count or note at the end of the row. */
   meta?: string;
   attention?: boolean;
-  /** Delivered without waking the agent, and not read yet. */
-  unread?: boolean;
+  /** Where an input waits, until the harness acknowledges reading it. */
+  unread?: string;
   detail?: ReactNode;
   links: readonly { href: string; label: string }[];
   onOpen?: OpenLink;
@@ -493,9 +523,7 @@ function InputRow({
         </span>
       )}
       {unread && (
-        <span className="shrink-0 text-[11px] text-fg-faint">
-          For the next turn
-        </span>
+        <span className="shrink-0 text-[11px] text-fg-faint">{unread}</span>
       )}
       {meta && (
         <span className="shrink-0 text-[11px] text-fg-faint">{meta}</span>

@@ -844,4 +844,63 @@ describe("context pills", () => {
     );
     expect(await run(`return timelineText();`)).not.toContain("/attachments/");
   });
+  it("does not pull a hidden editor's old selection into a new chat", async () => {
+    // The native-image test selects a local Codex agent. This regression
+    // needs an editable composer, independent of that agent's sign-in probe.
+    await app.eval(`(async () => {
+      const { agents } = await window.catamorphicDesktop.agentsList();
+      const fake = agents.find((agent) => agent.name === 'Fake Agent');
+      await window.catamorphicDesktop.agentsSetDefault(fake.id);
+    })()`);
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !frontDock();`, { label: "selection chat parked" });
+    // Keep a real selection in the retained document, then leave it.
+    expect(
+      await run(`
+      const h = window.__catMarkdownEditor;
+      h.editor.commands.focus();
+      h.editor.commands.setTextSelection({ from: 1, to: 6 });
+      return !h.editor.state.selection.empty;
+    `),
+    ).toBe(true);
+    // A retained project's opacity is zero while its DOM stays laid out.
+    // Exercise that browser visibility state as well as display:none tabs.
+    await run(`
+      window.__selectionPane = window.__catMarkdownEditor.editor.view.dom.closest('[data-project-runtime]').querySelector('[data-editor-toolbar]').parentElement;
+      window.__selectionPane.style.opacity = '0';
+      pressKey('n', { metaKey: true }); return true;
+    `);
+    await runWait(`return !!frontDock() && composer()?.isContentEditable;`, {
+      label: "chat over a transparent editor",
+    });
+    // The synthetic opacity change leaves the retained editor's native focus
+    // intact. Wait for the chat's selection-pull effect, not that focus state.
+    await run(`return settleFrames();`);
+    expect(
+      await run(`return pills().filter(p => p.source === 'selection').length;`),
+    ).toBe(0);
+    await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(`return !frontDock();`, {
+      label: "transparent-editor chat closed",
+    });
+    await run(
+      `window.__selectionPane.style.opacity = ''; delete window.__selectionPane; pressKey('t', { metaKey: true }); return true;`,
+    );
+    await runWait(
+      `return !!document.querySelector('[data-palette="tab"] textarea:focus');`,
+      {
+        label: "new tab in front of the selected editor",
+      },
+    );
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(
+      `return !!frontDock() && composer() === document.activeElement;`,
+      {
+        label: "new chat in the New Tab",
+      },
+    );
+    expect(
+      await run(`return pills().filter(p => p.source === 'selection').length;`),
+    ).toBe(0);
+  });
 });

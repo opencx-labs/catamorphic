@@ -78,6 +78,11 @@ export interface AppHandle {
   processId?: number;
   /** Low-level DevTools instrumentation for performance and lifecycle checks. */
   cdp: (method: string, params?: unknown) => Promise<unknown>;
+  /** Subscribe to trace and other instrumentation events from this target. */
+  onCdpEvent: (
+    method: string,
+    listener: (params: unknown) => void,
+  ) => () => void;
   /** Reload the main document and wait for its new load event. */
   reload: () => Promise<void>;
   /** Evaluate JS in the app window; resolves the JSON-serialized result. */
@@ -431,6 +436,7 @@ async function createClient(
 ) {
   let nextId = 1;
   const rendererErrors: string[] = [];
+  const listeners = new Map<string, Set<(params: unknown) => void>>();
   const pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -455,6 +461,9 @@ async function createClient(
           "Uncaught renderer exception",
       );
     }
+    if (message.method)
+      for (const listener of listeners.get(message.method) ?? [])
+        listener(message.params);
     if (message.id === undefined) return;
     const waiter = pending.get(message.id);
     if (!waiter) return;
@@ -615,6 +624,15 @@ async function createClient(
     });
   return {
     cdp: send,
+    onCdpEvent: (method: string, listener: (params: unknown) => void) => {
+      const subscribers = listeners.get(method) ?? new Set();
+      subscribers.add(listener);
+      listeners.set(method, subscribers);
+      return () => {
+        subscribers.delete(listener);
+        if (!subscribers.size) listeners.delete(method);
+      };
+    },
     eval: evaluate,
     waitFor,
     screenshot,
@@ -633,6 +651,7 @@ const KEY_CODES = {
   Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
   Slash: { key: "/", windowsVirtualKeyCode: 191, code: "Slash", text: "/" },
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
+  n: { windowsVirtualKeyCode: 78, code: "KeyN" },
   b: { windowsVirtualKeyCode: 66, code: "KeyB" },
   f: { windowsVirtualKeyCode: 70, code: "KeyF" },
   j: { windowsVirtualKeyCode: 74, code: "KeyJ" },

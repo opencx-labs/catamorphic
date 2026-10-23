@@ -1,6 +1,7 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import { pressNativeMacKey } from "./native-pointer.js";
 
 /**
  * Cmd+Left and Cmd+Right go back and forward in a browser tab, but a text
@@ -15,7 +16,7 @@ const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
   if (request.url === "/frame") {
     response.end(
-      `<input id="inner" value="inside"><button id="plain">plain</button>`,
+      `<input id="inner" value="inside"><button id="plain">plain</button><div id="rich" contenteditable></div>`,
     );
     return;
   }
@@ -28,7 +29,7 @@ const server = http.createServer((request, response) => {
   }
   const page = request.url?.startsWith("/second") ? "Second" : "First";
   response.end(
-    `<title>${page}</title><h1>${page}</h1><input id="field" value="hello world"><a id="next" href="/second">next</a><a id="slow" href="/slow">slow</a><iframe src="/frame"></iframe>`,
+    `<title>${page}</title><h1>${page}</h1><input id="field" value="hello world"><a id="next" href="/second">next</a><a id="slow" href="/slow">slow</a><b id="copy-source">Rich clipboard text</b><div id="rich" contenteditable></div><iframe src="/frame"></iframe>`,
   );
 });
 
@@ -57,13 +58,19 @@ const windowKey = (key: string, focus: string) =>
  * The same key pressed inside the page, through its real input path, which
  * needs the window focused.
  */
-const pageKey = async (keyCode: string) => {
+const pageKey = async (keyCode: string, shift = false) => {
   await focusWindow(app);
+  // macOS editing accelerators run through AppKit's menu. Injecting a
+  // Chromium key event alone does not exercise that native edit command.
+  if (mac && keyCode === "V") {
+    await app.eval(`${view}.focus(); true`);
+    return pressNativeMacKey("v", shift ? ["command", "shift"] : ["command"]);
+  }
   return app.eval(`(() => {
     const page = ${view};
     page.focus();
     for (const type of ['keyDown', 'keyUp'])
-      page.sendInputEvent({ type, keyCode: ${JSON.stringify(keyCode)}, modifiers: [${JSON.stringify(mac ? "meta" : "control")}] });
+      page.sendInputEvent({ type, keyCode: ${JSON.stringify(keyCode)}, modifiers: [${JSON.stringify(mac ? "meta" : "control")}, ...(${shift} ? ['shift'] : [])] });
     return true;
   })()`);
 };
@@ -200,4 +207,120 @@ describe("Cmd+Left and Cmd+Right", () => {
     await pageKey("Left");
     await loaded("Second");
   });
+});
+
+it("delivers Cmd+Enter to a page and its embedded frame instead of claiming a review shortcut", async () => {
+  for (const frame of [false, true]) {
+    await inGuest(`(() => {
+      const doc = ${frame ? "document.querySelector('iframe').contentDocument" : "document"};
+      doc.defaultView.__submitKeys = 0;
+      doc.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          doc.defaultView.__submitKeys += 1;
+        }
+      });
+      doc.querySelector('input').focus();
+      return true;
+    })()`);
+    await pageKey("Enter");
+    await app.waitFor(
+      `${view}.executeJavaScript(${JSON.stringify(
+        frame
+          ? "document.querySelector('iframe').contentWindow.__submitKeys === 1"
+          : "window.__submitKeys === 1",
+      )})`,
+      {
+        label: frame
+          ? "frame received the submit shortcut"
+          : "page received the submit shortcut",
+      },
+    );
+  }
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("pastes without formatting with Cmd+Shift+V in a page, a frame and Work's fields", async () => {
+  expect(
+    await inGuest(`(() => {
+    const range = document.createRange(); range.selectNode(document.getElementById('copy-source'));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+    return document.execCommand('copy');
+  })()`),
+  ).toBe(true);
+  // First prove this is a rich clipboard, rather than an already plain one.
+  await inGuest(`document.getElementById('rich').focus(); true`);
+  await pageKey("V");
+  await app.waitFor(
+    `${view}.executeJavaScript(${JSON.stringify(`(() => {
+      const field = document.getElementById('rich');
+      return field.textContent === 'Rich clipboard text' &&
+        [...field.querySelectorAll('*')].some(node => Number(getComputedStyle(node).fontWeight) >= 600);
+    })()`)})`,
+    {
+      label: "ordinary paste keeps formatting",
+    },
+  );
+  for (const frame of [false, true]) {
+    await inGuest(`(() => {
+      const doc = ${frame ? "document.querySelector('iframe').contentDocument" : "document"};
+      const field = doc.getElementById('rich'); field.replaceChildren(); field.focus();
+      return true;
+    })()`);
+    await pageKey("V", true);
+    await app.waitFor(
+      `${view}.executeJavaScript(${JSON.stringify(`(() => {
+      const doc = ${frame ? "document.querySelector('iframe').contentDocument" : "document"};
+      const field = doc.getElementById('rich');
+      return field.textContent === 'Rich clipboard text' && field.childElementCount === 0;
+    })()`)})`,
+      { label: frame ? "frame plain paste" : "page plain paste" },
+    );
+  }
+  await app.eval(`(() => {
+    const field = document.createElement('div'); field.id = 'plain-paste-probe';
+    field.contentEditable = 'true'; field.style.cssText = 'position:fixed;left:300px;top:60px;z-index:100';
+    document.querySelector('[data-workspace-ready]').append(field); field.focus();
+  })()`);
+  await focusWindow(app);
+  if (mac) await pressNativeMacKey("v", ["command", "shift"]);
+  else
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "V",
+        code: "KeyV",
+        windowsVirtualKeyCode: 86,
+        modifiers: 2 | 8,
+      });
+  await app.waitFor(
+    `(() => {
+    const field = document.getElementById('plain-paste-probe');
+    return field.textContent === 'Rich clipboard text' && field.childElementCount === 0;
+  })()`,
+    { label: "host field plain paste" },
+  );
+  await app.eval(`document.getElementById('plain-paste-probe').remove()`);
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("leaves PageUp and PageDown with browser pages", async () => {
+  await inGuest(`(() => {
+    window.__pageKeys = [];
+    document.addEventListener('keydown', event => {
+      if (event.key === 'PageUp' || event.key === 'PageDown') window.__pageKeys.push(event.key);
+    });
+    document.getElementById('field').focus();
+    return true;
+  })()`);
+  await focusWindow(app);
+  await app.eval(`(() => {
+    const page = ${view}; page.focus();
+    for (const keyCode of ['PageUp', 'PageDown'])
+      for (const type of ['keyDown', 'keyUp']) page.sendInputEvent({ type, keyCode });
+    return true;
+  })()`);
+  await app.waitFor(
+    `${view}.executeJavaScript("JSON.stringify(window.__pageKeys) === JSON.stringify(['PageUp','PageDown'])")`,
+  );
 });

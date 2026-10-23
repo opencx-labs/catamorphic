@@ -103,8 +103,9 @@ for sent attachments (default: a pill with an icon and the name), `Hint`
 `onLinkClick`, `sourceHref`, `resolveToolIcon`, `onFileClick`, `onReauth`,
 `backgroundCommands`, `workDisplay`, `presentUserMessage(text)` (an element of
 the host's own leading the person's message, and the words after it; the
-desktop leads a sent skill with a chip) and `registerJumpToPreviousUserMessage`
-with `jumpShortcut`. Rows are memoized: keep render-affecting slots stable;
+desktop leads a sent skill with a chip) and `registerMessageNavigation`, which
+hands the host previous/next actions for its own shortcut bindings. Navigation
+has no on-screen buttons. Rows are memoized: keep render-affecting slots stable;
 action callbacks may change every render.
 
 Import `@catamorphic/ui/styles.css` from the host's Tailwind entry: it holds

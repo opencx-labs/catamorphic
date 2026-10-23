@@ -205,6 +205,7 @@ export function EditorScreen({
   // "what's selected" to build a selection pill (see lib/editor-selection).
   const filePathRef = useRef(filePath);
   filePathRef.current = filePath;
+  const screenRef = useRef<HTMLDivElement>(null);
   const unregisterRef = useRef<(() => void) | null>(null);
   const publishReader = (
     read: () => { text: string; startLine?: number; endLine?: number } | null,
@@ -212,7 +213,16 @@ export function EditorScreen({
     unregisterRef.current?.();
     unregisterRef.current = registerSelectionReader(() => {
       const path = filePathRef.current;
-      if (!path) return null;
+      // Tabs and inactive projects keep their editors mounted. Their old
+      // selections are not context for a chat opened over another surface.
+      if (
+        !path ||
+        !screenRef.current?.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true,
+        })
+      )
+        return null;
       const selection = read();
       return selection ? { filePath: path, ...selection } : null;
     });
@@ -268,6 +278,7 @@ export function EditorScreen({
     // into a chat makes a selection pill (see lib/editor-selection). React's
     // handler runs after Monaco's/ProseMirror's own copy populated the event.
     <div
+      ref={screenRef}
       className="flex min-h-0 flex-1 flex-col"
       onCopy={stampSelectionOnClipboard}
     >

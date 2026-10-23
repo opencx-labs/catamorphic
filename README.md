@@ -241,8 +241,10 @@ using a project secret need no personal consent and work headlessly.
 Delegation is also first-class. A subagent works in an ordinary durable child
 session with explicit delegation authority, its own transcript, and the same
 message, interrupt, attention, and policy machinery as any other session. Its
-result reaches the parent like a subagent's: during the parent's turn while it
-still works, or as a new turn after it. An agent starts a copy of itself, or
+reports reach the parent's working turn automatically and are acknowledged
+there. Routine progress folds into expandable activity, with full reports and
+source chats one click away; failures and requests for your input stay visible.
+A result starts a new turn if the parent has finished. An agent starts a copy of itself, or
 another agent it is granted, on the model and effort the work needs, or
 read-only for a review (on harnesses with a read-only mode); grants in its
 definition limit whom it may start and what it may choose, and by default it

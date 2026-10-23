@@ -5,6 +5,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   handoff,
+  inboundMessage,
   notice,
   question,
   reply,
@@ -24,6 +25,68 @@ import {
 } from "./session-timeline.js";
 
 describe("sessionTimeline", () => {
+  it("keeps routine reports in work, while attention and failed tasks stay visible", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 10,
+        turns: [turn("t1", 1)],
+        items: [
+          userMessage("t1:input", 1, "t1", "Review it"),
+          inboundMessage("progress", 2, "t1", "The first check passed"),
+          toolCall("read", 3, "t1", "Read"),
+          inboundMessage("blocker", 4, "t1", "Which branch should I use?", {
+            attention: "required",
+          }),
+          taskNotification("failed", 5, "t1", "Child failed", {
+            dispatch: "steer",
+            task: {
+              type: "subsession",
+              id: "child",
+              title: "Review",
+              status: "failed",
+            },
+          }),
+          reply("reply", 6, "t1", "I need your choice"),
+        ],
+      }),
+    );
+    const entries = sessionTimeline(state)[0]?.entries;
+    expect(entries?.map((e) => e.kind)).toEqual([
+      "input",
+      "steps",
+      "inbound",
+      "notifications",
+      "reply",
+    ]);
+    expect(entries?.[1]).toMatchObject({
+      kind: "steps",
+      steps: [{ id: "progress" }, { id: "read" }],
+    });
+  });
+
+  it("groups consecutive loose agent reports without moving them across a turn", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 10,
+        turns: [turn("t1", 1)],
+        items: [
+          userMessage("t1:input", 1, "t1", "Review it"),
+          reply("reply", 2, "t1", "Done"),
+          inboundMessage("one", 3, null, "First report", {
+            dispatch: "message_only",
+          }),
+          inboundMessage("two", 4, null, "Second report", {
+            dispatch: "message_only",
+          }),
+        ],
+      }),
+    );
+    const timeline = sessionTimeline(state);
+    expect(timeline).toHaveLength(2);
+    expect(
+      timeline.find((group) => group.turn === null)?.entries,
+    ).toMatchObject([{ kind: "steps", steps: [{ id: "one" }, { id: "two" }] }]);
+  });
   it("reads a turn as its input, its work, and its answer", () => {
     const state = sessionStateFromSnapshot(
       snapshot({

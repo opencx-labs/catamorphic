@@ -8,6 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { DockHost } from "./components/dock-host.js";
+import { ResourceLinkBoundary } from "./components/open-resource-button.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
 import { VoiceBubble, VoiceSpots } from "./components/voice-bubble.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
@@ -92,7 +93,9 @@ function Root() {
       <SessionChangeHints />
       <KeybindingsProvider>
         <TerminalAppearanceProvider>
-          {detachedWindow ? <DockHost detachedWindow /> : <WorkspaceRoot />}
+          <ResourceLinkBoundary>
+            {detachedWindow ? <DockHost detachedWindow /> : <WorkspaceRoot />}
+          </ResourceLinkBoundary>
         </TerminalAppearanceProvider>
       </KeybindingsProvider>
     </CatamorphicAppProvider>

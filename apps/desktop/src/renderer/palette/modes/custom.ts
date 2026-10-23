@@ -149,6 +149,7 @@ async function paletteRows({
         id: `mode:${owner.id}:${item.id}`,
         icon: lucideIcon(item.icon) ?? icon,
         label: item.label,
+        url,
         detail: item.description ?? parent,
         keywords: [
           ...(item.keywords ?? []),

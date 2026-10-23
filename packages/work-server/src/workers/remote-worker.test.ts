@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Identity } from "@catamorphic/core";
+import {
+  cleanupWorkerAllocations,
+  type Identity,
+  WorkerNodesService,
+} from "@catamorphic/core";
 import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -732,14 +736,7 @@ describe("keyed chats on workers (ADR 0173)", () => {
       .where("id", "=", before.allocationId ?? "")
       .executeTakeFirstOrThrow();
     expect(released).toEqual({ status: "released", release_reason: "idle" });
-    await waitFor(async () => {
-      const row = await core.db
-        .selectFrom("execution_allocations")
-        .select("capacity_released_at")
-        .where("id", "=", before.allocationId ?? "")
-        .executeTakeFirstOrThrow();
-      return row.capacity_released_at !== null;
-    }, "the worker to destroy the idle workspace");
+    await freed(before.allocationId);
     const branch = () =>
       core.projectManager.remoteBackend?.withOrigin(
         SERVER_TENANT_ID,
@@ -760,14 +757,7 @@ describe("keyed chats on workers (ADR 0173)", () => {
     // Closing forgets the workspace: branch, copy, Allocation, sandbox.
     await sessions.close(identity, projectId, session.id);
     expect(await branch()).toBeNull();
-    await waitFor(async () => {
-      const row = await core.db
-        .selectFrom("execution_allocations")
-        .select(["status", "capacity_released_at"])
-        .where("id", "=", after.allocationId ?? "")
-        .executeTakeFirstOrThrow();
-      return row.status === "released" && row.capacity_released_at !== null;
-    }, "the worker to destroy the closed chat's workspace");
+    await freed(after.allocationId);
     expect(
       await core.projectManager.exists(
         SERVER_TENANT_ID,
@@ -790,10 +780,36 @@ describe("keyed chats on workers (ADR 0173)", () => {
     await waitFor(async () => {
       const row = await core.db
         .selectFrom("execution_allocations")
-        .select("capacity_released_at")
+        .select(["worker_node_id", "capacity_released_at"])
         .where("id", "=", allocationId ?? "")
         .executeTakeFirstOrThrow();
-      return row.capacity_released_at !== null;
+      if (row.capacity_released_at !== null) return true;
+      // Exercise real cleanup and the remote queue directly. Waiting for
+      // two independent ten-second maintenance ticks makes this a race
+      // with the twenty-second assertion deadline on a loaded runner.
+      const machine = await core.db
+        .selectFrom("worker_nodes")
+        .select("authority_id")
+        .where("id", "=", row.worker_node_id)
+        .executeTakeFirstOrThrow();
+      const nodes = new WorkerNodesService(core.db);
+      const node = (
+        await nodes.list({
+          tenantId: SERVER_TENANT_ID,
+          authorityId: machine.authority_id,
+        })
+      ).find((node) => node.id === row.worker_node_id);
+      if (!node?.remote) throw new Error("The chat worker is unavailable");
+      await cleanupWorkerAllocations({
+        db: core.db,
+        workerNode: { id: node.id, remote: true },
+        provider: nodes.remoteProvider({
+          nodeId: node.id,
+          offer: node.remote,
+          label: "Chat worker",
+        }),
+      });
+      return false;
     }, "the workspace slot to be freed");
   }
 

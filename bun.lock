@@ -21,7 +21,7 @@
     },
     "apps/desktop": {
       "name": "catamorphic-desktop",
-      "version": "0.1.0-alpha.27",
+      "version": "0.1.0-alpha.28",
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.52",
         "@ai-sdk/openai": "^4.0.65",

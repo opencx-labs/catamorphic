@@ -117,6 +117,29 @@ describe("the file menu", () => {
     );
   });
 
+  it("copies a web link's complete address from its resource menu", async () => {
+    const url = "https://docs.example.test/guide?view=full#paste";
+    await act(async () => root.render(<FileLink href={url} />));
+    await pick("Copy link", [...ALL.slice(0, 4), "Copy link"]);
+    expect(writeText).toHaveBeenCalledWith(url);
+    expect(opened).not.toHaveBeenCalled();
+  });
+
+  it("gives ordinary links elsewhere in the window a copy action", async () => {
+    await act(async () =>
+      root.render(
+        <ResourceLinkBoundary>
+          <a href="https://docs.example.test/guide">
+            <span>Read the guide</span>
+          </a>
+        </ResourceLinkBoundary>,
+      ),
+    );
+    await pick("Copy link", ["Copy link"]);
+    expect(writeText).toHaveBeenCalledWith("https://docs.example.test/guide");
+    expect(opened).not.toHaveBeenCalled();
+  });
+
   it("takes an absolute path as it is", async () => {
     await act(async () =>
       root.render(<FileTab filePath="/tmp/elsewhere/report.md" />),

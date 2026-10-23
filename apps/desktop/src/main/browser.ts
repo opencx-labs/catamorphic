@@ -1520,6 +1520,10 @@ export function registerBrowserSupport(
         ) &&
         !KEYBINDING_ACTIONS.some(
           (action) =>
+            // A review form owns this shortcut, never a browser page.
+            action !== "submit-pr-comment" &&
+            action !== "chat-previous-message" &&
+            action !== "chat-next-message" &&
             action !== "dismiss-floating" &&
             // Voice reads its keys in every page itself.
             !isVoiceAction(action) &&

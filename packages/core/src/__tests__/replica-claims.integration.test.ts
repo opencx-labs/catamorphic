@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ReplicaClaimBusyError,
   ReplicaClaimLostError,
@@ -57,6 +57,10 @@ describeIf("claims shared by replicas (ADR 0193)", () => {
   });
 
   it("refuses a held claim once the wait runs out", async () => {
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
     let release = () => {};
     const held = withReplicaClaim({
       db: first,
@@ -64,23 +68,31 @@ describeIf("claims shared by replicas (ADR 0193)", () => {
       operation: () =>
         new Promise<void>((resolve) => {
           release = resolve;
+          markStarted();
         }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await expect(
-      withReplicaClaim({
-        db: second,
-        name: "publish",
-        waitMs: 100,
-        pollMs: 20,
-        operation: async () => {},
-      }),
-    ).rejects.toBeInstanceOf(ReplicaClaimBusyError);
-    release();
-    await held;
+    await started;
+    try {
+      await expect(
+        withReplicaClaim({
+          db: second,
+          name: "publish",
+          waitMs: 100,
+          pollMs: 20,
+          operation: async () => {},
+        }),
+      ).rejects.toBeInstanceOf(ReplicaClaimBusyError);
+    } finally {
+      release();
+      await held;
+    }
   });
 
   it("stops the work once its claim is taken over", async () => {
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
     let seen: AbortSignal | undefined;
     const work = withReplicaClaim({
       db: first,
@@ -88,25 +100,29 @@ describeIf("claims shared by replicas (ADR 0193)", () => {
       ttlSeconds: 2,
       operation: ({ signal }) => {
         seen = signal;
+        markStarted();
         return new Promise<void>(() => {});
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const rejected = expect(work).rejects.toBeInstanceOf(ReplicaClaimLostError);
+    await started;
     // The claim lapsed (a frozen process) and another replica took it.
-    await second
-      .updateTable("replica_claims")
-      .set({ expires_at: new Date(Date.now() - 1_000) })
-      .where("name", "=", "runtime-lapse")
-      .execute();
-    expect(
-      await takeReplicaClaim({
-        db: second,
-        name: "runtime-lapse",
-        holder: "other",
-        ttlSeconds: 60,
-      }),
-    ).toBe(true);
-    await expect(work).rejects.toBeInstanceOf(ReplicaClaimLostError);
+    await second.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("replica_claims")
+        .set({ expires_at: new Date(Date.now() - 1_000) })
+        .where("name", "=", "runtime-lapse")
+        .execute();
+      expect(
+        await takeReplicaClaim({
+          db: trx,
+          name: "runtime-lapse",
+          holder: "other",
+          ttlSeconds: 60,
+        }),
+      ).toBe(true);
+    });
+    await rejected;
     expect(seen?.aborted).toBe(true);
     // The claim stays the new holder's.
     expect(
@@ -125,24 +141,61 @@ describeIf("claims shared by replicas (ADR 0193)", () => {
       schema,
       poolSize: 2,
     });
-    const started = performance.now();
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "performance",
+      ],
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const work = withReplicaClaim({
       db: unreachable,
       name: "runtime-silent",
-      ttlSeconds: 2,
-      operation: () => new Promise<void>(() => {}),
+      ttlSeconds: 60,
+      operation: (claim) => {
+        signal = claim.signal;
+        markStarted();
+        return new Promise<void>(() => {});
+      },
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await unreachable.destroy();
-    await expect(work).rejects.toBeInstanceOf(ReplicaClaimLostError);
-    const elapsed = performance.now() - started;
-    expect(elapsed).toBeGreaterThanOrEqual(1_900);
-    expect(elapsed).toBeLessThan(2_600);
-    // The database still holds it until then: nobody took it early.
-    await first
-      .deleteFrom("replica_claims")
-      .where("name", "=", "runtime-silent")
-      .execute();
+    const rejected = expect(work).rejects.toBeInstanceOf(ReplicaClaimLostError);
+    try {
+      await started;
+      await unreachable.destroy();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(signal?.aborted).toBe(false);
+      // A second replica still cannot take this database claim early.
+      expect(
+        await takeReplicaClaim({
+          db: second,
+          name: "runtime-silent",
+          holder: "other",
+          ttlSeconds: 60,
+        }),
+      ).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(signal?.aborted).toBe(true);
+      expect(warning).toHaveBeenCalled();
+    } finally {
+      await vi.advanceTimersByTimeAsync(60_001);
+      await work.catch(() => {});
+      vi.useRealTimers();
+      warning.mockRestore();
+      await unreachable.destroy();
+      await first
+        .deleteFrom("replica_claims")
+        .where("name", "=", "runtime-silent")
+        .execute();
+    }
   });
 
   it("is a schedule when never released: nobody takes it before it lapses", async () => {

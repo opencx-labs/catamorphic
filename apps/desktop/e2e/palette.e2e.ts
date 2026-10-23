@@ -749,3 +749,33 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   );
   expect(app.getRendererErrors()).toEqual([]);
 });
+
+it("shows the new chat's harness, model name and effort in chat mode", async () => {
+  const defaultId = await app.eval<string>(
+    `window.catamorphicDesktop.agentsList().then(data => data.defaultAgentId)`,
+  );
+  await app.eval(`(async () => {
+    const agent = await window.catamorphicDesktop.agentsCreate({name:'Review helper',harness:'codex',model:'fake-model-a',effort:'high'});
+    await window.catamorphicDesktop.agentsSetDefault(agent.id);
+  })()`);
+  await open();
+  await type("chat");
+  await run(`key(' ')`);
+  await wait(
+    `return rows()[0]?.textContent.includes('Review helper · Fake Model A · high') && !!rows()[0]?.querySelector('[data-harness-icon="openai"]');`,
+    "chat identity and default settings",
+  );
+  await type("please review this");
+  expect(await run(`return rows()[0].textContent`)).toBe(
+    "Ask agentReview helper · Fake Model A · high",
+  );
+  await shot("palette-chat-harness-model-effort.png");
+  await app.eval(`window.catamorphicDesktop.devWindow('setSize',700,600)`);
+  await shot("palette-chat-harness-model-effort-narrow.png");
+  await close();
+  await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,900)`);
+  await app.eval(
+    `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(defaultId)})`,
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});

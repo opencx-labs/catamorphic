@@ -93,6 +93,7 @@ export function useResourceRows({ active }: { active: boolean }) {
             ),
             label: item.label,
             detail: hostOf(url),
+            url,
             keywords: [
               item.label,
               hostOf(url),
