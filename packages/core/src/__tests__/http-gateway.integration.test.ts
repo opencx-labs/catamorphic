@@ -60,7 +60,7 @@ interface Seen {
 }
 const seen: Seen[] = [];
 /** Bytes the fake API has handed its socket for `/big`. */
-const big = { written: 0 };
+const big: { written: number; resume?: () => void } = { written: 0 };
 
 function fakeApi(): http.Server {
   return http.createServer((request, response) => {
@@ -77,7 +77,14 @@ function fakeApi(): http.Server {
         }
         response.end();
       };
-      pump();
+      // Hold the rest until the test has observed a streamed first chunk.
+      // Socket and fetch buffer sizes differ across CI kernels and runtimes.
+      big.written = chunk.length;
+      response.write(chunk);
+      big.resume = () => {
+        big.resume = undefined;
+        pump();
+      };
       return;
     }
     const parts: Buffer[] = [];
@@ -678,25 +685,75 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
   it("streams a large answer through without holding it whole", async () => {
     const grant = await issue("logs");
     big.written = 0;
-    const response = await call({
+    try {
+      const response = await call({
+        alias: "logs",
+        path: "/big",
+        headers: bearer(grant),
+      });
+      expect(response.status).toBe(200);
+      if (response.body instanceof Uint8Array) throw new Error("Not streamed");
+      const iterator = response.body[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      // The gateway returns bytes while the upstream is explicitly unfinished.
+      expect(big.written).toBe(64 * 1024);
+      big.resume?.();
+      let total = first.value?.byteLength ?? 0;
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) break;
+        total += next.value.byteLength;
+      }
+      expect(total).toBe(BIG_BYTES);
+    } finally {
+      big.resume?.();
+    }
+  }, 60_000);
+
+  it("pulls only as the reader asks, and cancels upstream when it stops", async () => {
+    const grant = await issue("logs");
+    let pulls = 0;
+    let cancelled = false;
+    const source = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          controller.enqueue(Uint8Array.of(++pulls));
+          if (pulls === 3) controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const controlled = new HttpGatewayService({
+      store: dbHttpGatewayStore(db),
+      broker,
+      fetch: async () => new Response(source),
+    });
+    const response = await controlled.handle({
       alias: "logs",
-      path: "/big",
+      method: "GET",
+      path: "/",
       headers: bearer(grant),
     });
-    expect(response.status).toBe(200);
+    expect(pulls).toBe(0);
     if (response.body instanceof Uint8Array) throw new Error("Not streamed");
     const iterator = response.body[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    expect(first.done).toBe(false);
-    // The API waits on the reader: far less than the whole answer left it.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(big.written).toBeLessThan(BIG_BYTES / 2);
-    let total = first.value?.byteLength ?? 0;
-    for (;;) {
-      const next = await iterator.next();
-      if (next.done) break;
-      total += next.value.byteLength;
-    }
-    expect(total).toBe(BIG_BYTES);
-  }, 60_000);
+    expect(await iterator.next()).toMatchObject({
+      done: false,
+      value: Uint8Array.of(1),
+    });
+    await Promise.resolve();
+    expect(pulls).toBe(1);
+    expect(await iterator.next()).toMatchObject({
+      done: false,
+      value: Uint8Array.of(2),
+    });
+    expect(pulls).toBe(2);
+    await iterator.return?.();
+    expect(cancelled).toBe(true);
+    expect(pulls).toBe(2);
+  });
 });
