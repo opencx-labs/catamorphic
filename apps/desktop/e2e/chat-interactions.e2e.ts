@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 let app: AppHandle;
 const dock = "document.querySelector('[data-chat-local-id]:not([inert])')";
@@ -88,15 +88,39 @@ it("focuses the composer from the empty sides without taking text selection", as
   await app.waitFor(
     `!${dock}.getAnimations().some(a=>a.playState==='running')`,
   );
+  await focusWindow(app);
   for (const side of ["left", "right"]) {
-    const at = await app.eval<{ x: number; y: number }>(`(() => {
+    // Exercise the empty gutter, clear of pane dividers, native resize
+    // bands and the scrollbar at the very edge.
+    const at = await app.eval<{
+      x: number;
+      y: number;
+      inChat: boolean;
+    }>(`(() => {
       const r=${dock}.getBoundingClientRect();${input}.blur();
-      return {x:${JSON.stringify(side)}==='left'?r.left+5:r.right-5,y:r.top+r.height/2};
+      const x=${JSON.stringify(side)}==='left'?r.left+20:r.right-20;
+      const y=r.top+r.height/2;
+      return {x,y,inChat:${dock}.contains(document.elementFromPoint(x,y))};
     })()`);
+    expect(at.inChat, `${side} gutter belongs to the chat`).toBe(true);
     await app.clickPointer(at);
-    await app.waitFor(`document.activeElement===${input}`, {
-      label: `${side} gutter focuses composer`,
-    });
+    try {
+      await app.waitFor(`document.activeElement===${input}`, {
+        label: `${side} gutter focuses composer`,
+      });
+    } catch (error) {
+      const detail = await app.eval(`(() => {
+        const hit=document.elementFromPoint(${at.x},${at.y});
+        return {point:${JSON.stringify(at)},hasFocus:document.hasFocus(),
+          activeTag:document.activeElement?.tagName,
+          activeRole:document.activeElement?.getAttribute('role'),
+          collapsed:getSelection()?.isCollapsed,hitTag:hit?.tagName,
+          hitRole:hit?.getAttribute('role'),hitClass:hit?.className};
+      })()`);
+      throw new Error(`${side} gutter focus: ${JSON.stringify(detail)}`, {
+        cause: error,
+      });
+    }
   }
   // A real drag selects the reply; the section's click must preserve it.
   const rect = await app.eval<{ x: number; y: number }>(`(() => {
