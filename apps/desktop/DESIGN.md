@@ -776,6 +776,9 @@ A tap of PageUp or PageDown still moves one message. A held key now requests
 the top or bottom directly, loading earlier pages before a top move. It never
 walks through every intermediate message anchor. The first key uses a bounded
 search of contained row boxes instead of laying out every offscreen message.
+While that glide settles, its target keeps priority over near-end following:
+a folding row cannot pull the view back down. Late layout corrections retain
+that priority until the destination is reached or the person takes over.
 
 The composer and conversation columns animate maximum width with their padding
 when a chat maximizes or floats. Changing one instantly made the composer narrow,

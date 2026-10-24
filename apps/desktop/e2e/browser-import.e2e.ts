@@ -26,16 +26,27 @@ async function click(selector: string) {
   await app.waitFor(
     `document.getAnimations().every(animation => animation.playState !== "running" || animation.effect?.getTiming().iterations === Infinity)`,
   );
-  const point = await app.waitFor<{ x: number; y: number }>(
-    `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return false; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); return r.width && {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
-  );
-  await app.movePointer(point);
+  let point = { x: 0, y: 0 };
   // Native movement and a CDP press travel through different input queues.
   // Observe arrival, then keep the whole click on the native input path.
-  await app.waitFor(
-    `(() => { const el=document.querySelector(${JSON.stringify(selector)}); return el?.matches(':hover') && el.contains(document.elementFromPoint(${point.x},${point.y})); })()`,
-    { label: "the import control has the native pointer" },
-  );
+  await expect
+    .poll(
+      async () => {
+        // Profile discovery resizes the dialog after its first render.
+        // Follow its current control rather than waiting at an old point.
+        const next = await app.eval<{ x: number; y: number } | null>(
+          `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return null; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); return r.width ? {x:r.x+r.width/2,y:r.y+r.height/2} : null;})()`,
+        );
+        if (!next) return false;
+        point = next;
+        await app.movePointer(point);
+        return app.eval<boolean>(
+          `(() => { const el=document.querySelector(${JSON.stringify(selector)}); return !!el?.matches(':hover') && el.contains(document.elementFromPoint(${point.x},${point.y})); })()`,
+        );
+      },
+      { timeout: 15_000, interval: 100 },
+    )
+    .toBe(true);
   await app.clickPointer(point);
 }
 async function palette() {

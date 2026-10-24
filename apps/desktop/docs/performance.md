@@ -543,6 +543,11 @@ sample used 2.4 ms of layout instead of 1.75 s. The samples were passive and the
 workloads differ; this is diagnostic evidence, not a latency guarantee. Native
 motion, navigation and a long-row workload verify behavior in isolation.
 
+Navigation also retains its destination through transcript resizes. The scroll
+library treats a shrinking row near the end as permission to follow again;
+an active message glide overrides that until its destination settles. Its
+resize observer disconnects on arrival or interruption and does no idle work.
+
 A matched isolated native comparison used the same 16,160 output elements, two
 lurk/expand cycles and typed draft. The longest frame interval was 183.4 ms with
 the published renderer files and 16.8 ms with the corrected files. Input-to-next-

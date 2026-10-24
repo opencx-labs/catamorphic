@@ -1473,26 +1473,47 @@ function ChatNavigation({
         scroller.getBoundingClientRect().top -
         clearance;
       const behavior = instant ? "instant" : "smooth";
-      scroller.scrollTo({ top: scroller.scrollTop + off(), behavior });
+      const distance = off();
+      scroller.scrollTo({ top: scroller.scrollTop + distance, behavior });
+      // A shrinking row near the end makes the scroll library follow again.
+      // The person's destination keeps priority throughout this navigation.
+      const observer = new ResizeObserver(() => stopScroll());
+      observer.observe(content);
       // Virtualized turns take their measured heights as they come into
       // view. Finish at the destination after that layout, unless another
       // navigation or the reader's pointer/scroll has taken over.
       const interrupts = ["wheel", "touchstart", "pointerdown"];
+      let fallback: number;
       const stop = () => {
         settling.current = undefined;
         anchor.current = null;
         window.clearTimeout(fallback);
+        observer.disconnect();
         scroller.removeEventListener("scrollend", settle);
         for (const name of interrupts)
           scroller.removeEventListener(name, stop, true);
       };
       const settle = () => {
-        stop();
-        const rest = off();
-        if (Math.abs(rest) > 2)
-          scroller.scrollTo({ top: scroller.scrollTop + rest, behavior });
+        stopScroll();
+        const remaining = off();
+        const top = Math.max(
+          0,
+          Math.min(
+            scroller.scrollHeight - scroller.clientHeight,
+            scroller.scrollTop + remaining,
+          ),
+        );
+        if (Math.abs(top - scroller.scrollTop) <= 2) {
+          stop();
+          return;
+        }
+        // A late layout can require another glide. Retain the target and
+        // resize guard until that glide finishes, including on a slow frame.
+        scroller.scrollTo({ top, behavior });
+        window.clearTimeout(fallback);
+        fallback = window.setTimeout(settle, 1_000);
       };
-      const fallback = window.setTimeout(settle, 1_000);
+      fallback = window.setTimeout(settle, 1_000);
       settling.current = stop;
       scroller.addEventListener("scrollend", settle);
       for (const name of interrupts)

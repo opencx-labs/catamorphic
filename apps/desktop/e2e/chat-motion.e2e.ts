@@ -1378,6 +1378,34 @@ describe("chat motion", () => {
       "return document.hasFocus() && document.activeElement === composer();",
       { label: "navigation composer has native focus" },
     );
+    // A folding step can shrink the transcript as navigation starts. The
+    // person's target must keep priority over the library's near-end follow.
+    await run(`
+      const content=logScroller().firstElementChild;
+      const shrinking=document.createElement('div'); shrinking.style.height='8px';
+      content.insertBefore(shrinking,content.lastElementChild);
+      window.__navigationStarted=false; window.__navigationUnpinned=false; window.__navigationRepinned=false;
+      const sample=()=>{
+        if(window.__navigationStarted){
+          const pinned=content.hasAttribute('data-pinned');
+          if(!pinned) window.__navigationUnpinned=true;
+          else if(window.__navigationUnpinned) window.__navigationRepinned=true;
+        }
+        window.__navigationFrame=requestAnimationFrame(sample);
+      };
+      window.__navigationFrame=requestAnimationFrame(sample);
+      window.addEventListener('keydown',function fold(event){
+        if(event.key!=='PageUp')return;
+        window.__navigationStarted=true;
+        // Fold after the first navigation frame has let go, while it is
+        // still near the end. This proves a resize cannot take it back.
+        requestAnimationFrame(()=>requestAnimationFrame(()=>shrinking.remove()));
+        window.removeEventListener('keydown',fold);
+      });
+      return true;`);
+    await runWait("return following();", {
+      label: "navigation starts from the end before the row folds",
+    });
     const key = async (
       name: "PageUp" | "PageDown" | "ArrowUp" | "ArrowDown",
       repeat = false,
@@ -1410,6 +1438,8 @@ describe("chat motion", () => {
       );
     await key("PageUp");
     await atMessage(3);
+    expect(await run("return window.__navigationRepinned;")).toBe(false);
+    await run("cancelAnimationFrame(window.__navigationFrame); return true;");
     // One repeat means held: reach the end without stepping through each
     // intermediate message or waiting for more repeats.
     await key("PageUp", true);
@@ -1420,6 +1450,9 @@ describe("chat motion", () => {
       windowsVirtualKeyCode: 33,
     });
     await atMessage(0);
+    await runWait("return logScroller().scrollTop < 1;", {
+      label: "held Up reaches the absolute top before another press",
+    });
     const oldest = await run<number>("return logScroller().scrollTop;");
     await key("PageUp");
     await key("PageUp", true);
@@ -1439,14 +1472,31 @@ describe("chat motion", () => {
     await runWait("return following();", {
       label: "held PageDown reaches the latest response",
     });
-    // The normal preference store rebinds both actions live.
-    await app.eval(`new Promise((resolve, reject) => {
-      const api=window.catamorphicDesktop;
-      const stop=api.onKeybindingsChanged(value => { stop(); requestAnimationFrame(() => resolve(value)); });
-      api.getKeybindings().then(current => api.setKeybindings({...current,
+    // Settings reads the same provider as the chat. Wait for its new
+    // bindings to render, not merely for the IPC broadcast to arrive.
+    await app.eval(
+      "document.querySelector('button[aria-label=\"Settings\"]').click()",
+    );
+    await app.waitFor(
+      "!!document.querySelector('[data-setting-id=\"shortcut.chat-previous-message\"]')",
+    );
+    await app.eval(`(async () => {
+      const api=window.catamorphicDesktop, current=await api.getKeybindings();
+      await api.setKeybindings({...current,
         'chat-previous-message':'Alt+ArrowUp', 'chat-next-message':'Alt+ArrowDown'
-      })).catch(reject);
-    })`);
+      });
+      return true;
+    })()`);
+    await app.waitFor(`
+      document.querySelector('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === '⌥↑' &&
+      document.querySelector('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === '⌥↓'`);
+    // Opening Settings minimizes the floating chat; restore it normally.
+    await app.press("m", process.platform === "darwin" ? 4 : 2);
+    await runWait(
+      "return !!composer() && !frontDock().getAnimations().some(a=>a.playState==='running');",
+      { label: "navigation chat restored after changing its shortcuts" },
+    );
+    await run("composer().focus(); return true;");
     await key("ArrowUp", false, 1);
     await atMessage(3);
     await key("ArrowDown", false, 1);
