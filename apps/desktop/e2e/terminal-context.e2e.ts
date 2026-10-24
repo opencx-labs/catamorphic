@@ -46,12 +46,14 @@ async function nextTerminal(open: () => Promise<unknown>) {
 }
 
 async function assertDirectory(pty: string, directory: string) {
+  // macOS shells report /private/tmp while the fixture may start at /tmp.
+  const actualDirectory = await fs.realpath(directory);
   const command = 'printf "\\nCTX_PATH=%s\\n" "$PWD"\r';
   await app.eval(
     `window.catamorphicDesktop.terminalWrite(${JSON.stringify(pty)},${JSON.stringify(command)})`,
   );
   await app.waitFor(
-    `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(pty)}).then(b=>b?.buffer.includes(${JSON.stringify(`CTX_PATH=${directory}`)}))`,
+    `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(pty)}).then(b=>b?.buffer.includes(${JSON.stringify(`CTX_PATH=${actualDirectory}`)}))`,
     { label: "shell's actual working folder" },
   );
 }

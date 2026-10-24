@@ -30,18 +30,13 @@ async function click(selector: string) {
     `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return false; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); return r.width && {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
   );
   await app.movePointer(point);
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    ...point,
-    button: "left",
-    clickCount: 1,
-  });
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    ...point,
-    button: "left",
-    clickCount: 1,
-  });
+  // Native movement and a CDP press travel through different input queues.
+  // Observe arrival, then keep the whole click on the native input path.
+  await app.waitFor(
+    `(() => { const el=document.querySelector(${JSON.stringify(selector)}); return el?.matches(':hover') && el.contains(document.elementFromPoint(${point.x},${point.y})); })()`,
+    { label: "the import control has the native pointer" },
+  );
+  await app.clickPointer(point);
 }
 async function palette() {
   await app.waitFor(`!${input}`);
