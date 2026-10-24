@@ -289,6 +289,19 @@ Whole-operation errors are retryable and cancellation never marks import complet
 
 ## Keyboard and chat identity
 
+Back and Forward, including mouse buttons, keyboard shortcuts, swipes and page
+menus, move one explicit Chromium history entry. Automatic full-page and
+same-document navigation remains reachable even without page activation.
+Work does not manufacture entries for a page's `replaceState` operation.
+
+Clicks on empty chat gutters focus the composer. Links, controls, message text,
+code and an active text selection retain their normal behavior.
+
+Maximizing and floating a chat animate the conversation and composer's maximum
+width with their padding. The composer must not briefly narrow and wrap while
+the surrounding card expands or contracts. Folder and unsupported-file previews
+show their summary; retry is offered only after an actual preview read failure.
+
 Browser pages receive shortcuts that belong to another surface. In particular,
 Cmd+Enter (Ctrl+Enter outside macOS) belongs to a focused review comment form only
 while that form is focused; a page or embedded frame keeps it for its own submit

@@ -2099,6 +2099,11 @@ describe("subagents and background watchers", () => {
          !!step.querySelector('.animate-pulse');`,
       { timeoutMs: 30_000, label: "running background step pulses" },
     );
+    const backgroundAlignment = await run<number>(`
+      const row=floatingDock().querySelector('[data-step-kind="background"][data-running]');
+      return Math.abs(row.getBoundingClientRect().left-row.closest('[data-testid="chat-turn-steps"]').getBoundingClientRect().left);
+    `);
+    expect(backgroundAlignment).toBeLessThan(1);
     await runWait(
       `return !!floatingDock()?.querySelector(
          '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,

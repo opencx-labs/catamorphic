@@ -251,7 +251,7 @@ function fakePage(url = PAGE) {
     isDestroyed: () => false,
     getURL: () => url,
     focus: record("focus"),
-    navigationHistory: { goBack: record("back"), goForward: record("forward") },
+    navigationHistory: { goToOffset: record("history") },
     reload: record("reload"),
     print: record("print"),
     undo: record("undo"),
@@ -381,7 +381,7 @@ describe("runPageMenuAction", () => {
       "downloadURL(https://cdn.example.test/cat.png)",
       "focus",
       "inspectElement(40, 60)",
-      "back",
+      "history(-1)",
     ]);
     runPageMenuAction({
       action: "extension:abc:1",

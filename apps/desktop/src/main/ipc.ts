@@ -3618,7 +3618,8 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:pr-status", async (event, raw: unknown) => {
     const url = pullRequestAddress(raw);
     const fixture = e2ePullRequestStatus(url);
-    if (fixture !== undefined) return fixture;
+    if (fixture !== undefined)
+      return { status: fixture, source: fixture ? "connection" : null };
     const server = state.current;
     return readPullRequestStatus({
       url,

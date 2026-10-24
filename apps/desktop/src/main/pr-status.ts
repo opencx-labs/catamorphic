@@ -7,14 +7,15 @@ import {
   GithubApiError,
   pullRequestFromUrl,
 } from "@catamorphic/github";
+import type { PullRequestStatusRead } from "../shared/pr-details.js";
 import { githubCliToken } from "./github-cli.js";
 
 /**
  * Where the pull request at a web address stands (ADR 0239), for the chip
  * of the chat that recorded it: read with the person's own connection to
  * the host serving the address, else the GitHub CLI when they turned it on
- * (ADR 0117). Null when nothing here may read it, so the chip shows what
- * the chat recorded; a failure worth retrying throws.
+ * (ADR 0117). Public GitHub pull requests also work without a sign-in.
+ * A failure worth retrying throws, retaining the chip's last good read.
  */
 export async function readPullRequestStatus({
   url,
@@ -27,24 +28,36 @@ export async function readPullRequestStatus({
   viaConnection: (url: string) => Promise<PullRequestStatus | null>;
   cliEnabled: boolean;
   cliToken?: () => Promise<string | null>;
-}): Promise<PullRequestStatus | null> {
+}): Promise<PullRequestStatusRead> {
   try {
     const status = await viaConnection(url);
-    if (status) return status;
+    if (status) return { status, source: "connection" };
   } catch (error) {
     if (!(error instanceof CodeHostNotConnectedError) && !refused(error))
       throw error;
   }
-  if (!cliEnabled) return null;
   const pull = pullRequestFromUrl({ url });
-  const token = pull ? await cliToken() : null;
-  if (!pull || !token) return null;
+  if (!pull) return { status: null, source: null };
+  // The opt-in controls credentials, never whether public data is readable.
+  const token = cliEnabled ? await cliToken() : null;
+  if (token) {
+    try {
+      const status = await new GithubApi(token, {
+        signal: AbortSignal.timeout(15_000),
+      }).pullRequestStatus(pull);
+      return { status, source: "github-cli" };
+    } catch (error) {
+      if (!refused(error)) throw error;
+    }
+  }
   try {
-    return await new GithubApi(token, {
+    const status = await new GithubApi(null, {
       signal: AbortSignal.timeout(15_000),
-    }).pullRequestStatus(pull);
+    }).pullRequestStatus({ ...pull, includeChecks: false });
+    return { status, source: "public" };
   } catch (error) {
-    if (refused(error)) return null;
+    if (error instanceof GithubApiError && error.status === 404)
+      return { status: null, source: "public" };
     throw error;
   }
 }

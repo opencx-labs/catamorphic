@@ -843,4 +843,61 @@ describe("ChatTimeline for embedders", () => {
       next: expect.any(Function),
     });
   });
+
+  it("loads earlier pages for a held top request before making its endpoint move", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const register = vi.fn();
+    const load = vi.fn(async () => {});
+    const props = {
+      timeline: timelineOf({
+        turns: [turn("t1", 1)],
+        items: [input("t1", "hello"), reply("a1", "t1", "Done.")],
+      }),
+      registerMessageNavigation: register,
+      hasOlder: true,
+      onLoadOlder: load,
+    };
+    await render(props);
+    const scroller = container.querySelector('[role="log"]')?.firstElementChild;
+    if (!scroller) throw Error("Missing chat scroller");
+    const scroll = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", {
+      value: scroll,
+      configurable: true,
+    });
+    await act(async () => register.mock.calls.at(-1)?.[0].previous(true));
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(scroll).not.toHaveBeenCalled();
+    await render({ ...props, isLoadingOlder: true });
+    await render({ ...props, isLoadingOlder: false });
+    expect(load).toHaveBeenCalledTimes(2);
+    await render({ ...props, hasOlder: false });
+    expect(scroll).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
+  });
+
+  it.each(["sync", "async"])(
+    "stops a held top request after a %s history-load failure",
+    async (kind) => {
+      const register = vi.fn();
+      const load = vi.fn(() => {
+        if (kind === "sync") throw Error("History unavailable");
+        return Promise.reject(Error("History unavailable"));
+      });
+      const props = {
+        timeline: timelineOf({
+          turns: [turn("t1", 1)],
+          items: [input("t1", "hello"), reply("a1", "t1", "Done.")],
+        }),
+        registerMessageNavigation: register,
+        hasOlder: true,
+        onLoadOlder: load,
+      };
+      await render(props);
+      await act(async () => register.mock.calls.at(-1)?.[0].previous(true));
+      await render({ ...props, isLoadingOlder: true });
+      await render({ ...props, isLoadingOlder: false });
+      await act(async () => register.mock.calls.at(-1)?.[0].previous(true));
+      expect(load).toHaveBeenCalledTimes(1);
+    },
+  );
 });

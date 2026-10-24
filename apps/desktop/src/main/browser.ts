@@ -1167,8 +1167,8 @@ export function registerBrowserSupport(
   ) => {
     const target = pageMenuTargetOf(params);
     const items = pageMenu(target, {
-      canGoBack: page.navigationHistory.canGoBack(),
-      canGoForward: page.navigationHistory.canGoForward(),
+      canGoBack: page.navigationHistory.canGoToOffset(-1),
+      canGoForward: page.navigationHistory.canGoToOffset(1),
       mac: process.platform === "darwin",
       emojiPanel: app.isEmojiPanelSupported(),
       credentials: null,
@@ -1213,8 +1213,8 @@ export function registerBrowserSupport(
     )
       return;
     const items = pageMenu(target, {
-      canGoBack: guest.navigationHistory.canGoBack(),
-      canGoForward: guest.navigationHistory.canGoForward(),
+      canGoBack: guest.navigationHistory.canGoToOffset(-1),
+      canGoForward: guest.navigationHistory.canGoToOffset(1),
       mac: process.platform === "darwin",
       emojiPanel: app.isEmojiPanelSupported(),
       credentials:

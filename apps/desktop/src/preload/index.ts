@@ -62,7 +62,7 @@ import type { OpenMode } from "../shared/open-mode.js";
 import type {
   PrCommentInput,
   PrDecisionInput,
-  PullRequestStatus,
+  PullRequestStatusRead,
 } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
 import type {
@@ -1571,7 +1571,7 @@ const api = {
     invoke("catamorphic:pr-review", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:pr-list", projectId),
-  prStatus: (url: string): Promise<PullRequestStatus | null> =>
+  prStatus: (url: string): Promise<PullRequestStatusRead> =>
     invoke("catamorphic:pr-status", url),
   prFiles: (projectId: string, number: number): Promise<unknown> =>
     invoke("catamorphic:pr-files", projectId, number),

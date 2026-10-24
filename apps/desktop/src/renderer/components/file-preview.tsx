@@ -20,6 +20,7 @@ export function FilePreview({
     path: string;
     document: typeof document;
     preview: ResourcePreview;
+    failed?: boolean;
   }>();
   const [retry, setRetry] = useState(0);
   const key = `${projectId ?? ""}:${filePath}:${retry}`;
@@ -35,6 +36,7 @@ export function FilePreview({
           setResult({
             path: key,
             document,
+            failed: true,
             preview: {
               name:
                 document?.name || filePath.split(/[\\/]/).at(-1) || filePath,
@@ -65,7 +67,7 @@ export function FilePreview({
           Loading preview…
         </p>
       )}
-      {preview?.content.kind === "unavailable" && (
+      {preview && result?.failed && (
         <button
           type="button"
           className="mt-2 text-xs text-accent hover:underline"

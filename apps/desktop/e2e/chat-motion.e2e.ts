@@ -75,8 +75,8 @@ const helpers = `
   };
   const toLatest = () => {
     const dock = frontDock();
-    for (let i = 0; i <= dock.querySelectorAll('[data-user-message]').length; i++)
-      dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',repeat:true,bubbles:true,cancelable:true}));
+    dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',bubbles:true,cancelable:true}));
+    dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',repeat:true,bubbles:true,cancelable:true}));
   };
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
@@ -1246,6 +1246,14 @@ describe("chat motion", () => {
       style.textContent = '[role="log"] > div > div { max-width: 335px !important; }';
       document.head.append(style);
       return true;`);
+    // The column now resizes smoothly. Aim the native pointer at its final
+    // position, after the width transition, rather than at a moving message.
+    await runWait(
+      `const column = frontDock().querySelector('[role="log"] > div > div');
+       return Math.abs(column.getBoundingClientRect().width - 335) < 1 &&
+         !column.getAnimations().some(animation => animation.playState === 'running');`,
+      { label: "the narrow column settled" },
+    );
     await app.movePointer(await point(latest));
     const narrow = await lookWhen("1", "the time shown in a narrow column");
     const column = await run<[number, number]>(
@@ -1402,9 +1410,9 @@ describe("chat motion", () => {
       );
     await key("PageUp");
     await atMessage(3);
-    // Repeats arrive before the first smooth scroll could finish. Each
-    // must advance a message rather than continually restart that move.
-    for (let i = 0; i < 8; i++) await key("PageUp", true);
+    // One repeat means held: reach the end without stepping through each
+    // intermediate message or waiting for more repeats.
+    await key("PageUp", true);
     await app.cdp("Input.dispatchKeyEvent", {
       type: "keyUp",
       key: "PageUp",
@@ -1421,7 +1429,7 @@ describe("chat motion", () => {
     ).toBeLessThan(2);
     await key("PageDown");
     await atMessage(1);
-    for (let i = 0; i < 8; i++) await key("PageDown", true);
+    await key("PageDown", true);
     await app.cdp("Input.dispatchKeyEvent", {
       type: "keyUp",
       key: "PageDown",
@@ -1443,6 +1451,31 @@ describe("chat motion", () => {
     await atMessage(3);
     await key("ArrowDown", false, 1);
     await runWait("return following();");
+    // A tab's top padding must not make the first Down merely align the
+    // oldest message after a held Up has reached the absolute beginning.
+    const maximize = await run<{ x: number; y: number }>(`
+      const r=frontDock().querySelector('button[aria-label="Open as tab"]').getBoundingClientRect();
+      return {x:r.x+r.width/2,y:r.y+r.height/2};`);
+    await app.clickPointer(maximize);
+    await runWait(
+      "return frontDock().hasAttribute('data-chat-tab') && !frontDock().getAnimations().some(a=>a.playState==='running');",
+      { label: "navigation chat is a settled tab" },
+    );
+    await run("composer().focus(); return true;");
+    await key("ArrowUp", false, 1);
+    await key("ArrowUp", true, 1);
+    await app.cdp("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "ArrowUp",
+      code: "ArrowUp",
+      windowsVirtualKeyCode: 38,
+      modifiers: 1,
+    });
+    await runWait("return logScroller().scrollTop < 1;", {
+      label: "held Up reaches the tab's absolute top",
+    });
+    await key("ArrowDown", false, 1);
+    await atMessage(1);
     expect(await run(`return composer().textContent;`)).toBe("Keep this draft");
     expect(app.getRendererErrors()).toEqual([]);
   });

@@ -1,12 +1,17 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import type { PullRequestStatus } from "../../shared/pr-details.js";
+import type {
+  PullRequestStatus,
+  PullRequestStatusRead,
+} from "../../shared/pr-details.js";
 import { desktopApi } from "./desktop-api.js";
 
 /** How often a pull request shown on a chip is read again. */
 const PR_STATUS_REFRESH_MS = 60_000;
 /** A status this fresh is drawn without asking again. */
 const PR_STATUS_STALE_MS = 30_000;
+/** Anonymous GitHub reads share a much smaller rate limit. */
+const PUBLIC_REFRESH_MS = 5 * 60_000;
 
 export const prStatusQueryKey = (url: string) =>
   ["desktop", "pr-status", url] as const;
@@ -29,15 +34,18 @@ export function usePullRequestStatuses({
       queryKey: prStatusQueryKey(url),
       queryFn: () => desktopApi.prStatus(url),
       enabled,
-      staleTime: PR_STATUS_STALE_MS,
-      // A merged or closed pull request stands where it is.
-      refetchInterval: (query: {
-        state: { data?: PullRequestStatus | null };
-      }) =>
+      staleTime: (query: { state: { data?: PullRequestStatusRead } }) =>
+        query.state.data?.source === "public"
+          ? PUBLIC_REFRESH_MS
+          : PR_STATUS_STALE_MS,
+      // A merged pull request cannot reopen; a closed one can.
+      refetchInterval: (query: { state: { data?: PullRequestStatusRead } }) =>
         enabled &&
-        query.state.data?.state !== "merged" &&
-        query.state.data?.state !== "closed"
-          ? PR_STATUS_REFRESH_MS
+        query.state.data?.status?.state !== "merged" &&
+        (query.state.data === undefined || query.state.data.status !== null)
+          ? query.state.data?.source === "public"
+            ? PUBLIC_REFRESH_MS
+            : PR_STATUS_REFRESH_MS
           : false,
       refetchIntervalInBackground: false,
       retry: 1,
@@ -66,7 +74,7 @@ export function usePullRequestStatuses({
       new Map(
         urls.flatMap((url, index) => {
           const data = results[index]?.data;
-          return data === undefined ? [] : [[url, data] as const];
+          return data === undefined ? [] : [[url, data.status] as const];
         }),
       ),
     [key],
