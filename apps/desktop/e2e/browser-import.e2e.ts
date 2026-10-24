@@ -20,35 +20,29 @@ const server = http.createServer((request, response) => {
 });
 const input = `[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0)`;
 async function click(selector: string) {
-  // An app launched after another suite may not yet be the key window.
-  // Its first native click must reach the control, not just activate it.
+  // A preceding app can leave this window inactive. The control must be
+  // ready before the pointer is sent through Chromium's one input queue.
   await focusWindow(app);
+  await app.waitFor("document.hasFocus()");
   await app.waitFor(
     `document.getAnimations().every(animation => animation.playState !== "running" || animation.effect?.getTiming().iterations === Infinity)`,
   );
-  let point = { x: 0, y: 0 };
-  // Native movement and a CDP press travel through different input queues.
-  // Observe arrival, then keep the whole click on the native input path.
-  await expect
-    .poll(
-      async () => {
-        // Profile discovery resizes the dialog after its first render.
-        // Follow its current control rather than waiting at an old point.
-        const next = await app.eval<{ x: number; y: number } | null>(
-          `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return null; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); return r.width ? {x:r.x+r.width/2,y:r.y+r.height/2} : null;})()`,
-        );
-        if (!next) return false;
-        point = next;
-        await app.movePointer(point);
-        return app.eval<boolean>(
-          `(() => { const el=document.querySelector(${JSON.stringify(selector)}); return !!el?.matches(':hover') && el.contains(document.elementFromPoint(${point.x},${point.y})); })()`,
-        );
-      },
-      { timeout: 15_000, interval: 100 },
-    )
-    .toBe(true);
-  await app.clickPointer(point);
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return false; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; return r.width && el.contains(document.elementFromPoint(x,y)) ? {x,y} : false;})()`,
+    { label: `ready control: ${selector}` },
+  );
+  // These controls use Chromium's themed picker. An OS hover flag is not
+  // a readiness signal for it; test the real opening and keyboard behavior.
+  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
 }
+
 async function palette() {
   await app.waitFor(`!${input}`);
   await app.press("p", process.platform === "darwin" ? 4 : 2);
