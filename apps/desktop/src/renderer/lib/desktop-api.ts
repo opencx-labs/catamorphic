@@ -87,7 +87,7 @@ import type {
   PrCommentInput,
   PrDecisionInput,
   PrDetails,
-  PullRequestStatus,
+  PullRequestStatusRead,
 } from "../../shared/pr-details.js";
 import type {
   ProfileSync,
@@ -124,6 +124,7 @@ import type {
   SiteSummary,
   SiteSystemRefusal,
 } from "../../shared/site-settings.js";
+import type { TerminalCreateInput } from "../../shared/terminal.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
@@ -1592,13 +1593,9 @@ export interface CatamorphicDesktopApi {
   projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalGhosttyAppearance: () => Promise<TerminalAppearanceResult>;
-  terminalCreate: (input: {
-    projectId?: string;
-    cols?: number;
-    rows?: number;
-    /** A shell in this remote chat's workspace (ADR 0209). */
-    remoteChat?: { sessionId: string };
-  }) => Promise<{ sessionId: string; cwd: string }>;
+  terminalCreate: (
+    input: TerminalCreateInput,
+  ) => Promise<{ sessionId: string; cwd: string }>;
   terminalWrite: (sessionId: string, data: string) => Promise<void>;
   terminalResize: (
     sessionId: string,
@@ -1785,10 +1782,6 @@ export interface CatamorphicDesktopApi {
   browserCloseAsk: (input: { guestId: number }) => Promise<"close" | "asking">;
   onBrowserCloseAnswer: (
     listener: (answer: { guestId: number; leave: boolean }) => void,
-  ) => () => void;
-  /** The page first took a press or a key, in any of its frames. */
-  onBrowserPageActivated: (
-    listener: (event: { guestId: number }) => void,
   ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
@@ -2115,7 +2108,7 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   /** Where the pull request at a web address stands; null when unreadable. */
-  prStatus: (url: string) => Promise<PullRequestStatus | null>;
+  prStatus: (url: string) => Promise<PullRequestStatusRead>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
   /** A page for load, a row or null for reveal, an effect or null for action. */
@@ -2250,8 +2243,5 @@ export const desktopApi: CatamorphicDesktopApi = {
   onPageDialogs: shareEvent((publish) => nativeApi.onPageDialogs(publish)),
   onBrowserCloseAnswer: shareEvent((publish) =>
     nativeApi.onBrowserCloseAnswer(publish),
-  ),
-  onBrowserPageActivated: shareEvent((publish) =>
-    nativeApi.onBrowserPageActivated(publish),
   ),
 };

@@ -269,7 +269,8 @@ export const BUILTIN_ACTIONS = [
     id: "new-terminal-tab",
     label: "New terminal",
     icon: "SquareTerminal",
-    description: "open a terminal tab in the project folder",
+    description:
+      "open a shell in the focused chat's folder or the project folder",
     defaultBinding: "Ctrl+`",
     keywords: ["terminal", "shell", "console", "cli", "command line"],
   },
@@ -730,11 +731,13 @@ export const BUILTIN_ACTIONS = [
     label: "Open terminal in this chat's workspace",
     icon: "SquareTerminal",
     description:
-      "open a terminal in the focused chat's workspace on the project's server, beside its agent",
+      "open a terminal beside the agent, in its local checkout or server workspace",
     defaultBinding: null,
     keywords: [
       "terminal",
       "shell",
+      "worktree",
+      "local",
       "remote",
       "server",
       "workspace",

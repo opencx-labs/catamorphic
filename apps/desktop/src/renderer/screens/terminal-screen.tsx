@@ -1,6 +1,7 @@
 import { FitAddon, Terminal } from "ghostty-web";
 import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import type { TerminalChat } from "../../shared/terminal.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import { isMoving } from "../lib/project-move.js";
@@ -49,10 +50,9 @@ export interface TerminalScreenProps {
   /** Viewing only — keystrokes don't reach the PTY (agent in control). */
   readOnly?: boolean;
   /**
-   * A shell in this remote chat's workspace on the project's server (ADR
-   * 0209) instead of one on this computer.
+   * The chat whose working folder the shell opens in, locally or on its server.
    */
-  remoteChat?: { sessionId: string };
+  chat?: TerminalChat;
   /** Shell title changes (OSC 0/2) — feeds the tab label. */
   onTitle: (title: string) => void;
   /**
@@ -79,7 +79,7 @@ export function TerminalScreen({
   restoreSessionId,
   adoptSessionId,
   readOnly = false,
-  remoteChat,
+  chat,
   onTitle,
   onExit,
   onSession,
@@ -111,7 +111,7 @@ export function TerminalScreen({
   readOnlyRef.current = readOnly;
   const initialCommandRef = useRef(initialCommand);
   // Fixed for the terminal's life, like the shell it names.
-  const remoteChatRef = useRef(remoteChat);
+  const chatRef = useRef(chat);
   const floatingRef = useRef(floating);
   floatingRef.current = floating;
   const macroShortcutsRef = useRef(macroShortcuts);
@@ -262,11 +262,11 @@ export function TerminalScreen({
               );
             }
           }
-          const remote = remoteChatRef.current;
+          const chat = chatRef.current;
           // Opening may start the chat's workspace and run its setup,
           // which takes a while: say so where the shell will be. One row,
           // so erasing it once the shell is there leaves nothing behind.
-          const progress = remote
+          const progress = chat?.remote
             ? "Starting the chat's workspace on the server…".slice(
                 0,
                 Math.max(0, term.cols - 1),
@@ -278,9 +278,7 @@ export function TerminalScreen({
               projectId,
               cols: term.cols,
               rows: term.rows,
-              ...(remote
-                ? { remoteChat: { sessionId: remote.sessionId } }
-                : {}),
+              ...(chat ? { chat } : {}),
             })
             .catch((error: unknown) => {
               // A remote workspace can refuse (not running, no access) or
@@ -620,7 +618,7 @@ export function TerminalScreen({
       if (
         sessionId &&
         !attachSessionId &&
-        (remoteChatRef.current || !isMoving(projectId))
+        (chatRef.current?.remote || !isMoving(projectId))
       ) {
         void desktopApi.terminalKill(sessionId);
       }

@@ -464,7 +464,7 @@ const emptyChatPromptFor = (localId: string) => {
  */
 /** A chat on screen, floating or in its tab: dock-in plays once. */
 const EXPANDED_POSE =
-  "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-in";
+  "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow] animate-dock-in";
 
 export function ChatDock(props: ChatDockProps) {
   return (
@@ -2702,6 +2702,27 @@ function ChatDockContent({
     >
       <section
         ref={sectionRef}
+        onClick={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.altKey ||
+            event.shiftKey ||
+            !(event.target instanceof HTMLElement) ||
+            event.target.closest(
+              'a, button, input, textarea, select, label, [contenteditable], [role="button"], [role="dialog"], [role="menu"], pre, code',
+            ) ||
+            !window.getSelection()?.isCollapsed ||
+            [...event.target.childNodes].some(
+              (node) =>
+                node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+            )
+          )
+            return;
+          focusComposerInternally();
+        }}
         onKeyDown={(event) => {
           if (
             event.defaultPrevented ||
@@ -2804,7 +2825,7 @@ function ChatDockContent({
         // off in the first frame.
         className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden duration-250 ease-standard ${
           presentsAsTab
-            ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
+            ? "h-full max-w-full rounded-none border border-bg bg-bg"
             : `${
                 lurking ? "h-44" : "h-[min(560px,100%)]"
               } max-w-3xl rounded-2xl border bg-bg-raised shadow-2xl ${
@@ -2812,7 +2833,7 @@ function ChatDockContent({
               }`
         } ${
           closing || minimizing
-            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-out"
+            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow] animate-dock-out"
             : expanded
               ? EXPANDED_POSE
               : presentsAsTab
@@ -2830,7 +2851,7 @@ function ChatDockContent({
                   // state transitions it: coming back, a transition's first
                   // frame would still skip the chat as it focuses its
                   // composer.
-                  "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow,content-visibility] transition-discrete [content-visibility:hidden]"
+                  "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow,content-visibility] transition-discrete [content-visibility:hidden]"
         }`}
         aria-label={title}
         aria-hidden={!expanded}
@@ -3263,11 +3284,11 @@ function ChatDockContent({
               focusMessageId={entry.focusMessageId}
               backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}
-              contentClassName={
+              contentClassName={`transition-[max-width,padding-top] duration-250 ease-standard ${
                 isTab
                   ? "mx-auto w-full max-w-4xl pt-12"
                   : "mx-auto w-full max-w-3xl"
-              }
+              }`}
               timeline={chat.timeline}
               requests={chat.state?.requests}
               pending={chat.pending}
@@ -3289,7 +3310,7 @@ function ChatDockContent({
               onDismissFailed={chat.dismissFailed}
               hasOlder={chat.hasOlder}
               isLoadingOlder={chat.isLoadingOlder}
-              onLoadOlder={() => void chat.loadOlder()}
+              onLoadOlder={chat.loadOlder}
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
               resolveAgentName={resolveAgentName}
@@ -3342,7 +3363,7 @@ function ChatDockContent({
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
           <div
-            className={`flex w-full flex-col ${arriving ? "" : "transition-[padding] duration-250 ease-standard"} ${
+            className={`flex w-full flex-col ${arriving ? "" : "transition-[max-width,padding] duration-250 ease-standard"} ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"

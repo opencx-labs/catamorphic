@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+/** The same status data, with its access path for the desktop's refresh budget. */
+export interface PullRequestStatusRead {
+  status: PullRequestStatus | null;
+  source: "connection" | "github-cli" | "public" | null;
+}
+
 const person = z.object({
   login: z.string().optional(),
   name: z.string().optional(),

@@ -309,7 +309,7 @@ export interface MenuPage {
   isDestroyed(): boolean;
   getURL(): string;
   focus(): void;
-  navigationHistory: { goBack(): void; goForward(): void };
+  navigationHistory: { goToOffset(offset: number): void };
   reload(): void;
   print(): void;
   undo(): void;
@@ -456,10 +456,10 @@ export function runPageMenuAction({
       host.suggestPassword();
       return;
     case "back":
-      page.navigationHistory.goBack();
+      page.navigationHistory.goToOffset(-1);
       return;
     case "forward":
-      page.navigationHistory.goForward();
+      page.navigationHistory.goToOffset(1);
       return;
     case "reload":
       page.reload();

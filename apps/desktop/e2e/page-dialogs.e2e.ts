@@ -3,10 +3,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
+  focusWindow,
   launchApp,
   pointerOnPage,
   setReactValueJs,
 } from "./harness.js";
+import { pressNativeMacKey } from "./native-pointer.js";
 
 /**
  * Pages ask through Work's dialogs (ADR 0227): alert, confirm and prompt
@@ -201,6 +203,17 @@ const newTab = async () => {
   await app.waitFor(`!!${ADDRESS} && document.activeElement === ${ADDRESS}`, {
     label: "new tab's address bar",
   });
+};
+/** macOS menu accelerator, or input sent to the actual guest on Linux. */
+const closePageKey = async () => {
+  if (process.platform === "darwin") await pressNativeMacKey("w", ["command"]);
+  else
+    await app.eval(`(() => {
+      const page = ${VIEW};
+      for (const type of ['keyDown', 'keyUp'])
+        page.sendInputEvent({ type, keyCode: 'W', modifiers: ['control'] });
+      return true;
+    })()`);
 };
 
 beforeAll(async () => {
@@ -493,6 +506,51 @@ describe("page dialogs", () => {
     expect(await inPage<string>("location.search")).toBe("?from=link");
   });
 
+  it("closes an interacted busy page without an app-owned waiting period", async () => {
+    await newTab();
+    await go(`${origin}/plain`);
+    await loaded("Plain");
+    await focusWindow(app);
+    await pressInPage();
+    const key = await app.eval<string>(ACTIVE_KEY);
+    // A busy app such as a calendar must not answer a script probe before
+    // its tab can leave. No beforeunload handler: nothing asks to stay.
+    await start(
+      `setTimeout(() => {
+      document.title = 'Busy';
+      const end = performance.now() + 5_000;
+      while (performance.now() < end) {}
+    }, 0); true`,
+      false,
+    );
+    await app.waitFor(
+      `(() => { try { return ${VIEW}.getTitle() === 'Busy'; } catch { return false; } })()`,
+      {
+        label: "the page's renderer is busy",
+      },
+    );
+    await app.eval(`(() => {
+      const tab = document.querySelector('[data-point-key=${JSON.stringify(key)}]');
+      const start = performance.now();
+      window.__tabCloseMs = null;
+      const observer = new MutationObserver(() => {
+        if (tab.isConnected) return;
+        window.__tabCloseMs = performance.now() - start;
+        observer.disconnect();
+      });
+      observer.observe(tab.parentElement, { childList: true });
+      return true;
+    })()`);
+    await closePageKey();
+    const elapsed = await app.waitFor<number>("window.__tabCloseMs", {
+      label: "the interacted tab closed",
+    });
+    console.info("[page-dialogs] interacted tab closed in", elapsed, "ms");
+    // Allows the tab's exit motion and slow CI frames, but not a timeout
+    // waiting for the busy renderer or a lost guest close event.
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
   it("a tab whose page nobody touched closes at once, its beforeunload never asked", async () => {
     await newTab();
     await go(`${origin}/unload`);
@@ -507,6 +565,27 @@ describe("page dialogs", () => {
     expect(
       (await dialogsSince(mark)).filter((kinds) => kinds.length > 0),
     ).toEqual([]);
+  });
+
+  it("a newly committed document does not inherit the previous page's interaction", async () => {
+    await newTab();
+    await go(`${origin}/plain`);
+    await loaded("Plain");
+    await pressInPage();
+    await go(`${origin}/unload`);
+    await loaded("Unload");
+    const key = await app.eval<string>(ACTIVE_KEY);
+    const mark = await markDialogs();
+    await focusWindow(app);
+    await app.eval(`${VIEW}.focus(); true`);
+    await closePageKey();
+    await app.waitFor(
+      `!document.querySelector('[data-point-key=${JSON.stringify(key)}]')`,
+      { label: "untouched replacement document closed by shortcut" },
+    );
+    expect((await dialogsSince(mark)).filter((kinds) => kinds.length)).toEqual(
+      [],
+    );
   });
 
   it("closing a tab asks its page, and Cancel keeps the tab", async () => {

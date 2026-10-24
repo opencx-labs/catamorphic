@@ -52,6 +52,14 @@ after it does.
 or their removal of a chat's page, asks; a chat page going back to its chip
 (still loaded), or an agent's or extension's close, does not. The page's
 beforeunload runs through `webContents.close({ waitForBeforeUnload: true })`.
+Native presses and the isolated preload record interaction with the current
+document as it happens. Closing never runs an activation script probe in the
+page. A committed navigation resets that record; a same-document route keeps it.
+A cached history restore republishes the document's sticky activation from its
+isolated preload, so it can protect changes without requiring another press.
+The native `close` event completes the tab close immediately, including when
+there is no beforeunload handler. Only the page's own beforeunload can ask to stay;
+Work adds no confirmation or waiting period for an ordinary page.
 Electron unloads a webview's page whatever it answers (its internal
 `-before-unload-fired` handler honours the answer only for windows), so
 main keeps the page loaded on that private event and the tab leaves with

@@ -26,10 +26,12 @@ export function chatSessionMenu(args: {
             action: "new-subsession" as const,
           },
         ]),
-    ...(args.remote && !args.archived
+    ...(!args.archived
       ? [
           { label: "Open terminal", action: "open-terminal" as const },
-          { label: "Open preview…", action: "open-preview" as const },
+          ...(args.remote
+            ? [{ label: "Open preview…", action: "open-preview" as const }]
+            : []),
         ]
       : []),
     {

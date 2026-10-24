@@ -79,6 +79,15 @@ checkout selection are runtime state, separate from presentation preferences.
 | Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voiceDictation`, `voiceShortcutsAsked`, `voiceInDock`, `voiceInChats`, `voiceBubbleSpot`, `voiceprint`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0216, 0236) |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
+App-themed terminals use the nearest resolved project theme and its monospace
+font, including shared and personal project overrides. The appearance provider
+loads only the profile's source choice and optional Ghostty configuration; it
+does not resolve app colors outside a project's theme scope. A new terminal
+waits for that scope to load. Existing shells retain their opening colors
+because the embedded terminal engine fixes its palette when opened; font edits
+apply live without restarting a shell. Choosing Ghostty remains an explicit
+profile-wide appearance choice.
+
 Do not apply generic object merging to workspace documents or themes. Credentials,
 enforced permissions, last project, unread markers and sidebar pose are not ordinary
 project-overridable settings. `ProfileConfigManager.forProject` identifies an owning

@@ -66,10 +66,6 @@ const LEAVE_WINDOW_MS = 5_000;
 const INTENT_WINDOW_MS = 3_000;
 /** A sign-in that takes longer than this to land is not offered for saving. */
 const SAVE_WINDOW_MS = 60_000;
-/** An isolated world for reading the page's activation, apart from the driver's. */
-const PROBE_WORLD = 1006;
-/** How long a page may take to say whether the person touched it. */
-const PROBE_MS = 400;
 /** How often a frame that asked is checked for having gone (removed, crashed). */
 const FRAME_CHECK_MS = 500;
 /** How long Chromium's transient user activation lasts (kActivationLifespan). */
@@ -193,6 +189,8 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   const held = new Map<number, HeldAction | null>();
   /** Tabs being closed, waiting on the page's beforeunload. */
   const closing = new Set<number>();
+  /** Native input and the isolated preload report interaction as it happens. */
+  const touched = new Set<number>();
   /**
    * Each tab's goings (the person's or an agent's, and every top-frame
    * navigation), counted: a sign-in asked before one never shows after it.
@@ -286,8 +284,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       void guest.loadURL(intent.url).catch(() => {});
     else if (intent.kind === "reload") guest.reload();
     else if (intent.kind === "reload-hard") guest.reloadIgnoringCache();
-    else if (intent.kind === "back") guest.navigationHistory.goBack();
-    else guest.navigationHistory.goForward();
+    else guest.navigationHistory.goToOffset(intent.kind === "back" ? -1 : 1);
   };
 
   // --- the page's alert, confirm and prompt ---
@@ -320,6 +317,15 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
         candidate.frameToken === frame.frameToken &&
         candidate.processId === frame.processId,
     );
+  const onPageActivated = (event: Electron.IpcMainEvent) => {
+    if (
+      event.senderFrame &&
+      hostOf(event.sender) &&
+      inPage(event.sender, event.senderFrame)
+    )
+      touched.add(event.sender.id);
+  };
+  ipcMain.on("catamorphic:page-activated", onPageActivated);
   const onScriptDialog = (event: Electron.IpcMainEvent, payload: unknown) => {
     const reply = (value: ScriptDialogReply) => {
       event.returnValue = value;
@@ -402,20 +408,9 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       const guest = hostedGuest(event.sender, input?.guestId);
       if (!guest || guest.isCrashed() || !hostOf(guest)) return "close";
       if (dialogs.has(guest.id)) return "close";
-      const touched = await Promise.race([
-        guest
-          .executeJavaScriptInIsolatedWorld(PROBE_WORLD, [
-            { code: "navigator.userActivation.hasBeenActive" },
-          ])
-          .then(
-            (value) => value === true,
-            () => false,
-          ),
-        new Promise<boolean>((resolve) =>
-          setTimeout(() => resolve(false), PROBE_MS),
-        ),
-      ]);
-      if (!touched || guest.isDestroyed()) return "close";
+      // Never query a busy renderer to decide whether to ask it. Chromium
+      // alone decides whether this interacted page has changes to protect.
+      if (!touched.has(guest.id)) return "close";
       closing.add(guest.id);
       activated.set(guest.id, Date.now() + ACTIVATION_MS);
       // The page's beforeunload runs; "-before-unload-fired" keeps the page
@@ -568,6 +563,23 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   const wire = (_event: Electron.Event, contents: WebContents) => {
     if (contents.getType() !== "webview") return;
     const id = contents.id;
+    // Native presses count even in a frame without a preload, and before
+    // dom-ready. Keys/typing come from the existing isolated preload.
+    contents.on("input-event", (_event, input) => {
+      if (input.type === "mouseDown" || input.type === "touchStart")
+        touched.add(id);
+    });
+    // No beforeunload handler: the native close settles immediately,
+    // even if destroying the guest loses the webview's forwarded event.
+    EventEmitter.prototype.on.call(contents, "close", () => {
+      if (!closing.delete(id)) return;
+      const owner = contents.hostWebContents;
+      if (owner && !owner.isDestroyed())
+        owner.send("catamorphic:browser-close-answer", {
+          guestId: id,
+          leave: true,
+        });
+    });
     contents.on("will-prevent-unload", (event) => {
       const owner = hostOf(contents);
       if (!owner) return;
@@ -686,6 +698,8 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       if (details.isMainFrame && !details.isSameDocument)
         mainNavigations.set(id, details.url);
     });
+    // A committed document starts with no interaction; a cancelled
+    // navigation and a same-document route keep the current document's.
     contents.on("did-navigate", (_event, url, httpResponseCode) => {
       went(id);
       dialogs.navigated(id);
@@ -693,6 +707,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       held.delete(id);
       leaving.delete(id);
       closing.delete(id);
+      touched.delete(id);
       const save = pendingSaves.get(id);
       pendingSaves.delete(id);
       const owner = contents.hostWebContents;
@@ -721,6 +736,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       held.delete(id);
       leaving.delete(id);
       closing.delete(id);
+      touched.delete(id);
       activated.delete(id);
       pendingSaves.delete(id);
       triedUsernames.delete(id);
@@ -733,6 +749,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   return () => {
     app.off("web-contents-created", wire);
     ipcMain.off("catamorphic:page-dialog", onScriptDialog);
+    ipcMain.off("catamorphic:page-activated", onPageActivated);
     ipcMain.off("catamorphic:browser-unload-intent", onUnloadIntent);
     ipcMain.off("catamorphic:page-navigating", onPageNavigating);
     ipcMain.removeHandler("catamorphic:page-dialogs");

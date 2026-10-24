@@ -3,7 +3,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addressAllowed,
   type EgressLookup,
@@ -585,18 +585,32 @@ describe("egress proxy", () => {
     let asked = false;
     const connections: net.Socket[] = [];
     echo.on("connection", (socket) => connections.push(socket));
-    const { socketPath } = await proxy(
-      { allow: [`127.0.0.1:${echoPort}`, "slow.test"] },
-      {
-        lookup: async () => {
-          asked = true;
-          await resolving;
-          return [{ address: "127.0.0.1", family: 4 }];
+    // Observe the real server socket: closing the client's local handle
+    // does not mean the proxy has received its close event yet.
+    const createServer = vi.spyOn(net, "createServer");
+    let socketPath: string;
+    let server: net.Server;
+    try {
+      ({ socketPath } = await proxy(
+        { allow: [`127.0.0.1:${echoPort}`, "slow.test"] },
+        {
+          lookup: async () => {
+            asked = true;
+            await resolving;
+            return [{ address: "127.0.0.1", family: 4 }];
+          },
         },
-      },
+      ));
+      server = createServer.mock.results[0]?.value;
+    } finally {
+      createServer.mockRestore();
+    }
+    const accepted = new Promise<net.Socket>((resolve) =>
+      server.once("connection", resolve),
     );
     const client = net.connect(socketPath);
-    const closed = new Promise((resolve) => client.once("close", resolve));
+    const remote = await accepted;
+    const closed = new Promise((resolve) => remote.once("close", resolve));
     client.write(`CONNECT slow.test:${echoPort} HTTP/1.1\r\n\r\n`);
     await vitestPoll(() => asked);
     client.destroy();
