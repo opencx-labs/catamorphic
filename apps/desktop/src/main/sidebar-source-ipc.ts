@@ -4,6 +4,13 @@ import path from "node:path";
 import { SESSION_METADATA_LIMITS } from "@catamorphic/agent-protocol";
 import { app, ipcMain } from "electron";
 import { z } from "zod";
+import {
+  accessBeyond,
+  accessText,
+  type CodeAccess,
+  isEmptyAccess,
+  type ModuleAccessRequest,
+} from "../shared/code-access.js";
 import { isHostAction, SOURCE_ACTION_PATTERN } from "../shared/sidebar.js";
 import {
   type SidebarSourceWorkCall,
@@ -13,8 +20,14 @@ import {
   sanitizeSidebarSourceItem,
   sanitizeSidebarSourcePage,
 } from "../shared/source-rows.js";
-import { executableSource } from "../shared/workspace-config.js";
+import {
+  CHIPS_OWNER_ID,
+  executableSource,
+} from "../shared/workspace-config.js";
+import type { CodeApprovals } from "./code-approvals.js";
 import type { WindowProfileRegistry } from "./index.js";
+import { describeModuleAccess, readModuleAccess } from "./module-access.js";
+import { launchConfinedModule } from "./module-sandbox.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
@@ -119,22 +132,31 @@ const workResultSchema = z.object({
   error: z.string().optional(),
 });
 /**
- * A module's request of Work, held to its section's grants (ADR 0234): a
- * list by `collections`, a workflow by `workflows`. Throws what to fix.
+ * A module's request of Work, held to the access its process started with
+ * (ADR 0277): a list it names in `lists`, a workflow in `workflows`.
+ * Throws what to fix.
  */
 export function parseWorkCall(
   raw: unknown,
-  grants: { collections: readonly string[]; workflows: readonly string[] },
+  access: CodeAccess,
+  owner?: string,
 ): SidebarSourceWorkCall {
   const call = workCallSchema.parse(raw);
   if (call.op === "call") {
-    if (!grants.workflows.includes(call.workflow))
+    if (!(access.workflows ?? []).includes(call.workflow))
       throw new Error(
-        `This section does not grant the workflow ${call.workflow} (add it to workflows).`,
+        `This module's access does not include the workflow ${call.workflow} (add it to workflows in catamorphic.access).`,
       );
-  } else if (!grants.collections.includes(call.source))
+    return call;
+  }
+  // A chips module reads its chat's chips, in the window that shows them.
+  if (owner === CHIPS_OWNER_ID && call.source !== CHIPS_OWNER_ID)
     throw new Error(
-      `This section does not grant Work's ${call.source} list (add it to collections).`,
+      `A chips module reads its chat's chips only, not Work's ${call.source} list.`,
+    );
+  if (!(access.lists ?? []).includes(call.source))
+    throw new Error(
+      `This module's access does not include Work's ${call.source} list (add it to lists in catamorphic.access).`,
     );
   return call;
 }
@@ -150,7 +172,17 @@ export function registerSidebarSources(deps: {
   rootFor: (projectId: string) => Promise<string | null>;
   /** Work's Bun toolchain environment: PATH entries and CATAMORPHIC_BUN. */
   toolchain: () => Promise<Record<string, string>>;
+  /** The profile's record of what the person approved code to reach. */
+  approvals: (profileId: string) => CodeApprovals;
+  /** Where modules keep a home and a temp folder of their own. */
+  scratchRoot: string;
+  /** A throwaway E2E profile where Work cannot confine modules (Linux CI). */
+  unconfined?: boolean;
+  /** Work's own loopback servers, which no module reaches. */
+  blocked?: (host: string, port: number) => boolean;
 }) {
+  /** The access each module's running process was started with. */
+  const started = new WeakMap<SidebarSourceRuntime, CodeAccess>();
   const runtimes = new Map<string, SidebarSourceRuntime>();
   let workerPath: string | undefined;
   const materializeWorker = () => {
@@ -177,8 +209,6 @@ export function registerSidebarSources(deps: {
       sender?: Electron.WebContents;
       projectId?: string;
       sectionId?: string;
-      collections?: readonly string[];
-      workflows?: readonly string[];
       /** The chat the request serves, which Work's chat lists read. */
       sessionId?: string;
     }
@@ -216,8 +246,8 @@ export function registerSidebarSources(deps: {
   };
   /**
    * A module asking Work for something (ADR 0234): only while it serves a
-   * request, only what its section grants, answered by the window that
-   * asked, which reads Work's lists as it does for its own sections.
+   * request, only what its access names (ADR 0277), answered by the window
+   * that asked, which reads Work's lists as it does for its own sections.
    */
   const answerWork = async (
     owner: SidebarSourceRuntime,
@@ -237,10 +267,11 @@ export function registerSidebarSources(deps: {
       throw new Error(
         "work is available while a source loads or acts, not in subscribe.",
       );
-    const call = parseWorkCall(raw, {
-      collections: request.collections ?? [],
-      workflows: request.workflows ?? [],
-    });
+    const call = parseWorkCall(
+      raw,
+      started.get(owner) ?? {},
+      request.sectionId,
+    );
     const callId = crypto.randomUUID();
     const value = await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -282,16 +313,62 @@ export function registerSidebarSources(deps: {
     const source = executableSource(resolved.config, input.sectionId);
     if (!source) throw new Error("This section has no executable source.");
     const modulePath = path.resolve(root, source.module);
+    // What it reaches is declared beside it and approved by the person
+    // (ADR 0277); read on every request, so an edit asks again at once.
+    const declared = readModuleAccess({ modulePath, projectRoot: root });
+    const module = path.relative(root, modulePath);
+    const subject = `module:${input.projectId}:${module}`;
+    const approvals = deps.approvals(profileId);
+    // A module that declares nothing needs no answer, and no keychain.
+    const beyond = isEmptyAccess(declared.access)
+      ? {}
+      : accessBeyond(await approvals.approved(subject), declared.access);
+    const ask: ModuleAccessRequest | null = isEmptyAccess(beyond)
+      ? null
+      : {
+          module,
+          beyond: describeModuleAccess({ access: beyond, projectRoot: root }),
+          all: describeModuleAccess({
+            access: declared.access,
+            projectRoot: root,
+          }),
+          network: Boolean(declared.access.hosts?.length),
+          fingerprint: accessText(declared.access),
+        };
     const key = JSON.stringify([profileId, input.projectId, modulePath]);
     let runtime = runtimes.get(key);
     if (!runtime) {
       const created: SidebarSourceRuntime = new SidebarSourceRuntime({
         modulePath,
         projectRoot: root,
-        workerPath: materializeWorker(),
-        executable: async () =>
-          (await deps.toolchain()).CATAMORPHIC_BUN ?? "bun",
-        env: deps.toolchain,
+        ...(declared.file ? { watchFiles: [declared.file] } : {}),
+        // Each start reads the declaration again and runs only what the
+        // person approved, confined to exactly that.
+        launch: async () => {
+          const current = readModuleAccess({ modulePath, projectRoot: root });
+          if (
+            !isEmptyAccess(current.access) &&
+            !isEmptyAccess(
+              accessBeyond(await approvals.approved(subject), current.access),
+            )
+          )
+            throw new Error(
+              "This module wants more access than you allowed. Allow it in its section.",
+            );
+          const toolchain = await deps.toolchain();
+          started.set(created, current.access);
+          return launchConfinedModule({
+            executable: toolchain.CATAMORPHIC_BUN ?? "bun",
+            workerPath: materializeWorker(),
+            modulePath,
+            projectRoot: root,
+            access: current.access,
+            toolchain,
+            scratchRoot: deps.scratchRoot,
+            unconfined: deps.unconfined === true,
+            ...(deps.blocked ? { blocked: deps.blocked } : {}),
+          });
+        },
         work: (requestKey, call) => answerWork(created, requestKey, call),
       });
       runtime = created;
@@ -311,7 +388,7 @@ export function registerSidebarSources(deps: {
         },
       );
     }
-    return { runtime, grants: source };
+    return { runtime, profileId, subject, declared, ask };
   };
   ipcMain.handle(
     "catamorphic:sidebar-source-request",
@@ -324,22 +401,26 @@ export function registerSidebarSources(deps: {
         sender?: Electron.WebContents;
         projectId?: string;
         sectionId?: string;
-        collections?: readonly string[];
-        workflows?: readonly string[];
         sessionId?: string;
       } = { cancelled: false };
       requests.set(key, request);
       try {
-        const { runtime, grants } = await resolve(event, input);
+        const { runtime, ask } = await resolve(event, input);
         if (request.cancelled || event.sender.isDestroyed())
           throw new Error("Sidebar request cancelled.");
+        // A module wanting more than the person allowed does not run: its
+        // section shows the request instead of rows.
+        if (ask) {
+          if (input.method === "load") return { items: [], access: ask };
+          throw new Error(
+            "This module wants more access than you allowed. Allow it in its section.",
+          );
+        }
         Object.assign(request, {
           runtime,
           sender: event.sender,
           projectId: input.projectId,
           sectionId: input.sectionId,
-          collections: grants.collections,
-          workflows: grants.workflows,
           sessionId: input.session?.id,
         });
         const { after, ...rest } = input;
@@ -370,6 +451,28 @@ export function registerSidebarSources(deps: {
       } finally {
         requests.delete(key);
       }
+    },
+  );
+  // The person allowed what the module's section showed them (ADR 0277).
+  ipcMain.handle(
+    "catamorphic:sidebar-source-allow",
+    async (event, raw: unknown) => {
+      // Work's own windows only; a page in a tab never approves anything.
+      if (event.sender.getType() !== "window")
+        throw new Error("Only Work can allow a module's access.");
+      const input = identity
+        .extend({ fingerprint: z.string().max(64 * 1024) })
+        .parse(raw);
+      const { runtime, profileId, subject, declared } = await resolve(
+        event,
+        input,
+      );
+      if (accessText(declared.access) !== input.fingerprint)
+        throw new Error(
+          "This module's access changed while you looked at it. Check it again.",
+        );
+      await deps.approvals(profileId).approve(subject, declared.access);
+      runtime.reload();
     },
   );
   ipcMain.handle("catamorphic:sidebar-source-cancel", (event, id: string) => {
@@ -442,6 +545,7 @@ export function registerSidebarSources(deps: {
     runtimes.clear();
     for (const suffix of [
       "request",
+      "allow",
       "cancel",
       "subscribe",
       "unsubscribe",

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { sanitizeSidebarSourcePage } from "../shared/source-rows.js";
+import type { ModuleLaunch } from "./module-sandbox.js";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
 
 /**
@@ -26,8 +27,9 @@ function setup(
     idleMs?: number;
     timeoutMs?: number;
     startTimeoutMs?: number;
-    executable?: () => Promise<string>;
-    env?: () => Promise<Record<string, string>>;
+    launch?: () => Promise<ModuleLaunch>;
+    /** The whole environment the module's process gets. */
+    env?: Record<string, string>;
     work?: (requestId: string, call: unknown) => Promise<unknown>;
   } = {},
 ) {
@@ -35,12 +37,21 @@ function setup(
   roots.push(root);
   const modulePath = path.join(root, "source.ts");
   fs.writeFileSync(modulePath, source);
+  const worker = path.join(import.meta.dirname, "sidebar-source-worker.ts");
+  const { launch, env, ...rest } = opts;
   const runtime = new SidebarSourceRuntime({
     projectRoot: root,
     modulePath,
-    workerPath: path.join(import.meta.dirname, "sidebar-source-worker.ts"),
-    executable: async () => "bun",
-    ...opts,
+    // Unconfined here: module-sandbox.test.ts runs the real sandbox.
+    launch:
+      launch ??
+      (async () => ({
+        command: "bun",
+        args: [worker, modulePath],
+        env: { PATH: process.env.PATH ?? "", ...env },
+        close: async () => {},
+      })),
+    ...rest,
   });
   runtimes.push(runtime);
   const load = (extra = {}) =>
@@ -198,23 +209,26 @@ it("reports a hung load as too slow", async () => {
   await expect(load()).rejects.toThrow("too long");
 });
 
-it("gives up on a toolchain that never resolves, and spawns nothing after", async () => {
-  let resolveExecutable: (executable: string) => void = () => {};
+it("gives up on a launch that never resolves, spawns nothing after, and releases it", async () => {
+  let resolveLaunch: (launch: ModuleLaunch) => void = () => {};
   const { load, runtime } = setup(
     `export default {async load(){return {items:[]}}}`,
     {
       startTimeoutMs: 200,
-      executable: () =>
+      launch: () =>
         new Promise((resolve) => {
-          resolveExecutable = resolve;
+          resolveLaunch = resolve;
         }),
     },
   );
   await expect(load()).rejects.toThrow("took too long to start");
-  // The toolchain arriving late must not start a worker for a dead request.
-  resolveExecutable("bun");
+  // A launch arriving late must not start a worker for a dead request, and
+  // what it holds (its proxy) is let go.
+  const close = vi.fn(async () => {});
+  resolveLaunch({ command: "bun", args: [], env: {}, close });
   await new Promise((resolve) => setImmediate(resolve));
   expect(Reflect.get(runtime, "child")).toBeUndefined();
+  expect(close).toHaveBeenCalled();
 });
 
 it("survives a hung source, source edits and a worker crash", async () => {
@@ -367,7 +381,7 @@ it("rejects malformed pages and preserves executable actions and display fields"
   ).toThrow("without run:");
 });
 
-it("answers a module's work calls for the request they serve, and gives it the toolchain environment", async () => {
+it("answers a module's work calls for the request they serve, and gives it only the environment it was launched with", async () => {
   const calls: Array<{ requestId: string; call: unknown }> = [];
   const { load, runtime } = setup(
     `
@@ -378,6 +392,7 @@ it("answers a module's work calls for the request they serve, and gives it the t
         return { items: [
           ...page.items,
           { id: "env", label: process.env.CATAMORPHIC_TEST_TOOLCHAIN ?? "missing" },
+          { id: "secret", label: process.env.CATAMORPHIC_TEST_SECRET ?? "none" },
           { id: "out", label: String(output.total) },
         ] };
       },
@@ -388,7 +403,7 @@ it("answers a module's work calls for the request they serve, and gives it the t
     };
   `,
     {
-      env: async () => ({ CATAMORPHIC_TEST_TOOLCHAIN: "bun-here" }),
+      env: { CATAMORPHIC_TEST_TOOLCHAIN: "bun-here" },
       work: async (requestId, call) => {
         calls.push({ requestId, call });
         if (
@@ -407,6 +422,8 @@ it("answers a module's work calls for the request they serve, and gives it the t
     items: [
       { id: "browser:1", label: "Docs" },
       { id: "env", label: "bun-here" },
+      // Work's own environment never reaches a module (ADR 0277).
+      { id: "secret", label: "none" },
       { id: "out", label: "3" },
     ],
   });

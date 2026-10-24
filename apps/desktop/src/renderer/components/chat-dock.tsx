@@ -60,7 +60,11 @@ import {
 import { normalizePrefs } from "../../shared/app-prefs.js";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ChatDockProps, McpAppRef } from "../../shared/chat.js";
-import { modifiersForMode, type OpenMode } from "../../shared/open-mode.js";
+import {
+  modifiersForMode,
+  type OpenMode,
+  type OpenModifiers,
+} from "../../shared/open-mode.js";
 import { paletteCountsVisit } from "../../shared/palette.js";
 import { rosterAgentId } from "../../shared/voice.js";
 import {
@@ -126,12 +130,14 @@ import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { parseSkillInvocation } from "../lib/skill-entries.js";
 import { selectionName, textPill } from "../lib/text-pills";
 import { ThemeBackdrop } from "../lib/theme.js";
+import { untrustedHost, useTrustedHosts } from "../lib/trusted-hosts.js";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useVoiceReading } from "../lib/use-voice-reading.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
+import { windowImage } from "../lib/window-images.js";
 import type { ChatMode } from "../lib/workspace-types.js";
 import { isOpenAction } from "../sources/run.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
@@ -170,6 +176,7 @@ import {
 } from "./composer-input";
 import { ComposerMenu } from "./composer-menu.js";
 import { EnvironmentConnections } from "./environment-connections.js";
+import { LinkTrustDialog } from "./link-trust-dialog.js";
 import { Modal } from "./modal.js";
 import { ResourceLinkBoundary } from "./open-resource-button.js";
 import { PendingButton } from "./pending-button.js";
@@ -177,11 +184,17 @@ import {
   ProjectAuthorityProvider,
   useRemoteAuthority,
 } from "./project-authority-provider.js";
+import { RemoteImage } from "./remote-image.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
 import { latestReportedModel } from "./reported-model.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
 import { VoiceButton } from "./voice-button.js";
+
+/** Images in replies wait for the person to show them (ADR 0277). */
+const renderImage = (props: { src: string; alt: string }) => (
+  <RemoteImage {...props} />
+);
 
 const EMPTY_CHAT_PROMPTS = [
   { empty: "Ready when you are.", composer: "Give me the first move…" },
@@ -504,7 +517,7 @@ function ChatDockContent({
   onFocusRequest,
   pullSelectionNonce = 0,
   onUnsplit,
-  onLinkClick,
+  onLinkClick: openLinkDirectly,
   onFileClick,
   onFork,
   onForkCurrent,
@@ -533,6 +546,23 @@ function ChatDockContent({
   onSessionAgent,
   onSignalsChange,
 }: ChatDockProps) {
+  // A web link the chat opens to a host it does not trust asks first: the
+  // address may carry what the agent read (ADR 0277). Work's own links,
+  // and links to trusted hosts, open as they always have.
+  const trustedHosts = useTrustedHosts(projectId);
+  const [linkAsk, setLinkAsk] = useState<{
+    url: string;
+    host: string;
+    modifiers: OpenModifiers | OpenMode;
+  } | null>(null);
+  const onLinkClick = useCallback(
+    (url: string, modifiers: OpenModifiers | OpenMode) => {
+      const host = untrustedHost(trustedHosts, url);
+      if (host) setLinkAsk({ url, host, modifiers });
+      else openLinkDirectly?.(url, modifiers);
+    },
+    [trustedHosts, openLinkDirectly],
+  );
   const authority = useRemoteAuthority();
   const catalog = useAgentCatalog(authority ? projectId : undefined);
   const [transferError, setTransferError] = useState<string>();
@@ -903,13 +933,17 @@ function ChatDockContent({
   useEffect(() => {
     void desktopApi
       .connectionsList()
-      .then((connections) => {
+      .then(async (connections) => {
+        // As data from main: the window fetches no icon itself (ADR 0277).
         const icons = new Map<string, string>();
-        for (const connection of connections) {
-          if (connection.iconUrl) {
-            icons.set(connection.serverKey, connection.iconUrl);
-          }
-        }
+        await Promise.all(
+          connections.map(async (connection) => {
+            const icon = connection.iconUrl
+              ? await windowImage({ url: connection.iconUrl })
+              : null;
+            if (icon) icons.set(connection.serverKey, icon);
+          }),
+        );
         setConnectorIcons(icons);
       })
       .catch(() => {});
@@ -3306,6 +3340,7 @@ function ChatDockContent({
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
               renderLink={renderLink}
+              renderImage={renderImage}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}
@@ -3377,6 +3412,7 @@ function ChatDockContent({
                     source={chipView.source}
                     session={chipView.session}
                     failure={chipView.failure}
+                    {...(chipView.access ? { access: chipView.access } : {})}
                     onOpen={openChipFromRail}
                     onCustomize={customizeChips}
                     onLeave={leaveChips}
@@ -3864,6 +3900,20 @@ function ChatDockContent({
           />
         )}
       </Modal>
+      <LinkTrustDialog
+        ask={linkAsk}
+        onClose={() => setLinkAsk(null)}
+        onOpen={() => {
+          setLinkAsk(null);
+          if (linkAsk) openLinkDirectly?.(linkAsk.url, linkAsk.modifiers);
+        }}
+        onTrust={async () => {
+          if (!linkAsk) return;
+          await desktopApi.trustHost(linkAsk.host);
+          setLinkAsk(null);
+          openLinkDirectly?.(linkAsk.url, linkAsk.modifiers);
+        }}
+      />
     </div>
   );
 }

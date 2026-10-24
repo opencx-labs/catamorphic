@@ -126,6 +126,7 @@ import type {
 } from "../../shared/site-settings.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
+import type { TrustedHosts } from "../../shared/trusted-hosts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 import type {
@@ -142,6 +143,7 @@ import type {
   VoiceBubbleDrag,
   VoiceSpotsState,
 } from "../../shared/voice-bubble.js";
+import type { WindowImageRequest } from "../../shared/window-images.js";
 import type { WorkspaceTabRef } from "../../shared/workspace-tab-ref.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
@@ -749,7 +751,7 @@ export interface Profile {
   color: string;
   projectIds: string[];
   defaultProjectId?: string;
-  /** Part → the profile whose settings it shares (ADR 0272). */
+  /** Part → the profile whose settings it shares (ADR 0277). */
   syncedFrom?: ProfileSync;
 }
 
@@ -1853,6 +1855,11 @@ export interface CatamorphicDesktopApi {
     url: string;
     faviconUrl: string;
   }) => Promise<void>;
+  /**
+   * An image from outside the window, as a data URL, or null when it may not
+   * show it (ADR 0277); use `renderer/lib/window-images.ts`, which caches.
+   */
+  windowImage: (input: WindowImageRequest) => Promise<string | null>;
   browserSuggest: (input: {
     profileId: string;
     query: string;
@@ -1940,7 +1947,7 @@ export interface CatamorphicDesktopApi {
     patch: { name?: string; color?: string; defaultProjectId?: string },
   ) => Promise<Profile | undefined>;
   profilesSetDefault: (id: string) => Promise<void>;
-  /** Bring parts of another profile's settings in, shared or copied (ADR 0272). */
+  /** Bring parts of another profile's settings in, shared or copied (ADR 0277). */
   profilesSyncSettings: (input: {
     profileId: string;
     from: string;
@@ -2120,6 +2127,21 @@ export interface CatamorphicDesktopApi {
 
   /** A page for load, a row or null for reveal, an effect or null for action. */
   sidebarSourceRequest: (input: SidebarSourceRequest) => Promise<unknown>;
+  /**
+   * The person allowed what a module's section asked (ADR 0277); the
+   * fingerprint names the declaration they saw, so a changed one asks again.
+   */
+  sidebarSourceAllow: (input: {
+    projectId: string;
+    sectionId: string;
+    fingerprint: string;
+  }) => Promise<void>;
+  /** Whether the person allowed an app to read their chats (ADR 0148, 0272). */
+  appAccessApproved: (input: {
+    projectId: string;
+    app: string;
+  }) => Promise<boolean>;
+  appAccessAllow: (input: { projectId: string; app: string }) => Promise<void>;
   sidebarSourceCancel: (id: string) => Promise<void>;
   sidebarSourceSubscribe: (input: {
     projectId: string;
@@ -2127,6 +2149,15 @@ export interface CatamorphicDesktopApi {
     leaseId: string;
   }) => Promise<void>;
   sidebarSourceUnsubscribe: (id: string) => Promise<void>;
+  /**
+   * The hosts a chat opens and shows without asking (ADR 0277): Work's,
+   * the project's committed list, and the person's own.
+   */
+  trustedHosts: (projectId?: string) => Promise<TrustedHosts>;
+  /** The person trusts a host from now on; only Work's own windows may. */
+  trustHost: (host: string) => Promise<void>;
+  untrustHost: (host: string) => Promise<void>;
+  onTrustedHostsChanged: (listener: () => void) => () => void;
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => () => void;

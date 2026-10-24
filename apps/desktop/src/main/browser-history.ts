@@ -29,6 +29,11 @@ const WRITE_DEBOUNCE_MS = 500;
 export class HistoryStore {
   private cache = new Map<string, HistoryEntry[]>();
   private writes = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Per profile, the icons each site's visited pages showed. */
+  private icons = new Map<
+    string,
+    { sites: Map<string, string[]>; all: Set<string> }
+  >();
   constructor(private readonly profilesDir: string) {}
   private file(profileId: string): string {
     return path.join(this.profilesDir, profileId, "history.json");
@@ -69,6 +74,7 @@ export class HistoryStore {
     fs.renameSync(`${file}.tmp`, file);
   }
   private changed(profileId: string): void {
+    this.icons.delete(profileId);
     const entries = this.load(profileId);
     if (entries.length > MAX_ENTRIES)
       this.cache.set(
@@ -189,6 +195,38 @@ export class HistoryStore {
       entry.title = title;
       this.changed(profileId);
     }
+  }
+  /**
+   * The icons pages of a site showed when they were visited, the most
+   * recent first: what the window may show for that site (ADR 0277).
+   */
+  siteFavicons(profileId: string, origin: string): readonly string[] {
+    return this.iconIndex(profileId).sites.get(origin) ?? [];
+  }
+  /** A visited page showed this icon. */
+  seenFavicon(profileId: string, icon: string): boolean {
+    return this.iconIndex(profileId).all.has(icon);
+  }
+  private iconIndex(profileId: string) {
+    const indexed = this.icons.get(profileId);
+    if (indexed) return indexed;
+    const index = {
+      sites: new Map<string, string[]>(),
+      all: new Set<string>(),
+    };
+    const pages = this.web(profileId).sort(
+      (a, b) => b.lastVisitAt - a.lastVisitAt,
+    );
+    for (const page of pages) {
+      const site = page.faviconUrl ? siteOrigin(page.url) : null;
+      if (!site || !page.faviconUrl) continue;
+      const icons = index.sites.get(site) ?? [];
+      if (!icons.includes(page.faviconUrl)) icons.push(page.faviconUrl);
+      index.sites.set(site, icons);
+      index.all.add(page.faviconUrl);
+    }
+    this.icons.set(profileId, index);
+    return index;
   }
   setFavicon(profileId: string, url: string, faviconUrl: string): void {
     const entry = this.load(profileId).find(

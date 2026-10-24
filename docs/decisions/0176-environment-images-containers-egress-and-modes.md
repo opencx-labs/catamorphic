@@ -1,6 +1,6 @@
 # 0176 — Environments choose images, containers, egress, and what agents may change
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md): a workflow run's egress is its program's declared hosts within the Environment's policy, closed when neither names any)
 - **Date:** 2026-09-27
 - **Refines:** 0054, 0056, 0100, 0158, 0162, 0167, 0175
 

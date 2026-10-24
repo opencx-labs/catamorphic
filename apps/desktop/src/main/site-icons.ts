@@ -45,6 +45,13 @@ export class SiteIcons {
     return icons[scheme] ?? icons[scheme === "dark" ? "light" : "dark"] ?? null;
   }
 
+  /** Some site of this profile showed this icon. */
+  has(profileId: string, iconUrl: string): boolean {
+    for (const icons of this.icons.get(profileId)?.values() ?? [])
+      if (icons.dark === iconUrl || icons.light === iconUrl) return true;
+    return false;
+  }
+
   releaseProfile(profileId: string): void {
     this.icons.delete(profileId);
   }

@@ -1,4 +1,5 @@
 import type { CollectionPage } from "@catamorphic/app";
+import type { ModuleAccessRequest } from "../../shared/code-access.js";
 import type { WorkSourceName } from "../../shared/sidebar.js";
 import type {
   SidebarSourceCapabilities,
@@ -7,7 +8,11 @@ import type {
 } from "../../shared/sidebar-source.js";
 import { sidebarSourceEffect } from "../../shared/sidebar-source.js";
 import { desktopApi } from "../lib/desktop-api.js";
-import { invalidateBranches, type SectionSource } from "./contract.js";
+import {
+  invalidateBranches,
+  type SectionSource,
+  type SourceAccess,
+} from "./contract.js";
 
 /** How long a burst of changes to Work's lists waits to read a module once. */
 const FOLLOW_MS = 150;
@@ -29,6 +34,25 @@ const isItem = (value: unknown): value is SidebarSourceItem =>
   isRecord(value) &&
   typeof value.id === "string" &&
   typeof value.label === "string";
+
+/** Main's request in place of a page (ADR 0277), as main shaped it. */
+function readAccess(value: unknown): ModuleAccessRequest | null {
+  if (!isRecord(value) || !isRecord(value.access)) return null;
+  const { module, beyond, all, network, fingerprint } = value.access;
+  const lines = (list: unknown) =>
+    Array.isArray(list)
+      ? list.filter((line): line is string => typeof line === "string")
+      : [];
+  return typeof module === "string" && typeof fingerprint === "string"
+    ? {
+        module,
+        beyond: lines(beyond),
+        all: lines(all),
+        network: network === true,
+        fingerprint,
+      }
+    : null;
+}
 
 function readPage(value: unknown): CollectionPage<SidebarSourceItem> & {
   capabilities?: SidebarSourceCapabilities;
@@ -80,6 +104,8 @@ export function moduleSource<Name extends string = WorkSourceName>({
     drop: false,
     reveal: false,
   };
+  /** What the module asked at its last read, until the person allows it. */
+  let asking: SourceAccess | null = null;
   const request = async (
     input: Omit<SidebarSourceRequest, "projectId" | "sectionId" | "requestId">,
     signal: AbortSignal,
@@ -107,19 +133,31 @@ export function moduleSource<Name extends string = WorkSourceName>({
     title,
     empty,
     capabilities: () => capabilities,
+    access: () => asking,
     load: async ({ parentId, cursor, query, session, signal }) => {
-      const page = readPage(
-        await request(
-          {
-            method: "load",
-            parentId,
-            cursor,
-            ...(query !== undefined ? { query } : {}),
-            ...(session ? { session } : {}),
-          },
-          signal,
-        ),
+      const answer = await request(
+        {
+          method: "load",
+          parentId,
+          cursor,
+          ...(query !== undefined ? { query } : {}),
+          ...(session ? { session } : {}),
+        },
+        signal,
       );
+      const wanted = readAccess(answer);
+      asking = wanted
+        ? {
+            request: wanted,
+            allow: () =>
+              desktopApi.sidebarSourceAllow({
+                projectId,
+                sectionId: ownerId,
+                fingerprint: wanted.fingerprint,
+              }),
+          }
+        : null;
+      const page = readPage(answer);
       const reported = page.capabilities;
       if (
         reported &&

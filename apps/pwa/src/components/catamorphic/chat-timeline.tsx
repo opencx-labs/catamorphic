@@ -242,6 +242,12 @@ export interface ChatTimelineProps {
     onOpen: NonNullable<ChatTimelineProps["onLinkClick"]>;
   }) => ReactNode;
   /**
+   * A Markdown image in an agent message. An address in a reply is not the
+   * person's choice to contact it, so without a host the image is named,
+   * never loaded; hosts decide what may show (ADR 0277).
+   */
+  renderImage?: (props: { src: string; alt: string }) => ReactNode;
+  /**
    * A file path in the steps was clicked ("Edited docs/plan.md"). Hosts
    * open the file; without it the rows stay text.
    */
@@ -347,7 +353,7 @@ const ActionsContext = createContext<TimelineActions>({
 // alive; the context hands each link the latest callbacks, so it is
 // provided once at the root and updates without re-rendering any message.
 const LinkContext = createContext<
-  Pick<ChatTimelineProps, "onLinkClick" | "renderLink">
+  Pick<ChatTimelineProps, "onLinkClick" | "renderLink" | "renderImage">
 >({});
 function TimelineLink({
   href,
@@ -372,7 +378,13 @@ function TimelineLink({
     </a>
   );
 }
-const LINK_COMPONENTS = { a: TimelineLink };
+function TimelineImage({ src, alt }: { src?: string; alt?: string }) {
+  const { renderImage } = useContext(LinkContext);
+  if (src && renderImage) return renderImage({ src, alt: alt ?? "" });
+  return <span className="text-fg-muted">{alt || "Image"}</span>;
+}
+const IMAGE_COMPONENTS = { img: TimelineImage };
+const LINK_COMPONENTS = { a: TimelineLink, img: TimelineImage };
 
 /** Links the host opens itself keep their scheme through sanitizing. */
 const HOST_LINK =
@@ -393,7 +405,7 @@ const TimelineMarkdown = memo(function TimelineMarkdown({
     <Markdown
       remarkPlugins={REMARK_PLUGINS}
       urlTransform={opensLinks ? hostUrlTransform : defaultUrlTransform}
-      components={opensLinks ? LINK_COMPONENTS : undefined}
+      components={opensLinks ? LINK_COMPONENTS : IMAGE_COMPONENTS}
     >
       {text}
     </Markdown>
@@ -574,6 +586,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     sourceHref,
     onLinkClick,
     renderLink,
+    renderImage,
     onFileClick,
     resolveToolIcon,
     backgroundCommands,
@@ -752,8 +765,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
   );
   // Links re-render with their message, unless the host's handlers change.
   const links = useMemo(
-    () => ({ onLinkClick, renderLink }),
-    [onLinkClick, renderLink],
+    () => ({ onLinkClick, renderLink, renderImage }),
+    [onLinkClick, renderLink, renderImage],
   );
   const { folding, folded } = useFoldingNotes(views);
   // Work that joins the timeline on screen opens its own height, while

@@ -44,8 +44,9 @@ import { lucideIcon } from "../lib/lucide-icon.js";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { TONE_TEXT } from "../lib/tones.js";
-import type { SectionSource } from "../sources/contract.js";
+import type { SectionSource, SourceAccess } from "../sources/contract.js";
 import { runRowAction } from "../sources/run.js";
+import { AccessRequest } from "./access-request.js";
 import { ActionInputDialog } from "./action-input-dialog.js";
 import { AnimatedTitle } from "./animated-title.js";
 import { ChatGlyph } from "./chat-icon.js";
@@ -720,6 +721,7 @@ export const ChipRail = memo(function ChipRail({
   source,
   session,
   failure,
+  access,
   onOpen,
   onCustomize,
   onLeave,
@@ -732,6 +734,8 @@ export const ChipRail = memo(function ChipRail({
   session?: SidebarSourceSession;
   /** The chips module failed: its message, and a way to read it again. */
   failure?: { message: string; retry: () => void };
+  /** The chips module wants more than the person allowed (ADR 0277). */
+  access?: SourceAccess;
   /** Open an address as the chat opens its links and tabs. */
   onOpen: (url: string, mode: OpenMode) => void;
   onCustomize: () => void;
@@ -1480,6 +1484,15 @@ export const ChipRail = memo(function ChipRail({
           ))}
         </div>
       </div>
+      {access && (
+        <div data-testid="chip-rail-access" className="mt-1 w-fit max-w-full">
+          <AccessRequest
+            request={access.request}
+            allow={access.allow}
+            compact
+          />
+        </div>
+      )}
       {failure && (
         <div
           role="alert"

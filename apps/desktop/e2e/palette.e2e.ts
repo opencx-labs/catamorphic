@@ -85,9 +85,19 @@ beforeAll(async () => {
       { id: "t-103", title: "Search results empty on mobile", owner: "maya" },
     ]),
   );
-  // One module backs a sidebar section and a palette mode (ADR 0186).
+  // One module backs a sidebar section and a palette mode (ADR 0186); its
+  // package.json declares the files it writes (ADR 0277).
+  fs.mkdirSync(path.join(projectRoot, ".work/tickets"), { recursive: true });
   fs.writeFileSync(
-    path.join(projectRoot, ".work/tickets.ts"),
+    path.join(projectRoot, ".work/tickets/package.json"),
+    JSON.stringify({
+      name: "tickets",
+      private: true,
+      catamorphic: { access: { writes: ["queries.log", "claimed.log"] } },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, ".work/tickets/index.ts"),
     `import {readFile,appendFile} from 'node:fs/promises';
     export default {
       async load({query}){
@@ -103,12 +113,12 @@ beforeAll(async () => {
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
     `module.exports={sidebars: {left:[{id:'work',title:'Work',icon:'Ticket',sections:[
-        {id:'tickets',title:'Tickets',source:'.work/tickets.ts',height:160},
+        {id:'tickets',title:'Tickets',source:'.work/tickets/index.ts',height:160},
         {id:'files',source:'work:files'}]}],
       right:[] },
       palette:{modes:[
         {id:'ticket-mode',trigger:'tickets',aliases:['tix'],title:'Tickets',description:'Find a ticket and claim it',icon:'Ticket',section:'tickets'},
-        {id:'ticket-search',trigger:'find-ticket',title:'Ticket search',source:'.work/tickets.ts',search:'source'},
+        {id:'ticket-search',trigger:'find-ticket',title:'Ticket search',source:'.work/tickets/index.ts',search:'source'},
         {id:'runbooks',trigger:'runbooks',title:'Runbooks',items:[{label:'Deploy runbook',url:'https://runbooks.test/deploy',keywords:['release']}]},
         {id:'project-files',trigger:'pf',title:'Project files',section:'files'}
       ]}
@@ -116,8 +126,16 @@ beforeAll(async () => {
   );
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Palette ranking')`);
+  // Allowed once in its section, it runs for the palette mode too.
   await app.waitFor(
-    `!!document.querySelector('[data-sidebar-source="tickets"]')`,
+    `!!document.querySelector('[data-sidebar-section="tickets"] [data-testid="module-access-allow"]')`,
+    { label: "the tickets module asks" },
+  );
+  await app.eval(
+    `document.querySelector('[data-sidebar-section="tickets"] [data-testid="module-access-allow"]').click()`,
+  );
+  await app.waitFor(
+    `!!document.querySelector('[data-sidebar-source="tickets"] [data-sidebar-item-id]')`,
   );
   // Close the startup New Tab so every search uses the overlay.
   await shortcut("w");
