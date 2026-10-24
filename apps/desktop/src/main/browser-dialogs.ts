@@ -286,8 +286,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       void guest.loadURL(intent.url).catch(() => {});
     else if (intent.kind === "reload") guest.reload();
     else if (intent.kind === "reload-hard") guest.reloadIgnoringCache();
-    else if (intent.kind === "back") guest.navigationHistory.goBack();
-    else guest.navigationHistory.goForward();
+    else guest.navigationHistory.goToOffset(intent.kind === "back" ? -1 : 1);
   };
 
   // --- the page's alert, confirm and prompt ---

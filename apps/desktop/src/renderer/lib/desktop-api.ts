@@ -87,7 +87,7 @@ import type {
   PrCommentInput,
   PrDecisionInput,
   PrDetails,
-  PullRequestStatus,
+  PullRequestStatusRead,
 } from "../../shared/pr-details.js";
 import type {
   ProfileSync,
@@ -2115,7 +2115,7 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   /** Where the pull request at a web address stands; null when unreadable. */
-  prStatus: (url: string) => Promise<PullRequestStatus | null>;
+  prStatus: (url: string) => Promise<PullRequestStatusRead>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
   /** A page for load, a row or null for reveal, an effect or null for action. */

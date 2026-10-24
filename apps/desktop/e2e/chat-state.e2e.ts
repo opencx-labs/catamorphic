@@ -230,6 +230,15 @@ it("preserves floating chats, their draft, and their bubble when opening links",
   await app.waitFor(
     "getComputedStyle(document.querySelector('[data-floating-chat]')).opacity === '1'",
   );
+  await app.waitFor(
+    `(() => {
+      const panel = document.querySelector('[data-floating-chat]');
+      const column = panel?.querySelector('[role="log"] > div > div');
+      return !!column && ![...panel.getAnimations(), ...column.getAnimations()]
+        .some(animation => animation.playState === 'running');
+    })()`,
+    { label: "floating panel and message column finished resizing" },
+  );
   // The scroller spans the floating panel, so its scrollbar sits at the
   // panel's edge, while the messages keep a centered, readable column.
   const layout = await app.eval<{

@@ -78,10 +78,8 @@ interface WebviewElement extends HTMLElement {
   loadURL: (url: string) => Promise<void>;
   getURL: () => string;
   getTitle: () => string;
-  canGoBack: () => boolean;
-  canGoForward: () => boolean;
-  goBack: () => void;
-  goForward: () => void;
+  canGoToOffset: (offset: number) => boolean;
+  goToOffset: (offset: number) => void;
   reload: () => void;
   reloadIgnoringCache: () => void;
   stop: () => void;
@@ -175,10 +173,12 @@ function announceLeaving(view: WebviewElement, intent: UnloadIntent): void {
 
 /** Step the page back or forward through its history, as the tab asks. */
 function stepHistory(view: WebviewElement, direction: "back" | "forward") {
-  if (direction === "back" ? !view.canGoBack() : !view.canGoForward()) return;
+  // Chromium's back/forward UI can skip entries made without a gesture,
+  // including autoplayed videos. An explicit offset keeps each visit reachable.
+  const offset = direction === "back" ? -1 : 1;
+  if (!view.canGoToOffset(offset)) return;
   announceLeaving(view, { kind: direction });
-  if (direction === "back") view.goBack();
-  else view.goForward();
+  view.goToOffset(offset);
 }
 
 export function BrowserScreen({
@@ -839,8 +839,8 @@ export function BrowserScreen({
           setSwipe(
             payload.direction &&
               (payload.direction === "back"
-                ? view.canGoBack()
-                : view.canGoForward())
+                ? view.canGoToOffset(-1)
+                : view.canGoToOffset(1))
               ? { direction: payload.direction, progress: payload.progress }
               : null,
           );
@@ -857,8 +857,8 @@ export function BrowserScreen({
       }) as EventListener);
 
       const sync = () => {
-        setCanGoBack(view.canGoBack());
-        setCanGoForward(view.canGoForward());
+        setCanGoBack(view.canGoToOffset(-1));
+        setCanGoForward(view.canGoToOffset(1));
       };
       const report = (patch: Partial<BrowserPageState>) => {
         onStateChangeRef.current({

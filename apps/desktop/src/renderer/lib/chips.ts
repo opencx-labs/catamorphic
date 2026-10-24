@@ -180,9 +180,10 @@ export function pullRequestChip({
           : []),
         ...(status.checks ? [checksBadge(status.checks)] : []),
       ]
-    : [];
+    : [{ label: "Recorded" }];
   const facts: SidebarPreviewMetadata[] = [
     { label: "State", value: looks.label },
+    ...(!status ? [{ label: "Status source", value: "Last recorded" }] : []),
     ...(status
       ? [
           { label: "Author", value: status.author },

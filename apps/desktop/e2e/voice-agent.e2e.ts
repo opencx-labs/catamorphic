@@ -848,26 +848,68 @@ describe("voice", () => {
          return detail.messages.filter((m) => m.role === 'user').length;`,
       );
     const before = await heard();
-    // Down with voice off: it starts, hearing only while held.
-    await holdTalkKeys("keyDown");
-    await runWait(`return mic().dataset.phase === 'hearing';`, {
-      timeoutMs: 30_000,
-      label: "hearing while the keys are down",
-    });
-    // Held past the scripted speech, which detection would have taken.
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
-    expect(await heard()).toBe(before);
-    await holdTalkKeys("keyUp");
-    await runWait(
-      `const detail = await session(${JSON.stringify(assistant)});
-       return detail.messages.filter((m) => m.role === 'user').length === ${before + 1};`,
-      { timeoutMs: 30_000, label: "heard as the keys came up" },
-    );
-    // Started by holding, voice goes off once it has nothing left to do.
-    await runWait(`return mic().dataset.phase === 'off';`, {
-      timeoutMs: 60_000,
-      label: "voice off once idle",
-    });
+    const audio = await app.connectToFrame("voice.html");
+    await audio.eval(`(() => {
+      window.__heldAudioSeconds=0;
+      const post=MessagePort.prototype.postMessage;
+      const devices=navigator.mediaDevices;
+      const getMicrophone=devices.getUserMedia;
+      // A slow microphone must not turn a fixed wall-clock hold into silence.
+      devices.getUserMedia=async function(...args) {
+        await new Promise(resolve=>setTimeout(resolve,3000));
+        return Reflect.apply(getMicrophone,this,args);
+      };
+      MessagePort.prototype.postMessage=function(message,...args) {
+        const result=Reflect.apply(post,this,[message,...args]);
+        if(message?.type==='frame')
+          window.__heldAudioSeconds+=message.samples.length/message.sampleRate;
+        return result;
+      };
+      window.__restoreHeldAudio=()=>{
+        MessagePort.prototype.postMessage=post;
+        devices.getUserMedia=getMicrophone;
+      };
+      return true;
+    })()`);
+    let held = false;
+    try {
+      // Down with voice off: it starts, hearing only while held.
+      await holdTalkKeys("keyDown");
+      held = true;
+      await runWait(`return mic().dataset.phase === 'hearing';`, {
+        timeoutMs: 30_000,
+        label: "hearing while the keys are down",
+      });
+      // Hearing reports the held intent. Wait for enough real capture to
+      // exceed the scripted speech, which detection would otherwise take.
+      await audio.waitFor("window.__heldAudioSeconds>=2.5", {
+        timeoutMs: 30_000,
+        label: "scripted speech captured while held",
+      });
+      expect(await heard()).toBe(before);
+      await holdTalkKeys("keyUp");
+      held = false;
+      await runWait(
+        `const detail = await session(${JSON.stringify(assistant)});
+         return detail.messages.filter((m) => m.role === 'user').length === ${before + 1};`,
+        { timeoutMs: 30_000, label: "heard as the keys came up" },
+      );
+      // Started by holding, voice goes off once it has nothing left to do.
+      await runWait(`return mic().dataset.phase === 'off';`, {
+        timeoutMs: 60_000,
+        label: "voice off once idle",
+      });
+    } finally {
+      try {
+        if (held) await holdTalkKeys("keyUp");
+      } finally {
+        try {
+          await audio.eval("window.__restoreHeldAudio();true");
+        } finally {
+          audio.close();
+        }
+      }
+    }
   }, 120_000);
 
   it("stops listening when its agent says so, once its goodbye is said", async () => {

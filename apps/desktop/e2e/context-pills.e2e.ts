@@ -879,7 +879,17 @@ describe("context pills", () => {
     expect(
       await run(`return pills().filter(p => p.source === 'selection').length;`),
     ).toBe(0);
-    await run(`pressKey('w', { metaKey: true }); return true;`);
+    // The opacity fixture deliberately retained native editor focus. The
+    // assertion above must run in that state; closing afterward must target
+    // the chat, rather than sometimes closing the editor behind it.
+    const inputPoint = await run<{ x: number; y: number }>(`
+      const r=composer().getBoundingClientRect();
+      return {x:r.x+r.width/2,y:r.y+r.height/2};`);
+    await app.clickPointer(inputPoint);
+    await runWait(`return composer() === document.activeElement;`, {
+      label: "transparent-editor chat owns the close shortcut",
+    });
+    await app.press("w", process.platform === "darwin" ? 4 : 2);
     await runWait(`return !frontDock();`, {
       label: "transparent-editor chat closed",
     });

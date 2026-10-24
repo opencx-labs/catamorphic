@@ -1,7 +1,12 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 /** A chat keeps its identity and history across agent and harness changes. */
 let app: AppHandle;
@@ -58,6 +63,12 @@ const inspector = async () => {
   await wait(
     `return !!$('[data-testid="session-inspector-content"]');`,
     "status popup",
+  );
+  await wait(
+    `const popup = $('[data-testid="session-inspector-content"]')?.closest('[data-resource-inspector]');
+     return !!popup && !popup.getAnimations({subtree:true}).some(animation =>
+       animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+    "status popup entrance settled",
   );
 };
 /** The agent picker's rows: name, whether it can be picked, and its detail. */
@@ -253,6 +264,7 @@ describe("picking a chat's agent", () => {
     );
     try {
       await inspector();
+      await focusWindow(app);
       const point = await wait<{ x: number; y: number }>(
         `
         const model = $('[aria-label="Change model"]'); if (!model?.disabled) return false;
@@ -260,10 +272,13 @@ describe("picking a chat's agent", () => {
       `,
         "busy model disabled",
       );
-      await app.cdp("Input.dispatchMouseEvent", {
-        type: "mouseMoved",
-        ...point,
-      });
+      // Disabled native controls need the OS pointer in the same place as
+      // Chromium's pointer, after the popup has reached its final bounds.
+      await app.movePointer(point);
+      await wait(
+        `return $('[aria-label="Change model"]')?.matches(':hover');`,
+        "native pointer over the busy model",
+      );
       await wait(
         `return $$('[role="tooltip"]').some(el => el.textContent === 'Finish the current turn to change the model.');`,
         "model hover explains why",
@@ -290,6 +305,7 @@ describe("picking a chat's agent", () => {
       await run(
         `document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true})); dock()?.querySelector('[data-testid="chat-stop"]')?.click();`,
       );
+      await app.movePointer({ x: 1, y: 1 });
     }
     await wait(
       `return !dock()?.querySelector('[data-testid="chat-stop"]');`,

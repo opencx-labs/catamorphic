@@ -751,6 +751,26 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+
+### 2026-10-24: Chat navigation and resizing keep their place
+
+A tap of PageUp or PageDown still moves one message. A held key now requests
+the top or bottom directly, loading earlier pages before a top move. It never
+walks through every intermediate message anchor. The first key uses a bounded
+search of contained row boxes instead of laying out every offscreen message.
+
+The composer and conversation columns animate maximum width with their padding
+when a chat maximizes or floats. Changing one instantly made the composer narrow,
+wrap and widen again inside the card's smooth resize. The card keeps its border
+width, easing its color into the tab's background instead. Empty side gutters focus
+the composer; controls and text selection keep their behavior. Running background
+rows align with the conversation instead of nesting under the steps line.
+
+Successful folder and unsupported-file previews offer no retry. PR chips can
+read public GitHub status without sign-in (ADR 0279); a recorded fallback is
+marked as such. Browser Back and Forward use explicit adjacent history entries,
+including automatic navigation that Chromium's UI history would skip.
+
 ### 2026-10-23: Chat navigation uses configurable keys
 
 Remove the up/down buttons from the conversation. PageUp and PageDown move

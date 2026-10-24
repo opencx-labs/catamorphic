@@ -208,5 +208,12 @@ contract and an example are in the authoring guide's Chips section.
 | Validation of `chips`, the owner id it shares with sections | `src/main/workspace-config.ts`, `src/shared/workspace-config.ts` |
 | Work's chips, built per chat | `src/renderer/lib/chips.ts` (rows), `src/renderer/app.tsx` (`chipsFor`, the chat's tabs), `src/renderer/components/chat-dock.tsx` (pull requests, attached chips, turns) |
 | `work:chips` and a chips module's `work` calls, in the window that shows the chat | `src/renderer/lib/chip-board.ts`, `src/renderer/sources/chips.ts`, `src/renderer/lib/chips-work.ts`, `src/renderer/lib/use-chips.ts` |
-| Pull request status (the person's connection, then the GitHub CLI) | `src/main/pr-status.ts`, `CodeHost.pullRequestStatus` |
+| Pull request status (the person's connection, opted-in GitHub CLI, then anonymous public GitHub data) | `src/main/pr-status.ts`, `CodeHost.pullRequestStatus` |
 | The rail: layout, folding, motion, keyboard, menus | `src/renderer/components/chip-rail.tsx`, `src/renderer/lib/chip-layout.ts` |
+
+Public GitHub PR chips need no sign-in (ADR 0279). Anonymous reads refresh every
+five minutes while visible and omit check-run requests; authenticated reads
+refresh every minute. A merged PR stops polling, while a closed PR can reopen.
+A failed refresh retains the last good read. When live information is unavailable,
+the chip labels its saved metadata **Recorded**. GitHub CLI access is an explicit
+profile connection; a working CLI login alone does not enable that connection.

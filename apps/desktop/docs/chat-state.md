@@ -5,6 +5,20 @@ the session event log and the turn queue (ADR 0197). Desktop owns surfaces, focu
 and native clipboard access. Registry components compose the hook and callbacks;
 they must not import Electron or assume a desktop workspace.
 
+## Message navigation and activity
+
+Message navigation belongs to the host's customizable shortcuts. A quick
+PageUp/PageDown press moves one message. The first repeat of a held key requests
+the top or bottom directly, without visiting intermediate message anchors;
+further repeats leave that move alone. A top request loads earlier pages before
+making its endpoint move and yields to pointer or wheel input. A failed history
+load stops that request. Reduced motion
+uses immediate scrolling. Finding a nearby message measures a bounded set of
+ordered row boxes, leaving offscreen message layout contained.
+
+Running background commands remain visible outside the folded steps list and
+align with the main conversation column, without a nested border or indentation.
+
 ## Three independent facts
 
 - Delivery: local session creation and command receipts. `isSending` ends when

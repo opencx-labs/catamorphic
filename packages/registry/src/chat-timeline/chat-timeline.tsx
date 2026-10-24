@@ -120,6 +120,7 @@ type LinkModifiers = InputLinkModifiers;
 export type AttachmentPlace = "inline" | "strip";
 
 export interface ChatMessageNavigation {
+  /** A tap moves one message; a repeat requests the corresponding endpoint. */
   previous: (repeat?: boolean) => void;
   next: (repeat?: boolean) => void;
 }
@@ -157,7 +158,7 @@ export interface ChatTimelineProps {
   /** Older history exists before the loaded turns. */
   hasOlder?: boolean;
   isLoadingOlder?: boolean;
-  onLoadOlder?: () => void;
+  onLoadOlder?: () => void | Promise<void>;
   error?: string | null;
   /** An item to scroll to and outline (a notification's message). */
   focusMessageId?: string;
@@ -967,7 +968,12 @@ export function ChatTimeline(props: ChatTimelineProps) {
                       )}
                       <div aria-hidden className="cat-scroll-anchor" />
                     </StickToBottom.Content>
-                    <ChatNavigation register={registerMessageNavigation} />
+                    <ChatNavigation
+                      register={registerMessageNavigation}
+                      hasOlder={hasOlder}
+                      loadingOlder={isLoadingOlder}
+                      onLoadOlder={onLoadOlder}
+                    />
                     <FocusMessage
                       messageId={focusMessageId}
                       ready={Boolean(
@@ -1343,43 +1349,117 @@ function useFoldingNotes(views: TurnView[]): {
 /** Conversation navigation is headless; the host owns its shortcut bindings. */
 function ChatNavigation({
   register,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
 }: {
   register?: (navigation: ChatMessageNavigation | null) => void;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder?: () => void | Promise<void>;
 }) {
   const { scrollRef, contentRef, stopScroll, scrollToBottom } =
     useStickToBottomContext();
   const settling = useRef<(() => void) | undefined>(undefined);
   const anchor = useRef<HTMLElement | null>(null);
+  const held = useRef<-1 | 1 | null>(null);
+  const [seekingTop, setSeekingTop] = useState(false);
   useEffect(() => () => settling.current?.(), []);
+  // A held key names the end, not every message on the way there. Fetch
+  // earlier pages before making that one move, rather than walking the view
+  // through each newly loaded page. The existing loader owns deduplication.
+  useEffect(() => {
+    if (!seekingTop || loadingOlder) return;
+    if (hasOlder && onLoadOlder) {
+      void Promise.resolve()
+        .then(onLoadOlder)
+        .catch(() => setSeekingTop(false));
+      return;
+    }
+    setSeekingTop(false);
+    scrollRef.current?.scrollTo({
+      top: 0,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "instant"
+        : "smooth",
+    });
+  }, [seekingTop, hasOlder, loadingOlder, onLoadOlder, scrollRef]);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const cancel = () => {
+      held.current = null;
+      setSeekingTop(false);
+    };
+    const events = ["wheel", "touchstart", "pointerdown"];
+    for (const name of events)
+      scroller.addEventListener(name, cancel, { capture: true, passive: true });
+    return () => {
+      for (const name of events)
+        scroller.removeEventListener(name, cancel, true);
+    };
+  }, [scrollRef]);
   const jump = useCallback(
     (direction: -1 | 1, repeat = false) => {
       const scroller = scrollRef.current;
       const content = contentRef.current;
       if (!scroller || !content) return;
+      if (repeat) {
+        if (held.current === direction) return;
+        held.current = direction;
+        settling.current?.();
+        anchor.current = null;
+        stopScroll();
+        if (direction < 0) setSeekingTop(true);
+        else {
+          setSeekingTop(false);
+          void scrollToBottom({
+            animation: matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? "instant"
+              : "smooth",
+          });
+        }
+        return;
+      }
+      held.current = null;
+      setSeekingTop(false);
       const targets = [
         ...content.querySelectorAll<HTMLElement>("[data-user-message]"),
       ];
       const clearance = 12 + edgeFadeLength(scroller);
       const viewTop = scroller.getBoundingClientRect().top + clearance;
-      // A held key advances from the destination of the preceding press,
-      // even while that press's smooth scroll has not reached it yet.
+      // Rapid taps advance from the preceding destination while it glides.
       const current = anchor.current;
       const index = current ? targets.indexOf(current) : -1;
-      const target =
-        index >= 0
-          ? targets[index + direction]
-          : direction < 0
-            ? targets
-                .filter(
-                  (element) =>
-                    element.getBoundingClientRect().top < viewTop - 4,
-                )
-                .at(-1)
-            : targets.find(
-                (element) => element.getBoundingClientRect().top > viewTop + 4,
-              );
-      const instant =
-        repeat || matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let target = index >= 0 ? targets[index + direction] : undefined;
+      if (index < 0) {
+        // The rows are in reading order. Measuring every message renders all
+        // offscreen turns on the first keypress; binary search only touches
+        // a few row boxes, leaving the rest's contained layout alone.
+        let low = 0;
+        let high = targets.length;
+        const threshold = viewTop + direction * 4;
+        while (low < high) {
+          const middle = (low + high) >>> 1;
+          const element = targets[middle];
+          if (!element) break;
+          const top = (
+            element.closest<HTMLElement>(".cat-row") ?? element
+          ).getBoundingClientRect().top;
+          if (direction < 0 ? top < threshold : top <= threshold)
+            low = middle + 1;
+          else high = middle;
+        }
+        // At the absolute top the oldest message is already in view, even
+        // when a host's top padding puts its row below the navigation line.
+        target =
+          targets[
+            direction < 0
+              ? low - 1
+              : Math.max(low, scroller.scrollTop < 1 ? 1 : 0)
+          ];
+      }
+      const instant = matchMedia("(prefers-reduced-motion: reduce)").matches;
       settling.current?.();
       if (!target) {
         if (direction > 0)

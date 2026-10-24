@@ -69,7 +69,7 @@ class Page extends EventEmitter {
   loadURL = vi.fn(async () => {});
   send = vi.fn();
   close = vi.fn();
-  navigationHistory = { goBack: vi.fn(), goForward: vi.fn() };
+  navigationHistory = { goToOffset: vi.fn() };
   touched = true;
   executeJavaScriptInIsolatedWorld = vi.fn(async () => this.touched);
   constructor(
@@ -387,7 +387,7 @@ describe("Leave site?", () => {
       accept: false,
     });
     await flush();
-    expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+    expect(page.navigationHistory.goToOffset).not.toHaveBeenCalled();
     const next = { preventDefault: vi.fn() };
     page.emit("will-prevent-unload", next);
     expect(next.preventDefault).not.toHaveBeenCalled();
@@ -535,7 +535,7 @@ describe("Leave site?", () => {
         now.mockReturnValue(11_500);
         page.emit("will-prevent-unload", { preventDefault: vi.fn() });
         await leave();
-        expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+        expect(page.navigationHistory.goToOffset).not.toHaveBeenCalled();
         expect(page.send).not.toHaveBeenCalledWith("catamorphic:page-proceed");
 
         now.mockReturnValue(20_000);
@@ -546,7 +546,7 @@ describe("Leave site?", () => {
         page.emit("will-prevent-unload", { preventDefault: vi.fn() });
         await leave();
         expect(page.send).toHaveBeenCalledWith("catamorphic:page-proceed");
-        expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+        expect(page.navigationHistory.goToOffset).not.toHaveBeenCalled();
       } finally {
         now.mockRestore();
       }

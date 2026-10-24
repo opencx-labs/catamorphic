@@ -284,3 +284,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md) | A resumed Claude Code keeps its sign-in: the CLI's credential store stays the sign-in's own home, not the SDK's temporary resume home | Accepted (amends 0198, 0228, 0269) |
 | [0276](0276-a-chat-can-switch-agents-and-harnesses.md) | A chat can switch agents and harnesses | Accepted (supersedes 0214; amends 0233) |
 | [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md) | Subagent updates reach the working turn and read as compact activity | Accepted (extends 0240; replaces 0250's parent delivery rule) |
+| [0279](0279-public-pull-request-status-needs-no-sign-in.md) | Public pull request status needs no sign-in | Accepted (extends 0239) |

@@ -56,7 +56,13 @@ describe("pull request chips", () => {
       data: { kind: "pull-request", state: "draft", number: 12 },
     });
     expect(chip.tone).toBeUndefined();
-    expect(chip.badges).toBeUndefined();
+    expect(chip.badges).toEqual([{ label: "Recorded" }]);
+    const preview = chip.preview;
+    if (!preview) throw new Error("Missing pull request preview");
+    expect(preview.metadata).toContainEqual({
+      label: "Status source",
+      value: "Last recorded",
+    });
   });
 
   it("read their number from their address when the chat recorded none", () => {

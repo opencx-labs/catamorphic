@@ -769,6 +769,14 @@ describe("chat flows", () => {
         .find((row) => row.textContent.includes('Session menu'));`,
       { timeoutMs: 30_000, label: "session menu row in the sidebar" },
     );
+    await runWait(
+      `const dock = floatingDock();
+       return dock?.textContent.includes('The session menu is ready.') &&
+         !dock.querySelector('[aria-label="Stop the agent"]') &&
+         !dock.getAnimations().some(animation => animation.playState === 'running') &&
+         dock.contains(document.activeElement);`,
+      { label: "new chat settled before opening its session menu" },
+    );
 
     // Sidebar and dock titles settle independently. Open the dock's menu only
     // once its own bubble reflects the session title.
@@ -2099,6 +2107,11 @@ describe("subagents and background watchers", () => {
          !!step.querySelector('.animate-pulse');`,
       { timeoutMs: 30_000, label: "running background step pulses" },
     );
+    const backgroundAlignment = await run<number>(`
+      const row=floatingDock().querySelector('[data-step-kind="background"][data-running]');
+      return Math.abs(row.getBoundingClientRect().left-row.closest('[data-testid="chat-turn-steps"]').getBoundingClientRect().left);
+    `);
+    expect(backgroundAlignment).toBeLessThan(1);
     await runWait(
       `return !!floatingDock()?.querySelector(
          '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,

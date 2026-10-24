@@ -1394,7 +1394,8 @@ export function TurnSteps({
           </div>
           {running.length > 0 && (
             <div
-              className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
+              className={`flex flex-col ${bare ? "-mt-0.5" : "mt-0.5"}`}
+              data-testid="chat-running-background"
             >
               {running.map((step) => (
                 <StepRow
