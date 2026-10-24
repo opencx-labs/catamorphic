@@ -22,6 +22,8 @@ export function useListMotion(
   /** Recomputed (and rows animated) whenever this changes. */
   key: unknown,
   opts: {
+    /** Closed containers retain their last frame without measuring rows. */
+    enabled?: boolean;
     /**
      * Whether rows in the very first pass fade-rise in. The palette skips
      * it (its panel's own enter covers that paint); a list that fills in
@@ -38,9 +40,17 @@ export function useListMotion(
   reset: () => void;
 } {
   const rowTopsRef = useRef(new Map<string, { top: number; left: number }>());
-  const { enterOnFirstPass = false, keepTransitions = "" } = opts;
+  const {
+    enabled = true,
+    enterOnFirstPass = false,
+    keepTransitions = "",
+  } = opts;
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures on the keys list only; options are read on each pass
   useLayoutEffect(() => {
+    if (!enabled) {
+      rowTopsRef.current.clear();
+      return;
+    }
     const sizer = sizerRef.current;
     if (!sizer) return;
     const reducedMotion = window.matchMedia?.(
@@ -123,10 +133,11 @@ export function useListMotion(
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [key]);
+  }, [enabled, key]);
   // A resized list (a wider sidebar reflowing a tile grid) re-takes its
   // positions without animating, so the next change starts from the truth.
   useLayoutEffect(() => {
+    if (!enabled) return;
     const sizer = sizerRef.current;
     if (!sizer || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
@@ -148,7 +159,7 @@ export function useListMotion(
     });
     observer.observe(sizer);
     return () => observer.disconnect();
-  }, [sizerRef]);
+  }, [enabled, sizerRef]);
   return { reset: () => rowTopsRef.current.clear() };
 }
 

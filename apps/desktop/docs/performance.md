@@ -522,3 +522,30 @@ section listing `work:git` is visible. Idle and single-edit behaviour is unchang
 Tests cover external atomic saves, index changes, renames, deletes, commits,
 linked checkouts and shared refs, ignored output with tracked exceptions, burst
 coalescing, shared ownership, teardown races and fallback recovery.
+
+## Long live turns and hidden palette layout, 2026-10-24
+
+The installed alpha.28 window became sluggish while typing and changing lurk
+state in a long turn. A 20.5 s renderer trace counted roughly 179,000 DOM nodes,
+with individual style passes at 266–280 ms and layouts at 536–568 ms. A closed
+palette's `offsetHeight` read forced pending document layout. Lurk transitions
+also removed and restored over 60,000 layout objects; rows of a live turn had
+been excluded from the containment used by completed turns.
+
+Earlier conversation rows now use the existing `content-visibility: auto` and
+remembered intrinsic size even while their turn runs. Current work, rows entering
+and folding notes keep layout until their motion completes. This preserves focus
+rings, anchoring and the existing transitions while allowing earlier work in an
+ongoing turn to skip layout.
+A closed palette skips sizing and list-motion reads, and measures afresh when
+opened. In a temporary live-window containment experiment, a comparable 20.1 s
+sample used 2.4 ms of layout instead of 1.75 s. The samples were passive and their
+workloads differ; this is diagnostic evidence, not a latency guarantee. Native
+motion, navigation and a long-row workload verify behavior in isolation.
+
+A matched isolated native comparison used the same 16,160 output elements, two
+lurk/expand cycles and typed draft. The longest frame interval was 183.4 ms with
+the published renderer files and 16.8 ms with the corrected files. Input-to-next-
+frame samples stayed below 24 ms in both quiet typing runs; the comparison does
+not establish a quiet-typing speedup. Captures used software compositing while
+other checks ran, and neither app reported a renderer error.

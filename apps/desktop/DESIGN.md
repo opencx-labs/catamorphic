@@ -738,6 +738,16 @@ and one component (`source-section.tsx`) draws every list.
   the operating system for the pre-JS first paint.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
+- App-themed terminals consume the nearest `ThemeScope`, like editors and apps.
+  Their profile-level provider owns only the appearance source and optional
+  Ghostty import. A project's colors and monospace font never come from that
+  outer provider. New shells wait for the scoped theme before opening.
+
+Terminals opened from a chat use that chat's assigned working folder. Local and
+remote chat terminals carry the same session reference; main resolves the local
+checkout at creation, including when reopened. Layout attachment does not change
+where a running shell works. A missing checkout shows an error instead of
+opening in a different folder.
 
 ## Current interaction contracts
 
@@ -753,6 +763,14 @@ the historical log explains how it arrived here.
 ## Design log
 
 ### 2026-10-24: Chat navigation and resizing keep their place
+
+Long running turns use the same offscreen row containment as completed work.
+Earlier rows keep their measured size while skipped; current work, entrances and
+folding notes retain layout through their changes. Lurk expansion no longer rebuilds every
+earlier tool result, and typing does not pay for those offscreen rows. A closed
+command palette retains its exit frame without measuring or animating its results.
+Browser tab closing also avoids a script probe into the page: interaction is
+recorded as it happens, and only the page's own beforeunload can ask to stay.
 
 A tap of PageUp or PageDown still moves one message. A held key now requests
 the top or bottom directly, loading earlier pages before a top move. It never

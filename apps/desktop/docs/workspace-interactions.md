@@ -51,6 +51,18 @@ among another group's tabs it joins that chat, and dropped among the top tabs it
 leaves its chat (`attach`, `attachBlocker`). A page an agent drives and an
 agent's or remote chat's terminal stay with their chat; chats never nest.
 
+Ctrl+` opens a terminal in the focused chat's working folder, including its
+assigned worktree. The same applies to a floating chat and its Open terminal
+action. Without a chat in focus, a terminal starts in the project folder. A
+chat shown over another project or in a detached dock opens its terminal in the
+chat's owning project, using the same configured shortcut and chat command. A
+terminal records the originating chat, not a copied filesystem path: reopening
+it resolves that chat's current assignment. A missing assigned checkout is an
+error, never a silent fallback to the project folder. Server chats use the same
+reference with a remote target; their shells still run on the server. Moving a
+project between windows preserves this reference and adopts a running local
+shell. Group attachment and the shell's execution context are independent.
+
 A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on
@@ -65,6 +77,12 @@ Elsewhere Cmd+N floats a chat as before. Chats Work starts for something else (t
 sidebar's customization chat, a workflow's) keep their own placement; the dock's +
 never takes a New Tab, it starts its chat in the dock; and a chat switched to
 another harness from a floating chat floats beside it.
+
+Closing a web tab never runs a script probe in its page first. Main records
+interaction with the current document as it happens and lets Chromium run the
+page's own `beforeunload`, when applicable. Only that handler can ask to stay;
+Work adds no confirmation. A native page close completes the tab close immediately,
+without waiting for a guest event to reach the renderer's fallback timer.
 
 Closing the tab in front goes back to the tab the person was on before it, the
 newest one still open (`recentTabKeys`, kept with the workspace): Cmd+W on a page

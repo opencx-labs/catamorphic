@@ -88,7 +88,7 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
           projectId: "local-project",
           cols: 100,
           rows: 30,
-          remoteChat: { sessionId: "chat-1" },
+          chat: { sessionId: "chat-1", remote: true },
         },
       )) as { sessionId: string; cwd: string };
       expect(requested).toEqual([
@@ -156,7 +156,10 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
       const refused = await Promise.resolve(
         handlers.get("catamorphic:terminal-create")?.(
           { sender },
-          { projectId: "local-project", remoteChat: { sessionId: "chat-1" } },
+          {
+            projectId: "local-project",
+            chat: { sessionId: "chat-1", remote: true },
+          },
         ),
       ).catch((error: unknown) => error);
       // Electron sends `String(error)` to the renderer.
@@ -195,7 +198,10 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
     try {
       const created = (await handlers.get("catamorphic:terminal-create")?.(
         { sender },
-        { projectId: "local-project", remoteChat: { sessionId: "chat-1" } },
+        {
+          projectId: "local-project",
+          chat: { sessionId: "chat-1", remote: true },
+        },
       )) as { sessionId: string };
       await handlers.get("catamorphic:terminal-kill")?.({}, created.sessionId);
       await vi.waitFor(() =>

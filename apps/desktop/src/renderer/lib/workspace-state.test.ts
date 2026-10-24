@@ -487,8 +487,14 @@ it("keeps shells and unsent chats only for a move to another window", () => {
       {
         localId: "remote",
         title: "server",
-        remoteSessionId: "chat-9",
+        chat: { sessionId: "chat-9", remote: true },
         ptySessionId: "pty-3",
+      },
+      {
+        localId: "chat-shell",
+        title: "local checkout",
+        chat: { sessionId: "chat-local", remote: false },
+        ptySessionId: "pty-4",
       },
       { localId: "starting", title: "" },
     ],
@@ -513,8 +519,15 @@ it("keeps shells and unsent chats only for a move to another window", () => {
     {
       localId: "remote",
       title: "server",
-      remoteSessionId: "chat-9",
+      chat: { sessionId: "chat-9", remote: true },
       restoreSessionId: "pty-3",
+    },
+    {
+      localId: "chat-shell",
+      title: "local checkout",
+      chat: { sessionId: "chat-local", remote: false },
+      adoptSessionId: "pty-4",
+      ptySessionId: "pty-4",
     },
   ]);
   expect(moving.chats.map((chat) => chat.localId)).toEqual(["sent", "draft"]);

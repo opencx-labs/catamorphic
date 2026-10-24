@@ -63,7 +63,7 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
   nest. Rows carry signal and data (the session's fields: running,
   attentionRequired, owner, createdAt, ...). Actions: rename (opens the
   rename dialog), new-subsession, mark-read, mark-unread, archive, unarchive
-  (open-terminal and open-preview for a server's chats).
+  (open-terminal for any chat, and open-preview for a server's chats).
 - subsessions: the children of the chat in front; needs when: {session:true}.
 - activity: chats working or waiting for you, and workflow runs going or
   stopped.

@@ -794,7 +794,7 @@ describe("chat flows", () => {
     );
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Rename…|New subsession|Mark as unread|Archive';`,
+       return labels.join('|') === 'Rename…|New subsession|Open terminal|Mark as unread|Archive';`,
       { label: "dock session menu" },
     );
     await run(
@@ -824,7 +824,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|Rename…|New subsession|Mark as read|Archive';`,
+       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|Rename…|New subsession|Open terminal|Mark as read|Archive';`,
       { label: "sidebar session menu matches the dock" },
     );
     await run(

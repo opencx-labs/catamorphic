@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createBrowserProfile } from "./fixtures/browser-profile.js";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 let app: AppHandle;
 let directory: string;
@@ -20,6 +20,9 @@ const server = http.createServer((request, response) => {
 });
 const input = `[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0)`;
 async function click(selector: string) {
+  // An app launched after another suite may not yet be the key window.
+  // Its first native click must reach the control, not just activate it.
+  await focusWindow(app);
   await app.waitFor(
     `document.getAnimations().every(animation => animation.playState !== "running" || animation.effect?.getTiming().iterations === Infinity)`,
   );

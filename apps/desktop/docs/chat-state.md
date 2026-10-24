@@ -133,8 +133,9 @@ render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
 `cat-step-in`, `cat-gap-in`, `cat-swap-*`, `cat-reveal` with its
 `data-entering` and `data-moving`, `cat-grow`), its scroll pinning (`cat-scroll-anchor` with
 `data-pinned`, set only while the chat follows and nothing in it is pressed
-or selected) and `cat-settled` live in `@catamorphic/ui/styles.css`, which
-the renderer stylesheet imports. The timeline's press and key listeners on
+or selected) and row containment (`cat-row`, with `cat-uncontained` for current
+work and folding notes) live in `@catamorphic/ui/styles.css`, which the renderer
+stylesheet imports. The timeline's press and key listeners on
 the document are listed in the desktop's design lint.
 
 Registry build emits the installable JSON; source edits alone do not update that

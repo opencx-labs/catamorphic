@@ -122,7 +122,7 @@ describe("Open preview (ADR 0209)", () => {
 });
 
 describe("chat menu", () => {
-  it("offers a terminal and a preview for a remote chat only", () => {
+  it("offers every chat a terminal and remote chats a preview", () => {
     const actions = (remote: boolean, archived = false) =>
       chatSessionMenu({ unread: false, archived, remote }).map(
         (entry) => entry.action,
@@ -135,7 +135,9 @@ describe("chat menu", () => {
       "mark-unread",
       "archive",
     ]);
-    expect(actions(false)).not.toContain("open-terminal");
+    expect(actions(false)).toContain("open-terminal");
+    expect(actions(false)).not.toContain("open-preview");
+    expect(actions(false, true)).not.toContain("open-terminal");
     expect(actions(true, true)).not.toContain("open-preview");
   });
 });

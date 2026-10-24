@@ -788,12 +788,12 @@ export function ChatTimeline(props: ChatTimelineProps) {
     for (const row of view.rows) {
       const key = rowKey(view.group, row);
       if (key.startsWith("send:")) shownSends.add(key);
-      const className = undone
-        ? "cat-row cat-settled flex flex-col gap-3 opacity-50"
-        : view.live || foldingIn(row, folding)
-          ? "cat-row flex flex-col gap-3"
-          : // A settled turn out of view is skipped by style and layout.
-            "cat-row cat-settled flex flex-col gap-3";
+      // Only the current work/reply and an entrance still need continuous
+      // layout. Earlier rows of a long live turn skip work offscreen too.
+      const measuring =
+        (view.live && (row === view.rows.at(-1) || key === clockRow)) ||
+        foldingIn(row, folding);
+      const className = `cat-row flex flex-col gap-3${measuring ? " cat-uncontained" : ""}${undone ? " opacity-50" : ""}`;
       conversation.push(
         row.kind === "entry" && row.entry.kind === "input" ? (
           // Rendered here, not through the row view, so a pending
@@ -1250,8 +1250,8 @@ const FOLD_GRACE_MS = 250;
 const FoldedContext = createContext<(noteId: string) => void>(() => undefined);
 
 /**
- * Whether notes are still folding away in this row. It waits to settle
- * (`cat-settled`) until they have gone: the frame a row starts skipping,
+ * Whether notes are still folding away in this row. It waits to skip layout
+ * until they have gone: the frame a row starts skipping,
  * before the browser finds it on screen, it keeps its last laid-out size,
  * which stand-ins that arrived in that same commit would make short by
  * their height, so the conversation below jumped up and back for a frame.

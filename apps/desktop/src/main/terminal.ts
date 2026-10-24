@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import type { TerminalCreateInput } from "../shared/terminal.js";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
 import { registerProcessOwner } from "./process-owners.js";
@@ -317,22 +318,19 @@ export function registerTerminalSupport(
     });
   };
 
-  const spawnSession = async (input: {
-    projectId?: string;
-    workingDirectory?: string;
-    cols?: number;
-    rows?: number;
-    sender: WebContents | null;
-    agent?: { projectId: string; sessionId: string };
-    /** The remote chat whose workspace the shell runs in. */
-    remoteChat?: { sessionId: string };
-  }): Promise<{ sessionId: string; cwd: string }> => {
-    if (input.remoteChat) {
+  const spawnSession = async (
+    input: TerminalCreateInput & {
+      workingDirectory?: string;
+      sender: WebContents | null;
+      agent?: { projectId: string; sessionId: string };
+    },
+  ): Promise<{ sessionId: string; cwd: string }> => {
+    if (input.chat?.remote) {
       if (!input.projectId || !input.sender)
         throw new Error("A remote terminal belongs to a project's window");
       const backend = await openRemoteSession({
         projectId: input.projectId,
-        chatSessionId: input.remoteChat.sessionId,
+        chatSessionId: input.chat.sessionId,
         cols: input.cols,
         rows: input.rows,
         sender: input.sender,
@@ -347,13 +345,23 @@ export function registerTerminalSupport(
     const rootPath = input.projectId
       ? await state.current?.projectRoots.get(input.projectId)
       : null;
+    // Resolve the assignment when opening, never a renderer-supplied path or
+    // a cached copy. A missing checkout must not silently open the project root.
+    const chatDirectory = input.chat
+      ? await state.current?.sessionCheckouts.resolve({
+          projectId: input.projectId ?? "",
+          sessionId: input.chat.sessionId,
+        })
+      : undefined;
+    if (input.chat && !chatDirectory)
+      throw new Error("This chat's working folder is unavailable.");
     const requestedDirectory = input.workingDirectory
       ? await fs.access(input.workingDirectory).then(
           () => input.workingDirectory,
           () => undefined,
         )
       : undefined;
-    const cwd = requestedDirectory ?? rootPath ?? os.homedir();
+    const cwd = chatDirectory ?? requestedDirectory ?? rootPath ?? os.homedir();
     const shell = defaultShell();
     // Agent terminals spawn with OSC 133 shell integration for exact
     // busy/exit tracking; user terminals stay exactly as the user's
@@ -513,21 +521,18 @@ export function registerTerminalSupport(
 
   ipcMain.handle(
     "catamorphic:terminal-create",
-    (
-      event,
-      input: {
-        projectId?: string;
-        cols?: number;
-        rows?: number;
-        remoteChat?: { sessionId: string };
-      },
-    ) =>
+    (event, input: TerminalCreateInput) =>
       spawnSession({
         ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.cols ? { cols: input.cols } : {}),
         ...(input.rows ? { rows: input.rows } : {}),
-        ...(typeof input.remoteChat?.sessionId === "string"
-          ? { remoteChat: { sessionId: input.remoteChat.sessionId } }
+        ...(typeof input.chat?.sessionId === "string"
+          ? {
+              chat: {
+                sessionId: input.chat.sessionId,
+                remote: input.chat.remote === true,
+              },
+            }
           : {}),
         sender: event.sender,
       }),

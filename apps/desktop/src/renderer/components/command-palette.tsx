@@ -736,6 +736,7 @@ export function CommandPalette({
   //    same hook, so every as-you-type list in the app moves alike).
   // biome-ignore lint/correctness/useExhaustiveDependencies: results is the "rows changed" signal; the refs are stable
   useLayoutEffect(() => {
+    if (!open) return;
     const list = listRef.current;
     const sizer = sizerRef.current;
     if (!list || !sizer) return;
@@ -743,11 +744,12 @@ export function CommandPalette({
     // height would spend most of the tween past the max-h cutoff.
     const height = Math.min(sizer.offsetHeight, LIST_MAX_HEIGHT);
     list.style.setProperty("--palette-list-height", `${height}px`);
-  }, [results]);
+  }, [open, results]);
   // Colors stay in the list so the selection fade keeps working while
   // (and after) a row glides. First paint of the palette skips per-row
   // enters: the panel's own enter animation covers it.
   const listMotion = useListMotion(sizerRef, results, {
+    enabled: open,
     keepTransitions: "background-color 100ms, color 100ms",
   });
   const listMotionRef = useRef(listMotion);

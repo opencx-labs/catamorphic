@@ -18,11 +18,11 @@ const DEFAULT_APPEARANCE: TerminalAppearance = {
   theme: {},
 };
 const TerminalAppearanceContext = createContext({
-  appearance: DEFAULT_APPEARANCE,
-  source: "app",
+  loaded: null as TerminalAppearance | null,
+  source: "app" as "app" | "ghostty",
   error: "",
   loading: false,
-  ready: false,
+  prefsLoaded: false,
   reload: () => {},
 });
 
@@ -31,7 +31,6 @@ export function TerminalAppearanceProvider({
 }: {
   children: ReactNode;
 }) {
-  const appTheme = useTheme();
   const [source, setSource] = useState<"app" | "ghostty">("app");
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [loaded, setLoaded] = useState<TerminalAppearance | null>(null);
@@ -83,33 +82,14 @@ export function TerminalAppearanceProvider({
       cancelled = true;
     };
   }, [source, revision]);
-  const appearance = useMemo(() => {
-    if (source === "ghostty" && loaded) return loaded;
-    const colors = appTheme?.colors;
-    return {
-      ...DEFAULT_APPEARANCE,
-      fontFamily: appTheme?.fonts.mono ?? DEFAULT_APPEARANCE.fontFamily,
-      theme: colors
-        ? {
-            background: colors["bg-inset"],
-            foreground: colors.fg,
-            cursor: colors.accent,
-            selectionBackground: colors.accent,
-            selectionForeground: colors["accent-fg"],
-          }
-        : {},
-    };
-  }, [source, loaded, appTheme]);
-  const ready =
-    prefsLoaded && (source === "app" || loaded !== null || error !== "");
   return (
     <TerminalAppearanceContext.Provider
       value={{
-        appearance,
+        loaded,
         source,
         error: source === "ghostty" ? error : "",
         loading: source === "ghostty" && loading,
-        ready,
+        prefsLoaded,
         reload,
       }}
     >
@@ -118,5 +98,38 @@ export function TerminalAppearanceProvider({
   );
 }
 
-export const useTerminalAppearance = () =>
-  useContext(TerminalAppearanceContext);
+/** App colors belong to the consumer's theme scope, never the profile loader. */
+export function useTerminalAppearance() {
+  const { loaded, source, error, loading, prefsLoaded, reload } = useContext(
+    TerminalAppearanceContext,
+  );
+  const theme = useTheme();
+  const appearance = useMemo<TerminalAppearance>(() => {
+    if (source === "ghostty" && loaded) return loaded;
+    return {
+      ...DEFAULT_APPEARANCE,
+      fontFamily: theme?.fonts.mono ?? DEFAULT_APPEARANCE.fontFamily,
+      theme: theme
+        ? {
+            background: theme.colors["bg-inset"],
+            foreground: theme.colors.fg,
+            cursor: theme.colors.accent,
+            selectionBackground: theme.colors.accent,
+            selectionForeground: theme.colors["accent-fg"],
+          }
+        : {},
+    };
+  }, [source, loaded, theme]);
+  return {
+    appearance,
+    source,
+    error,
+    loading,
+    ready:
+      prefsLoaded &&
+      (source === "ghostty" && loaded !== null
+        ? true
+        : theme !== null && (source === "app" || error !== "")),
+    reload,
+  };
+}

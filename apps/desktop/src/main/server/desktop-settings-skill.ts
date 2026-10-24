@@ -96,7 +96,9 @@ ${SETTING_KEYS.map((key) => {
 Example: {"tabPlacement":"top","contentFrame":false} chooses regular top tabs
 with content flush against the sidebars; contentFrame true insets it as a
 rounded, bordered window sized by contentPadding and contentRadius. headerPlacement applies to the sidebar tab layout. Terminal
-appearance changes apply to newly opened terminals.
+appearance changes apply to newly opened terminals. App-themed terminals follow
+the resolved project theme, including its personal and shared overrides and
+monospace font; Ghostty is an explicit profile-wide alternative.
 
 terminalMacros is a replacement array. Preserve unrelated entries. Each macro has
 unique nonempty id, nonempty name and command strings, and a shortcut string.

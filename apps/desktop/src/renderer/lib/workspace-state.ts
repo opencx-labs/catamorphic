@@ -1,4 +1,5 @@
 import type { BrowserHistory } from "../../shared/browser-history.js";
+import type { TerminalChat } from "../../shared/terminal.js";
 import { resolveWorkspaceLayout, type SplitView } from "./workspace-layout.js";
 import type { ChatDockEntry } from "./workspace-types.js";
 import { tabKey, type WorkspaceTab } from "./workspace-types.js";
@@ -33,10 +34,9 @@ export interface TerminalEntry {
   /** Attached to an agent-owned PTY session instead of spawning one. */
   attachSessionId?: string;
   /**
-   * A shell in this remote chat's workspace on the project's server (ADR
-   * 0209), named for the chat; closing the tab closes it.
+   * The chat whose workspace a new or reopened shell uses.
    */
-  remoteSessionId?: string;
+  chat?: TerminalChat;
   /** PTY session backing this tab (agents read terminals through it). */
   ptySessionId?: string;
   /**
@@ -102,8 +102,8 @@ export type ClosedTab = (
       chatLocalId?: string;
       /** Dead PTY whose scrollback the reopened tab replays. */
       ptySessionId?: string;
-      /** A remote chat's terminal reopens in that chat's workspace. */
-      remoteSessionId?: string;
+      /** Reopening resolves this chat's current local or remote workspace. */
+      chat?: TerminalChat;
       title?: string;
     }
   | { kind: "editor"; filePath: string | null; chatLocalId?: string }
@@ -254,9 +254,8 @@ export const serializeWorkspace = (
     ? ws.terminals.flatMap((terminal) => {
         const kept = terminal.attachSessionId
           ? { attachSessionId: terminal.attachSessionId }
-          : terminal.remoteSessionId
+          : terminal.chat?.remote
             ? {
-                remoteSessionId: terminal.remoteSessionId,
                 // Its shell ends with the old window; what it printed
                 // shows above the new one.
                 ...(terminal.ptySessionId
@@ -276,6 +275,7 @@ export const serializeWorkspace = (
             localId: terminal.localId,
             title: terminal.title,
             ...chatRef(terminal.chatLocalId),
+            ...(terminal.chat ? { chat: terminal.chat } : {}),
             ...kept,
             ...(terminal.background ? { background: true } : {}),
           },
@@ -355,7 +355,7 @@ export const hydrateWorkspace = (
             (terminal) =>
               terminal.adoptSessionId ||
               terminal.attachSessionId ||
-              terminal.remoteSessionId,
+              terminal.chat?.remote,
           )
         : [],
     editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
@@ -454,7 +454,7 @@ export const attachBlocker = (
   if (key.startsWith("terminal:")) {
     const terminal = ws.terminals.find((entry) => entry.localId === localId);
     if (!terminal) return "That tab is closed.";
-    if (terminal.attachSessionId || terminal.remoteSessionId)
+    if (terminal.attachSessionId || terminal.chat?.remote)
       return "This terminal belongs to its chat.";
     return undefined;
   }
@@ -878,9 +878,9 @@ function applyWorkspaceEvent(
                   chatLocalId: closing.chatLocalId,
                   // Reopening replays the dead shell's scrollback.
                   ptySessionId: closing.ptySessionId,
-                  ...(closing.remoteSessionId
+                  ...(closing.chat
                     ? {
-                        remoteSessionId: closing.remoteSessionId,
+                        chat: closing.chat,
                         title: closing.title,
                       }
                     : {}),
@@ -1017,9 +1017,7 @@ function applyWorkspaceEvent(
             title: record.title ?? "",
             chatLocalId: record.chatLocalId,
             restoreSessionId: record.ptySessionId,
-            ...(record.remoteSessionId
-              ? { remoteSessionId: record.remoteSessionId }
-              : {}),
+            ...(record.chat ? { chat: record.chat } : {}),
           };
           key = terminalTabKey(entry.localId);
           patch = { terminals: [...ws.terminals, entry] };

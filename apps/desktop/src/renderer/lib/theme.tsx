@@ -125,15 +125,19 @@ export function themeStyle(theme: ResolvedTheme | null): CSSProperties {
  * (voice's bubble), reads it again in the profile it has moved to.
  */
 export function useProjectTheme(projectId?: string, profileId?: string) {
-  const [theme, setTheme] = useState<ResolvedTheme | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: main reads the page's profile; a new one asks again
+  const [loaded, setLoaded] = useState<{
+    projectId?: string;
+    profileId?: string;
+    theme: ResolvedTheme;
+  } | null>(null);
   useEffect(() => {
     let live = true;
     let generation = 0;
     const load = () => {
       const request = ++generation;
       void desktopApi.getTheme(projectId).then((next) => {
-        if (live && request === generation) setTheme(next);
+        if (live && request === generation)
+          setLoaded({ projectId, profileId, theme: next });
       });
     };
     load();
@@ -143,7 +147,11 @@ export function useProjectTheme(projectId?: string, profileId?: string) {
       stop();
     };
   }, [projectId, profileId]);
-  return theme;
+  // A scope changing owner is unresolved until that owner's read finishes.
+  // In particular, a terminal must never bake the previous scope's palette.
+  return loaded?.projectId === projectId && loaded?.profileId === profileId
+    ? (loaded?.theme ?? null)
+    : null;
 }
 
 /** Resolved theme boundary shared by workspaces and floating chat surfaces. */
