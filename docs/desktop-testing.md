@@ -96,6 +96,10 @@ modifier flags and pairs its press and release as one click. Suites share the
 runner's pointer state, so park it away from hover targets after a native gesture
 when the next app must start without a hover card.
 
+Audio tests synchronize with captured samples. A held voice can show its intent
+before the microphone has delivered audio, so elapsed wall time after a phase
+change does not prove that the scripted speech has reached the worker.
+
 Linux validates real Electron behavior on Linux. macOS shards retain native
 window, menu, and Command-key coverage. Blacksmith macOS support exists, but
 this repository uses GitHub macOS until the organization's macOS entitlement
