@@ -30,23 +30,21 @@ cg.CGEventPost.restype = None
 cf.CFRelease.argtypes = [ctypes.c_void_p]
 cf.CFRelease.restype = None
 
-FLAGS = {
-    "command": 0x100000,
-    "shift": 0x20000,
-    "option": 0x80000,
-    "control": 0x40000,
+MODIFIERS = {
+    "command": (55, 0x100000),
+    "shift": (56, 0x20000),
+    "option": (58, 0x80000),
+    "control": (59, 0x40000),
 }
 
 args = sys.argv[1:]
-if not args or not args[0].isdigit() or any(arg not in FLAGS for arg in args[1:]):
+if not args or not args[0].isdigit() or any(arg not in MODIFIERS for arg in args[1:]):
     sys.exit("Usage: native-keys-macos.py KEYCODE [command] [shift] [option] [control]")
 key = int(args[0])
-flags = 0
-for name in args[1:]:
-    flags |= FLAGS[name]
+modifiers = [MODIFIERS[name] for name in args[1:]]
 
 
-def post(down):
+def post(key, down, flags):
     event = cg.CGEventCreateKeyboardEvent(None, key, down)
     if not event:
         sys.exit("Failed to create native key event")
@@ -58,6 +56,19 @@ def post(down):
         cf.CFRelease(event)
 
 
-post(True)
-time.sleep(0.05)
-post(False)
+flags = 0
+held = []
+try:
+    for modifier_key, flag in modifiers:
+        flags |= flag
+        post(modifier_key, True, flags)
+        held.append((modifier_key, flag))
+    post(key, True, flags)
+    time.sleep(0.05)
+    post(key, False, flags)
+finally:
+    # Release the physical modifiers too. Leaving Command on the key-up
+    # alone strands it in the event source used by subsequent pointer input.
+    for modifier_key, flag in reversed(held):
+        flags &= ~flag
+        post(modifier_key, False, flags)

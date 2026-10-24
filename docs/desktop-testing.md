@@ -90,6 +90,12 @@ On Linux this starts and owns a new X server; on macOS it requires a dedicated
 GitHub-hosted runner. It must not run on a developer's macOS login session.
 Raw harness launches reject a missing isolation context before spawning Electron.
 
+Native input helpers own complete gestures. Keyboard shortcuts press and release
+their modifiers, including on failure; plain pointer input clears inherited
+modifier flags and pairs its press and release as one click. Suites share the
+runner's pointer state, so park it away from hover targets after a native gesture
+when the next app must start without a hover card.
+
 Linux validates real Electron behavior on Linux. macOS shards retain native
 window, menu, and Command-key coverage. Blacksmith macOS support exists, but
 this repository uses GitHub macOS until the organization's macOS entitlement
