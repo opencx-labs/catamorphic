@@ -82,6 +82,8 @@ it("keeps the composer from narrowing and wrapping during maximize and float", a
 });
 
 it("focuses the composer from the empty sides without taking text selection", async () => {
+  await app.eval("window.catamorphicDesktop.devWindow('setSize',1024,730)");
+  await app.waitFor("innerWidth===1024");
   await click(
     '[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]',
   );
@@ -89,6 +91,27 @@ it("focuses the composer from the empty sides without taking text selection", as
     `!${dock}.getAnimations().some(a=>a.playState==='running')`,
   );
   await focusWindow(app);
+  await app.eval(`(() => {
+    window.__gutterEvents=[];
+    window.__gutterTrace=event=>{
+      const target=event.target;
+      window.__gutterEvents.push({type:event.type,phase:event.eventPhase,
+        x:event.clientX,y:event.clientY,button:event.button,
+        prevented:event.defaultPrevented,meta:event.metaKey,ctrl:event.ctrlKey,
+        alt:event.altKey,shift:event.shiftKey,
+        target:target instanceof Element?target.tagName:null,
+        className:target instanceof Element?target.getAttribute('class'):null,
+        excluded:target instanceof Element?target.closest('a,button,input,textarea,select,label,[contenteditable],[role="button"],[role="dialog"],[role="menu"],pre,code')?.outerHTML.slice(0,200):null,
+        collapsed:getSelection()?.isCollapsed,
+        active:document.activeElement?.tagName});
+      window.__gutterEvents=window.__gutterEvents.slice(-24);
+    };
+    for(const type of ['pointerdown','mousedown','mouseup','click','focusin']) {
+      window.addEventListener(type,window.__gutterTrace,true);
+      window.addEventListener(type,window.__gutterTrace);
+    }
+    return true;
+  })()`);
   for (const side of ["left", "right"]) {
     // Exercise the empty gutter, clear of pane dividers, native resize
     // bands and the scrollbar at the very edge.
@@ -115,13 +138,21 @@ it("focuses the composer from the empty sides without taking text selection", as
           activeTag:document.activeElement?.tagName,
           activeRole:document.activeElement?.getAttribute('role'),
           collapsed:getSelection()?.isCollapsed,hitTag:hit?.tagName,
-          hitRole:hit?.getAttribute('role'),hitClass:hit?.className};
+          hitRole:hit?.getAttribute('role'),hitClass:hit?.className,
+          events:window.__gutterEvents};
       })()`);
       throw new Error(`${side} gutter focus: ${JSON.stringify(detail)}`, {
         cause: error,
       });
     }
   }
+  await app.eval(`(() => {
+    for(const type of ['pointerdown','mousedown','mouseup','click','focusin']) {
+      window.removeEventListener(type,window.__gutterTrace,true);
+      window.removeEventListener(type,window.__gutterTrace);
+    }
+    return true;
+  })()`);
   // A real drag selects the reply; the section's click must preserve it.
   const rect = await app.eval<{ x: number; y: number }>(`(() => {
     const p=[...${dock}.querySelectorAll('.cat-markdown p')].find(e=>e.textContent.includes('Hello layout'));
