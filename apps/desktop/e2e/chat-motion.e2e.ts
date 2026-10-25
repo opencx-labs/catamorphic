@@ -794,7 +794,14 @@ describe("chat motion", () => {
           { label: "a long answer streaming", timeoutMs: 30_000 },
         );
         await mark("pinned");
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        await runWait(
+          `return performance.now()-window.__marks.pinned>=1200 &&
+            window.__chatMotion.since(window.__marks.pinned)>20;`,
+          {
+            label:
+              "enough rendered frames while following the streaming answer",
+          },
+        );
         await mark("followed");
         // A person's wheel, which is what lets go of the latest message,
         // over a code block while the answer opens a new line: the block
@@ -863,7 +870,11 @@ describe("chat motion", () => {
           });
         }
         await mark("scrolled");
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        await runWait(
+          `return performance.now()-window.__marks.scrolled>=1200 &&
+            window.__chatMotion.since(window.__marks.scrolled+400)>20;`,
+          { label: "enough rendered frames while reading above the stream" },
+        );
         await mark("back");
         await run(`toLatest(); return true;`);
       },
@@ -1497,10 +1508,68 @@ describe("chat motion", () => {
       { label: "navigation chat restored after changing its shortcuts" },
     );
     await run("composer().focus(); return true;");
+    // A busy renderer can deliver the upward glide's scroll notification
+    // after the next key. Coalesce those notifications, then release one
+    // after the Down handler, before its first animation frame.
+    await run(`
+      const s=logScroller();window.__delayedNavigationScrolls=0;
+      const hold=event=>{window.__delayedNavigationScrolls++;event.stopImmediatePropagation();};
+      const restore=()=>{
+        s.removeEventListener('scroll',hold,true);
+        window.removeEventListener('keydown',release);
+      };
+      const release=event=>{
+        if(event.key!=='ArrowDown'||!event.altKey)return;
+        restore();s.dispatchEvent(new Event('scroll'));
+      };
+      s.addEventListener('scroll',hold,true);
+      window.addEventListener('keydown',release);
+      window.__restoreNavigationScroll=restore;return true;
+    `);
+    try {
+      await key("ArrowUp", false, 1);
+      await atMessage(3);
+      await key("ArrowDown", false, 1);
+      await runWait("return following();", {
+        label: "customized Down reaches latest after a delayed upward scroll",
+      });
+      expect(
+        await run<number>("return window.__delayedNavigationScrolls;"),
+      ).toBeGreaterThan(0);
+    } finally {
+      await run("window.__restoreNavigationScroll();return true;");
+    }
+    // Streaming layout can carry the viewport slightly past the endpoint
+    // recorded when Down began. That also counts as arriving, so following
+    // must resume rather than waiting forever for an exact old position.
     await key("ArrowUp", false, 1);
     await atMessage(3);
-    await key("ArrowDown", false, 1);
-    await runWait("return following();");
+    await run(`
+      const s=logScroller(), content=s.firstElementChild;
+      const padding=content.style.paddingBottom;
+      const end=s.scrollHeight-s.clientHeight;
+      window.__navigationPassedEnd=false;
+      const grow=()=>{
+        if(s.scrollTop<end-2)return;
+        s.removeEventListener('scrollend',grow,true);
+        content.style.paddingBottom=(parseFloat(getComputedStyle(content).paddingBottom)+64)+'px';
+        s.scrollTop=end+8;
+        window.__navigationPassedEnd=s.scrollTop>end+2;
+      };
+      s.addEventListener('scrollend',grow,true);
+      window.__restoreNavigationGrowth=()=>{
+        s.removeEventListener('scrollend',grow,true);
+        content.style.paddingBottom=padding;
+      };return true;
+    `);
+    try {
+      await key("ArrowDown", false, 1);
+      await runWait("return window.__navigationPassedEnd && following();", {
+        label: "following resumes after layout carries Down past its endpoint",
+      });
+    } finally {
+      await run("window.__restoreNavigationGrowth();return true;");
+    }
     // A tab's top padding must not make the first Down merely align the
     // oldest message after a held Up has reached the absolute beginning.
     const maximize = await run<{ x: number; y: number }>(`

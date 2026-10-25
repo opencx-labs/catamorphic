@@ -15,7 +15,14 @@ afterAll(async () => {
 });
 async function click(selector: string) {
   const point = await app.waitFor<{ x: number; y: number }>(
-    `(() => {const e=document.querySelector(${JSON.stringify(selector)});if(!e)return false;const r=e.getBoundingClientRect();return r.width>0&&r.height>0?{x:r.x+r.width/2,y:r.y+r.height/2}:false})()`,
+    `(() => {
+      const e=document.querySelector(${JSON.stringify(selector)});
+      if(!e || e.closest('[inert]') || e.disabled) return false;
+      if(document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity)) return false;
+      const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
+      return r.width>0&&r.height>0&&e.contains(document.elementFromPoint(x,y))?{x,y}:false;
+    })()`,
+    { label: `settled, reachable control: ${selector}` },
   );
   for (const type of ["mousePressed", "mouseReleased"])
     await app.cdp("Input.dispatchMouseEvent", {

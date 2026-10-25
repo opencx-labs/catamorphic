@@ -373,30 +373,24 @@ describe("acquireDevPortAllocatorLock", () => {
       pid: process.pid,
       timeoutMs: 250,
     });
-    const waiting = acquireDevPortAllocatorLock({
-      lockPath,
-      pid: process.pid,
-      timeoutMs: 25,
-    });
-
-    const outcome = await Promise.race([
-      waiting.then(
-        () => "unexpected acquisition",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("allocator wait did not stop"), 100),
-      ),
-    ]);
-    await owner.release();
-    if (outcome === "allocator wait did not stop") {
-      await (await waiting).release();
+    // The deadline is wall time; filesystem work need not finish within
+    // 100 ms on a busy host. Advance only Date while retaining real IO.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(0);
+      const waiting = acquireDevPortAllocatorLock({
+        lockPath,
+        pid: process.pid,
+        timeoutMs: 25,
+      });
+      vi.setSystemTime(25);
+      await expect(waiting).rejects.toThrow(
+        `Timed out after 25ms waiting for global development port allocator ${lockPath}. Another development launcher may still be allocating ports; retry after it reaches readiness or exits.`,
+      );
+    } finally {
+      vi.useRealTimers();
+      await owner.release();
     }
-
-    expect(outcome).toBe(
-      `Timed out after 25ms waiting for global development port allocator ${lockPath}. Another development launcher may still be allocating ports; retry after it reaches readiness or exits.`,
-    );
   });
 
   it("aborts an allocator wait on a launcher signal", async () => {
@@ -415,24 +409,13 @@ describe("acquireDevPortAllocatorLock", () => {
     });
     abort.abort(new Error("Development startup interrupted by SIGTERM"));
 
-    const outcome = await Promise.race([
-      waiting.then(
-        () => "unexpected acquisition",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("allocator wait did not abort"), 100),
-      ),
-    ]);
-    await owner.release();
-    if (outcome === "allocator wait did not abort") {
-      await (await waiting).release();
+    try {
+      await expect(waiting).rejects.toThrow(
+        `Stopped waiting for global development port allocator ${lockPath}: Development startup interrupted by SIGTERM`,
+      );
+    } finally {
+      await owner.release();
     }
-
-    expect(outcome).toBe(
-      `Stopped waiting for global development port allocator ${lockPath}: Development startup interrupted by SIGTERM`,
-    );
   });
 });
 
