@@ -3771,3 +3771,11 @@ activity status per child, with the harness mark, all reports and a link to the
 source chat. They do not fill the person's conversation with delivery receipts.
 Failures, questions and explicit attention requests stay in the conversation.
 The person's messages keep steering immediately. See ADR 0278.
+
+### 2026-10-25: Choose the Dock icon
+
+Appearance has a macOS Dock icon picker and reset. The running application owns
+one icon, so the choice applies to every profile and stays outside profile settings
+and their syncing. Work keeps its own normalized image in host storage; the original
+file is no longer needed. Reset restores the OS-rendered bundle icon, preserving
+Icon Composer on newer macOS releases. The application name stays Work.
