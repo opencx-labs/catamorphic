@@ -28,6 +28,7 @@ vi.mock("@catamorphic/mcp", () => ({
 }));
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(value),
     decryptString: (value: Buffer) => value.toString(),

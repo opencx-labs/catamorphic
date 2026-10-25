@@ -46,6 +46,7 @@ import type {
   WorkspaceInitial,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
+import type { DockIconState } from "../shared/dock-icon.js";
 import type {
   DockDrag,
   DockRegion,
@@ -97,6 +98,21 @@ export interface ServerInfo {
 }
 
 const api = {
+  dockIconState: (): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-state"),
+  dockIconSet: (bytes: Uint8Array): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-set", bytes),
+  dockIconReset: (): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-reset"),
+  onDockIconChanged: (
+    listener: (state: DockIconState) => void,
+  ): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: DockIconState) =>
+      listener(state);
+    ipcRenderer.on("catamorphic:dock-icon-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:dock-icon-changed", handler);
+  },
   defaultBrowserState: (): Promise<DefaultBrowserState> =>
     invoke("catamorphic:default-browser-state"),
   defaultBrowserRequest: (): Promise<DefaultBrowserState> =>

@@ -1,6 +1,6 @@
 # 0206 — Project secrets reach Environments, with a value per member
 
-- **Status:** Accepted (refined by [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md): the gateway's variables load beside the secrets)
+- **Status:** Accepted (refined by [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md): the gateway's variables load beside the secrets; amended by [0281](0281-secret-storage-has-one-encrypted-format.md): stored values and delivery history require a vault)
 - **Date:** 2026-10-06
 - **Amends:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0184](0184-personal-credentials-reach-a-members-own-sessions.md)
 
@@ -100,8 +100,7 @@ workspace when the secrets file leaves it: a teammate's turn in that chat runs
 in the same workspace without the file, and its commands can read what those
 processes and files still hold; only what is recorded is masked. Masking
 covers values delivered to the chat and values that exist now: a value
-rotated before it ever reached the chat is not known to it, and a host
-without a credential vault keeps no record of delivered values, so there a
-rotated value is no longer masked. Masking is a guard on what is recorded,
+rotated before it ever reached the chat is not known to it. Stored values
+and delivery history require a credential vault (ADR 0281). Masking is a guard on what is recorded,
 not a boundary: an agent asked to transform a value (reverse it, split it)
 can still print it.

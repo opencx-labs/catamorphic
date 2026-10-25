@@ -10,6 +10,7 @@ import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { UndeclaredSecretError } from "../services/plugins-service.js";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 import {
+  reservedSandboxVariable,
   SecretMemberNotFoundError,
   SecretsService,
   SecretValueInvalidError,
@@ -70,6 +71,16 @@ const POLICY = parseProjectEnvironmentPolicy({
     ci: { workloads: ["workflow"], secrets: ["SENTRY_DSN"] },
   },
 });
+
+it.each([
+  "BUN_OPTIONS",
+  "GIT_EXEC_PATH",
+  "GIT_PROXY_COMMAND",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+  "SSLKEYLOGFILE",
+])("refuses the execution or TLS override %s as a sandbox secret", (name) =>
+  expect(reservedSandboxVariable(name)).toBe(true),
+);
 
 describe("project secrets with a value per member (ADR 0206)", () => {
   const vault = new MemoryCredentialVault();
@@ -152,7 +163,7 @@ describe("project secrets with a value per member (ADR 0206)", () => {
     );
     // Sealed: the rows hold vault references only.
     expect(JSON.stringify(stored)).not.toContain("ch-key");
-    expect(stored.every((row) => row.value === null)).toBe(true);
+    expect(stored.every((row) => !Object.hasOwn(row, "value"))).toBe(true);
   });
 
   it("lets members change only their own value, and only for members", async () => {

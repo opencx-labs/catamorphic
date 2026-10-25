@@ -294,10 +294,21 @@ export function DisabledControlHints() {
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") hide();
     };
+    const scroll = (event: Event) => {
+      // A following chat can scroll beside a fixed inspector. Only a
+      // scroll that moves this control invalidates its hover position.
+      if (
+        event.target === document ||
+        (target &&
+          event.target instanceof Element &&
+          event.target.contains(target))
+      )
+        hide();
+    };
     document.addEventListener("pointerover", move, true);
     document.addEventListener("focusin", move, true);
     document.addEventListener("pointerdown", hide, true);
-    document.addEventListener("scroll", hide, true);
+    document.addEventListener("scroll", scroll, true);
     window.addEventListener("blur", hide);
     document.addEventListener("keydown", key);
     return () => {
@@ -306,7 +317,7 @@ export function DisabledControlHints() {
       document.removeEventListener("pointerover", move, true);
       document.removeEventListener("focusin", move, true);
       document.removeEventListener("pointerdown", hide, true);
-      document.removeEventListener("scroll", hide, true);
+      document.removeEventListener("scroll", scroll, true);
       window.removeEventListener("blur", hide);
       document.removeEventListener("keydown", key);
     };

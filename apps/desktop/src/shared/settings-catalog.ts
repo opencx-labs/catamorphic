@@ -39,6 +39,21 @@ export function settingCategory(key: SettingKey): SettingsCategory {
 /** Search metadata and stable navigation ids, shared by the UI and agent reference. */
 export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
   {
+    id: "dockIcon",
+    label: "Dock icon",
+    category: "appearance",
+    keywords: [
+      "macos",
+      "application",
+      "icon",
+      "image",
+      "customize",
+      "png",
+      "jpeg",
+    ],
+    macOnly: true,
+  },
+  {
     id: "defaultBrowser",
     label: "Default browser",
     category: "workspace",

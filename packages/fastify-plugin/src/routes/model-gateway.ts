@@ -1,17 +1,12 @@
-import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import {
   MODEL_REQUEST_MAX_BYTES,
-  type ModelGatewayAdmission,
   type ModelGatewayResponse,
 } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RouteContext } from "../app.js";
 
 const MODEL_ROUTE = "/gateway/model/";
-
-/** Admissions from `onRequest`, for the handler of the same request. */
-const admissions = new WeakMap<IncomingMessage, ModelGatewayAdmission>();
 
 /**
  * Models through the gateway (ADR 0180), for harnesses in sandboxes:
@@ -104,10 +99,7 @@ async function admit(
     path,
     headers: requestHeaders(request),
   });
-  if ("admitted" in result) {
-    admissions.set(request.raw, result.admitted);
-    return undefined;
-  }
+  if ("admitted" in result) return undefined;
   // The unread body may still be arriving; close rather than drain it.
   reply.header("connection", "close");
   return send(reply, result.refused);
@@ -124,8 +116,6 @@ async function serve(
       .status(404)
       .type("application/json")
       .send({ error: { message: "This host has no model gateway" } });
-  const admitted = admissions.get(request.raw);
-  admissions.delete(request.raw);
   const response = await gateway.handle({
     ...routeTarget(request),
     method: request.method,
@@ -139,7 +129,6 @@ async function serve(
           ),
         }
       : {}),
-    ...(admitted ? { admitted } : {}),
   });
   return send(reply, response);
 }

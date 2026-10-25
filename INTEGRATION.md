@@ -1020,10 +1020,33 @@ inject their own infrastructure and auth.
 
 Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
 external systems are enabled. The host vault stores opaque encrypted material using an injected store and key.
+Storing project secret values also requires `credentialVault` (ADR 0281),
+even without connection providers. No plaintext storage or automatic legacy
+import exists. Keep production wrapping keys outside the database; use
+`MemoryCredentialVault` only for tests or ephemeral hosts.
 `EncryptedCredentialVault` can use `PostgresObjectStore` or a host store; the
 wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
 `context.connections.<alias>.<action>(args)` and agents use allocation-bound
 Catamorphic MCP grants. Neither receives upstream credentials.
+For a shared host, provide `resolveMemberIdentity` so every session connection
+call resolves the member's live authority, including after a human approval.
+The same resolver supplies live identity for OAuth callbacks; `projectId` is
+absent for tenant service and personal authorizations. Include host-issued
+connection administration permissions where appropriate. A callback without a
+resolver is refused, rather than reconstructing a root identity from its state.
+Calls revalidate the committed binding and narrow the Allocation's snapshot;
+a grant does not preserve revoked permissions. HTTP and model gateways check
+again after reading a request body and immediately before forwarding.
+
+`createApp` logs route templates instead of raw URLs, and sends safe responses
+for unexpected exceptions and unknown routes. When mounting the plugin in your
+own Fastify app, configure its logger with
+`serializers: { req: requestLogFields, err: errorLogFields }` and install
+`app.setErrorHandler(apiErrorResponse)` and
+`app.setNotFoundHandler(apiNotFoundResponse)` before registering routes. These
+helpers are exported by `@catamorphic/fastify-plugin`. Keep reverse proxies,
+telemetry and separate host logs free of raw request URLs, headers, bodies and
+exception messages: OAuth codes and webhook credentials can appear in them.
 
 Review policy is host code (ADRs 0162, 0183): pass `connectionGuards`, each a
 `ConnectionActionGuard` (`name`, optional provider `kinds`, and

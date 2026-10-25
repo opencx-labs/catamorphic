@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(value),
     decryptString: (value: Buffer) => value.toString(),

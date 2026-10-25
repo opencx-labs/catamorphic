@@ -13,6 +13,7 @@ import {
   Menu,
   MenuItem,
   type MenuItemConstructorOptions,
+  nativeImage,
   nativeTheme,
   powerMonitor,
   safeStorage,
@@ -37,6 +38,7 @@ import {
   desktopDataDirFromEnvironment,
 } from "./development-paths.js";
 import { dockClicks } from "./dock-clicks.js";
+import { registerDockIcon } from "./dock-icon.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
@@ -664,9 +666,15 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  if (!app.isPackaged && process.platform === "darwin") {
-    app.dock?.setIcon(path.join(import.meta.dirname, "../../build/icon.png"));
-  }
+  // An empty native image restores the signed bundle icon on macOS. Keep
+  // Icon Composer rendering under OS control when no custom icon is selected.
+  registerDockIcon({
+    defaultIcon: app.isPackaged
+      ? nativeImage.createEmpty()
+      : nativeImage.createFromPath(
+          path.join(import.meta.dirname, "../../build/icon.png"),
+        ),
+  });
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.

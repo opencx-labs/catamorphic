@@ -205,9 +205,24 @@ export async function ingestHarnessEvents(input: {
         // A harness reports its own work; people's messages, notices,
         // handoffs and requests are Work's to write.
         if (items.has(id) || !HARNESS_ITEM_KINDS.has(event.item.kind)) break;
+        const draft = mask ? mask.value(event.item) : event.item;
+        if (
+          mask &&
+          (event.status === undefined || event.status === "in_progress")
+        ) {
+          for (const field of STREAMED_FIELDS) {
+            const text = Reflect.get(event.item, field);
+            if (typeof text === "string")
+              Reflect.set(
+                draft,
+                field,
+                mask.stream({ itemId: id, field }, text),
+              );
+          }
+        }
         const item = newItem({
           id,
-          draft: mask ? mask.value(event.item) : event.item,
+          draft,
           state: { ...state, turn, attempt },
           parentItemId: event.item.parentKey
             ? derivedId(attemptId, event.item.parentKey)
@@ -252,8 +267,20 @@ export async function ingestHarnessEvents(input: {
         // A field given whole replaces what streamed into it; an item that
         // ends records what its stream still held.
         for (const field of STREAMED_FIELDS) {
-          if (changes && field in changes) mask?.drop({ itemId: id, field });
-          else if (event.type === "item.completed")
+          if (changes && field in changes) {
+            mask?.drop({ itemId: id, field });
+            const text = event.item && Reflect.get(event.item, field);
+            if (
+              mask &&
+              event.type === "item.updated" &&
+              typeof text === "string"
+            )
+              Reflect.set(
+                changes,
+                field,
+                mask.stream({ itemId: id, field }, text),
+              );
+          } else if (event.type === "item.completed")
             release({ itemId: id, field });
         }
         const current = items.get(id);

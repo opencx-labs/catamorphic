@@ -3,7 +3,7 @@ import type { Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Sandboxing, sandboxingRefusal } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
-import { identityMayUseConnection } from "../identity.js";
+import { identityMayUseConnection, isProjectPrincipal } from "../identity.js";
 import {
   type ConnectionActionGuard,
   type ConnectionGuardRecord,
@@ -23,11 +23,13 @@ import {
   type ResolvedConnectionBinding,
 } from "./connection-types.js";
 import {
+  AuthenticationRequiredError,
+  ConnectionPermissionDeniedError,
   type ConnectionsService,
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import { bindingRepositories } from "./git-repositories.js";
+import { bindingRepositories, repositoryBelow } from "./git-repositories.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -58,6 +60,12 @@ export class ConnectionActionRefusedError extends Error {
 /** Review policy for every brokered action (ADR 0162). */
 export interface ConnectionGateway {
   guards: readonly ConnectionActionGuard[];
+  /** Re-resolve a member's current authority for every session call. */
+  resolveMemberIdentity?: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
   /** How long one guard may take before the action escalates (ADR 0183). */
   guardTimeoutMs?: number;
   /**
@@ -99,6 +107,7 @@ export class ConnectionBroker {
     identity: Identity;
     allocationId: string;
     alias: string;
+    agentSessionId?: string;
   }) {
     const { binding, provider } = await this.resolveInvocation({
       ...args,
@@ -186,37 +195,40 @@ export class ConnectionBroker {
       });
       throw new Error(`Connection action '${args.action}' is not permitted`);
     }
-    if (
-      args.caller === "agent" &&
-      args.agentSessionId &&
-      (await this.gateway.sessionSandboxing?.(args.agentSessionId)) ===
-        "contained" &&
-      !(await this.readsOnly({
-        identity: args.identity,
-        connectionId: binding.connectionId,
-        capabilities: binding.capabilities,
-        provider,
-        action: args.action,
-      }))
-    ) {
-      await this.connections.audit({
-        identity: args.identity,
-        projectId: allocation.projectId,
-        connectionId: binding.connectionId,
-        allocationId: allocation.id,
-        eventType: "connection.invoked",
-        outcome: "denied",
-        action: args.action,
-        argumentsDigest: digest,
-        metadata: { sandboxing: "contained" },
-      });
-      throw new ConnectionActionDeniedError(
-        sandboxingRefusal({
-          sandboxing: "contained",
-          action: `call ${args.alias} ${args.action}, which can change ${args.alias}`,
-        }),
-      );
-    }
+    const requireSandboxing = async () => {
+      if (
+        args.caller === "agent" &&
+        args.agentSessionId &&
+        (await this.gateway.sessionSandboxing?.(args.agentSessionId)) ===
+          "contained" &&
+        !(await this.readsOnly({
+          identity: args.identity,
+          connectionId: binding.connectionId,
+          capabilities: binding.capabilities,
+          provider,
+          action: args.action,
+        }))
+      ) {
+        await this.connections.audit({
+          identity: args.identity,
+          projectId: allocation.projectId,
+          connectionId: binding.connectionId,
+          allocationId: allocation.id,
+          eventType: "connection.invoked",
+          outcome: "denied",
+          action: args.action,
+          argumentsDigest: digest,
+          metadata: { sandboxing: "contained" },
+        });
+        throw new ConnectionActionDeniedError(
+          sandboxingRefusal({
+            sandboxing: "contained",
+            action: `call ${args.alias} ${args.action}, which can change ${args.alias}`,
+          }),
+        );
+      }
+    };
+    await requireSandboxing();
     const review = await this.review({
       ...args,
       projectId: allocation.projectId,
@@ -240,6 +252,13 @@ export class ConnectionBroker {
       });
       throw new ConnectionActionDeniedError(review.reason);
     }
+    // A guard may await a person: the authority it reviewed can end meanwhile.
+    const current = await this.resolveInvocation(args);
+    if (JSON.stringify(current.binding) !== JSON.stringify(binding))
+      throw new ConnectionActionDeniedError(
+        "Connection authorization changed; retry the action",
+      );
+    await requireSandboxing();
     try {
       await this.connections.refreshIfNeeded({
         identity: args.identity,
@@ -313,7 +332,12 @@ export class ConnectionBroker {
           binding.connectionId,
         );
       }
-      throw cause;
+      if (
+        cause instanceof ConnectionActionDeniedError ||
+        cause instanceof ConnectionActionRefusedError
+      )
+        throw cause;
+      throw new Error("Connection action failed");
     }
   }
 
@@ -358,8 +382,10 @@ export class ConnectionBroker {
         },
       },
       async () => {
-        const { allocation, binding, provider } =
-          await this.resolveInvocation(args);
+        const { allocation, binding, provider } = await this.resolveInvocation({
+          ...args,
+          agentSessionId: args.agentSessionId ?? args.review?.agentSessionId,
+        });
         const git = provider.git;
         if (!git) {
           throw new ConnectionActionRefusedError(
@@ -392,6 +418,25 @@ export class ConnectionBroker {
             args.access === "write"
               ? `this session may not push through '${args.alias}' (it lacks git:write)`
               : `this session may not fetch through '${args.alias}' (it lacks git:read)`,
+          );
+        }
+        const repositories = bindingRepositories({
+          policy: binding.git,
+          bases: git.remoteBaseUrls,
+          projectRemote: binding.git?.repositories
+            ? undefined
+            : await this.gateway.projectRemote?.({
+                tenantId: args.identity.tenantId,
+                projectId: allocation.projectId,
+              }),
+        });
+        const repository = git.remoteBaseUrls
+          .map((base) => repositoryBelow(args.remoteUrl, base))
+          .find((path) => path !== null);
+        if (!repository || !repositories.includes(repository)) {
+          await record("denied", { reason: "repository outside binding" });
+          throw new ConnectionActionDeniedError(
+            "The repository is outside this connection's current binding",
           );
         }
         // A contained agent's work never leaves its sandbox (ADR 0182):
@@ -439,6 +484,22 @@ export class ConnectionBroker {
           });
           throw new ConnectionActionDeniedError(review.reason);
         }
+        const current = await this.resolveInvocation({
+          ...args,
+          ...(sessionId ? { agentSessionId: sessionId } : {}),
+        });
+        if (JSON.stringify(current.binding) !== JSON.stringify(binding))
+          throw new ConnectionActionDeniedError(
+            "Connection authorization changed; retry the action",
+          );
+        if (
+          args.access === "write" &&
+          sessionId &&
+          (await this.gateway.sessionSandboxing?.(sessionId)) === "contained"
+        )
+          throw new ConnectionActionDeniedError(
+            "This session is contained and may not push",
+          );
         try {
           await this.connections.refreshIfNeeded({
             identity: args.identity,
@@ -1022,6 +1083,7 @@ export class ConnectionBroker {
     identity: Identity;
     allocationId: string;
     alias: string;
+    agentSessionId?: string;
   }) {
     const allocation = await this.allocations.get({
       identity: args.identity,
@@ -1030,12 +1092,41 @@ export class ConnectionBroker {
     if (allocation?.status !== "active") {
       throw new Error("Allocation is unavailable");
     }
-    const binding = allocation.policy.connections?.find(
+    const selected = allocation.policy.connections?.find(
       (candidate) => candidate.alias === args.alias,
     );
-    if (!binding) {
+    if (!selected) {
       throw new Error(`Connection alias '${args.alias}' is unavailable`);
     }
+    const owner =
+      args.agentSessionId && this.gateway.sessionOwner
+        ? await this.gateway.sessionOwner(args.agentSessionId)
+        : args.identity.externalUserId;
+    const sessionIdentity = owner
+      ? { ...args.identity, externalUserId: owner }
+      : args.identity;
+    const identity =
+      args.agentSessionId &&
+      this.gateway.resolveMemberIdentity &&
+      owner &&
+      !isProjectPrincipal(owner)
+        ? await this.gateway.resolveMemberIdentity({
+            tenantId: args.identity.tenantId,
+            projectId: allocation.projectId,
+            externalUserId: owner,
+          })
+        : sessionIdentity;
+    if (
+      !owner ||
+      !identity ||
+      identity.tenantId !== args.identity.tenantId ||
+      (this.gateway.resolveMemberIdentity &&
+        args.agentSessionId &&
+        identity.externalUserId !== owner)
+    )
+      throw new ConnectionActionDeniedError(
+        "Connection authority is unavailable",
+      );
     if (allocation.policy.workflowEnablementId) {
       try {
         await this.workflowEnablements?.().revalidate({
@@ -1046,20 +1137,46 @@ export class ConnectionBroker {
         throw new ConnectionUnavailableError(
           args.alias,
           "Workflow enablement authority is unavailable",
-          binding.connectionId,
+          selected.connectionId,
         );
       }
     }
     if (
       !identityMayUseConnection(
-        args.identity,
+        identity,
         allocation.projectId,
         allocation.environmentName,
         args.alias,
       )
     ) {
-      throw new Error("Connection permission denied");
+      throw new ConnectionActionDeniedError("Connection permission denied");
     }
+    await this.connections.refreshIfNeeded({
+      identity,
+      connectionId: selected.connectionId,
+    });
+    const [binding] = await this.connections
+      .resolveSnapshot({
+        identity,
+        projectId: allocation.projectId,
+        environment: allocation.environmentName,
+        snapshot: [selected],
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ConnectionPermissionDeniedError)
+          throw new ConnectionActionDeniedError("Connection permission denied");
+        if (error instanceof AuthenticationRequiredError)
+          throw new ConnectionUnavailableError(
+            args.alias,
+            "Connection is unavailable",
+            selected.connectionId,
+          );
+        throw error;
+      });
+    if (!binding)
+      throw new ConnectionActionDeniedError(
+        "Connection authority is unavailable",
+      );
     const provider = this.providers.get(binding.providerKind);
     if (!provider) throw new Error("Connection provider is unavailable");
     return { allocation, binding, provider };

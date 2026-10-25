@@ -648,9 +648,11 @@ and one component (`source-section.tsx`) draws every list.
   floating surface) positions itself relative to that ancestor: never mount a
   fixed panel inside pane content.
 - **Tooltips always hide.** A hint closes on the anchor's leave event and on
-  any pointer movement elsewhere, a drag or scroll start, or the pointer
+  any pointer movement elsewhere, a drag or a scroll that moves its anchor, or the pointer
   leaving the window; one of those always fires even when the anchor
-  re-renders or turns inert under the pointer.
+  re-renders or turns inert under the pointer. A disabled-control reason in a
+  fixed inspector stays available while a neighboring chat follows its answer;
+  scrolling the viewport or the control's own ancestor dismisses it.
 - **Popovers open at their size.** A hover inspector's reads start once the
   pointer has rested on its trigger a moment (`ResourceInspector`'s
   `warmup`; a pointer passing over reads nothing), and the panel waits,
@@ -3805,3 +3807,11 @@ Private extension worlds are outside page capture revocation.
 The assistant lowers audio only during a conversation. Dictation and voice
 learning leave it alone, and the native lowering helper gets its normal
 release-and-exit path when voice ends.
+
+### 2026-10-25: Choose the Dock icon
+
+Appearance has a macOS Dock icon picker and reset. The running application owns
+one icon, so the choice applies to every profile and stays outside profile settings
+and their syncing. Work keeps its own normalized image in host storage; the original
+file is no longer needed. Reset restores the OS-rendered bundle icon, preserving
+Icon Composer on newer macOS releases. The application name stays Work.

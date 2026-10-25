@@ -45,7 +45,7 @@ export function registerConnectionMcpRoutes(
       }
       const token = bearer(request.headers.authorization);
       const grant = token ? await grants.validate({ token }) : null;
-      if (!grant)
+      if (grant?.channel !== "mcp")
         return reply.status(401).send({ error: "Invalid connection grant" });
       const identity = {
         tenantId: grant.tenantId,
@@ -74,6 +74,9 @@ export function registerConnectionMcpRoutes(
               identity,
               allocationId: allocation.id,
               alias: binding.alias,
+              ...(grant.agentSessionId
+                ? { agentSessionId: grant.agentSessionId }
+                : {}),
             });
             // Only an MCP server's own results match its output schema.
             return mcp

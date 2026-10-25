@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const encryption = vi.hoisted(() => ({ available: true }));
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => encryption.available,
     encryptString: (value: string) => Buffer.from(value),
     decryptString: (value: Buffer) => value.toString("utf8"),

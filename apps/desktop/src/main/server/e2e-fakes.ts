@@ -616,15 +616,22 @@ function toJson(value: unknown): JsonValue {
 
 /** A host tool's result as the value the tool returned. */
 function toolValue(result: HostToolResult): unknown {
-  const text = result.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("");
+  const parts = result.content.flatMap((part) =>
+    part.type === "text" ? [part.text] : [],
+  );
+  const text = parts.join("");
   if (result.isError) throw new Error(text || "The tool failed");
   if (result.structured !== undefined) return result.structured;
   try {
     return JSON.parse(text);
   } catch {
-    return text;
+    // Core can append a waiting note as a separate text block when a
+    // steer reaches a host call. Its primary JSON reply still stands.
+    try {
+      return JSON.parse(parts[0] ?? "");
+    } catch {
+      return text;
+    }
   }
 }
 
@@ -869,6 +876,40 @@ export function parse(input = ""): Token[] {
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
   const prompt = message.toLowerCase();
+
+  if (prompt.includes("context reports main")) {
+    yield {
+      type: "text",
+      content: "Waiting for independent context reports.",
+    };
+    while (!turn.interrupted()) {
+      const peers = await turn.tool("list_project_sessions", {});
+      yield {
+        type: "tool_call",
+        toolName: "list_project_sessions",
+        toolResult: peers,
+      };
+      const update = await turn.steerWithin(150);
+      if (update?.text.includes("Continue after context reports")) break;
+    }
+    if (!turn.interrupted())
+      yield { type: "text", content: "Continued after the context reports." };
+    return;
+  }
+  const contextPeer = /context reports peer ([a-z0-9-]+)/.exec(prompt)?.[1];
+  if (contextPeer) {
+    for (let i = 1; i <= 9; i++) {
+      await turn.pause(600);
+      if (turn.interrupted()) return;
+      await turn.tool("send_project_session_message", {
+        session_id: contextPeer,
+        message: `Context report ${i}: independent check passed.`,
+        delivery_mode: "message_only",
+      });
+    }
+    yield { type: "text", content: "Independent context reports sent." };
+    return;
+  }
 
   if (prompt.includes("agent activity parent")) {
     yield { type: "text", content: "Checking the delegated review." };

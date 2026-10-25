@@ -38,6 +38,7 @@ import type {
   WorkspaceInitial,
   WorkspaceNavigation,
 } from "../../shared/desktop-workspace.js";
+import type { DockIconState } from "../../shared/dock-icon.js";
 import type {
   DockDrag,
   DockRegion,
@@ -1504,6 +1505,10 @@ export interface CatamorphicDesktopApi {
     import("../../shared/palette.js").PaletteSignals
   >;
   onHistoryChanged: (listener: () => void) => () => void;
+  dockIconState: () => Promise<DockIconState>;
+  dockIconSet: (bytes: Uint8Array) => Promise<DockIconState>;
+  dockIconReset: () => Promise<DockIconState>;
+  onDockIconChanged: (listener: (state: DockIconState) => void) => () => void;
   defaultBrowserState: () => Promise<
     import("../../shared/default-browser.js").DefaultBrowserState
   >;

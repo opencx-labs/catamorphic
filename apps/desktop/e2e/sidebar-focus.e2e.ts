@@ -116,6 +116,13 @@ beforeAll(async () => {
     `document.querySelector('${files} [data-tree-id="notes/b.txt"]')?.getAttribute('aria-selected') === 'true'`,
     { label: "the open file's row in front" },
   );
+  // Selection precedes the lazy editor's read and Monaco mount. Its final
+  // initial focus must land before the keyboard handoff is what we measure.
+  await app.waitFor(
+    `!!document.activeElement?.closest('.monaco-editor') &&
+      document.querySelector('[data-workspace-visible="true"] [data-editor-toolbar]')?.textContent.includes('notes/b.txt')`,
+    { label: "the selected file's editor mounted and initially focused" },
+  );
 });
 afterAll(async () => {
   await app?.stop();

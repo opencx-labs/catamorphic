@@ -63,6 +63,12 @@ reference with a remote target; their shells still run on the server. Moving a
 project between windows preserves this reference and adopts a running local
 shell. Group attachment and the shell's execution context are independent.
 
+Take control gives the person the keys to an agent's running terminal. When
+its command ends, an open tab keeps the output and says "Command finished".
+"Open new shell" starts a fresh user terminal below that history, in the owning
+chat's current working folder. The finished command stays ended and does not
+run again. A finished terminal has no blinking work indicator or typing cursor.
+
 A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on
