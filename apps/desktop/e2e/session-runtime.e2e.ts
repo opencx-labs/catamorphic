@@ -678,6 +678,19 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
     // Its own loop only: a loop from the recording before, still waiting
     // for its next frame, stops instead of joining this one.
     await run(`window.__fold = [];
+      // Exercise the native animation's before phase: on a loaded renderer,
+      // playback can start after the commit that changes its resting spot.
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function(...args) {
+        const animation = animate.apply(this, args);
+        if (this.hasAttribute('data-dock-rail')) {
+          const start = document.timeline.currentTime + 80;
+          for (const part of this.getAnimations({subtree:true}))
+            if (part.effect?.getTiming().iterations !== Infinity) part.startTime = start;
+        }
+        return animation;
+      };
+      window.__restoreFoldAnimation = () => { Element.prototype.animate = animate; };
       const recording = window.__foldRecording = (window.__foldRecording ?? 0) + 1;
       const fiberOf = (element) => element[Object.keys(element).find((key) => key.startsWith('__reactFiber$'))];
       const heads = (element) => {
@@ -709,15 +722,17 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);`);
-    await wait(`return window.__fold.length >= 2;`);
-    await act();
-    await wait(
-      `return window.__fold.at(-1)?.folded === ${folded} && (${!folded} || !$('section[data-floating-chat="true"]')) && ${idle};`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return read<Frame[]>(
-      `const frames = window.__fold; window.__fold = null; return frames;`,
-    );
+    try {
+      await wait(`return window.__fold.length >= 2;`);
+      await act();
+      await wait(
+        `return window.__fold.at(-1)?.folded === ${folded} && (${!folded} || !$('section[data-floating-chat="true"]')) && ${idle};`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return await read<Frame[]>(`return window.__fold;`);
+    } finally {
+      await run(`window.__restoreFoldAnimation(); window.__fold = null;`);
+    }
   };
   /**
    * Each chat's dock renders at most once, for the press that starts the
@@ -780,7 +795,7 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
       const slid = (frame.right - from.right) / travel;
       const narrowed = (from.width - frame.width) / narrowing;
       // The width changes as the strip slides, not once it has landed.
-      expect(narrowed).toBeGreaterThan(slid - 0.35);
+      expect(narrowed, JSON.stringify(frames)).toBeGreaterThan(slid - 0.35);
       const step = Math.max(
         Math.abs(frame.right - previous.right),
         Math.abs(frame.width - previous.width),
@@ -887,11 +902,29 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
   await record(false, () =>
     run(`$('[aria-label="Expand chat bubbles"]').click();`),
   );
-  const reversed = await record(false, () =>
-    run(`$('[aria-label="Collapse chat bubbles"]').click();
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      $('[aria-label="Expand chat bubbles"]').click();`),
-  );
+  let reversed: Frame[];
+  await app.cdp("Animation.enable");
+  try {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    reversed = await record(false, () =>
+      run(`const rail = $('[data-dock-rail]');
+        const from = rail.getBoundingClientRect().right;
+        $('[aria-label="Collapse chat bubbles"]').click();
+        await new Promise((resolve, reject) => {
+          const deadline = performance.now() + 15000;
+          const tick = () => {
+            const moved = Math.abs(rail.getBoundingClientRect().right - from);
+            if (moved > 5 && moved < ${Math.abs(cornerOffset) - 5}) return resolve();
+            if (performance.now() > deadline) return reject(new Error('The strip did not reach its reversal point'));
+            requestAnimationFrame(tick);
+          }; requestAnimationFrame(tick);
+        });
+        $('[aria-label="Expand chat bubbles"]').click();`),
+    );
+  } finally {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    await app.cdp("Animation.disable");
+  }
   const farthest = Math.max(
     ...reversed.map((frame) => Math.abs(offset(frame))),
   );

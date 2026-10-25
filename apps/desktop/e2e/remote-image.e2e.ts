@@ -114,6 +114,18 @@ async function ask(name: string) {
     `document.fonts.ready.then(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)))))`,
   );
   await app.eval(`${pill}.scrollIntoView({block:'nearest'}); true`);
+  // Measure consent after the chat/message entrance has actually settled.
+  // Ready describes the agent, not its ancestor animations or follow spring.
+  await app.waitFor(
+    `(async () => {${helpers}
+      for(let node=frame;node;node=node.parentElement)
+        if(node.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity)) return false;
+      const before=geometry();
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      return geometry().every((box,index)=>['x','y','width','height'].every(axis=>Math.abs(box[axis]-before[index][axis])<0.01));
+    })()`,
+    { label: "image consent layout at rest" },
+  );
 }
 
 async function approve(always = false) {
@@ -141,7 +153,10 @@ async function unchangedWhileLoading(before: Rect[]) {
   for (const sample of samples)
     for (const [index, box] of sample.entries())
       for (const axis of ["x", "y", "width", "height"] as const)
-        expect(Math.abs(box[axis] - before[index]![axis])).toBeLessThan(0.75);
+        expect(
+          Math.abs(box[axis] - before[index]![axis]),
+          JSON.stringify({ index, axis, before: before[index], actual: box }),
+        ).toBeLessThan(0.75);
   expect(
     await app.eval(
       `!!${pill} && [...${pill}.querySelectorAll('button')].every(button=>button.disabled)`,
@@ -276,7 +291,15 @@ it("holds a wrapped pill in a narrow layout, including with reduced motion", asy
 });
 
 it("keeps the pill through host saving and the shared trust refresh", async () => {
-  await ask("always");
+  // A slow entrance must finish before its coordinates become the baseline.
+  await app.cdp("Animation.enable");
+  try {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    await ask("always");
+  } finally {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    await app.cdp("Animation.disable");
+  }
   const before = await bounds();
   await approve(true);
   await app.waitFor(
