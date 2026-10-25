@@ -10,6 +10,7 @@ import {
   type ExtensionHostBridge,
   installExtensionApis,
 } from "./extension-api.js";
+import { installPageMedia } from "./page-media.js";
 import { installPasskeys } from "./passkeys.js";
 import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
 
@@ -23,6 +24,8 @@ import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
  *    looks for (chrome-object.ts, ADR 0235).
  *  - A web page's top frame, in a tab or in a sign-in popup it opened,
  *    answers passkey requests from the profile's vault (passkeys.ts).
+ *  - Every browsing frame releases its page-owned tracks when that origin's
+ *    device permission is revoked (page-media.ts).
  *  - An extension's service worker or page gets Work's `chrome.*` APIs
  *    (extension-api.ts) before its own code runs; a popup closes on Escape
  *    or when focus leaves it.
@@ -177,9 +180,26 @@ function attempt(job: () => void): void {
   }
 }
 
+// Revoke page-owned capture in every frame, including an embedded call.
+if (
+  process.type !== "service-worker" &&
+  location.protocol !== "chrome-extension:"
+) {
+  attempt(() => {
+    contextBridge.exposeInMainWorld("__workPageMedia", {
+      onRevoke: (listener: (kind: string) => void) => {
+        ipcRenderer.on("catamorphic:page-media-stop", (_event, kind: string) =>
+          listener(kind),
+        );
+      },
+    });
+    contextBridge.executeInMainWorld({ func: installPageMedia });
+  });
+}
+
 // A tab's embedded frames run the session's preloads too, for the tab
 // preload's page dialogs (ADR 0227). They get Chrome's identity, as Chrome's
-// frames have it (ADR 0235), and nothing else of this one: the rest is for a
+// frames have it (ADR 0235), and page capture revocation above. The rest is for a
 // top frame or a service worker.
 if (process.type === "service-worker" || window.top === window)
   installForContext();

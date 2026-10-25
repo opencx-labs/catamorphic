@@ -1,15 +1,14 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { type BrowserWindow, screen } from "electron";
+import type { BrowserWindow } from "electron";
+import { z } from "zod";
+import type { WorkspaceInitial } from "../shared/desktop-workspace.js";
 
 /**
- * Window placement that survives a relaunch: size, position, and whether
- * the window was maximized/fullscreen. App-level (`window-state.json` in
- * userData), not per profile — where a window sits is a fact about this
- * machine's screens, not about who's signed in. Saved on every settle of a
- * move/resize (debounced) and on close; restored bounds are validated
- * against the current display set so a laptop unplugged from its monitor
- * doesn't open its window off-screen.
+ * Normal window placement and its native presentation modes. The app's
+ * window-state.json keeps one record per workspace window; project contents
+ * remain in the existing per-project workspace store.
  */
 export interface WindowState {
   x?: number;
@@ -105,56 +104,191 @@ export function cascadeWindowState(
   };
 }
 
-export class WindowStateStore {
+export interface WorkspaceWindowState extends WorkspaceInitial {
+  id: string;
+  profileId: string;
+  state: WindowState;
+  visible: boolean;
+  minimized: boolean;
+}
+
+export interface WindowSession {
+  windows: WorkspaceWindowState[];
+  lastFocusedWindowId?: string;
+}
+
+const savedWindowSchema = z.object({
+  id: z.string().min(1),
+  profileId: z.string().min(1),
+  projectIds: z.array(z.string().min(1)),
+  activeProjectId: z.string().min(1).optional(),
+  state: z.unknown().transform(normalizeWindowState),
+  visible: z.boolean(),
+  minimized: z.boolean(),
+});
+
+/** A partial/corrupt record cannot duplicate a window or a project's owner. */
+export function normalizeWindowSession(raw: unknown): WindowSession {
+  const result = z
+    .object({
+      windows: z.array(z.unknown()),
+      lastFocusedWindowId: z.string().optional(),
+    })
+    .safeParse(raw);
+  if (!result.success) return { windows: [] };
+  const ids = new Set<string>();
+  const projects = new Set<string>();
+  const windows = result.data.windows.flatMap((item) => {
+    const parsed = savedWindowSchema.safeParse(item);
+    if (!parsed.success || ids.has(parsed.data.id)) return [];
+    ids.add(parsed.data.id);
+    const window = parsed.data;
+    const projectIds = window.projectIds.filter((projectId) => {
+      if (projects.has(projectId)) return false;
+      projects.add(projectId);
+      return true;
+    });
+    return [
+      {
+        ...window,
+        projectIds,
+        activeProjectId: projectIds.includes(window.activeProjectId ?? "")
+          ? window.activeProjectId
+          : projectIds[0],
+      },
+    ];
+  });
+  return {
+    windows,
+    lastFocusedWindowId: ids.has(result.data.lastFocusedWindowId ?? "")
+      ? result.data.lastFocusedWindowId
+      : undefined,
+  };
+}
+
+type StateWindow = Pick<
+  BrowserWindow,
+  | "isDestroyed"
+  | "getNormalBounds"
+  | "isMaximized"
+  | "isFullScreen"
+  | "isVisible"
+  | "isMinimized"
+> & { on(event: string, listener: () => void): unknown };
+
+/** One app-owned collection, so windows never overwrite one another. */
+export class WindowStateStore<W extends StateWindow = BrowserWindow> {
   private debounce: ReturnType<typeof setTimeout> | undefined;
+  private readonly tracked = new Map<
+    string,
+    {
+      window: W;
+      capture: () => WorkspaceWindowState;
+    }
+  >();
+  private lastFocusedWindowId: string | undefined;
+  private frozen = false;
 
-  constructor(readonly file: string) {}
+  constructor(readonly file: string) {
+    this.lastFocusedWindowId = this.load().lastFocusedWindowId;
+  }
 
-  load(): WindowState {
+  load(): WindowSession {
     try {
-      const state = normalizeWindowState(
+      return normalizeWindowSession(
         JSON.parse(fs.readFileSync(this.file, "utf-8")),
       );
-      return fitToDisplays(state, screen.getAllDisplays());
     } catch {
-      return { ...DEFAULT_WINDOW_STATE };
+      return { windows: [] };
     }
   }
 
-  save(state: WindowState): void {
+  /** A new window's default placement, never a second saved content payload. */
+  placement(): WindowState {
+    const session = this.tracked.size > 0 ? this.snapshot() : this.load();
+    return (
+      session.windows.find(
+        (window) => window.id === session.lastFocusedWindowId,
+      )?.state ??
+      session.windows.at(-1)?.state ?? { ...DEFAULT_WINDOW_STATE }
+    );
+  }
+
+  snapshot(): WindowSession {
+    return {
+      windows: [...this.tracked.values()]
+        .filter(({ window }) => !window.isDestroyed())
+        .map(({ capture }) => capture()),
+      lastFocusedWindowId: this.lastFocusedWindowId,
+    };
+  }
+
+  private save(): void {
+    if (this.frozen) return;
+    if (this.debounce) clearTimeout(this.debounce);
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, `${JSON.stringify(state, null, 2)}\n`);
+      const temporary = `${this.file}.tmp`;
+      fs.writeFileSync(
+        temporary,
+        `${JSON.stringify(this.snapshot(), null, 2)}\n`,
+      );
+      fs.renameSync(temporary, this.file);
     } catch {
-      // Best-effort: a failed save only costs the next launch's placement.
+      // Best-effort: a failed save only costs the next launch's restoration.
     }
   }
 
-  /** Read the live window into a state, keeping the last normal bounds
-   * when it's maximized/fullscreen (so un-maximizing after a relaunch
-   * lands where it used to). */
-  capture(window: BrowserWindow, previous: WindowState): WindowState {
-    const maximized = window.isMaximized();
-    const fullscreen = window.isFullScreen();
-    if (maximized || fullscreen) {
-      return { ...previous, maximized, fullscreen };
-    }
-    const bounds = window.getBounds();
-    return { ...bounds, maximized: false, fullscreen: false };
+  /** Metadata and geometry settle together in one collection write. */
+  changed(): void {
+    if (this.frozen) return;
+    if (this.debounce) clearTimeout(this.debounce);
+    this.debounce = setTimeout(() => this.save(), SAVE_DEBOUNCE_MS);
   }
 
-  /** Follow a window for its lifetime, persisting placement as it settles. */
-  track(window: BrowserWindow, initial: WindowState): void {
+  /** Quit/update teardown must not persist the shrinking set of windows. */
+  freeze(): void {
+    this.save();
+    this.frozen = true;
+  }
+
+  /** A failed update or cancelled native close is live work again. */
+  resume(): void {
+    this.frozen = false;
+    this.changed();
+  }
+
+  track({
+    window,
+    initial,
+    workspace,
+  }: {
+    window: W;
+    initial: WorkspaceWindowState;
+    workspace: () => WorkspaceInitial & { profileId: string };
+  }): void {
+    const id = initial.id;
     let last = initial;
-    const update = () => {
-      if (window.isDestroyed()) return;
-      last = this.capture(window, last);
+    // A restored hidden window keeps its modes until its first real show.
+    let presented = window.isVisible();
+    const capture = () => {
+      last = {
+        ...last,
+        ...workspace(),
+        state: {
+          ...window.getNormalBounds(),
+          maximized: presented ? window.isMaximized() : last.state.maximized,
+          fullscreen: presented ? window.isFullScreen() : last.state.fullscreen,
+        },
+        visible: presented
+          ? window.isVisible() || window.isMinimized()
+          : last.visible,
+        minimized: presented ? window.isMinimized() : last.minimized,
+      };
+      return last;
     };
-    const scheduleSave = () => {
-      update();
-      if (this.debounce) clearTimeout(this.debounce);
-      this.debounce = setTimeout(() => this.save(last), SAVE_DEBOUNCE_MS);
-    };
+    this.tracked.set(id, { window, capture });
+    this.lastFocusedWindowId ??= id;
     for (const event of [
       "resize",
       "move",
@@ -162,14 +296,45 @@ export class WindowStateStore {
       "unmaximize",
       "enter-full-screen",
       "leave-full-screen",
-    ] as const) {
-      window.on(event as "resize", scheduleSave);
-    }
-    // Close is the one moment that must not be debounced away.
-    window.on("close", () => {
-      if (this.debounce) clearTimeout(this.debounce);
-      update();
-      this.save(last);
+      "hide",
+      "minimize",
+      "restore",
+    ] as const)
+      window.on(event, () => this.changed());
+    window.on("show", () => {
+      presented = true;
+      this.changed();
     });
+    window.on("focus", () => {
+      this.lastFocusedWindowId = id;
+      this.changed();
+    });
+    window.on("closed", () => {
+      this.tracked.delete(id);
+      if (this.lastFocusedWindowId === id)
+        this.lastFocusedWindowId = [...this.tracked.keys()].at(-1);
+      this.save();
+    });
+    this.changed();
   }
+}
+
+export function freshWindowState({
+  profileId,
+  projectId,
+  state,
+}: {
+  profileId: string;
+  projectId?: string;
+  state: WindowState;
+}): WorkspaceWindowState {
+  return {
+    id: randomUUID(),
+    profileId,
+    projectIds: projectId ? [projectId] : [],
+    activeProjectId: projectId,
+    state,
+    visible: true,
+    minimized: false,
+  };
 }

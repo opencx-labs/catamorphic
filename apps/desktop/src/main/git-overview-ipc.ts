@@ -22,7 +22,7 @@ export function registerGitOverviewSubscriptions({
     for (const consumer of consumers?.values() ?? []) consumer.stop();
     consumers?.clear();
   };
-  app.once("before-quit", () => {
+  app.once("will-quit", () => {
     for (const sender of gitConsumers.keys()) clearGitConsumers(sender);
     gitMonitor.dispose();
   });

@@ -186,7 +186,32 @@ again, and agent calls for it wait until the new window has opened it. Unsaved e
 until they are saved or discarded; that window says so. A new window cascades
 from the one it came from and carries its project's name, so the macOS Window
 menu lists it and Cmd+` reaches it. Closing an occupied window hides it;
-explicit Quit owns shutdown.
+explicit Quit owns shutdown. The palette's **Close current Work window** uses
+that same lifecycle, including in an empty window. Cmd+W continues to close the
+focused tab or chat. **Rename current chat…** uses the existing rename dialog
+and can name the current chat while its bubble is minimized.
+
+A restart, including an update, restores every workspace window with its profile,
+owned project group, active project, normal bounds, maximized/fullscreen modes,
+and visible or hidden presentation. The last focused visible window comes
+forward after the set is restored. A minimized window stays minimized. An
+occupied window that was hidden stays hidden with its project resources alive;
+a truly closed empty window is removed. Detached docks, sign-in popups, extension
+windows and voice bubbles follow their own existing lifecycles.
+
+The app-owned `window-state.json` stores this window collection. Each project's
+existing workspace store remains the one source for tabs, chats and layout.
+Startup reserves all saved project owners before renderers begin claiming
+projects or monitoring attention, then validates those claims against existing
+project records. A fallback selected from profile preferences is only a request:
+its project resources and saver mount after the existing ownership claim succeeds.
+An empty restored window cannot mount or save another window's project. Deleting a
+project removes its claim and retained runtime. Quit
+and update restart ask every initialized workspace to flush its current project
+saves and await their acknowledgements before freezing the complete window
+collection and closing any window. Teardown cannot replace it with the shrinking
+set. Failed updates, declined moves and prevented native closes resume persistence
+for the next attempt. Positions unavailable on the current screens are recentered.
 
 The profile can show chats from the current project or all its projects, attach
 or detach the dock, and choose edge or centered expansion. Drag the collapsed

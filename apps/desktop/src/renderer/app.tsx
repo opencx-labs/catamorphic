@@ -245,6 +245,10 @@ import {
   workspaceCustomizationMessage,
 } from "./lib/workspace-customization.js";
 import {
+  saveWorkspace,
+  useWorkspacePersistence,
+} from "./lib/workspace-persistence.js";
+import {
   agentOpenInFront,
   attachBlocker,
   attachedTabKeys,
@@ -614,10 +618,11 @@ interface AgentArrival {
 
 export function App({
   runtimeProjectId,
-  onProjectResolved,
+  onRequestProject,
 }: {
   runtimeProjectId?: string;
-  onProjectResolved?: (projectId: string) => void;
+  /** Request a fallback; project effects wait for the parent's accepted claim. */
+  onRequestProject?: (projectId: string) => Promise<boolean>;
 } = {}) {
   const runtime = useWorkspace();
   const visibleRef = useRef(runtime.visible);
@@ -946,16 +951,42 @@ export function App({
             !ownedElsewhere.has(project.id)),
       )
     : allProjects;
+  // A window may suggest its profile's last/default project, but it cannot
+  // mount that project's resources or saver until WorkspaceRoot owns its claim.
+  const fallbackSelectionReady = Boolean(
+    activeProfileId && profilesData && profilePrefs && !projectsLoading,
+  );
+  const fallbackProjectId =
+    !runtimeProjectId && fallbackSelectionReady
+      ? (
+          projects.find((project) => project.id === activeProjectId) ??
+          projects.find(
+            (project) => project.id === profilePrefs?.lastProjectId,
+          ) ??
+          projects.find(
+            (project) => project.id === activeProfile?.defaultProjectId,
+          ) ??
+          projects[0]
+        )?.id
+      : undefined;
+  // A request token identifies this candidate's UI decision only. An earlier
+  // candidate's answer cannot let links drain while a newer claim is pending.
+  const fallbackRequest = useMemo(
+    () =>
+      fallbackProjectId && activeProfileId
+        ? { projectId: fallbackProjectId, profileId: activeProfileId }
+        : null,
+    [fallbackProjectId, activeProfileId],
+  );
+  const [fallbackDecision, setFallbackDecision] = useState<{
+    request: NonNullable<typeof fallbackRequest>;
+    accepted: boolean;
+  } | null>(null);
+  const requestProjectRef = useRef(onRequestProject);
+  requestProjectRef.current = onRequestProject;
   const activeProject = runtimeProjectId
     ? projects.find((project) => project.id === runtimeProjectId)
-    : (projects.find((project) => project.id === activeProjectId) ??
-      // A relaunch lands in the profile's last active project, then the
-      // profile default, then whatever exists.
-      projects.find((project) => project.id === prefs?.lastProjectId) ??
-      projects.find(
-        (project) => project.id === activeProfile?.defaultProjectId,
-      ) ??
-      projects[0]);
+    : undefined;
   const projectId = activeProject?.id;
   const remoteSurfaceResolved = Boolean(
     projectId && remoteSurfaceState?.projectId === projectId,
@@ -1078,11 +1109,29 @@ export function App({
     };
   }, [projectId]);
   useEffect(() => {
-    if (projectId) {
-      setActiveProjectId(projectId);
-      onProjectResolved?.(projectId);
-    }
-  }, [projectId, onProjectResolved]);
+    if (!fallbackRequest) return;
+    let current = true;
+    const request = requestProjectRef.current;
+    void (request ? request(fallbackRequest.projectId) : Promise.resolve(false))
+      .then((accepted) => {
+        if (current)
+          setFallbackDecision({ request: fallbackRequest, accepted });
+      })
+      .catch((error: unknown) => {
+        if (current)
+          setLinkError(
+            error instanceof Error
+              ? error.message
+              : "Could not open the project",
+          );
+      });
+    return () => {
+      current = false;
+    };
+  }, [fallbackRequest]);
+  useEffect(() => {
+    if (projectId) setActiveProjectId(projectId);
+  }, [projectId]);
 
   const startWithAgent = async (): Promise<void> => {
     const project = await desktopApi.createDefaultProject();
@@ -1720,17 +1769,10 @@ export function App({
   useEffect(() => {
     if (projectId && workspaceReady) void desktopApi.workspaceReady(projectId);
   }, [projectId, workspaceReady]);
-  useEffect(() => {
-    if (!projectId || !workspaceReady) return;
-    const snapshot = workspaces[projectId];
-    if (!snapshot) return;
-    const timer = window.setTimeout(() => {
-      void desktopApi
-        .workspaceStateSet(projectId, serializeWorkspace(snapshot))
-        .catch(() => {});
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [workspaces, projectId, workspaceReady]);
+  useWorkspacePersistence({
+    projectId,
+    workspace: projectId && workspaceReady ? workspaces[projectId] : undefined,
+  });
   // Moving to a window of its own (lib/project-move.ts), the project's
   // workspace goes to the main process as it is, its shells and unsent
   // chats with it, for the new window to open as it was left here; what a
@@ -1751,9 +1793,9 @@ export function App({
         leaving,
         serializeWorkspace(left, { moving: true }),
       );
-      void desktopApi
-        .workspaceStateSet(leaving, serializeWorkspace(left))
-        .catch(() => {});
+      void saveWorkspace({ projectId: leaving, workspace: left }).catch(
+        () => {},
+      );
     },
     [],
   );
@@ -2557,8 +2599,12 @@ export function App({
   // the last one it had open are known, and that project's workspace is
   // restored. Taken earlier (a cold launch from a link), a link opens in a
   // placeholder workspace that the restored one then replaces.
-  const linksLandSettled =
-    !projectsLoading && prefs !== null && (!projectId || workspaceReady);
+  const linksLandSettled = runtimeProjectId
+    ? Boolean(projectId && workspaceReady)
+    : fallbackSelectionReady &&
+      (fallbackRequest === null ||
+        (fallbackDecision?.request === fallbackRequest &&
+          !fallbackDecision.accepted));
   useEffect(() => {
     const take = () => {
       if (!runtime.visible || !activeProfile?.id || !linksLandSettled) return;
@@ -4509,6 +4555,7 @@ export function App({
       void desktopApi.setPrefs({ sidebarOpen: open });
     },
     "close-tab": closeActiveSurface,
+    "close-window": () => window.close(),
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
     "change-assistant": () => openPalettePicker("assistant"),
@@ -6384,8 +6431,8 @@ export function App({
     "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
-    // Any focused chat that has a session, loaded in the list or not.
-    "rename-chat": focusedChat?.sessionId !== undefined,
+    // The same current chat the handler targets, including a minimized one.
+    "rename-chat": paletteTargetChat?.sessionId !== undefined,
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":
@@ -6484,6 +6531,7 @@ export function App({
             action.id,
             [
               "check-for-updates",
+              "close-window",
               "setup-agent",
               "manage-connectors",
               "connect-remote-project",

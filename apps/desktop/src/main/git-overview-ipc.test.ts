@@ -83,6 +83,9 @@ it("owns leases per renderer, cleans reloads without accumulating lifecycle list
   first.emit("destroyed");
   expect(stops[12]).not.toHaveBeenCalled();
   app.emit("before-quit", { preventDefault() {} });
+  expect(stops[12]).not.toHaveBeenCalled();
+  expect(monitor.dispose).not.toHaveBeenCalled();
+  app.emit("will-quit", { preventDefault() {} });
   expect(stops[12]).toHaveBeenCalledOnce();
   expect(monitor.dispose).toHaveBeenCalledOnce();
 });

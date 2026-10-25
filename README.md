@@ -116,7 +116,8 @@ UI. See [`INTEGRATION.md`](INTEGRATION.md).
   embedded product surface.
 - **A daily-driver dev shell.** Import a monorepo with its existing agent
   instructions. Worktrees, terminals, browser tabs, diffs, pull requests, and
-  multiple coding harnesses live in one window.
+  multiple coding harnesses share workspace windows. Each window returns with its
+  profile, project group, tabs and layout after Quit or an update restart.
 - **An embedded copilot.** Mount the libraries in a SaaS backend, add the
   React surfaces you want, and give the agent the host's skills, tools,
   trigger kinds, look, and doctrine.

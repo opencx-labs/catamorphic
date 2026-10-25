@@ -10,6 +10,7 @@ import {
   normalizeDocumentPath,
   PROJECT_PERMISSIONS,
   type ProjectAgentEntry,
+  ProjectNotFoundError,
 } from "@catamorphic/core";
 import { isPersonalFile } from "@catamorphic/git";
 import {
@@ -338,6 +339,10 @@ export function registerIpcHandlers(
   mcpApps?: McpAppsService,
   mobilePairing?: MobilePairingService,
   incognitoSessions?: IncognitoSessionsStore,
+  workspaceLifecycle?: {
+    prepareQuit: () => Promise<void>;
+    forgetProject: (projectId: string) => void;
+  },
 ): void {
   registerGitOverviewSubscriptions({
     resolve: async (input) => {
@@ -1678,14 +1683,25 @@ export function registerIpcHandlers(
     // What Electron's autoUpdater.quitAndInstall does before installing:
     // announce the update quit, then close every window. The e2e suite
     // proves the app really exits from there (hide-on-close must yield).
-    ipcMain.handle("catamorphic:dev-update-restart", () => {
-      autoUpdater.emit("before-quit-for-update");
-      // Electron quits once the last window has closed (macOS keeps the
-      // app alive otherwise); the installer's terminate stands in for it.
-      app.once("window-all-closed", () => app.quit());
-      for (const window of BrowserWindow.getAllWindows()) window.close();
-      return true;
-    });
+    ipcMain.handle(
+      "catamorphic:dev-update-restart",
+      async (_event, options?: { abort?: boolean }) => {
+        await workspaceLifecycle?.prepareQuit();
+        autoUpdater.emit("before-quit-for-update");
+        if (options?.abort) {
+          autoUpdater.emit(
+            "error",
+            new Error("Simulated update restart failure"),
+          );
+          return true;
+        }
+        // Electron quits once the last window has closed (macOS keeps the
+        // app alive otherwise); the installer's terminate stands in for it.
+        app.once("window-all-closed", () => app.quit());
+        for (const window of BrowserWindow.getAllWindows()) window.close();
+        return true;
+      },
+    );
     ipcMain.handle(
       "catamorphic:dev-window",
       (
@@ -1698,12 +1714,18 @@ export function registerIpcHandlers(
           | "setSize"
           | "zoom"
           | "focus"
+          | "quit"
           | "get",
         width?: number,
         height?: number,
       ) => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window) return null;
+        if (action === "quit") {
+          // The native menu's lifecycle, including a cancelled beforeunload.
+          setImmediate(() => app.quit());
+          return null;
+        }
         if (action === "get") {
           // Read-only: geometry as the OS reports it (window-state tests).
         } else if (action === "focus") {
@@ -2869,6 +2891,7 @@ export function registerIpcHandlers(
         await shell.trashItem(rootPath);
       }
       await server.catamorphic.core.projects.delete(identity, input.projectId);
+      workspaceLifecycle?.forgetProject(input.projectId);
       await server.projectRoots.delete(input.projectId);
       await server.workspaceStates.delete(input.projectId);
       await removeComposerFiles({
@@ -3164,7 +3187,16 @@ export function registerIpcHandlers(
     "catamorphic:workspace-state-set",
     async (_event, projectId: string, snapshot: unknown) => {
       if (typeof projectId !== "string") return;
-      await state.current?.workspaceStates.set(projectId, snapshot);
+      const server = state.current;
+      if (!server) throw new Error("The project server is unavailable.");
+      try {
+        await server.catamorphic.core.projects.get(identity, projectId);
+      } catch (error) {
+        // A debounced save may arrive just after the project was removed.
+        if (error instanceof ProjectNotFoundError) return;
+        throw error;
+      }
+      await server.workspaceStates.set(projectId, snapshot);
     },
   );
 

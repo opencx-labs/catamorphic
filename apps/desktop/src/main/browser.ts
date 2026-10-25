@@ -1921,6 +1921,19 @@ export function registerBrowserSupport(
     },
   );
 
+  const revokeCapture = (profileId: string, origin: string, kind: string) => {
+    if (kind !== "microphone" && kind !== "camera" && kind !== "screenShare")
+      return;
+    const browsingSession = session.fromPartition(partitionFor(profileId));
+    for (const guest of webContents.getAllWebContents()) {
+      if (guest.isDestroyed() || guest.session !== browsingSession) continue;
+      for (const frame of guest.mainFrame.framesInSubtree) {
+        if (!frame.isDestroyed() && !frame.detached && frame.origin === origin)
+          frame.send("catamorphic:page-media-stop", kind);
+      }
+    }
+  };
+
   ipcMain.handle("catamorphic:site-settings-set", (event, input: unknown) => {
     const { origin, kind, state } = z
       .object({
@@ -1931,6 +1944,7 @@ export function registerBrowserSupport(
       .parse(input);
     const profileId = windows.profileFor(event.sender);
     const permissions = siteSettings.set(profileId, origin, kind, state);
+    if (state !== "allow") revokeCapture(profileId, origin, kind);
     siteSettingsChanged(profileId, origin);
     return permissions;
   });
@@ -1939,6 +1953,8 @@ export function registerBrowserSupport(
     const { origin } = originInput.parse(input);
     const profileId = windows.profileFor(event.sender);
     siteSettings.reset(profileId, origin);
+    for (const kind of ["microphone", "camera", "screenShare"])
+      revokeCapture(profileId, origin, kind);
     siteSettingsChanged(profileId, origin);
   });
 

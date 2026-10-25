@@ -52,6 +52,8 @@ export interface DesktopUpdaterControllerOptions {
   broadcast: (state: DesktopUpdateState) => void;
   logger?: Pick<Console, "error" | "info" | "warn">;
   prepareInstall?: () => Promise<void>;
+  /** Installation did not proceed; release any prepared workspace freeze. */
+  cancelInstall?: () => void;
   /**
    * The release downloaded and not installed yet, kept across launches: a
    * check that finds it again has electron-updater verify its cached copy
@@ -169,6 +171,7 @@ export class DesktopUpdaterController {
     });
     updater.on("error", (error) => {
       if (this.preparing) return;
+      if (this.state.phase === "installing") this.options.cancelInstall?.();
       if (needsMove(error)) {
         this.moveRequired(true);
         return;
@@ -316,9 +319,13 @@ export class DesktopUpdaterController {
       } finally {
         this.preparing = false;
       }
-      if (this.current().phase !== "installing") return;
+      if (this.current().phase !== "installing") {
+        this.options.cancelInstall?.();
+        return;
+      }
       this.options.updater.quitAndInstall(false, true);
     } catch (error) {
+      this.options.cancelInstall?.();
       this.logger.error("[desktop] update preparation failed:", error);
       if (needsMove(error)) {
         this.moveRequired(true);

@@ -64,7 +64,7 @@ import { isStopCommand, speakableText } from "./speech-text.js";
 import { SystemKeys } from "./system-keys.js";
 import { createVoiceBubble, voiceBubbleDragSchema } from "./voice-bubble.js";
 import { listenForVoiceKeys } from "./voice-keys.js";
-import { QUIET_PHASES, VoiceQuiet } from "./voice-quiet.js";
+import { quietForConversation, VoiceQuiet } from "./voice-quiet.js";
 
 /** What voice says when it starts learning the person's voice. */
 const LEARN_PROMPT =
@@ -325,7 +325,7 @@ export function registerVoiceSupport(deps: {
       return;
     }
     quiet?.set({
-      quiet: !voice.ending && QUIET_PHASES.has(voice.live.phase),
+      quiet: !voice.ending && quietForConversation(voice.live),
       microphone: voice.microphone,
     });
   };

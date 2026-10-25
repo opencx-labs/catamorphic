@@ -3686,6 +3686,11 @@ voice on or off: off, in its agent's voice, with the microphone closed.
 While it is on its way the button spins, while it plays it is a stop
 square and stays in view, and pressed again it stops. See ADR 0268.
 
+Dictation into a field and learning a voice do not lower other audio. Only a
+conversation with the assistant or a chat does. Stopping capture releases a
+microphone immediately, even while its worklet or audio context is still
+starting; a permission result arriving after Stop is released on arrival.
+
 ### 2026-10-20: A turn that failed on its sign-in while you were away runs again when you are back
 
 A chat's background tasks finished in the night and woke it while every
@@ -3771,3 +3776,32 @@ activity status per child, with the harness mark, all reports and a link to the
 source chat. They do not fill the person's conversation with delivery receipts.
 Failures, questions and explicit attention requests stay in the conversation.
 The person's messages keep steering immediately. See ADR 0278.
+
+
+## Every workspace window returns after a restart (2026-10-25)
+
+Workspace windows are one app-owned saved collection: their profiles, project
+ownership groups, active projects, native placement and visible/hidden state.
+Quit and update restart flush and acknowledge each renderer's current project
+saves, then freeze that set before teardown. A native abort resumes persistence.
+Startup reserves every project owner before loading its renderer, validates it
+against the project records, then restores the last focused visible
+workspace. Existing project stores still own their tabs and layout. The palette's
+Close current Work window uses the native close lifecycle, and Rename current
+chat names the current chat through the existing dialog, minimized chats included.
+See [ADR 0284](../../docs/decisions/0284-workspace-windows-restore-as-one-saved-set.md)
+and [workspace interactions](docs/workspace-interactions.md).
+
+### 2026-10-25: A site permission change ends its page capture
+
+Changing a site's camera, microphone or screen sharing permission away from
+Allow stops matching page-owned capture in that profile and origin, including
+cloned tracks, embedded frames and device requests still resolving. Revocation
+keeps only weak track references and adds no track lifecycle listeners that
+could keep an abandoned microphone alive. Browser sleep retains its conservative
+native-grant protection: a capture grant keeps the tab awake until navigation.
+Private extension worlds are outside page capture revocation.
+
+The assistant lowers audio only during a conversation. Dictation and voice
+learning leave it alone, and the native lowering helper gets its normal
+release-and-exit path when voice ends.
