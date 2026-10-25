@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import http from "node:http";
 import { createConnection } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
@@ -9,6 +10,44 @@ afterEach(async () => {
 });
 
 describe("terminal shutdown", () => {
+  it("finishes Quit after loaded browser guests accept closing", async () => {
+    const server = http.createServer((_request, response) => {
+      response.setHeader("Content-Type", "text/html");
+      response.end("<title>Quit fixture</title><p>Ready to close</p>");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("Missing fixture server address");
+      const origin = `http://127.0.0.1:${address.port}`;
+      app = await launchApp({ urls: [`${origin}/one`, `${origin}/two`] });
+      await app.waitFor(
+        `(() => {
+        const pages = [...document.querySelectorAll('webview')];
+        return pages.length === 2 && pages.every(page => {
+          try { return page.getTitle() === 'Quit fixture' && !page.isLoading(); }
+          catch { return false; }
+        });
+      })()`,
+        { label: "both browser guests loaded" },
+      );
+      const quitting = app;
+      await quitting.stop();
+      app = undefined;
+      expect(quitting.getOutput()).toContain(
+        "Windows closed; shutting down services",
+      );
+      expect(quitting.getOutput()).toContain("Shutdown complete");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("closes an unfinished HTTP request before flushing the database", async () => {
     app = await launchApp();
     const url = new URL(

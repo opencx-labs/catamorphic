@@ -159,7 +159,12 @@ export class DesktopWorkspaces {
       const generation = this.quitGeneration;
       void this.prepareQuit()
         .then(() => {
-          if (this.quitting) app.quit();
+          // Electron commits its native quit state after the JS callback's
+          // microtasks. Reentering Quit there can close every guest/window
+          // and then have the cancelled outer attempt clear that state.
+          setImmediate(() => {
+            if (generation === this.quitGeneration && this.quitting) app.quit();
+          });
         })
         .catch((error: unknown) => {
           if (generation !== this.quitGeneration) return;

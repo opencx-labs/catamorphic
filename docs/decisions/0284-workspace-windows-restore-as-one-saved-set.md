@@ -30,6 +30,8 @@ registered project savers and acknowledges completion. The ordinary 500 ms saves
 and this flush share an ordered write queue to the existing project store. Only
 then freeze the complete window collection and permit native teardown. A failed
 update, declined move or prevented native close resumes persistence for a retry.
+Resume ordinary native Quit on the next event-loop turn after acknowledgement,
+so Electron finishes cancelling the preparatory attempt before the final one.
 Validate saved owners against real project records before mounting them; deleting
 a project forgets its claim and runtime. Occupied close still hides the window and
 keeps its resources; a truly closed empty window leaves the collection. The palette
