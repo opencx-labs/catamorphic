@@ -6,6 +6,20 @@ import {
 } from "../services/encrypted-credential-vault.js";
 
 describe("CredentialVault", () => {
+  it("cannot alias a different tenant by adding separators to a ref", async () => {
+    const vault = new MemoryCredentialVault();
+    const ref = await vault.put({
+      tenantId: "company:team",
+      material: new TextEncoder().encode("company-secret"),
+    });
+    await expect(
+      vault.withMaterial({
+        tenantId: "company",
+        ref: { id: `team:${ref.id}` },
+        use: () => "leaked",
+      }),
+    ).rejects.toThrow("not found");
+  });
   it("tenant-qualifies refs and zeroes callback copies", async () => {
     const vault = new MemoryCredentialVault();
     const ref = await vault.put({
@@ -102,5 +116,33 @@ describe("EncryptedCredentialVault keyring (ADR 0162)", () => {
     expect(
       () => new EncryptedCredentialVault({ store: memoryStore(), keys: [] }),
     ).toThrow("at least one key");
+  });
+
+  it("rejects unsupported envelopes, forged tenants and modified authentication tags", async () => {
+    const store = memoryStore();
+    const vault = new EncryptedCredentialVault({ store, keys: [newKey] });
+    const ref = await vault.put({
+      tenantId: "tenant",
+      material: new TextEncoder().encode("company-secret"),
+    });
+    const [recordKey, bytes] = [...store.records.entries()][0]!;
+    await expect(
+      vault.withMaterial({ tenantId: "other", ref, use: () => "leaked" }),
+    ).rejects.toThrow();
+    const envelope = JSON.parse(new TextDecoder().decode(bytes));
+    const write = (record: unknown) =>
+      store.records.set(
+        recordKey,
+        new TextEncoder().encode(JSON.stringify(record)),
+      );
+    const { kid: _kid, ...unkeyed } = envelope;
+    write(unkeyed);
+    await expect(read(vault, ref)).rejects.toThrow();
+    write({ ...envelope, tag: Buffer.alloc(12).toString("base64") });
+    await expect(read(vault, ref)).rejects.toThrow();
+    write({ ...envelope, nonce: Buffer.alloc(16).toString("base64") });
+    await expect(read(vault, ref)).rejects.toThrow();
+    write(envelope);
+    expect(await read(vault, ref)).toBe("company-secret");
   });
 });

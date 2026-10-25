@@ -31,7 +31,7 @@ import { startWorkWorker } from "./worker-runtime.js";
 const REAL_KEY = `sk-ant-real-${randomUUID()}`;
 const identity: Identity = {
   tenantId: SERVER_TENANT_ID,
-  externalUserId: "harness-gateway-test",
+  externalUserId: "work-setup-agent",
 };
 
 let root: string;

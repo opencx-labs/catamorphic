@@ -16,8 +16,12 @@ import {
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
 import {
+  apiErrorResponse,
+  apiNotFoundResponse,
   catamorphicPlugin,
+  errorLogFields,
   instrumentHttpServer,
+  requestLogFields,
 } from "@catamorphic/fastify-plugin";
 import {
   dockerImageBuilder,
@@ -593,6 +597,10 @@ export async function startEmbeddedServer(
     credentialVault: new DesktopCredentialVault(
       path.join(paths.root, "credentials.json"),
     ),
+    resolveMemberIdentity: async ({ tenantId, externalUserId }) =>
+      tenantId === DESKTOP_TENANT_ID && externalUserId === DESKTOP_USER_ID
+        ? { tenantId, externalUserId }
+        : null,
     connectionProviders: [...(connectionProviders ?? []), github],
     codeHosts: [githubCodeHost(github)],
     // No public webhook URL here: watchers poll GitHub instead, recording
@@ -1396,12 +1404,17 @@ export async function startEmbeddedServer(
   // media attachments are ~10MB each (base64 4/3), the composer caps the
   // total it sends well below this.
   const app: FastifyInstance = Fastify({
-    logger: { level: "warn" },
+    logger: {
+      level: "warn",
+      serializers: { req: requestLogFields, err: errorLogFields },
+    },
     bodyLimit: 96 * 1024 * 1024,
     // Windows are already closed at shutdown. Remaining Chromium requests
     // must not keep HTTP close (and therefore the database flush) waiting.
     forceCloseConnections: true,
   });
+  app.setErrorHandler(apiErrorResponse);
+  app.setNotFoundHandler(apiNotFoundResponse);
   // A linked project is a remote authority. Never execute its API operations
   // under the desktop's loopback root identity.
   app.addHook("preHandler", async (request, reply) => {

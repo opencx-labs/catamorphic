@@ -398,6 +398,9 @@ export class GitGatewayService {
         alias: request.alias,
         access: "read",
         remoteUrl: authorized.remoteUrl,
+        ...(authorized.sessionId
+          ? { agentSessionId: authorized.sessionId }
+          : {}),
         ...(listing
           ? {}
           : {
@@ -525,6 +528,13 @@ export class GitGatewayService {
         }),
       };
     }
+    // The committed branch policy can narrow while an approval is pending.
+    const currentRefusals = reviewPush({
+      commands,
+      patterns: access.binding.git?.push ?? DEFAULT_PUSH_PATTERNS,
+      defaultBranch,
+    });
+    if (currentRefusals) return refuse(currentRefusals);
     const headers = { ...request.headers };
     delete headers["content-encoding"];
     return this.forward({
@@ -653,6 +663,7 @@ export class GitGatewayService {
       alias: request.alias,
       access: "read",
       remoteUrl: authorized.remoteUrl,
+      ...(authorized.sessionId ? { agentSessionId: authorized.sessionId } : {}),
     });
     const response = await this.fetch(
       `${this.upstreamRepository(authorized, request)}/info/refs?service=git-upload-pack`,
@@ -699,15 +710,10 @@ export class GitGatewayService {
         ? { body: toReadableStream(input.body), duplex: "half" }
         : {}),
     };
-    const response = await this.fetch(input.url, init).catch(
-      async (error: unknown) => {
-        await input.audit?.("error", { error: "upstream unreachable" });
-        throw new GitGatewayError(
-          502,
-          `The remote could not be reached: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      },
-    );
+    const response = await this.fetch(input.url, init).catch(async () => {
+      await input.audit?.("error", { error: "upstream unreachable" });
+      throw new GitGatewayError(502, "The remote could not be reached");
+    });
     if (!response.ok || !response.body) {
       await input.audit?.("error", { status: response.status });
       await response.body?.cancel().catch(() => {});
@@ -804,7 +810,9 @@ function refusalResponse(error: unknown): GitGatewayResponse {
       503,
       `The connection behind this alias is unavailable: ${error.message}`,
     );
-  console.warn("[catamorphic] Git gateway request failed", error);
+  console.warn("[catamorphic] Git gateway request failed", {
+    errorType: "Error",
+  });
   return text(502, "The Git gateway could not complete this request");
 }
 

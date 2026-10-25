@@ -582,13 +582,20 @@ async function createWorkServerInner(
     }),
     // Unattended work re-resolves its member on every dispatch; a disabled
     // account (ADR 0161) has no authority left to lend.
-    resolveMemberIdentity: async ({ tenantId, externalUserId }) =>
-      (await accountLifecycle.isActive(externalUserId))
-        ? catamorphic.core.memberships.identityForUser({
-            tenantId,
-            externalUserId,
-          })
-        : null,
+    resolveMemberIdentity: async ({ tenantId, externalUserId }) => {
+      if (tenantId !== SERVER_TENANT_ID) return null;
+      // The machine-local operator and setup agent use this host-owned
+      // service principal, which has no person account or project roles.
+      if (externalUserId === SETUP_AGENT_USER)
+        return { tenantId, externalUserId };
+      if (!(await accountLifecycle.isActive(externalUserId))) return null;
+      return administrators.withPermissions(
+        await catamorphic.core.memberships.identityForUser({
+          tenantId,
+          externalUserId,
+        }),
+      );
+    },
     // Workflows name members by the email they sign in with (ADR 0210).
     // Only a verified email names someone (ADR 0210).
     memberIdForEmail: ({ email }) =>

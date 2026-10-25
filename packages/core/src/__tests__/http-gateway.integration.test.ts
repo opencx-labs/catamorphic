@@ -216,6 +216,9 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
   const grants = new ConnectionCapabilityGrantsService(db, allocations);
   const reviewed: ConnectionActionContext[] = [];
   const sandboxing: { value: Sandboxing | undefined } = { value: undefined };
+  const authority: { identity: Identity | null } = {
+    identity: { ...admin, externalUserId: "member-1" },
+  };
   const broker = new ConnectionBroker(
     connections,
     providers,
@@ -242,6 +245,7 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
         },
       ],
       sessionSandboxing: async () => sandboxing.value,
+      resolveMemberIdentity: async () => authority.identity,
     },
   );
   const gateway = new HttpGatewayService({
@@ -660,7 +664,7 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
     expect(seen).toHaveLength(2);
   });
 
-  it("checks the grant before the body, and once per admitted request", async () => {
+  it("rechecks a grant revoked after early body admission", async () => {
     const refused = await gateway.admit({
       alias: "logs",
       headers: bearer("nope"),
@@ -672,16 +676,59 @@ describe("HTTP APIs through the gateway (ADR 0212)", () => {
       headers: bearer(grant),
     });
     if (!("admitted" in admitted)) throw new Error("Not admitted");
-    // Revoked after admission: the admission stands for its own request.
+    // A revocation while the body is read still ends the request.
     await grants.revokeAllocation({ allocationId: session.allocationId });
     const response = await gateway.handle({
       alias: "logs",
       method: "GET",
       path: "/",
       headers: bearer(grant),
-      admitted: admitted.admitted,
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(401);
+  });
+
+  it("stops a member's existing grant after their authority is removed or narrowed", async () => {
+    const grant = await issue("logs");
+    expect((await call({ alias: "logs", headers: bearer(grant) })).status).toBe(
+      200,
+    );
+    const before = seen.length;
+    authority.identity = null;
+    try {
+      expect(
+        (await call({ alias: "logs", headers: bearer(grant) })).status,
+      ).toBe(403);
+      authority.identity = {
+        tenantId,
+        externalUserId: "member-1",
+        scope: [],
+        connectionScope: [],
+      };
+      expect(
+        (await call({ alias: "logs", headers: bearer(grant) })).status,
+      ).not.toBe(200);
+      expect(seen).toHaveLength(before);
+      authority.identity = {
+        tenantId,
+        externalUserId: "member-1",
+        scope: [{ kind: "agent", projectId, name: "*" }],
+        connectionScope: [
+          {
+            projectId,
+            environment: "dev",
+            alias: "logs",
+            capabilities: ["get"],
+          },
+        ],
+      };
+      expect(
+        (await call({ alias: "logs", method: "POST", headers: bearer(grant) }))
+          .status,
+      ).toBe(403);
+      expect(seen).toHaveLength(before);
+    } finally {
+      authority.identity = { ...admin, externalUserId: "member-1" };
+    }
   });
 
   it("streams a large answer through without holding it whole", async () => {

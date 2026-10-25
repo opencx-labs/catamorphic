@@ -11,6 +11,7 @@ const encryption = vi.hoisted(() => ({ available: true }));
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => encryption.available,
     // Reversible, and visibly not the plaintext.
     encryptString: (value: string) =>

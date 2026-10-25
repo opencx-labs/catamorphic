@@ -3,6 +3,7 @@ import {
   PluginNotAttachedError,
   SecretDeclarationConflictError,
   SecretMemberNotFoundError,
+  SecretsUnavailableError,
   SecretValueInvalidError,
   UndeclaredSecretError,
   UnfulfilledCapabilityError,
@@ -27,10 +28,12 @@ import {
   UpsertSecretSchema,
 } from "../schemas.js";
 
-/** A refused secret write the person can fix: a 400 or 404, not a fault. */
+/** A refused secret write or an unavailable vault, never an internal fault. */
 function secretWriteError(
   error: unknown,
-): { status: 400 | 404; message: string } | undefined {
+): { status: 400 | 404 | 503; message: string } | undefined {
+  if (error instanceof SecretsUnavailableError)
+    return { status: 503, message: error.message };
   if (error instanceof SecretMemberNotFoundError)
     return { status: 404, message: error.message };
   if (
@@ -206,6 +209,8 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.send(status);
       } catch (err) {
         const refused = secretWriteError(err);
+        if (refused?.status === 503)
+          return reply.status(503).send({ error: refused.message });
         if (refused?.status === 400)
           return reply.status(400).send({ error: refused.message });
         throw err;
@@ -246,6 +251,8 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.send(change);
       } catch (err) {
         const refused = secretWriteError(err);
+        if (refused?.status === 503)
+          return reply.status(503).send({ error: refused.message });
         if (refused?.status === 400)
           return reply.status(400).send({ error: refused.message });
         if (refused?.status === 404)

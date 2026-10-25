@@ -5,7 +5,9 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
+import { AccessDeniedError } from "../services/artifact-scope.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
+import { ProjectNotFoundError } from "../services/projects-service.js";
 import {
   SecretDeclarationConflictError,
   SecretsService,
@@ -34,7 +36,7 @@ describe("sealed project secrets (ADR 0162)", () => {
   const row = (name: string) =>
     db
       .selectFrom("project_secrets")
-      .select(["value", "credential_ref"])
+      .select(["credential_ref"])
       .where("project_id", "=", projectId)
       .where("name", "=", name)
       .where("member_external_user_id", "is", null)
@@ -64,7 +66,7 @@ describe("sealed project secrets (ADR 0162)", () => {
       value: "sk-live-123",
     });
     const stored = await row("API_KEY");
-    expect(stored?.value).toBeNull();
+    expect(stored).not.toHaveProperty("value");
     expect(stored?.credential_ref).toBeTruthy();
     expect(JSON.stringify(stored)).not.toContain("sk-live-123");
 
@@ -125,25 +127,65 @@ describe("sealed project secrets (ADR 0162)", () => {
     ).rejects.toThrow();
   });
 
-  it("seals a plaintext value written before sealing on first read", async () => {
-    await db
-      .insertInto("project_secrets")
-      .values({
-        project_id: projectId,
-        name: "WEBHOOK_SECRET",
-        value: "legacy-plaintext",
-      })
-      .execute();
-    expect(
-      await secrets.value({
-        tenantId,
+  it("refuses writes without a vault instead of storing plaintext", async () => {
+    const service = new SecretsService({
+      db,
+      projectDeclarations: async () => [
+        { name: "NO_VAULT_KEY", required: true },
+      ],
+    });
+    await expect(
+      service.upsert({
+        identity: owner,
         projectId,
-        name: "WEBHOOK_SECRET",
+        name: "NO_VAULT_KEY",
+        value: "must-never-be-stored",
       }),
-    ).toBe("legacy-plaintext");
-    const sealed = await row("WEBHOOK_SECRET");
-    expect(sealed?.value).toBeNull();
-    expect(sealed?.credential_ref).toBeTruthy();
+    ).rejects.toThrow("Secret vault is not configured");
+    expect(await row("NO_VAULT_KEY")).toBeUndefined();
+  });
+
+  it("refuses a different tenant before reading secret values", async () => {
+    const name = "TENANT_KEY";
+    const wrongTenant = { ...owner, tenantId: crypto.randomUUID() };
+    // A host's declaration reader is not an authorization boundary.
+    const service = new SecretsService({
+      db,
+      vault,
+      projectDeclarations: async () => [{ name, required: true }],
+    });
+    await service.upsert({
+      identity: owner,
+      projectId,
+      name,
+      value: "tenant-secret",
+    });
+    const before = await row(name);
+    await expect(
+      service.value({ tenantId: wrongTenant.tenantId, projectId, name }),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+    await expect(
+      service.loadForRun({ identity: wrongTenant, projectId }),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+    await expect(
+      service.valuesForMasking({
+        identity: wrongTenant,
+        projectId,
+        owners: [],
+        sessionIds: [],
+      }),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+    expect(await row(name)).toEqual(before);
+  });
+
+  it("refuses a scoped outsider before resolving a run's secret values", async () => {
+    const service = new SecretsService({
+      db,
+      projectDeclarations: async () => [{ name: "TENANT_KEY", required: true }],
+    });
+    await expect(
+      service.loadForRun({ identity: { ...owner, scope: [] }, projectId }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
   });
 
   describe("a plugin secret named like a project webhook secret", () => {

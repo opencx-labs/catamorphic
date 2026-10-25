@@ -1,5 +1,6 @@
 import {
   SecretMemberNotFoundError,
+  SecretsUnavailableError,
   SecretValueInvalidError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -58,6 +59,27 @@ function appWithSecrets(
 }
 
 describe("project secret routes (ADR 0206)", () => {
+  it("reports a missing encryption vault as unavailable for shared and member writes", async () => {
+    const { app } = appWithSecrets({
+      upsert: async () => {
+        throw new SecretsUnavailableError();
+      },
+      setMember: async () => {
+        throw new SecretsUnavailableError();
+      },
+    });
+    for (const suffix of ["", "/members/me"]) {
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${PROJECT_ID}/secrets/CLICKHOUSE_API_KEY${suffix}`,
+        payload: { value: "should-not-be-stored" },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({
+        error: "Secret vault is not configured",
+      });
+    }
+  });
   it("lists secrets with their Environments and values' metadata, never a value", async () => {
     const { app } = appWithSecrets();
     const response = await app.inject({

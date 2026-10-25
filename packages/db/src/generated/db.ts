@@ -780,13 +780,12 @@ export interface ProjectSandboxes {
 
 export interface ProjectSecrets {
   created_at: Generated<Timestamp>;
-  credential_ref: string | null;
+  credential_ref: string;
   member_external_user_id: string | null;
   name: string;
   project_id: string;
   set_by: string | null;
   updated_at: Generated<Timestamp>;
-  value: string | null;
 }
 
 export interface Publications {

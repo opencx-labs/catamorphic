@@ -7,6 +7,7 @@ import {
   CODEX_SANDBOX_MODES,
   SANDBOXING_LEVELS,
 } from "@catamorphic/sandbox";
+import { safeStorage } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_PERMISSION_MODE_OPTIONS,
@@ -19,7 +20,8 @@ import {
 // Electron, so exercise a reversible stand-in cipher.
 vi.mock("electron", () => ({
   safeStorage: {
-    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => "gnome_libsecret",
+    isEncryptionAvailable: vi.fn(() => true),
     encryptString: (value: string) => Buffer.from(`enc:${value}`, "utf-8"),
     decryptString: (buffer: Buffer) => {
       const raw = buffer.toString("utf-8");
@@ -39,12 +41,74 @@ function storeFile(): string {
 }
 
 afterEach(() => {
+  vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
   for (const dir of tmpdirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
+
+describe("agent API key storage", () => {
+  it("allows only public metadata across the renderer boundary", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({ harness: "ai-sdk" });
+    const publicAgent = toPublicAgent({
+      ...agent,
+      ...{ unexpectedSecret: "hidden-secret" },
+    });
+    expect(publicAgent).not.toHaveProperty("unexpectedSecret");
+    expect(JSON.stringify(publicAgent)).not.toContain("hidden-secret");
+  });
+
+  it("refuses unsupported or corrupt settings without replacing the file", () => {
+    const file = storeFile();
+    for (const data of [
+      "{broken",
+      JSON.stringify({
+        agents: [{ id: "a", unexpectedSecret: "hidden-secret" }],
+      }),
+    ]) {
+      fs.writeFileSync(file, data);
+      expect(() => new AgentsStore(file)).toThrow(
+        "Agent settings could not be opened",
+      );
+      expect(fs.readFileSync(file, "utf8")).toBe(data);
+    }
+  });
+  it("never exposes key fragments through the public masked label", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({ harness: "ai-sdk" });
+    for (const apiKey of [
+      "shortkey",
+      "abcdefghijkl",
+      "sk-long-secret-1234567890",
+    ]) {
+      const publicAgent = toPublicAgent({ ...agent, apiKey });
+      expect(publicAgent.apiKeyMasked).toBe("••••••••");
+      expect(JSON.stringify(publicAgent)).not.toContain(apiKey);
+    }
+  });
+  it("refuses to save keys without OS encryption, without changing existing agents", () => {
+    const file = storeFile();
+    const store = new AgentsStore(file);
+    const agent = store.create({
+      harness: "ai-sdk",
+      apiKey: "existing-secret",
+    });
+    const before = fs.readFileSync(file, "utf8");
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    expect(() =>
+      store.create({ harness: "ai-sdk", apiKey: "new-secret" }),
+    ).toThrow("OS credential encryption is unavailable");
+    expect(() =>
+      store.update(agent.id, { name: "Changed", apiKey: "replacement-secret" }),
+    ).toThrow("OS credential encryption is unavailable");
+    expect(store.list()).toHaveLength(1);
+    expect(store.get(agent.id)?.name).toBe(agent.name);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+});
 
 describe("AgentsStore — ADR 0056 fields", () => {
   it("persists instructions, sandboxing, permission mode, memory, skills, and coordination; defaults stay implicit", () => {
@@ -135,47 +199,20 @@ describe("AgentsStore — ADR 0056 fields", () => {
     });
   });
 
-  it("keeps what a person set before grants: off stays off, and routes become grants", () => {
+  it("refuses an unsupported saved delegation instead of resetting authority", () => {
     const file = storeFile();
-    const store = new AgentsStore(file);
-    const off = store.create({ harness: "claude-code" });
-    const reviewer = store.create({ harness: "claude-code" });
-    const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+    new AgentsStore(file).create({ harness: "claude-code" });
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
     saved.agents[0].delegation = {
       enabled: false,
-      maxConcurrentChildren: 3,
-      routes: [{ id: "same-agent", target: "self" }],
+      routes: [{ target: "self" }],
     };
-    saved.agents[1].delegation = {
-      enabled: true,
-      maxConcurrentChildren: 2,
-      routes: [
-        {
-          id: "agent:project:reviewer",
-          target: "project:reviewer",
-          allowFurtherDelegation: false,
-        },
-      ],
-    };
-    fs.writeFileSync(file, JSON.stringify(saved));
-    const reread = new AgentsStore(file);
-    expect(reread.get(off.id)?.delegation).toEqual({
-      enabled: false,
-      maxConcurrentChildren: 3,
-      agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
-    });
-    expect(reread.get(reviewer.id)?.delegation).toEqual({
-      enabled: true,
-      maxConcurrentChildren: 2,
-      agents: [
-        {
-          agent: "project:reviewer",
-          model: "any",
-          effort: "any",
-          delegate: false,
-        },
-      ],
-    });
+    const contents = JSON.stringify(saved);
+    fs.writeFileSync(file, contents);
+    expect(() => new AgentsStore(file)).toThrow(
+      "Agent settings could not be opened",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(contents);
   });
 
   it("update clears back to defaults including shared-first coordination", () => {

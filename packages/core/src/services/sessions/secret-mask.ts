@@ -121,11 +121,26 @@ export class SecretMask {
 
   value<T>(value: T): T {
     if (!this.pattern || value === undefined || value === null) return value;
-    if (typeof value === "string") return this.text(value) as T;
+    if (typeof value === "string" || typeof value === "number") {
+      const masked = this.text(String(value));
+      return (
+        typeof value === "number" && masked === String(value) ? value : masked
+      ) as T;
+    }
     if (typeof value !== "object") return value;
-    return JSON.parse(JSON.stringify(value), (_key, entry: unknown) =>
-      typeof entry === "string" ? this.text(entry) : entry,
-    ) as T;
+    return JSON.parse(JSON.stringify(value), (_key, entry: unknown) => {
+      if (typeof entry === "string") return this.text(entry);
+      if (typeof entry === "number") {
+        const text = String(entry);
+        const masked = this.text(text);
+        return masked === text ? entry : masked;
+      }
+      if (entry !== null && typeof entry === "object" && !Array.isArray(entry))
+        return Object.fromEntries(
+          Object.entries(entry).map(([key, item]) => [this.text(key), item]),
+        );
+      return entry;
+    }) as T;
   }
 
   /**
@@ -135,18 +150,27 @@ export class SecretMask {
   private holdFrom(text: string): number {
     const pattern = this.pattern;
     if (!pattern) return text.length;
-    let settled = 0;
-    pattern.lastIndex = 0;
-    for (const match of text.matchAll(pattern))
-      settled = (match.index ?? 0) + match[0].length;
     const longest = this.values[0]?.length ?? 0;
     for (
-      let start = Math.max(settled, text.length - longest + 1);
+      let start = Math.max(0, text.length - longest + 1);
       start < text.length;
       start += 1
     ) {
       const tail = text.slice(start);
-      if (this.values.some((value) => value.startsWith(tail))) return start;
+      if (
+        !this.values.some(
+          (value) => tail.length < value.length && value.startsWith(tail),
+        )
+      )
+        continue;
+      // Never cut a complete shorter match in half while holding a longer
+      // value that overlaps it: keep the whole match until disambiguated.
+      pattern.lastIndex = 0;
+      for (const match of text.matchAll(pattern)) {
+        if (match.index < start && match.index + match[0].length > start)
+          return match.index;
+      }
+      return start;
     }
     return text.length;
   }
