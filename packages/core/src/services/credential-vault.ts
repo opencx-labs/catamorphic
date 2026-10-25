@@ -59,5 +59,5 @@ export class MemoryCredentialVault implements CredentialVault {
 }
 
 function key(tenantId: string, ref: CredentialRef): string {
-  return `${tenantId}:${ref.id}`;
+  return JSON.stringify([tenantId, ref.id]);
 }

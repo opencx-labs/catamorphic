@@ -92,7 +92,16 @@ const provider: ConnectionProvider = {
         : {}),
     };
   },
-  invoke: async ({ material, action, connection }) => {
+  invoke: async ({ material, action, connection, input }) => {
+    if (
+      input &&
+      typeof input === "object" &&
+      !Array.isArray(input) &&
+      input.throwWithCredential
+    )
+      throw new Error(
+        `Upstream repeated ${new TextDecoder().decode(material)}`,
+      );
     decodedMaterials.push(new TextDecoder().decode(material));
     invokedRevisions.push(`${connection.id}@${connection.revision}`);
     return { action, ok: true };
@@ -730,6 +739,10 @@ describe("credential connections", () => {
 
   it("reviews every action through the gateway's guards and audits each decision", async () => {
     let answer: "allow" | "deny" = "allow";
+    let liveMember: Identity | null = member;
+    let revokeDuringApproval = false;
+    let containDuringApproval = false;
+    let contained = false;
     const asked: string[] = [];
     const guarded = new ConnectionBroker(
       connections,
@@ -766,9 +779,13 @@ describe("credential connections", () => {
         guardTimeoutMs: 50,
         approve: async (request) => {
           asked.push(`${request.sessionId}:${request.description}`);
+          if (revokeDuringApproval) liveMember = null;
+          if (containDuringApproval) contained = true;
           return answer;
         },
         sessionOwner: async () => "member",
+        sessionSandboxing: async () => (contained ? "contained" : undefined),
+        resolveMemberIdentity: async () => liveMember,
       },
     );
     const [resolved] = await connections.resolve({
@@ -835,6 +852,18 @@ describe("credential connections", () => {
       "requires human approval",
     );
     expect(asked).toHaveLength(3);
+    answer = "allow";
+    revokeDuringApproval = true;
+    const beforeRevocation = decodedMaterials.length;
+    await expect(call(7)).rejects.toThrow(
+      "Connection authority is unavailable",
+    );
+    expect(decodedMaterials).toHaveLength(beforeRevocation);
+    revokeDuringApproval = false;
+    liveMember = member;
+    containDuringApproval = true;
+    await expect(call(7)).rejects.toThrow("contained");
+    expect(decodedMaterials).toHaveLength(beforeRevocation);
 
     const audit = (
       await connections.listAudit({ identity: admin, projectId })
@@ -1065,5 +1094,381 @@ describe("credential connections", () => {
         state: started.authorizationId,
       }),
     ).toBe(false);
+  });
+
+  it("resolves live authority for OAuth callbacks instead of granting root", async () => {
+    let identity: Identity | null = admin;
+    const guarded = new ConnectionsService({
+      db,
+      vault,
+      providers,
+      bindings: async () => committed,
+      resolveMemberIdentity: async () => identity,
+    });
+    const service = await guarded.createService({
+      identity: admin,
+      providerKind: "fake",
+      name: "callback-authority",
+      principalKind: "tenant_service",
+    });
+    const started = await guarded.beginServiceAuthorization({
+      identity: admin,
+      connectionId: service.id,
+      redirectUri: "https://app.test/callback",
+    });
+    identity = { ...admin, scope: [], controlPlanePermissions: [] };
+    await expect(
+      guarded.completeAuthorizationCallback({
+        state: started.authorizationId,
+        callback: { code: "new-company-key" },
+      }),
+    ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
+    const row = await db
+      .selectFrom("connections")
+      .select(["status", "credential_ref"])
+      .where("id", "=", service.id)
+      .executeTakeFirstOrThrow();
+    expect(row.credential_ref).toBeNull();
+    identity = admin;
+    const disabled = await guarded.beginServiceAuthorization({
+      identity: admin,
+      connectionId: service.id,
+      redirectUri: "https://app.test/callback",
+    });
+    identity = null;
+    await expect(
+      guarded.completeAuthorizationCallback({
+        state: disabled.authorizationId,
+        callback: { code: "disabled-account-key" },
+      }),
+    ).rejects.toBeInstanceOf(ConnectionPermissionDeniedError);
+  });
+
+  it("rechecks an administrator after a provider exchange and refuses a cancelled service sign-in", async () => {
+    let current: Identity | null = admin;
+    const guarded = new ConnectionsService({
+      db,
+      vault,
+      providers,
+      bindings: async () => committed,
+      resolveMemberIdentity: async () => current,
+    });
+    const service = await guarded.createService({
+      identity: admin,
+      providerKind: "fake",
+      name: "late-service-sign-in",
+      principalKind: "tenant_service",
+    });
+    for (const outcome of ["revoked", "cancelled"] as const) {
+      let finish = () => {};
+      current = admin;
+      slowAuthorization = {
+        started: false,
+        finish: new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+      };
+      const started = await guarded.beginServiceAuthorization({
+        identity: admin,
+        connectionId: service.id,
+        redirectUri: "https://app.test/callback",
+      });
+      const pending = guarded.completeAuthorizationCallback({
+        state: started.authorizationId,
+        callback: { code: "slow" },
+      });
+      await vi.waitFor(() => expect(slowAuthorization.started).toBe(true));
+      if (outcome === "revoked")
+        current = { ...admin, scope: [], controlPlanePermissions: [] };
+      else
+        await guarded.cancelAuthorization({
+          identity: admin,
+          state: started.authorizationId,
+        });
+      finish();
+      await expect(pending).rejects.toThrow();
+      const row = await db
+        .selectFrom("connections")
+        .select("credential_ref")
+        .where("id", "=", service.id)
+        .executeTakeFirstOrThrow();
+      expect(row.credential_ref).toBeNull();
+    }
+  });
+  it.each(
+    ["personal", "member", "service"].flatMap((kind) =>
+      ["cancel", "disabled", ...(kind === "service" ? ["downgraded"] : [])].map(
+        (reason) => ({ kind, reason }),
+      ),
+    ),
+  )(
+    "does not publish a $kind credential when $reason during vault preparation",
+    async ({ kind, reason }) => {
+      const person: Identity = {
+        tenantId,
+        externalUserId: `before-publication-${kind}-${reason}`,
+      };
+      let live: Identity | null = person;
+      const localVault = new MemoryCredentialVault();
+      const local = new ConnectionsService({
+        db,
+        vault: localVault,
+        providers,
+        bindings: async () => committed,
+        resolveMemberIdentity: async () => live,
+      });
+      const service =
+        kind === "service"
+          ? await local.createService({
+              identity: person,
+              providerKind: "fake",
+              name: `before-publication-${reason}`,
+              principalKind: "tenant_service",
+            })
+          : undefined;
+      const started = service
+        ? await local.beginServiceAuthorization({
+            identity: person,
+            connectionId: service.id,
+            redirectUri: "https://app.test/callback",
+          })
+        : kind === "personal"
+          ? await local.beginPersonalAuthorization({
+              identity: person,
+              providerKind: "fake",
+              redirectUri: "https://app.test/callback",
+            })
+          : await local.beginAuthorization({
+              identity: person,
+              projectId,
+              environment: "company",
+              alias: "directory",
+              redirectUri: "https://app.test/callback",
+            });
+      let resume = () => {};
+      let prepared: string | undefined;
+      const barrier = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const put = localVault.put.bind(localVault);
+      vi.spyOn(localVault, "put").mockImplementation(async (args) => {
+        const ref = await put(args);
+        prepared = ref.id;
+        await barrier;
+        return ref;
+      });
+      const completion = local
+        .completeAuthorization({
+          identity: person,
+          state: started.authorizationId,
+          callback: { code: "prepared-credential" },
+        })
+        .catch((error: unknown) => error);
+      try {
+        await vi.waitFor(() => expect(prepared).toBeDefined());
+        if (reason === "cancel")
+          expect(
+            await local.cancelAuthorization({
+              identity: person,
+              state: started.authorizationId,
+            }),
+          ).toBe(true);
+        else if (reason === "disabled") live = null;
+        else live = { ...person, scope: [], controlPlanePermissions: [] };
+      } finally {
+        resume();
+      }
+      expect(await completion).toBeInstanceOf(
+        reason === "cancel"
+          ? ConnectionUnavailableError
+          : ConnectionPermissionDeniedError,
+      );
+      expect(
+        await local.authorizationStatus({
+          identity: person,
+          state: started.authorizationId,
+        }),
+      ).toEqual({ status: "canceled" });
+      const rows = await db
+        .selectFrom("connections")
+        .select(["status", "credential_ref"])
+        .where("tenant_id", "=", tenantId)
+        .where((eb) =>
+          service
+            ? eb("id", "=", service.id)
+            : eb("owner_external_user_id", "=", person.externalUserId),
+        )
+        .execute();
+      expect(rows).toEqual(
+        service ? [{ status: "pending", credential_ref: null }] : [],
+      );
+      await expect(
+        localVault.withMaterial({
+          tenantId,
+          ref: { id: prepared! },
+          use: () => undefined,
+        }),
+      ).rejects.toThrow("not found");
+    },
+  );
+
+  it.each(["sign-in", "refresh"])(
+    "commits authorization before release and preserves a later %s",
+    async (next) => {
+      let releaseFirst = () => {};
+      let firstPaused = false;
+      const barrier = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const revoke = vi.fn(async () => {});
+      let releases = 0;
+      const local = new ConnectionsService({
+        db,
+        vault,
+        providers: new ConnectionProviderRegistry([
+          {
+            ...provider,
+            revoke,
+            refresh: async () => ({
+              material: new TextEncoder().encode("refreshed-credential"),
+              capabilities: ["users.list"],
+              expiresAt: new Date(Date.now() + 3_600_000),
+            }),
+            release: async () => {
+              if (++releases === 1) {
+                firstPaused = true;
+                await barrier;
+              }
+            },
+          },
+        ]),
+        bindings: async () => committed,
+      });
+      const service = await local.createService({
+        identity: admin,
+        providerKind: "fake",
+        name: `concurrent-${next}`,
+        principalKind: "tenant_service",
+      });
+      const first = await local.beginServiceAuthorization({
+        identity: admin,
+        connectionId: service.id,
+        redirectUri: "https://app.test/callback",
+      });
+      const completing = local
+        .completeAuthorization({
+          identity: admin,
+          state: first.authorizationId,
+          callback: { code: "approved" },
+        })
+        .then(
+          (connection) => connection,
+          (error: unknown) => error,
+        );
+      try {
+        await vi.waitFor(() => expect(firstPaused).toBe(true));
+        expect(
+          await local.cancelAuthorization({
+            identity: admin,
+            state: first.authorizationId,
+          }),
+        ).toBe(false);
+        expect(
+          await local.authorizationStatus({
+            identity: admin,
+            state: first.authorizationId,
+          }),
+        ).toEqual({ status: "completed" });
+        if (next === "sign-in")
+          await authorizeService(local, service.id, "newer-credential");
+        else
+          await local.refreshIfNeeded({
+            identity: admin,
+            connectionId: service.id,
+          });
+      } finally {
+        releaseFirst();
+      }
+      expect(await completing).toMatchObject({
+        id: service.id,
+        status: "ready",
+      });
+      expect(revoke).not.toHaveBeenCalled();
+      expect(
+        await local.withCredential({
+          identity: admin,
+          connectionId: service.id,
+          use: async (material) => new TextDecoder().decode(material),
+        }),
+      ).toBe(next === "sign-in" ? "newer-credential" : "refreshed-credential");
+    },
+  );
+
+  it("never propagates credential-bearing provider exception messages", async () => {
+    const localProviders = new ConnectionProviderRegistry([provider]);
+    const local = new ConnectionsService({
+      db,
+      vault,
+      providers: localProviders,
+      bindings: async () => ({
+        safe: {
+          provider: "fake",
+          principal: "service",
+          service: "safe-errors",
+        },
+      }),
+    });
+    const connection = await local.createService({
+      identity: admin,
+      providerKind: "fake",
+      name: "safe-errors",
+      principalKind: "project_service",
+      projectId,
+    });
+    await authorizeService(local, connection.id, "must-not-enter-errors");
+    const selected = await local.resolve({
+      identity: admin,
+      projectId,
+      environment: "company",
+      aliases: ["safe"],
+    });
+    const allocation = await allocations.create({
+      identity: admin,
+      projectId,
+      environmentName: "company",
+      workloadKind: "agent",
+      rootWorkloadId: crypto.randomUUID(),
+      policy: {
+        binding: {
+          id: "safe",
+          label: "safe",
+          trust: "managed",
+          isolation: "sandbox",
+          workloads: ["agent"],
+          agentTopologies: ["controller"],
+          capabilities: [],
+          resources: {},
+        },
+        requirements: { workload: "agent" },
+        connections: selected,
+      },
+    });
+    const localBroker = new ConnectionBroker(
+      local,
+      localProviders,
+      allocations,
+    );
+    await expect(
+      localBroker.invoke({
+        identity: admin,
+        allocationId: allocation.id,
+        alias: "safe",
+        action: "users.list",
+        input: { throwWithCredential: true },
+      }),
+    ).rejects.toThrow(/^Connection action failed$/);
+    expect(
+      JSON.stringify(await local.listAudit({ identity: admin, projectId })),
+    ).not.toContain("must-not-enter-errors");
   });
 });

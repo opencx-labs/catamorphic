@@ -100,6 +100,36 @@ describe("secret masks", () => {
     expect(second.holding()).toEqual([]);
   });
 
+  it("masks secret values used as JSON object keys", () => {
+    const mask = new SecretMask({ API_KEY: KEY });
+    expect(mask.value({ nested: { [KEY]: KEY } })).toEqual({
+      nested: { "[secret API_KEY]": "[secret API_KEY]" },
+    });
+  });
+
+  it("masks a numeric credential returned as a JSON number", () => {
+    const mask = new SecretMask({ PIN: "12345678" });
+    expect(mask.value({ pin: 12345678, count: 3 })).toEqual({
+      pin: "[secret PIN]",
+      count: 3,
+    });
+    expect(mask.value(12345678)).toBe("[secret PIN]");
+  });
+
+  it("holds a complete shorter value while it could still be a longer one", () => {
+    const mask = new SecretMask({
+      PREFIX: "shared-prefix",
+      KEY: "shared-prefix-private-tail",
+    });
+    const key = { itemId: "item", field: "text" as const };
+    const first = mask.begin();
+    expect(first.stream(key, "Key: shared-prefix")).toBe("Key: ");
+    first.commit();
+    const second = mask.begin();
+    expect(second.stream(key, "-private-tail!")).toBe("[secret KEY]!");
+    expect(second.flush(key)).toBe("");
+  });
+
   it("keeps held text only from batches that were recorded", () => {
     const mask = new SecretMask({ API_KEY: KEY });
     const key = { itemId: "item", field: "output" as const };
@@ -228,6 +258,61 @@ function project(items: Map<string, Item>, events: readonly SessionEvent[]) {
 }
 
 describe("recorded output of a turn with secrets", () => {
+  it.each(["started", "updated"] as const)(
+    "holds secret prefixes in item.%s snapshots before later deltas",
+    async (snapshot) => {
+      const db = itemsDatabase(new Map());
+      const mask = new SecretMask({ API_KEY: KEY });
+      const batch = mask.begin();
+      const prefix = "sk-live-0123";
+      const events: HarnessEvent[] = [
+        {
+          type: "item.started",
+          key: "reply",
+          item: {
+            kind: "assistant_message",
+            text: snapshot === "started" ? prefix : "",
+            agentId: null,
+          },
+        },
+        ...(snapshot === "updated"
+          ? [
+              {
+                type: "item.updated" as const,
+                key: "reply",
+                item: { text: prefix },
+              },
+            ]
+          : []),
+        { type: "item.delta", key: "reply", field: "text", text: "456789!" },
+        { type: "item.completed", key: "reply", status: "completed" },
+      ];
+      const result = await db.transaction().execute((trx) =>
+        ingestHarnessEvents({
+          trx,
+          state: {
+            sessionId: turn.sessionId,
+            agentId: null,
+            turn,
+            attempt,
+            thread,
+          },
+          events,
+          now: new Date(),
+          mask: batch,
+        }),
+      );
+      const items = new Map<string, Item>();
+      project(items, result.events);
+      const reply = items.get(derivedId(attemptId, "reply"));
+      expect(reply?.kind === "assistant_message" && reply.text).toBe(
+        "[secret API_KEY]!",
+      );
+      expect(JSON.stringify(result.events)).not.toContain(prefix);
+      await db.destroy();
+    },
+  );
+
   it("never records a value, whole or in parts, anywhere an event carries it", async () => {
     const items = new Map<string, Item>();
     const db = itemsDatabase(items);

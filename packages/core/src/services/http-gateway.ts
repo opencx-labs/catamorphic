@@ -26,12 +26,6 @@ const encoder = new TextEncoder();
 
 /** Largest request body the gateway forwards to an HTTP API. */
 export const HTTP_REQUEST_MAX_BYTES = 32 * 1024 * 1024;
-/** How long a resolved alias (binding, endpoint, key headers) is reused. */
-const ACCESS_TTL_MS = 30_000;
-/** Most resolved aliases kept at once; the oldest goes first. */
-const ACCESS_CACHE_SIZE = 1024;
-/** A credential this close to expiry is resolved again, so it refreshes. */
-const ACCESS_EXPIRY_MARGIN_MS = 60_000;
 
 /**
  * A header that carries the session's grant, for clients that must keep
@@ -257,7 +251,7 @@ export function httpQueryInput(query: string | undefined): JsonObject {
   return input;
 }
 
-/** A grant resolved to its alias's upstream: reused for a few seconds. */
+/** A grant resolved to its alias's upstream for one request. */
 interface HttpAccess {
   identity: Identity;
   projectId: string;
@@ -277,18 +271,10 @@ interface HttpAccess {
   headers: Readonly<Record<string, string>>;
 }
 
-/**
- * A request `admit` let in, handed to `handle` so it is not checked twice.
- * Only this gateway's own admissions count.
- */
-export interface HttpGatewayAdmission {
-  readonly access: HttpAccess;
-}
-
 /** What `admit` decided: a refusal to send, or an admission. */
 export type HttpGatewayAdmitResult =
   | { refused: HttpGatewayResponse }
-  | { admitted: HttpGatewayAdmission };
+  | { admitted: true };
 
 /**
  * HTTP APIs through the gateway (ADR 0212). Code in a sandbox (a dev
@@ -301,29 +287,15 @@ export type HttpGatewayAdmitResult =
  * for byte, the answer streamed back unchanged. Each request is audited as
  * `connection.http`.
  *
- * One indexed read checks the grant on each request; the resolved alias
- * and its key are reused for 30 seconds per grant and connection revision.
+ * Every request resolves current authority and its binding before forwarding.
  */
 export class HttpGatewayService {
   private readonly fetch: typeof fetch;
-  /**
-   * Replica memory (b): a grant's resolved alias, keyed by the grant and
-   * its connection's revision, and bounded by the key's expiry.
-   */
-  private readonly access = new Map<
-    string,
-    { revision: number; until: number; access: HttpAccess }
-  >();
-  /** Replica memory (a): admissions of requests this process is serving. */
-  private readonly admissions = new WeakSet<HttpGatewayAdmission>();
-
   constructor(
     private readonly deps: {
       store: HttpGatewayStore;
       broker: Pick<ConnectionBroker, "httpEndpoint" | "reviewHttpCall">;
       fetch?: typeof fetch;
-      /** Clock for the access cache (tests). */
-      now?: () => number;
     },
   ) {
     this.fetch = deps.fetch ?? ((input, init) => fetch(input, init));
@@ -331,26 +303,21 @@ export class HttpGatewayService {
 
   /**
    * Check a request's grant before its body is read, so an unauthenticated
-   * caller cannot make the host buffer a large body. Pass the admission to
-   * `handle`.
+   * caller cannot make the host buffer a large body. `handle` always
+   * rechecks current authority after the body is read.
    */
   async admit(
     request: Pick<HttpGatewayRequest, "alias" | "headers">,
   ): Promise<HttpGatewayAdmitResult> {
     try {
-      const admission: HttpGatewayAdmission = {
-        access: await this.authorize(request),
-      };
-      this.admissions.add(admission);
-      return { admitted: admission };
+      await this.authorize(request);
+      return { admitted: true };
     } catch (error) {
       return { refused: refusalResponse(error) };
     }
   }
 
-  async handle(
-    request: HttpGatewayRequest & { admitted?: HttpGatewayAdmission },
-  ): Promise<HttpGatewayResponse> {
+  async handle(request: HttpGatewayRequest): Promise<HttpGatewayResponse> {
     try {
       return await withSpan(
         {
@@ -369,12 +336,9 @@ export class HttpGatewayService {
   }
 
   private async handleUninstrumented(
-    request: HttpGatewayRequest & { admitted?: HttpGatewayAdmission },
+    request: HttpGatewayRequest,
   ): Promise<HttpGatewayResponse> {
-    const access =
-      request.admitted && this.admissions.has(request.admitted)
-        ? request.admitted.access
-        : await this.authorize(request);
+    const access = await this.authorize(request);
     const method = request.method.toUpperCase();
     const capability = httpMethodCapability(method);
     if (!capability)
@@ -403,10 +367,20 @@ export class HttpGatewayService {
       ...(access.sessionId ? { agentSessionId: access.sessionId } : {}),
     });
     const audit = (outcome: "allowed" | "error", metadata: Json) => {
-      auditCall(outcome, metadata).catch((error: unknown) =>
-        console.warn("[catamorphic] Could not audit an HTTP API call", error),
+      auditCall(outcome, metadata).catch(() =>
+        console.warn("[catamorphic] Could not audit an HTTP API call", {
+          errorType: "Error",
+        }),
       );
     };
+    // Approval and body reads can take time. A prior admission never
+    // authorizes a call after a membership, binding or connection changed.
+    const current = await this.authorize(request);
+    if (JSON.stringify(current) !== JSON.stringify(access))
+      throw new HttpGatewayError(
+        403,
+        "Connection authorization changed; retry the request",
+      );
     const body =
       request.body && method !== "GET" && method !== "HEAD"
         ? request.body
@@ -420,11 +394,11 @@ export class HttpGatewayService {
       // A redirect could carry the key elsewhere; the caller sees it instead.
       redirect: "manual",
       ...(body ? { body } : {}),
-    }).catch((error: unknown) => {
+    }).catch(() => {
       audit("error", { error: "upstream unreachable" });
       throw new HttpGatewayError(
         502,
-        `'${request.alias}' could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+        `'${request.alias}' could not be reached`,
       );
     });
     const headers = downstreamResponseHeaders(upstream.headers);
@@ -448,7 +422,7 @@ export class HttpGatewayService {
     };
   }
 
-  /** The grant, checked on every call, and its alias, resolved at most every 30 seconds. */
+  /** The live grant and current alias authority for this call. */
   private async authorize(
     request: Pick<HttpGatewayRequest, "alias" | "headers">,
   ): Promise<HttpAccess> {
@@ -466,16 +440,6 @@ export class HttpGatewayService {
       );
     if (grant.agentSessionId && !grant.session?.active)
       throw new HttpGatewayError(401, "This session is closed");
-    const now = this.deps.now?.() ?? Date.now();
-    const cached = this.access.get(grant.id);
-    if (
-      cached &&
-      cached.revision === grant.connection.revision &&
-      cached.until > now &&
-      grant.connection.status === "ready"
-    )
-      return cached.access;
-    this.access.delete(grant.id);
     const identity: Identity = {
       tenantId: grant.tenantId,
       externalUserId:
@@ -499,26 +463,6 @@ export class HttpGatewayService {
       contained: resolved.contained,
       headers: resolved.headers,
     };
-    const until = Math.min(
-      now + ACCESS_TTL_MS,
-      grant.connection.expiresAt
-        ? grant.connection.expiresAt.getTime() - ACCESS_EXPIRY_MARGIN_MS
-        : Number.POSITIVE_INFINITY,
-    );
-    if (until > now) {
-      // Renewed grants leave their entries behind: drop what has lapsed.
-      for (const [id, entry] of this.access)
-        if (entry.until <= now) this.access.delete(id);
-      if (this.access.size >= ACCESS_CACHE_SIZE) {
-        const oldest = this.access.keys().next().value;
-        if (oldest !== undefined) this.access.delete(oldest);
-      }
-      this.access.set(grant.id, {
-        revision: grant.connection.revision,
-        until,
-        access,
-      });
-    }
     return access;
   }
 }
@@ -577,8 +521,10 @@ async function* relay(args: {
     reader.releaseLock();
     try {
       args.onEnd(finished);
-    } catch (error) {
-      console.warn("[catamorphic] Could not settle an HTTP API call", error);
+    } catch {
+      console.warn("[catamorphic] Could not settle an HTTP API call", {
+        errorType: "Error",
+      });
     }
   }
 }
@@ -598,7 +544,9 @@ function refusalResponse(error: unknown): HttpGatewayResponse {
               )
             : undefined;
   if (!refusal)
-    console.warn("[catamorphic] HTTP gateway request failed", error);
+    console.warn("[catamorphic] HTTP gateway request failed", {
+      errorType: "Error",
+    });
   // Refusals never carry a retryable status: a client would only retry
   // into the same answer. Only an unreachable API is 502.
   const status = refusal?.status ?? 403;

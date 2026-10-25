@@ -9,6 +9,12 @@ import {
 } from "fastify-type-provider-zod";
 import type { IdentityResolver } from "./http-identity.js";
 import { type CatamorphicPluginOptions, catamorphicPlugin } from "./plugin.js";
+import {
+  apiErrorResponse,
+  apiNotFoundResponse,
+  errorLogFields,
+  requestLogFields,
+} from "./request-logging.js";
 
 export type { RouteContext } from "./plugin.js";
 
@@ -56,9 +62,11 @@ function jsonValueComponent(id: string) {
 
 export function createApp(config: AppConfig) {
   const app = Fastify({
-    logger: true,
+    logger: { serializers: { req: requestLogFields, err: errorLogFields } },
     forceCloseConnections: true,
   });
+  app.setErrorHandler(apiErrorResponse);
+  app.setNotFoundHandler(apiNotFoundResponse);
 
   app.register(fastifyCors, {
     origin: true,

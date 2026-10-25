@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { Kysely, Selectable } from "kysely";
+import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import {
   hasControlPlanePermission,
@@ -34,6 +34,12 @@ import { toJson } from "./run-coordinator.js";
 const tracer = getTracer("@catamorphic/core");
 
 type ConnectionRow = Selectable<DB["connections"]>;
+type AuthorizationAttempt = Selectable<DB["connection_authorization_attempts"]>;
+type ConnectionIdentityResolver = (args: {
+  tenantId: string;
+  projectId?: string;
+  externalUserId: string;
+}) => Promise<Identity | null>;
 
 export class ConnectionNotFoundError extends Error {
   constructor() {
@@ -134,6 +140,7 @@ export class ConnectionsService {
     connectionId: string;
   }) => Promise<void>;
   private readonly jobs: Pick<ExecutionJobsService, "makeJobsAvailable">;
+  private readonly resolveMemberIdentity?: ConnectionIdentityResolver;
 
   constructor(args: {
     db: Kysely<DB>;
@@ -141,6 +148,7 @@ export class ConnectionsService {
     providers: ConnectionProviderRegistry;
     /** The committed (and host-supplied) bindings of an Environment. */
     bindings: ConnectionBindingSource;
+    resolveMemberIdentity?: ConnectionIdentityResolver;
     onMemberConnectionReady?: (identity: Identity) => Promise<void>;
     onConnectionUnavailable?: (input: {
       identity: Identity;
@@ -159,6 +167,7 @@ export class ConnectionsService {
     this.onMemberConnectionReady = args.onMemberConnectionReady;
     this.onConnectionUnavailable = args.onConnectionUnavailable;
     this.jobs = args.jobs ?? new ExecutionJobsService(args.db);
+    this.resolveMemberIdentity = args.resolveMemberIdentity;
   }
 
   providerCatalog(): Array<{ kind: string; displayName: string }> {
@@ -286,6 +295,13 @@ export class ConnectionsService {
     authorized: ConnectionAuthorizationResult;
     label?: string;
   }): Promise<ConnectionRecord> {
+    return this.storePersonal(args);
+  }
+
+  private async storePersonal(
+    args: Parameters<ConnectionsService["savePersonal"]>[0],
+    attempt?: AuthorizationAttempt,
+  ): Promise<ConnectionRecord> {
     const provider = this.providers.get(args.providerKind);
     if (!provider) {
       throw new Error(`Unknown connection provider '${args.providerKind}'`);
@@ -305,6 +321,7 @@ export class ConnectionsService {
         identity: args.identity,
         current,
         authorized: args.authorized,
+        attempt,
       });
       await this.audit({
         identity: args.identity,
@@ -318,37 +335,42 @@ export class ConnectionsService {
       tenantId: args.identity.tenantId,
       material: args.authorized.material,
     });
+    let row: ConnectionRow;
     try {
-      const row = await this.db
-        .insertInto("connections")
-        .values({
-          tenant_id: args.identity.tenantId,
-          project_id: null,
-          provider_kind: args.providerKind,
-          principal_kind: "member",
-          owner_external_user_id: args.identity.externalUserId,
-          label: args.label ?? provider.displayName,
-          status: "ready",
-          credential_ref: ref.id,
-          account_summary: toJson(args.authorized.account ?? {}),
-          scopes: toJson(args.authorized.scopes ?? []),
-          capabilities: toJson(args.authorized.capabilities ?? []),
-          expires_at: args.authorized.expiresAt ?? null,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      await this.audit({
-        identity: args.identity,
-        connectionId: row.id,
-        eventType: "connection.created",
-        outcome: "allowed",
-        metadata: { personal: true },
-      });
-      return mapConnection(row);
+      row = await this.publishCredential(
+        { identity: args.identity, attempt },
+        (trx) =>
+          trx
+            .insertInto("connections")
+            .values({
+              tenant_id: args.identity.tenantId,
+              project_id: null,
+              provider_kind: args.providerKind,
+              principal_kind: "member",
+              owner_external_user_id: args.identity.externalUserId,
+              label: args.label ?? provider.displayName,
+              status: "ready",
+              credential_ref: ref.id,
+              account_summary: toJson(args.authorized.account ?? {}),
+              scopes: toJson(args.authorized.scopes ?? []),
+              capabilities: toJson(args.authorized.capabilities ?? []),
+              expires_at: args.authorized.expiresAt ?? null,
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow(),
+      );
     } catch (cause) {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
     }
+    await this.audit({
+      identity: args.identity,
+      connectionId: row.id,
+      eventType: "connection.created",
+      outcome: "allowed",
+      metadata: { personal: true },
+    });
+    return mapConnection(row);
   }
 
   /** The caller's live personal connection to a provider, ready or not. */
@@ -503,6 +525,10 @@ export class ConnectionsService {
       });
     let authorized: ConnectionAuthorizationResult;
     try {
+      await this.requireAuthorizationAuthority({
+        identity: args.identity,
+        attempt,
+      });
       authorized = await withSpan(
         {
           tracer,
@@ -527,28 +553,10 @@ export class ConnectionsService {
               })
             : complete(),
       );
-    } catch {
-      await this.finishAttempt({
+      await this.requireAuthorizationAuthority({
         identity: args.identity,
         attempt,
-        status: "canceled",
       });
-      throw new ConnectionUnavailableError(subject, "Authorization failed");
-    }
-    if (attempt.service_connection_id) {
-      const connection = await this.storeServiceCredential({
-        identity: args.identity,
-        connectionId: attempt.service_connection_id,
-        authorized,
-      });
-      await this.finishAttempt({
-        identity: args.identity,
-        attempt,
-        status: "completed",
-      });
-      return connection;
-    }
-    if (attempt.personal) {
       const still = await this.db
         .selectFrom("connection_authorization_attempts")
         .select("status")
@@ -556,63 +564,92 @@ export class ConnectionsService {
         .executeTakeFirst();
       if (still?.status !== "completing")
         throw new ConnectionUnavailableError(
-          attempt.provider_kind,
+          subject,
           "Authorization was cancelled",
         );
-      const connection = await this.savePersonal({
+    } catch (error) {
+      await this.finishAttempt({
         identity: args.identity,
-        providerKind: attempt.provider_kind,
-        authorized,
+        attempt,
+        status: "canceled",
       });
-      // Cancelled while the person was still authorizing: what was saved
-      // is taken back, so a disconnect is never undone by a late sign-in.
-      if (!(await this.completeAttempt({ identity: args.identity, attempt }))) {
-        await this.revoke({
-          identity: args.identity,
-          connectionId: connection.id,
-        });
-        throw new ConnectionUnavailableError(
-          attempt.provider_kind,
-          "Authorization was cancelled",
-        );
-      }
-      return connection;
+      if (
+        error instanceof ConnectionPermissionDeniedError ||
+        error instanceof ConnectionUnavailableError
+      )
+        throw error;
+      throw new ConnectionUnavailableError(subject, "Authorization failed");
     }
-    if (!attempt.project_id || !attempt.environment_name || !attempt.alias) {
-      throw new ConnectionUnavailableError(subject, "Attempt is malformed");
-    }
-    const connection = attempt.reauthorize_connection_id
-      ? await this.reauthorizeMember({
+    try {
+      if (attempt.service_connection_id) {
+        const connection = await this.storeServiceCredential({
           identity: args.identity,
-          connectionId: attempt.reauthorize_connection_id,
-          providerKind: attempt.provider_kind,
+          connectionId: attempt.service_connection_id,
           authorized,
-        })
-      : await this.create({
-          identity: args.identity,
-          projectId: attempt.project_id,
-          providerKind: attempt.provider_kind,
-          label: `${provider?.displayName ?? attempt.provider_kind} (${attempt.alias})`,
-          material: authorized.material,
-          account: authorized.account,
-          scopes: authorized.scopes,
-          capabilities: authorized.capabilities,
-          expiresAt: authorized.expiresAt,
+          attempt,
         });
-    await this.attachMember({
-      identity: args.identity,
-      projectId: attempt.project_id,
-      environment: attempt.environment_name,
-      alias: attempt.alias,
-      connectionId: connection.id,
-    });
-    await this.finishAttempt({
-      identity: args.identity,
-      attempt,
-      status: "completed",
-    });
-    await this.onMemberConnectionReady?.(args.identity);
-    return connection;
+        return connection;
+      }
+      if (attempt.personal) {
+        const connection = await this.storePersonal(
+          {
+            identity: args.identity,
+            providerKind: attempt.provider_kind,
+            authorized,
+          },
+          attempt,
+        );
+        return connection;
+      }
+      if (!attempt.project_id || !attempt.environment_name || !attempt.alias) {
+        throw new ConnectionUnavailableError(subject, "Attempt is malformed");
+      }
+      const connection = attempt.reauthorize_connection_id
+        ? await this.reauthorizeMember({
+            identity: args.identity,
+            connectionId: attempt.reauthorize_connection_id,
+            providerKind: attempt.provider_kind,
+            authorized,
+            attempt,
+          })
+        : await this.createMember(
+            {
+              identity: args.identity,
+              projectId: attempt.project_id,
+              providerKind: attempt.provider_kind,
+              label: `${provider?.displayName ?? attempt.provider_kind} (${attempt.alias})`,
+              material: authorized.material,
+              account: authorized.account,
+              scopes: authorized.scopes,
+              capabilities: authorized.capabilities,
+              expiresAt: authorized.expiresAt,
+            },
+            attempt,
+          );
+      await this.attachMember({
+        identity: args.identity,
+        projectId: attempt.project_id,
+        environment: attempt.environment_name,
+        alias: attempt.alias,
+        connectionId: connection.id,
+      });
+      await this.onMemberConnectionReady?.(args.identity);
+      return connection;
+    } catch (error) {
+      await this.db
+        .updateTable("connection_authorization_attempts")
+        .set({ status: "canceled", completed_at: new Date() })
+        .where("id", "=", attempt.id)
+        .where("tenant_id", "=", args.identity.tenantId)
+        .where("status", "=", "completing")
+        .execute();
+      throw error;
+    } finally {
+      await this.finishAuthorization({
+        identity: args.identity,
+        attempt,
+      });
+    }
   }
 
   async completeAuthorizationCallback(args: {
@@ -624,18 +661,25 @@ export class ConnectionsService {
       .where("state_hash", "=", hashBearer(args.state))
       .where("status", "=", "pending")
       .where("expires_at", ">", new Date())
-      .select(["tenant_id", "external_user_id"])
+      .select(["tenant_id", "external_user_id", "project_id"])
       .executeTakeFirst();
     if (!attempt) {
       throw new ConnectionUnavailableError("authorization", "Attempt expired");
     }
-    // The state is the bearer: it was issued to this person, who held the
-    // authority to start the attempt, and it expires in ten minutes.
+    const identity = await this.resolveMemberIdentity?.({
+      tenantId: attempt.tenant_id,
+      externalUserId: attempt.external_user_id,
+      ...(attempt.project_id ? { projectId: attempt.project_id } : {}),
+    });
+    if (
+      !identity ||
+      identity.tenantId !== attempt.tenant_id ||
+      identity.externalUserId !== attempt.external_user_id
+    )
+      throw new ConnectionPermissionDeniedError();
+    // State identifies the attempt; it never manufactures root authority.
     return this.completeAuthorization({
-      identity: {
-        tenantId: attempt.tenant_id,
-        externalUserId: attempt.external_user_id,
-      },
+      identity,
       state: args.state,
       callback: args.callback,
     });
@@ -653,6 +697,13 @@ export class ConnectionsService {
     capabilities?: readonly string[];
     expiresAt?: Date;
   }): Promise<ConnectionRecord> {
+    return this.createMember(args);
+  }
+
+  private async createMember(
+    args: Parameters<ConnectionsService["create"]>[0],
+    attempt?: AuthorizationAttempt,
+  ): Promise<ConnectionRecord> {
     if (!this.providers.get(args.providerKind)) {
       throw new Error(`Unknown connection provider '${args.providerKind}'`);
     }
@@ -661,37 +712,42 @@ export class ConnectionsService {
       tenantId: args.identity.tenantId,
       material: args.material,
     });
+    let row: ConnectionRow;
     try {
-      const row = await this.db
-        .insertInto("connections")
-        .values({
-          tenant_id: args.identity.tenantId,
-          project_id: args.projectId,
-          provider_kind: args.providerKind,
-          principal_kind: "member",
-          owner_external_user_id: args.identity.externalUserId,
-          label: args.label,
-          status: "ready",
-          credential_ref: ref.id,
-          account_summary: toJson(args.account ?? {}),
-          scopes: toJson(args.scopes ?? []),
-          capabilities: toJson(args.capabilities ?? []),
-          expires_at: args.expiresAt ?? null,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      await this.audit({
-        identity: args.identity,
-        projectId: args.projectId,
-        connectionId: row.id,
-        eventType: "connection.created",
-        outcome: "allowed",
-      });
-      return mapConnection(row);
+      row = await this.publishCredential(
+        { identity: args.identity, attempt },
+        (trx) =>
+          trx
+            .insertInto("connections")
+            .values({
+              tenant_id: args.identity.tenantId,
+              project_id: args.projectId,
+              provider_kind: args.providerKind,
+              principal_kind: "member",
+              owner_external_user_id: args.identity.externalUserId,
+              label: args.label,
+              status: "ready",
+              credential_ref: ref.id,
+              account_summary: toJson(args.account ?? {}),
+              scopes: toJson(args.scopes ?? []),
+              capabilities: toJson(args.capabilities ?? []),
+              expires_at: args.expiresAt ?? null,
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow(),
+      );
     } catch (cause) {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
     }
+    await this.audit({
+      identity: args.identity,
+      projectId: args.projectId,
+      connectionId: row.id,
+      eventType: "connection.created",
+      outcome: "allowed",
+    });
+    return mapConnection(row);
   }
 
   /**
@@ -1685,23 +1741,47 @@ export class ConnectionsService {
     return Boolean(cancelled.numUpdatedRows);
   }
 
-  /** Mark a completing attempt done, unless it was cancelled meanwhile. */
-  private async completeAttempt(args: {
-    identity: Identity;
-    attempt: Selectable<DB["connection_authorization_attempts"]>;
-  }): Promise<boolean> {
-    const completed = await this.db
+  /** Publish material and complete its attempt as one database change. */
+  private async publishCredential(
+    args: { identity: Identity; attempt?: AuthorizationAttempt },
+    write: (trx: Transaction<DB>) => Promise<ConnectionRow>,
+  ): Promise<ConnectionRow> {
+    if (args.attempt)
+      await this.requireAuthorizationAuthority({
+        identity: args.identity,
+        attempt: args.attempt,
+      });
+    return this.db.transaction().execute(async (trx) => {
+      if (args.attempt)
+        await this.completeAttempt(
+          { identity: args.identity, attempt: args.attempt },
+          trx,
+        );
+      return write(trx);
+    });
+  }
+
+  /** Cancellation and publication contend on this row in the same transaction. */
+  private async completeAttempt(
+    args: {
+      identity: Identity;
+      attempt: AuthorizationAttempt;
+    },
+    trx: Transaction<DB>,
+  ): Promise<void> {
+    const completed = await trx
       .updateTable("connection_authorization_attempts")
       .set({ status: "completed", completed_at: new Date() })
       .where("id", "=", args.attempt.id)
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("external_user_id", "=", args.identity.externalUserId)
       .where("status", "=", "completing")
       .executeTakeFirst();
-    if (args.attempt.private_state_ref)
-      await this.vault.delete({
-        tenantId: args.identity.tenantId,
-        ref: { id: args.attempt.private_state_ref },
-      });
-    return Boolean(completed.numUpdatedRows);
+    if (!completed.numUpdatedRows)
+      throw new ConnectionUnavailableError(
+        args.attempt.id,
+        "Authorization was cancelled",
+      );
   }
 
   private async finishAttempt(args: {
@@ -1722,11 +1802,61 @@ export class ConnectionsService {
     }
   }
 
+  private async requireAuthorizationAuthority(args: {
+    identity: Identity;
+    attempt: Selectable<DB["connection_authorization_attempts"]>;
+  }): Promise<void> {
+    const identity = this.resolveMemberIdentity
+      ? await this.resolveMemberIdentity({
+          tenantId: args.identity.tenantId,
+          externalUserId: args.identity.externalUserId,
+          ...(args.attempt.project_id
+            ? { projectId: args.attempt.project_id }
+            : {}),
+        })
+      : args.identity;
+    if (
+      !identity ||
+      identity.tenantId !== args.identity.tenantId ||
+      identity.externalUserId !== args.identity.externalUserId
+    )
+      throw new ConnectionPermissionDeniedError();
+    if (
+      args.attempt.service_connection_id &&
+      !hasControlPlanePermission(identity, "connections:write")
+    )
+      throw new ConnectionPermissionDeniedError();
+    if (
+      args.attempt.project_id &&
+      args.attempt.environment_name &&
+      args.attempt.alias &&
+      !identityMayUseConnection(
+        identity,
+        args.attempt.project_id,
+        args.attempt.environment_name,
+        args.attempt.alias,
+      )
+    )
+      throw new ConnectionPermissionDeniedError();
+  }
+
+  private async finishAuthorization(args: {
+    identity: Identity;
+    attempt: AuthorizationAttempt;
+  }): Promise<void> {
+    if (args.attempt.private_state_ref)
+      await this.vault.delete({
+        tenantId: args.identity.tenantId,
+        ref: { id: args.attempt.private_state_ref },
+      });
+  }
+
   /** A completed service authorization becomes the connection's credential. */
   private async storeServiceCredential(args: {
     identity: Identity;
     connectionId: string;
     authorized: ConnectionAuthorizationResult;
+    attempt: AuthorizationAttempt;
   }): Promise<ConnectionRecord> {
     const current = await this.requireConnection(
       args.identity,
@@ -1739,6 +1869,7 @@ export class ConnectionsService {
       identity: args.identity,
       current,
       authorized: args.authorized,
+      attempt: args.attempt,
     });
     await this.resolveWorkflowRequirementsForConnection({
       tenantId: args.identity.tenantId,
@@ -1765,38 +1896,46 @@ export class ConnectionsService {
     identity: Identity;
     current: ConnectionRow;
     authorized: ConnectionAuthorizationResult;
+    attempt?: AuthorizationAttempt;
   }): Promise<ConnectionRecord> {
     const { current } = args;
     const nextRef = await this.vault.put({
       tenantId: args.identity.tenantId,
       material: args.authorized.material,
     });
-    const row = await this.db
-      .updateTable("connections")
-      .set({
-        credential_ref: nextRef.id,
-        status: "ready",
-        account_summary: toJson(args.authorized.account ?? {}),
-        scopes: toJson(args.authorized.scopes ?? []),
-        capabilities: toJson(args.authorized.capabilities ?? []),
-        expires_at: args.authorized.expiresAt ?? null,
-        revision: current.revision + 1,
-        updated_at: new Date(),
-      })
-      .where("id", "=", current.id)
-      .where("tenant_id", "=", args.identity.tenantId)
-      .where("revision", "=", current.revision)
-      .returningAll()
-      .executeTakeFirst();
-    if (!row) {
+    let row: ConnectionRow;
+    try {
+      row = await this.publishCredential(args, async (trx) => {
+        const updated = await trx
+          .updateTable("connections")
+          .set({
+            credential_ref: nextRef.id,
+            status: "ready",
+            account_summary: toJson(args.authorized.account ?? {}),
+            scopes: toJson(args.authorized.scopes ?? []),
+            capabilities: toJson(args.authorized.capabilities ?? []),
+            expires_at: args.authorized.expiresAt ?? null,
+            revision: current.revision + 1,
+            updated_at: new Date(),
+          })
+          .where("id", "=", current.id)
+          .where("tenant_id", "=", args.identity.tenantId)
+          .where("revision", "=", current.revision)
+          .returningAll()
+          .executeTakeFirst();
+        if (!updated)
+          throw new ConnectionUnavailableError(
+            current.id,
+            "Credential update raced",
+          );
+        return updated;
+      });
+    } catch (error) {
       await this.vault.delete({
         tenantId: args.identity.tenantId,
         ref: nextRef,
       });
-      throw new ConnectionUnavailableError(
-        current.id,
-        "Credential update raced",
-      );
+      throw error;
     }
     if (current.credential_ref) {
       await this.vault.delete({
@@ -1932,6 +2071,7 @@ export class ConnectionsService {
     connectionId: string;
     providerKind: string;
     authorized: ConnectionAuthorizationResult;
+    attempt: AuthorizationAttempt;
   }): Promise<ConnectionRecord> {
     const current = await this.requireConnection(
       args.identity,
@@ -1949,6 +2089,7 @@ export class ConnectionsService {
       identity: args.identity,
       current,
       authorized: args.authorized,
+      attempt: args.attempt,
     });
   }
 

@@ -213,10 +213,11 @@ export interface CatamorphicCoreConfig {
    * fields. Host code, as guards are; each is bounded by the guard timeout.
    */
   modelRequestRewrites?: readonly ModelRequestRewrite[];
-  /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
+  /** Re-resolve live authority for dispatch, gateways and OAuth callbacks. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
-    projectId: string;
+    /** Absent for a tenant-wide or personal connection authorization. */
+    projectId?: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
   /**
@@ -820,6 +821,9 @@ export class CatamorphicCore {
         jobs: executionJobs,
         vault: credentialVault,
         providers,
+        ...(config.resolveMemberIdentity
+          ? { resolveMemberIdentity: config.resolveMemberIdentity }
+          : {}),
         // Committed bindings are read with the Environment they belong to
         // (ADR 0172); a host may add its own aliases beside them, and a
         // committed alias wins over a host one of the same name.
@@ -864,6 +868,9 @@ export class CatamorphicCore {
         () => this.workflowEnablements,
         {
           guards: config.connectionGuards ?? [],
+          ...(config.resolveMemberIdentity
+            ? { resolveMemberIdentity: config.resolveMemberIdentity }
+            : {}),
           ...(config.connectionGuardTimeoutMs
             ? { guardTimeoutMs: config.connectionGuardTimeoutMs }
             : {}),
@@ -893,6 +900,7 @@ export class CatamorphicCore {
                 .selectFrom("agent_sessions")
                 .select("external_user_id")
                 .where("id", "=", sessionId)
+                .where("status", "=", "active")
                 .executeTakeFirst()
             )?.external_user_id,
           sessionSandboxing: async (sessionId) => {

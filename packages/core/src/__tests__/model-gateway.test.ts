@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { JsonObject } from "@catamorphic/db";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ConnectionActionDeniedError,
   ConnectionActionRefusedError,
@@ -101,7 +101,7 @@ function harness(options: {
     capabilities: ["model"],
     ...(options.policy ? { model: options.policy } : {}),
   };
-  const state = { revoked: false, revision: 1, key: REAL_KEY, now: 0 };
+  const state = { revoked: false, revision: 1, key: REAL_KEY };
   const endpoint: ConnectionModelEndpoint = {
     api: options.api,
     baseUrl:
@@ -130,7 +130,6 @@ function harness(options: {
   const slow = () =>
     options.writeDelayMs ? until(options.writeDelayMs) : Promise.resolve();
   const gateway = new ModelGatewayService({
-    now: () => state.now,
     ...(options.rewrites ? { rewrites: options.rewrites } : {}),
     ...(options.rewriteTimeoutMs
       ? { rewriteTimeoutMs: options.rewriteTimeoutMs }
@@ -726,25 +725,21 @@ describe("the model gateway", () => {
     expect(idle.recorded[0]?.turnId).toBeNull();
   });
 
-  it("reuses a resolved alias across calls, and resolves it again after a rotation", async () => {
+  it("resolves authority on every call and uses a rotated credential immediately", async () => {
     const { gateway, state, counts, upstreamCalls } = harness({
       api: "anthropic",
     });
     for (let call = 0; call < 3; call++)
       await bodyText(await gateway.handle(messages({ model: "claude-x" })));
-    // The grant is checked every call; the key is decrypted once.
-    expect(counts.liveGrant).toBe(3);
-    expect(counts.resolved).toBe(1);
+    // Resolve again just before forwarding, including after any approval.
+    expect(counts.liveGrant).toBe(6);
+    expect(counts.resolved).toBe(6);
     // A rotated key is a new revision: the next call uses it.
     state.revision = 2;
     state.key = "sk-rotated";
     await bodyText(await gateway.handle(messages({ model: "claude-x" })));
-    expect(counts.resolved).toBe(2);
+    expect(counts.resolved).toBe(8);
     expect(upstreamCalls.at(-1)?.headers.get("x-api-key")).toBe("sk-rotated");
-    // And the cache lasts 30 seconds.
-    state.now += 31_000;
-    await bodyText(await gateway.handle(messages({ model: "claude-x" })));
-    expect(counts.resolved).toBe(3);
   });
 
   it("stops serving a revoked grant on its next call", async () => {
@@ -826,20 +821,40 @@ describe("the model gateway", () => {
     }
   });
 
-  it("admits a request by its grant before reading the body, and checks it once", async () => {
+  it("does not log credential-bearing exception names, messages or stacks", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fail = new Error("synthetic-message-secret");
+    fail.name = "synthetic-name-secret";
+    fail.stack = "synthetic-stack-secret";
+    try {
+      const { gateway, upstreamCalls } = harness({ api: "anthropic", fail });
+      const response = await gateway.handle(messages({ model: "claude-x" }));
+      expect(response.status).toBe(403);
+      expect(await bodyText(response)).not.toMatch(/synthetic-\w+-secret/);
+      expect(warn).toHaveBeenCalledWith(
+        "[catamorphic] Model gateway request failed",
+        { errorType: "Error" },
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(
+        /synthetic-\w+-secret/,
+      );
+      expect(upstreamCalls).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("checks a grant before the body and rechecks before forwarding", async () => {
     const { gateway, counts } = harness({ api: "anthropic" });
     const request = messages({ model: "claude-x" });
     const result = await gateway.admit(request);
     if (!("admitted" in result)) throw new Error("expected an admission");
-    await bodyText(
-      await gateway.handle({ ...request, admitted: result.admitted }),
-    );
-    expect(counts.liveGrant).toBe(1);
-    // An admission this gateway did not issue is checked again.
-    await bodyText(
-      await gateway.handle({ ...request, admitted: { ...result.admitted } }),
-    );
-    expect(counts.liveGrant).toBe(2);
+    expect(result.admitted).toBe(true);
+    await bodyText(await gateway.handle(request));
+    expect(counts.liveGrant).toBe(3);
+    // Direct callers receive the same current-authority checks.
+    await bodyText(await gateway.handle(request));
+    expect(counts.liveGrant).toBe(5);
     const refused = await gateway.admit({
       ...request,
       headers: { "x-api-key": "nope" },

@@ -6,6 +6,7 @@ import {
   generateExecutorKeyPair,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import { credentialEncryptionAvailable } from "./credential-encryption.js";
 
 interface StoredKey {
   version: 1;
@@ -37,7 +38,7 @@ export class RunnerKeyStore {
 
   private create(): ExecutorKeyPair {
     const keys = generateExecutorKeyPair();
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!credentialEncryptionAvailable()) {
       console.warn(
         "[desktop] OS keychain encryption unavailable; this machine's runner key will last only for this session.",
       );
@@ -62,6 +63,7 @@ export class RunnerKeyStore {
 
   /** The stored pair, or undefined when absent, unreadable, or altered. */
   private load(): ExecutorKeyPair | undefined {
+    if (!credentialEncryptionAvailable()) return undefined;
     try {
       const raw: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"));
       if (

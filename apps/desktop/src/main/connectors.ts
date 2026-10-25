@@ -605,21 +605,7 @@ export class ConnectorsService {
       url: connection.url,
       ...(connection.headers ? { headers: connection.headers } : {}),
     };
-    // Connections lifted from a plugin before it declared (or before we
-    // read) an `oauth` block: consult the installed plugin directly.
-    let client = connection.oauthClient;
-    if (!client && connection.source.kind === "plugin") {
-      const plugin = this.listInstalled(profileId).find(
-        (entry) =>
-          connection.source.kind === "plugin" &&
-          entry.name === connection.source.plugin,
-      );
-      if (plugin) {
-        client = await readInstalledPlugin(plugin.path)
-          .then((info) => info.mcpOAuth[connection.name])
-          .catch(() => undefined);
-      }
-    }
+    const client = connection.oauthClient;
     const result = await authorizeMcpServer(config, {
       store: oauthStoreFor(store, connectionId),
       openUrl: opts.openUrl,
