@@ -108,7 +108,7 @@
         "tar": "^7.5.22",
         "tldts": "^7.4.10",
         "use-stick-to-bottom": "^1.1.6",
-        "zod": "^4.1.8",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@catamorphic/parser": "workspace:*",
@@ -119,7 +119,7 @@
         "@types/react": "^19.2.17",
         "@types/react-dom": "^19.2.3",
         "@vitejs/plugin-react": "^6.0.5",
-        "electron": "45.0.0-beta.1",
+        "electron": "45.0.0-beta.7",
         "electron-builder": "^26.15.3",
         "electron-vite": "^5.0.0",
         "monaco-editor": "^0.56.0",
@@ -201,7 +201,7 @@
       "name": "@catamorphic/agent-protocol",
       "version": "0.0.1",
       "dependencies": {
-        "zod": "^4.4.3",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -228,7 +228,7 @@
         "@catamorphic/sandbox": "workspace:*",
         "@opentelemetry/api": "^1.9.1",
         "ai": "^7.0.97",
-        "zod": "^4.1.8",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@catamorphic/agent-runner": "workspace:*",
@@ -279,7 +279,7 @@
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.32.1",
-        "zod": "^4.1.8",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@catamorphic/agent-runner": "workspace:*",
@@ -352,7 +352,7 @@
         "@catamorphic/workflow": "workspace:*",
         "croner": "^10.0.1",
         "kysely": "^0.29.3",
-        "zod": "^4.4.3",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@catamorphic/cloudflare": "workspace:*",
@@ -402,7 +402,7 @@
         "fastify": "^5.12.7",
         "fastify-type-provider-zod": "^7.0.0",
         "kysely": "^0.29.3",
-        "zod": "^4.4.3",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@catamorphic/agent-runner": "workspace:*",
@@ -435,7 +435,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@catamorphic/otel": "workspace:*",
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -551,7 +551,7 @@
       "name": "@catamorphic/plugins",
       "version": "0.0.1",
       "dependencies": {
-        "zod": "^4.4.3",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -668,7 +668,7 @@
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/workflow": "workspace:*",
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -689,7 +689,7 @@
         "kysely": "^0.29.3",
         "pg": "^8.22.0",
         "web-push": "^3.6.7",
-        "zod": "^4.4.3",
+        "zod": "^4.6.7",
       },
       "devDependencies": {
         "@catamorphic/agent-runner": "workspace:*",
@@ -762,7 +762,7 @@
         "kysely": "^0.29.3",
         "micromark": "^4.0.2",
         "pg": "8.16.3",
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -2066,7 +2066,7 @@
 
     "ejs": ["ejs@3.1.10", "", { "dependencies": { "jake": "^10.8.5" }, "bin": { "ejs": "bin/cli.js" } }, "sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA=="],
 
-    "electron": ["electron@45.0.0-beta.1", "", { "dependencies": { "@electron-internal/extract-zip": "^1.0.1", "@electron/get": "^5.0.0", "@types/node": "^24.9.0" }, "bin": { "electron": "cli.js", "install-electron": "install.js" } }, "sha512-g2hymDQImDcwzISFZne2IHZ4XgeRFKigPQ2mDcdk3w5wBoLeBLpAQnoIWPoh84gZr3rnmIDnpgcbrS94RorTFw=="],
+    "electron": ["electron@45.0.0-beta.7", "", { "dependencies": { "@electron-internal/extract-zip": "^1.0.1", "@electron/get": "^5.0.0", "@types/node": "^24.9.0" }, "bin": { "electron": "cli.js", "install-electron": "install.js" } }, "sha512-vnSYb+CfzzLAgv4/nviNYyLywc7GuTOQXNn6YAwJSyjHpdagcljrsnhRQ51A2X+bgbeJhoC1hLB6vi6QTm+AJA=="],
 
     "electron-builder": ["electron-builder@26.15.3", "", { "dependencies": { "app-builder-lib": "26.15.3", "builder-util": "26.15.3", "builder-util-runtime": "9.7.0", "chalk": "^4.1.2", "ci-info": "^4.2.0", "dmg-builder": "26.15.3", "fs-extra": "^10.1.0", "lazy-val": "^1.0.5", "simple-update-notifier": "2.0.0", "yargs": "^17.6.2" }, "bin": { "electron-builder": "./cli.js", "install-app-deps": "./install-app-deps.js" } }, "sha512-a1KM5heqS3gQCZzizXEI8RjJy3QVogULPdeSknt76uLDpBIW/HDGsMg/XgP0riP6PI9COsRvFITKKGDqA8fJxA=="],
 
@@ -3198,7 +3198,7 @@
 
     "youch-core": ["youch-core@0.3.3", "", { "dependencies": { "@poppinss/exception": "^1.2.2", "error-stack-parser-es": "^1.0.5" } }, "sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA=="],
 
-    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+    "zod": ["zod@4.6.7", "", {}, "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 

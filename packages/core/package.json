@@ -37,7 +37,7 @@
     "@catamorphic/workflow": "workspace:*",
     "croner": "^10.0.1",
     "kysely": "^0.29.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@catamorphic/cloudflare": "workspace:*",
