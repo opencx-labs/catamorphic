@@ -883,20 +883,22 @@ describe("context pills", () => {
     // Cmd+W would target that editor, so close this empty chat by
     // its own control and keep the selected document for the next case.
     const close = await runWait<{ x: number; y: number }>(
-      `const button = frontDock()?.querySelector('button[aria-label="Close chat"]');
+      `const dock = frontDock();
+       if (!dock || dock.parentElement.getAnimations({subtree:true}).some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)) return false;
+       const button = dock.querySelector('button[aria-label="Close chat"]');
        if (!button) return false;
        const rect = button.getBoundingClientRect();
        const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
        return rect.width > 0 && rect.height > 0 && button.contains(document.elementFromPoint(point.x, point.y)) ? point : false;`,
-      { label: "transparent-editor chat close control" },
+      { label: "transparent-editor chat close control at rest" },
     );
     await app.clickPointer(close);
-    // The private desktop's pointer survives this app. Leave no hover for
-    // the next suite's window to inherit at this control's coordinates.
-    await app.movePointer({ x: 1, y: 1 });
     await runWait(`return !frontDock();`, {
       label: "transparent-editor chat closed",
     });
+    // The private desktop's pointer survives this app. Leave no hover for
+    // the next suite's window to inherit at this control's coordinates.
+    await app.movePointer({ x: 1, y: 1 });
     expect(
       await run(`
         const editor = window.__catMarkdownEditor.editor;
