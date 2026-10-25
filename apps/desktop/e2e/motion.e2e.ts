@@ -127,6 +127,22 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+/** Give sampling time to see the middle without changing the animation's timeline. */
+async function inspectSlowMotion<T>(inspect: () => Promise<T>): Promise<T> {
+  await runWait(
+    "return document.getAnimations().every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity);",
+    { label: "the window at rest before time slows" },
+  );
+  await app.cdp("Animation.enable");
+  try {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    return await inspect();
+  } finally {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    await app.cdp("Animation.disable");
+  }
+}
+
 interface AnimationRule {
   selector: string;
   name: string;
@@ -565,13 +581,13 @@ describe("animate-before-unmount", () => {
        return !!dock && getComputedStyle(dock).opacity === '1';`,
       { label: "empty dock fully visible" },
     );
-    const samples = await run<
-      { t: number; opacity?: number; gone?: boolean }[]
-    >(`
-      const dock = visibleDock();
-      pressKey('Escape');
-      return sampleUntilGone(dock, null, EXIT_BOUND_MS);
-    `);
+    const samples = await inspectSlowMotion(() =>
+      run<{ t: number; opacity?: number; gone?: boolean }[]>(`
+        const dock = visibleDock();
+        pressKey('Escape');
+        return sampleUntilGone(dock, null, 15000);
+      `),
+    );
     // Mid-tween: mounted with partial opacity. End: unmounted.
     expect(
       samples.some(
@@ -954,22 +970,23 @@ describe("chats over a settling sidebar", () => {
           const box = element?.getBoundingClientRect();
           return !!box && element.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
         };
-        const frames = [];
+        const sample = () => ({
+          plus: Math.round(plus().getBoundingClientRect().left),
+          edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
+          docked: side().dataset.docked,
+          seen: reached(plus()),
+          rightToggle: reached($('[data-workspace-visible="true"] .workspace-chrome [aria-label$="right sidebar"]')),
+        });
+        const frames = [sample()];
         [...document.querySelectorAll('[aria-label="${label}"]')]
           .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
           .click();
         return new Promise((resolve) => {
           const started = performance.now();
           const tick = () => {
-            frames.push({
-              plus: Math.round(plus().getBoundingClientRect().left),
-              edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
-              docked: side().dataset.docked,
-              seen: reached(plus()),
-              rightToggle: reached($('[data-workspace-visible="true"] .workspace-chrome [aria-label$="right sidebar"]')),
-            });
+            frames.push(sample());
             if (side().dataset.settled === 'true' && performance.now() - started > 200) resolve(frames);
-            else if (performance.now() - started > 5000) resolve(frames);
+            else if (performance.now() - started > 15000) resolve(frames);
             else requestAnimationFrame(tick);
           };
           requestAnimationFrame(tick);
@@ -1000,14 +1017,18 @@ describe("chats over a settling sidebar", () => {
       for (const frame of frames.slice(flipped)) expect(frame.plus).toBe(to);
       return to;
     };
-    const open = await run<number>(
-      `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
-    );
-    const closed = check(await toggle("Collapse sidebar"), open);
-    expect(closed).toBeLessThan(open);
-    await settled(false);
-    expect(check(await toggle("Expand sidebar"), closed)).toBe(open);
-    await settled(true);
+    // Preserve the shared timeline while giving rAF enough time to observe
+    // the middle of a 200 ms transition on a busy test host.
+    await inspectSlowMotion(async () => {
+      const open = await run<number>(
+        `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
+      );
+      const closed = check(await toggle("Collapse sidebar"), open);
+      expect(closed).toBeLessThan(open);
+      await settled(false);
+      expect(check(await toggle("Expand sidebar"), closed)).toBe(open);
+      await settled(true);
+    });
     expect(app.getRendererErrors()).toEqual([]);
   });
 });
@@ -1038,21 +1059,22 @@ describe("content Work draws moves with the sidebar", () => {
     const toggle = (label: string) =>
       run<Frame[]>(`
         const side = () => $('[data-workspace-visible="true"] [data-sidebar="left"]');
-        const frames = [];
+        const sample = () => ({
+          edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
+          content: Math.round($('[data-workspace-visible="true"] .workspace-surface').getBoundingClientRect().left),
+          plus: Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left),
+          push: side().hasAttribute('data-push'),
+          settling: 'contentSettling' in document.documentElement.dataset,
+        });
+        const frames = [sample()];
         [...document.querySelectorAll('[aria-label="${label}"]')]
           .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
           .click();
         return new Promise((resolve) => {
           const started = performance.now();
           const tick = () => {
-            frames.push({
-              edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
-              content: Math.round($('[data-workspace-visible="true"] .workspace-surface').getBoundingClientRect().left),
-              plus: Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left),
-              push: side().hasAttribute('data-push'),
-              settling: 'contentSettling' in document.documentElement.dataset,
-            });
-            if ((side().dataset.settled === 'true' && performance.now() - started > 200) || performance.now() - started > 5000) resolve(frames);
+            frames.push(sample());
+            if ((side().dataset.settled === 'true' && performance.now() - started > 200) || performance.now() - started > 15000) resolve(frames);
             else requestAnimationFrame(tick);
           };
           requestAnimationFrame(tick);
@@ -1085,14 +1107,16 @@ describe("content Work draws moves with the sidebar", () => {
       expect(midway.length, JSON.stringify(frames)).toBeGreaterThan(0);
       return plus.at(-1) ?? 0;
     };
-    const open = await run<number>(
-      `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
-    );
-    const closed = check(await toggle("Collapse sidebar"));
-    expect(closed).toBeLessThan(open);
-    await sidebarSettled(false);
-    expect(check(await toggle("Expand sidebar"))).toBe(open);
-    await sidebarSettled(true);
+    await inspectSlowMotion(async () => {
+      const open = await run<number>(
+        `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
+      );
+      const closed = check(await toggle("Collapse sidebar"));
+      expect(closed).toBeLessThan(open);
+      await sidebarSettled(false);
+      expect(check(await toggle("Expand sidebar"))).toBe(open);
+      await sidebarSettled(true);
+    });
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

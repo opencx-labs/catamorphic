@@ -1410,29 +1410,25 @@ function ChatNavigation({
         settling.current?.();
         anchor.current = null;
         stopScroll();
-        if (direction < 0) setSeekingTop(true);
-        else {
-          setSeekingTop(false);
-          void scrollToBottom({
-            animation: matchMedia("(prefers-reduced-motion: reduce)").matches
-              ? "instant"
-              : "smooth",
-          });
+        if (direction < 0) {
+          setSeekingTop(true);
+          return;
         }
-        return;
+        setSeekingTop(false);
+      } else {
+        held.current = null;
+        setSeekingTop(false);
       }
-      held.current = null;
-      setSeekingTop(false);
-      const targets = [
-        ...content.querySelectorAll<HTMLElement>("[data-user-message]"),
-      ];
+      const targets = repeat
+        ? []
+        : [...content.querySelectorAll<HTMLElement>("[data-user-message]")];
       const clearance = 12 + edgeFadeLength(scroller);
       const viewTop = scroller.getBoundingClientRect().top + clearance;
       // Rapid taps advance from the preceding destination while it glides.
       const current = anchor.current;
       const index = current ? targets.indexOf(current) : -1;
       let target = index >= 0 ? targets[index + direction] : undefined;
-      if (index < 0) {
+      if (!repeat && index < 0) {
         // The rows are in reading order. Measuring every message renders all
         // offscreen turns on the first keypress; binary search only touches
         // a few row boxes, leaving the rest's contained layout alone.
@@ -1461,20 +1457,22 @@ function ChatNavigation({
       }
       const instant = matchMedia("(prefers-reduced-motion: reduce)").matches;
       settling.current?.();
-      if (!target) {
-        if (direction > 0)
-          void scrollToBottom({ animation: instant ? "instant" : "smooth" });
-        return;
-      }
+      if (!target && direction < 0) return;
       stopScroll();
-      anchor.current = target;
+      anchor.current = target ?? null;
+      // The endpoint uses the same native glide as adjacent messages.
+      // Starting the follow spring here lets a delayed upward-scroll
+      // handler cancel it. Resume following only after this glide arrives.
       const off = () =>
-        target.getBoundingClientRect().top -
-        scroller.getBoundingClientRect().top -
-        clearance;
+        target
+          ? target.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top -
+            clearance
+          : scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
       const behavior = instant ? "instant" : "smooth";
       const distance = off();
-      scroller.scrollTo({ top: scroller.scrollTop + distance, behavior });
+      const destination = scroller.scrollTop + distance;
+      scroller.scrollTo({ top: destination, behavior });
       // A shrinking row near the end makes the scroll library follow again.
       // The person's destination keeps priority throughout this navigation.
       const observer = new ResizeObserver(() => stopScroll());
@@ -1494,6 +1492,27 @@ function ChatNavigation({
           scroller.removeEventListener(name, stop, true);
       };
       const settle = () => {
+        if (!target) {
+          // A scrollend from the previous glide may still be queued.
+          // Keep this move until its own destination has arrived; clamp
+          // for content that shrank meanwhile. Growing layout can carry
+          // the viewport past that point, which also means it arrived.
+          const end = Math.min(
+            destination,
+            scroller.scrollHeight - scroller.clientHeight,
+          );
+          if (scroller.scrollTop < end - 2) {
+            window.clearTimeout(fallback);
+            fallback = window.setTimeout(settle, 1_000);
+            return;
+          }
+          stop();
+          // The answer may have grown during the glide. Following takes
+          // over here and tracks further growth without another native
+          // glide chasing the moving endpoint.
+          void scrollToBottom({ animation: instant ? "instant" : "smooth" });
+          return;
+        }
         stopScroll();
         const remaining = off();
         const top = Math.max(
@@ -1518,6 +1537,9 @@ function ChatNavigation({
       scroller.addEventListener("scrollend", settle);
       for (const name of interrupts)
         scroller.addEventListener(name, stop, { capture: true, passive: true });
+      // An instant move or an endpoint already in view need not emit
+      // scrollend. Pin immediately instead of waiting for the fallback.
+      if (!target && (instant || Math.abs(distance) <= 2)) settle();
     },
     [scrollRef, contentRef, stopScroll, scrollToBottom],
   );
