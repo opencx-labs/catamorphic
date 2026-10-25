@@ -1,0 +1,3612 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "kernel": "24.6.0",
+    "cpu": "Apple M1 (Virtual)",
+    "bun": "1.4.4",
+    "parent": "v24.22.1"
+  },
+  "samples": [
+    {
+      "sample": 0,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 48920,
+      "startupParentCpu": {
+        "user": 2898,
+        "system": 420
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 22.725124999999025,
+      "treeBytes": 29671424,
+      "cpuMs": 124.2975,
+      "ioMs": 113.10999999999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 134702,
+        "system": 75689
+      },
+      "idleCpu": {
+        "user": 2303,
+        "system": 831
+      },
+      "rss": 8701248,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 702,
+        "system": 78
+      }
+    },
+    {
+      "sample": 0,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 38648,
+      "startupParentCpu": {
+        "user": 2630,
+        "system": 835
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 32.027374999999665,
+      "treeBytes": 29933568,
+      "cpuMs": 109.40004200000001,
+      "ioMs": 98.69370799999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 120939,
+        "system": 66502
+      },
+      "idleCpu": {
+        "user": 2073,
+        "system": 914
+      },
+      "rss": 8668672,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 846,
+        "system": 91
+      }
+    },
+    {
+      "sample": 0,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 20464,
+      "startupParentCpu": {
+        "user": 2438,
+        "system": 679
+      },
+      "totalCpuMs": 220,
+      "readyMs": 17.76104200000009,
+      "treeBytes": 30425088,
+      "cpuMs": 116.64462500000002,
+      "ioMs": 100.53350000000003,
+      "networkMs": 17.741332999999997,
+      "cpu": {
+        "user": 130661,
+        "system": 67164
+      },
+      "idleCpu": {
+        "user": 2141,
+        "system": 866
+      },
+      "rss": 8914432,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 10434,
+        "system": 3046
+      }
+    },
+    {
+      "sample": 0,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 102736,
+      "startupParentCpu": {
+        "user": 7014,
+        "system": 1035
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 39.550750000000335,
+      "treeBytes": 30113792,
+      "cpuMs": 113.166417,
+      "ioMs": 171.06962499999997,
+      "networkMs": 74.52991700000001,
+      "cpu": {
+        "user": 129295,
+        "system": 72989
+      },
+      "idleCpu": {
+        "user": 1268,
+        "system": 556
+      },
+      "rss": 9061952,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 63133,
+        "system": 12212
+      }
+    },
+    {
+      "sample": 1,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -5960,
+      "startupParentCpu": {
+        "user": 2640,
+        "system": 759
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 28.305707999999868,
+      "treeBytes": 29458432,
+      "cpuMs": 112.76187499999999,
+      "ioMs": 122.7575,
+      "networkMs": null,
+      "cpu": {
+        "user": 123705,
+        "system": 67263
+      },
+      "idleCpu": {
+        "user": 2405,
+        "system": 1026
+      },
+      "rss": 8619456,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 725,
+        "system": 59
+      }
+    },
+    {
+      "sample": 1,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8520,
+      "startupParentCpu": {
+        "user": 2445,
+        "system": 764
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 24.569083000002138,
+      "treeBytes": 30081024,
+      "cpuMs": 107.540208,
+      "ioMs": 108.14908299999996,
+      "networkMs": null,
+      "cpu": {
+        "user": 122317,
+        "system": 75707
+      },
+      "idleCpu": {
+        "user": 1974,
+        "system": 1216
+      },
+      "rss": 12797312,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 381,
+        "system": 43
+      }
+    },
+    {
+      "sample": 1,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 83896,
+      "startupParentCpu": {
+        "user": 4789,
+        "system": 1679
+      },
+      "totalCpuMs": 250,
+      "readyMs": 42.639250000000175,
+      "treeBytes": 30015488,
+      "cpuMs": 122.77908400000001,
+      "ioMs": 150.60987500000002,
+      "networkMs": 79.32475,
+      "cpu": {
+        "user": 134960,
+        "system": 80877
+      },
+      "idleCpu": {
+        "user": 1688,
+        "system": 598
+      },
+      "rss": 8897984,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 65823,
+        "system": 11710
+      }
+    },
+    {
+      "sample": 1,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -440,
+      "startupParentCpu": {
+        "user": 3217,
+        "system": 564
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 24.335583000000042,
+      "treeBytes": 30572544,
+      "cpuMs": 117.02395800000001,
+      "ioMs": 123.49908400000001,
+      "networkMs": 26.99483299999997,
+      "cpu": {
+        "user": 134079,
+        "system": 78334
+      },
+      "idleCpu": {
+        "user": 1688,
+        "system": 753
+      },
+      "rss": 9061952,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 12059,
+        "system": 3444
+      }
+    },
+    {
+      "sample": 2,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 3808,
+      "startupParentCpu": {
+        "user": 2226,
+        "system": 458
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 22.801958000000013,
+      "treeBytes": 29523968,
+      "cpuMs": 109.118792,
+      "ioMs": 283.02275,
+      "networkMs": null,
+      "cpu": {
+        "user": 116924,
+        "system": 81202
+      },
+      "idleCpu": {
+        "user": 2178,
+        "system": 960
+      },
+      "rss": 8717760,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 549,
+        "system": 42
+      }
+    },
+    {
+      "sample": 2,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 45760,
+      "startupParentCpu": {
+        "user": 8067,
+        "system": 1472
+      },
+      "totalCpuMs": 250,
+      "readyMs": 45.52691599999889,
+      "treeBytes": 29769728,
+      "cpuMs": 116.45891700000001,
+      "ioMs": 134.83374999999998,
+      "networkMs": null,
+      "cpu": {
+        "user": 129264,
+        "system": 72551
+      },
+      "idleCpu": {
+        "user": 1933,
+        "system": 1136
+      },
+      "rss": 8619520,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 417,
+        "system": 67
+      }
+    },
+    {
+      "sample": 2,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 13328,
+      "startupParentCpu": {
+        "user": 2673,
+        "system": 517
+      },
+      "totalCpuMs": 200,
+      "readyMs": 21.422417000001587,
+      "treeBytes": 30638080,
+      "cpuMs": 105.351958,
+      "ioMs": 90.9005,
+      "networkMs": 19.31016600000001,
+      "cpu": {
+        "user": 119376,
+        "system": 67185
+      },
+      "idleCpu": {
+        "user": 2166,
+        "system": 1537
+      },
+      "rss": 9094656,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7813,
+        "system": 2815
+      }
+    },
+    {
+      "sample": 2,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 73648,
+      "startupParentCpu": {
+        "user": 2791,
+        "system": 841
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 24.51195799999914,
+      "treeBytes": 30457856,
+      "cpuMs": 98.60875000000001,
+      "ioMs": 121.82158299999998,
+      "networkMs": 60.05970800000003,
+      "cpu": {
+        "user": 118712,
+        "system": 73981
+      },
+      "idleCpu": {
+        "user": 1821,
+        "system": 1565
+      },
+      "rss": 9061952,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 47647,
+        "system": 9906
+      }
+    },
+    {
+      "sample": 3,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -23152,
+      "startupParentCpu": {
+        "user": 3421,
+        "system": 987
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 31.509249999999156,
+      "treeBytes": 29720576,
+      "cpuMs": 104.044,
+      "ioMs": 123.970584,
+      "networkMs": null,
+      "cpu": {
+        "user": 116960,
+        "system": 77332
+      },
+      "idleCpu": {
+        "user": 1963,
+        "system": 1409
+      },
+      "rss": 8848832,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 321,
+        "system": 77
+      }
+    },
+    {
+      "sample": 3,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 10952,
+      "startupParentCpu": {
+        "user": 2799,
+        "system": 442
+      },
+      "totalCpuMs": 190,
+      "readyMs": 16.422083000001294,
+      "treeBytes": 29736960,
+      "cpuMs": 95.540041,
+      "ioMs": 128.1605,
+      "networkMs": null,
+      "cpu": {
+        "user": 108965,
+        "system": 70139
+      },
+      "idleCpu": {
+        "user": 2326,
+        "system": 1343
+      },
+      "rss": 8734144,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1265,
+        "system": 120
+      }
+    },
+    {
+      "sample": 3,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 94752,
+      "startupParentCpu": {
+        "user": 3433,
+        "system": 920
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 30.89341599999898,
+      "treeBytes": 30638080,
+      "cpuMs": 104.18366699999999,
+      "ioMs": 114.80766599999998,
+      "networkMs": 68.25608299999999,
+      "cpu": {
+        "user": 125563,
+        "system": 77089
+      },
+      "idleCpu": {
+        "user": 4126,
+        "system": 944
+      },
+      "rss": 9094720,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 60319,
+        "system": 10393
+      }
+    },
+    {
+      "sample": 3,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -21024,
+      "startupParentCpu": {
+        "user": 784,
+        "system": 368
+      },
+      "totalCpuMs": 280,
+      "readyMs": 34.13933300000281,
+      "treeBytes": 30556160,
+      "cpuMs": 124.896625,
+      "ioMs": 150.74791699999997,
+      "networkMs": 25.386374999999987,
+      "cpu": {
+        "user": 146161,
+        "system": 104141
+      },
+      "idleCpu": {
+        "user": 2701,
+        "system": 1691
+      },
+      "rss": 9127616,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 13881,
+        "system": 3945
+      }
+    },
+    {
+      "sample": 4,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 9552,
+      "startupParentCpu": {
+        "user": 2796,
+        "system": 624
+      },
+      "totalCpuMs": 250,
+      "readyMs": 31.79149999999936,
+      "treeBytes": 29507584,
+      "cpuMs": 115.51108400000001,
+      "ioMs": 128.44516700000003,
+      "networkMs": null,
+      "cpu": {
+        "user": 132661,
+        "system": 81352
+      },
+      "idleCpu": {
+        "user": 5670,
+        "system": 2045
+      },
+      "rss": 8619392,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1102,
+        "system": 99
+      }
+    },
+    {
+      "sample": 4,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -168,
+      "startupParentCpu": {
+        "user": 4058,
+        "system": 1368
+      },
+      "totalCpuMs": 280,
+      "readyMs": 52.42087499999616,
+      "treeBytes": 29163520,
+      "cpuMs": 123.685583,
+      "ioMs": 125.14908299999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 139338,
+        "system": 86393
+      },
+      "idleCpu": {
+        "user": 2171,
+        "system": 1248
+      },
+      "rss": 8373760,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 733,
+        "system": 83
+      }
+    },
+    {
+      "sample": 4,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 15272,
+      "startupParentCpu": {
+        "user": 2816,
+        "system": 663
+      },
+      "totalCpuMs": 200,
+      "readyMs": 29.311083000000508,
+      "treeBytes": 30392320,
+      "cpuMs": 99.143666,
+      "ioMs": 118.05600000000001,
+      "networkMs": 19.59579199999996,
+      "cpu": {
+        "user": 115922,
+        "system": 64752
+      },
+      "idleCpu": {
+        "user": 2051,
+        "system": 1319
+      },
+      "rss": 9176704,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 6102,
+        "system": 2882
+      }
+    },
+    {
+      "sample": 4,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 50752,
+      "startupParentCpu": {
+        "user": 3419,
+        "system": 917
+      },
+      "totalCpuMs": 250,
+      "readyMs": 37.9151669999992,
+      "treeBytes": 30310400,
+      "cpuMs": 107.264791,
+      "ioMs": 122.25491699999998,
+      "networkMs": 59.61087500000002,
+      "cpu": {
+        "user": 125144,
+        "system": 85373
+      },
+      "idleCpu": {
+        "user": 1989,
+        "system": 1027
+      },
+      "rss": 9209408,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 45121,
+        "system": 9560
+      }
+    },
+    {
+      "sample": 5,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -20320,
+      "startupParentCpu": {
+        "user": 3732,
+        "system": 934
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 39.45237500000076,
+      "treeBytes": 29507584,
+      "cpuMs": 100.78437500000001,
+      "ioMs": 146.604833,
+      "networkMs": null,
+      "cpu": {
+        "user": 119883,
+        "system": 66972
+      },
+      "idleCpu": {
+        "user": 2226,
+        "system": 1108
+      },
+      "rss": 8734208,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 741,
+        "system": 81
+      }
+    },
+    {
+      "sample": 5,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8520,
+      "startupParentCpu": {
+        "user": 2676,
+        "system": 527
+      },
+      "totalCpuMs": 200,
+      "readyMs": 23.020041999996465,
+      "treeBytes": 29507584,
+      "cpuMs": 103.61533399999999,
+      "ioMs": 113.28462499999998,
+      "networkMs": null,
+      "cpu": {
+        "user": 116484,
+        "system": 61751
+      },
+      "idleCpu": {
+        "user": 1730,
+        "system": 971
+      },
+      "rss": 8619456,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 442,
+        "system": 74
+      }
+    },
+    {
+      "sample": 5,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 82888,
+      "startupParentCpu": {
+        "user": 5569,
+        "system": 1154
+      },
+      "totalCpuMs": 200,
+      "readyMs": 30.84862499999872,
+      "treeBytes": 30146560,
+      "cpuMs": 94.28087500000001,
+      "ioMs": 109.16987499999999,
+      "networkMs": 48.67462499999999,
+      "cpu": {
+        "user": 115102,
+        "system": 59225
+      },
+      "idleCpu": {
+        "user": 1732,
+        "system": 873
+      },
+      "rss": 8963456,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 27774,
+        "system": 7917
+      }
+    },
+    {
+      "sample": 5,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -25592,
+      "startupParentCpu": {
+        "user": 2989,
+        "system": 786
+      },
+      "totalCpuMs": 290.00000000000006,
+      "readyMs": 32.67362499999581,
+      "treeBytes": 30244864,
+      "cpuMs": 122.64054199999998,
+      "ioMs": 231.37350000000004,
+      "networkMs": 19.198833000000036,
+      "cpu": {
+        "user": 140222,
+        "system": 125951
+      },
+      "idleCpu": {
+        "user": 1893,
+        "system": 758
+      },
+      "rss": 8963520,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 9152,
+        "system": 2919
+      }
+    },
+    {
+      "sample": 6,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 11040,
+      "startupParentCpu": {
+        "user": 2915,
+        "system": 416
+      },
+      "totalCpuMs": 169.99999999999997,
+      "readyMs": 14.715917000001355,
+      "treeBytes": 29327360,
+      "cpuMs": 93.324833,
+      "ioMs": 123.81245799999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 106307,
+        "system": 51036
+      },
+      "idleCpu": {
+        "user": 2137,
+        "system": 1163
+      },
+      "rss": 8455680,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 590,
+        "system": 68
+      }
+    },
+    {
+      "sample": 6,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 16568,
+      "startupParentCpu": {
+        "user": 5173,
+        "system": 2431
+      },
+      "totalCpuMs": 200,
+      "readyMs": 35.225750000005064,
+      "treeBytes": 29327360,
+      "cpuMs": 103.55616699999999,
+      "ioMs": 114.95933399999998,
+      "networkMs": null,
+      "cpu": {
+        "user": 115151,
+        "system": 58772
+      },
+      "idleCpu": {
+        "user": 2291,
+        "system": 1253
+      },
+      "rss": 8422848,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 617,
+        "system": 104
+      }
+    },
+    {
+      "sample": 6,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 13504,
+      "startupParentCpu": {
+        "user": 2620,
+        "system": 417
+      },
+      "totalCpuMs": 240,
+      "readyMs": 15.244124999997439,
+      "treeBytes": 30359552,
+      "cpuMs": 97.210667,
+      "ioMs": 223.726375,
+      "networkMs": 28.378709000000015,
+      "cpu": {
+        "user": 118656,
+        "system": 111688
+      },
+      "idleCpu": {
+        "user": 2593,
+        "system": 1415
+      },
+      "rss": 9078336,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 18902,
+        "system": 5360
+      }
+    },
+    {
+      "sample": 6,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 84384,
+      "startupParentCpu": {
+        "user": 3298,
+        "system": 963
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 28.954416000000492,
+      "treeBytes": 30162944,
+      "cpuMs": 104.84683299999999,
+      "ioMs": 113.27516699999998,
+      "networkMs": 64.30875,
+      "cpu": {
+        "user": 122879,
+        "system": 66080
+      },
+      "idleCpu": {
+        "user": 1816,
+        "system": 1147
+      },
+      "rss": 8963584,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 47162,
+        "system": 10279
+      }
+    },
+    {
+      "sample": 7,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 17592,
+      "startupParentCpu": {
+        "user": 4778,
+        "system": 867
+      },
+      "totalCpuMs": 200,
+      "readyMs": 27.658833000001323,
+      "treeBytes": 29687808,
+      "cpuMs": 100.903334,
+      "ioMs": 135.225333,
+      "networkMs": null,
+      "cpu": {
+        "user": 114970,
+        "system": 65477
+      },
+      "idleCpu": {
+        "user": 2765,
+        "system": 1434
+      },
+      "rss": 8586752,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1823,
+        "system": 59
+      }
+    },
+    {
+      "sample": 7,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8992,
+      "startupParentCpu": {
+        "user": 2134,
+        "system": 595
+      },
+      "totalCpuMs": 190,
+      "readyMs": 16.875082999998995,
+      "treeBytes": 29294592,
+      "cpuMs": 103.188541,
+      "ioMs": 108.517583,
+      "networkMs": null,
+      "cpu": {
+        "user": 115363,
+        "system": 57892
+      },
+      "idleCpu": {
+        "user": 2467,
+        "system": 1243
+      },
+      "rss": 8406400,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 327,
+        "system": 63
+      }
+    },
+    {
+      "sample": 7,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 54216,
+      "startupParentCpu": {
+        "user": 4017,
+        "system": 780
+      },
+      "totalCpuMs": 190,
+      "readyMs": 27.960124999997788,
+      "treeBytes": 30343168,
+      "cpuMs": 96.391042,
+      "ioMs": 111.42099999999999,
+      "networkMs": 42.29374999999999,
+      "cpu": {
+        "user": 111102,
+        "system": 58972
+      },
+      "idleCpu": {
+        "user": 2572,
+        "system": 1237
+      },
+      "rss": 8783424,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 32086,
+        "system": 7864
+      }
+    },
+    {
+      "sample": 7,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -23648,
+      "startupParentCpu": {
+        "user": 3390,
+        "system": 523
+      },
+      "totalCpuMs": 230,
+      "readyMs": 18.69562500000029,
+      "treeBytes": 30932992,
+      "cpuMs": 105.85033299999998,
+      "ioMs": 128.653375,
+      "networkMs": 16.555000000000007,
+      "cpu": {
+        "user": 126136,
+        "system": 88006
+      },
+      "idleCpu": {
+        "user": 4482,
+        "system": 1185
+      },
+      "rss": 9144000,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7357,
+        "system": 2402
+      }
+    },
+    {
+      "sample": 8,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 6352,
+      "startupParentCpu": {
+        "user": 2620,
+        "system": 390
+      },
+      "totalCpuMs": 230,
+      "readyMs": 25.24199999999837,
+      "treeBytes": 29442048,
+      "cpuMs": 114.946416,
+      "ioMs": 176.55091700000003,
+      "networkMs": null,
+      "cpu": {
+        "user": 124870,
+        "system": 77198
+      },
+      "idleCpu": {
+        "user": 1897,
+        "system": 1122
+      },
+      "rss": 8504832,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 765,
+        "system": 116
+      }
+    },
+    {
+      "sample": 8,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 14584,
+      "startupParentCpu": {
+        "user": 3704,
+        "system": 1273
+      },
+      "totalCpuMs": 200,
+      "readyMs": 32.77520899999945,
+      "treeBytes": 29474816,
+      "cpuMs": 103.19054200000001,
+      "ioMs": 111.707041,
+      "networkMs": null,
+      "cpu": {
+        "user": 115019,
+        "system": 58800
+      },
+      "idleCpu": {
+        "user": 2703,
+        "system": 1115
+      },
+      "rss": 8619456,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 500,
+        "system": 127
+      }
+    },
+    {
+      "sample": 8,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 32832,
+      "startupParentCpu": {
+        "user": 3461,
+        "system": 696
+      },
+      "totalCpuMs": 200,
+      "readyMs": 21.652125000000524,
+      "treeBytes": 30703616,
+      "cpuMs": 93.709209,
+      "ioMs": 114.83158300000001,
+      "networkMs": 18.566457999999983,
+      "cpu": {
+        "user": 110180,
+        "system": 62004
+      },
+      "idleCpu": {
+        "user": 2150,
+        "system": 1316
+      },
+      "rss": 9061824,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 5594,
+        "system": 2856
+      }
+    },
+    {
+      "sample": 8,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 41128,
+      "startupParentCpu": {
+        "user": 3716,
+        "system": 975
+      },
+      "totalCpuMs": 200,
+      "readyMs": 31.5030409999963,
+      "treeBytes": 30113792,
+      "cpuMs": 102.21091700000002,
+      "ioMs": 103.514667,
+      "networkMs": 48.80120899999997,
+      "cpu": {
+        "user": 116255,
+        "system": 64055
+      },
+      "idleCpu": {
+        "user": 1688,
+        "system": 894
+      },
+      "rss": 9012800,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 31350,
+        "system": 8892
+      }
+    },
+    {
+      "sample": 9,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -7232,
+      "startupParentCpu": {
+        "user": 3432,
+        "system": 1425
+      },
+      "totalCpuMs": 200,
+      "readyMs": 34.48424999999406,
+      "treeBytes": 29900800,
+      "cpuMs": 99.26416600000002,
+      "ioMs": 117.99129200000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 114010,
+        "system": 61047
+      },
+      "idleCpu": {
+        "user": 3644,
+        "system": 2049
+      },
+      "rss": 8652288,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 779,
+        "system": 56
+      }
+    },
+    {
+      "sample": 9,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8744,
+      "startupParentCpu": {
+        "user": 2561,
+        "system": 533
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 26.304792000002635,
+      "treeBytes": 29409280,
+      "cpuMs": 110.359125,
+      "ioMs": 111.31441700000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 123160,
+        "system": 62973
+      },
+      "idleCpu": {
+        "user": 2097,
+        "system": 1290
+      },
+      "rss": 8570304,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 852,
+        "system": 79
+      }
+    },
+    {
+      "sample": 9,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 54464,
+      "startupParentCpu": {
+        "user": 3411,
+        "system": 829
+      },
+      "totalCpuMs": 200,
+      "readyMs": 27.417333999997936,
+      "treeBytes": 30146560,
+      "cpuMs": 93.40070799999998,
+      "ioMs": 130.97991600000003,
+      "networkMs": 41.64045900000002,
+      "cpu": {
+        "user": 109424,
+        "system": 64400
+      },
+      "idleCpu": {
+        "user": 1796,
+        "system": 1136
+      },
+      "rss": 8979840,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 25353,
+        "system": 7589
+      }
+    },
+    {
+      "sample": 9,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -3800,
+      "startupParentCpu": {
+        "user": 2383,
+        "system": 518
+      },
+      "totalCpuMs": 250,
+      "readyMs": 24.806499999998778,
+      "treeBytes": 30326784,
+      "cpuMs": 114.922,
+      "ioMs": 123.29233300000001,
+      "networkMs": 23.033000000000015,
+      "cpu": {
+        "user": 135978,
+        "system": 95812
+      },
+      "idleCpu": {
+        "user": 2519,
+        "system": 885
+      },
+      "rss": 9029056,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 13056,
+        "system": 3562
+      }
+    },
+    {
+      "sample": 10,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8200,
+      "startupParentCpu": {
+        "user": 3036,
+        "system": 789
+      },
+      "totalCpuMs": 270,
+      "readyMs": 42.109499999991385,
+      "treeBytes": 29523968,
+      "cpuMs": 121.519625,
+      "ioMs": 152.50708300000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 137291,
+        "system": 92075
+      },
+      "idleCpu": {
+        "user": 2592,
+        "system": 1534
+      },
+      "rss": 8635968,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 2637,
+        "system": 116
+      }
+    },
+    {
+      "sample": 10,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 30680,
+      "startupParentCpu": {
+        "user": 5153,
+        "system": 1547
+      },
+      "totalCpuMs": 280,
+      "readyMs": 44.65320899999642,
+      "treeBytes": 29507584,
+      "cpuMs": 115.504292,
+      "ioMs": 174.95449999999997,
+      "networkMs": null,
+      "cpu": {
+        "user": 134846,
+        "system": 101833
+      },
+      "idleCpu": {
+        "user": 1911,
+        "system": 1356
+      },
+      "rss": 8717760,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 588,
+        "system": 76
+      }
+    },
+    {
+      "sample": 10,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -1704,
+      "startupParentCpu": {
+        "user": 2545,
+        "system": 497
+      },
+      "totalCpuMs": 270,
+      "readyMs": 25.449208000005456,
+      "treeBytes": 30507008,
+      "cpuMs": 114.915458,
+      "ioMs": 149.93045799999996,
+      "networkMs": 23.505999999999972,
+      "cpu": {
+        "user": 135226,
+        "system": 116855
+      },
+      "idleCpu": {
+        "user": 2150,
+        "system": 1227
+      },
+      "rss": 9176640,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7564,
+        "system": 3892
+      }
+    },
+    {
+      "sample": 10,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 48664,
+      "startupParentCpu": {
+        "user": 4470,
+        "system": 1287
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 47.72650000000431,
+      "treeBytes": 30343168,
+      "cpuMs": 100.571041,
+      "ioMs": 114.62191700000002,
+      "networkMs": 53.275417000000004,
+      "cpu": {
+        "user": 116510,
+        "system": 65363
+      },
+      "idleCpu": {
+        "user": 2010,
+        "system": 1327
+      },
+      "rss": 9094784,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 30823,
+        "system": 9083
+      }
+    },
+    {
+      "sample": 11,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -5888,
+      "startupParentCpu": {
+        "user": 4472,
+        "system": 816
+      },
+      "totalCpuMs": 200,
+      "readyMs": 31.203957999998238,
+      "treeBytes": 29786112,
+      "cpuMs": 99.62899999999999,
+      "ioMs": 108.50479100000001,
+      "networkMs": null,
+      "cpu": {
+        "user": 111161,
+        "system": 65650
+      },
+      "idleCpu": {
+        "user": 2360,
+        "system": 1270
+      },
+      "rss": 8685056,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1141,
+        "system": 91
+      }
+    },
+    {
+      "sample": 11,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8216,
+      "startupParentCpu": {
+        "user": 2437,
+        "system": 519
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 22.633250000013504,
+      "treeBytes": 29753344,
+      "cpuMs": 105.123042,
+      "ioMs": 120.30320900000001,
+      "networkMs": null,
+      "cpu": {
+        "user": 118108,
+        "system": 70654
+      },
+      "idleCpu": {
+        "user": 1988,
+        "system": 950
+      },
+      "rss": 8684992,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 640,
+        "system": 61
+      }
+    },
+    {
+      "sample": 11,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 75616,
+      "startupParentCpu": {
+        "user": 4125,
+        "system": 1145
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 35.146667000008165,
+      "treeBytes": 30638080,
+      "cpuMs": 105.650833,
+      "ioMs": 111.53191600000002,
+      "networkMs": 57.20883300000003,
+      "cpu": {
+        "user": 121072,
+        "system": 64561
+      },
+      "idleCpu": {
+        "user": 1787,
+        "system": 1264
+      },
+      "rss": 9094656,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 56724,
+        "system": 9715
+      }
+    },
+    {
+      "sample": 11,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -6072,
+      "startupParentCpu": {
+        "user": 2541,
+        "system": 559
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 36.30670800000371,
+      "treeBytes": 30670848,
+      "cpuMs": 104.418958,
+      "ioMs": 86.89425,
+      "networkMs": 15.148416999999995,
+      "cpu": {
+        "user": 119280,
+        "system": 62255
+      },
+      "idleCpu": {
+        "user": 2243,
+        "system": 1192
+      },
+      "rss": 9193024,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 9447,
+        "system": 2870
+      }
+    },
+    {
+      "sample": 12,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": -7648,
+      "startupParentCpu": {
+        "user": 2464,
+        "system": 484
+      },
+      "totalCpuMs": 250,
+      "readyMs": 29.73887499999546,
+      "treeBytes": 29556736,
+      "cpuMs": 116.658542,
+      "ioMs": 150.153584,
+      "networkMs": null,
+      "cpu": {
+        "user": 129733,
+        "system": 92545
+      },
+      "idleCpu": {
+        "user": 1955,
+        "system": 616
+      },
+      "rss": 12715392,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1141,
+        "system": 73
+      }
+    },
+    {
+      "sample": 12,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 15776,
+      "startupParentCpu": {
+        "user": 7500,
+        "system": 996
+      },
+      "totalCpuMs": 260,
+      "readyMs": 45.27462499999092,
+      "treeBytes": 29491200,
+      "cpuMs": 109.37545899999999,
+      "ioMs": 134.817208,
+      "networkMs": null,
+      "cpu": {
+        "user": 123657,
+        "system": 90088
+      },
+      "idleCpu": {
+        "user": 2286,
+        "system": 1424
+      },
+      "rss": 8684992,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 542,
+        "system": 98
+      }
+    },
+    {
+      "sample": 12,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 12648,
+      "startupParentCpu": {
+        "user": 2212,
+        "system": 485
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 29.487750000000233,
+      "treeBytes": 30228480,
+      "cpuMs": 106.21104199999999,
+      "ioMs": 129.81170800000004,
+      "networkMs": 23.418457999999987,
+      "cpu": {
+        "user": 122662,
+        "system": 73320
+      },
+      "idleCpu": {
+        "user": 1905,
+        "system": 1317
+      },
+      "rss": 8979968,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 10700,
+        "system": 3980
+      }
+    },
+    {
+      "sample": 12,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 46472,
+      "startupParentCpu": {
+        "user": 3121,
+        "system": 933
+      },
+      "totalCpuMs": 240,
+      "readyMs": 40.64054199999373,
+      "treeBytes": 30457856,
+      "cpuMs": 109.44091700000001,
+      "ioMs": 117.43608400000002,
+      "networkMs": 77.66950000000003,
+      "cpu": {
+        "user": 127953,
+        "system": 82916
+      },
+      "idleCpu": {
+        "user": 2239,
+        "system": 1639
+      },
+      "rss": 9242112,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 71424,
+        "system": 11327
+      }
+    },
+    {
+      "sample": 13,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -5000,
+      "startupParentCpu": {
+        "user": 3736,
+        "system": 868
+      },
+      "totalCpuMs": 240,
+      "readyMs": 40.728791000001365,
+      "treeBytes": 29491200,
+      "cpuMs": 105.263667,
+      "ioMs": 126.37749999999997,
+      "networkMs": null,
+      "cpu": {
+        "user": 120049,
+        "system": 82351
+      },
+      "idleCpu": {
+        "user": 2729,
+        "system": 1665
+      },
+      "rss": 8422848,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 621,
+        "system": 92
+      }
+    },
+    {
+      "sample": 13,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 19960,
+      "startupParentCpu": {
+        "user": 5789,
+        "system": 827
+      },
+      "totalCpuMs": 200,
+      "readyMs": 27.106749999991735,
+      "treeBytes": 29671424,
+      "cpuMs": 96.21116699999999,
+      "ioMs": 120.24912500000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 110876,
+        "system": 69397
+      },
+      "idleCpu": {
+        "user": 1947,
+        "system": 1400
+      },
+      "rss": 8603072,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 342,
+        "system": 62
+      }
+    },
+    {
+      "sample": 13,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 43488,
+      "startupParentCpu": {
+        "user": 3798,
+        "system": 854
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 40.07229099998949,
+      "treeBytes": 30326784,
+      "cpuMs": 103.32408400000001,
+      "ioMs": 113.70483300000001,
+      "networkMs": 51.08487500000001,
+      "cpu": {
+        "user": 120349,
+        "system": 71443
+      },
+      "idleCpu": {
+        "user": 2348,
+        "system": 1429
+      },
+      "rss": 9225728,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 37004,
+        "system": 8387
+      }
+    },
+    {
+      "sample": 13,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -6240,
+      "startupParentCpu": {
+        "user": 3145,
+        "system": 806
+      },
+      "totalCpuMs": 200,
+      "readyMs": 22.138208000003942,
+      "treeBytes": 30670848,
+      "cpuMs": 103.51766699999999,
+      "ioMs": 114.013959,
+      "networkMs": 19.543957999999975,
+      "cpu": {
+        "user": 119595,
+        "system": 68787
+      },
+      "idleCpu": {
+        "user": 1799,
+        "system": 1065
+      },
+      "rss": 9029056,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 6539,
+        "system": 2867
+      }
+    },
+    {
+      "sample": 14,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 9168,
+      "startupParentCpu": {
+        "user": 2731,
+        "system": 583
+      },
+      "totalCpuMs": 260,
+      "readyMs": 38.44437499999185,
+      "treeBytes": 28884992,
+      "cpuMs": 121.28712499999999,
+      "ioMs": 148.66724999999997,
+      "networkMs": null,
+      "cpu": {
+        "user": 133091,
+        "system": 91898
+      },
+      "idleCpu": {
+        "user": 2919,
+        "system": 1056
+      },
+      "rss": 8308224,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 4996,
+        "system": 145
+      }
+    },
+    {
+      "sample": 14,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 1152,
+      "startupParentCpu": {
+        "user": 4798,
+        "system": 1487
+      },
+      "totalCpuMs": 200,
+      "readyMs": 45.07766600001196,
+      "treeBytes": 29294592,
+      "cpuMs": 95.072416,
+      "ioMs": 125.11204100000003,
+      "networkMs": null,
+      "cpu": {
+        "user": 109003,
+        "system": 60099
+      },
+      "idleCpu": {
+        "user": 2018,
+        "system": 1485
+      },
+      "rss": 8439232,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 461,
+        "system": 114
+      }
+    },
+    {
+      "sample": 14,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 15616,
+      "startupParentCpu": {
+        "user": 3857,
+        "system": 674
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 24.865582999991602,
+      "treeBytes": 30294016,
+      "cpuMs": 102.56695799999999,
+      "ioMs": 117.69816700000001,
+      "networkMs": 23.151834000000008,
+      "cpu": {
+        "user": 119521,
+        "system": 71623
+      },
+      "idleCpu": {
+        "user": 1485,
+        "system": 743
+      },
+      "rss": 9143808,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 8953,
+        "system": 3302
+      }
+    },
+    {
+      "sample": 14,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 90864,
+      "startupParentCpu": {
+        "user": 5353,
+        "system": 1641
+      },
+      "totalCpuMs": 270,
+      "readyMs": 38.181375000000116,
+      "treeBytes": 30539776,
+      "cpuMs": 117.57720800000001,
+      "ioMs": 142.70108300000004,
+      "networkMs": 58.083624999999984,
+      "cpu": {
+        "user": 131234,
+        "system": 103758
+      },
+      "idleCpu": {
+        "user": 2038,
+        "system": 1213
+      },
+      "rss": 9258496,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 48425,
+        "system": 8997
+      }
+    },
+    {
+      "sample": 15,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -10840,
+      "startupParentCpu": {
+        "user": 3645,
+        "system": 1112
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 32.15287499999977,
+      "treeBytes": 29605888,
+      "cpuMs": 109.76887500000001,
+      "ioMs": 122.693792,
+      "networkMs": null,
+      "cpu": {
+        "user": 124029,
+        "system": 70847
+      },
+      "idleCpu": {
+        "user": 1784,
+        "system": 1013
+      },
+      "rss": 12666240,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 606,
+        "system": 67
+      }
+    },
+    {
+      "sample": 15,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8584,
+      "startupParentCpu": {
+        "user": 2496,
+        "system": 518
+      },
+      "totalCpuMs": 200,
+      "readyMs": 26.75729200000933,
+      "treeBytes": 29868032,
+      "cpuMs": 101.460959,
+      "ioMs": 116.03287500000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 113868,
+        "system": 60538
+      },
+      "idleCpu": {
+        "user": 2216,
+        "system": 1267
+      },
+      "rss": 8635840,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 4715,
+        "system": 71
+      }
+    },
+    {
+      "sample": 15,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 34160,
+      "startupParentCpu": {
+        "user": 4716,
+        "system": 1158
+      },
+      "totalCpuMs": 260,
+      "readyMs": 38.910166999994544,
+      "treeBytes": 30081024,
+      "cpuMs": 110.89166699999998,
+      "ioMs": 121.60637500000001,
+      "networkMs": 54.17841600000003,
+      "cpu": {
+        "user": 129225,
+        "system": 86769
+      },
+      "idleCpu": {
+        "user": 1663,
+        "system": 980
+      },
+      "rss": 8832512,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 42011,
+        "system": 8689
+      }
+    },
+    {
+      "sample": 15,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -6200,
+      "startupParentCpu": {
+        "user": 4944,
+        "system": 601
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 24.45233400000143,
+      "treeBytes": 30326784,
+      "cpuMs": 105.57674999999999,
+      "ioMs": 128.71537499999997,
+      "networkMs": 21.21629200000001,
+      "cpu": {
+        "user": 121941,
+        "system": 76637
+      },
+      "idleCpu": {
+        "user": 1782,
+        "system": 1256
+      },
+      "rss": 9078272,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7630,
+        "system": 3280
+      }
+    },
+    {
+      "sample": 16,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 4872,
+      "startupParentCpu": {
+        "user": 2283,
+        "system": 671
+      },
+      "totalCpuMs": 230,
+      "readyMs": 24.6650410000002,
+      "treeBytes": 29622272,
+      "cpuMs": 106.044958,
+      "ioMs": 159.946708,
+      "networkMs": null,
+      "cpu": {
+        "user": 122861,
+        "system": 94417
+      },
+      "idleCpu": {
+        "user": 2575,
+        "system": 721
+      },
+      "rss": 8701376,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1754,
+        "system": 76
+      }
+    },
+    {
+      "sample": 16,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 13720,
+      "startupParentCpu": {
+        "user": 5030,
+        "system": 3147
+      },
+      "totalCpuMs": 240,
+      "readyMs": 54.776083999997354,
+      "treeBytes": 29523968,
+      "cpuMs": 109.846625,
+      "ioMs": 125.43624999999997,
+      "networkMs": null,
+      "cpu": {
+        "user": 122324,
+        "system": 75024
+      },
+      "idleCpu": {
+        "user": 2289,
+        "system": 1368
+      },
+      "rss": 8455680,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1014,
+        "system": 83
+      }
+    },
+    {
+      "sample": 16,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 29040,
+      "startupParentCpu": {
+        "user": 3311,
+        "system": 485
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 23.71249999999418,
+      "treeBytes": 30687232,
+      "cpuMs": 108.677333,
+      "ioMs": 116.008625,
+      "networkMs": 22.604917,
+      "cpu": {
+        "user": 122643,
+        "system": 73363
+      },
+      "idleCpu": {
+        "user": 1930,
+        "system": 1566
+      },
+      "rss": 9045568,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 9346,
+        "system": 3574
+      }
+    },
+    {
+      "sample": 16,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 34992,
+      "startupParentCpu": {
+        "user": 3723,
+        "system": 1279
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 35.53170799999498,
+      "treeBytes": 30490624,
+      "cpuMs": 103.25241700000001,
+      "ioMs": 111.64008300000003,
+      "networkMs": 60.002250000000004,
+      "cpu": {
+        "user": 121544,
+        "system": 70372
+      },
+      "idleCpu": {
+        "user": 2086,
+        "system": 1383
+      },
+      "rss": 9061952,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 40443,
+        "system": 9506
+      }
+    },
+    {
+      "sample": 17,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -8016,
+      "startupParentCpu": {
+        "user": 3146,
+        "system": 813
+      },
+      "totalCpuMs": 270,
+      "readyMs": 45.49550000000454,
+      "treeBytes": 29638656,
+      "cpuMs": 114.05995899999999,
+      "ioMs": 133.00500000000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 129305,
+        "system": 96550
+      },
+      "idleCpu": {
+        "user": 2093,
+        "system": 1402
+      },
+      "rss": 8586624,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 557,
+        "system": 86
+      }
+    },
+    {
+      "sample": 17,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 5192,
+      "startupParentCpu": {
+        "user": 2765,
+        "system": 634
+      },
+      "totalCpuMs": 200,
+      "readyMs": 22.20916600000055,
+      "treeBytes": 29720576,
+      "cpuMs": 103.693041,
+      "ioMs": 114.27766599999998,
+      "networkMs": null,
+      "cpu": {
+        "user": 116534,
+        "system": 60458
+      },
+      "idleCpu": {
+        "user": 1847,
+        "system": 1118
+      },
+      "rss": 8750464,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 6028,
+        "system": 96
+      }
+    },
+    {
+      "sample": 17,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 31408,
+      "startupParentCpu": {
+        "user": 4061,
+        "system": 848
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 32.94991699999082,
+      "treeBytes": 30195712,
+      "cpuMs": 103.89987500000001,
+      "ioMs": 106.52404200000001,
+      "networkMs": 53.50491699999998,
+      "cpu": {
+        "user": 118492,
+        "system": 69630
+      },
+      "idleCpu": {
+        "user": 1884,
+        "system": 1085
+      },
+      "rss": 8979968,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 38948,
+        "system": 9428
+      }
+    },
+    {
+      "sample": 17,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -3288,
+      "startupParentCpu": {
+        "user": 2807,
+        "system": 643
+      },
+      "totalCpuMs": 230,
+      "readyMs": 31.299958000003244,
+      "treeBytes": 30359552,
+      "cpuMs": 105.957917,
+      "ioMs": 118.9555,
+      "networkMs": 18.419624999999996,
+      "cpu": {
+        "user": 121539,
+        "system": 78311
+      },
+      "idleCpu": {
+        "user": 1834,
+        "system": 1179
+      },
+      "rss": 9094592,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7924,
+        "system": 3164
+      }
+    },
+    {
+      "sample": 18,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 5464,
+      "startupParentCpu": {
+        "user": 2820,
+        "system": 706
+      },
+      "totalCpuMs": 200,
+      "readyMs": 22.1127919999999,
+      "treeBytes": 29605888,
+      "cpuMs": 102.280584,
+      "ioMs": 114.292833,
+      "networkMs": null,
+      "cpu": {
+        "user": 114248,
+        "system": 60636
+      },
+      "idleCpu": {
+        "user": 1778,
+        "system": 819
+      },
+      "rss": 8521152,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 5904,
+        "system": 86
+      }
+    },
+    {
+      "sample": 18,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 192,
+      "startupParentCpu": {
+        "user": 3684,
+        "system": 1419
+      },
+      "totalCpuMs": 300.00000000000006,
+      "readyMs": 53.41049999999814,
+      "treeBytes": 29425664,
+      "cpuMs": 119.037292,
+      "ioMs": 221.832083,
+      "networkMs": null,
+      "cpu": {
+        "user": 129127,
+        "system": 118467
+      },
+      "idleCpu": {
+        "user": 2158,
+        "system": 1360
+      },
+      "rss": 8537536,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 751,
+        "system": 101
+      }
+    },
+    {
+      "sample": 18,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 14752,
+      "startupParentCpu": {
+        "user": 2528,
+        "system": 559
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 22.656499999997322,
+      "treeBytes": 30277632,
+      "cpuMs": 105.69045799999999,
+      "ioMs": 117.14358300000004,
+      "networkMs": 24.135875,
+      "cpu": {
+        "user": 123759,
+        "system": 75249
+      },
+      "idleCpu": {
+        "user": 5252,
+        "system": 3289
+      },
+      "rss": 9029184,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 11964,
+        "system": 3921
+      }
+    },
+    {
+      "sample": 18,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 74104,
+      "startupParentCpu": {
+        "user": 3857,
+        "system": 1238
+      },
+      "totalCpuMs": 260,
+      "readyMs": 47.19612500000221,
+      "treeBytes": 30654464,
+      "cpuMs": 109.04325,
+      "ioMs": 119.49108400000003,
+      "networkMs": 49.93783399999995,
+      "cpu": {
+        "user": 127472,
+        "system": 88484
+      },
+      "idleCpu": {
+        "user": 1877,
+        "system": 1156
+      },
+      "rss": 9094656,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 38861,
+        "system": 8817
+      }
+    },
+    {
+      "sample": 19,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 4672,
+      "startupParentCpu": {
+        "user": 3313,
+        "system": 1092
+      },
+      "totalCpuMs": 250,
+      "readyMs": 39.27520800000639,
+      "treeBytes": 29884416,
+      "cpuMs": 106.15275,
+      "ioMs": 119.70654100000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 124534,
+        "system": 83133
+      },
+      "idleCpu": {
+        "user": 2746,
+        "system": 1429
+      },
+      "rss": 8635840,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1139,
+        "system": 81
+      }
+    },
+    {
+      "sample": 19,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 4280,
+      "startupParentCpu": {
+        "user": 2886,
+        "system": 756
+      },
+      "totalCpuMs": 230,
+      "readyMs": 32.498833000005106,
+      "treeBytes": 29589504,
+      "cpuMs": 106.844291,
+      "ioMs": 124.04179100000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 120270,
+        "system": 80458
+      },
+      "idleCpu": {
+        "user": 1926,
+        "system": 1151
+      },
+      "rss": 8766976,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 505,
+        "system": 94
+      }
+    },
+    {
+      "sample": 19,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 38872,
+      "startupParentCpu": {
+        "user": 3855,
+        "system": 1163
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 34.62841600000684,
+      "treeBytes": 30343168,
+      "cpuMs": 105.79904200000001,
+      "ioMs": 117.74558400000001,
+      "networkMs": 54.90779200000003,
+      "cpu": {
+        "user": 123192,
+        "system": 70918
+      },
+      "idleCpu": {
+        "user": 1802,
+        "system": 1084
+      },
+      "rss": 8848768,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 37364,
+        "system": 8919
+      }
+    },
+    {
+      "sample": 19,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -8368,
+      "startupParentCpu": {
+        "user": 2364,
+        "system": 469
+      },
+      "totalCpuMs": 200,
+      "readyMs": 21.15487500000745,
+      "treeBytes": 30507008,
+      "cpuMs": 98.69162500000002,
+      "ioMs": 151.76695800000002,
+      "networkMs": 17.051874999999995,
+      "cpu": {
+        "user": 111907,
+        "system": 68811
+      },
+      "idleCpu": {
+        "user": 1651,
+        "system": 992
+      },
+      "rss": 9127424,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 5281,
+        "system": 2928
+      }
+    },
+    {
+      "sample": 20,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 25312,
+      "startupParentCpu": {
+        "user": 2336,
+        "system": 543
+      },
+      "totalCpuMs": 190,
+      "readyMs": 21.106667000000016,
+      "treeBytes": 29868032,
+      "cpuMs": 103.026208,
+      "ioMs": 113.34633300000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 114975,
+        "system": 58997
+      },
+      "idleCpu": {
+        "user": 1663,
+        "system": 952
+      },
+      "rss": 8767040,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 440,
+        "system": 53
+      }
+    },
+    {
+      "sample": 20,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 12064,
+      "startupParentCpu": {
+        "user": 3507,
+        "system": 1275
+      },
+      "totalCpuMs": 280,
+      "readyMs": 47.65570899999875,
+      "treeBytes": 29753344,
+      "cpuMs": 118.33695900000001,
+      "ioMs": 153.14633299999997,
+      "networkMs": null,
+      "cpu": {
+        "user": 132188,
+        "system": 103168
+      },
+      "idleCpu": {
+        "user": 2884,
+        "system": 1288
+      },
+      "rss": 8701440,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 1743,
+        "system": 118
+      }
+    },
+    {
+      "sample": 20,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 10664,
+      "startupParentCpu": {
+        "user": 2681,
+        "system": 574
+      },
+      "totalCpuMs": 250,
+      "readyMs": 23.163457999995444,
+      "treeBytes": 30195712,
+      "cpuMs": 124.31391699999999,
+      "ioMs": 117.16229199999998,
+      "networkMs": 21.753332999999998,
+      "cpu": {
+        "user": 139329,
+        "system": 84623
+      },
+      "idleCpu": {
+        "user": 1950,
+        "system": 1290
+      },
+      "rss": 9029248,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 8317,
+        "system": 3145
+      }
+    },
+    {
+      "sample": 20,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 55680,
+      "startupParentCpu": {
+        "user": 2021,
+        "system": 1231
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 36.04358400001365,
+      "treeBytes": 30326784,
+      "cpuMs": 104.227542,
+      "ioMs": 113.709,
+      "networkMs": 52.093208000000004,
+      "cpu": {
+        "user": 119902,
+        "system": 71359
+      },
+      "idleCpu": {
+        "user": 1708,
+        "system": 1132
+      },
+      "rss": 9029120,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 42621,
+        "system": 8728
+      }
+    },
+    {
+      "sample": 21,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -22704,
+      "startupParentCpu": {
+        "user": 3131,
+        "system": 977
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 36.78766699999687,
+      "treeBytes": 29196288,
+      "cpuMs": 104.27729100000002,
+      "ioMs": 117.857167,
+      "networkMs": null,
+      "cpu": {
+        "user": 117531,
+        "system": 66231
+      },
+      "idleCpu": {
+        "user": 1771,
+        "system": 1039
+      },
+      "rss": 8439296,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 388,
+        "system": 73
+      }
+    },
+    {
+      "sample": 21,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 10200,
+      "startupParentCpu": {
+        "user": 3088,
+        "system": 455
+      },
+      "totalCpuMs": 210,
+      "readyMs": 20.930999999996857,
+      "treeBytes": 29523968,
+      "cpuMs": 94.71958299999999,
+      "ioMs": 196.104959,
+      "networkMs": null,
+      "cpu": {
+        "user": 108111,
+        "system": 83575
+      },
+      "idleCpu": {
+        "user": 1992,
+        "system": 1105
+      },
+      "rss": 8668672,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 619,
+        "system": 84
+      }
+    },
+    {
+      "sample": 21,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 46520,
+      "startupParentCpu": {
+        "user": 3065,
+        "system": 834
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 33.06695900000341,
+      "treeBytes": 30162944,
+      "cpuMs": 106.71875,
+      "ioMs": 117.62816699999999,
+      "networkMs": 51.293334000000016,
+      "cpu": {
+        "user": 124245,
+        "system": 73924
+      },
+      "idleCpu": {
+        "user": 2207,
+        "system": 1144
+      },
+      "rss": 9078336,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 36549,
+        "system": 8717
+      }
+    },
+    {
+      "sample": 21,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -15160,
+      "startupParentCpu": {
+        "user": 2631,
+        "system": 538
+      },
+      "totalCpuMs": 200,
+      "readyMs": 25.95595800000592,
+      "treeBytes": 30654464,
+      "cpuMs": 98.71699999999998,
+      "ioMs": 117.35541700000002,
+      "networkMs": 18.410832999999997,
+      "cpu": {
+        "user": 114596,
+        "system": 62602
+      },
+      "idleCpu": {
+        "user": 1808,
+        "system": 1163
+      },
+      "rss": 9094528,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7467,
+        "system": 2844
+      }
+    },
+    {
+      "sample": 22,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": -6064,
+      "startupParentCpu": {
+        "user": 2619,
+        "system": 578
+      },
+      "totalCpuMs": 200,
+      "readyMs": 23.252000000007683,
+      "treeBytes": 29687808,
+      "cpuMs": 102.663959,
+      "ioMs": 89.654958,
+      "networkMs": null,
+      "cpu": {
+        "user": 114143,
+        "system": 60834
+      },
+      "idleCpu": {
+        "user": 1746,
+        "system": 1151
+      },
+      "rss": 8603072,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 351,
+        "system": 76
+      }
+    },
+    {
+      "sample": 22,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 16328,
+      "startupParentCpu": {
+        "user": 4781,
+        "system": 776
+      },
+      "totalCpuMs": 260,
+      "readyMs": 35.83970800001407,
+      "treeBytes": 29147136,
+      "cpuMs": 117.316708,
+      "ioMs": 154.27987499999998,
+      "networkMs": null,
+      "cpu": {
+        "user": 130686,
+        "system": 98932
+      },
+      "idleCpu": {
+        "user": 1951,
+        "system": 820
+      },
+      "rss": 12371392,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 2426,
+        "system": 111
+      }
+    },
+    {
+      "sample": 22,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 29496,
+      "startupParentCpu": {
+        "user": 2952,
+        "system": 1071
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 25.35479199999827,
+      "treeBytes": 30834688,
+      "cpuMs": 103.884792,
+      "ioMs": 116.15737499999997,
+      "networkMs": 22.867999999999995,
+      "cpu": {
+        "user": 122570,
+        "system": 70397
+      },
+      "idleCpu": {
+        "user": 2361,
+        "system": 1144
+      },
+      "rss": 9111104,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7859,
+        "system": 3720
+      }
+    },
+    {
+      "sample": 22,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 43768,
+      "startupParentCpu": {
+        "user": 3708,
+        "system": 1090
+      },
+      "totalCpuMs": 260,
+      "readyMs": 27.35158399998909,
+      "treeBytes": 30113792,
+      "cpuMs": 122.102292,
+      "ioMs": 177.427209,
+      "networkMs": 66.87649999999996,
+      "cpu": {
+        "user": 140861,
+        "system": 91841
+      },
+      "idleCpu": {
+        "user": 1944,
+        "system": 1751
+      },
+      "rss": 9029184,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 52523,
+        "system": 10431
+      }
+    },
+    {
+      "sample": 23,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -8912,
+      "startupParentCpu": {
+        "user": 3264,
+        "system": 1029
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 33.73141700000269,
+      "treeBytes": 29786112,
+      "cpuMs": 102.666292,
+      "ioMs": 117.76737499999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 114686,
+        "system": 66060
+      },
+      "idleCpu": {
+        "user": 2101,
+        "system": 1258
+      },
+      "rss": 8701376,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 295,
+        "system": 53
+      }
+    },
+    {
+      "sample": 23,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 24808,
+      "startupParentCpu": {
+        "user": 3197,
+        "system": 479
+      },
+      "totalCpuMs": 169.99999999999997,
+      "readyMs": 17.79437499999767,
+      "treeBytes": 29818880,
+      "cpuMs": 93.694791,
+      "ioMs": 112.79529200000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 106555,
+        "system": 52150
+      },
+      "idleCpu": {
+        "user": 1690,
+        "system": 1176
+      },
+      "rss": 8799680,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 312,
+        "system": 47
+      }
+    },
+    {
+      "sample": 23,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 40424,
+      "startupParentCpu": {
+        "user": 3852,
+        "system": 1139
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 35.6979589999828,
+      "treeBytes": 30539776,
+      "cpuMs": 102.67908299999999,
+      "ioMs": 103.91825,
+      "networkMs": 55.154874999999976,
+      "cpu": {
+        "user": 118492,
+        "system": 70620
+      },
+      "idleCpu": {
+        "user": 2003,
+        "system": 1431
+      },
+      "rss": 9012736,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 36339,
+        "system": 11153
+      }
+    },
+    {
+      "sample": 23,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -8664,
+      "startupParentCpu": {
+        "user": 2677,
+        "system": 553
+      },
+      "totalCpuMs": 180,
+      "readyMs": 19.784499999979744,
+      "treeBytes": 30703616,
+      "cpuMs": 96.739291,
+      "ioMs": 110.75800000000001,
+      "networkMs": 21.659333000000004,
+      "cpu": {
+        "user": 111871,
+        "system": 59553
+      },
+      "idleCpu": {
+        "user": 1797,
+        "system": 1138
+      },
+      "rss": 9094656,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 9253,
+        "system": 2903
+      }
+    },
+    {
+      "sample": 24,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 23712,
+      "startupParentCpu": {
+        "user": 3089,
+        "system": 574
+      },
+      "totalCpuMs": 220,
+      "readyMs": 30.732917000015732,
+      "treeBytes": 29900800,
+      "cpuMs": 103.91175,
+      "ioMs": 129.236959,
+      "networkMs": null,
+      "cpu": {
+        "user": 117483,
+        "system": 75222
+      },
+      "idleCpu": {
+        "user": 1753,
+        "system": 911
+      },
+      "rss": 12748288,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 5276,
+        "system": 85
+      }
+    },
+    {
+      "sample": 24,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 11808,
+      "startupParentCpu": {
+        "user": 4584,
+        "system": 1989
+      },
+      "totalCpuMs": 270,
+      "readyMs": 39.72583300000406,
+      "treeBytes": 29261824,
+      "cpuMs": 115.42541700000001,
+      "ioMs": 212.11775,
+      "networkMs": null,
+      "cpu": {
+        "user": 131484,
+        "system": 110936
+      },
+      "idleCpu": {
+        "user": 1855,
+        "system": 849
+      },
+      "rss": 8390016,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 2966,
+        "system": 232
+      }
+    },
+    {
+      "sample": 24,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 10912,
+      "startupParentCpu": {
+        "user": 2464,
+        "system": 537
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 22.478625000017928,
+      "treeBytes": 30588928,
+      "cpuMs": 111.89949999999999,
+      "ioMs": 119.655667,
+      "networkMs": 21.125708999999972,
+      "cpu": {
+        "user": 129521,
+        "system": 71597
+      },
+      "idleCpu": {
+        "user": 2248,
+        "system": 1063
+      },
+      "rss": 9078272,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 14082,
+        "system": 3584
+      }
+    },
+    {
+      "sample": 24,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 30584,
+      "startupParentCpu": {
+        "user": 3963,
+        "system": 942
+      },
+      "totalCpuMs": 220.00000000000003,
+      "readyMs": 31.72195800000918,
+      "treeBytes": 30130176,
+      "cpuMs": 104.690417,
+      "ioMs": 118.1275,
+      "networkMs": 54.64904200000001,
+      "cpu": {
+        "user": 123109,
+        "system": 75062
+      },
+      "idleCpu": {
+        "user": 2088,
+        "system": 1078
+      },
+      "rss": 8947328,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 39494,
+        "system": 9618
+      }
+    },
+    {
+      "sample": 25,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -4264,
+      "startupParentCpu": {
+        "user": 1761,
+        "system": 776
+      },
+      "totalCpuMs": 200,
+      "readyMs": 30.437624999991385,
+      "treeBytes": 30015488,
+      "cpuMs": 96.90004100000002,
+      "ioMs": 114.57412500000001,
+      "networkMs": null,
+      "cpu": {
+        "user": 111747,
+        "system": 62502
+      },
+      "idleCpu": {
+        "user": 3152,
+        "system": 1823
+      },
+      "rss": 8750592,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 3040,
+        "system": 58
+      }
+    },
+    {
+      "sample": 25,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 8192,
+      "startupParentCpu": {
+        "user": 3256,
+        "system": 1676
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 32.13866600001347,
+      "treeBytes": 29982720,
+      "cpuMs": 110.240541,
+      "ioMs": 115.55812500000002,
+      "networkMs": null,
+      "cpu": {
+        "user": 121756,
+        "system": 62488
+      },
+      "idleCpu": {
+        "user": 2040,
+        "system": 1327
+      },
+      "rss": 8701440,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 615,
+        "system": 78
+      }
+    },
+    {
+      "sample": 25,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 65576,
+      "startupParentCpu": {
+        "user": 4280,
+        "system": 1161
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 33.29995799998869,
+      "treeBytes": 30212096,
+      "cpuMs": 112.10720899999998,
+      "ioMs": 113.65058399999998,
+      "networkMs": 48.86624999999998,
+      "cpu": {
+        "user": 130304,
+        "system": 76093
+      },
+      "idleCpu": {
+        "user": 1859,
+        "system": 1149
+      },
+      "rss": 9012800,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 42998,
+        "system": 8425
+      }
+    },
+    {
+      "sample": 25,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -14416,
+      "startupParentCpu": {
+        "user": 2866,
+        "system": 701
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 23.04983400000492,
+      "treeBytes": 30359552,
+      "cpuMs": 100.742542,
+      "ioMs": 130.249375,
+      "networkMs": 21.964958000000024,
+      "cpu": {
+        "user": 117277,
+        "system": 73494
+      },
+      "idleCpu": {
+        "user": 1930,
+        "system": 1712
+      },
+      "rss": 9094528,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 14656,
+        "system": 3579
+      }
+    },
+    {
+      "sample": 26,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": -8664,
+      "startupParentCpu": {
+        "user": 2508,
+        "system": 503
+      },
+      "totalCpuMs": 180,
+      "readyMs": 19.464959000004455,
+      "treeBytes": 29999104,
+      "cpuMs": 93.393833,
+      "ioMs": 112.868709,
+      "networkMs": null,
+      "cpu": {
+        "user": 106067,
+        "system": 52366
+      },
+      "idleCpu": {
+        "user": 2280,
+        "system": 1375
+      },
+      "rss": 8602944,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 355,
+        "system": 56
+      }
+    },
+    {
+      "sample": 26,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 30392,
+      "startupParentCpu": {
+        "user": 3968,
+        "system": 1283
+      },
+      "totalCpuMs": 250,
+      "readyMs": 36.12004199999501,
+      "treeBytes": 29655040,
+      "cpuMs": 111.058708,
+      "ioMs": 148.383875,
+      "networkMs": null,
+      "cpu": {
+        "user": 124640,
+        "system": 94259
+      },
+      "idleCpu": {
+        "user": 2315,
+        "system": 797
+      },
+      "rss": 12731904,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 4205,
+        "system": 90
+      }
+    },
+    {
+      "sample": 26,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": 16760,
+      "startupParentCpu": {
+        "user": 2831,
+        "system": 647
+      },
+      "totalCpuMs": 200,
+      "readyMs": 28.041958000016166,
+      "treeBytes": 30261248,
+      "cpuMs": 100.91137499999999,
+      "ioMs": 152.98175,
+      "networkMs": 19.534208000000035,
+      "cpu": {
+        "user": 116549,
+        "system": 68975
+      },
+      "idleCpu": {
+        "user": 3263,
+        "system": 1243
+      },
+      "rss": 9061888,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 11304,
+        "system": 3073
+      }
+    },
+    {
+      "sample": 26,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 51248,
+      "startupParentCpu": {
+        "user": 3160,
+        "system": 1002
+      },
+      "totalCpuMs": 229.99999999999997,
+      "readyMs": 33.833084000012605,
+      "treeBytes": 30294016,
+      "cpuMs": 108.373625,
+      "ioMs": 116.04629200000002,
+      "networkMs": 53.24179099999998,
+      "cpu": {
+        "user": 126797,
+        "system": 72764
+      },
+      "idleCpu": {
+        "user": 2201,
+        "system": 1200
+      },
+      "rss": 8980032,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 40940,
+        "system": 9071
+      }
+    },
+    {
+      "sample": 27,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": -22136,
+      "startupParentCpu": {
+        "user": 3036,
+        "system": 962
+      },
+      "totalCpuMs": 190,
+      "readyMs": 33.39383399998769,
+      "treeBytes": 29933568,
+      "cpuMs": 93.203,
+      "ioMs": 103.6695,
+      "networkMs": null,
+      "cpu": {
+        "user": 105992,
+        "system": 51221
+      },
+      "idleCpu": {
+        "user": 2879,
+        "system": 1454
+      },
+      "rss": 8652288,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 969,
+        "system": 102
+      }
+    },
+    {
+      "sample": 27,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 10176,
+      "startupParentCpu": {
+        "user": 2957,
+        "system": 579
+      },
+      "totalCpuMs": 190,
+      "readyMs": 20.490500000014435,
+      "treeBytes": 29540352,
+      "cpuMs": 103.30779099999998,
+      "ioMs": 88.19079199999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 115997,
+        "system": 55410
+      },
+      "idleCpu": {
+        "user": 1837,
+        "system": 866
+      },
+      "rss": 8684928,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 4548,
+        "system": 78
+      }
+    },
+    {
+      "sample": 27,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 63792,
+      "startupParentCpu": {
+        "user": 8798,
+        "system": 1222
+      },
+      "totalCpuMs": 260,
+      "readyMs": 38.62849999999162,
+      "treeBytes": 30228480,
+      "cpuMs": 103.17933400000001,
+      "ioMs": 355.50700000000006,
+      "networkMs": 65.34458300000006,
+      "cpu": {
+        "user": 119692,
+        "system": 101659
+      },
+      "idleCpu": {
+        "user": 1126,
+        "system": 457
+      },
+      "rss": 8980032,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 56033,
+        "system": 11015
+      }
+    },
+    {
+      "sample": 27,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -21144,
+      "startupParentCpu": {
+        "user": 3239,
+        "system": 741
+      },
+      "totalCpuMs": 220,
+      "readyMs": 21.237083000014536,
+      "treeBytes": 30408704,
+      "cpuMs": 110.03479199999998,
+      "ioMs": 114.32804199999998,
+      "networkMs": 19.70883299999997,
+      "cpu": {
+        "user": 129779,
+        "system": 71182
+      },
+      "idleCpu": {
+        "user": 3200,
+        "system": 1544
+      },
+      "rss": 8881664,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7425,
+        "system": 2960
+      }
+    },
+    {
+      "sample": 28,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 10840,
+      "startupParentCpu": {
+        "user": 3207,
+        "system": 582
+      },
+      "totalCpuMs": 190,
+      "readyMs": 21.903959000017494,
+      "treeBytes": 30130176,
+      "cpuMs": 96.180666,
+      "ioMs": 118.94116600000001,
+      "networkMs": null,
+      "cpu": {
+        "user": 110636,
+        "system": 59000
+      },
+      "idleCpu": {
+        "user": 1986,
+        "system": 1224
+      },
+      "rss": 8717760,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 344,
+        "system": 77
+      }
+    },
+    {
+      "sample": 28,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 13728,
+      "startupParentCpu": {
+        "user": 3733,
+        "system": 1000
+      },
+      "totalCpuMs": 240.00000000000003,
+      "readyMs": 36.96624999999767,
+      "treeBytes": 29458432,
+      "cpuMs": 103.63550000000001,
+      "ioMs": 140.92862500000004,
+      "networkMs": null,
+      "cpu": {
+        "user": 118193,
+        "system": 91266
+      },
+      "idleCpu": {
+        "user": 1947,
+        "system": 838
+      },
+      "rss": 8406528,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 5310,
+        "system": 118
+      }
+    },
+    {
+      "sample": 28,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -1312,
+      "startupParentCpu": {
+        "user": 3134,
+        "system": 639
+      },
+      "totalCpuMs": 210.00000000000003,
+      "readyMs": 27.57970900001237,
+      "treeBytes": 30474240,
+      "cpuMs": 102.729375,
+      "ioMs": 124.66087499999998,
+      "networkMs": 20.652957999999956,
+      "cpu": {
+        "user": 119332,
+        "system": 78093
+      },
+      "idleCpu": {
+        "user": 2036,
+        "system": 1019
+      },
+      "rss": 9110976,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 9107,
+        "system": 3505
+      }
+    },
+    {
+      "sample": 28,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 66352,
+      "startupParentCpu": {
+        "user": 4170,
+        "system": 1163
+      },
+      "totalCpuMs": 230,
+      "readyMs": 31.763542000000598,
+      "treeBytes": 30179328,
+      "cpuMs": 99.800375,
+      "ioMs": 125.97016599999998,
+      "networkMs": 56.35733399999998,
+      "cpu": {
+        "user": 118518,
+        "system": 84428
+      },
+      "idleCpu": {
+        "user": 1848,
+        "system": 988
+      },
+      "rss": 9029184,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 39187,
+        "system": 9328
+      }
+    },
+    {
+      "sample": 29,
+      "confined": true,
+      "network": false,
+      "parentHeapDelta": 9016,
+      "startupParentCpu": {
+        "user": 3567,
+        "system": 867
+      },
+      "totalCpuMs": 190,
+      "readyMs": 27.994084000005387,
+      "treeBytes": 29589504,
+      "cpuMs": 94.65862500000001,
+      "ioMs": 127.81316699999999,
+      "networkMs": null,
+      "cpu": {
+        "user": 107861,
+        "system": 55977
+      },
+      "idleCpu": {
+        "user": 1943,
+        "system": 1136
+      },
+      "rss": 8553984,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 4976,
+        "system": 78
+      }
+    },
+    {
+      "sample": 29,
+      "confined": false,
+      "network": false,
+      "parentHeapDelta": 6248,
+      "startupParentCpu": {
+        "user": 2817,
+        "system": 608
+      },
+      "totalCpuMs": 190,
+      "readyMs": 17.193916000018362,
+      "treeBytes": 29458432,
+      "cpuMs": 103.94091600000002,
+      "ioMs": 115.31337500000004,
+      "networkMs": null,
+      "cpu": {
+        "user": 116450,
+        "system": 57049
+      },
+      "idleCpu": {
+        "user": 1950,
+        "system": 1386
+      },
+      "rss": 8684928,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 4659,
+        "system": 123
+      }
+    },
+    {
+      "sample": 29,
+      "confined": true,
+      "network": true,
+      "parentHeapDelta": 31344,
+      "startupParentCpu": {
+        "user": 4208,
+        "system": 1112
+      },
+      "totalCpuMs": 200,
+      "readyMs": 24.892250000004424,
+      "treeBytes": 30097408,
+      "cpuMs": 96.134625,
+      "ioMs": 169.522959,
+      "networkMs": 56.18241699999999,
+      "cpu": {
+        "user": 114125,
+        "system": 70686
+      },
+      "idleCpu": {
+        "user": 1823,
+        "system": 1013
+      },
+      "rss": 8668608,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 38678,
+        "system": 9203
+      }
+    },
+    {
+      "sample": 29,
+      "confined": false,
+      "network": true,
+      "parentHeapDelta": -8856,
+      "startupParentCpu": {
+        "user": 2354,
+        "system": 488
+      },
+      "totalCpuMs": 190,
+      "readyMs": 17.32712500001071,
+      "treeBytes": 30621696,
+      "cpuMs": 102.855209,
+      "ioMs": 114.306209,
+      "networkMs": 19.678417000000024,
+      "cpu": {
+        "user": 118461,
+        "system": 63659
+      },
+      "idleCpu": {
+        "user": 2351,
+        "system": 1511
+      },
+      "rss": 9029184,
+      "hash": -645128448,
+      "parentCpu": {
+        "user": 7751,
+        "system": 3208
+      }
+    }
+  ]
+}
