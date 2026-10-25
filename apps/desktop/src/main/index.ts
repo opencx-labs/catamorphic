@@ -779,9 +779,12 @@ app.whenReady().then(async () => {
       (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     (window) => desktopWorkspaces?.isDock(window) ?? false,
     {
-      // Linux has no confinement yet; only throwaway E2E profiles run
-      // modules there (as they keep secrets in plain text, ADR 0129).
-      unconfined: e2eDataDir !== undefined && process.platform !== "darwin",
+      // Ordinary Docker UI suites cannot create nested /proc mounts. A
+      // dedicated native Linux lane verifies the real boundary (ADR 0283).
+      unconfined:
+        e2eDataDir !== undefined &&
+        process.platform !== "darwin" &&
+        process.env.CATAMORPHIC_TEST_MODULE_CONFINEMENT !== "1",
       workPorts: () => {
         const url = state.current?.url;
         if (!url) return [];

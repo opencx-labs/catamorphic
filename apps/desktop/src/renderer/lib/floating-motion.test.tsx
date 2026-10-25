@@ -16,31 +16,85 @@ describe("useRecedingSurface", () => {
   let root: Root;
   /** What each committed render showed, in order. */
   let seen: Array<string | null>;
+  let poseReady: boolean;
+  function motion() {
+    let state: AnimationPlayState = "running";
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    return {
+      animation: {
+        get playState() {
+          return state;
+        },
+        effect: { getTiming: () => ({ iterations: 1 }) },
+        finished,
+      } as unknown as Animation,
+      finish: () => {
+        state = "finished";
+        finish();
+      },
+    };
+  }
+  let frameMotion: ReturnType<typeof motion>;
+  let cardMotion: ReturnType<typeof motion>;
 
   function Probe(props: {
     identity: string;
     activeTabKey: string;
     chats: Chats;
   }) {
-    const receding = useRecedingSurface(props);
+    const receding = useRecedingSurface({
+      ...props,
+      chatElement: () => container.querySelector("section"),
+    });
     // Committed renders only: one React discards never reaches the screen.
     useLayoutEffect(() => {
       seen.push(receding);
     });
-    return null;
+    return (
+      <div
+        ref={(element) => {
+          if (element) element.getAnimations = () => [frameMotion.animation];
+        }}
+      >
+        <section
+          data-chat-tab={
+            poseReady && props.activeTabKey.startsWith("chat:")
+              ? true
+              : undefined
+          }
+          ref={(element) => {
+            if (element) element.getAnimations = () => [cardMotion.animation];
+          }}
+        />
+      </div>
+    );
   }
 
   beforeEach(() => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     vi.useFakeTimers();
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      window.setTimeout(() => callback(performance.now()), 16),
+    );
+    vi.stubGlobal("cancelAnimationFrame", (id: number) =>
+      window.clearTimeout(id),
+    );
+    poseReady = true;
+    frameMotion = motion();
+    cardMotion = motion();
     seen = [];
     container = document.createElement("div");
+    document.body.append(container);
     root = createRoot(container);
   });
 
   afterEach(() => {
     act(() => root.unmount());
+    container.remove();
     vi.unstubAllGlobals();
     vi.useRealTimers();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
@@ -53,16 +107,62 @@ describe("useRecedingSurface", () => {
       ),
     );
 
-  it("keeps what was in front while a floating chat grows into its tab", () => {
+  it("keeps what was in front until both the frame and card finish growing", async () => {
     render("settings", [{ localId: "a", mode: "partial" }]);
     seen = [];
     render("chat:a", [{ localId: "a", mode: "tab" }]);
     // Every render committed with the chat in front already had it: the
     // surface is never dropped for a frame first.
     expect(seen).toEqual(["settings"]);
-    act(() => vi.advanceTimersByTime(CHAT_EXPAND_MS - 1));
+    act(() => vi.advanceTimersByTime(CHAT_EXPAND_MS * 3));
     expect(seen.at(-1)).toBe("settings");
-    act(() => vi.advanceTimersByTime(1));
+    await act(async () => frameMotion.finish());
+    expect(seen.at(-1)).toBe("settings");
+    await act(async () => cardMotion.finish());
+    expect(seen.at(-1)).toBeNull();
+  });
+
+  it("waits for a dock pose that commits after workspace state", async () => {
+    render("settings", [{ localId: "a", mode: "partial" }]);
+    poseReady = false;
+    render("chat:a", [{ localId: "a", mode: "tab" }]);
+    act(() => vi.advanceTimersByTime(CHAT_EXPAND_MS * 3));
+    expect(seen.at(-1)).toBe("settings");
+    poseReady = true;
+    await act(async () => render("chat:a", [{ localId: "a", mode: "tab" }]));
+    expect(seen.at(-1)).toBe("settings");
+    await act(async () => {
+      frameMotion.finish();
+      cardMotion.finish();
+    });
+    expect(seen.at(-1)).toBeNull();
+  });
+
+  it("keeps the background while another chat changes during growth", async () => {
+    render("settings", [{ localId: "a", mode: "partial" }]);
+    render("chat:a", [{ localId: "a", mode: "tab" }]);
+    act(() => vi.advanceTimersByTime(16));
+    render("chat:a", [
+      { localId: "a", mode: "tab" },
+      { localId: "b", mode: "partial" },
+    ]);
+    expect(seen.at(-1)).toBe("settings");
+    await act(async () => frameMotion.finish());
+    expect(seen.at(-1)).toBe("settings");
+    await act(async () => cardMotion.finish());
+    expect(seen.at(-1)).toBeNull();
+  });
+
+  it("drops a receding surface on navigation and ignores its late finish", async () => {
+    render("settings", [{ localId: "a", mode: "partial" }]);
+    render("chat:a", [{ localId: "a", mode: "tab" }]);
+    act(() => vi.advanceTimersByTime(16));
+    render("editor", [{ localId: "a", mode: "tab" }]);
+    expect(seen.at(-1)).toBeNull();
+    await act(async () => {
+      frameMotion.finish();
+      cardMotion.finish();
+    });
     expect(seen.at(-1)).toBeNull();
   });
 

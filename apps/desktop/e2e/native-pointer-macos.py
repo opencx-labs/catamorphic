@@ -35,6 +35,10 @@ cg.CGEventGetLocation.argtypes = [ctypes.c_void_p]
 cg.CGEventGetLocation.restype = Point
 cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, Point, ctypes.c_uint32]
 cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+cg.CGEventSetIntegerValueField.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64]
+cg.CGEventSetIntegerValueField.restype = None
+cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+cg.CGEventSetFlags.restype = None
 cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
 cg.CGEventPost.restype = None
 cf.CFRelease.argtypes = [ctypes.c_void_p]
@@ -58,6 +62,13 @@ def post(kind, point):
     if not event:
         sys.exit("Failed to create native mouse event")
     try:
+        # This helper sends plain pointer input, never a modifier gesture.
+        # A default source inherits flags left by an earlier native shortcut.
+        cg.CGEventSetFlags(event, 0)
+        if kind in (DOWN, UP):
+            # kCGMouseEventClickState = 1. Core Graphics defaults a release
+            # to zero clicks; both halves must describe this single click.
+            cg.CGEventSetIntegerValueField(event, 1, 1)
         cg.CGEventPost(0, event)
     finally:
         cf.CFRelease(event)

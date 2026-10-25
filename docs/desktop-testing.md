@@ -90,6 +90,16 @@ On Linux this starts and owns a new X server; on macOS it requires a dedicated
 GitHub-hosted runner. It must not run on a developer's macOS login session.
 Raw harness launches reject a missing isolation context before spawning Electron.
 
+Native input helpers own complete gestures. Keyboard shortcuts press and release
+their modifiers, including on failure; plain pointer input clears inherited
+modifier flags and pairs its press and release as one click. Suites share the
+runner's pointer state, so park it away from hover targets after a native gesture
+when the next app must start without a hover card.
+
+Audio tests synchronize with captured samples. A held voice can show its intent
+before the microphone has delivered audio, so elapsed wall time after a phase
+change does not prove that the scripted speech has reached the worker.
+
 Linux validates real Electron behavior on Linux. macOS shards retain native
 window, menu, and Command-key coverage. Blacksmith macOS support exists, but
 this repository uses GitHub macOS until the organization's macOS entitlement
@@ -101,3 +111,32 @@ new critical path and per-shard durations in CI before claiming a speedup or
 adjusting the file targets and runner caps in `scripts/ci-shards.ts`. File count
 is a size estimate; adding cases inside one file does not add runners. More workers on one display reduce realism;
 more independent runners preserve it.
+
+
+## Confined Linux source modules
+
+The regular Docker UI suites explicitly bypass module confinement because
+Docker's default masked `/proc` cannot support nested PID namespaces. That
+bypass is restricted to disposable E2E profiles. The dedicated
+`module-confinement-linux` CI lane sets
+`CATAMORPHIC_TEST_MODULE_CONFINEMENT=1`, installs Bubblewrap and socat, and
+runs both the real worker escape probes and `sidebar-live-sources.e2e.ts` in
+Electron on a private display. It never reuses the host `/proc` or network.
+The fixture grants a data directory so atomic file replacement has the same
+behavior with Linux bind mounts and macOS Seatbelt.
+
+On a dedicated Linux test host, give the test user an empty parent for the
+synthetic private service configuration probe, then run:
+
+```sh
+sudo install -d -o "$(id -u)" -g "$(id -g)" /usr/local/etc/work-module-tests /etc/ssl/work-module-tests
+CATAMORPHIC_TEST_MODULE_CONFINEMENT=1 bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+CATAMORPHIC_TEST_MODULE_CONFINEMENT=1 bun run --cwd apps/desktop test:e2e:ci sidebar-live-sources.e2e --bail=1
+```
+
+Ubuntu's restricted user namespaces need a scoped system Bubblewrap AppArmor
+profile. Do not disable the restriction globally in product setup. Disposable
+local nested-container probes may give the outer test container the mount
+privileges it needs, without mounting host data, display or Docker socket;
+the inner module boundary must still use fresh PID/mount/network namespaces
+and the mandatory seccomp helper. A normal Docker container must fail closed.

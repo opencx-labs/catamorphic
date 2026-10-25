@@ -2,6 +2,7 @@ import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
 import type { ResourceSnapshot } from "../shared/resources.js";
+import type { TerminalCreateInput } from "../shared/terminal.js";
 import type { TrustedHosts } from "../shared/trusted-hosts.js";
 import type { WindowImageRequest } from "../shared/window-images.js";
 
@@ -64,7 +65,7 @@ import type { OpenMode } from "../shared/open-mode.js";
 import type {
   PrCommentInput,
   PrDecisionInput,
-  PullRequestStatus,
+  PullRequestStatusRead,
 } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
 import type {
@@ -1019,12 +1020,7 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-close-answer", handler);
   },
-  onBrowserPageActivated: (listener: (event: unknown) => void) => {
-    const handler = (_event: unknown, payload: unknown) => listener(payload);
-    ipcRenderer.on("catamorphic:browser-page-activated", handler);
-    return () =>
-      ipcRenderer.removeListener("catamorphic:browser-page-activated", handler);
-  },
+
   sitePermissionAnswer: (input: {
     id: string;
     decision: string;
@@ -1270,12 +1266,9 @@ const api = {
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
   terminalGhosttyAppearance: () =>
     invoke("catamorphic:terminal-ghostty-appearance"),
-  terminalCreate: (input: {
-    projectId?: string;
-    cols?: number;
-    rows?: number;
-    remoteChat?: { sessionId: string };
-  }): Promise<{ sessionId: string; cwd: string }> =>
+  terminalCreate: (
+    input: TerminalCreateInput,
+  ): Promise<{ sessionId: string; cwd: string }> =>
     invoke("catamorphic:terminal-create", input),
   terminalWrite: (sessionId: string, data: string): Promise<void> =>
     invoke("catamorphic:terminal-write", sessionId, data),
@@ -1575,7 +1568,7 @@ const api = {
     invoke("catamorphic:pr-review", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:pr-list", projectId),
-  prStatus: (url: string): Promise<PullRequestStatus | null> =>
+  prStatus: (url: string): Promise<PullRequestStatusRead> =>
     invoke("catamorphic:pr-status", url),
   prFiles: (projectId: string, number: number): Promise<unknown> =>
     invoke("catamorphic:pr-files", projectId, number),

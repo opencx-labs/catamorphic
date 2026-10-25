@@ -377,7 +377,7 @@ function Chat({
           onDismissFailed={chat.dismissFailed}
           hasOlder={chat.hasOlder}
           isLoadingOlder={chat.isLoadingOlder}
-          onLoadOlder={() => void chat.loadOlder()}
+          onLoadOlder={chat.loadOlder}
           requests={chat.state?.requests}
           resolveAgentName={agentName}
           sourceHref={phoneSourceHref}

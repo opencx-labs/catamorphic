@@ -20,6 +20,62 @@ afterAll(async () => {
   await app?.stop();
 });
 
+it("skips offscreen rows of a live turn, retaining their content through resizing", async () => {
+  try {
+    await app.eval(`(() => {
+      const list = document.createElement('div');
+      list.id = 'live-row-workload';
+      list.style.cssText = 'position:fixed;inset:100px auto auto 300px;width:600px;height:240px;overflow:auto;background:var(--color-bg)';
+      for (let i = 0; i < 100; i++) {
+        const row = document.createElement('div');
+        row.className = 'cat-row';
+        for (let j = 0; j < 80; j++) {
+          const text = document.createElement('p');
+          text.textContent = 'Work item ' + i + ', output line ' + j;
+          row.append(text);
+        }
+        list.append(row);
+      }
+      document.body.append(list);
+    })()`);
+    const skipped = `(() => {
+      const list = document.getElementById('live-row-workload');
+      return list.firstElementChild.firstElementChild.checkVisibility({contentVisibilityAuto:true}) &&
+        !list.lastElementChild.lastElementChild.checkVisibility({contentVisibilityAuto:true});
+    })()`;
+    await app.waitFor(skipped, { label: "offscreen live work skips layout" });
+    await app.eval(`(() => {
+      const list = document.getElementById('live-row-workload');
+      list.lastElementChild.lastElementChild.textContent = 'Latest preserved output';
+      list.style.display = 'none';
+    })()`);
+    await app.eval(`(() => {
+      const list = document.getElementById('live-row-workload');
+      list.style.width = '400px'; list.style.display = '';
+    })()`);
+    await app.waitFor(skipped, {
+      label: "resizing retains offscreen containment",
+    });
+    await app.eval(`(() => {
+      const list = document.getElementById('live-row-workload');
+      list.lastElementChild.lastElementChild.scrollIntoView({block:'end'});
+    })()`);
+    await app.waitFor(
+      `document.getElementById('live-row-workload').lastElementChild.lastElementChild.checkVisibility({contentVisibilityAuto:true})`,
+      {
+        label: "scrolling to the work lays it out",
+      },
+    );
+    expect(
+      await app.eval(
+        "document.getElementById('live-row-workload').lastElementChild.lastElementChild.textContent",
+      ),
+    ).toBe("Latest preserved output");
+  } finally {
+    await app.eval("document.getElementById('live-row-workload')?.remove()");
+  }
+});
+
 it("keeps local insertions out of long chat transcripts' style work", async () => {
   // Real profiles retain tens of thousands of transcript elements. Their
   // data attributes also exercise the selector for the tab's corner controls.

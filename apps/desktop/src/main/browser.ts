@@ -1234,8 +1234,8 @@ export function registerBrowserSupport(
   ) => {
     const target = pageMenuTargetOf(params);
     const items = pageMenu(target, {
-      canGoBack: page.navigationHistory.canGoBack(),
-      canGoForward: page.navigationHistory.canGoForward(),
+      canGoBack: page.navigationHistory.canGoToOffset(-1),
+      canGoForward: page.navigationHistory.canGoToOffset(1),
       mac: process.platform === "darwin",
       emojiPanel: app.isEmojiPanelSupported(),
       credentials: null,
@@ -1280,8 +1280,8 @@ export function registerBrowserSupport(
     )
       return;
     const items = pageMenu(target, {
-      canGoBack: guest.navigationHistory.canGoBack(),
-      canGoForward: guest.navigationHistory.canGoForward(),
+      canGoBack: guest.navigationHistory.canGoToOffset(-1),
+      canGoForward: guest.navigationHistory.canGoToOffset(1),
       mac: process.platform === "darwin",
       emojiPanel: app.isEmojiPanelSupported(),
       credentials:
@@ -1408,22 +1408,6 @@ export function registerBrowserSupport(
         showNativePageMenu(popup, popup.webContents, params, contents),
       );
     });
-    // The person's first press in the page as main sees it reach the page
-    // (a frame that runs no preload included; the preload reports keys):
-    // its tab, closing, asks only a page someone touched (browser-screen.tsx).
-    const onPageInput = (
-      _event: Electron.Event,
-      input: Electron.InputEvent,
-    ) => {
-      if (input.type !== "mouseDown" && input.type !== "touchStart") return;
-      const host = contents.hostWebContents;
-      if (!host || host.isDestroyed()) return;
-      contents.off("input-event", onPageInput);
-      host.send("catamorphic:browser-page-activated", {
-        guestId: contents.id,
-      });
-    };
-    contents.on("input-event", onPageInput);
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const browserDirection =

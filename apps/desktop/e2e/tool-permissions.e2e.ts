@@ -112,9 +112,14 @@ describe("tool permissions", () => {
     const chatKey = await run<string>(
       `return $('[data-point-key^="chat:"]').dataset.pointKey;`,
     );
-    await run(
-      `byText('[data-point-key] button', 'New Tab').click(); return true;`,
+    // Opening the chat reused the empty New Tab. Create another tab to
+    // exercise leaving the pending request before returning to it.
+    await runWait(
+      `const button = $('[data-workspace-visible="true"] button[aria-label="New tab"]');
+       if (!button) return false; button.click(); return true;`,
+      { label: "open another tab beside the pending approval" },
     );
+    await runWait(`return !!byText('[data-point-key] button', 'New Tab');`);
     await run(
       `$('[data-point-key="'+${JSON.stringify(chatKey)}+'"]').querySelector('button').click(); return true;`,
     );

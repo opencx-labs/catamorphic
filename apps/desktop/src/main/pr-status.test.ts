@@ -72,7 +72,7 @@ describe("readPullRequestStatus", () => {
   it("reads through the person's connection first", async () => {
     expect(
       await read({ viaConnection: async () => STATUS, cliEnabled: true }),
-    ).toEqual(STATUS);
+    ).toEqual({ status: STATUS, source: "connection" });
     expect(requests).toEqual([]);
   });
 
@@ -87,26 +87,48 @@ describe("readPullRequestStatus", () => {
         cliEnabled: true,
       });
       expect(status, denied.message).toMatchObject({
-        number: 42,
-        state: "merged",
-        repository: "acme/web",
+        status: { number: 42, state: "merged", repository: "acme/web" },
+        source: "github-cli",
       });
     }
     expect(requests[0]).toBe("https://api.github.com/repos/acme/web/pulls/42");
   });
 
-  it("shows what the chat recorded when nothing here may read it", async () => {
+  it("reads public status without enabling or consulting the CLI", async () => {
+    const cliToken = vi.fn();
+    const anonymous = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(new Headers(init.headers).has("Authorization")).toBe(false);
+      return Response.json({ ...GITHUB.pull, state: "open", merged: false });
+    });
+    vi.stubGlobal("fetch", anonymous);
+    expect(
+      await readPullRequestStatus({
+        url: URL_42,
+        viaConnection: async () => null,
+        cliEnabled: false,
+        cliToken,
+      }),
+    ).toMatchObject({ status: { state: "open" }, source: "public" });
+    expect(cliToken).not.toHaveBeenCalled();
+    expect(anonymous).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows what the chat recorded when public data is unavailable", async () => {
     const none = async () => null;
-    expect(await read({ viaConnection: none, cliEnabled: false })).toBeNull();
+    expect(
+      await read({ viaConnection: none, cliEnabled: false }),
+    ).toMatchObject({ status: { state: "merged" }, source: "public" });
     expect(
       await read({
         viaConnection: none,
         cliEnabled: true,
         url: "https://gitlab.com/acme/web/-/merge_requests/42",
       }),
-    ).toBeNull();
+    ).toMatchObject({ status: null });
     answer = () => Response.json({ message: "Not Found" }, { status: 404 });
-    expect(await read({ viaConnection: none, cliEnabled: true })).toBeNull();
+    expect(await read({ viaConnection: none, cliEnabled: true })).toMatchObject(
+      { status: null },
+    );
     expect(
       await readPullRequestStatus({
         url: URL_42,
@@ -114,7 +136,7 @@ describe("readPullRequestStatus", () => {
         cliEnabled: true,
         cliToken: async () => null,
       }),
-    ).toBeNull();
+    ).toMatchObject({ status: null });
   });
 
   it("keeps a failure worth retrying", async () => {
@@ -126,6 +148,11 @@ describe("readPullRequestStatus", () => {
     await expect(
       read({ viaConnection: async () => null, cliEnabled: true }),
     ).rejects.toMatchObject({ status: 503 });
+    answer = () =>
+      Response.json({ message: "API rate limit exceeded" }, { status: 403 });
+    await expect(
+      read({ viaConnection: async () => null, cliEnabled: false }),
+    ).rejects.toMatchObject({ status: 403 });
   });
 });
 

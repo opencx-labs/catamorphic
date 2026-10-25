@@ -1,6 +1,6 @@
 # 0277 — What agents write reaches only trusted hosts, project code runs confined, and commands run as approved
 
-- **Status:** Accepted (amends 0045, 0140, 0148, 0176, 0234, 0239, 0241)
+- **Status:** Accepted (amends 0045, 0140, 0148, 0176, 0234, 0239, 0241; extended by 0283)
 - **Date:** 2026-10-21
 
 ## Context
@@ -100,8 +100,7 @@ what lives outside the project:
 keys from the shell environment (use a connection), command-line tools that
 read the home folder or keychain (`gh`, `aws`: use a connection or a
 workflow), and redirect targets they did not declare. Workflows that call APIs
-declare their hosts. Confinement is macOS's; Linux needs bubblewrap or Landlock
-before the desktop ships there. A full-access local agent can still send data
+declare their hosts. Linux confinement uses Bubblewrap and mandatory seccomp (0283). A full-access local agent can still send data
 out during its own turn; the same proxy can confine agents' shells later.
 
 This change delivers desktop chat link and image gates, safe row and chip

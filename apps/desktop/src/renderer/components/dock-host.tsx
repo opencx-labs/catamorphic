@@ -573,6 +573,20 @@ export function DockHost({
       return;
     }
     if (!chat) return;
+    if (
+      chat.entry.sessionId &&
+      document.activeElement?.closest<HTMLElement>("[data-chat-local-id]")
+        ?.dataset.chatLocalId === chat.entry.localId &&
+      matchesBinding(event, keybindings["new-terminal-tab"])
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      invoke(chat, {
+        kind: "menu",
+        entry: { label: "Open terminal", action: "open-terminal" },
+      });
+      return;
+    }
     if (matchesBinding(event, keybindings["focus-chips"])) {
       if (actions.current.get(chat.entry.localId)?.focusChips?.()) {
         event.preventDefault();

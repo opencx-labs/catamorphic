@@ -54,9 +54,12 @@ export async function startEgressProxy({
   hosts,
   blocked = () => false,
   onRefused,
+  socketPath,
   lookup = (host) => dns.lookup(host, { all: true, verbatim: true }),
 }: {
   hosts: readonly string[];
+  /** Linux namespace relay; serves the identical HTTP and CONNECT policy. */
+  socketPath?: string;
   /** Addresses never reachable whatever is declared: Work's own servers. */
   blocked?: (host: string, port: number) => boolean;
   /** A connection the declaration does not allow, for the module's error. */
@@ -99,6 +102,7 @@ export async function startEgressProxy({
     );
   };
   const track = (socket: net.Socket) => {
+    if (sockets.has(socket)) return;
     sockets.add(socket);
     socket.setTimeout(IDLE_MS, () => socket.destroy());
     socket.on("close", () => sockets.delete(socket));
@@ -107,7 +111,7 @@ export async function startEgressProxy({
   const refuse = (address: string) => {
     onRefused?.(address);
   };
-  const server = http.createServer(async (request, response) => {
+  const handleRequest: http.RequestListener = async (request, response) => {
     let target: URL;
     try {
       target = new URL(request.url ?? "");
@@ -157,8 +161,12 @@ export async function startEgressProxy({
       response.end();
     });
     request.pipe(upstream);
-  });
-  server.on("connect", async (request, client: net.Socket, head: Buffer) => {
+  };
+  const handleConnect = async (
+    request: http.IncomingMessage,
+    client: net.Socket,
+    head: Buffer,
+  ) => {
     const match = /^\[?([^\]]+?)\]?:(\d{1,5})$/.exec(request.url ?? "");
     const host = match?.[1];
     const port = Number(match?.[2]);
@@ -186,11 +194,19 @@ export async function startEgressProxy({
     }
     upstream.on("error", () => client.destroy());
     client.on("error", () => upstream.destroy());
-  });
-  server.on("connection", (socket) => {
+  };
+  const handleConnection = (socket: net.Socket) => {
     if (sockets.size >= MAX_CONNECTIONS) socket.destroy();
     else track(socket);
-  });
+  };
+  const makeServer = () => {
+    const result = http.createServer(handleRequest);
+    result.on("connect", handleConnect);
+    result.on("connection", handleConnection);
+    return result;
+  };
+  const server = makeServer();
+  const unix = socketPath ? makeServer() : null;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolve());
@@ -199,6 +215,17 @@ export async function startEgressProxy({
   if (!address || typeof address === "string") {
     server.close();
     throw new Error("The module's network could not start.");
+  }
+  if (unix && socketPath) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        unix.once("error", reject);
+        unix.listen(socketPath, resolve);
+      });
+    } catch (error) {
+      server.close();
+      throw error;
+    }
   }
   const port = address.port;
   livePorts.add(port);
@@ -211,7 +238,12 @@ export async function startEgressProxy({
         livePorts.delete(port);
         for (const socket of sockets) socket.destroy();
         sockets.clear();
-        server.close(() => resolve());
+        void Promise.all(
+          [server, ...(unix ? [unix] : [])].map(
+            (listener) =>
+              new Promise<void>((done) => listener.close(() => done())),
+          ),
+        ).then(() => resolve());
       });
       return closing;
     },

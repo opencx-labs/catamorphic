@@ -1,25 +1,50 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { accessText, type CodeAccess } from "../shared/code-access.js";
 import { startEgressProxy } from "./egress-proxy.js";
 import { canonicalModuleAccess } from "./module-access.js";
+import { linuxModuleCommand } from "./module-sandbox-linux.js";
 
 /** How a confined module's process starts, and what to release after. */
 export interface ModuleLaunch {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** Trusted setup handles, consumed before the untrusted workload starts. */
+  inheritedFds?: readonly number[];
+  /** Release the parent's setup handles once spawn has duplicated them. */
+  spawned?: () => void;
   close: () => Promise<void>;
 }
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-/** Where a person's data lives, unreadable unless the module may read it. */
-const PRIVATE_ROOTS = [
-  "/Users",
-  "/Volumes",
-  "/private/var/folders",
-  "/private/tmp",
+/** Public OS runtime, never whole volumes or user-controlled tool prefixes. */
+const PUBLIC_RUNTIME_READS = [
+  "/System/Library",
+  "/System/Cryptexes/OS",
+  "/usr/lib",
+  "/usr/libexec",
+  "/usr/bin",
+  "/usr/sbin",
+  "/usr/share",
+  "/bin",
+  "/sbin",
+  "/Library/Apple",
+  "/Library/Developer/CommandLineTools",
+  "/private/var/db/dyld",
+];
+const PUBLIC_RUNTIME_FILES = [
+  // Directory entries only; Bun needs a root descriptor to initialize.
+  "/",
+  "/dev/null",
+  "/dev/random",
+  "/dev/urandom",
+  "/private/etc/hosts",
+  "/private/etc/resolv.conf",
+  "/private/etc/localtime",
+  "/private/etc/ssl/cert.pem",
 ];
 
 function real(file: string): string {
@@ -64,12 +89,15 @@ export function moduleProfile({
   readable,
   writable,
   proxyPort,
+  listable = [],
 }: {
   projectRoot: string;
   /** Beyond the project: Bun, the worker, scratch, declared reads. */
   readable: readonly string[];
   writable: readonly string[];
   proxyPort: number | null;
+  /** Directory entries only: Bun resolves the worker without reading siblings. */
+  listable?: readonly string[];
 }): string {
   const subpaths = (paths: readonly string[]) =>
     paths.map((entry) => `(subpath ${literal(entry)})`).join(" ");
@@ -80,11 +108,17 @@ export function moduleProfile({
     ...(proxyPort === null
       ? []
       : [`(allow network-outbound (remote ip "localhost:${proxyPort}"))`]),
-    `(deny file-read-data ${subpaths(PRIVATE_ROOTS)})`,
-    `(allow file-read-data ${subpaths([projectRoot, ...readable, ...writable])})`,
+    "(deny file-read-data file-map-executable process-exec)",
+    `(allow file-read-data file-map-executable process-exec ${subpaths([...PUBLIC_RUNTIME_READS.map(real), projectRoot, ...readable, ...writable])} ${[...PUBLIC_RUNTIME_FILES.map(real), ...listable].map((entry) => `(literal ${literal(entry)})`).join(" ")})`,
     "(deny file-write*)",
     `(allow file-write* (literal "/dev/null") ${subpaths(writable)})`,
     "(deny mach-lookup)",
+    "(deny sysctl-read)",
+    '(allow sysctl-read (sysctl-name-prefix "hw.") (sysctl-name-prefix "machdep.cpu.") (sysctl-name "machdep.ptrauth_enabled") (sysctl-name-prefix "kern.os") (sysctl-name "kern.argmax") (sysctl-name "kern.maxfiles") (sysctl-name "kern.maxfilesperproc") (sysctl-name "kern.hostname") (sysctl-name "kern.usrstack64") (sysctl-name "kern.boottime") (sysctl-name "sysctl.proc_cputype") (sysctl-name "vm.loadavg"))',
+    "(deny process-info*)",
+    "(allow process-info* (target same-sandbox))",
+    "(deny mach-priv-task-port)",
+    "(allow mach-priv-task-port (target same-sandbox))",
     "(deny appleevent-send)",
     "(deny signal)",
     "(allow signal (target self))",
@@ -95,8 +129,8 @@ export function moduleProfile({
  * Start a module's process confined to its declared access (ADR 0277):
  * a clean environment (Work's Bun on PATH, a home and temp folder of its
  * own, its proxy), its own loopback proxy when it declares hosts, and the
- * Seatbelt profile above. Confinement is macOS's; elsewhere a module runs
- * only for a throwaway E2E profile, which may opt out.
+ * Seatbelt profile above or Linux namespaces and seccomp. A throwaway E2E
+ * profile may explicitly opt out.
  */
 export async function launchConfinedModule({
   executable,
@@ -106,6 +140,7 @@ export async function launchConfinedModule({
   access,
   toolchain,
   scratchRoot,
+  scope = "",
   platform = process.platform,
   unconfined = false,
   blocked,
@@ -121,16 +156,16 @@ export async function launchConfinedModule({
   toolchain: Record<string, string>;
   /** Where modules keep their home and temp folders. */
   scratchRoot: string;
+  /** Host identity: profiles and project identities never share private files. */
+  scope?: string;
   platform?: NodeJS.Platform;
   /** A throwaway E2E profile on a platform without confinement. */
   unconfined?: boolean;
   blocked?: (host: string, port: number) => boolean;
   onRefused?: (address: string) => void;
 }): Promise<ModuleLaunch> {
-  if (platform !== "darwin" && !unconfined)
-    throw new Error(
-      "Sidebar modules run confined, which Work does on macOS only for now.",
-    );
+  if (!["darwin", "linux"].includes(platform) && !unconfined)
+    throw new Error("Sidebar modules require macOS or Linux confinement.");
   const root = real(projectRoot);
   const canonical = canonicalModuleAccess({ access, projectRoot: root });
   if (accessText(canonical) !== accessText(access))
@@ -140,7 +175,7 @@ export async function launchConfinedModule({
   const scratch = path.join(
     scratchRoot,
     createHash("sha256")
-      .update(`${root}\n${modulePath}`)
+      .update(`${scope}\n${root}\n${modulePath}`)
       .digest("hex")
       .slice(0, 16),
   );
@@ -148,10 +183,31 @@ export async function launchConfinedModule({
   const temp = path.join(scratch, "tmp");
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(temp, { recursive: true });
-  const proxy = canonical.hosts?.length
-    ? await startEgressProxy({ hosts: canonical.hosts, blocked, onRefused })
+  const networkDir =
+    platform === "linux" && !unconfined && canonical.hosts?.length
+      ? fs.mkdtempSync(path.join(os.tmpdir(), "work-module-network-"))
+      : null;
+  const proxySocket = networkDir
+    ? path.join(networkDir, "proxy.sock")
+    : undefined;
+  const proxy = await (async () => {
+    try {
+      return canonical.hosts?.length
+        ? await startEgressProxy({
+            hosts: canonical.hosts,
+            blocked,
+            onRefused,
+            socketPath: proxySocket,
+          })
+        : null;
+    } catch (error) {
+      if (networkDir) fs.rmSync(networkDir, { recursive: true, force: true });
+      throw error;
+    }
+  })();
+  const proxyUrl = proxy
+    ? `http://127.0.0.1:${proxySocket ? 3128 : proxy.port}`
     : null;
-  const proxyUrl = proxy ? `http://127.0.0.1:${proxy.port}` : null;
   const env: Record<string, string> = {
     // Where commands are found, nothing more: Work's own PATH holds no keys.
     PATH: toolchain.PATH ?? process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -175,23 +231,42 @@ export async function launchConfinedModule({
   };
   const close = async () => {
     await proxy?.close();
+    if (networkDir) fs.rmSync(networkDir, { recursive: true, force: true });
   };
   const bun = real(onPath(executable, env.PATH));
-  if (platform !== "darwin")
+  if (unconfined)
     return { command: bun, args: [workerPath, modulePath], env, close };
-  const bunRoot =
-    path.basename(path.dirname(bun)) === "bin"
-      ? path.dirname(path.dirname(bun))
-      : path.dirname(bun);
+  if (platform === "linux") {
+    try {
+      const launch = linuxModuleCommand({
+        bun,
+        workerPath,
+        modulePath,
+        projectRoot: root,
+        readable: [bun, real(workerPath), ...(canonical.reads ?? [])],
+        writable: [real(scratch), ...(canonical.writes ?? [])],
+        proxySocket,
+      });
+      return {
+        ...launch,
+        env,
+        spawned: launch.close,
+        close: async () => {
+          launch.close();
+          await close();
+        },
+      };
+    } catch (error) {
+      await close();
+      throw error;
+    }
+  }
   const profile = moduleProfile({
     projectRoot: root,
-    readable: [
-      bunRoot,
-      real(path.dirname(workerPath)),
-      ...(canonical.reads ?? []),
-    ],
+    readable: [bun, real(workerPath), ...(canonical.reads ?? [])],
     writable: [real(scratch), ...(canonical.writes ?? [])],
     proxyPort: proxy?.port ?? null,
+    listable: [real(path.dirname(workerPath))],
   });
   return {
     command: SANDBOX_EXEC,

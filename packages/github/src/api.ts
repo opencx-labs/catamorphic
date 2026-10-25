@@ -345,14 +345,14 @@ function discussionComment(raw: RawDiscussionComment) {
   };
 }
 
-/** Minimal REST client bound to one user access token. */
+/** Minimal REST client: a user access token, or anonymous public reads. */
 export class GithubApi {
   private readonly fetch: FetchLike;
   private readonly baseUrl: string;
   private readonly signal?: AbortSignal;
 
   constructor(
-    private readonly accessToken: string,
+    private readonly accessToken: string | null,
     opts?: GithubApiOptions,
   ) {
     this.fetch = opts?.fetch ?? fetch;
@@ -369,7 +369,9 @@ export class GithubApi {
       method: init?.method ?? "GET",
       headers: {
         Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${this.accessToken}`,
+        ...(this.accessToken
+          ? { Authorization: `Bearer ${this.accessToken}` }
+          : {}),
         "X-GitHub-Api-Version": "2022-11-28",
         ...(init?.body !== undefined
           ? { "Content-Type": "application/json" }
@@ -407,7 +409,9 @@ export class GithubApi {
       method,
       headers: {
         Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${this.accessToken}`,
+        ...(this.accessToken
+          ? { Authorization: `Bearer ${this.accessToken}` }
+          : {}),
         "X-GitHub-Api-Version": "2022-11-28",
       },
     });
@@ -438,7 +442,9 @@ export class GithubApi {
       redirect: "error",
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${this.accessToken}`,
+        ...(this.accessToken
+          ? { Authorization: `Bearer ${this.accessToken}` }
+          : {}),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query, variables }),
@@ -1141,6 +1147,8 @@ export class GithubApi {
   async pullRequestStatus(input: {
     fullName: string;
     number: number;
+    /** Anonymous chip reads reserve their smaller rate limit for status. */
+    includeChecks?: boolean;
   }): Promise<GithubPullRequestStatus> {
     if (
       !/^[\w.-]+\/[\w.-]+$/.test(input.fullName) ||
@@ -1152,7 +1160,7 @@ export class GithubApi {
       `/repos/${input.fullName}/pulls/${input.number}`,
     );
     const checks =
-      pr.state === "open" && pr.head.sha
+      input.includeChecks !== false && pr.state === "open" && pr.head.sha
         ? await this.checksOf(input.fullName, pr.head.sha).catch(
             () => undefined,
           )

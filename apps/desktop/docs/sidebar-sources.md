@@ -88,16 +88,42 @@ A module reads its project folder and nothing else, unless the nearest
 
 A module directly in `.work/` shares `.work/package.json`'s declaration; one
 that reaches something of its own lives in a folder with its own
-`package.json`. On macOS the module's process runs under a Seatbelt profile
-built from the declaration: its network is a proxy in Work that opens only the
+`package.json`. The module runs under a macOS Seatbelt profile or Linux
+Bubblewrap namespaces with a mandatory seccomp filter (ADR 0283), built from
+the same declaration: its network is a proxy in Work that opens only the
 declared hosts (no DNS or other sockets), it reads the project, Work's Bun and
 its own home and temp folders, it writes only what it declares, and it has no
 system services (no clipboard, keychain, opening addresses in a browser or
 scripting other apps). It gets nothing of Work's environment, so keys from the
 person's shell and command-line tools that read the home folder (`gh`, `aws`)
 are not available: call a workflow for anything behind a credential. Work's own
-servers are never reachable, whatever is declared. Other systems run no
-modules yet.
+servers are never reachable, whatever is declared. Windows runs no modules yet.
+On both platforms, reads and executable code outside the public OS runtime,
+project, own scratch and approved paths are refused; macOS does not rely on
+guessing which home or temporary folders might contain private data.
+
+Linux requires system Bubblewrap 0.12+ and `socat` (the latter only
+for networked modules), Bash, and unprivileged user/PID/mount namespaces.
+Descriptor mounts stop a path replaced during startup from changing the file
+Work approved. The minimum version also includes safe destination symlink
+resolution during mount setup; older versions are refused.
+Some LTS repositories still ship an older release. Install a current
+[upstream or distribution build](https://github.com/containers/bubblewrap#building)
+as the system `/usr/bin/bwrap` before enabling modules.
+Work packages the pinned arm64/x64 seccomp helper itself. Missing dependencies
+or a blocked namespace stop the module; there is no unconfined fallback.
+On Ubuntu with restricted user namespaces, install the distribution's scoped
+AppArmor policy for `/usr/bin/bwrap` that permits the helper's nested
+PID/mount namespaces too. Some distribution profiles deliberately refuse
+capabilities in child namespaces; those hosts need an administrator-approved
+scoped policy before modules can run. Do not disable AppArmor globally.
+
+Linux file and directory grants must name existing targets. Create the target
+first; Work will never grant its parent as a workaround. Grant a directory
+for creation or atomic replacement beneath it. A grant for an existing single
+file allows in-place changes, but that bind mount cannot itself be replaced.
+Replacing a bound directory's inode requires the worker to restart. These
+mount semantics differ from macOS without widening the approved reach.
 
 Before a module that declares anything runs, its section (palette mode, chips)
 shows Work's request in Work's words: what is new since the person last allowed
@@ -261,5 +287,12 @@ contract and an example are in the authoring guide's Chips section.
 | Validation of `chips`, the owner id it shares with sections | `src/main/workspace-config.ts`, `src/shared/workspace-config.ts` |
 | Work's chips, built per chat | `src/renderer/lib/chips.ts` (rows), `src/renderer/app.tsx` (`chipsFor`, the chat's tabs), `src/renderer/components/chat-dock.tsx` (pull requests, attached chips, turns) |
 | `work:chips` and a chips module's `work` calls, in the window that shows the chat | `src/renderer/lib/chip-board.ts`, `src/renderer/sources/chips.ts`, `src/renderer/lib/chips-work.ts`, `src/renderer/lib/use-chips.ts` |
-| Pull request status (the person's connection, then the GitHub CLI) | `src/main/pr-status.ts`, `CodeHost.pullRequestStatus` |
+| Pull request status (the person's connection, opted-in GitHub CLI, then anonymous public GitHub data) | `src/main/pr-status.ts`, `CodeHost.pullRequestStatus` |
 | The rail: layout, folding, motion, keyboard, menus | `src/renderer/components/chip-rail.tsx`, `src/renderer/lib/chip-layout.ts` |
+
+Public GitHub PR chips need no sign-in (ADR 0279). Anonymous reads refresh every
+five minutes while visible and omit check-run requests; authenticated reads
+refresh every minute. A merged PR stops polling, while a closed PR can reopen.
+A failed refresh retains the last good read. When live information is unavailable,
+the chip labels its saved metadata **Recorded**. GitHub CLI access is an explicit
+profile connection; a working CLI login alone does not enable that connection.

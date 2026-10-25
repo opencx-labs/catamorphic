@@ -159,3 +159,26 @@ it("does not resolve undeclared hosts or reach another module's proxy", async ()
     403,
   );
 });
+
+it("keeps proxy bookkeeping bounded across a reused upstream connection", async () => {
+  const server = await fixture();
+  const gateway = await proxy({ hosts: [`127.0.0.1:${server.port}`] });
+  const warnings: Error[] = [];
+  const onWarning = (warning: Error) => warnings.push(warning);
+  process.on("warning", onWarning);
+  try {
+    for (let i = 0; i < 40; i++)
+      expect(
+        await request(gateway.port, `http://127.0.0.1:${server.port}/`),
+      ).toBe(200);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(
+      warnings.filter(
+        (warning) => warning.name === "MaxListenersExceededWarning",
+      ),
+    ).toEqual([]);
+    expect(server.hits).toHaveLength(40);
+  } finally {
+    process.off("warning", onWarning);
+  }
+});

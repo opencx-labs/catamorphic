@@ -119,8 +119,15 @@ export class SidebarSourceRuntime {
         const spawned = spawn(launch.command, launch.args, {
           cwd: this.opts.projectRoot,
           env: launch.env,
-          stdio: ["pipe", "ignore", "pipe", "pipe"],
+          stdio: [
+            "pipe",
+            "ignore",
+            "pipe",
+            "pipe",
+            ...(launch.inheritedFds ?? []),
+          ],
         });
+        launch.spawned?.();
         child = spawned;
         this.child = spawned;
         this.launched = launch;

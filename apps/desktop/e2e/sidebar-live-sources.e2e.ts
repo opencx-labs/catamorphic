@@ -60,8 +60,9 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Live sources',rootPath:${JSON.stringify(projectRoot)}})`,
   );
   fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "todo-data"), { recursive: true });
   fs.writeFileSync(
-    path.join(projectRoot, "todos.json"),
+    path.join(projectRoot, "todo-data", "todos.json"),
     JSON.stringify([{ id: "todo", text: "Plan the week", done: false }]),
   );
   // Each module lives in a folder of its own, its package.json declaring
@@ -77,13 +78,13 @@ beforeAll(async () => {
   };
   writeModule(
     "todos",
-    { writes: ["todos.json", "todos.tmp", "subscribed"] },
+    { writes: ["todo-data"] },
     `
     import {watch} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
-      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
-      subscribe({invalidate}){void writeFile('subscribed','yes');const w=watch('.',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('subscribed','no')}},
-      async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todos.tmp',JSON.stringify(ts));await rename('todos.tmp','todos.json')}
+      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todo-data/todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
+      subscribe({invalidate}){void writeFile('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('todo-data/subscribed','no')}},
+      async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todo-data/todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todo-data/todos.tmp',JSON.stringify(ts));await rename('todo-data/todos.tmp','todo-data/todos.json')}
     };`,
   );
   writeModule(
@@ -112,7 +113,9 @@ beforeAll(async () => {
       `!!document.querySelector('[data-sidebar-section="${id}"] [data-testid="module-access-request"]')`,
       { label: `${id} asks for its access` },
     );
-  expect(fs.existsSync(path.join(projectRoot, "subscribed"))).toBe(false);
+  expect(fs.existsSync(path.join(projectRoot, "todo-data", "subscribed"))).toBe(
+    false,
+  );
   expect(requests).toBe(0);
   for (const id of sections)
     await click(
@@ -150,19 +153,23 @@ it("writes a todo with visible busy feedback and follows external atomic edits",
     `!!document.querySelector('[data-sidebar-source="todos"] [aria-label="Reopen"]')`,
   );
   expect(
-    JSON.parse(fs.readFileSync(path.join(projectRoot, "todos.json"), "utf8"))[0]
-      .done,
+    JSON.parse(
+      fs.readFileSync(
+        path.join(projectRoot, "todo-data", "todos.json"),
+        "utf8",
+      ),
+    )[0].done,
   ).toBe(true);
   fs.writeFileSync(
-    path.join(projectRoot, "todos.tmp"),
+    path.join(projectRoot, "todo-data", "todos.tmp"),
     JSON.stringify([
       { id: "todo", text: "Plan revised", done: true },
       { id: "review", text: "Review notes", done: false },
     ]),
   );
   fs.renameSync(
-    path.join(projectRoot, "todos.tmp"),
-    path.join(projectRoot, "todos.json"),
+    path.join(projectRoot, "todo-data", "todos.tmp"),
+    path.join(projectRoot, "todo-data", "todos.json"),
   );
   await app.waitFor(
     `document.body.innerText.includes('Plan revised') && document.body.innerText.includes('Review notes')`,
@@ -218,11 +225,16 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
     `document.querySelector('[role="tab"][aria-label="Other"]')?.getAttribute('aria-selected')==='true'`,
   );
   await expect
-    .poll(() => fs.readFileSync(path.join(projectRoot, "subscribed"), "utf8"))
+    .poll(() =>
+      fs.readFileSync(
+        path.join(projectRoot, "todo-data", "subscribed"),
+        "utf8",
+      ),
+    )
     .toBe("no");
   const before = requests;
   fs.writeFileSync(
-    path.join(projectRoot, "todos.json"),
+    path.join(projectRoot, "todo-data", "todos.json"),
     JSON.stringify(
       Array.from({ length: 500 }, (_, i) => ({
         id: `item-${i}`,

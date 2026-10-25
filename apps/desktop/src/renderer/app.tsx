@@ -1494,12 +1494,14 @@ export function App({
       (chat) => chat.sessionId === sessionId && chat.incognito,
     );
 
-  /** A terminal in a remote chat's workspace, named for the chat. */
+  /** A terminal in this chat's workspace, named for the chat. */
   const openChatTerminal = (sessionId: string) => {
-    if (!remoteChatSession(sessionId)) return;
     const session = sessionsById.get(sessionId);
+    // A chat may be shown over another project's workspace or in a detached
+    // dock. Its terminal opens in the workspace that owns the chat.
+    if (projectId) void desktopApi.workspaceNavigate({ projectId });
     openTerminalTab({
-      remoteSessionId: sessionId,
+      chat: { sessionId, remote: remoteChatSession(sessionId) },
       title: `Terminal · ${session ? sessionLabel(session) : "Chat"}`,
     });
   };
@@ -1653,6 +1655,10 @@ export function App({
     identity: projectId,
     activeTabKey: workspace.activeTabKey,
     chats: workspace.chats,
+    chatElement: (localId) =>
+      document.querySelector<HTMLElement>(
+        `[data-chat-project="${CSS.escape(projectId ?? "")}"][data-chat-local-id="${CSS.escape(localId)}"]`,
+      ),
   });
   // Ref'd for the agent-bridge handler (a mount-time effect closure).
   const floatingMotionRef = useRef(floatingMotion);
@@ -2035,7 +2041,7 @@ export function App({
   const switchToOpenPageRef = useRef(switchToOpenPage);
   switchToOpenPageRef.current = switchToOpenPage;
 
-  /** Open a terminal tab; the shell starts in the project folder. */
+  /** Open a shell beside the work in focus: its chat's workspace or the project. */
   const openTerminalTab = (opts?: {
     chatLocalId?: string;
     side?: boolean;
@@ -2044,9 +2050,32 @@ export function App({
     floating?: boolean;
     initialCommand?: string;
     title?: string;
-    /** A shell in this remote chat's workspace (ADR 0209). */
-    remoteSessionId?: string;
+    chat?: TerminalEntry["chat"];
   }) => {
+    const ws = workspaceRef.current;
+    const focused = focusedChatSurfaceId();
+    const focusedPane =
+      document.activeElement?.closest<HTMLElement>("[data-surface-key]")
+        ?.dataset.surfaceKey;
+    const originId =
+      opts?.chatLocalId ??
+      focused ??
+      (focusedPane && !focusedPane.startsWith("chat:")
+        ? undefined
+        : ws.activeChatId);
+    const origin = ws.chats.find(
+      (chat) =>
+        chat.localId === originId &&
+        (opts?.chatLocalId !== undefined || chatVisible(ws, chat)),
+    );
+    const chat =
+      opts?.chat ??
+      (origin?.sessionId
+        ? {
+            sessionId: origin.sessionId,
+            remote: remoteChatSession(origin.sessionId),
+          }
+        : undefined);
     const floating = opts?.floating ?? Boolean(opts?.floatingTool);
     const entry: TerminalEntry = {
       localId: crypto.randomUUID(),
@@ -2055,9 +2084,7 @@ export function App({
       floatingTool: opts?.floatingTool,
       macroId: opts?.macroId,
       initialCommand: opts?.initialCommand,
-      ...(opts?.remoteSessionId
-        ? { remoteSessionId: opts.remoteSessionId }
-        : {}),
+      ...(chat ? { chat } : {}),
     };
     updateWorkspace((ws) => {
       const key = terminalTabKey(entry.localId);
@@ -2467,7 +2494,7 @@ export function App({
         if (
           !target ||
           target.macroId ||
-          target.remoteSessionId ||
+          target.chat?.remote ||
           target.title === title
         )
           return ws;
@@ -6357,7 +6384,7 @@ export function App({
     "switch-agent":
       focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
     "session-status": focusedChat !== undefined,
-    "open-chat-terminal": remoteChatSession(paletteTargetChat?.sessionId),
+    "open-chat-terminal": paletteTargetChat?.sessionId !== undefined,
     "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
@@ -7754,13 +7781,7 @@ export function App({
                             attachSessionId={terminal.attachSessionId}
                             restoreSessionId={terminal.restoreSessionId}
                             adoptSessionId={terminal.adoptSessionId}
-                            {...(terminal.remoteSessionId
-                              ? {
-                                  remoteChat: {
-                                    sessionId: terminal.remoteSessionId,
-                                  },
-                                }
-                              : {})}
+                            chat={terminal.chat}
                             readOnly={Boolean(terminal.agentControlled)}
                             onTitle={(title) =>
                               onTerminalTitle(terminal.localId, title)

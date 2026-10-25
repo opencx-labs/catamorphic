@@ -69,9 +69,8 @@ class Page extends EventEmitter {
   loadURL = vi.fn(async () => {});
   send = vi.fn();
   close = vi.fn();
-  navigationHistory = { goBack: vi.fn(), goForward: vi.fn() };
-  touched = true;
-  executeJavaScriptInIsolatedWorld = vi.fn(async () => this.touched);
+  navigationHistory = { goToOffset: vi.fn() };
+  executeJavaScriptInIsolatedWorld = vi.fn(() => new Promise(() => {}));
   constructor(
     public id: number,
     public hostWebContents: Window,
@@ -141,6 +140,7 @@ beforeEach(() => {
   window = new Window();
   page = new Page(7, window);
   app.emit("web-contents-created", {}, page);
+  page.emit("input-event", {}, { type: "mouseDown" });
 });
 afterEach(() => {
   dispose();
@@ -387,7 +387,7 @@ describe("Leave site?", () => {
       accept: false,
     });
     await flush();
-    expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+    expect(page.navigationHistory.goToOffset).not.toHaveBeenCalled();
     const next = { preventDefault: vi.fn() };
     page.emit("will-prevent-unload", next);
     expect(next.preventDefault).not.toHaveBeenCalled();
@@ -535,7 +535,7 @@ describe("Leave site?", () => {
         now.mockReturnValue(11_500);
         page.emit("will-prevent-unload", { preventDefault: vi.fn() });
         await leave();
-        expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+        expect(page.navigationHistory.goToOffset).not.toHaveBeenCalled();
         expect(page.send).not.toHaveBeenCalledWith("catamorphic:page-proceed");
 
         now.mockReturnValue(20_000);
@@ -546,7 +546,7 @@ describe("Leave site?", () => {
         page.emit("will-prevent-unload", { preventDefault: vi.fn() });
         await leave();
         expect(page.send).toHaveBeenCalledWith("catamorphic:page-proceed");
-        expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+        expect(page.navigationHistory.goToOffset).not.toHaveBeenCalled();
       } finally {
         now.mockRestore();
       }
@@ -587,13 +587,13 @@ describe("Leave site?", () => {
   });
 
   it("asks before a tab the person touched closes, and tells the window the answer", async () => {
-    page.touched = false;
+    page.emit("did-navigate");
     await expect(
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("close");
     expect(page.close).not.toHaveBeenCalled();
 
-    page.touched = true;
+    page.emit("input-event", {}, { type: "mouseDown" });
     await expect(
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("asking");
@@ -620,6 +620,52 @@ describe("Leave site?", () => {
     page.destroyed = true;
     page.emit("destroyed");
     expect(pageClosing(7)).toBe(false);
+  });
+
+  it("does not query the renderer and immediately reports a page without beforeunload closing", async () => {
+    page.close.mockImplementation(() => {
+      page.emit("close");
+      page.destroyed = true;
+      page.emit("destroyed");
+    });
+    await expect(
+      invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
+    ).resolves.toBe("asking");
+    expect(page.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+    expect(window.send).toHaveBeenCalledWith(
+      "catamorphic:browser-close-answer",
+      { guestId: 7, leave: true },
+    );
+  });
+
+  it("keeps interaction with the current document, including keys in its frames", async () => {
+    page.emit("did-navigate");
+    // Neither a shortcut intercepted by the host nor an old frame counts.
+    page.emit("before-input-event", {}, { type: "keyDown", key: "w" });
+    const stale = new Frame("https://example.com", null, 99);
+    ipcMain.emit("catamorphic:page-activated", {
+      sender: page,
+      senderFrame: stale,
+    });
+    await expect(
+      invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
+    ).resolves.toBe("close");
+    expect(page.close).not.toHaveBeenCalled();
+    const frame = embed(page, "https://embedded.test");
+    ipcMain.emit("catamorphic:page-activated", {
+      sender: page,
+      senderFrame: frame,
+    });
+    // Same-document routes and cancelled navigations keep the activation.
+    page.emit("did-start-navigation", {
+      isMainFrame: true,
+      isSameDocument: true,
+      url: "https://example.com/next",
+    });
+    await expect(
+      invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
+    ).resolves.toBe("asking");
+    expect(page.close).toHaveBeenCalledWith({ waitForBeforeUnload: true });
   });
 
   it("keeps a page that stays from using the close's activation while it lasts", async () => {

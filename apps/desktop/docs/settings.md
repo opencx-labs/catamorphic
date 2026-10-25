@@ -4,7 +4,7 @@ Executable sidebar, palette and chip sources declare their access in
 `catamorphic.access` in the nearest `package.json`. Work asks before they
 run with that access and when it grows. File grants bind their resolved
 destinations; changing a symlink's target asks again. Modules run confined
-on macOS, with only declared hosts through a proxy and no inherited keys.
+on macOS and Linux, with only declared hosts through a proxy and no inherited keys.
 They cannot reach Work's own servers, even through a DNS or loopback alias.
 
 Chat hosts declared in `.work/project.json` become shared trust only in the
@@ -90,6 +90,15 @@ checkout selection are runtime state, separate from presentation preferences.
 | Default agent | Profile, shared project, personal project |
 | Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voiceDictation`, `voiceShortcutsAsked`, `voiceInDock`, `voiceInChats`, `voiceBubbleSpot`, `voiceprint`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0216, 0236) |
 | Runtime state | Explicit owner, not inherited appearance configuration |
+
+App-themed terminals use the nearest resolved project theme and its monospace
+font, including shared and personal project overrides. The appearance provider
+loads only the profile's source choice and optional Ghostty configuration; it
+does not resolve app colors outside a project's theme scope. A new terminal
+waits for that scope to load. Existing shells retain their opening colors
+because the embedded terminal engine fixes its palette when opened; font edits
+apply live without restarting a shell. Choosing Ghostty remains an explicit
+profile-wide appearance choice.
 
 Do not apply generic object merging to workspace documents or themes. Credentials,
 enforced permissions, last project, unread markers and sidebar pose are not ordinary

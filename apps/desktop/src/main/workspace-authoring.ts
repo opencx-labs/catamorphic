@@ -5,6 +5,7 @@
  * is a source, Work's own lists included, and nothing here may promise
  * what the loader refuses. No backticks: it lives in a template literal.
  */
+import { PROJECT_APP_DATA_DIR } from "@catamorphic/workflow/project-layout";
 import { RESERVED_PALETTE_TRIGGERS } from "../shared/palette.js";
 
 export const WORKSPACE_AUTHORING_GUIDE = `## Workspace: sidebars, chips and palette modes in workspace.js
@@ -63,7 +64,7 @@ Work's lists (bare names in access lists, app grants and work.read; work:<name> 
   nest. Rows carry signal and data (the session's fields: running,
   attentionRequired, owner, createdAt, ...). Actions: rename (opens the
   rename dialog), new-subsession, mark-read, mark-unread, archive, unarchive
-  (open-terminal and open-preview for a server's chats).
+  (open-terminal for any chat, and open-preview for a server's chats).
 - subsessions: the children of the chat in front; needs when: {session:true}.
 - activity: chats working or waiting for you, and workflow runs going or
   stopped.
@@ -193,13 +194,16 @@ root declares it under catamorphic.access:
 { "name": "linear", "private": true, "catamorphic": { "access": {
   "lists": ["tabs"], "workflows": ["listTickets"],
   "hosts": ["api.linear.app", "*.example.com", "localhost:11434"],
-  "reads": ["~/notes"], "writes": ["todos.json"] } } }
+  "reads": ["~/notes"], "writes": ["${PROJECT_APP_DATA_DIR}/linear"] } } }
 lists: Work's lists it reads and acts on (work.read, work.execute). workflows:
 project workflows it calls (work.call). hosts: the only addresses fetch reaches
 (a name, *.name for its subdomains, name:port; no scheme; without a port, 80
 and 443). reads: files or folders outside the project it reads (from / or ~/).
 writes: files or folders it changes (in the project unless from / or ~/), so a
-module that saves todos.json declares it, and its temporary file too. A module
+module that saves data declares its own data directory. Create that directory
+during setup, before enabling the module. On Linux, grants must name existing
+targets; use a directory grant for new files and atomic replacement. Never
+widen a grant to the parent to work around a missing target. A module
 directly in .work/ shares .work/package.json's declaration; give a module that
 reaches something of its own a folder with its own package.json
 (.work/linear/index.ts beside .work/linear/package.json).
@@ -211,7 +215,9 @@ behind a credential. Before a module that declares anything runs, its section
 asks the person in Work's own words, and asks again whenever the declaration
 grows, naming only what is new; equal or narrower access runs at once, however
 the code changed. A module with no declaration runs without asking. Work
-confines modules on macOS; elsewhere they do not run yet. Local projects only;
+confines modules with macOS Seatbelt or Linux Bubblewrap and mandatory seccomp.
+On Linux, install system Bubblewrap 0.12+ and socat if missing; never
+turn off confinement or host security to make a module start. Local projects only;
 connected projects keep apps. Every handler receives { projectRoot, signal,
 work, session? }.
 - load({parentId, cursor, query?}) returns { items, cursor? }: one parent's
@@ -282,18 +288,19 @@ Rows keep their url, so they still open, highlight and drag as tabs; close
 reaches the tabs list through action. Omit move: a sorted list does not take
 manual order. When a chat starts working its row slides up.
 
-Example: a todo list over a file, with input and an inline action:
+Example: a todo list over a file, with input and an inline action. First create
+${PROJECT_APP_DATA_DIR}/sidebar-todos for its data, then add the section:
 { id: "todos", source: ".work/todos/index.ts", title: "Todos",
   headerActions: [{ label: "Add todo", action: "add", icon: "Plus",
     input: { title: "Add todo", fields: [{ name: "text", label: "Todo" }] } }] }
 .work/todos/package.json:
 { "name": "todos", "private": true, "catamorphic": { "access": {
-  "writes": ["todos.json", "todos.json.tmp"] } } }
+  "writes": ["${PROJECT_APP_DATA_DIR}/sidebar-todos"] } } }
 .work/todos/index.ts:
 import { watch } from "node:fs";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-const file = (root) => path.join(root, "todos.json");
+const file = (root) => path.join(root, "${PROJECT_APP_DATA_DIR}", "sidebar-todos", "todos.json");
 const read = async (root) => {
   try {
     return JSON.parse(await readFile(file(root), "utf8"));
@@ -318,7 +325,7 @@ export default {
         icon: "Check" }] })) };
   },
   subscribe({ projectRoot, invalidate }) {
-    const watcher = watch(projectRoot, (event, name) => {
+    const watcher = watch(path.dirname(file(projectRoot)), (event, name) => {
       if (event === "rename" || name?.toString() === "todos.json") invalidate();
     });
     return () => watcher.close();

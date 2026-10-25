@@ -739,6 +739,16 @@ and one component (`source-section.tsx`) draws every list.
   the operating system for the pre-JS first paint.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
+- App-themed terminals consume the nearest `ThemeScope`, like editors and apps.
+  Their profile-level provider owns only the appearance source and optional
+  Ghostty import. A project's colors and monospace font never come from that
+  outer provider. New shells wait for the scoped theme before opening.
+
+Terminals opened from a chat use that chat's assigned working folder. Local and
+remote chat terminals carry the same session reference; main resolves the local
+checkout at creation, including when reopened. Layout attachment does not change
+where a running shell works. A missing checkout shows an error instead of
+opening in a different folder.
 
 ## Current interaction contracts
 
@@ -752,6 +762,42 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+
+### 2026-10-24: Chat navigation and resizing keep their place
+
+Long running turns use the same offscreen row containment as completed work.
+Earlier rows keep their measured size while skipped; current work, entrances and
+folding notes retain layout through their changes. Lurk expansion no longer rebuilds every
+earlier tool result, and typing does not pay for those offscreen rows. A closed
+command palette retains its exit frame without measuring or animating its results.
+Browser tab closing also avoids a script probe into the page: interaction is
+recorded as it happens, and only the page's own beforeunload can ask to stay.
+
+A tap of PageUp or PageDown still moves one message. A held key now requests
+the top or bottom directly, loading earlier pages before a top move. It never
+walks through every intermediate message anchor. The first key uses a bounded
+search of contained row boxes instead of laying out every offscreen message.
+While that glide settles, its target keeps priority over near-end following:
+a folding row cannot pull the view back down. Late layout corrections retain
+that priority until the destination is reached or the person takes over.
+The end uses that same browser glide before following takes over; switching
+directly from an upward glide to the follow spring let a delayed upward-scroll
+handler cancel the new request. Changing direction must keep the new destination.
+Growing content can carry the view past that saved point; that counts as arrival,
+so following resumes rather than waiting for an exact obsolete position.
+
+The composer and conversation columns animate maximum width with their padding
+when a chat maximizes or floats. Changing one instantly made the composer narrow,
+wrap and widen again inside the card's smooth resize. The card keeps its border
+width, easing its color into the tab's background instead. Empty side gutters focus
+the composer; controls and text selection keep their behavior. Running background
+rows align with the conversation instead of nesting under the steps line.
+
+Successful folder and unsupported-file previews offer no retry. PR chips can
+read public GitHub status without sign-in (ADR 0279); a recorded fallback is
+marked as such. Browser Back and Forward use explicit adjacent history entries,
+including automatic navigation that Chromium's UI history would skip.
+
 ### 2026-10-23: Chat navigation uses configurable keys
 
 Remove the up/down buttons from the conversation. PageUp and PageDown move
@@ -3429,9 +3475,10 @@ after that the rows were cached.
   chat a tab (⌘⇧M) switched the content to the chat's tab in the frame the
   chat started to grow: the page behind vanished, leaving the bare
   backdrop around a chat that had just lost its title, border and shadow.
-  The page in front now stays painted, and mounted, beneath the chat for
-  its 250ms (`useRecedingSurface`), and the card's edge and title ease out
-  as it grows.
+  The page in front stays painted and mounted until the frame and card's
+  actual growth animations finish (`useRecedingSurface`), including a late
+  dock commit or delayed animation progress. A wall-clock timer cannot
+  discard it early. The card's edge and title ease out as it grows.
 - **A queued message reads right to left.** Its state (Queued, Held,
   Sending) sits at the bubble's right edge and its controls slide out of
   it to the left on hover, each easing in a soft ground under the pointer.

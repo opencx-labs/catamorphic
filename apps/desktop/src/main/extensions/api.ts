@@ -315,15 +315,15 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
     },
     goBack: (caller, [tabId]) => {
       const record = tabFor(caller, tabId);
-      if (!record.guest.navigationHistory.canGoBack())
+      if (!record.guest.navigationHistory.canGoToOffset(-1))
         throw new Error("Cannot find a next page in history.");
-      record.guest.navigationHistory.goBack();
+      record.guest.navigationHistory.goToOffset(-1);
     },
     goForward: (caller, [tabId]) => {
       const record = tabFor(caller, tabId);
-      if (!record.guest.navigationHistory.canGoForward())
+      if (!record.guest.navigationHistory.canGoToOffset(1))
         throw new Error("Cannot find a next page in history.");
-      record.guest.navigationHistory.goForward();
+      record.guest.navigationHistory.goToOffset(1);
     },
     highlight: async (caller, [info]) => {
       const props = bag(info);

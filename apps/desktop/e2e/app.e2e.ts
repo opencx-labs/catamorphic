@@ -769,6 +769,14 @@ describe("chat flows", () => {
         .find((row) => row.textContent.includes('Session menu'));`,
       { timeoutMs: 30_000, label: "session menu row in the sidebar" },
     );
+    await runWait(
+      `const dock = floatingDock();
+       return dock?.textContent.includes('The session menu is ready.') &&
+         !dock.querySelector('[aria-label="Stop the agent"]') &&
+         !dock.getAnimations().some(animation => animation.playState === 'running') &&
+         dock.contains(document.activeElement);`,
+      { label: "new chat settled before opening its session menu" },
+    );
 
     // Sidebar and dock titles settle independently. Open the dock's menu only
     // once its own bubble reflects the session title.
@@ -786,7 +794,7 @@ describe("chat flows", () => {
     );
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Rename…|New subsession|Mark as unread|Archive';`,
+       return labels.join('|') === 'Rename…|New subsession|Open terminal|Mark as unread|Archive';`,
       { label: "dock session menu" },
     );
     await run(
@@ -816,7 +824,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|Rename…|New subsession|Mark as read|Archive';`,
+       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|Rename…|New subsession|Open terminal|Mark as read|Archive';`,
       { label: "sidebar session menu matches the dock" },
     );
     await run(
@@ -2103,6 +2111,11 @@ describe("subagents and background watchers", () => {
          !!step.querySelector('.animate-pulse');`,
       { timeoutMs: 30_000, label: "running background step pulses" },
     );
+    const backgroundAlignment = await run<number>(`
+      const row=floatingDock().querySelector('[data-step-kind="background"][data-running]');
+      return Math.abs(row.getBoundingClientRect().left-row.closest('[data-testid="chat-turn-steps"]').getBoundingClientRect().left);
+    `);
+    expect(backgroundAlignment).toBeLessThan(1);
     await runWait(
       `return !!floatingDock()?.querySelector(
          '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,

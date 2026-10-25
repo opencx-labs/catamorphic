@@ -365,6 +365,7 @@ export function registerSidebarSources(deps: {
             access: current.access,
             toolchain,
             scratchRoot: deps.scratchRoot,
+            scope: key,
             unconfined: deps.unconfined === true,
             ...(deps.blocked ? { blocked: deps.blocked } : {}),
           });

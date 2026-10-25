@@ -5,6 +5,24 @@ the session event log and the turn queue (ADR 0197). Desktop owns surfaces, focu
 and native clipboard access. Registry components compose the hook and callbacks;
 they must not import Electron or assume a desktop workspace.
 
+## Message navigation and activity
+
+Message navigation belongs to the host's customizable shortcuts. A quick
+PageUp/PageDown press moves one message. The first repeat of a held key requests
+the top or bottom directly, without visiting intermediate message anchors;
+further repeats leave that move alone. A top request loads earlier pages before
+making its endpoint move and yields to pointer or wheel input. A failed history
+load stops that request. Reduced motion
+uses immediate scrolling. Finding a nearby message measures a bounded set of
+ordered row boxes, leaving offscreen message layout contained.
+Adjacent messages and a move to the end use the same browser glide. Following
+resumes from that glide, so a delayed upward-scroll handler cannot cancel a new
+request for the latest response, and new words keep following as they arrive.
+Layout that carries the view past its saved endpoint also counts as arrival.
+
+Running background commands remain visible outside the folded steps list and
+align with the main conversation column, without a nested border or indentation.
+
 ## Three independent facts
 
 - Delivery: local session creation and command receipts. `isSending` ends when
@@ -119,8 +137,9 @@ render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
 `cat-step-in`, `cat-gap-in`, `cat-swap-*`, `cat-reveal` with its
 `data-entering` and `data-moving`, `cat-grow`), its scroll pinning (`cat-scroll-anchor` with
 `data-pinned`, set only while the chat follows and nothing in it is pressed
-or selected) and `cat-settled` live in `@catamorphic/ui/styles.css`, which
-the renderer stylesheet imports. The timeline's press and key listeners on
+or selected) and row containment (`cat-row`, with `cat-uncontained` for current
+work and folding notes) live in `@catamorphic/ui/styles.css`, which the renderer
+stylesheet imports. The timeline's press and key listeners on
 the document are listed in the desktop's design lint.
 
 Registry build emits the installable JSON; source edits alone do not update that

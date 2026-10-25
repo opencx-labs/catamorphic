@@ -75,8 +75,8 @@ const helpers = `
   };
   const toLatest = () => {
     const dock = frontDock();
-    for (let i = 0; i <= dock.querySelectorAll('[data-user-message]').length; i++)
-      dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',repeat:true,bubbles:true,cancelable:true}));
+    dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',bubbles:true,cancelable:true}));
+    dock.dispatchEvent(new KeyboardEvent('keydown', {key:'PageDown',repeat:true,bubbles:true,cancelable:true}));
   };
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
@@ -794,7 +794,14 @@ describe("chat motion", () => {
           { label: "a long answer streaming", timeoutMs: 30_000 },
         );
         await mark("pinned");
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        await runWait(
+          `return performance.now()-window.__marks.pinned>=1200 &&
+            window.__chatMotion.since(window.__marks.pinned)>20;`,
+          {
+            label:
+              "enough rendered frames while following the streaming answer",
+          },
+        );
         await mark("followed");
         // A person's wheel, which is what lets go of the latest message,
         // over a code block while the answer opens a new line: the block
@@ -863,7 +870,11 @@ describe("chat motion", () => {
           });
         }
         await mark("scrolled");
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        await runWait(
+          `return performance.now()-window.__marks.scrolled>=1200 &&
+            window.__chatMotion.since(window.__marks.scrolled+400)>20;`,
+          { label: "enough rendered frames while reading above the stream" },
+        );
         await mark("back");
         await run(`toLatest(); return true;`);
       },
@@ -1246,6 +1257,14 @@ describe("chat motion", () => {
       style.textContent = '[role="log"] > div > div { max-width: 335px !important; }';
       document.head.append(style);
       return true;`);
+    // The column now resizes smoothly. Aim the native pointer at its final
+    // position, after the width transition, rather than at a moving message.
+    await runWait(
+      `const column = frontDock().querySelector('[role="log"] > div > div');
+       return Math.abs(column.getBoundingClientRect().width - 335) < 1 &&
+         !column.getAnimations().some(animation => animation.playState === 'running');`,
+      { label: "the narrow column settled" },
+    );
     await app.movePointer(await point(latest));
     const narrow = await lookWhen("1", "the time shown in a narrow column");
     const column = await run<[number, number]>(
@@ -1370,6 +1389,34 @@ describe("chat motion", () => {
       "return document.hasFocus() && document.activeElement === composer();",
       { label: "navigation composer has native focus" },
     );
+    // A folding step can shrink the transcript as navigation starts. The
+    // person's target must keep priority over the library's near-end follow.
+    await run(`
+      const content=logScroller().firstElementChild;
+      const shrinking=document.createElement('div'); shrinking.style.height='8px';
+      content.insertBefore(shrinking,content.lastElementChild);
+      window.__navigationStarted=false; window.__navigationUnpinned=false; window.__navigationRepinned=false;
+      const sample=()=>{
+        if(window.__navigationStarted){
+          const pinned=content.hasAttribute('data-pinned');
+          if(!pinned) window.__navigationUnpinned=true;
+          else if(window.__navigationUnpinned) window.__navigationRepinned=true;
+        }
+        window.__navigationFrame=requestAnimationFrame(sample);
+      };
+      window.__navigationFrame=requestAnimationFrame(sample);
+      window.addEventListener('keydown',function fold(event){
+        if(event.key!=='PageUp')return;
+        window.__navigationStarted=true;
+        // Fold after the first navigation frame has let go, while it is
+        // still near the end. This proves a resize cannot take it back.
+        requestAnimationFrame(()=>requestAnimationFrame(()=>shrinking.remove()));
+        window.removeEventListener('keydown',fold);
+      });
+      return true;`);
+    await runWait("return following();", {
+      label: "navigation starts from the end before the row folds",
+    });
     const key = async (
       name: "PageUp" | "PageDown" | "ArrowUp" | "ArrowDown",
       repeat = false,
@@ -1402,9 +1449,11 @@ describe("chat motion", () => {
       );
     await key("PageUp");
     await atMessage(3);
-    // Repeats arrive before the first smooth scroll could finish. Each
-    // must advance a message rather than continually restart that move.
-    for (let i = 0; i < 8; i++) await key("PageUp", true);
+    expect(await run("return window.__navigationRepinned;")).toBe(false);
+    await run("cancelAnimationFrame(window.__navigationFrame); return true;");
+    // One repeat means held: reach the end without stepping through each
+    // intermediate message or waiting for more repeats.
+    await key("PageUp", true);
     await app.cdp("Input.dispatchKeyEvent", {
       type: "keyUp",
       key: "PageUp",
@@ -1412,6 +1461,9 @@ describe("chat motion", () => {
       windowsVirtualKeyCode: 33,
     });
     await atMessage(0);
+    await runWait("return logScroller().scrollTop < 1;", {
+      label: "held Up reaches the absolute top before another press",
+    });
     const oldest = await run<number>("return logScroller().scrollTop;");
     await key("PageUp");
     await key("PageUp", true);
@@ -1421,7 +1473,7 @@ describe("chat motion", () => {
     ).toBeLessThan(2);
     await key("PageDown");
     await atMessage(1);
-    for (let i = 0; i < 8; i++) await key("PageDown", true);
+    await key("PageDown", true);
     await app.cdp("Input.dispatchKeyEvent", {
       type: "keyUp",
       key: "PageDown",
@@ -1431,18 +1483,126 @@ describe("chat motion", () => {
     await runWait("return following();", {
       label: "held PageDown reaches the latest response",
     });
-    // The normal preference store rebinds both actions live.
-    await app.eval(`new Promise((resolve, reject) => {
-      const api=window.catamorphicDesktop;
-      const stop=api.onKeybindingsChanged(value => { stop(); requestAnimationFrame(() => resolve(value)); });
-      api.getKeybindings().then(current => api.setKeybindings({...current,
+    // Settings reads the same provider as the chat. Wait for its new
+    // bindings to render, not merely for the IPC broadcast to arrive.
+    await app.eval(
+      "document.querySelector('button[aria-label=\"Settings\"]').click()",
+    );
+    await app.waitFor(
+      "!!document.querySelector('[data-setting-id=\"shortcut.chat-previous-message\"]')",
+    );
+    await app.eval(`(async () => {
+      const api=window.catamorphicDesktop, current=await api.getKeybindings();
+      await api.setKeybindings({...current,
         'chat-previous-message':'Alt+ArrowUp', 'chat-next-message':'Alt+ArrowDown'
-      })).catch(reject);
-    })`);
+      });
+      return true;
+    })()`);
+    await app.waitFor(`
+      document.querySelector('[data-setting-id="shortcut.chat-previous-message"] button')?.textContent === '⌥↑' &&
+      document.querySelector('[data-setting-id="shortcut.chat-next-message"] button')?.textContent === '⌥↓'`);
+    // Opening Settings minimizes the floating chat; restore it normally.
+    await app.press("m", process.platform === "darwin" ? 4 : 2);
+    await runWait(
+      "return !!composer() && !frontDock().getAnimations().some(a=>a.playState==='running');",
+      { label: "navigation chat restored after changing its shortcuts" },
+    );
+    await run("composer().focus(); return true;");
+    // A busy renderer can deliver the upward glide's scroll notification
+    // after the next key. Coalesce those notifications, then release one
+    // after the Down handler, before its first animation frame.
+    await run(`
+      const s=logScroller();window.__delayedNavigationScrolls=0;
+      const hold=event=>{window.__delayedNavigationScrolls++;event.stopImmediatePropagation();};
+      const restore=()=>{
+        s.removeEventListener('scroll',hold,true);
+        window.removeEventListener('keydown',release);
+      };
+      const release=event=>{
+        if(event.key!=='ArrowDown'||!event.altKey)return;
+        restore();s.dispatchEvent(new Event('scroll'));
+      };
+      s.addEventListener('scroll',hold,true);
+      window.addEventListener('keydown',release);
+      window.__restoreNavigationScroll=restore;return true;
+    `);
+    try {
+      await key("ArrowUp", false, 1);
+      await atMessage(3);
+      await key("ArrowDown", false, 1);
+      await runWait("return following();", {
+        label: "customized Down reaches latest after a delayed upward scroll",
+      });
+      expect(
+        await run<number>("return window.__delayedNavigationScrolls;"),
+      ).toBeGreaterThan(0);
+    } finally {
+      await run("window.__restoreNavigationScroll();return true;");
+    }
+    // Streaming layout can carry the viewport slightly past the endpoint
+    // recorded when Down began. That also counts as arriving, so following
+    // must resume rather than waiting forever for an exact old position.
     await key("ArrowUp", false, 1);
     await atMessage(3);
+    await run(`
+      const s=logScroller(), content=s.firstElementChild;
+      const padding=content.style.paddingBottom;
+      const end=s.scrollHeight-s.clientHeight;
+      window.__navigationPassedEnd=false;
+      window.__navigationGrowth=[];
+      const grow=()=>{
+        window.__navigationGrowth.push({top:s.scrollTop,end,max:s.scrollHeight-s.clientHeight,pinned:content.hasAttribute('data-pinned')});
+        if(s.scrollTop<end-2)return;
+        s.removeEventListener('scrollend',grow,true);
+        content.style.paddingBottom=(parseFloat(getComputedStyle(content).paddingBottom)+64)+'px';
+        s.scrollTop=end+8;
+        window.__navigationPassedEnd=s.scrollTop>end+2;
+      };
+      s.addEventListener('scrollend',grow,true);
+      window.__restoreNavigationGrowth=()=>{
+        s.removeEventListener('scrollend',grow,true);
+        content.style.paddingBottom=padding;
+      };return true;
+    `);
+    try {
+      await key("ArrowDown", false, 1);
+      await runWait(
+        `const s=logScroller();
+         if(!window.__navigationPassedEnd || !following()) throw new Error(JSON.stringify({passed:window.__navigationPassedEnd,top:s.scrollTop,max:s.scrollHeight-s.clientHeight,pinned:s.firstElementChild.hasAttribute('data-pinned'),growth:window.__navigationGrowth}));
+         return true;`,
+        {
+          label:
+            "following resumes after layout carries Down past its endpoint",
+        },
+      );
+    } finally {
+      await run("window.__restoreNavigationGrowth();return true;");
+    }
+    // A tab's top padding must not make the first Down merely align the
+    // oldest message after a held Up has reached the absolute beginning.
+    const maximize = await run<{ x: number; y: number }>(`
+      const r=frontDock().querySelector('button[aria-label="Open as tab"]').getBoundingClientRect();
+      return {x:r.x+r.width/2,y:r.y+r.height/2};`);
+    await app.clickPointer(maximize);
+    await runWait(
+      "return frontDock().hasAttribute('data-chat-tab') && !frontDock().getAnimations().some(a=>a.playState==='running');",
+      { label: "navigation chat is a settled tab" },
+    );
+    await run("composer().focus(); return true;");
+    await key("ArrowUp", false, 1);
+    await key("ArrowUp", true, 1);
+    await app.cdp("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "ArrowUp",
+      code: "ArrowUp",
+      windowsVirtualKeyCode: 38,
+      modifiers: 1,
+    });
+    await runWait("return logScroller().scrollTop < 1;", {
+      label: "held Up reaches the tab's absolute top",
+    });
     await key("ArrowDown", false, 1);
-    await runWait("return following();");
+    await atMessage(1);
     expect(await run(`return composer().textContent;`)).toBe("Keep this draft");
     expect(app.getRendererErrors()).toEqual([]);
   });

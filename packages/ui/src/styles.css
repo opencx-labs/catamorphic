@@ -2290,10 +2290,10 @@
   overflow-y: clip;
 }
 
-/* A conversation in view only, from first to last. A settled turn out of
-   view skips style, layout and paint; the live turn never does. Every row
-   (cat-row) remembers its last laid-out size, live ones included, so a
-   turn that settles in view keeps its height for the frame before the
+/* A conversation in view only, from first to last. Every row out of
+   view skips style, layout and paint, including earlier rows of a live turn.
+   Each row remembers its last laid-out size, so a
+   row coming into view keeps its height for the frame before the
    browser finds it in view (a guess there could collapse the conversation
    for a frame and drop the scroll to the top), and one coming back into
    view takes the size it left with. Only a row never laid out guesses.
@@ -2308,10 +2308,14 @@
 }
 
 @supports (overflow-anchor: auto) {
-  .cat-settled {
+  .cat-row {
     content-visibility: auto;
     padding: 4px;
     margin: -4px;
+  }
+  /* Current work, entrances and folding notes retain their actual size. */
+  .cat-row:is(.cat-gap-in, .cat-uncontained) {
+    content-visibility: visible;
   }
 }
 

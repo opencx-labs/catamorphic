@@ -178,6 +178,7 @@ it("draws a chat as a row: its address, signals, branch and own verbs", async ()
     menu: [
       { action: "rename" },
       { action: "new-subsession" },
+      { action: "open-terminal" },
       { action: "mark-unread" },
       { action: "archive" },
     ],
