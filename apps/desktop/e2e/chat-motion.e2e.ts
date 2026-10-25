@@ -1558,18 +1558,21 @@ describe("chat motion", () => {
       };
       window.__navigationPassedEnd=false;
       window.__navigationGrowth=[];
+      // Observe arrival before the scroll library's handlers. A browser can
+      // coalesce scrollend with the preceding glide, so it is not the
+      // signal that this fixture's simulated layout change should depend on.
       const grow=()=>{
         const max=s.scrollHeight-s.clientHeight;
         window.__navigationGrowth.push({top:s.scrollTop,end,max});
         if(end===undefined || s.scrollTop<Math.min(end,max)-2)return;
-        s.removeEventListener('scrollend',grow,true);
+        s.removeEventListener('scroll',grow,true);
         content.style.paddingBottom=(parseFloat(getComputedStyle(content).paddingBottom)+Math.max(64,end-max+64))+'px';
         s.scrollTop=end+8;
         window.__navigationPassedEnd=s.scrollTop>end+2;
       };
-      s.addEventListener('scrollend',grow,true);
+      s.addEventListener('scroll',grow,true);
       window.__restoreNavigationGrowth=()=>{
-        s.removeEventListener('scrollend',grow,true);
+        s.removeEventListener('scroll',grow,true);
         if(ownScrollTo) Object.defineProperty(s,'scrollTo',ownScrollTo);
         else delete s.scrollTo;
         content.style.paddingBottom=padding;
