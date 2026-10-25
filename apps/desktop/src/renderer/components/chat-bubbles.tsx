@@ -563,7 +563,13 @@ export function ChatBubbles({
           { transform: `translateX(${delta}px)` },
           { transform: "translateX(0)" },
         ],
-        { duration: motionMs(FOLD_MS) * shortening, easing: EASE_STANDARD },
+        {
+          duration: motionMs(FOLD_MS) * shortening,
+          easing: EASE_STANDARD,
+          // Hold the measured pose while playback is pending. Without it,
+          // the new resting spot can show for a frame before the slide.
+          fill: "backwards",
+        },
       ),
       from: previous,
       shortening,
