@@ -1547,26 +1547,45 @@ describe("chat motion", () => {
     await run(`
       const s=logScroller(), content=s.firstElementChild;
       const padding=content.style.paddingBottom;
-      const end=s.scrollHeight-s.clientHeight;
+      // Capture Down's real native endpoint. Contained rows can change the
+      // scroll height between this setup and the key handler's measurement.
+      const ownScrollTo=Object.getOwnPropertyDescriptor(s,'scrollTo');
+      const scrollTo=s.scrollTo;
+      let end;
+      s.scrollTo=function(...args){
+        if(end===undefined && typeof args[0]?.top==='number') end=args[0].top;
+        return scrollTo.apply(this,args);
+      };
       window.__navigationPassedEnd=false;
+      window.__navigationGrowth=[];
       const grow=()=>{
-        if(s.scrollTop<end-2)return;
+        const max=s.scrollHeight-s.clientHeight;
+        window.__navigationGrowth.push({top:s.scrollTop,end,max});
+        if(end===undefined || s.scrollTop<Math.min(end,max)-2)return;
         s.removeEventListener('scrollend',grow,true);
-        content.style.paddingBottom=(parseFloat(getComputedStyle(content).paddingBottom)+64)+'px';
+        content.style.paddingBottom=(parseFloat(getComputedStyle(content).paddingBottom)+Math.max(64,end-max+64))+'px';
         s.scrollTop=end+8;
         window.__navigationPassedEnd=s.scrollTop>end+2;
       };
       s.addEventListener('scrollend',grow,true);
       window.__restoreNavigationGrowth=()=>{
         s.removeEventListener('scrollend',grow,true);
+        if(ownScrollTo) Object.defineProperty(s,'scrollTo',ownScrollTo);
+        else delete s.scrollTo;
         content.style.paddingBottom=padding;
       };return true;
     `);
     try {
       await key("ArrowDown", false, 1);
-      await runWait("return window.__navigationPassedEnd && following();", {
-        label: "following resumes after layout carries Down past its endpoint",
-      });
+      await runWait(
+        `const s=logScroller();
+         if(!window.__navigationPassedEnd || !following()) throw new Error(JSON.stringify({passed:window.__navigationPassedEnd,following:following(),top:s.scrollTop,max:s.scrollHeight-s.clientHeight,growth:window.__navigationGrowth}));
+         return true;`,
+        {
+          label:
+            "following resumes after layout carries Down past its endpoint",
+        },
+      );
     } finally {
       await run("window.__restoreNavigationGrowth();return true;");
     }
