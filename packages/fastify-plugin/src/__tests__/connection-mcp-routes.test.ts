@@ -26,6 +26,7 @@ function appWithBroker(
     provider?: "mcp" | "json";
     actions?: Record<string, unknown>[];
     output?: unknown;
+    channel?: "mcp" | "sandbox";
   } = {},
 ) {
   const invoke = vi.fn(async (input: { action: string }) => {
@@ -46,6 +47,7 @@ function appWithBroker(
                 allocationId: ALLOCATION_ID,
                 agentSessionId: "session",
                 alias: "workspace",
+                channel: args.channel ?? "mcp",
               }
             : null,
       },
@@ -96,6 +98,16 @@ async function rpc(args: {
 }
 
 describe("connection capability MCP gateway", () => {
+  it("refuses a grant issued for sandbox code", async () => {
+    const { app, invoke } = appWithBroker({ channel: "sandbox" });
+    const response = await rpc({
+      app,
+      token: "valid",
+      payload: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(invoke).not.toHaveBeenCalled();
+  });
   it("requires a live bearer grant and validates JSON-RPC envelopes", async () => {
     const { app } = appWithBroker();
     expect(

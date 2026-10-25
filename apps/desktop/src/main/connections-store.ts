@@ -15,6 +15,7 @@ import {
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 import type { ProfileConnection } from "../shared/profile-connections.js";
+import { credentialEncryptionAvailable } from "./credential-encryption.js";
 
 /**
  * Per-profile MCP connections: `<userData>/profiles/<id>/connections.json`.
@@ -92,18 +93,37 @@ export interface CachedMcpTool {
 }
 
 interface StoredConnection
-  extends Omit<McpConnection, "headers" | "env" | "oauth"> {
+  extends Omit<McpConnection, "headers" | "env" | "oauth" | "oauthClient"> {
   headersEncrypted?: string;
-  headersPlaintext?: Record<string, string>;
   envEncrypted?: string;
-  envPlaintext?: Record<string, string>;
   oauthEncrypted?: string;
-  oauthPlaintext?: McpOAuthState;
+  oauthClientEncrypted?: string;
 }
 
 interface ConnectionsFile {
   connections: StoredConnection[];
 }
+
+const STORED_CONNECTION_FIELDS: Record<keyof StoredConnection, true> = {
+  id: true,
+  name: true,
+  transport: true,
+  url: true,
+  command: true,
+  args: true,
+  cwd: true,
+  envVars: true,
+  enabled: true,
+  source: true,
+  iconUrl: true,
+  toolPolicy: true,
+  ceiling: true,
+  tools: true,
+  headersEncrypted: true,
+  envEncrypted: true,
+  oauthEncrypted: true,
+  oauthClientEncrypted: true,
+};
 
 /** Connection as exposed to the renderer: secret values never included. */
 export interface PublicMcpConnection {
@@ -170,12 +190,11 @@ export class ConnectionsStore {
 
   constructor(private readonly file: string) {
     this.data = this.load();
-    this.migratePlaintext();
   }
 
   /**
    * A profile's connections as its preview card shows them, read from its
-   * file without decrypting, migrating or watching it: the card reads
+   * file without decrypting or watching it: the card reads
    * profiles that are not open.
    */
   static previews(file: string): ProfileConnection[] {
@@ -204,11 +223,29 @@ export class ConnectionsStore {
   private load(): ConnectionsFile {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, "utf-8"));
-      if (Array.isArray(raw?.connections)) return raw as ConnectionsFile;
-    } catch {
-      // First run.
+      if (!Array.isArray(raw?.connections))
+        throw new Error("Invalid connection settings");
+      if (
+        Object.keys(raw).some((key) => key !== "connections") ||
+        raw.connections.some(
+          (entry: unknown) =>
+            entry === null ||
+            typeof entry !== "object" ||
+            Array.isArray(entry) ||
+            Object.keys(entry).some(
+              (key) => !Object.hasOwn(STORED_CONNECTION_FIELDS, key),
+            ),
+        )
+      )
+        throw new Error("Unsupported connection settings");
+      return raw as ConnectionsFile;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return { connections: [] };
+      throw new Error("Connection settings could not be opened", {
+        cause: error,
+      });
     }
-    return { connections: [] };
   }
 
   private save(): void {
@@ -220,36 +257,6 @@ export class ConnectionsStore {
     fs.renameSync(temporary, this.file);
     fs.chmodSync(this.file, 0o600);
     for (const listener of this.listeners) listener();
-  }
-
-  private migratePlaintext(): void {
-    const needsMigration = this.data.connections.some(
-      (connection) =>
-        connection.headersPlaintext ||
-        connection.envPlaintext ||
-        connection.oauthPlaintext,
-    );
-    if (!needsMigration) return;
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error(
-        "OS credential encryption is required to migrate connection secrets",
-      );
-    }
-    for (const connection of this.data.connections) {
-      if (connection.headersPlaintext) {
-        connection.headersEncrypted = encryptValue(connection.headersPlaintext);
-        connection.headersPlaintext = undefined;
-      }
-      if (connection.envPlaintext) {
-        connection.envEncrypted = encryptValue(connection.envPlaintext);
-        connection.envPlaintext = undefined;
-      }
-      if (connection.oauthPlaintext) {
-        connection.oauthEncrypted = encryptValue(connection.oauthPlaintext);
-        connection.oauthPlaintext = undefined;
-      }
-    }
-    this.save();
   }
 
   /** Fired after every mutation (agent registries key caches off this). */
@@ -280,7 +287,7 @@ export class ConnectionsStore {
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.envVars ? { envVars: input.envVars } : {}),
       ...(input.iconUrl ? { iconUrl: input.iconUrl } : {}),
-      ...(input.oauthClient ? { oauthClient: input.oauthClient } : {}),
+      ...encryptJson("oauthClient", input.oauthClient),
       ...(input.ceiling ? { ceiling: input.ceiling } : {}),
       enabled: input.enabled ?? true,
       source: input.source ?? { kind: "manual" },
@@ -295,6 +302,18 @@ export class ConnectionsStore {
   update(id: string, patch: UpdateConnectionInput): McpConnection | undefined {
     const stored = this.data.connections.find((entry) => entry.id === id);
     if (!stored) return undefined;
+    const headers =
+      patch.headers === undefined
+        ? undefined
+        : encryptMap("headers", patch.headers ?? undefined);
+    const env =
+      patch.env === undefined
+        ? undefined
+        : encryptMap("env", patch.env ?? undefined);
+    const oauthClient =
+      patch.oauthClient === undefined
+        ? undefined
+        : encryptJson("oauthClient", patch.oauthClient ?? undefined);
     if (patch.name !== undefined)
       stored.name = patch.name.trim() || stored.name;
     if (patch.url !== undefined) stored.url = patch.url;
@@ -302,21 +321,13 @@ export class ConnectionsStore {
     if (patch.args !== undefined) stored.args = patch.args;
     if (patch.cwd !== undefined) stored.cwd = patch.cwd ?? undefined;
     if (patch.envVars !== undefined) stored.envVars = patch.envVars;
-    if (patch.oauthClient !== undefined)
-      stored.oauthClient = patch.oauthClient ?? undefined;
+    if (oauthClient)
+      stored.oauthClientEncrypted = oauthClient.oauthClientEncrypted;
     if (patch.enabled !== undefined) stored.enabled = patch.enabled;
     if (patch.ceiling !== undefined)
       stored.ceiling = patch.ceiling ?? undefined;
-    if (patch.headers !== undefined) {
-      const next = encryptMap("headers", patch.headers ?? undefined);
-      stored.headersEncrypted = next.headersEncrypted;
-      stored.headersPlaintext = next.headersPlaintext;
-    }
-    if (patch.env !== undefined) {
-      const next = encryptMap("env", patch.env ?? undefined);
-      stored.envEncrypted = next.envEncrypted;
-      stored.envPlaintext = next.envPlaintext;
-    }
+    if (headers) stored.headersEncrypted = headers.headersEncrypted;
+    if (env) stored.envEncrypted = env.envEncrypted;
     this.save();
     return this.decrypt(stored);
   }
@@ -363,7 +374,6 @@ export class ConnectionsStore {
     if (!stored) return;
     const next = encryptJson("oauth", state);
     stored.oauthEncrypted = next.oauthEncrypted;
-    stored.oauthPlaintext = next.oauthPlaintext;
     this.save();
   }
 
@@ -397,19 +407,19 @@ export class ConnectionsStore {
   private decrypt(stored: StoredConnection): McpConnection {
     const {
       headersEncrypted,
-      headersPlaintext,
       envEncrypted,
-      envPlaintext,
       oauthEncrypted,
-      oauthPlaintext,
+      oauthClientEncrypted,
       ...rest
     } = stored;
-    const oauth = decryptJson<McpOAuthState>(oauthEncrypted, oauthPlaintext);
+    const oauth = decryptJson<McpOAuthState>(oauthEncrypted);
+    const oauthClient = decryptJson<McpOAuthClientHint>(oauthClientEncrypted);
     return {
       ...rest,
-      ...maybeMap("headers", headersEncrypted, headersPlaintext),
-      ...maybeMap("env", envEncrypted, envPlaintext),
+      ...maybeMap("headers", headersEncrypted),
+      ...maybeMap("env", envEncrypted),
       ...(oauth ? { oauth } : {}),
+      ...(oauthClient ? { oauthClient } : {}),
     };
   }
 }
@@ -419,18 +429,18 @@ function encryptMap(
   map: Record<string, string> | undefined,
 ): Partial<StoredConnection> {
   if (!map || Object.keys(map).length === 0) return {};
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!credentialEncryptionAvailable()) {
     throw new Error("OS credential encryption is unavailable");
   }
   return { [`${key}Encrypted`]: encryptValue(map) };
 }
 
 function encryptJson<T>(
-  key: "oauth",
+  key: "oauth" | "oauthClient",
   value: T | undefined,
-): { oauthEncrypted?: string; oauthPlaintext?: T } {
+): Pick<Partial<StoredConnection>, "oauthEncrypted" | "oauthClientEncrypted"> {
   if (value === undefined) return {};
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!credentialEncryptionAvailable()) {
     throw new Error("OS credential encryption is unavailable");
   }
   return { [`${key}Encrypted`]: encryptValue(value) };
@@ -440,11 +450,9 @@ function encryptValue(value: unknown): string {
   return safeStorage.encryptString(JSON.stringify(value)).toString("base64");
 }
 
-function decryptJson<T>(
-  encrypted: string | undefined,
-  plaintext: T | undefined,
-): T | undefined {
+function decryptJson<T>(encrypted: string | undefined): T | undefined {
   if (encrypted) {
+    if (!credentialEncryptionAvailable()) return undefined;
     try {
       return JSON.parse(
         safeStorage.decryptString(Buffer.from(encrypted, "base64")),
@@ -453,15 +461,15 @@ function decryptJson<T>(
       return undefined;
     }
   }
-  return plaintext;
+  return undefined;
 }
 
 function maybeMap(
   key: "headers" | "env",
   encrypted: string | undefined,
-  plaintext: Record<string, string> | undefined,
 ): Partial<Pick<McpConnection, "headers" | "env">> {
   if (encrypted) {
+    if (!credentialEncryptionAvailable()) return {};
     try {
       return {
         [key]: JSON.parse(
@@ -472,15 +480,28 @@ function maybeMap(
       return {};
     }
   }
-  return plaintext ? { [key]: plaintext } : {};
+  return {};
 }
 
 export function toPublicConnection(
   connection: McpConnection,
 ): PublicMcpConnection {
-  const { headers, env, oauth, ...rest } = connection;
+  const { headers, env, oauth } = connection;
   return {
-    ...rest,
+    id: connection.id,
+    name: connection.name,
+    transport: connection.transport,
+    ...(connection.url ? { url: connection.url } : {}),
+    ...(connection.command ? { command: connection.command } : {}),
+    ...(connection.args ? { args: connection.args } : {}),
+    ...(connection.cwd ? { cwd: connection.cwd } : {}),
+    ...(connection.envVars ? { envVars: connection.envVars } : {}),
+    enabled: connection.enabled,
+    source: connection.source,
+    ...(connection.iconUrl ? { iconUrl: connection.iconUrl } : {}),
+    ...(connection.toolPolicy ? { toolPolicy: connection.toolPolicy } : {}),
+    ...(connection.ceiling ? { ceiling: connection.ceiling } : {}),
+    ...(connection.tools ? { tools: connection.tools } : {}),
     serverKey: connectionServerKey(connection),
     headerNames: Object.keys(headers ?? {}),
     envNames: Object.keys(env ?? {}),

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { vaultKeyId } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 
@@ -13,6 +14,31 @@ afterEach(() => {
 });
 
 describe("EncryptedFileCredentialVault", () => {
+  it("uses only explicitly configured keys, without adding a local fallback", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cat-vault-configured-"),
+    );
+    directories.push(directory);
+    const local = new EncryptedFileCredentialVault(directory);
+    const ref = await local.put({
+      tenantId: "tenant",
+      material: new TextEncoder().encode("local-secret"),
+    });
+    const configuredKey = new Uint8Array(32).fill(7);
+    const configured = new EncryptedFileCredentialVault(directory, [
+      configuredKey,
+    ]);
+    expect(configured.keyIds).toEqual([vaultKeyId(configuredKey)]);
+    await expect(
+      configured.withMaterial({ tenantId: "tenant", ref, use: () => "leaked" }),
+    ).rejects.toThrow("key this vault lacks");
+    const freshDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cat-vault-no-local-"),
+    );
+    directories.push(freshDirectory);
+    new EncryptedFileCredentialVault(freshDirectory, [configuredKey]);
+    expect(fs.existsSync(path.join(freshDirectory, "vault.key"))).toBe(false);
+  });
   it("encrypts, authenticates, and deletes material", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cat-vault-"));
     directories.push(directory);

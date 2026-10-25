@@ -14,6 +14,7 @@ import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { SECRETS_CAPABILITY } from "../services/secrets-capability.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -179,13 +180,14 @@ describeIf("catamorphic.secrets host calls (ADR 0210)", () => {
     const sandboxProvider = new FakeSandboxProvider();
     const members = new Map([["ada@example.test", "ada"]]);
     core = new CatamorphicCore({
+      credentialVault: new MemoryCredentialVault(),
       db,
       projectManager,
       sandboxProvider,
       environmentProvider: testEnvironmentProvider(sandboxProvider),
       // Ada is the project's member; nobody else outside Bob.
       resolveMemberIdentity: async ({ tenantId, projectId, externalUserId }) =>
-        ["ada", "bob"].includes(externalUserId)
+        projectId && ["ada", "bob"].includes(externalUserId)
           ? {
               tenantId,
               externalUserId,

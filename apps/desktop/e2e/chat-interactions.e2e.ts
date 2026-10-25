@@ -43,19 +43,36 @@ interface SizeFrame {
 }
 async function observeResize(action: () => Promise<void>) {
   await app.eval(`(() => {
-    window.__chatSizeFrames=[];window.__chatSizeDone=false;
-    const start=performance.now();
-    requestAnimationFrame(function sample(t) {
+    window.__chatSizeFrames=[];
+    function sample() {
       const s=${dock};const i=${input};
       if(s&&i){const r=s.getBoundingClientRect();const c=i.getBoundingClientRect();
         window.__chatSizeFrames.push({width:r.width,inputWidth:c.width,inputHeight:c.height});}
-      if(t-start<700)requestAnimationFrame(sample);else window.__chatSizeDone=true;
-    });return true;
+    }
+    sample();
+    let nextFrame=requestAnimationFrame(function frame() {
+      sample();nextFrame=requestAnimationFrame(frame);
+    });
+    window.__stopChatSizeCapture=()=>{cancelAnimationFrame(nextFrame);sample();};return true;
   })()`);
-  await action();
-  await app.waitFor("window.__chatSizeDone", {
-    label: "chat resize frames captured",
-  });
+  try {
+    await action();
+    // Native input can take longer than the resize itself to arrive on a
+    // loaded host. Keep sampling through its actual transition, including
+    // the starting geometry, instead of spending a fixed recording window
+    // waiting for the pointer helper to launch.
+    await app.waitFor(
+      `(() => {
+      const frames=window.__chatSizeFrames;
+      return frames.some(f=>Math.abs(f.width-frames[0].width)>1)
+        && !${dock}.getAnimations({subtree:true}).some(a=>
+          a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);
+    })()`,
+      { label: "chat resize changed size and settled" },
+    );
+  } finally {
+    await app.eval("window.__stopChatSizeCapture();true");
+  }
   const frames = await app.eval<SizeFrame[]>("window.__chatSizeFrames");
   expect(frames.length).toBeGreaterThan(2);
   expect(new Set(frames.map((f) => Math.round(f.width))).size).toBeGreaterThan(

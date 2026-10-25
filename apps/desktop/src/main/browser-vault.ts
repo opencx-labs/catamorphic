@@ -4,6 +4,7 @@ import path from "node:path";
 import { app, safeStorage, systemPreferences } from "electron";
 import * as kdbx from "kdbxweb";
 import "./kdbx-argon2.js";
+import { credentialEncryptionAvailable } from "./credential-encryption.js";
 import { fromBase64Url, toBase64Url } from "./webauthn.js";
 
 /**
@@ -183,6 +184,8 @@ export class PasswordVault {
   }
 
   private async openVault(profileId: string): Promise<OpenVault> {
+    if (!credentialEncryptionAvailable())
+      throw new Error("OS keychain encryption unavailable");
     const dir = path.join(this.profilesDir, profileId);
     fs.mkdirSync(dir, { recursive: true });
     const keyFile = this.keyFile(profileId);
@@ -199,9 +202,6 @@ export class PasswordVault {
       }
     } else {
       keyHex = randomBytes(32).toString("hex");
-      if (!safeStorage.isEncryptionAvailable()) {
-        throw new Error("OS keychain encryption unavailable");
-      }
       fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(keyHex));
     }
 

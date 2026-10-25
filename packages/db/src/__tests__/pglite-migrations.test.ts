@@ -32,6 +32,47 @@ afterAll(async () => {
 const PGLITE_TIMEOUT = 60_000;
 
 describe("PGlite migrations", () => {
+  it("refuses a plaintext secret upgrade without discarding the value", async () => {
+    await sql.raw("CREATE SCHEMA secret_storage_upgrade").execute(db);
+    await sql
+      .raw(`CREATE TABLE secret_storage_upgrade.project_secrets (
+      value text,
+      credential_ref text,
+      CONSTRAINT chk_project_secret_storage CHECK ((value IS NULL) <> (credential_ref IS NULL))
+    )`)
+      .execute(db);
+    await sql`INSERT INTO secret_storage_upgrade.project_secrets (value) VALUES (${"plaintext-before-upgrade"})`.execute(
+      db,
+    );
+    const migration = fs.readFileSync(
+      path.join(
+        import.meta.dirname,
+        "../../migrations/069_encrypted_project_secrets_only.sql",
+      ),
+      "utf8",
+    );
+    const apply = () =>
+      db.transaction().execute(async (trx) => {
+        await sql
+          .raw("SET LOCAL search_path TO secret_storage_upgrade")
+          .execute(trx);
+        for (const statement of splitSqlStatements(migration))
+          await sql.raw(statement).execute(trx);
+      });
+    await expect(apply()).rejects.toThrow();
+    const preserved = await sql<{
+      value: string;
+    }>`SELECT value FROM secret_storage_upgrade.project_secrets`.execute(db);
+    expect(preserved.rows).toEqual([{ value: "plaintext-before-upgrade" }]);
+    await sql`UPDATE secret_storage_upgrade.project_secrets SET value = null, credential_ref = ${"sealed-reference"}`.execute(
+      db,
+    );
+    await apply();
+    const sealed = await sql<{
+      credential_ref: string;
+    }>`SELECT * FROM secret_storage_upgrade.project_secrets`.execute(db);
+    expect(sealed.rows).toEqual([{ credential_ref: "sealed-reference" }]);
+  });
   it("applies the schema baseline on an in-memory PGlite", {
     timeout: PGLITE_TIMEOUT,
   }, async () => {
@@ -105,6 +146,7 @@ describe("PGlite migrations", () => {
       "066_placement_waits.sql",
       "067_step_call_state.sql",
       "068_subsession_grants.sql",
+      "069_encrypted_project_secrets_only.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -208,3 +250,6 @@ describe("splitSqlStatements", () => {
     expect(statements).toHaveLength(2);
   });
 });
+
+import fs from "node:fs";
+import path from "node:path";

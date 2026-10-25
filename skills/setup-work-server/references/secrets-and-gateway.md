@@ -36,6 +36,8 @@ matters.
   (`openssl rand -base64 32`). Required for Postgres deployments; standalone
   installs generate an owner-only key file instead. Keep it separate from
   `WORK_SECRET` and back it up separately from the database.
+  Configured keys replace the standalone key file; any previous key needed
+  during a rotation must be supplied explicitly.
 - Rotation: set the new key as `WORK_VAULT_KEY` and the old one in
   `WORK_VAULT_PREVIOUS_KEYS` (comma-separated). New records use the new key;
   keep the old key until every credential has been re-entered or rotated.
@@ -46,6 +48,22 @@ matters.
 
 Store all of these with the deployment's secret mechanism. Never commit them,
 print them, or pass them to agents.
+
+Project-secret values require a credential vault on every host. Rows store only
+vault references; there is no plaintext storage or legacy import. An alpha
+upgrade with unsupported plaintext database rows refuses the migration without
+discarding them. Recover those records explicitly before upgrading.
+
+For a company brain, keep company API and database credentials in gateway
+connections and narrow their methods, actions, paths and roles. The Work server
+re-resolves member authority and committed bindings for each request; approvals
+and early body admission do not preserve revoked access. A custom host must
+provide `resolveMemberIdentity` for its live directory.
+OAuth callbacks use that resolver too, including its host-issued administrative
+permissions; `projectId` is absent for personal and tenant service sign-ins.
+The callback state never grants root identity. Request, step and run
+payloads are durable application data: never send credential values as workflow
+inputs or return them as outputs.
 
 ## The gateway configuration
 

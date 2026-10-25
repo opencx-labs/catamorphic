@@ -163,8 +163,8 @@ describe("HTTP gateway routes (ADR 0212)", () => {
         body: undefined,
       },
     ]);
-    // The admission from before the body is the handler's: one check each.
-    expect(counts.liveGrant).toBe(3);
+    // Admit before the body, then recheck after reading and after review.
+    expect(counts.liveGrant).toBe(9);
   });
 
   it("refuses a missing grant before the body, and a path leaving the base", async () => {

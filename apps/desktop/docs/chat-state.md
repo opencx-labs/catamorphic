@@ -15,6 +15,10 @@ making its endpoint move and yields to pointer or wheel input. A failed history
 load stops that request. Reduced motion
 uses immediate scrolling. Finding a nearby message measures a bounded set of
 ordered row boxes, leaving offscreen message layout contained.
+Adjacent messages and a move to the end use the same browser glide. Following
+resumes from that glide, so a delayed upward-scroll handler cannot cancel a new
+request for the latest response, and new words keep following as they arrive.
+Layout that carries the view past its saved endpoint also counts as arrival.
 
 Running background commands remain visible outside the folded steps list and
 align with the main conversation column, without a nested border or indentation.

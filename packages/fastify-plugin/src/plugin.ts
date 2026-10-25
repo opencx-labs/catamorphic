@@ -32,6 +32,7 @@ import {
   HttpIdentityError,
   type IdentityResolver,
 } from "./http-identity.js";
+import { apiErrorResponse } from "./request-logging.js";
 import { registerAgentRoutes } from "./routes/agent.js";
 import { registerAgentCapabilityRoutes } from "./routes/agent-capabilities.js";
 import { registerAppRoutes } from "./routes/apps.js";
@@ -247,8 +248,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (err instanceof DraftPathError) {
       return reply.status(409).send({ error: err.message });
     }
-    app.log.error(err);
-    return reply.send(err);
+    return apiErrorResponse(err, _req, reply);
   });
 
   // Identity is resolved once per request, before any route runs, and

@@ -41,7 +41,7 @@ const UPSTREAM_USER = "robot";
 const UPSTREAM_SECRET = `upstream-secret-${randomUUID()}`;
 const identity: Identity = {
   tenantId: SERVER_TENANT_ID,
-  externalUserId: "git-gateway-test",
+  externalUserId: "work-setup-agent",
 };
 const author = [
   "-c",

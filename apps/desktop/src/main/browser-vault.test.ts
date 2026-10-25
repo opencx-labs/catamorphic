@@ -9,6 +9,7 @@ const encryption = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
     encryptStringAsync: encryption.encrypt,
     decryptStringAsync: vi.fn(),

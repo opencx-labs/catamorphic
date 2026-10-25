@@ -440,6 +440,10 @@ screen, or under reduced motion.
   the test's `DURATION_EXCEPTIONS` |
 | `veil-touch` (a press on an agent-held surface) | 760ms | **sanctioned exception**: one-shot answer to a refused press; the sheet appears, gives, and clears (design log 2026-10-09) |
 
+The bubble strip's slide holds its measured starting pose while native playback
+is pending. Its width and position begin together, without exposing the new
+resting spot before the slide starts.
+
 ### Sanctioned exceptions
 
 - `animate-spin` / `animate-pulse`: indeterminate progress may loop, only
@@ -779,6 +783,11 @@ search of contained row boxes instead of laying out every offscreen message.
 While that glide settles, its target keeps priority over near-end following:
 a folding row cannot pull the view back down. Late layout corrections retain
 that priority until the destination is reached or the person takes over.
+The end uses that same browser glide before following takes over; switching
+directly from an upward glide to the follow spring let a delayed upward-scroll
+handler cancel the new request. Changing direction must keep the new destination.
+Growing content can carry the view past that saved point; that counts as arrival,
+so following resumes rather than waiting for an exact obsolete position.
 
 The composer and conversation columns animate maximum width with their padding
 when a chat maximizes or floats. Changing one instantly made the composer narrow,

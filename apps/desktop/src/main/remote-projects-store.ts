@@ -3,6 +3,7 @@ import path from "node:path";
 import { projectDataDirectory } from "@catamorphic/core";
 import { PROJECT_APP_DATA_DIR } from "@catamorphic/workflow/project-layout";
 import { safeStorage } from "electron";
+import { credentialEncryptionAvailable } from "./credential-encryption.js";
 import type { RemoteOAuthCredentials } from "./remote-oauth.js";
 
 /**
@@ -244,7 +245,7 @@ export class RemoteProjectsStore {
     credentials: RemoteOAuthCredentials,
   ): StoredCredentials | null {
     const serialized = JSON.stringify(credentials);
-    if (safeStorage.isEncryptionAvailable()) {
+    if (credentialEncryptionAvailable()) {
       return {
         credentialsEncrypted: safeStorage
           .encryptString(serialized)
@@ -261,6 +262,7 @@ export class RemoteProjectsStore {
     stored: StoredCredentials | undefined,
   ): RemoteOAuthCredentials | null {
     if (!stored) return null;
+    if (!credentialEncryptionAvailable()) return null;
     if (!stored.credentialsEncrypted) return null;
     let serialized: string;
     try {
