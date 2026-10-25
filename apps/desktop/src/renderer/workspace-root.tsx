@@ -248,7 +248,13 @@ export function WorkspaceRoot() {
             return existing
               ? items.map((item) =>
                   item.key === key
-                    ? { ...item, projectId, navigation: event.surface }
+                    ? {
+                        ...item,
+                        projectId,
+                        // Revealing the project does not cancel a surface
+                        // that another request is still opening there.
+                        navigation: event.surface ?? item.navigation,
+                      }
                     : item,
                 )
               : [...items, { key, projectId, navigation: event.surface }];
