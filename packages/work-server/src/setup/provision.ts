@@ -5,7 +5,7 @@ import type {
   ProjectRoleEntry,
 } from "@catamorphic/core";
 import { z } from "zod";
-import type { WorkAuth, WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuth, WorkAuthUser } from "../auth/work-auth-types.js";
 
 export const ProvisionWorkUserInputSchema = z.strictObject({
   username: z.string().trim().min(3).max(30),

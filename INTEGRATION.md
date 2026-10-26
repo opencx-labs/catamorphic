@@ -1,5 +1,11 @@
 # Catamorphic Integration Guide
 
+Framework libraries use one release version, shared with Work. Install Preview
+packages from npm with `@alpha`, for example
+`bun add @catamorphic/server-sdk@alpha @catamorphic/fastify-plugin@alpha`.
+Keep every `@catamorphic/*` dependency on that version. Stable releases use
+`latest`; local development can still link a built checkout.
+
 Catamorphic is an **embeddable framework for agentic work environments**. A host mounts it in-process and gets the whole environment: general-purpose projects (git repos that hold docs, data, code, automations, and apps — ADR 0043), git-native work tracking (per-turn checkpoint commits, remote sync, the CodeHost seam — ADR 0044), multi-harness coding agents with durable sessions (ADR 0038), durable TypeScript workflows, sandboxed user-built apps (ADRs 0035–0037), and hooks that make the result look and behave like the *host's* product (ADRs 0048–0049). Workflows are one capability among these, not the frame.
 
 A host application runs catamorphic services in-process against its own Postgres instance: all catamorphic tables live in one schema (default: `catamorphic`). Three integration surfaces are available, in increasing order of coupling:

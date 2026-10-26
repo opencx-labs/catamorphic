@@ -1,7 +1,7 @@
 import type { ControlPlanePermission, Identity } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import type { WorkAuth, WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuth, WorkAuthUser } from "../auth/work-auth-types.js";
 
 /**
  * What an organization administrator holds beyond their project roles

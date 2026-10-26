@@ -290,3 +290,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0281](0281-secret-storage-has-one-encrypted-format.md) | Secret storage has one encrypted format | Accepted (amends 0162, 0206) |
 | [0283](0283-linux-modules-use-namespaces-and-seccomp.md) | Linux modules use namespaces and seccomp | Accepted (extends 0277) |
 | [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |
+| [0285](0285-one-version-for-work-and-the-framework.md) | One version for Work and the framework | Accepted (extends 0082, 0085, 0159) |

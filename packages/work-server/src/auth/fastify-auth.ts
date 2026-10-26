@@ -11,7 +11,7 @@ import {
   isPrivateAddress,
   trustedProxies,
 } from "./client-address.js";
-import type { WorkAuth } from "./work-auth.js";
+import type { WorkAuth } from "./work-auth-types.js";
 
 /** Account lifecycle checks around the OAuth token endpoint (ADR 0161). */
 export interface TokenGate {

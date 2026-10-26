@@ -1,7 +1,7 @@
 import type { Identity } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { WorkAuth } from "../auth/work-auth.js";
+import type { WorkAuth } from "../auth/work-auth-types.js";
 import type {
   AdmissionMode,
   AdmissionUser,

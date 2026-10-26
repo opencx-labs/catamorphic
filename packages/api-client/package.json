@@ -1,7 +1,6 @@
 {
   "name": "@catamorphic/api-client",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.30",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,8 +12,8 @@
   },
   "scripts": {
     "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && cp src/schema.d.ts dist/schema.d.ts",
-    "generate": "openapi-typescript openapi.json -o src/schema.d.ts",
-    "typecheck": "bun check --project ./tsconfig.json"
+    "generate": "bun scripts/generate.ts",
+    "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.tools.json"
   },
   "bundle": {
     "entry": [
@@ -22,10 +21,32 @@
     ]
   },
   "dependencies": {
-    "openapi-fetch": "^0.17.0"
+    "openapi-fetch": "^0.17.0",
+    "@catamorphic/agent-protocol": "workspace:*"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0",
     "typescript": "5"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/api-client"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
+  ]
 }

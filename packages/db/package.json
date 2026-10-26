@@ -1,7 +1,6 @@
 {
   "name": "@catamorphic/db",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.30",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,6 +9,14 @@
   },
   "files": [
     "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**",
     "migrations"
   ],
   "exports": {
@@ -40,11 +47,21 @@
   },
   "dependencies": {
     "kysely": "^0.29.3",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "@types/pg": "^8.20.0"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",
-    "@types/pg": "^8.20.0",
     "kysely-codegen": "^0.20.0"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/db"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

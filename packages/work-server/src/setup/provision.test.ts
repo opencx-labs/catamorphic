@@ -1,6 +1,6 @@
 import type { Identity, ProjectRoleEntry } from "@catamorphic/core";
 import { describe, expect, it, vi } from "vitest";
-import type { WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuthUser } from "../auth/work-auth-types.js";
 import { grantWorkMembership, provisionWorkUser } from "./provision.js";
 
 const operatorIdentity: Identity = {

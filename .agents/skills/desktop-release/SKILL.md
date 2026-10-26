@@ -1,12 +1,13 @@
 ---
 name: desktop-release
-description: Use when preparing, dry-running, publishing, repairing, or verifying a Work Stable or Preview release (the macOS desktop through GitHub Releases and the opencx-labs/homebrew-tap casks and update feeds, and the matching work-server image). Not for ordinary desktop development or for publishing framework npm packages.
+description: "Use when preparing, dry-running, publishing, repairing, or verifying a synchronized Work Stable or Preview release: the macOS desktop, Homebrew casks and update feeds, matching work-server image, and public Catamorphic npm libraries. Not for ordinary desktop development."
 ---
 
 # Desktop release
 
-Publish the signed, notarized macOS app from one immutable tag, keeping GitHub
-Releases and the Homebrew Stable and Preview channels in step.
+Publish the signed, notarized macOS app, server image and npm libraries from one
+immutable tag and version, keeping GitHub Releases, npm and the Homebrew Stable
+and Preview channels in step.
 
 ## Read first
 
@@ -22,6 +23,8 @@ Read these completely before changing or publishing anything:
   `work-server` image to GHCR; manual dispatch builds and smoke-tests only.
 - [scripts/desktop-release.ts](../../../scripts/desktop-release.ts): tag, version,
   cask and feed rules.
+- [scripts/release-packages.ts](../../../scripts/release-packages.ts): workspace
+  version synchronization, tarballs, standalone installs and npm publication.
 - `apps/desktop/package.json`: the version being released.
 
 When changing distribution, updates or harness packaging, also read ADRs
@@ -57,6 +60,8 @@ confirmation. "Release" alone does not mean Stable.
   RELEASING.md or its reviewer and branch/tag protection;
 - the tag or a GitHub release for it already exists;
 - the tap or its token is not ready (the dry run checks tap write access).
+- npm scope ownership and each library's trusted publisher are not ready.
+  First publication needs one-time authenticated bootstrap; see RELEASING.md.
 
 ## 1. Prepare
 
@@ -64,8 +69,10 @@ confirmation. "Release" alone does not mean Stable.
    SHA, the latest `desktop-v*` release, and the intended version.
 2. Check environment and ruleset metadata with `gh` (for example
    `gh secret list --env desktop-release` lists names only). Never print values.
-3. If the version needs a bump, change `apps/desktop/package.json` on a branch and
-   keep `bun.lock` consistent. Check the pair:
+3. If the version needs a bump, run
+   `bun run release:version --version <version>` on the release branch. This
+   updates every library and private app plus `bun.lock`; do not edit just the
+   desktop manifest. Run `bun run release:verify`. Check the pair:
    `bun scripts/desktop-release.ts verify --tag desktop-v<version> --package-version <version>`
    and `bun run test:file scripts/desktop-release.test.ts`.
 4. If Claude Code or Codex dependencies changed, update
@@ -94,7 +101,8 @@ Confirm the run's `headSha` is the recorded SHA and watch it to completion
 (`gh run watch <id>`). The environment requires reviewer approval, so the run
 waits for a person. A dispatch signs, notarizes, verifies and uploads the DMG,
 ZIP, blockmaps, feed and `SHA256SUMS.txt` as workflow artifacts. It never creates
-a release or touches the tap. The server image dispatch builds and smoke-tests
+a release or touches the tap. It also packs and tests every npm library without
+publishing. The server image dispatch builds and smoke-tests
 both architectures but never pushes.
 
 For a signing-credential change or a material packaging change, pause for the
@@ -136,6 +144,9 @@ Use a temporary directory for downloads and a tap clone. Confirm:
 - the `work-server` image has the version and `alpha` tags (plus `latest` for
   Stable), `linux/amd64` and `linux/arm64` manifests, and a provenance
   attestation that `gh attestation verify` accepts;
+- every public library has the same npm version and its published integrity
+  matches the retained tarball; Preview advances `alpha` without changing
+  `latest`, and Stable advances `latest`;
 - the release and workflow run URLs are recorded for the user.
 
 Do not run `brew install`, replace `/Applications/Work.app`, or run an updater

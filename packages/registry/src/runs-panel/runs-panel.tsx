@@ -3,6 +3,7 @@ import { PendingButton } from "@catamorphic/ui";
 ("use client");
 
 import {
+  type JsonValue,
   useCancelRun,
   useEnvironments,
   usePauseRunProcessing,
@@ -365,7 +366,7 @@ export function RunsPanel({
   const [inputError, setInputError] = useState(false);
 
   const startRun = () => {
-    let parsed: Record<string, unknown> | undefined;
+    let parsed: JsonValue | undefined;
     try {
       parsed = inputDraft.trim() ? JSON.parse(inputDraft) : undefined;
     } catch {

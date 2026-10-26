@@ -5,7 +5,7 @@ Headless React bindings for Catamorphic: a provider, jotai atoms for canvas/pane
 ## Install
 
 ```bash
-pnpm add @catamorphic/react @catamorphic/api-client @tanstack/react-query react react-dom
+pnpm add @catamorphic/react@alpha @catamorphic/api-client@alpha @tanstack/react-query react react-dom
 ```
 
 Peer versions: React `^18.2 || ^19`, TanStack Query `^5`.

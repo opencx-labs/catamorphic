@@ -3,6 +3,7 @@ import { copyFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { checkCommands, checkOptions } from "./check-plan.js";
 import { writeCliError } from "./cli-error.js";
+import { verifyReleasePackages } from "./release-packages.js";
 import {
   createTestRunResources,
   runLoggedProcess,
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   let succeeded = false;
   let exitCode = 1;
   try {
+    verifyReleasePackages({ rootPath: repositoryRoot });
     const generatedTypesBaseline = path.join(
       resources.rootPath,
       "db-types-before.ts",

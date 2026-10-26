@@ -2,17 +2,20 @@
 
 User projects depend on published `@catamorphic/*` packages (`@catamorphic/app`,
 `@catamorphic/parser`, `@catamorphic/workflow` — pinned by the constants in
-`packages/core/src/seeds.ts` and each package's `*_PACKAGE_VERSION`). Until
-those are on npm, local testing needs a local registry.
+`packages/core/src/seeds.ts` and each package's `*_PACKAGE_VERSION`). Public
+releases publish them to npm with the same version as Work. A local registry
+lets development and evals exercise unreleased code at those pinned versions.
 
 - `./publish.sh` starts verdaccio on `http://localhost:4873` (config.yaml:
   `@catamorphic/*` served locally, everything else proxied to npmjs) and
-  publishes the three packages at their current versions.
+  publishes the three packages at their current versions under `alpha`.
+  The explicit `--registry` keeps this developer command local even though
+  package manifests configure production publication to npm.
 - Resolution is wired through `~/.bunfig.toml`:
   `[install.scopes] "@catamorphic" = "http://localhost:4873"` — only the scope
   is redirected; all other packages hit npm as usual. (For npm/pnpm add
   `@catamorphic:registry=http://localhost:4873` to `~/.npmrc`.)
-- Bump a package's version constant + package.json together, re-run
+- Run `bun run release:version --version <version>` to synchronize versions, then re-run
   `./publish.sh` (verdaccio refuses to overwrite a published version — bump,
   don't republish).
 - Build sandboxes are microVMs: `localhost` inside one is the VM, so the
@@ -25,4 +28,5 @@ those are on npm, local testing needs a local registry.
 - `bun run dev:desktop` also passes the microsandbox SDK's bundled `msb` as
   `MSB_PATH`, so sandboxes never run a differently versioned `msb` from PATH
   (the two share one database and the older binary refuses a newer schema).
-- When the packages ship to real npm, delete the bunfig scope entry.
+- To consume public npm releases, remove the local `@catamorphic` scope entry
+  from bunfig/npmrc and install Preview packages with `@alpha`.

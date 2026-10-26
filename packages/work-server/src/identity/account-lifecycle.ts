@@ -14,7 +14,7 @@ import type {
   WorkDirectoryPolicy,
   WorkSessionPolicy,
 } from "../auth/auth-config.js";
-import type { WorkAuth, WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuth, WorkAuthUser } from "../auth/work-auth-types.js";
 import {
   type DirectoryProvider,
   DirectoryUnavailableError,

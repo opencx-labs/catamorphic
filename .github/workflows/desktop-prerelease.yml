@@ -10,12 +10,58 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-prerelease-${{ github.ref }}
+  group: desktop-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
+  prepare-npm:
+    name: Build and verify npm packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.1
+      - run: bun install --frozen-lockfile
+      - id: release
+        name: Verify the shared release version
+        shell: bash
+        run: |
+          version="$(bun -e 'console.log((await Bun.file("apps/desktop/package.json").json()).version)')"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            bun scripts/desktop-release.ts verify --tag "${GITHUB_REF_NAME}" --package-version "${version}"
+          fi
+          bun run release:verify --version "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Build libraries
+        run: bunx turbo run build --filter='./packages/*' --no-daemon
+      - name: Pack and test outside the monorepo
+        run: |
+          bun run release:pack --output "${RUNNER_TEMP}/npm-packages"
+          bun run release:smoke --directory "${RUNNER_TEMP}/npm-packages"
+      - name: Reject stale npm channels before desktop publication
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: bun scripts/release-packages.ts preflight --directory "${RUNNER_TEMP}/npm-packages"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages-${{ steps.release.outputs.version }}
+          path: ${{ runner.temp }}/npm-packages/
+          if-no-files-found: error
+          retention-days: 14
+
   build-macos:
     name: Build, sign, and notarize macOS
+    needs: prepare-npm
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
     runs-on: macos-15
     timeout-minutes: 90
     environment: desktop-release
@@ -237,3 +283,29 @@ jobs:
             git -C "${tap_path}" commit -m "work ${VERSION}"
             git -C "${tap_path}" push origin HEAD:main
           fi
+
+  publish-npm:
+    name: Publish matching libraries to npm
+    needs: [prepare-npm, build-macos]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.1
+      - name: Install the OIDC-capable npm client
+        run: npm install --global npm@11.21.1 --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages-${{ needs.prepare-npm.outputs.version }}
+          path: ${{ runner.temp }}/npm-packages
+      - name: Publish the verified tarballs
+        run: bun scripts/release-packages.ts publish --directory "${RUNNER_TEMP}/npm-packages"

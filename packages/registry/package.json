@@ -1,7 +1,6 @@
 {
   "name": "@catamorphic/registry",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.30",
   "type": "module",
   "scripts": {
     "build": "bun run scripts/build.ts",
@@ -40,11 +39,29 @@
     "vitest": "^4.1.11"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
   ],
   "exports": {
     "./package.json": "./package.json",
     "./catalog.json": "./dist/catalog.json",
     "./r/*": "./dist/r/*"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/registry"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

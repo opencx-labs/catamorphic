@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { JsonValue } from "./model.js";
 
 /**
  * Commands a person's client sends to a session (ADR 0197). Each carries a
@@ -8,9 +9,7 @@ import { z } from "zod";
 
 const commandId = z.string().min(8).max(200);
 
-export const jsonValueSchema: z.ZodType<
-  string | number | boolean | null | object
-> = z.lazy(() =>
+export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number(),

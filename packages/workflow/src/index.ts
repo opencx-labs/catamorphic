@@ -1,3 +1,4 @@
+import packageJson from "../package.json" with { type: "json" };
 import type { Where } from "./where.js";
 
 export type {
@@ -267,7 +268,7 @@ export function defineTrigger(
   return new ProjectTriggerImpl(definition);
 }
 
-export const WORKFLOW_PACKAGE_VERSION = "0.0.4";
+export const WORKFLOW_PACKAGE_VERSION = packageJson.version;
 
 export type {
   SecretHostOperations,

@@ -33,7 +33,12 @@
     "db:migrate": "bun run --filter @catamorphic/db db:migrate",
     "db:status": "bun run --filter @catamorphic/db db:status",
     "db:codegen": "bun run --filter @catamorphic/db db:codegen",
-    "db:reset": "bun run --filter @catamorphic/db db:reset"
+    "db:reset": "bun run --filter @catamorphic/db db:reset",
+    "release:version": "bun scripts/release-packages.ts version",
+    "release:verify": "bun scripts/release-packages.ts verify",
+    "release:pack": "bun scripts/release-packages.ts pack",
+    "release:smoke": "bun scripts/release-packages.ts smoke",
+    "release:trust": "bun scripts/release-packages.ts trust"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
@@ -41,7 +46,8 @@
     "@types/node": "^26.1.1",
     "turbo": "2.10.10",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "npm": "11.21.1"
   },
   "optionalDependencies": {
     "node-bin-darwin-arm64": "24.22.1",

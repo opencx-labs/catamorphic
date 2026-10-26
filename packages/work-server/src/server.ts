@@ -69,8 +69,8 @@ import {
   createWorkAuth,
   loadWorkAuthSecret,
   verifiedUserIdForEmail,
-  type WorkAuth,
 } from "./auth/work-auth.js";
+import type { WorkAuth } from "./auth/work-auth-types.js";
 import { workMark } from "./brand.js";
 import {
   registerWorkMachine,
