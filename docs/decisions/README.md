@@ -57,7 +57,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted (refined by 0171) |
 | [0043](0043-general-purpose-projects.md) | Projects are general-purpose; the workflow workspace is scaffolded on demand | Accepted; paths superseded by 0142 |
 | [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted (push policy refined by 0170; GitHub code host superseded by 0177) |
-| [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted (refined by 0215: a chat's own worktree is set up) |
+| [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted (refined by 0215: a chat's own worktree is set up; amended by 0277) |
 | [0046](0046-plugin-activation-planes.md) | Plugin activation planes: capability providers and project lifecycle hooks | Accepted |
 | [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted (provider selection refined by 0064; container sandboxes by 0204) |
 | [0048](0048-app-feel-is-the-embedders.md) | An app's feel is entirely the embedder's: neutral kit defaults, host feel tokens | Accepted |
@@ -152,7 +152,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0137](0137-sign-in-recovery.md) | Sign-in recovery stays with the active attempt | Accepted |
 | [0138](0138-session-workflow-triggers-and-actions.md) | Session workflow triggers and actions | Accepted |
 | [0139](0139-session-reminder-lifetime-and-attention.md) | Session reminder lifetime and message attention | Accepted |
-| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted (amended by 0234) |
+| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted (amended by 0234, 0277) |
 | [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |
 | [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted; folder name superseded by 0169 |
 | [0143](0143-profile-history-and-browser-import.md) | Profile history and shared browser import | Accepted |
@@ -160,7 +160,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0145](0145-work-product-identity.md) | Work is the home for the end-user experiences | Accepted |
 | [0146](0146-work-application-identity.md) | Work application identity | Accepted; project paths superseded by 0169 |
 | [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted (amended by 0234) |
-| [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
+| [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted (amended by 0277) |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
 | [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted (amended by 0235) |
 | [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted (amended by 0201) |
@@ -188,7 +188,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted (project chat connections refined by 0181; idle release on any replica by 0192; setup and volumes by 0208) |
 | [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted (amended by 0198; terminals and previews by 0209; Daytona follow-up dropped by 0231) |
 | [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180; amended by 0184, 0206; HTTP APIs for code in 0212) |
-| [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182; container sandboxes by 0204; setup and volumes by 0208) |
+| [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182; container sandboxes by 0204; setup and volumes by 0208; amended by 0277) |
 | [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
 | [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
 | [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181; the `slack-threads` pack by 0262) |
@@ -246,14 +246,14 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
 | [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |
 | [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |
-| [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226; row activity added by 0273) |
+| [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226; row activity added by 0273; amended by 0277) |
 | [0235](0235-pages-find-chromes-window-chrome.md) | Pages find Chrome's `window.chrome`; a daily check watches Google's sign-in | Accepted (amends 0150, 0203) |
 | [0236](0236-voice-hears-the-person-and-dictates-anywhere.md) | Voice hears the person, dictates anywhere, and its keys tap or hold | Accepted (amends 0216; amended by 0265, 0268) |
 | [0237](0237-lists-fade-where-they-continue.md) | Lists fade where they continue: one overflow hint, the sidebar thumb a section's choice | Accepted (refines 0218, 0234; amended by 0248) |
 | [0238](0238-one-ring-per-list-and-sidebar-focus.md) | One ring per list; an opened sidebar focuses what is in front | Accepted (amends 0168) |
-| [0239](0239-chips-are-a-source.md) | A chat's chips are a source, and agents attach chips by metadata | Accepted (builds on 0226, 0234) |
+| [0239](0239-chips-are-a-source.md) | A chat's chips are a source, and agents attach chips by metadata | Accepted (builds on 0226, 0234; amended by 0277) |
 | [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) | A message sent while the agent works reaches it at its next step, and can stop it to be read now | Accepted (amends 0197, 0217) |
-| [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245; on the Work server by 0255) |
+| [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245; on the Work server by 0255; amended by 0277) |
 | [0244](0244-each-question-takes-its-own-answer-with-pills.md) | Each question takes its own answer, pills and all | Accepted (amends 0195) |
 | [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241) |
 | [0246](0246-a-restart-never-waits-on-work.md) | A restart never waits on work: working agents continue after it, a downloaded update stays downloaded | Accepted (amends 0083, 0198) |
@@ -283,9 +283,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0274](0274-composer-menus-for-skills-and-mentions.md) | The composer's "/" and "@" menus: skills and mentions go in the message as pills | Accepted (supersedes 0270's composer "/"; builds on 0052, 0186, 0123) |
 | [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md) | A resumed Claude Code keeps its sign-in: the CLI's credential store stays the sign-in's own home, not the SDK's temporary resume home | Accepted (amends 0198, 0228, 0269) |
 | [0276](0276-a-chat-can-switch-agents-and-harnesses.md) | A chat can switch agents and harnesses | Accepted (supersedes 0214; amends 0233) |
+| [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md) | What agents write reaches only trusted hosts, project code runs confined and declares what it reaches, and commands run as approved | Accepted (amends 0045, 0140, 0148, 0176, 0234, 0239, 0241) |
 | [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md) | Subagent updates reach the working turn and read as compact activity | Accepted (extends 0240; replaces 0250's parent delivery rule) |
 | [0279](0279-public-pull-request-status-needs-no-sign-in.md) | Public pull request status needs no sign-in | Accepted (extends 0239) |
 | [0280](0280-terminals-use-the-project-theme-and-chat-workspace.md) | Terminals use the project theme and chat workspace | Accepted (builds on 0209, 0215) |
 | [0281](0281-secret-storage-has-one-encrypted-format.md) | Secret storage has one encrypted format | Accepted (amends 0162, 0206) |
+| [0283](0283-linux-modules-use-namespaces-and-seccomp.md) | Linux modules use namespaces and seccomp | Accepted (extends 0277) |
 | [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |
 | [0285](0285-one-version-for-work-and-the-framework.md) | One version for Work and the framework | Accepted (extends 0082, 0085, 0159) |

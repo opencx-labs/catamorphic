@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SidebarSourceSession } from "../../shared/sidebar-source.js";
 import { CHIPS_OWNER_ID } from "../../shared/workspace-config.js";
 import { chipsSource } from "../sources/chips.js";
-import type { SectionSource } from "../sources/contract.js";
+import type { SectionSource, SourceAccess } from "../sources/contract.js";
 import { moduleSource } from "../sources/module.js";
 import type { Chip } from "./chips.js";
 
@@ -15,6 +15,11 @@ export interface ChipsView {
   session?: SidebarSourceSession;
   /** The chips module failed; its last chips stay beside a Retry. */
   failure?: { message: string; retry: () => void };
+  /**
+   * The chips module wants more than the person allowed (ADR 0277): it is
+   * not running, Work's chips show, and the rail asks.
+   */
+  access?: SourceAccess;
 }
 
 /**
@@ -119,6 +124,7 @@ export function useChips({
     key: string;
     chips?: readonly Chip[];
     error?: string;
+    access?: SourceAccess;
   }>({ key: "" });
   const key = `${sessionId ?? ""}\u0000${module ?? ""}`;
   // Its own data changed (subscribe), or Work's chips it reads did.
@@ -145,6 +151,11 @@ export function useChips({
     }).then(
       (chips) => {
         if (controller.signal.aborted) return;
+        const access = source.access?.() ?? null;
+        if (access) {
+          setState({ key, access });
+          return;
+        }
         lastRead.set(key, chips);
         setState({ key, chips });
       },
@@ -163,6 +174,20 @@ export function useChips({
   }, [source, key, reads, session, enabled]);
   if (!source || !session) return { chips: defaults, source: work, session };
   const shown = state.key === key ? state : undefined;
+  const asked = shown?.access;
+  if (asked)
+    return {
+      chips: defaults,
+      source: work,
+      session,
+      access: {
+        request: asked.request,
+        allow: async () => {
+          await asked.allow();
+          setReads((count) => count + 1);
+        },
+      },
+    };
   const read = shown?.chips ?? lastRead.get(key);
   // Failed before it ever read: Work's chips, acted on by Work.
   const fallback = !read && Boolean(shown?.error);

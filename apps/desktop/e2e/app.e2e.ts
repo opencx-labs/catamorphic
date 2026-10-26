@@ -1640,11 +1640,15 @@ describe("tiling and chat surfaces", () => {
         label: "agent reply renders the link",
       },
     );
-    // Clicking the agent's link opens an ATTACHED browser tab (the page
-    // itself may not load offline — the tab and rail chip still appear).
+    // The untrusted host asks first. Opening it once still preserves the
+    // attached tab and rail behavior, even when the page is offline.
     await run(
       `floatingDock().querySelector('.cat-markdown a').click(); return true;`,
     );
+    await runWait(`return !!$('[data-testid="link-trust-open"]');`, {
+      label: "the agent's link asks before contacting its host",
+    });
+    await run(`$('[data-testid="link-trust-open"]').click(); return true;`);
     await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
       timeoutMs: 30_000,
       label: "attached browser tab",

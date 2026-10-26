@@ -128,6 +128,15 @@ export class ConnectorsService {
        * are fetched; E2E runs answer them offline.
        */
       catalogFetch?: typeof fetch;
+      /**
+       * The window shows remote images only through main (ADR 0277): a
+       * catalog's icons are listed as they arrive, and an installed
+       * connection keeps its icon as data, so its file names no address.
+       */
+      images?: {
+        list(url: string): void;
+        inline(url: string): Promise<string | null>;
+      };
     },
   ) {}
 
@@ -233,7 +242,10 @@ export class ConnectorsService {
               return entries;
             })
             .catch(() => cached?.entries ?? []);
-    for (const entry of registry) this.registryEntries.set(entry.name, entry);
+    for (const entry of registry) {
+      this.registryEntries.set(entry.name, entry);
+      if (entry.iconUrl) this.deps.images?.list(entry.iconUrl);
+    }
     trimCatalogCache(this.registryEntries, 512);
     return registry.map((entry) => ({
       ...entry,
@@ -353,13 +365,16 @@ export class ConnectorsService {
         config.env = { ...config.env, [input.name]: value };
       }
     }
+    const iconUrl = entry.iconUrl
+      ? await this.deps.images?.inline(entry.iconUrl)
+      : null;
     const connection = this.deps.connectionsFor(profileId).create({
       name: entry.displayName,
       transport: config.transport,
       ...(config.transport === "stdio"
         ? { command: config.command, args: config.args, env: config.env }
         : { url: config.url, headers: config.headers }),
-      ...(entry.iconUrl ? { iconUrl: entry.iconUrl } : {}),
+      ...(iconUrl ? { iconUrl } : {}),
       source: { kind: "registry", registryName },
     });
     return toPublicConnection(connection);

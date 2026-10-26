@@ -565,3 +565,35 @@ the published renderer files and 16.8 ms with the corrected files. Input-to-next
 frame samples stayed below 24 ms in both quiet typing runs; the comparison does
 not establish a quiet-typing speedup. Captures used software compositing while
 other checks ran, and neither app reported a renderer error.
+
+## Module confinement overhead
+
+`apps/desktop/scripts/module-sandbox-bench.ts` compares a fresh Bun worker with
+the production confined launch on macOS and Linux. It alternates baseline and
+confined order, discards two warmup pairs, and records 30 pairs with and without
+network access. Fixtures contain no project secrets or external traffic.
+
+Each worker performs an integer loop, 1,000 cached 4 KiB read/write pairs,
+100 sequential local HTTP requests when networked, and one second idle.
+Startup ends at its ready handshake. CPU includes the worker and Linux wrappers
+and relays; parent proxy/fixture CPU and live JS heap are reported separately.
+Linux CPU comes from the live process tree and reaped-child ticks because
+Bubblewrap does not propagate descendant usage to GNU time. macOS uses
+`/usr/bin/time` user plus system time.
+
+RSS is the largest summed process-tree snapshot at ready or after work, not a
+continuous peak or unique physical memory. Shared pages can be counted more
+than once. These synthetic measurements do not establish whole-app latency,
+internet/TLS performance or a CPU/memory quota. A loaded module is reused;
+unsubscribed workers retire after the existing idle timeout.
+
+The dedicated `module-confinement-macos` and `module-confinement-linux` CI jobs
+retain raw JSON artifacts. The resource comparison for this change is in
+[PR #332](https://github.com/opencx-labs/catamorphic/pull/332). To reproduce on a
+supported host, after installing the worktree dependencies:
+
+```sh
+bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
+module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
+"$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > /tmp/module-bench.json
+```

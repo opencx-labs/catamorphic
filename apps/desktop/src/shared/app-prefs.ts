@@ -108,12 +108,6 @@ export interface AppPrefs {
   /** Sessions this profile has explicitly or implicitly marked unread. */
   unreadSessionIds: string[];
   /**
-   * Apps this profile allowed to read its chats, as `<projectId>/<app>`
-   * (ADR 0148). Asked once per app; a rebuilt version that drops the
-   * declaration needs no new answer because it gains no access.
-   */
-  appAccessApprovals: string[];
-  /**
    * The assistant's chat (ADR 0216): where the dock's microphone sends what
    * it hears, until a reset (or another assistant) closes it and the next
    * start makes another.
@@ -192,7 +186,6 @@ export const DEFAULT_PREFS: AppPrefs = {
   reviewGrouping: "purpose",
   rightSidebarOpen: false,
   unreadSessionIds: [],
-  appAccessApprovals: [],
   assistantSession: null,
   assistantHeardThrough: null,
   voiceAssistant: null,
@@ -323,7 +316,6 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       ? { lastProjectId: record.lastProjectId }
       : {}),
     unreadSessionIds: stringList(record.unreadSessionIds),
-    appAccessApprovals: stringList(record.appAccessApprovals),
     assistantSession: voiceSessionRef(record.assistantSession),
     assistantHeardThrough:
       typeof record.assistantHeardThrough === "string"

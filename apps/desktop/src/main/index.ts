@@ -740,6 +740,10 @@ app.whenReady().then(async () => {
     ...(e2eDataDir
       ? { catalogFetch: async () => new Response(null, { status: 404 }) }
       : {}),
+    images: {
+      list: (url) => browserSupport?.images.list(url),
+      inline: async (url) => (await browserSupport?.images.inline(url)) ?? null,
+    },
   });
   // MCP Apps host: which connection tools carry a ui:// view, their
   // templates, and the view-initiated tool calls. Elicitation from those
@@ -815,6 +819,23 @@ app.whenReady().then(async () => {
     async () =>
       (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     (window) => desktopWorkspaces?.isDock(window) ?? false,
+    {
+      // Ordinary Docker UI suites cannot create nested /proc mounts. A
+      // dedicated native Linux lane verifies the real boundary (ADR 0283).
+      unconfined:
+        e2eDataDir !== undefined &&
+        process.platform !== "darwin" &&
+        process.env.CATAMORPHIC_TEST_MODULE_CONFINEMENT !== "1",
+      workPorts: () => {
+        const url = state.current?.url;
+        if (!url) return [];
+        try {
+          return [Number(new URL(url).port)];
+        } catch {
+          return [];
+        }
+      },
+    },
   );
   voiceSupport = registerVoiceSupport({
     state,

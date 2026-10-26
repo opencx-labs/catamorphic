@@ -5,7 +5,7 @@
 > Setting up a chat's own worktree (`.worktreeinclude`, Environment setup) is refined by [ADR 0215](0215-a-chats-own-worktree.md).
 
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md): project hooks and settings that run commands run only as the person approved them)
 - **Date:** 2026-08-13
 - **Builds on:** 0043 (general-purpose projects), 0044 (checkpoints + remote sync)
 - **Refines:** 0044's worktree stance

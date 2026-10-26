@@ -15,9 +15,9 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "env -u ELECTRON_RUN_AS_NODE bun --bun electron-vite dev -- --remote-debugging-port=${CATAMORPHIC_DESKTOP_CDP_PORT:-9333}",
-    "build": "bun --bun electron-vite build",
+    "build": "bun --bun electron-vite build && bun scripts/verify-build.ts",
     "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.node.json",
-    "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder --publish never",
+    "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun scripts/verify-build.ts && bun --bun electron-builder --publish never",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ../../vitest.config.ts --pool=forks",
     "test:e2e": "bun ../../scripts/desktop-test.ts",
     "test:eval": "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
@@ -26,6 +26,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.52",
     "@ai-sdk/openai": "^4.0.65",
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@catamorphic/acp": "workspace:*",
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/agent-runner": "workspace:*",

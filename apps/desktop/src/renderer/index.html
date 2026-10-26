@@ -8,6 +8,8 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://localhost:* data:; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data: blob:; frame-src 'self' http://127.0.0.1:* http://localhost:*"
     />
+    <!-- Links in replies and notes resolve no names until opened (ADR 0277). -->
+    <meta http-equiv="x-dns-prefetch-control" content="off" />
     <title>Work</title>
   </head>
   <body>

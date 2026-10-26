@@ -141,7 +141,7 @@ describe("resolveWorkspaceConfig", () => {
       sections(`
         { id: "flows", source: "work:workflows", collapsed: true, hideEmpty: true, scrollbar: true },
         { id: "pins", source: "work:pinned", title: "", presentation: "tiles", scrollbar: "yes" },
-        { id: "todos", source: ".work/todos.ts", collections: ["tabs"], workflows: ["listTickets"] },
+        { id: "todos", source: ".work/todos.ts" },
         { id: "docs", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
           { label: "no url" },
@@ -161,18 +161,18 @@ describe("resolveWorkspaceConfig", () => {
     expect(pins).toMatchObject({ title: "", presentation: "tiles" });
     // A thumb is asked for with true; anything else leaves the faded edge.
     expect(pins).not.toHaveProperty("scrollbar");
-    expect(todos).toMatchObject({
-      source: ".work/todos.ts",
-      collections: ["tabs"],
-      workflows: ["listTickets"],
-    });
+    expect(todos).toEqual({ id: "todos", source: ".work/todos.ts" });
     expect(docs?.items).toEqual([
       expect.objectContaining({
         label: "MDN",
         url: "https://developer.mozilla.org",
       }),
     ]);
-    expect(monitor).toMatchObject({ app: "monitor", height: 1200 });
+    expect(monitor).toMatchObject({
+      app: "monitor",
+      height: 1200,
+      collections: ["chats"],
+    });
     expect(note).toMatchObject({ note: true });
   });
 
@@ -186,15 +186,21 @@ describe("resolveWorkspaceConfig", () => {
         `{ id: "a", source: "work:subsessions" }`,
         "add when: { session: true }",
       ],
+      // What a module reaches is declared beside it (ADR 0277).
+      [
+        `{ id: "a", source: ".work/x.ts", collections: ["tabs"] }`,
+        "catamorphic.access in its package.json",
+      ],
+      [
+        `{ id: "a", source: ".work/x.ts", workflows: ["x"] }`,
+        "catamorphic.access in its package.json",
+      ],
       [
         `{ id: "a", source: "work:chats", collections: ["tabs"] }`,
-        "only apps and modules",
+        "catamorphic.access in its package.json",
       ],
-      [
-        `{ id: "a", source: ".work/x.ts", collections: ["work:tabs"] }`,
-        "without work:",
-      ],
-      [`{ id: "a", app: "m", workflows: ["x"] }`, "only modules"],
+      [`{ id: "a", app: "m", collections: ["work:tabs"] }`, "without work:"],
+      [`{ id: "a", app: "m", workflows: ["x"] }`, "catamorphic.access"],
       [`{ id: "a", note: "../secrets" }`, "project-relative"],
       [`{ id: "a", source: "work:tabs", presentation: "grid" }`, "rows"],
     ] as const) {
@@ -554,7 +560,7 @@ describe("tabbed layout reloads", () => {
 describe("palette modes", () => {
   const withModes = (modes: string, extra = "") =>
     `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
-      { id: "todos", source: ".work/todos.ts", collections: ["chats"] },
+      { id: "todos", source: ".work/todos.ts" },
       { id: "kids", source: "work:subsessions", when: { session: true } },
       ${extra}
     ] }], right: [] }, palette: { modes: [${modes}] } };`;
@@ -563,7 +569,7 @@ describe("palette modes", () => {
     const resolved = resolveProfile(
       withModes(`
         { id: "issues", trigger: "@Issues", aliases: ["bugs"], title: "Issues",
-          source: ".work/issues.ts", search: "source", workflows: ["searchIssues"] },
+          source: ".work/issues.ts", search: "source" },
         { id: "changes", trigger: "changes", title: "Changes", source: "work:git" },
         { id: "todo", trigger: "todo", title: "Todos", section: "todos", topLevel: true },
         { id: "runbooks", trigger: "runbook", title: "Runbooks",
@@ -576,7 +582,6 @@ describe("palette modes", () => {
       aliases: ["bugs"],
       source: ".work/issues.ts",
       search: "source",
-      workflows: ["searchIssues"],
     });
     expect(modes[1]).toMatchObject({ source: "work:git", search: "palette" });
     expect(modes[2]).toMatchObject({ section: "todos", topLevel: true });
@@ -609,25 +614,25 @@ describe("palette modes", () => {
         `{ id: "k", trigger: "k", title: "K", source: "work:git", section: "todos" }`,
         "exactly one of",
       ],
+      [
+        `{ id: "k", trigger: "k", title: "K", source: ".work/k.ts", workflows: ["x"] }`,
+        "catamorphic.access in its package.json",
+      ],
     ] as const)
       expect(resolveProfile(withModes(mode)).error, mode).toContain(message);
   });
 
-  it("finds a module and its grants by section or mode id", () => {
+  it("finds a module by section or mode id", () => {
     const config = resolveProfile(
       withModes(`
-        { id: "issues", trigger: "issues", title: "Issues", source: ".work/issues.ts", collections: ["tabs"] },
+        { id: "issues", trigger: "issues", title: "Issues", source: ".work/issues.ts" },
         { id: "todo", trigger: "todo", title: "Todos", section: "todos" },`),
     ).config;
     expect(executableSource(config, "todos")).toEqual({
       module: ".work/todos.ts",
-      collections: ["chats"],
-      workflows: [],
     });
     expect(executableSource(config, "issues")).toEqual({
       module: ".work/issues.ts",
-      collections: ["tabs"],
-      workflows: [],
     });
     expect(executableSource(config, "todo")?.module).toBe(".work/todos.ts");
     expect(executableSource(config, "kids")).toBeUndefined();
@@ -678,25 +683,16 @@ describe("chips", () => {
     expect(executableSource(DEFAULT_WORKSPACE_CONFIG, "chips")).toBeUndefined();
   });
 
-  it("runs a module with the chat's chips and its workflows", () => {
+  it("runs a module over the chat's chips", () => {
     const { config, error } = resolveProfile(
-      withChips(
-        `{ source: ".work/chips.ts", collections: ["chips"], workflows: ["deploy"] }`,
-      ),
+      withChips(`{ source: ".work/chips.ts" }`),
     );
     expect(error).toBeUndefined();
     expect(chipsModule(config)).toBe(".work/chips.ts");
+    // What it reads and calls is declared beside it (ADR 0277).
     expect(executableSource(config, "chips")).toEqual({
       module: ".work/chips.ts",
-      collections: ["chips"],
-      workflows: ["deploy"],
     });
-    // No collections (or none named) grants nothing to read.
-    const bare = resolveProfile(
-      withChips(`{ source: ".work/chips.ts", collections: [] }`),
-    ).config;
-    expect(bare.chips).toEqual({ source: ".work/chips.ts" });
-    expect(executableSource(bare, "chips")?.collections).toEqual([]);
   });
 
   it("refuses chips Work cannot run", () => {
@@ -705,11 +701,14 @@ describe("chips", () => {
       [`{ source: ".work/chips.ts", rank: 1 }`, "unknown keys rank"],
       [
         `{ source: "work:chips", workflows: ["deploy"] }`,
-        "only a chips module",
+        "catamorphic.access in its package.json",
       ],
       [`{ source: "work:git" }`, "not chips"],
       [`{ source: "work:nope" }`, "not one of Work's lists"],
-      [`{ source: ".work/chips.ts", collections: ["tabs"] }`, "chips only"],
+      [
+        `{ source: ".work/chips.ts", collections: ["chips"] }`,
+        "catamorphic.access in its package.json",
+      ],
     ] as const)
       expect(resolveProfile(withChips(chips)).error, chips).toContain(message);
   });

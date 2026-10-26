@@ -1735,6 +1735,10 @@ export function App({
     identity: projectId,
     activeTabKey: workspace.activeTabKey,
     chats: workspace.chats,
+    chatElement: (localId) =>
+      document.querySelector<HTMLElement>(
+        `[data-chat-project="${CSS.escape(projectId ?? "")}"][data-chat-local-id="${CSS.escape(localId)}"]`,
+      ),
   });
   // Ref'd for the agent-bridge handler (a mount-time effect closure).
   const floatingMotionRef = useRef(floatingMotion);
@@ -6957,18 +6961,21 @@ export function App({
     );
 
   // Tabs leave the top bar only for a sidebar section that lists them (the
-  // default Tabs section, or a module or app granted Work's tabs, ADR 0234);
-  // a layout without one keeps them on top whatever the preference says. A
-  // module runs only in a local project, so it lists nothing on a server's.
+  // default Tabs section, an app granted Work's tabs, or a module whose
+  // package.json declares them, ADR 0234, 0277); a layout without one keeps
+  // them on top whatever the preference says. A module runs only in a local
+  // project, so it lists nothing on a server's.
   const tabsInSidebar =
     prefs?.tabPlacement === "sidebar" &&
     sidebarSections(visibleWorkspace).some(
       (section) =>
         section.when?.tabPlacement !== "top" &&
         (workSourceName(section.source) === "tabs" ||
-          (section.collections?.includes("tabs") === true &&
-            (section.app !== undefined ||
-              (remoteSurfaceResolved && remoteSurfaceStatus === null)))),
+          (section.app !== undefined &&
+            section.collections?.includes("tabs") === true) ||
+          (section.moduleLists?.includes("tabs") === true &&
+            remoteSurfaceResolved &&
+            remoteSurfaceStatus === null)),
     );
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
   // The dock is a sibling of project runtimes. Publish its frame and

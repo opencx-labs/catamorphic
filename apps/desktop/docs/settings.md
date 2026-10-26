@@ -1,5 +1,17 @@
 # Desktop settings
 
+Executable sidebar, palette and chip sources declare their access in
+`catamorphic.access` in the nearest `package.json`. Work asks before they
+run with that access and when it grows. File grants bind their resolved
+destinations; changing a symlink's target asks again. Modules run confined
+on macOS and Linux, with only declared hosts through a proxy and no inherited keys.
+They cannot reach Work's own servers, even through a DNS or loopback alias.
+
+Chat hosts declared in `.work/project.json` become shared trust only in the
+project's approved published program. Every person uses that list automatically;
+local drafts and checkpoint commits do not widen it. Without a publication,
+Work uses its built-in hosts and the person's own trusted hosts.
+
 `src/shared/settings.ts` declares ordinary preference keys, labels, validation and
 permitted scopes. `app-prefs.ts` supplies defaults and runtime preference shape.
 `main/settings-store.ts` owns per-key resolution and atomic writes.
