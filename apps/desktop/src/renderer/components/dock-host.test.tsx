@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDockEntry } from "../../shared/chat.js";
 import type { DockData, DockSnapshot } from "../../shared/desktop-workspace.js";
+import { localPresentations } from "../lib/chat-presentations.js";
 import { DockHost } from "./dock-host.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -102,6 +103,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  for (const item of localPresentations.getSnapshot().chats)
+    localPresentations.remove(item.entry.localId);
   expect(state.listeners.size).toBe(0);
 });
 async function mount() {
@@ -115,6 +118,69 @@ async function publish(snapshot: DockSnapshot) {
 }
 
 describe("dock project scope", () => {
+  it("lets a fork's tab take over when the parent's remote activation arrived before its local presentation", async () => {
+    if (!state.snapshot) throw new Error("Missing fixture snapshot");
+    const parent = chat("opencx", "parent");
+    parent.entry.mode = "partial";
+    parent.selected = true;
+    state.snapshot = {
+      ...state.snapshot,
+      chats: [{ ...parent, local: true }],
+      activeChatId: "parent",
+    };
+    await mount();
+    await act(async () => localPresentations.publish(parent));
+    expect(
+      container.querySelector('[data-chat="parent"][data-mode="partial"]'),
+    ).not.toBeNull();
+
+    const fork = chat("opencx", "fork", true);
+    fork.entry.mode = "tab";
+    fork.tabActive = true;
+    fork.selected = true;
+    await act(async () => {
+      localPresentations.publish({ ...parent, selected: false });
+      localPresentations.publish(fork);
+    });
+    await publish({
+      ...state.snapshot,
+      chats: [
+        { ...parent, local: true },
+        { ...fork, local: true },
+      ],
+      activeChatId: "fork",
+    });
+    expect(
+      container.querySelector('[data-chat="fork"][data-mode="tab"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-chat="parent"][data-mode="partial"]'),
+    ).toBeNull();
+  });
+
+  it("keeps a local opening visible while its remote acknowledgement is pending", async () => {
+    if (!state.snapshot) throw new Error("Missing fixture snapshot");
+    state.snapshot = { ...state.snapshot, chats: [] };
+    await mount();
+    const opening = chat("opencx", "opening");
+    opening.entry.mode = "partial";
+    opening.selected = true;
+    await act(async () => localPresentations.publish(opening));
+    expect(localPresentations.getSnapshot().pendingActivation).toBe("opening");
+    expect(
+      container.querySelector('[data-chat="opening"][data-mode="partial"]'),
+    ).not.toBeNull();
+    await publish({
+      ...state.snapshot,
+      chats: [{ ...opening, local: true }],
+      activeChatId: "opening",
+    });
+    expect(localPresentations.getSnapshot().pendingActivation).toBeUndefined();
+    expect(
+      container.querySelector('[data-chat="opening"][data-mode="partial"]'),
+    ).not.toBeNull();
+  });
+
   it.each([false, true])(
     "keeps foreign attention chats out of a project-only dock (fork: %s)",
     async (fork) => {

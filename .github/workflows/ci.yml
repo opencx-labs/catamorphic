@@ -327,7 +327,22 @@ jobs:
         run: |
           defaults write com.apple.universalaccess reduceMotion -bool false
           defaults write com.apple.universalaccess reduceTransparency -bool false
+          # A hosted-compute LAN prompt can cover otherwise focusable test
+          # windows. Decline only that runner prompt on this disposable Mac.
+          mkdir -p test-results
+          permission_log="${PWD}/test-results/macos-native-permissions.log"
+          python3 scripts/macos-ci-permissions.py --self-test
+          python3 scripts/macos-ci-permissions.py --watch > "${permission_log}" 2>&1 &
+          permission_pid=$!
+          trap 'kill "${permission_pid}" 2>/dev/null || true; wait "${permission_pid}" || true; cat "${permission_log}"' EXIT
+          for attempt in $(seq 1 50); do
+            kill -0 "${permission_pid}" 2>/dev/null || { cat "${permission_log}"; exit 1; }
+            grep -q '^Watching only for' "${permission_log}" && break
+            sleep 0.1
+          done
+          grep -q '^Watching only for' "${permission_log}"
           bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
+          kill -0 "${permission_pid}"
       - uses: actions/upload-artifact@v4
         # Diagnostics only: an artifact service outage never fails verification.
         continue-on-error: true
