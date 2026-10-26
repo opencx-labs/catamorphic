@@ -8,8 +8,13 @@ jobs:
   probe:
     runs-on: macos-15
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [control, listener, geometry]
     env:
       CATAMORPHIC_REUSE_TESTS: "1"
+      DIAG_VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/test-setup
@@ -29,7 +34,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fork-hover-diagnostic
+          name: fork-hover-diagnostic-${{ matrix.variant }}
           path: |
             test-results/
             /tmp/fork-hover-display.png
