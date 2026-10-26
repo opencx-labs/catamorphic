@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
@@ -1847,19 +1852,38 @@ describe("agents and profiles", () => {
     );
   });
   it("shows the shared session inspector and explains unavailable server moves", async () => {
-    await run(
-      `const row = byText('[data-session-id] button', 'artifact links'); if (!row) throw new Error('Session row missing'); row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); return true;`,
+    await settled("the artifact-link turn finished before inspecting its move");
+    await focusWindow(app);
+    const row = await runWait<{ x: number; y: number }>(
+      `const row = byText('[data-session-id] button', 'artifact links');
+       if (!row) return false;
+       const box = row.getBoundingClientRect();
+       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };`,
+      { label: "session row to inspect" },
     );
+    await app.movePointer(row);
     await runWait(
       `return !!$('[data-resource-inspector]') && !!byText('[data-resource-inspector] button', 'Move to server');`,
       { label: "sidebar session inspector" },
     );
-    await runWait(
-      `return byText('[data-resource-inspector] button', 'Move to server')?.getAttribute('aria-disabled') === 'true';`,
-      { label: "move eligibility" },
+    const move = await runWait<{ x: number; y: number }>(
+      `const inspector = $('[data-resource-inspector]');
+       const button = byText('[data-resource-inspector] button', 'Move to server');
+       if (!inspector || button?.getAttribute('aria-disabled') !== 'true' ||
+           button.dataset.disabledReason !== 'Link this project to a server first' ||
+           inspector.getAnimations({subtree:true}).some(animation =>
+             animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)) return false;
+       const box = button.getBoundingClientRect();
+       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };`,
+      { label: "disabled move control after the inspector settles" },
     );
-    await run(
-      `byText('[data-resource-inspector] button', 'Move to server').dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); return true;`,
+    // Readiness includes eligibility: hovering during the preceding turn
+    // would explain its busy state instead of the missing server link.
+    // A synthetic pointerover also does not establish native hover on macOS.
+    await app.movePointer(move);
+    await runWait(
+      `return byText('[data-resource-inspector] button', 'Move to server')?.matches(':hover');`,
+      { label: "native pointer over the disabled move control" },
     );
     await runWait(
       `return $$('[role="tooltip"]').some(node => node.textContent === 'Link this project to a server first');`,
@@ -1867,5 +1891,6 @@ describe("agents and profiles", () => {
     );
 
     await run(`pressKey('Escape'); return true;`);
+    await app.movePointer({ x: 1, y: 1 });
   });
 });

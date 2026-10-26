@@ -123,6 +123,15 @@ it("keeps local insertions out of long chat transcripts' style work", async () =
           probe.replaceChildren(document.createElement('span')); probe.offsetHeight;
         }
       }
+      // Minimizing/maximizing changes the tab pose. The corner controls
+      // must be found directly, without matching every test-marked tool
+      // result in a retained conversation.
+      const chat=document.querySelector('[data-chat-local-id]:not([inert])');
+      const wasTab=chat.hasAttribute('data-chat-tab');
+      for (let i=0;i<4;i++) {
+        chat.toggleAttribute('data-chat-tab'); probe.offsetHeight;
+      }
+      chat.toggleAttribute('data-chat-tab',wasTab);
     })()`);
     await app.cdp("Tracing.end");
     await ended;

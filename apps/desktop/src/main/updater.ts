@@ -15,7 +15,7 @@ import {
   UpdatePreferencesStore,
 } from "./update-preferences.js";
 import { createUpdatePreparation } from "./update-preparation.js";
-import { markUpdateRestart } from "./update-restart.js";
+import { consumeUpdateRestart, markUpdateRestart } from "./update-restart.js";
 import { UpdateSchedule } from "./update-schedule.js";
 import { DesktopUpdaterController } from "./updater-controller.js";
 import { createUpdaterLog } from "./updater-log.js";
@@ -30,11 +30,15 @@ export interface DesktopUpdaterService {
    * launch instead of stopping them (ADR 0246).
    */
   restarting(): boolean;
+  /** A native close was prevented; subsequent Quit is ordinary again. */
+  cancelRestart(): void;
   dispose(): void;
 }
 
 export function registerDesktopUpdater(options: {
   broadcast: (channel: string, payload: unknown) => void;
+  prepareRestart: () => Promise<void>;
+  cancelRestart: () => void;
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
   const logger = createUpdaterLog(
@@ -49,8 +53,24 @@ export function registerDesktopUpdater(options: {
   );
   const preparation = createUpdatePreparation({ updater: nativeUpdater });
   let restarting = false;
+  let restartPrepared = false;
+  const cancelRestart = () => {
+    restarting = false;
+    restartPrepared = false;
+    consumeUpdateRestart(app.getPath("userData"));
+  };
+  const abortRestart = () => {
+    if (!restarting && !restartPrepared) return;
+    cancelRestart();
+    options.cancelRestart();
+  };
   const controller = new DesktopUpdaterController({
-    prepareInstall: () => preparation.prepare(),
+    prepareInstall: async () => {
+      await preparation.prepare();
+      restartPrepared = true;
+      await options.prepareRestart();
+    },
+    cancelInstall: abortRestart,
     downloaded: {
       load: () => preferences.downloaded(),
       // Losing the record only costs a second download: never a failure.
@@ -69,11 +89,14 @@ export function registerDesktopUpdater(options: {
     // Electron moves the bundle (out of a disk image or App Translocation
     // too) and relaunches from Applications; false when the person declines.
     moveToApplications: async () => {
-      restarting = true;
       try {
+        restartPrepared = true;
+        await options.prepareRestart();
+        restarting = true;
         restarting = app.moveToApplicationsFolder();
+        if (!restarting) abortRestart();
       } catch (error) {
-        restarting = false;
+        abortRestart();
         throw error;
       }
       return restarting;
@@ -117,9 +140,7 @@ export function registerDesktopUpdater(options: {
   };
   // Squirrel failing to relaunch leaves Work running: a later Quit is an
   // ordinary one again, which stops agents rather than handing them back.
-  const onUpdateError = () => {
-    restarting = false;
-  };
+  const onUpdateError = () => abortRestart();
   // Every build listens: a development build's restart rehearsal (the e2e
   // suite's) announces the same quit.
   nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
@@ -151,6 +172,7 @@ export function registerDesktopUpdater(options: {
       return true;
     },
     restarting: () => restarting,
+    cancelRestart,
     dispose() {
       preparation.dispose();
       schedule.dispose();

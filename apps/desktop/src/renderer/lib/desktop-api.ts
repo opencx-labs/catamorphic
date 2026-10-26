@@ -35,6 +35,7 @@ import type {
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceInitial,
   WorkspaceNavigation,
 } from "../../shared/desktop-workspace.js";
 import type { DockIconState } from "../../shared/dock-icon.js";
@@ -1258,10 +1259,11 @@ export interface CatamorphicDesktopApi {
     listener: (state: DesktopUpdateState) => void,
   ) => () => void;
 
-  workspaceInitial: () => Promise<string | undefined>;
+  workspaceInitial: () => Promise<WorkspaceInitial>;
   dockDraftGet: (localId: string) => Promise<ChatDraft | null>;
   dockDraftSet: (localId: string, draft: ChatDraft) => Promise<void>;
   onDockDraft: (listener: (update: ChatDraftUpdate) => void) => () => void;
+  workspaceFlushed: (requestId: string, error?: string) => Promise<void>;
   workspaceClaim: (projectId: string) => Promise<boolean>;
   workspaceNavigate: (input: WorkspaceNavigation) => Promise<void>;
   /** Answers a `release` workspace event: whether the project was let go. */

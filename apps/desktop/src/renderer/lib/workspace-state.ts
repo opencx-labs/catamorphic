@@ -565,6 +565,13 @@ export type WorkspaceEvent =
     }
   | { type: "finish-expansion"; key: string; split: SplitView }
   | { type: "dismiss-floating"; key?: string }
+  /** The person takes this attachment's keys, or starts anew after it ended. */
+  | {
+      type: "terminal-take-control";
+      localId: string;
+      sessionId: string;
+      running: boolean;
+    }
   | TerminalEvent;
 
 /** News from the PTY behind a terminal: a command runs in it, or it ended. */
@@ -1092,6 +1099,40 @@ function applyWorkspaceEvent(
         ),
       };
     }
+    case "terminal-take-control": {
+      const terminal = ws.terminals.find(
+        (entry) =>
+          entry.localId === event.localId &&
+          entry.attachSessionId === event.sessionId,
+      );
+      // The buffer lookup may outlive a closed tab or a new shell already
+      // opened in its place. Only the attachment it looked up may change.
+      if (!terminal) return ws;
+      const running = event.running && terminal.running !== false;
+      if (running && !terminal.agentControlled) return ws;
+      const {
+        attachSessionId: _attachment,
+        ptySessionId: _pty,
+        adoptSessionId: _adopt,
+        initialCommand: _command,
+        ...kept
+      } = terminal;
+      const replacement: TerminalEntry = running
+        ? { ...terminal, agentControlled: false }
+        : {
+            ...kept,
+            restoreSessionId: event.sessionId,
+            agentControlled: false,
+            running: true,
+            busy: false,
+          };
+      return {
+        ...ws,
+        terminals: ws.terminals.map((entry) =>
+          entry === terminal ? replacement : entry,
+        ),
+      };
+    }
     // Its process ended (ADR 0223): nothing runs in it any more. An agent
     // terminal that only rode its chat as a chip leaves with its command;
     // one open as a tab keeps its final output until the person closes it.
@@ -1099,11 +1140,20 @@ function applyWorkspaceEvent(
       const { sessionId } = event;
       const terminals = ws.terminals.flatMap((terminal) =>
         !backedBy(terminal, sessionId) ||
-        (!terminal.busy && terminal.running === false)
+        (!terminal.busy &&
+          terminal.running === false &&
+          !terminal.agentControlled)
           ? [terminal]
           : terminal.attachSessionId && terminal.background
             ? []
-            : [{ ...terminal, busy: false, running: false }],
+            : [
+                {
+                  ...terminal,
+                  busy: false,
+                  running: false,
+                  agentControlled: false,
+                },
+              ],
       );
       return terminals.length === ws.terminals.length &&
         terminals.every((terminal, index) => terminal === ws.terminals[index])

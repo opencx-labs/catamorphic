@@ -100,16 +100,26 @@ it("restores guest visibility and destroys closed browser guests across repeated
       expect(page).toMatchObject({ url: `${fixtureUrl}/` });
       // Hide through the real tab UI. The guest stays alive but its native
       // animation scheduler must stop, independent of the page cooperating.
-      const before = await app.eval<number>(
-        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
-      );
       await app.eval(
         `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),altKey:true,bubbles:true}))`,
       );
       await app.waitFor(
         `getComputedStyle(document.querySelector('webview')).display==='none'`,
       );
+      await app.waitFor(
+        `document.querySelector('webview').executeJavaScript('document.visibilityState === "hidden"')`,
+        { label: "the native guest is hidden before measuring its scheduler" },
+      );
+      const before = await app.eval<number>(
+        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
+      );
       await app.eval(`new Promise(resolve=>setTimeout(resolve,500))`);
+      const hidden = await app.eval<number>(
+        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
+      );
+      // Measure only the hidden interval. The old before-hide/after-show
+      // sample included visible handoff frames and failed on slow runners.
+      expect(hidden - before).toBeLessThan(2);
       expect(
         await app.eval(
           `document.querySelector('webview').executeJavaScript('document.querySelector("h1").textContent')`,
@@ -121,10 +131,10 @@ it("restores guest visibility and destroys closed browser guests across repeated
       await app.waitFor(
         `getComputedStyle(document.querySelector('webview')).display!=='none'`,
       );
-      const after = await app.eval<number>(
-        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
+      await app.waitFor(
+        `document.querySelector('webview').executeJavaScript('window.framesRun > ${hidden}')`,
+        { label: "the restored guest resumes its native scheduler" },
       );
-      expect(after - before).toBeLessThan(15);
       if (index === 0) {
         stage = "bounded guest recovery";
         for (let recovery = 0; recovery < 2; recovery += 1) {

@@ -132,6 +132,15 @@ export const BUILTIN_ACTIONS = [
     hiddenInPalette: true,
   },
   {
+    id: "close-window",
+    label: "Close current Work window",
+    icon: "AppWindow",
+    description:
+      "close this Work window, keeping its projects and agents alive",
+    defaultBinding: null,
+    keywords: ["close", "window", "current", "work", "hide"],
+  },
+  {
     id: "new-floating-chat",
     label: "New chat",
     icon: "MessageSquarePlus",
@@ -462,12 +471,20 @@ export const BUILTIN_ACTIONS = [
   },
   {
     id: "rename-chat",
-    label: "Rename chat…",
+    label: "Rename current chat…",
     icon: "Pencil",
     description:
-      "name the focused chat; it keeps the name, whatever its agent titles it",
+      "name the current chat; it keeps the name, whatever its agent titles it",
     defaultBinding: null,
-    keywords: ["rename", "name", "title", "chat", "conversation", "session"],
+    keywords: [
+      "rename",
+      "name",
+      "title",
+      "current",
+      "chat",
+      "conversation",
+      "session",
+    ],
   },
   {
     id: "archive-chat",

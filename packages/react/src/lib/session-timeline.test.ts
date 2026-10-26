@@ -87,6 +87,145 @@ describe("sessionTimeline", () => {
       timeline.find((group) => group.turn === null)?.entries,
     ).toMatchObject([{ kind: "steps", steps: [{ id: "one" }, { id: "two" }] }]);
   });
+
+  it("groups loose reports that render together after interleaved running work", () => {
+    const reports = Array.from({ length: 9 }, (_, index) =>
+      inboundMessage(`report:${index}`, 13 + index * 2, null, "Check passed", {
+        dispatch: "message_only",
+        status: "in_progress",
+      }),
+    );
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 30,
+        turns: [turn("t1", 1, { status: "running" })],
+        items: [
+          userMessage("t1:input", 10, "t1", "Run the checks"),
+          ...reports.flatMap((report, index) => [
+            toolCall(`command:${index}`, 12 + index * 2, "t1", "Check"),
+            report,
+          ]),
+        ],
+      }),
+    );
+    const timeline = sessionTimeline(state);
+    expect(timeline.map((group) => group.key)).toEqual(["t1", "report:0"]);
+    expect(timeline[0]?.entries).toMatchObject([
+      { kind: "input", item: { id: "t1:input" } },
+      {
+        kind: "steps",
+        steps: reports.map((_, index) => ({ id: `command:${index}` })),
+      },
+    ]);
+    expect(timeline[1]?.entries).toEqual([{ kind: "steps", steps: reports }]);
+    expect(state.items.filter((item) => item.turnId === null)).toEqual(reports);
+    expect(shareTimeline(timeline, sessionTimeline(state))).toBe(timeline);
+  });
+
+  it("keeps loose report groups on their side of each rendered turn", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 30,
+        turns: [turn("t1", 1), turn("t2", 2, { status: "running" })],
+        items: [
+          inboundMessage("before:one", 1, null, "First report"),
+          inboundMessage("before:two", 2, null, "Second report"),
+          userMessage("t1:input", 10, "t1", "First task"),
+          toolCall("first:read", 12, "t1", "Read"),
+          inboundMessage("between:one", 13, null, "Third report"),
+          toolCall("first:check", 14, "t1", "Check"),
+          inboundMessage("between:two", 15, null, "Fourth report"),
+          userMessage("t2:input", 20, "t2", "Second task"),
+          toolCall("second:read", 22, "t2", "Read"),
+          inboundMessage("after:one", 23, null, "Fifth report"),
+          toolCall("second:check", 24, "t2", "Check"),
+          inboundMessage("after:two", 25, null, "Sixth report"),
+        ],
+      }),
+    );
+    const timeline = sessionTimeline(state);
+    expect(timeline.map((group) => group.key)).toEqual([
+      "before:one",
+      "t1",
+      "between:one",
+      "t2",
+      "after:one",
+    ]);
+    expect(
+      timeline
+        .filter((group) => group.turn === null)
+        .map((group) => group.entries),
+    ).toMatchObject([
+      [{ kind: "steps", steps: [{ id: "before:one" }, { id: "before:two" }] }],
+      [
+        {
+          kind: "steps",
+          steps: [{ id: "between:one" }, { id: "between:two" }],
+        },
+      ],
+      [{ kind: "steps", steps: [{ id: "after:one" }, { id: "after:two" }] }],
+    ]);
+  });
+
+  it.each([
+    ["a person's message", userMessage("boundary", 15, null, "Please wait")],
+    ["a notice", notice("boundary", 15, "agent_changed", "Agent changed")],
+    [
+      "an important task notification",
+      taskNotification("boundary", 15, null, "Needs your attention", {
+        dispatch: "steer",
+        attention: "required",
+      }),
+    ],
+    [
+      "a failed task notification",
+      taskNotification("boundary", 15, null, "Check failed", {
+        dispatch: "steer",
+        task: {
+          type: "background_command",
+          id: "failed-check",
+          title: "Check",
+          status: "failed",
+        },
+      }),
+    ],
+    [
+      "an agent's question",
+      inboundMessage("boundary", 15, null, "Which branch?", {
+        attention: "required",
+      }),
+    ],
+    [
+      "a report owned by an unloaded turn",
+      inboundMessage("boundary", 15, "historical-turn", "Earlier report"),
+    ],
+  ] as const)("does not merge loose reports across %s", (_name, boundary) => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        turns: [turn("t1", 1, { status: "running" })],
+        items: [
+          userMessage("t1:input", 10, "t1", "Run the checks"),
+          inboundMessage("before", 13, null, "First report"),
+          boundary,
+          inboundMessage("after", 17, null, "Second report"),
+        ],
+      }),
+    );
+    const timeline = sessionTimeline(state);
+    expect(timeline.map((group) => group.key)).toEqual([
+      "t1",
+      "before",
+      boundary.turnId ?? boundary.id,
+      "after",
+    ]);
+    expect(timeline[1]?.entries).toMatchObject([
+      { kind: "steps", steps: [{ id: "before" }] },
+    ]);
+    expect(timeline[3]?.entries).toMatchObject([
+      { kind: "steps", steps: [{ id: "after" }] },
+    ]);
+  });
+
   it("reads a turn as its input, its work, and its answer", () => {
     const state = sessionStateFromSnapshot(
       snapshot({

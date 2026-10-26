@@ -245,6 +245,10 @@ import {
   workspaceCustomizationMessage,
 } from "./lib/workspace-customization.js";
 import {
+  saveWorkspace,
+  useWorkspacePersistence,
+} from "./lib/workspace-persistence.js";
+import {
   agentOpenInFront,
   attachBlocker,
   attachedTabKeys,
@@ -374,17 +378,37 @@ const clamp = (value: number, low: number, high: number) =>
 function AgentControlOverlay({
   kind,
   active,
+  ended = false,
   onTakeOver,
   onGoToChat,
 }: {
   kind: "terminal" | "page";
   active: boolean;
-  onTakeOver: () => void;
+  /** A finished command offers a fresh shell, rather than claiming ownership. */
+  ended?: boolean;
+  onTakeOver: () => void | Promise<void>;
   /** Reveal the chat driving this surface (absent when unattributed). */
   onGoToChat?: () => void;
 }) {
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const takeOver = async () => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await onTakeOver();
+    } catch (cause) {
+      setError(ipcErrorText(cause));
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  };
   const [phase, setPhase] = useState<"in" | "out" | "gone">(
-    active ? "in" : "gone",
+    active || ended ? "in" : "gone",
   );
   // The latest press on the blocked surface, where it landed: the veil
   // shows for a moment from there (animate-veil-touch).
@@ -394,9 +418,9 @@ function AgentControlOverlay({
     y: number;
   } | null>(null);
   useEffect(() => {
-    setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
-    if (!active) setTouch(null);
-  }, [active]);
+    setPhase((prev) => (active || ended ? "in" : prev === "in" ? "out" : prev));
+    if (!active || ended) setTouch(null);
+  }, [active, ended]);
   // The pill steps aside after a few seconds so the surface reads whole;
   // the pointer moving over the surface brings it back for a while.
   const [quiet, setQuiet] = useState(false);
@@ -425,19 +449,20 @@ function AgentControlOverlay({
   };
   if (phase === "gone") return null;
   const exiting = phase === "out";
+  const hidden = quiet && !ended && !pending && error === null;
   const anim = exiting ? "animate-fade-out" : "animate-fade-in";
   return (
     // Pill at the top: the floating chat dock owns the bottom center.
     <div
-      className={`absolute inset-0 z-20 flex items-start justify-center pt-4 ${exiting ? "pointer-events-none" : ""}`}
+      className={`absolute inset-0 z-20 flex items-start justify-center pt-4 ${exiting || ended ? "pointer-events-none" : ""}`}
       onAnimationEnd={(event) => {
         if (event.animationName === "fade-out") setPhase("gone");
       }}
     >
       <div
-        className={`pointer-events-none absolute inset-0 ${anim} ring-2 ring-inset ring-accent/40`}
+        className={`pointer-events-none absolute inset-0 ${anim} ring-2 ring-inset ${ended ? "ring-border" : "ring-accent/40"}`}
       />
-      {!exiting && (
+      {!exiting && !ended && (
         /* The blocking layer keeps keys, clicks, and paste away from an
            agent-driven surface — but view-only SCROLLBACK is harmless
            and genuinely useful while watching, so wheel events are
@@ -481,11 +506,11 @@ function AgentControlOverlay({
         />
       )}
       <div
-        className={`${exiting || quiet ? "pointer-events-none" : "pointer-events-auto"} z-10 flex ${anim} cursor-grab touch-none select-none items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl transition-opacity duration-300 ease-[cubic-bezier(0.2,0,0,1)] active:cursor-grabbing ${quiet ? "opacity-0" : "opacity-100"}`}
+        className={`${exiting || hidden ? "pointer-events-none" : "pointer-events-auto"} z-10 flex ${anim} cursor-grab touch-none select-none items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl transition-opacity duration-300 ease-[cubic-bezier(0.2,0,0,1)] active:cursor-grabbing ${hidden ? "opacity-0" : "opacity-100"}`}
         style={{ translate: `${offset.x}px ${offset.y}px` }}
         data-agent-control-pill
         role="toolbar"
-        aria-label={`Agent owns this ${kind}`}
+        aria-label={ended ? "Command finished" : `Agent owns this ${kind}`}
         onPointerMove={wake}
         // Tabbing to its buttons brings it back too.
         onFocus={wake}
@@ -528,10 +553,14 @@ function AgentControlOverlay({
         onPointerCancel={endDrag}
       >
         <span className="relative flex size-2">
-          <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
-          <span className="relative inline-flex size-2 rounded-full bg-accent" />
+          {!ended && (
+            <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
+          )}
+          <span
+            className={`relative inline-flex size-2 rounded-full ${ended ? "bg-fg-faint" : "bg-accent"}`}
+          />
         </span>
-        Agent owns this {kind}
+        {ended ? "Command finished" : `Agent owns this ${kind}`}
         {onGoToChat && (
           <button
             type="button"
@@ -542,13 +571,19 @@ function AgentControlOverlay({
             Go to chat
           </button>
         )}
-        <button
+        {error && (
+          <span role="alert" className="max-w-64 text-danger">
+            {error}
+          </span>
+        )}
+        <PendingButton
           type="button"
-          onClick={onTakeOver}
+          pending={pending}
+          onClick={() => void takeOver()}
           className="h-6 cursor-pointer rounded-full bg-accent px-2.5 font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
         >
-          Take control
-        </button>
+          {ended ? "Open new shell" : "Take control"}
+        </PendingButton>
       </div>
     </div>
   );
@@ -614,10 +649,11 @@ interface AgentArrival {
 
 export function App({
   runtimeProjectId,
-  onProjectResolved,
+  onRequestProject,
 }: {
   runtimeProjectId?: string;
-  onProjectResolved?: (projectId: string) => void;
+  /** Request a fallback; project effects wait for the parent's accepted claim. */
+  onRequestProject?: (projectId: string) => Promise<boolean>;
 } = {}) {
   const runtime = useWorkspace();
   const visibleRef = useRef(runtime.visible);
@@ -946,16 +982,42 @@ export function App({
             !ownedElsewhere.has(project.id)),
       )
     : allProjects;
+  // A window may suggest its profile's last/default project, but it cannot
+  // mount that project's resources or saver until WorkspaceRoot owns its claim.
+  const fallbackSelectionReady = Boolean(
+    activeProfileId && profilesData && profilePrefs && !projectsLoading,
+  );
+  const fallbackProjectId =
+    !runtimeProjectId && fallbackSelectionReady
+      ? (
+          projects.find((project) => project.id === activeProjectId) ??
+          projects.find(
+            (project) => project.id === profilePrefs?.lastProjectId,
+          ) ??
+          projects.find(
+            (project) => project.id === activeProfile?.defaultProjectId,
+          ) ??
+          projects[0]
+        )?.id
+      : undefined;
+  // A request token identifies this candidate's UI decision only. An earlier
+  // candidate's answer cannot let links drain while a newer claim is pending.
+  const fallbackRequest = useMemo(
+    () =>
+      fallbackProjectId && activeProfileId
+        ? { projectId: fallbackProjectId, profileId: activeProfileId }
+        : null,
+    [fallbackProjectId, activeProfileId],
+  );
+  const [fallbackDecision, setFallbackDecision] = useState<{
+    request: NonNullable<typeof fallbackRequest>;
+    accepted: boolean;
+  } | null>(null);
+  const requestProjectRef = useRef(onRequestProject);
+  requestProjectRef.current = onRequestProject;
   const activeProject = runtimeProjectId
     ? projects.find((project) => project.id === runtimeProjectId)
-    : (projects.find((project) => project.id === activeProjectId) ??
-      // A relaunch lands in the profile's last active project, then the
-      // profile default, then whatever exists.
-      projects.find((project) => project.id === prefs?.lastProjectId) ??
-      projects.find(
-        (project) => project.id === activeProfile?.defaultProjectId,
-      ) ??
-      projects[0]);
+    : undefined;
   const projectId = activeProject?.id;
   const remoteSurfaceResolved = Boolean(
     projectId && remoteSurfaceState?.projectId === projectId,
@@ -1078,11 +1140,29 @@ export function App({
     };
   }, [projectId]);
   useEffect(() => {
-    if (projectId) {
-      setActiveProjectId(projectId);
-      onProjectResolved?.(projectId);
-    }
-  }, [projectId, onProjectResolved]);
+    if (!fallbackRequest) return;
+    let current = true;
+    const request = requestProjectRef.current;
+    void (request ? request(fallbackRequest.projectId) : Promise.resolve(false))
+      .then((accepted) => {
+        if (current)
+          setFallbackDecision({ request: fallbackRequest, accepted });
+      })
+      .catch((error: unknown) => {
+        if (current)
+          setLinkError(
+            error instanceof Error
+              ? error.message
+              : "Could not open the project",
+          );
+      });
+    return () => {
+      current = false;
+    };
+  }, [fallbackRequest]);
+  useEffect(() => {
+    if (projectId) setActiveProjectId(projectId);
+  }, [projectId]);
 
   const startWithAgent = async (): Promise<void> => {
     const project = await desktopApi.createDefaultProject();
@@ -1720,17 +1800,10 @@ export function App({
   useEffect(() => {
     if (projectId && workspaceReady) void desktopApi.workspaceReady(projectId);
   }, [projectId, workspaceReady]);
-  useEffect(() => {
-    if (!projectId || !workspaceReady) return;
-    const snapshot = workspaces[projectId];
-    if (!snapshot) return;
-    const timer = window.setTimeout(() => {
-      void desktopApi
-        .workspaceStateSet(projectId, serializeWorkspace(snapshot))
-        .catch(() => {});
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [workspaces, projectId, workspaceReady]);
+  useWorkspacePersistence({
+    projectId,
+    workspace: projectId && workspaceReady ? workspaces[projectId] : undefined,
+  });
   // Moving to a window of its own (lib/project-move.ts), the project's
   // workspace goes to the main process as it is, its shells and unsent
   // chats with it, for the new window to open as it was left here; what a
@@ -1751,9 +1824,9 @@ export function App({
         leaving,
         serializeWorkspace(left, { moving: true }),
       );
-      void desktopApi
-        .workspaceStateSet(leaving, serializeWorkspace(left))
-        .catch(() => {});
+      void saveWorkspace({ projectId: leaving, workspace: left }).catch(
+        () => {},
+      );
     },
     [],
   );
@@ -2557,8 +2630,12 @@ export function App({
   // the last one it had open are known, and that project's workspace is
   // restored. Taken earlier (a cold launch from a link), a link opens in a
   // placeholder workspace that the restored one then replaces.
-  const linksLandSettled =
-    !projectsLoading && prefs !== null && (!projectId || workspaceReady);
+  const linksLandSettled = runtimeProjectId
+    ? Boolean(projectId && workspaceReady)
+    : fallbackSelectionReady &&
+      (fallbackRequest === null ||
+        (fallbackDecision?.request === fallbackRequest &&
+          !fallbackDecision.accepted));
   useEffect(() => {
     const take = () => {
       if (!runtime.visible || !activeProfile?.id || !linksLandSettled) return;
@@ -3941,7 +4018,34 @@ export function App({
 
   /** User claims an agent-driven surface; the agent is told on its next
       action and may reclaim or move on. */
-  const takeOverSurface = (key: string) => {
+  const takeOverSurface = async (key: string) => {
+    const terminal = workspaceRef.current.terminals.find(
+      (entry) => terminalTabKey(entry.localId) === key,
+    );
+    const attachment = terminal?.attachSessionId;
+    if (terminal && attachment) {
+      // The renderer's last exit event can lag the PTY. Taking the keys
+      // of an ended command explicitly starts a fresh user shell instead.
+      const history = await desktopApi.terminalBuffer(attachment);
+      if (
+        !workspaceRef.current.terminals.some(
+          (entry) =>
+            entry.localId === terminal.localId &&
+            entry.attachSessionId === attachment,
+        )
+      )
+        return;
+      desktopApi.bridgeTakeover(key);
+      updateWorkspace((ws) =>
+        transitionWorkspace(ws, {
+          type: "terminal-take-control",
+          localId: terminal.localId,
+          sessionId: attachment,
+          running: history?.running === true,
+        }),
+      );
+      return;
+    }
     desktopApi.bridgeTakeover(key);
     updateWorkspace((ws) => ({
       ...ws,
@@ -4509,6 +4613,7 @@ export function App({
       void desktopApi.setPrefs({ sidebarOpen: open });
     },
     "close-tab": closeActiveSurface,
+    "close-window": () => window.close(),
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
     "change-assistant": () => openPalettePicker("assistant"),
@@ -5293,6 +5398,11 @@ export function App({
                 ? params.title
                 : "Agent terminal",
             chatLocalId,
+            // This bridge attached a local agent PTY. Keep its actual chat
+            // reference for a user shell opened after the command ends.
+            ...(typeof params.sessionId === "string"
+              ? { chat: { sessionId: params.sessionId, remote: false } }
+              : {}),
             attachSessionId: String(params.terminalId),
             agentControlled: true,
             running: true,
@@ -6384,8 +6494,8 @@ export function App({
     "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
-    // Any focused chat that has a session, loaded in the list or not.
-    "rename-chat": focusedChat?.sessionId !== undefined,
+    // The same current chat the handler targets, including a minimized one.
+    "rename-chat": paletteTargetChat?.sessionId !== undefined,
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":
@@ -6484,6 +6594,7 @@ export function App({
             action.id,
             [
               "check-for-updates",
+              "close-window",
               "setup-agent",
               "manage-connectors",
               "connect-remote-project",
@@ -7757,7 +7868,10 @@ export function App({
                           />
                         )}
                         <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                          {/* A restored user shell is a new terminal life,
+                              with a fresh fixed chat context. */}
                           <TerminalScreen
+                            key={terminal.attachSessionId ?? "owned"}
                             projectId={projectId}
                             active={
                               runtime.visible &&
@@ -7775,7 +7889,13 @@ export function App({
                             restoreSessionId={terminal.restoreSessionId}
                             adoptSessionId={terminal.adoptSessionId}
                             chat={terminal.chat}
-                            readOnly={Boolean(terminal.agentControlled)}
+                            readOnly={
+                              Boolean(terminal.agentControlled) ||
+                              Boolean(
+                                terminal.attachSessionId &&
+                                  terminal.running === false,
+                              )
+                            }
                             onTitle={(title) =>
                               onTerminalTitle(terminal.localId, title)
                             }
@@ -7807,6 +7927,10 @@ export function App({
                         <AgentControlOverlay
                           kind="terminal"
                           active={Boolean(terminal.agentControlled)}
+                          ended={Boolean(
+                            terminal.attachSessionId &&
+                              terminal.running === false,
+                          )}
                           onTakeOver={() =>
                             takeOverSurface(terminalTabKey(terminal.localId))
                           }

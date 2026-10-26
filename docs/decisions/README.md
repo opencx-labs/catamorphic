@@ -287,3 +287,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0279](0279-public-pull-request-status-needs-no-sign-in.md) | Public pull request status needs no sign-in | Accepted (extends 0239) |
 | [0280](0280-terminals-use-the-project-theme-and-chat-workspace.md) | Terminals use the project theme and chat workspace | Accepted (builds on 0209, 0215) |
 | [0281](0281-secret-storage-has-one-encrypted-format.md) | Secret storage has one encrypted format | Accepted (amends 0162, 0206) |
+| [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |

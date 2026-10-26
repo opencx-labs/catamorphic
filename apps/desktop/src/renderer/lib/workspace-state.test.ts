@@ -10,6 +10,7 @@ import {
   reconcileWorkspace,
   serializeWorkspace,
   stripTravel,
+  type TerminalEntry,
   transitionWorkspace,
   type Workspace,
   type WorkspaceEvent,
@@ -450,7 +451,11 @@ it("an agent terminal lives as long as its command: its chip leaves, its tab sta
   ws = transitionWorkspace(ws, { type: "terminal-ended", sessionId: "s1" });
   ws = transitionWorkspace(ws, { type: "terminal-ended", sessionId: "s2" });
   expect(ws.terminals.map(({ localId }) => localId)).toEqual(["tab", "live"]);
-  expect(ws.terminals[0]).toMatchObject({ running: false, busy: false });
+  expect(ws.terminals[0]).toMatchObject({
+    running: false,
+    busy: false,
+    agentControlled: false,
+  });
   // A view that attaches after the end says so again: nothing changes.
   expect(
     transitionWorkspace(ws, { type: "terminal-ended", sessionId: "s2" }),
@@ -472,6 +477,144 @@ it("an agent terminal lives as long as its command: its chip leaves, its tab sta
   });
   expect(ws.terminals).toEqual([]);
   expect(ws.closedTabs).toEqual([]);
+});
+
+function terminalControlWorkspace(
+  overrides: Partial<TerminalEntry> = {},
+): Workspace {
+  return {
+    ...emptyUtilityWorkspace(),
+    chats: [{ localId: "owner", mode: "tab", sessionId: "owner-session" }],
+    terminals: [
+      {
+        localId: "held",
+        title: "Interactive check",
+        chatLocalId: "owner",
+        chat: { sessionId: "owner-session", remote: false },
+        attachSessionId: "agent-pty",
+        ptySessionId: "agent-pty",
+        agentControlled: true,
+        busy: true,
+        running: true,
+        ...overrides,
+      },
+    ],
+    activeTabKey: "terminal:held",
+    split: { leftKey: "chat:owner", rightKey: "terminal:held", ratio: 0.6 },
+  };
+}
+
+it("taking a live terminal's keys keeps its PTY, layout and chat context", () => {
+  const ws = terminalControlWorkspace();
+  const taken = transitionWorkspace(ws, {
+    type: "terminal-take-control",
+    localId: "held",
+    sessionId: "agent-pty",
+    running: true,
+  });
+  expect(taken.terminals).toEqual([
+    { ...ws.terminals[0], agentControlled: false },
+  ]);
+  expect(taken.split).toEqual(ws.split);
+  expect(taken.activeTabKey).toBe(ws.activeTabKey);
+  expect(
+    transitionWorkspace(taken, {
+      type: "terminal-take-control",
+      localId: "held",
+      sessionId: "agent-pty",
+      running: true,
+    }),
+  ).toBe(taken);
+});
+
+it("opening a shell after a command ended restores history without replaying the command", () => {
+  const ws = terminalControlWorkspace({
+    running: false,
+    busy: false,
+    adoptSessionId: "old-handoff",
+    initialCommand: "never replay this command",
+  });
+  const opened = transitionWorkspace(ws, {
+    type: "terminal-take-control",
+    localId: "held",
+    sessionId: "agent-pty",
+    running: false,
+  });
+  expect(opened.terminals).toEqual([
+    {
+      localId: "held",
+      title: "Interactive check",
+      chatLocalId: "owner",
+      chat: { sessionId: "owner-session", remote: false },
+      restoreSessionId: "agent-pty",
+      agentControlled: false,
+      busy: false,
+      running: true,
+    },
+  ]);
+  expect(opened.split).toEqual(ws.split);
+  expect(opened.activeTabKey).toBe(ws.activeTabKey);
+  expect(
+    transitionWorkspace(opened, {
+      type: "terminal-ended",
+      sessionId: "agent-pty",
+    }),
+  ).toBe(opened);
+  expect(
+    transitionWorkspace(opened, {
+      type: "terminal-take-control",
+      localId: "held",
+      sessionId: "agent-pty",
+      running: false,
+    }),
+  ).toBe(opened);
+});
+
+it("uses the PTY's actual end when the renderer's running flag is stale", () => {
+  const ws = terminalControlWorkspace();
+  const opened = transitionWorkspace(ws, {
+    type: "terminal-take-control",
+    localId: "held",
+    sessionId: "agent-pty",
+    running: false,
+  });
+  expect(opened.terminals[0]).toMatchObject({
+    restoreSessionId: "agent-pty",
+    agentControlled: false,
+  });
+  expect(opened.terminals[0]?.attachSessionId).toBeUndefined();
+});
+
+it("does not undo an exit that arrived after the control lookup began", () => {
+  const ws = terminalControlWorkspace({ running: false, busy: false });
+  const opened = transitionWorkspace(ws, {
+    type: "terminal-take-control",
+    localId: "held",
+    sessionId: "agent-pty",
+    running: true,
+  });
+  expect(opened.terminals[0]?.restoreSessionId).toBe("agent-pty");
+  expect(opened.terminals[0]?.attachSessionId).toBeUndefined();
+});
+
+it("ignores a control lookup for a closed or replaced terminal attachment", () => {
+  const ws = terminalControlWorkspace({ attachSessionId: "replacement-pty" });
+  expect(
+    transitionWorkspace(ws, {
+      type: "terminal-take-control",
+      localId: "held",
+      sessionId: "agent-pty",
+      running: false,
+    }),
+  ).toBe(ws);
+  expect(
+    transitionWorkspace(ws, {
+      type: "terminal-take-control",
+      localId: "closed",
+      sessionId: "replacement-pty",
+      running: false,
+    }),
+  ).toBe(ws);
 });
 
 it("keeps shells and unsent chats only for a move to another window", () => {

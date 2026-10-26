@@ -130,7 +130,12 @@ do in Chrome:
 - **Unused tabs sleep.** `renderer/lib/tab-sleep.ts` unloads browser tabs
   out of sight for the profile's `browserTabSleep` time and mounts a
   restored workspace's hidden tabs asleep; `main/browser-sleep.ts` keeps
-  their page state and decides what keeps a page awake. Test runs shorten
+  their page state and decides what keeps a page awake. Native camera,
+  microphone and screen sharing grants conservatively keep a tab awake until
+  navigation, including capture in an extension's private world. Changing a site
+  permission away from Allow ends matching page-owned capture in that profile
+  and origin; private extension worlds are outside page capture revocation.
+  Test runs shorten
   the minute with `CATAMORPHIC_E2E_TAB_SLEEP_MINUTE_MS`
   (`e2e/browser-sleep.e2e.ts`).
 
@@ -260,6 +265,12 @@ native `style-invalidation.e2e.ts` regression adds 12,000 transcript rows and
 checks the trace's element counts for insertions in the workspace, dock and
 document, avoiding timing thresholds. Keyboard timestamp reveal remains
 covered by `chat-motion.e2e.ts`.
+
+The tab's corner controls have their own `data-chat-controls` attribute and a
+direct header path. A descendant `data-testid` selector made switching a long
+chat between floating and tab poses reconsider thousands of tool-result nodes.
+The same regression now toggles that pose as well as inserting local content;
+the released selector visited 12,013 elements in the test's style pass.
 
 A tab switch shows the new tab in the frame after the press, a chat as a
 page: a chat tab behind another keeps its tab pose and is hidden at once

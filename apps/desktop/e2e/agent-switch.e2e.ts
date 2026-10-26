@@ -37,6 +37,14 @@ const wait = <T = unknown>(body: string, label?: string) =>
 
 /** Opens the chat's status popup the way a person does: a press on it. */
 const inspector = async () => {
+  const ready = () =>
+    wait(
+      `const popup = $('[data-testid="session-inspector-content"]')?.closest('[data-resource-inspector][data-open="true"][data-settled="true"]');
+       return !!popup && !popup.closest('[inert]') && getComputedStyle(popup).opacity === '1' &&
+         !popup.getAnimations({subtree:true}).some(animation =>
+           animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      "visible status popup entrance settled",
+    );
   await wait(
     `return !document.getAnimations().some(animation => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);`,
   );
@@ -44,8 +52,10 @@ const inspector = async () => {
     await run(
       `return !!$('[data-resource-inspector][data-open="true"] [data-testid="session-inspector-content"]');`,
     )
-  )
+  ) {
+    await ready();
     return;
+  }
   const point = await app.waitFor<{ x: number; y: number }>(`(() => { ${helpers}
     const button = dock()?.querySelector('[aria-label^="Session status:"]');
     if (!button || button.closest('[inert]')) return false;
@@ -64,12 +74,7 @@ const inspector = async () => {
     `return !!$('[data-testid="session-inspector-content"]');`,
     "status popup",
   );
-  await wait(
-    `const popup = $('[data-testid="session-inspector-content"]')?.closest('[data-resource-inspector]');
-     return !!popup && !popup.getAnimations({subtree:true}).some(animation =>
-       animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
-    "status popup entrance settled",
-  );
+  await ready();
 };
 /** The agent picker's rows: name, whether it can be picked, and its detail. */
 const agentRows = (ready = "true") =>

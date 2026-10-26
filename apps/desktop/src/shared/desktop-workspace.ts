@@ -85,6 +85,12 @@ export interface DockSnapshot {
   /** The person's folded strip (prefs `dockCollapsed`). */
   collapsed: boolean;
 }
+/** Projects reserved for this workspace window before its renderer mounts. */
+export interface WorkspaceInitial {
+  projectIds: string[];
+  activeProjectId?: string;
+}
+
 export interface WorkspaceNavigation {
   projectId: string;
   newWindow?: boolean;
@@ -103,6 +109,8 @@ export interface WorkspaceNavigation {
   };
 }
 export type WorkspaceEvent =
+  | { kind: "flush"; requestId: string }
+  | { kind: "forget"; projectId: string }
   | ({ kind: "navigate" } & WorkspaceNavigation)
   /**
    * A project this window keeps in the background is moving to a window

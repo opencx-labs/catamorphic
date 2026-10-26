@@ -118,6 +118,23 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   "content.js": `
 document.documentElement.dataset.workTest = "ran";
 chrome.runtime.sendMessage({ type: "count", count: document.querySelectorAll("p").length });
+// The stream stays in the extension's isolated world; only its native state
+// crosses the shared DOM for the sleep protection regression below.
+let capturedMicrophone;
+document.addEventListener("work-test-microphone-start", async () => {
+  const state = document.documentElement.dataset;
+  state.workTestMicrophoneNative = String(navigator.mediaDevices.getUserMedia).includes("[native code]") ? "true" : "false";
+  try {
+    capturedMicrophone = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.workTestMicrophone = capturedMicrophone.getAudioTracks()[0].readyState;
+  } catch (error) {
+    state.workTestMicrophone = "error:" + error.name;
+  }
+});
+document.addEventListener("work-test-microphone-stop", () => {
+  capturedMicrophone?.getTracks().forEach((track) => track.stop());
+  document.documentElement.dataset.workTestMicrophone = capturedMicrophone?.getAudioTracks()[0]?.readyState ?? "none";
+});
 `,
   "popup.html": `<!doctype html><html><body style="width:240px;margin:12px">
 <p id="tab">…</p><p id="sync">…</p>
@@ -279,6 +296,7 @@ beforeAll(async () => {
     urls: [`${origin}/page`],
     sandboxedRenderers: true,
     env: {
+      CATAMORPHIC_E2E_SYSTEM_MEDIA_ACCESS: "granted",
       CATAMORPHIC_E2E_PICK_FILE: path.join(work, "pick"),
       CATAMORPHIC_E2E_WEBSTORE_ORIGIN: storeOrigin,
       CATAMORPHIC_E2E_WEBSTORE_UPDATE_URL: `${storeOrigin}/service/update2/crx`,
@@ -442,6 +460,46 @@ describe("an unpacked extension", () => {
       `document.querySelector('[data-testid="extension-action"][data-extension-id="${extensionId}"] [data-testid="extension-badge"]')?.textContent === '3'`,
       { label: "badge shows the paragraph count" },
     );
+  });
+
+  it("keeps a native extension microphone protected from tab sleep", async () => {
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'allow'})`,
+    );
+    try {
+      await inPage(
+        "document.dispatchEvent(new Event('work-test-microphone-start'));true",
+      );
+      await app.waitFor(
+        `${pageView}.executeJavaScript('document.documentElement.dataset.workTestMicrophone==="live"')`,
+        { label: "extension private world has a live native microphone" },
+      );
+      expect(
+        await inPage(
+          "document.documentElement.dataset.workTestMicrophoneNative",
+        ),
+      ).toBe("true");
+      expect(
+        await app.eval(
+          `window.catamorphicDesktop.browserSleepBlocker({guestId:${pageView}.getWebContentsId()})`,
+        ),
+      ).toBe("media");
+    } finally {
+      await inPage(
+        "document.dispatchEvent(new Event('work-test-microphone-stop'));true",
+      );
+      await app.waitFor(
+        `${pageView}.executeJavaScript('document.documentElement.dataset.workTestMicrophone==="ended"')`,
+        { label: "extension native microphone stopped" },
+      );
+    }
+    // A grant conservatively protects the page until navigation, including
+    // capture in private extension worlds the page cannot observe.
+    expect(
+      await app.eval(
+        `window.catamorphicDesktop.browserSleepBlocker({guestId:${pageView}.getWebContentsId()})`,
+      ),
+    ).toBe("media");
   });
 
   it("opens its popup, which sees the tab and storage.sync", async () => {

@@ -83,6 +83,12 @@ describe.skipIf(process.platform !== "darwin")("macOS Dock icon", () => {
     expect(await app.eval(`${api}.dockIconState()`)).toMatchObject({
       custom: true,
     });
+    // The setting mounts before its asynchronous state arrives. Its initial
+    // Work preview and disabled Reset do not acknowledge the saved choice.
+    await app.waitFor(
+      `${iconRow}.querySelector('img')?.alt === 'Custom Dock icon' && !${iconRow}.querySelectorAll('button')[1].disabled`,
+      { label: "saved custom icon loaded and Reset available" },
+    );
     await app.eval(`${iconRow}.querySelectorAll('button')[1].click()`);
     await app.waitFor(
       `${iconRow}.querySelector('img')?.alt === 'Work Dock icon'`,

@@ -4,8 +4,12 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
-import { QUIET_PHASES, VoiceQuiet } from "./voice-quiet.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  QUIET_PHASES,
+  quietForConversation,
+  VoiceQuiet,
+} from "./voice-quiet.js";
 
 const nativeDir = path.resolve(
   import.meta.dirname,
@@ -28,18 +32,20 @@ function fakeHelper() {
   const child = Object.assign(new EventEmitter(), {
     stdin,
     stdout,
-    kill: () => {
+    kill: vi.fn(() => {
       child.emit("exit", null);
       return true;
-    },
+    }),
   });
   const spawns: string[] = [];
   const spawnImpl = ((file: string) => {
     spawns.push(file);
     return child;
   }) as unknown as typeof spawn;
-  return { written, stdout, spawns, spawnImpl, ended: () => ended };
+  return { child, written, stdout, spawns, spawnImpl, ended: () => ended };
 }
+
+afterEach(() => vi.useRealTimers());
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const label = "MacBook Pro Microphone (Built-in)";
@@ -100,12 +106,91 @@ describe("VoiceQuiet", () => {
     expect(next.written).toEqual([`quiet ${base64}`]);
   });
 
+  it("releases native voice processing before letting the helper exit", async () => {
+    const helper = fakeHelper();
+    const quiet = new VoiceQuiet({
+      helperPath: "/app/voice-quiet",
+      spawnImpl: helper.spawnImpl,
+    });
+    quiet.set({ quiet: true, microphone: label });
+    quiet.stop();
+    await flush();
+    expect(helper.written).toEqual([`quiet ${base64}`, "loud"]);
+    expect(helper.ended()).toBe(true);
+    expect(helper.child.kill).not.toHaveBeenCalled();
+    helper.child.emit("exit", 0);
+  });
+
+  it("bounds cleanup of a helper that cannot exit", () => {
+    vi.useFakeTimers();
+    const helper = fakeHelper();
+    const quiet = new VoiceQuiet({
+      helperPath: "/app/voice-quiet",
+      spawnImpl: helper.spawnImpl,
+    });
+    quiet.set({ quiet: true, microphone: label });
+    quiet.stop();
+    expect(helper.child.kill).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(helper.child.kill).toHaveBeenCalledOnce();
+  });
+
   it("keeps other audio lowered while voice listens or waits, never while the agent speaks", () => {
     expect([...QUIET_PHASES].sort()).toEqual([
       "hearing",
       "listening",
       "thinking",
     ]);
+  });
+
+  it("keeps dictation and voice learning from lowering other audio", () => {
+    for (const phase of QUIET_PHASES) {
+      expect(
+        quietForConversation({
+          phase,
+          target: { kind: "dictation" },
+          learning: false,
+        }),
+      ).toBe(false);
+      expect(
+        quietForConversation({ phase, target: null, learning: false }),
+      ).toBe(false);
+      expect(
+        quietForConversation({
+          phase,
+          target: { kind: "assistant" },
+          learning: true,
+        }),
+      ).toBe(false);
+      expect(
+        quietForConversation({
+          phase,
+          target: { kind: "assistant" },
+          learning: false,
+        }),
+      ).toBe(true);
+      expect(
+        quietForConversation({
+          phase,
+          target: { kind: "chat", projectId: "p", sessionId: "s" },
+          learning: false,
+        }),
+      ).toBe(true);
+    }
+    expect(
+      quietForConversation({
+        phase: "speaking",
+        target: { kind: "assistant" },
+        learning: false,
+      }),
+    ).toBe(false);
+    expect(
+      quietForConversation({
+        phase: "off",
+        target: { kind: "assistant" },
+        learning: false,
+      }),
+    ).toBe(false);
   });
 
   it("ships a prebuilt helper matching its source manifest", () => {

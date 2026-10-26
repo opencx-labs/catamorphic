@@ -22,6 +22,12 @@ chat's background step and its notice stay, and the agent still reads the
 command's final output. A terminal the person has open as a tab keeps
 showing that output until they close it; closing it then removes it.
 
+Taking control while the command runs hands over that same terminal's keys.
+Once it ends, the tab says "Command finished" and offers "Open new shell".
+That explicit action opens a fresh user shell in the owning chat's current
+working folder, with the finished command's scrollback above a divider. It
+neither revives the old process nor runs its command again.
+
 **A terminal is active only while a process runs in it.** Every way a
 terminal ends (exit, stop, close, kill) clears its activity, and the
 renderer handles an agent terminal's end itself, whether or not its tab

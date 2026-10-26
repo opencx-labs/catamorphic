@@ -135,6 +135,138 @@ describe("site microphone", () => {
     expect(await app.eval(`!!${modal}`)).toBe(false);
     expect(app.getRendererErrors()).toEqual([]);
   });
+
+  it("keeps a native clone live after its original track stops", async () => {
+    await inGuest(`navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+      window.liveMic=stream;window.clonedMic=stream.clone();return true;
+    })`);
+    expect(
+      await inGuest("window.liveMic.getTracks().map(t=>t.readyState)"),
+    ).toEqual(["live"]);
+    expect(
+      await inGuest("window.clonedMic.getTracks().map(t=>t.readyState)"),
+    ).toEqual(["live"]);
+    await inGuest("window.liveMic.getTracks().forEach(t=>t.stop());true");
+    expect(
+      await inGuest("window.liveMic.getTracks().map(t=>t.readyState)"),
+    ).toEqual(["ended"]);
+    expect(
+      await inGuest("window.clonedMic.getTracks().map(t=>t.readyState)"),
+    ).toEqual(["live"]);
+    await inGuest("window.clonedMic.getTracks().forEach(t=>t.stop());true");
+    expect(
+      await inGuest("window.clonedMic.getTracks().map(t=>t.readyState)"),
+    ).toEqual(["ended"]);
+  });
+
+  it("ends only matching capture and clones when a site permission is blocked", async () => {
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'camera',state:'allow'})`,
+    );
+    await inGuest(
+      `navigator.mediaDevices.getUserMedia({audio:true,video:true}).then(stream=>{window.liveCall=stream;window.clonedCall=stream.clone();return true})`,
+    );
+    expect(
+      await inGuest(
+        "window.liveCall.getTracks().every(t=>t.readyState==='live')",
+      ),
+    ).toBe(true);
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'block'})`,
+    );
+    await app.waitFor(
+      `${guest}.executeJavaScript('[window.liveCall,window.clonedCall].every(s=>s.getAudioTracks().every(t=>t.readyState==="ended")&&s.getVideoTracks().every(t=>t.readyState==="live"))')`,
+      { label: "blocking microphone ends audio and preserves camera" },
+    );
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'camera',state:'block'})`,
+    );
+    await app.waitFor(
+      `${guest}.executeJavaScript('[window.liveCall,window.clonedCall].every(s=>s.getTracks().every(t=>t.readyState==="ended"))')`,
+      { label: "blocking camera ends the remaining video tracks" },
+    );
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'allow'})`,
+    );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("ends capture in a same-origin embedded frame when permission is blocked", async () => {
+    await inGuest(`new Promise(resolve=>{
+      const frame=document.createElement('iframe');frame.src='/call';
+      frame.onload=()=>frame.contentWindow.navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{frame.contentWindow.liveMic=stream;resolve(true)});
+      frame.id='call-frame';document.body.append(frame);
+    })`);
+    expect(
+      await inGuest(
+        "document.getElementById('call-frame').contentWindow.liveMic.getTracks().map(t=>t.readyState)",
+      ),
+    ).toEqual(["live"]);
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'block'})`,
+    );
+    await app.waitFor(
+      `${guest}.executeJavaScript('document.getElementById("call-frame").contentWindow.liveMic.getTracks().every(t=>t.readyState==="ended")')`,
+      { label: "origin revocation reaches embedded capture" },
+    );
+    await inGuest("document.getElementById('call-frame').remove();true");
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'allow'})`,
+    );
+  });
+
+  it("revokes a microphone cloned into its parent page through another realm", async () => {
+    await inGuest(`new Promise(resolve=>{
+      const frame=document.createElement('iframe');frame.src='/call';frame.id='call-frame';
+      frame.onload=()=>frame.contentWindow.navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{
+        frame.contentWindow.liveMic=stream;
+        window.parentClone=new MediaStream(stream.getTracks()).clone();
+        // Another realm's stop entry point must not lose the clone's capture kind.
+        for(const track of stream.getTracks())MediaStreamTrack.prototype.stop.call(track);
+        resolve(true);
+      });document.body.append(frame);
+    })`);
+    expect(
+      await inGuest(
+        "document.getElementById('call-frame').contentWindow.liveMic.getTracks().map(t=>t.readyState)",
+      ),
+    ).toEqual(["ended"]);
+    expect(
+      await inGuest("window.parentClone.getTracks().map(t=>t.readyState)"),
+    ).toEqual(["live"]);
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'block'})`,
+    );
+    await app.waitFor(
+      `${guest}.executeJavaScript('window.parentClone.getTracks().every(t=>t.readyState==="ended")')`,
+      { label: "origin revocation reaches cross-frame clone" },
+    );
+    await inGuest("document.getElementById('call-frame').remove();true");
+    await app.eval(
+      `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'allow'})`,
+    );
+  });
+
+  it("revokes capture from both callback-based browser APIs", async () => {
+    for (const name of ["getUserMedia", "webkitGetUserMedia"]) {
+      await inGuest(
+        `new Promise((resolve,reject)=>navigator[${JSON.stringify(name)}]({audio:true},stream=>{window.callbackMic=stream;resolve(true)},reject))`,
+      );
+      expect(
+        await inGuest("window.callbackMic.getTracks().map(t=>t.readyState)"),
+      ).toEqual(["live"]);
+      await app.eval(
+        `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'block'})`,
+      );
+      await app.waitFor(
+        `${guest}.executeJavaScript('window.callbackMic.getTracks().every(t=>t.readyState==="ended")')`,
+        { label: `${name} native capture revoked` },
+      );
+      await app.eval(
+        `window.catamorphicDesktop.siteSettingsSet({origin:${JSON.stringify(origin)},kind:'microphone',state:'allow'})`,
+      );
+    }
+  });
 });
 
 describe("site microphone the OS refuses", () => {
