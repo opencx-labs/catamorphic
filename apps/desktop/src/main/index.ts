@@ -914,7 +914,11 @@ app.whenReady().then(async () => {
       target?.window ?? (restored.length === 0 ? startupWindows[0] : undefined);
     const updateRestart = consumeUpdateRestart(app.getPath("userData"));
     if (!window || window.isDestroyed()) return;
-    if (updateRestart) app.focus({ steal: true });
+    // Restored windows are shown inactive. On macOS, choosing a key window
+    // alone may leave the application inactive on an ordinary relaunch too.
+    // Activate once, then focus only the saved visible workspace selected above.
+    if (updateRestart || (process.platform === "darwin" && restored.length > 0))
+      app.focus({ steal: true });
     window.focus();
   });
 
