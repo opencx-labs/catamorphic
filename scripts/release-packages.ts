@@ -557,8 +557,14 @@ try {
   }
 }
 
-async function registeredPackage(name: string): Promise<RegistryPackage> {
-  const response = await fetch(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
+export async function registeredPackage(
+  name: string,
+): Promise<RegistryPackage> {
+  // Match npm's canonical scoped path and fresh metadata reads. Cached
+  // install metadata can hide a just-published version for five minutes.
+  const response = await fetch(
+    `${NPM_REGISTRY}/${name.replace("/", "%2f")}?write=true`,
+  );
   if (response.status === 404) return {};
   if (!response.ok)
     throw new Error(`npm lookup for ${name} failed (${response.status})`);

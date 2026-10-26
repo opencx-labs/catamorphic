@@ -8,13 +8,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NPM_REGISTRY,
   npmReleaseTag,
   packReleasePackages,
   publicationOrder,
   publicationPlan,
+  registeredPackage,
   setReleaseVersion,
   verifyPackedPackage,
   verifyReleasePackages,
@@ -24,8 +25,26 @@ import {
 const version = "0.1.0-alpha.30";
 const directories: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
+});
+
+it("reads current publication metadata instead of a cached install snapshot", async () => {
+  const published = {
+    versions: {
+      [version]: { dist: { integrity: "sha512-published" } },
+    },
+    "dist-tags": { alpha: version },
+  };
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json(published));
+
+  expect(await registeredPackage("@catamorphic/workflow")).toEqual(published);
+  expect(fetch).toHaveBeenCalledWith(
+    `${NPM_REGISTRY}/@catamorphic%2fworkflow?write=true`,
+  );
 });
 
 function fixture() {
