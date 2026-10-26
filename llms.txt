@@ -10,6 +10,7 @@ Work is the product; Catamorphic is the open-source framework it is built on. Bo
 
 - Product: Work, "the software for work"
 - Framework underneath: Catamorphic (same repository)
+- Framework libraries: public `@catamorphic/*` npm packages, released at the same version as Work; Preview installs use `@alpha`, Stable uses `latest`
 - License: Apache-2.0
 - Price: free; no account, subscription or hosted service required
 - Platform: macOS 12 or newer on Apple silicon (desktop); a mobile web companion; the Work server, a self-hosted Docker image

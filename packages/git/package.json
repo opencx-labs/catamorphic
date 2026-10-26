@@ -1,7 +1,6 @@
 {
   "name": "@catamorphic/git",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.30",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,5 +30,26 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
+  ]
 }

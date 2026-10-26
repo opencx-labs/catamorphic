@@ -1,3 +1,7 @@
+import packageJson from "../package.json" with { type: "json" };
+
+export const APP_PACKAGE_VERSION = packageJson.version;
+
 export {
   type AppClientOptions,
   createClient,

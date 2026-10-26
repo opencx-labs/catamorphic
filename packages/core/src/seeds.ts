@@ -1,5 +1,5 @@
 import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
-import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
+import { APP_PACKAGE_VERSION, APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import {
@@ -219,7 +219,7 @@ export const appScaffold = ({
   [`${PROJECT_APPS_DIR}/${name}/src/main.tsx`]: APP_MAIN_TSX,
 });
 
-export const APP_PACKAGE_VERSION = "0.0.4";
+export { APP_PACKAGE_VERSION };
 
 /**
  * The seeded check script. Thin by design: everything it calls ships in

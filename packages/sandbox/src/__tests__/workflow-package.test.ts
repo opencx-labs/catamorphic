@@ -1,3 +1,4 @@
+import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { describe, expect, it } from "vitest";
 import {
   loadWorkflowPackagePayload,
@@ -11,7 +12,7 @@ describe("workflow package fallback", () => {
     const payload = await loadWorkflowPackagePayload();
 
     expect(payload.packageName).toBe(WORKFLOW_PACKAGE_NAME);
-    expect(payload.version).toBe("0.0.4");
+    expect(payload.version).toBe(WORKFLOW_PACKAGE_VERSION);
     expect(payload.files["package.json"]).toContain(WORKFLOW_PACKAGE_NAME);
     expect(payload.files["package.json"]).not.toContain('"bun"');
     expect(payload.files["dist/index.js"]).toContain("defineWorkflow");
@@ -27,18 +28,20 @@ describe("workflow package fallback", () => {
     await expect(
       resolveWorkflowPackageFallback({
         packageJson: JSON.stringify({
-          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.4" },
+          dependencies: { [WORKFLOW_PACKAGE_NAME]: WORKFLOW_PACKAGE_VERSION },
         }),
       }),
     ).resolves.toMatchObject({
       packageName: WORKFLOW_PACKAGE_NAME,
-      version: "0.0.4",
+      version: WORKFLOW_PACKAGE_VERSION,
     });
 
     await expect(
       resolveWorkflowPackageFallback({
         packageJson: JSON.stringify({
-          dependencies: { [WORKFLOW_PACKAGE_NAME]: "^1.0.0" },
+          dependencies: {
+            [WORKFLOW_PACKAGE_NAME]: `^${WORKFLOW_PACKAGE_VERSION}`,
+          },
         }),
       }),
     ).resolves.toBeUndefined();
@@ -48,7 +51,7 @@ describe("workflow package fallback", () => {
     await expect(
       resolveWorkflowPackageFallback({
         packageJson: JSON.stringify({
-          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.4" },
+          dependencies: { [WORKFLOW_PACKAGE_NAME]: WORKFLOW_PACKAGE_VERSION },
         }),
         hasLockfile: true,
       }),
@@ -75,7 +78,7 @@ describe("workflow package fallback", () => {
       packageJson: JSON.stringify({
         name: "customer-project",
         dependencies: {
-          [WORKFLOW_PACKAGE_NAME]: "0.0.4",
+          [WORKFLOW_PACKAGE_NAME]: WORKFLOW_PACKAGE_VERSION,
           zod: "^4.0.0",
         },
       }),

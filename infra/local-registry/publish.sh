@@ -17,6 +17,8 @@ for p in app parser workflow; do
     bun run build
     bun publish \
       --config=infra/local-registry/bunfig.toml \
+      --registry http://localhost:4873 \
+      --tag alpha \
       --tolerate-republish
   )
 done

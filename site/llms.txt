@@ -22,6 +22,11 @@
 > The desktop app runs the lightest column (pglite, local sandboxes, no
 > server) as proof.
 
+Libraries publish as public `@catamorphic/*` npm packages with the same version
+as Work. Preview releases use the `alpha` tag (`bun add
+@catamorphic/server-sdk@alpha`); Stable releases use `latest`. Keep all framework
+dependencies on one release version.
+
 Capabilities are co-equal: projects, git-native tracking, coding agents,
 workflows, apps, and embedder sovereignty. Do not describe Catamorphic as
 a workflow-automation framework; workflows are one capability among

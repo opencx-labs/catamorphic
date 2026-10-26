@@ -92,6 +92,17 @@ to provision it.
 
 ### Embeddable framework
 
+Framework libraries publish to npm with the same version as Work. Preview
+releases use the `alpha` tag:
+
+```bash
+bun add @catamorphic/server-sdk@alpha @catamorphic/fastify-plugin@alpha
+```
+
+Use one release version across `@catamorphic/*` dependencies. Stable releases
+use npm's `latest` tag. The deployed Cloudflare bridge is a Worker application,
+rather than an npm library.
+
 The packages under [`packages/`](packages) let a host application mount
 Catamorphic in-process without adopting Catamorphic's identity, deployment, or
 design choices. A host supplies auth, users and organizations, database,

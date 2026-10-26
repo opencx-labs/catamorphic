@@ -36,8 +36,12 @@ Most hosts use the first two together: the SDK boots the core once, and the
 plugin exposes that same core to the frontend. The React packages
 (`@catamorphic/react`, `@catamorphic/ui`) always talk HTTP through the API client.
 
-Most `@catamorphic/*` packages are private workspace packages, not published
-to npm. Link them from a built checkout ([Local dev linking](#local-dev-linking)).
+`@catamorphic/*` libraries publish to the public npm registry with the same
+version as Work. Install Preview libraries explicitly with `@alpha`, for example
+`bun add @catamorphic/server-sdk@alpha @catamorphic/fastify-plugin@alpha`.
+Keep all Catamorphic dependencies on one release version. Stable releases use
+`latest`. For changes alongside the framework, use
+[local dev linking](#local-dev-linking).
 
 ## 1. Boot once per process
 

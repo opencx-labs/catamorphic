@@ -46,6 +46,16 @@ describe("verifyDesktopRelease", () => {
       }),
     ).toThrow("does not match package version");
   });
+
+  it("requires a numeric alpha release number", () => {
+    for (const version of [
+      "0.1.0-alpha",
+      "0.1.0-alpha.beta",
+      "0.1.0-alpha.01",
+      "0.1.0-alpha.1.extra",
+    ])
+      expect(() => desktopReleaseKind(version)).toThrow("alpha");
+  });
 });
 
 describe("renderHomebrewCask", () => {

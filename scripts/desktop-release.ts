@@ -35,7 +35,7 @@ export function desktopReleaseKind(version: string): DesktopReleaseKind {
   }
   const prerelease = version.split("-")[1];
   if (!prerelease) return "stable";
-  if (prerelease.split(".")[0] !== "alpha") {
+  if (!/^alpha\.(0|[1-9]\d*)$/.test(prerelease)) {
     throw new Error(
       `Desktop preview versions must use the alpha prerelease channel: ${version}`,
     );

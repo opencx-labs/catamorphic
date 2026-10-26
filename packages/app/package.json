@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/app",
-  "version": "0.0.4",
+  "version": "0.1.0-alpha.30",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,8 +17,14 @@
   },
   "files": [
     "dist",
-    "package.json",
-    "README.md"
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
   ],
   "scripts": {
     "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
@@ -54,5 +60,15 @@
     "jsdom": "^29.1.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/app"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

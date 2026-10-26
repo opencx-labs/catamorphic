@@ -1,3 +1,5 @@
+import packageJson from "../package.json" with { type: "json" };
+
 export {
   appApiTypesPath,
   appWorkspaceNames,
@@ -92,4 +94,4 @@ export {
   webhookSettingsKey,
 } from "./webhook-settings.js";
 
-export const PARSER_PACKAGE_VERSION = "0.0.2";
+export const PARSER_PACKAGE_VERSION = packageJson.version;
