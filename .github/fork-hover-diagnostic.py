@@ -8,14 +8,22 @@ s = s.replace('  await app.movePointer(point);', '''  await app.eval(`(() => {
     if(!window.__pointerTracing){
       window.__pointerTracing=true;
       window.addEventListener('pointermove', e=>{
-        window.__pointerTrace.push({x:e.clientX,y:e.clientY,trusted:e.isTrusted,target:e.target?.tagName});
+        window.__pointerTrace.push({x:e.clientX,y:e.clientY,trusted:e.isTrusted,buttons:e.buttons,target:e.target?.tagName});
         if(window.__pointerTrace.length>12)window.__pointerTrace.shift();
       },true);
     }
     return true;
   })()`);
   console.log('NATIVE_POINTER_TARGET',selector,point);
-  await app.movePointer(point);''')
+  await app.movePointer(point);
+  console.log('AFTER_NATIVE_MOVE',selector,JSON.stringify(await app.eval(`(() => {
+    const node=document.querySelector(window.__clickTarget);
+    const r=node?.getBoundingClientRect();
+    const hidden=[];
+    for(let n=node;n;n=n.parentElement)
+      if(getComputedStyle(n).opacity!=='1')hidden.push({tag:n.tagName,cls:n.className,opacity:getComputedStyle(n).opacity,hover:n.matches(':hover')});
+    return {rect:r?.toJSON(),hidden,hover:node?.matches(':hover'),pointer:window.__pointerTrace,documentFocus:document.hasFocus()};
+  })()`)));''')
 s = s.replace('  await app?.stop();', '''  if(app) console.log('FINAL_HOVER_DIAGNOSTIC',JSON.stringify(await app.eval(`(async () => {
     const node=document.querySelector(window.__clickTarget);
     const r=node?.getBoundingClientRect();
