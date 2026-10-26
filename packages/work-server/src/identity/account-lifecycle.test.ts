@@ -4,7 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuthUser } from "../auth/work-auth-types.js";
 import { FakeDirectory } from "../test-support.js";
 import { AccountLifecycle } from "./account-lifecycle.js";
 

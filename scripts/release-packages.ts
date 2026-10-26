@@ -391,7 +391,6 @@ export function smokeReleasePackages(input: {
         type: "module",
         devDependencies: {
           "@types/node": "^24",
-          "@types/bun": "1.4.3",
           "@types/react": "^19.2.17",
         },
         dependencies: Object.fromEntries([
@@ -502,9 +501,6 @@ try {
           type: "module",
           devDependencies: {
             "@types/node": "^24",
-            ...(name === "@catamorphic/work-server"
-              ? { "@types/bun": "1.4.3" }
-              : {}),
           },
           dependencies: { [name]: tarballs[name] },
           overrides: tarballs,

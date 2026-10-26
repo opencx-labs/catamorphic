@@ -10,7 +10,7 @@ import {
 } from "@catamorphic/core";
 import { projectToolCapabilities } from "@catamorphic/fastify-plugin";
 import { z } from "zod";
-import type { WorkAuth } from "./auth/work-auth.js";
+import type { WorkAuth } from "./auth/work-auth-types.js";
 
 /**
  * Project tools the server's own agents reach through discovery: proposing

@@ -4,7 +4,7 @@ import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { micromark } from "micromark";
 import { z } from "zod";
-import type { WorkAuth, WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuth, WorkAuthUser } from "../auth/work-auth-types.js";
 import { workMark } from "../brand.js";
 import {
   CreateShareSchema,

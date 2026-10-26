@@ -9,7 +9,7 @@ import {
 import type { DB } from "@catamorphic/db";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
-import type { WorkAuth, WorkAuthUser } from "../auth/work-auth.js";
+import type { WorkAuth, WorkAuthUser } from "../auth/work-auth-types.js";
 
 export type ShareKind = "document" | "folder" | "app";
 
