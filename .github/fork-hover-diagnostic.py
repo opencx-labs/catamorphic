@@ -53,3 +53,40 @@ new = '''  useEffect(() => {
   }, [remoteSnapshot.activeChatId, local.pendingActivation]);'''
 assert text.count(old) == 1
 dock.write_text(text.replace(old, new))
+
+# The fork leaves its floating parent in the dock, as a new chat does.
+app = Path('apps/desktop/src/renderer/app.tsx')
+text = app.read_text()
+old = '              chats: [...ws.chats, entry],'
+new = """              chats: [
+                ...ws.chats.map((chat) =>
+                  chat.mode === "partial"
+                    ? { ...chat, mode: "min" as const }
+                    : chat,
+                ),
+                entry,
+              ],"""
+assert text.count(old) == 1
+app.write_text(text.replace(old, new))
+test = Path('apps/desktop/e2e/project-dock-scope.e2e.ts')
+text = test.read_text()
+anchor = '  await click(`${front(fork)} button[aria-label="Minimize chat to bubble"]`);'
+assert text.count(anchor) == 1
+text = text.replace(anchor, """  await app.waitFor(
+    `window.catamorphicDesktop.dockSnapshot().then(s=>s.chats.some(c=>c.entry.localId===${JSON.stringify(original)}&&c.entry.mode==='min'))`,
+    { label: "fork leaves its floating parent in the dock" },
+  );
+  await app.waitFor(
+    `!document.querySelector(${JSON.stringify(front(original))})`,
+  );
+""" + anchor)
+old = """  await click(
+    `${front(original)} button[aria-label="Minimize chat to bubble"]`,
+  );
+  await app.waitFor(
+    `window.catamorphicDesktop.dockSnapshot().then(s=>s.chats.some(c=>c.entry.localId===${JSON.stringify(original)}&&c.entry.mode==='min'))`,
+    { label: "parent minimized" },
+  );
+"""
+assert text.count(old) == 1
+test.write_text(text.replace(old, ''))
