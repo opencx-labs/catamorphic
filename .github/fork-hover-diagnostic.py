@@ -36,3 +36,8 @@ s = s.replace('  await app?.stop();', '''  if(app) console.log('FINAL_HOVER_DIAG
   })()`).catch(e=>String(e))));
   await app?.stop();''')
 p.write_text(s)
+
+# Vitest sorts fresh files by size. Keep the original preceding suite ahead
+# of this instrumented file so the diagnostic reproduces the hosted order.
+previous = Path('apps/desktop/e2e/chat-trusted-hosts.e2e.ts')
+previous.write_text(previous.read_text() + '\n/* Diagnostic ordering only. ' + ' ' * 6000 + ' */\n')
