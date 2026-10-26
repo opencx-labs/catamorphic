@@ -16,6 +16,7 @@ export type DockData = Pick<
   | "placeholder"
   | "tabActive"
   | "refreshWhileIdle"
+  | "attentionRevision"
   | "slot"
   | "splitRatio"
   | "splitResizing"

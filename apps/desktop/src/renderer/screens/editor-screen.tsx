@@ -43,6 +43,8 @@ const isPdfPath = (path: string) => /\.pdf$/i.test(path);
 
 export interface EditorScreenProps {
   projectId: string;
+  /** Its pane occupies a slot in the visible workspace. */
+  active: boolean;
   line?: number;
   column?: number;
   navigation?: string;
@@ -58,6 +60,7 @@ export interface EditorScreenProps {
 
 export function EditorScreen({
   projectId,
+  active,
   line,
   column,
   navigation,
@@ -68,6 +71,8 @@ export function EditorScreen({
   onPropose,
   onSharePersonal,
 }: EditorScreenProps) {
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const theme = useTheme();
   const editorTheme = useMonacoTheme();
   const officeFile = filePath ? isOfficePath(filePath) : false;
@@ -215,16 +220,19 @@ export function EditorScreen({
       const path = filePathRef.current;
       // Tabs and inactive projects keep their editors mounted. Their old
       // selections are not context for a chat opened over another surface.
+      // Read the workspace's known pane state before asking the browser:
+      // checkVisibility can flush styles across every retained transcript.
+      if (!path || !activeRef.current) return null;
+      const selection = read();
       if (
-        !path ||
+        !selection ||
         !screenRef.current?.checkVisibility({
           checkOpacity: true,
           checkVisibilityCSS: true,
         })
       )
         return null;
-      const selection = read();
-      return selection ? { filePath: path, ...selection } : null;
+      return { filePath: path, ...selection };
     });
   };
   useEffect(() => () => unregisterRef.current?.(), []);

@@ -7967,6 +7967,10 @@ export function App({
                         )}
                         <Suspense fallback={<div className="flex-1 bg-bg" />}>
                           <EditorScreen
+                            active={
+                              runtime.visible &&
+                              Boolean(viewSlots[editorTabKey(editor.localId)])
+                            }
                             line={editor.line}
                             column={editor.column}
                             navigation={editor.navigation}
@@ -8107,6 +8111,12 @@ export function App({
                       fork={chatForks[entry.localId] ?? false}
                       unread={unreadByChat[entry.localId] ?? false}
                       attention={attentionByChat[entry.localId] ?? false}
+                      attentionRevision={
+                        attentionByChat[entry.localId]
+                          ? sessionsById.get(entry.sessionId ?? "")
+                              ?.attentionRevision
+                          : undefined
+                      }
                       menu={chatMenus[entry.localId] ?? []}
                       onMenuAction={(action) => {
                         if (entry.sessionId)

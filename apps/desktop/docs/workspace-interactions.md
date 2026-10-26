@@ -220,7 +220,9 @@ set. Failed updates, declined moves and prevented native closes resume persisten
 for the next attempt. Positions unavailable on the current screens are recentered.
 
 The profile can show chats from the current project or all its projects, attach
-or detach the dock, and choose edge or centered expansion. Drag the collapsed
+or detach the dock, and choose edge or centered expansion. Current-project scope
+also applies to chats needing attention, including subagents and forks. Opening
+and acknowledging a chat never changes which project it belongs to. Drag the collapsed
 bubble or expanded handle horizontally to change bottom corners. It lands on
 the resting spot nearest its centre, leaving its own after 40% of the way to
 the next, and slides there, back to where it started included. Persist only

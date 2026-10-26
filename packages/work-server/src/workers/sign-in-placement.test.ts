@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -66,18 +65,6 @@ let projectId: string;
 const users: Record<"alice" | "bob", string> = { alice: "", bob: "" };
 const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
 const workerDirs: Record<string, string> = {};
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close(() => resolve(port));
-    });
-  });
-}
 
 async function waitFor(
   check: () => Promise<boolean>,
@@ -258,12 +245,9 @@ beforeAll(async () => {
   );
   fs.chmodSync(path.join(bin, "codex"), 0o755);
 
-  const port = await freePort();
-  base = `http://127.0.0.1:${port}`;
   server = await createWorkServer(
     testServerOptions({
       dataDir: path.join(root, "control-plane"),
-      publicBases: [base],
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_CONTROL_PLANE_WORKLOADS: "workflow",
@@ -271,7 +255,12 @@ beforeAll(async () => {
       },
     }),
   );
-  await server.app.listen({ port, host: "127.0.0.1" });
+  // Bind the real listener before publishing its address. Probing and then
+  // releasing a port lets a parallel suite claim it while this server boots.
+  await server.app.listen({ port: 0, host: "127.0.0.1" });
+  const address = server.app.server.address();
+  if (!address || typeof address === "string") throw new Error("No address");
+  base = `http://127.0.0.1:${address.port}`;
 
   const project = await operator("/_work/operator/projects", {
     name: "sign-ins",
