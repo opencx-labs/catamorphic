@@ -33,6 +33,10 @@ async function click(selector: string) {
   const point = await app.waitFor<{ x: number; y: number }>(`(() => {
     const node=document.querySelector(${JSON.stringify(selector)});
     if(!node)return false;
+    // Hover-only controls must reach their final position before the
+    // native pointer moves. Otherwise it can land where the row used to be.
+    for(let parent=node;parent;parent=parent.parentElement)
+      if(parent.getAnimations().some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;
     const r=node.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
     return r.width&&r.height&&node.contains(document.elementFromPoint(x,y))&&{x,y};
   })()`);
