@@ -57,6 +57,7 @@ jobs:
   build-macos:
     name: Build, sign, and notarize macOS
     needs: prepare-npm
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
     runs-on: macos-15
     timeout-minutes: 90
     environment: desktop-release

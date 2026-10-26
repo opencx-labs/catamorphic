@@ -49,11 +49,14 @@ Never commit certificates, keys, passwords, or encoded credentials.
 
 ## Dry run
 
-Run the `Desktop release` workflow manually from the intended commit. A
+Run the `Desktop release` workflow manually from the intended commit on `main`. A
 manual dispatch verifies Homebrew tap write access, builds, signs, notarizes,
 and verifies the app, then retains the DMG, ZIP, blockmaps, update metadata,
 and checksum file as workflow artifacts. It does not create a GitHub release
 or change the Homebrew tap.
+
+A manual dispatch from a feature branch verifies only npm packages. Signing
+remains restricted to `main` and release tags by the desktop environment.
 
 Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
