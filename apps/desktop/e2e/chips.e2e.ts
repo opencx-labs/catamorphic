@@ -381,10 +381,20 @@ it("focuses the first chip with Cmd+J; arrows move, Tab reaches its buttons, Esc
   });
 });
 
-it("runs the project's chips module: its order, its chip and its button", async () => {
-  fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
+it("runs the project's chips module once allowed: its order, its chip and its button", async () => {
+  // Beside it, its package.json declares that it reads the chat's chips
+  // (ADR 0277).
+  fs.mkdirSync(path.join(projectRoot, ".work/chips"), { recursive: true });
   fs.writeFileSync(
-    path.join(projectRoot, ".work/chips.ts"),
+    path.join(projectRoot, ".work/chips/package.json"),
+    JSON.stringify({
+      name: "chips",
+      private: true,
+      catamorphic: { access: { lists: ["chips"] } },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, ".work/chips/index.ts"),
     `export default {
       async load({ work, parentId, session }) {
         const page = await work.read({ source: 'chips', parentId });
@@ -405,7 +415,20 @@ it("runs the project's chips module: its order, its chip and its button", async 
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
     `module.exports = { sidebars: { left: [{ id: 'project', title: 'Project', icon: 'House', sections: [{ id: 'files', source: 'work:files' }] }], right: [] },
-      chips: { source: '.work/chips.ts', collections: ['chips'] } };`,
+      chips: { source: '.work/chips/index.ts' } };`,
+  );
+  // It asks first, and Work's chips show until it is allowed.
+  await wait(
+    `return rail()?.querySelector('[data-testid="chip-rail-access"]')?.textContent.includes("Read and act on this chat's chips");`,
+    { timeoutMs: 30_000, label: "the chips module asks" },
+  );
+  expect(
+    await run<boolean>(
+      `return !!chip('https://github.com/acme/widgets/pull/4') && !chip('standup');`,
+    ),
+  ).toBe(true);
+  await run(
+    `rail().querySelector('[data-testid="chip-rail-access"] [data-testid="module-access-allow"]').click(); return true;`,
   );
   await wait(
     `return shown().map((el) => el.dataset.chipId).join(',') ===
@@ -440,7 +463,7 @@ it("keeps Work's chips beside a Retry when the chips module fails", async () => 
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
     `module.exports = { sidebars: { left: [{ id: 'project', title: 'Project', icon: 'House', sections: [{ id: 'files', source: 'work:files' }] }], right: [] },
-      chips: { source: '.work/broken-chips.ts', collections: ['chips'] } };`,
+      chips: { source: '.work/broken-chips.ts' } };`,
   );
   await wait(
     `return rail()?.querySelector('[data-testid="chip-rail-failure"]')?.textContent.includes('no chips today');`,

@@ -7,8 +7,16 @@ import { desktopApi, type ProfileConnection } from "../lib/desktop-api.js";
 import { ProfileInspector } from "./profile-inspector";
 
 vi.mock("../lib/desktop-api.js", () => ({
-  desktopApi: { profileConnections: vi.fn() },
+  desktopApi: { profileConnections: vi.fn(), windowImage: vi.fn() },
 }));
+
+/** Main's answer for an icon (ADR 0277): data, or nothing to show. */
+const ICONS: Record<string, string> = {
+  "https://registry.example/linear.svg": "data:image/svg+xml;base64,TGluZWFy",
+  "https://registry.example/broken.svg": "data:image/svg+xml;base64,QnJva2Vu",
+  "https://docs.example.com/mcp": "data:image/png;base64,RG9jcw==",
+  "https://mcp.linear.example/sse": "data:image/png;base64,U2l0ZQ==",
+};
 
 const profile = {
   id: "8b2f4c1e-0000-4000-8000-000000000001",
@@ -27,6 +35,13 @@ describe("ProfileInspector", () => {
 
   beforeEach(() => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    vi.mocked(desktopApi.windowImage).mockImplementation(async (request) =>
+      "url" in request
+        ? (ICONS[request.url] ?? null)
+        : "site" in request
+          ? (ICONS[request.site.page ?? ""] ?? null)
+          : null,
+    );
     vi.mocked(desktopApi.profileConnections).mockImplementation(
       () =>
         new Promise((resolve, reject) => {
@@ -101,12 +116,15 @@ describe("ProfileInspector", () => {
       "Docs",
       "Local files",
     ]);
-    expect(rows[0]?.querySelector("img")?.getAttribute("src")).toBe(
-      "https://registry.example/linear.svg",
-    );
-    expect(rows[1]?.querySelector("img")?.getAttribute("src")).toBe(
-      "https://docs.example.com/favicon.ico",
-    );
+    // As data from main: the window fetches no icon itself.
+    await vi.waitFor(() => {
+      expect(rows[0]?.querySelector("img")?.getAttribute("src")).toBe(
+        ICONS["https://registry.example/linear.svg"],
+      );
+      expect(rows[1]?.querySelector("img")?.getAttribute("src")).toBe(
+        ICONS["https://docs.example.com/mcp"],
+      );
+    });
     expect(rows[2]?.querySelector("img")).toBeNull();
     expect(rows[2]?.querySelector('[aria-label="Local files"]')).not.toBeNull();
   });
@@ -123,12 +141,16 @@ describe("ProfileInspector", () => {
       ]),
     );
     const image = () => container.querySelector("li img");
-    expect(image()?.getAttribute("src")).toBe(
-      "https://registry.example/broken.svg",
+    await vi.waitFor(() =>
+      expect(image()?.getAttribute("src")).toBe(
+        ICONS["https://registry.example/broken.svg"],
+      ),
     );
     await act(async () => image()?.dispatchEvent(new Event("error")));
-    expect(image()?.getAttribute("src")).toBe(
-      "https://mcp.linear.example/favicon.ico",
+    await vi.waitFor(() =>
+      expect(image()?.getAttribute("src")).toBe(
+        ICONS["https://mcp.linear.example/sse"],
+      ),
     );
     await act(async () => image()?.dispatchEvent(new Event("error")));
     expect(image()).toBeNull();

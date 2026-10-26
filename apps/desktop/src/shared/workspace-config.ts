@@ -25,14 +25,13 @@ export interface WorkspaceConfig {
 
 /**
  * Where a chat's chips come from (ADR 0239): Work's `work:chips`, or a
- * module in the project that reads it (`collections: ["chips"]`) and sorts,
- * groups, filters or adds to it. The rail draws whatever the source returns.
+ * module in the project that reads it (its access lists `chips`, ADR 0277)
+ * and sorts, groups, filters or adds to it. The rail draws whatever the
+ * source returns.
  */
 export interface ChipsConfig {
   /** `work:chips`, or a module path relative to the project. */
   source: string;
-  collections?: string[];
-  workflows?: string[];
 }
 
 /**
@@ -78,9 +77,6 @@ export interface PaletteModeConfig {
   section?: string;
   /** Static rows; nested items are listed flat. */
   items?: SidebarItem[];
-  /** A module mode's grants, as a section's (ADR 0234). */
-  collections?: string[];
-  workflows?: string[];
   /**
    * "palette" (default) loads rows once and ranks them as the user types.
    * "source" passes the typed query to the module's load, for APIs that
@@ -108,23 +104,17 @@ export function sidebarSections(
 export function executableSource(
   config: WorkspaceConfig | null | undefined,
   id: string,
-): { module: string; collections: string[]; workflows: string[] } | undefined {
+): { module: string } | undefined {
+  // What a module reaches is declared beside it, never here (ADR 0277).
   if (id === CHIPS_OWNER_ID) {
     const module = chipsModule(config);
-    return module
-      ? {
-          module,
-          collections: config?.chips?.collections ?? [],
-          workflows: config?.chips?.workflows ?? [],
-        }
-      : undefined;
+    return module ? { module } : undefined;
   }
   const sections = sidebarSections(config);
   const section = sections.find((item) => item.id === id);
   const mode = section
     ? undefined
     : config?.palette?.modes.find((item) => item.id === id);
-  const owner = section ?? mode;
   const shown = mode?.section
     ? sections.find((item) => item.id === mode.section)
     : undefined;
@@ -133,13 +123,7 @@ export function executableSource(
     : mode?.source && !mode.source.startsWith("work:")
       ? mode.source
       : sectionModule(shown);
-  if (!module || !owner) return undefined;
-  const grants = mode?.source ? mode : (shown ?? owner);
-  return {
-    module,
-    collections: grants.collections ?? [],
-    workflows: grants.workflows ?? [],
-  };
+  return module && (section ?? mode) ? { module } : undefined;
 }
 
 /** Resolve the same authorized presentation for sidebars, search and agent discovery. */

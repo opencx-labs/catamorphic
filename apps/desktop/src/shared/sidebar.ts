@@ -316,10 +316,17 @@ export interface SidebarSectionConfig {
   title?: string;
   /** "tiles" draws root rows without children as a grid of icons. */
   presentation?: "rows" | "tiles";
-  /** Work lists an app or module may read and act on (bare names). */
+  /**
+   * Work lists an app widget may read and act on (bare names). A module
+   * declares its own in its package.json (ADR 0277).
+   */
   collections?: string[];
-  /** Project workflows a module may call (`work.call`). */
-  workflows?: string[];
+  /**
+   * Set by Work, never read from a layout: the lists a module section's
+   * package.json declares (ADR 0277), so the window knows a module lists
+   * tabs.
+   */
+  moduleLists?: string[];
   itemDefaults?: SidebarItemPresentation;
   itemOverrides?: Record<string, SidebarItemPresentation>;
   headerActions?: SidebarMenuEntry[];

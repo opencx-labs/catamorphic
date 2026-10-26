@@ -428,6 +428,7 @@ screen, or under reduced motion.
 | Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |
 | Chip motion (Web Animations in `components/chip-rail.tsx`: a chip arriving rises 4px from 96% and transparent; one leaving fades and sinks the same way where it stood; chips that stay slide from their old place; the rail's `height` transition follows its lines) | 200ms in and slides, 180ms out | each other (exit snappier); reduced motion settles at once |
 | Chip glyph cross-fade (a chip's new icon scales in from 60% over the one it replaces, as a pull request merges) | 150ms | itself: the old icon leaves as the new one arrives |
+| Reply image reveal (Web Animations in `components/remote-image.tsx`: the line the image's name held opens to the picture's height as the picture fades in from 98%) | 200ms | — (one-shot content-ready reveal; nothing leaves) |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
@@ -911,6 +912,35 @@ its MCP servers, and an uninstalled one offers more from its category.
 Pages stack under a breadcrumb; the search pill stays in reach and typing
 returns to results, which list in one column and glide with the shared
 list motion. Native `title` tooltips on the old rows went with them.
+### 2026-10-21: Work asks before code reaches anything, and what agents write reaches only trusted hosts
+
+Agents read what other people wrote, and some of it is written to instruct
+them (ADR 0277). Opening a link or loading an image sends its whole address
+to its host, and the agent chose the address. So an image in a reply from a
+host the chat does not trust is a quiet pill naming the host, with Show (this
+once) and Always show from the host; a web link to such a host opens a
+dialog with the whole address, Open, and Always open links from the host.
+One list answers both: Work's (GitHub's hosts, Wikimedia, MDN, this
+machine), the project's committed `trustedHosts`, and the person's own. A
+trusted image grows into its place once it is ready. The consent pill keeps
+its position, width, height and controls through approval, a slow response,
+and retry. Its actions use PendingButton; the host is named once and the
+actions stay Show and Always show. One persistent frame then changes from
+the pill's measured size to the picture's size over 200 ms on the standard
+curve, fading the pill out as the picture fades in. Reduced motion settles
+at once. A failed image or host save stays in the same pill with a visible
+reason and retry. Rows' and chips' icons
+come from main, only for sites a tab of this profile showed. Files, notes,
+pull request comments and theme pictures load as they did.
+
+A sidebar, palette or chips module runs confined to what its package.json
+declares. Its section, mode or chips show Work's request in place of rows,
+worded by Work, never by the module: what is new since it was last allowed,
+what it already may, and when project files could leave with it. One Allow
+covers the module wherever it shows; an edit that widens it asks again,
+and one that does not runs at once. The request is a section state beside
+loading, empty and error, so it draws the same in every section and a
+section that hides when empty still shows it.
 
 ### 2026-10-20: Skills live in the palette; "/" opens them from a chat
 
@@ -3451,9 +3481,10 @@ after that the rows were cached.
   chat a tab (⌘⇧M) switched the content to the chat's tab in the frame the
   chat started to grow: the page behind vanished, leaving the bare
   backdrop around a chat that had just lost its title, border and shadow.
-  The page in front now stays painted, and mounted, beneath the chat for
-  its 250ms (`useRecedingSurface`), and the card's edge and title ease out
-  as it grows.
+  The page in front stays painted and mounted until the frame and card's
+  actual growth animations finish (`useRecedingSurface`), including a late
+  dock commit or delayed animation progress. A wall-clock timer cannot
+  discard it early. The card's edge and title ease out as it grows.
 - **A queued message reads right to left.** Its state (Queued, Held,
   Sending) sits at the bubble's right edge and its controls slide out of
   it to the left on hover, each easing in a soft ground under the pointer.

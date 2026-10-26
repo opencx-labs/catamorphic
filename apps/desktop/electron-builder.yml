@@ -18,6 +18,9 @@ files:
   - "!**/node_modules/@openai/codex-darwin-*/**"
   - "!**/node_modules/@openai/codex-linux-*/**"
   - "!**/node_modules/@openai/codex-win32-*/**"
+  # Only ASRT's Linux seccomp helper is used; no Windows or Java wrappers.
+  - "!**/node_modules/@anthropic-ai/sandbox-runtime/vendor/srt-win/**"
+  - "!**/node_modules/@anthropic-ai/sandbox-runtime/vendor/java-proxy-agent/**"
 extraResources:
   - from: ../pwa/dist
     to: pwa
@@ -44,6 +47,7 @@ publish:
 # catamorphic db migrations (.sql read via fs), and the runtime dist files
 # the stdio provider uploads into sandboxes.
 asarUnpack:
+  - "**/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/**"
   - "**/node_modules/@electric-sql/pglite/**"
   - "**/node_modules/@lydell/node-pty*/**"
   - "**/node_modules/microsandbox/**"

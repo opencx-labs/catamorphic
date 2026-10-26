@@ -14,6 +14,7 @@ Keep this page and that guide in step.
 | Layout validation, defaults, the one-time rewrite of old layouts | `src/main/workspace-config.ts`, `workspace-config-upgrade.ts` |
 | The contract (rows, `work`, effects) | `src/shared/sidebar.ts`, `src/shared/sidebar-source.ts` |
 | A module's Bun process and its `work` calls | `src/main/sidebar-source-runtime.ts`, `-worker.ts`, `-ipc.ts` |
+| What a module reaches, its sandbox and proxy, and the person's approvals (ADR 0277) | `src/shared/code-access.ts`, `src/main/module-access.ts`, `src/main/module-sandbox.ts`, `src/main/egress-proxy.ts`, `src/main/code-approvals.ts`, `src/renderer/components/access-request.tsx` |
 | Work's lists | `src/renderer/sources/*` (registry, one file per family) |
 | `work:resources`: what Work runs, sampled in the main process (ADR 0266) | `src/main/resource-monitor.ts`, `process-owners.ts`, `src/renderer/sources/processes.ts` |
 | The one list renderer | `src/renderer/components/source-section.tsx` |
@@ -33,22 +34,23 @@ export default {
 ```
 
 A module runs in a lazy Bun process with the project as its working directory,
-full filesystem, fetch, subprocess and npm access, and Work's Bun first on
-`PATH`. It runs only for local projects. `session` is the chat beside a
-`when: { session: true }` section. Work's lists implement the same contract in
-the window (sharing its caches) and take Work's live state from it.
+its npm packages, and Work's Bun first on `PATH`, confined to what it declares
+(ADR 0277; see "What a module reaches" below). It runs only for local projects.
+`session` is the chat beside a `when: { session: true }` section. Work's lists
+implement the same contract in the window (sharing its caches) and take Work's
+live state from it.
 
-Rows are one shape for everyone: `id`, `label`, `url` (any workspace target:
-a page, a chat, `workflow:`, `app:`, `run:`, `file:`, an open tab's key,
-`command:<id>`), `icon` (a Lucide name, `<chat icon>:<color>`, or an image
-address), `description`, `badges` (strings or `{ label, icon }`), `signal`
-(`working`, `attention`, `unread`), `activity` (on the icon's lower corner
-whatever the signal: `working`, or what it waits on: `watch`, `subagent`,
-`command`; without it a `working` signal spins there), `progress`, `trend` (a sparkline:
+Rows are one shape for everyone: `id`, `label`, `url` (any workspace target: a
+page, a chat, `workflow:`, `app:`, `run:`, `file:`, an open tab's key,
+`command:<id>`), `icon` (a Lucide name, `<chat icon>:<color>`, an inline
+`data:` image, or a site icon this profile saw; the window fetches no other
+image, ADR 0277), `description`, `badges` (strings or `{ label, icon }`),
+`signal` (`working`, `attention`, `unread`), `activity` (on the icon's lower corner: `working`, `watch`, `subagent`, or `command`), `progress`, `trend` (a sparkline:
 `{ values, label?, tone? }`, ADR 0266), `preview`, `collapsed`,
 `menu`/`contextMenu`/`actions`, and `data` (the record behind the row, for code
-that reads it). A row opens its `url`; it is active when that target is in front,
-drags as that target, and gets Work's inspector for it (a chat's live details).
+that reads it). A row opens its `url`; it is active when that target is in
+front, drags as that target, and gets Work's inspector for it (a chat's live
+details).
 
 Actions: Work keeps `open`, `open-here`, `open-tab`, `open-side`,
 `open-floating`, `copy-url`, `refresh` and `search`; any other name is the
@@ -63,23 +65,93 @@ menu entry's, an action's `open`) must be one that only opens something
 `server-connections`). A layout's own header actions and items may name any
 command.
 
-## Reaching Work, and anything else
+## What a module reaches
 
-`work` is Work as the section grants it:
+A module reads its project folder and nothing else, unless the nearest
+`package.json` from its folder up to the project root declares more under
+`catamorphic.access` (ADR 0277):
+
+```json
+{ "name": "linear", "private": true, "catamorphic": { "access": {
+  "lists": ["tabs"], "workflows": ["listTickets"],
+  "hosts": ["api.linear.app", "*.example.com", "localhost:11434"],
+  "reads": ["~/notes"], "writes": ["todos.json"] } } }
+```
+
+- `lists`: Work's lists it reads and acts on through `work`.
+- `workflows`: project workflows it calls through `work.call`.
+- `hosts`: the only addresses it reaches. A name, `*.name` for its subdomains,
+  or `name:port`; without a port, 80 and 443.
+- `reads`: files and folders outside the project it reads, from `/` or `~/`.
+- `writes`: files and folders it changes, in the project unless from `/` or
+  `~/`. A module that saves a file declares it (and its temporary file).
+
+A module directly in `.work/` shares `.work/package.json`'s declaration; one
+that reaches something of its own lives in a folder with its own
+`package.json`. The module runs under a macOS Seatbelt profile or Linux
+Bubblewrap namespaces with a mandatory seccomp filter (ADR 0283), built from
+the same declaration: its network is a proxy in Work that opens only the
+declared hosts (no DNS or other sockets), it reads the project, Work's Bun and
+its own home and temp folders, it writes only what it declares, and it has no
+system services (no clipboard, keychain, opening addresses in a browser or
+scripting other apps). It gets nothing of Work's environment, so keys from the
+person's shell and command-line tools that read the home folder (`gh`, `aws`)
+are not available: call a workflow for anything behind a credential. Work's own
+servers are never reachable, whatever is declared. Windows runs no modules yet.
+On both platforms, reads and executable code outside the public OS runtime,
+project, own scratch and approved paths are refused; macOS does not rely on
+guessing which home or temporary folders might contain private data.
+
+Linux requires system Bubblewrap 0.12+ and `socat` (the latter only
+for networked modules), Bash, and unprivileged user/PID/mount namespaces.
+Descriptor mounts stop a path replaced during startup from changing the file
+Work approved. The minimum version also includes safe destination symlink
+resolution during mount setup; older versions are refused.
+Some LTS repositories still ship an older release. Install a current
+[upstream or distribution build](https://github.com/containers/bubblewrap#building)
+as the system `/usr/bin/bwrap` before enabling modules.
+Work packages the pinned arm64/x64 seccomp helper itself. Missing dependencies
+or a blocked namespace stop the module; there is no unconfined fallback.
+On Ubuntu with restricted user namespaces, install the distribution's scoped
+AppArmor policy for `/usr/bin/bwrap` that permits the helper's nested
+PID/mount namespaces too. Some distribution profiles deliberately refuse
+capabilities in child namespaces; those hosts need an administrator-approved
+scoped policy before modules can run. Do not disable AppArmor globally.
+
+Linux file and directory grants must name existing targets. Create the target
+first; Work will never grant its parent as a workaround. Grant a directory
+for creation or atomic replacement beneath it. A grant for an existing single
+file allows in-place changes, but that bind mount cannot itself be replaced.
+Replacing a bound directory's inode requires the worker to restart. These
+mount semantics differ from macOS without widening the approved reach.
+
+Before a module that declares anything runs, its section (palette mode, chips)
+shows Work's request in Work's words: what is new since the person last allowed
+it, the rest of what it reaches, and whether project files could leave with
+it. Allowing records exactly that declaration, signed with a key only Work can
+unseal from the keychain, so writing an approval into a file grants nothing.
+Equal or narrower access runs without asking, however the code changed; a
+wider declaration waits for the person again. A module without a declaration
+runs without asking.
+
+## Reaching Work
+
+`work` is Work as the module's access declares it:
 
 - `work.read({ source, parentId, cursor })` reads one of Work's lists by its
   bare name, in the same row shape; `work.execute({ source, itemId, action,
-  values })` runs a row's action. Both need the name in the section's
-  `collections`. A section that read a list reads again when that list changes,
+  values })` runs a row's action. Both need the name in the module's
+  `lists`. A section that read a list reads again when that list changes,
   so a sorted or filtered view follows live, and moved rows slide.
 - `work.call({ workflow, input })` runs a project workflow and returns its
-  output; it needs the name in `workflows`. Workflows hold secrets, gateway
+  output; it needs the name in the module's `workflows`. Workflows hold secrets, gateway
   grants and brokered connections under their own authorization and audit, so
   this is how a module uses company APIs without ever holding a credential.
   The workflow must be deployed and finish within 100 seconds.
 
-Main checks the grants against the resolved layout before asking the window,
-and only the window that made the request answers it. `work` answers only
+Main checks each call against the declaration the module's process started
+with before asking the window, and only the window that made the request
+answers it. `work` answers only
 while the module serves a request (a load or an action, not `subscribe`),
 eight calls at a time; time spent waiting on Work does not count against the
 request's own 30 seconds.
@@ -94,13 +166,18 @@ personal project file), copied from the resolved layout:
 
 ```js
 // .work/workspace.js
-{ id: "tabs", title: "Tabs", source: ".work/tabs.ts", collections: ["tabs"],
+{ id: "tabs", title: "Tabs", source: ".work/tabs/index.ts",
   when: { tabPlacement: "sidebar" },
   headerActions: [{ label: "New tab", action: "open", icon: "Plus", url: "command:new-tab" }] }
 ```
 
+```json
+// .work/tabs/package.json
+{ "name": "tabs", "private": true, "catamorphic": { "access": { "lists": ["tabs"] } } }
+```
+
 ```ts
-// .work/tabs.ts
+// .work/tabs/index.ts
 const rank = (row) => (row.signal === "attention" ? 0 : row.activity === "working" ? 1 : 2);
 export default {
   async load({ work, parentId, cursor }) {
@@ -166,8 +243,9 @@ export default {
 ## HTTP list
 
 Return a `cursor` while more rows exist: the section reads the next page as the
-person scrolls near the end. Check response status, pass `signal`, and never
-put credentials in rows (call a workflow for an API that needs them).
+person scrolls near the end. Declare the host (`"hosts": ["your-service.example"]`),
+check response status, pass `signal`, and never put credentials in rows (call a
+workflow for an API that needs them).
 
 ```ts
 export default {
@@ -197,8 +275,9 @@ the Work lists it reads) and the public collection and tree primitives.
 
 A chat's chips are a source too (ADR 0239): workspace.js `chips: { source }`
 names `work:chips` (the default) or a module that reads it with
-`work.read({ source: "chips" })` and returns chips, with `collections:
-["chips"]` and any `workflows`. A chip is a row plus `wide` and `tone`;
+`work.read({ source: "chips" })` and returns chips, its `package.json`
+declaring `"lists": ["chips"]` and any `workflows`. Until the person allows it,
+Work's chips show with the request under them. A chip is a row plus `wide` and `tone`;
 `hasChildren` makes a group whose members name it as `parentId`. Agents attach
 chips under their session's `chips` metadata (`SESSION_CHIPS_CONTRACT`). The
 contract and an example are in the authoring guide's Chips section.

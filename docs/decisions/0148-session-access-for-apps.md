@@ -1,6 +1,6 @@
 # 0148: Session access for apps
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md): access is the general `catamorphic.access` shape, and approvals live in one signed record)
 - **Date:** 2026-09-19
 - **Builds on:** 0036 (app authorization), 0041 (generated projections),
   0053 (identity scope), 0062 (session privacy), 0102 (app widgets and

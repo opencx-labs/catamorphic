@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
+import { hasLocalGit, nativeGit } from "@catamorphic/git";
+import {
+  PROJECT_MANIFEST_PATH,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import {
   matchesProjectExperience,
   type ProjectExperienceContext,
   sanitizeProjectExperienceWhen,
 } from "../shared/project-experience.js";
+import { trustedHostEntry } from "../shared/trusted-hosts.js";
 
 /**
  * The project manifest (`.work/project.json`) is the committed home
@@ -90,6 +95,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function projectAllowsIncognito(rootPath: string): boolean {
   return readManifest(rootPath).allowIncognito !== false;
+}
+
+/**
+ * The published program's approved hosts (ADR 0277), trusted by everyone.
+ * Working files and checkpoint commits cannot grant trust. A project with
+ * no publication has no shared approved list; never fall back to HEAD.
+ */
+export async function projectTrustedHosts(rootPath: string): Promise<string[]> {
+  let value: unknown;
+  try {
+    if (!(await hasLocalGit({ path: rootPath }))) return [];
+    const text = await nativeGit(rootPath, [
+      "--no-replace-objects",
+      "show",
+      `${publishedRef()}:${PROJECT_MANIFEST_PATH}`,
+    ]);
+    const manifest: unknown = JSON.parse(text);
+    value = isRecord(manifest) ? manifest.trustedHosts : undefined;
+  } catch {
+    // Missing publication or malformed policy grants nothing.
+    return [];
+  }
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.flatMap((entry) => {
+        const host = typeof entry === "string" ? trustedHostEntry(entry) : null;
+        return host ? [host] : [];
+      }),
+    ),
+  ].slice(0, 200);
 }
 
 /** The committed default agent's slug, when the manifest declares one. */

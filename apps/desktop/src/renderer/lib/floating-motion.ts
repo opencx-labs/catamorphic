@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { motionMs } from "./motion.js";
 import { chatTabKey } from "./workspace-state.js";
 
@@ -59,12 +53,18 @@ export function useRecedingSurface({
   identity,
   activeTabKey,
   chats,
+  chatElement,
 }: {
   /** The workspace (project) it belongs to; a switch drops what recedes. */
   identity: string | undefined;
   activeTabKey: string | null | undefined;
   chats: ReadonlyArray<{ localId: string; mode: string }>;
+  /** The live card; its parent carries the paired padding/edge transition. */
+  chatElement: (localId: string) => HTMLElement | null;
 }): string | null {
+  const target = chats.find(
+    (chat) => chat.mode === "tab" && chatTabKey(chat.localId) === activeTabKey,
+  )?.localId;
   const view: FrontView = { identity, activeTabKey, modes: chatModes(chats) };
   const [seen, setSeen] = useState(view);
   const [receding, setReceding] = useState<string | null>(null);
@@ -77,13 +77,62 @@ export function useRecedingSurface({
   ) {
     setSeen(view);
     const front = grownOver(seen, view);
-    if (front || seen.identity !== view.identity) setReceding(front);
+    if (
+      front ||
+      seen.identity !== view.identity ||
+      seen.activeTabKey !== view.activeTabKey ||
+      !target
+    )
+      setReceding(front);
   }
-  useEffect(() => {
-    if (!receding) return;
-    const timer = setTimeout(() => setReceding(null), CHAT_EXPAND_MS);
-    return () => clearTimeout(timer);
-  }, [receding]);
+  const elementRef = useRef(chatElement);
+  elementRef.current = chatElement;
+  useLayoutEffect(() => {
+    if (!receding || !target) return;
+    let current = true;
+    let following = false;
+    const observer = new MutationObserver(() => follow());
+    const finish = () => {
+      if (current) setReceding(null);
+    };
+    const follow = () => {
+      if (!current || following) return;
+      const card = elementRef.current(target);
+      // Dock presentation can commit after workspace state. Keep the old
+      // surface until the card has its tab pose, then flush its real styles.
+      if (!card?.hasAttribute("data-chat-tab")) return;
+      observer.disconnect();
+      const motions = [
+        ...(card.parentElement?.getAnimations?.() ?? []),
+        ...(card.getAnimations?.() ?? []),
+      ].filter(
+        (animation) =>
+          animation.playState !== "finished" &&
+          animation.effect?.getTiming().iterations !== Infinity,
+      );
+      if (!motions.length) return finish();
+      following = true;
+      void Promise.allSettled(
+        motions.map((animation) => animation.finished),
+      ).then(() => {
+        following = false;
+        // A reversal or another geometry change may replace a transition.
+        if (current) follow();
+      });
+    };
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-chat-tab"],
+    });
+    const frame = requestAnimationFrame(follow);
+    return () => {
+      current = false;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [receding, target]);
   return receding;
 }
 

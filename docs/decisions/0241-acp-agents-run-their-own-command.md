@@ -1,6 +1,6 @@
 # 0241 — ACP agents run their own command
 
-- **Status:** Accepted (builds on [0050](0050-project-agent-definitions.md) and [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0245](0245-a-harness-says-its-thread-is-gone.md): a session the agent cannot reopen is reported gone, and the turn goes on in a new one, handed the conversation; [0255](0255-acp-agents-run-on-the-work-server.md): on the Work server ACP agents run in their chat's sandbox, their model through the gateway)
+- **Status:** Accepted (builds on [0050](0050-project-agent-definitions.md) and [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0245](0245-a-harness-says-its-thread-is-gone.md): a session the agent cannot reopen is reported gone, and the turn goes on in a new one, handed the conversation; [0255](0255-acp-agents-run-on-the-work-server.md): on the Work server ACP agents run in their chat's sandbox, their model through the gateway; amended by [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md): the files an ACP command runs are approved by content too)
 - **Date:** 2026-10-17
 
 ## Context

@@ -1,6 +1,6 @@
 # 0239 — A chat's chips are a source, and agents attach chips by metadata
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md): a chip's icon is a Lucide name, a data image, or an icon its site showed this profile)
 - **Date:** 2026-10-17
 - **Builds on:** [0226](0226-session-metadata-and-this-session.md) (session metadata), [0234](0234-sidebar-sections-are-sources.md) (sources)
 

@@ -162,6 +162,86 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  module-confinement-macos:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: module-confinement-macos
+      - name: Probe native macOS confinement
+        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+      - name: Measure macOS sandbox overhead
+        run: |
+          mkdir -p test-results
+          bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
+          module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
+          "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > test-results/module-bench-macos.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: module-confinement-macos
+          path: test-results/
+          retention-days: 7
+
+  module-confinement-linux:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: module-confinement-linux
+          electron: "true"
+      - name: Install namespace tools
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --yes bubblewrap socat time xvfb xauth x11-utils xdotool openbox build-essential curl xz-utils meson ninja-build pkg-config libcap-dev
+          # Noble's older package does not include safe destination symlink
+          # setup. Build the pinned upstream release for this disposable runner.
+          curl --fail --location --retry 3 https://github.com/containers/bubblewrap/releases/download/v0.13.0/bubblewrap-0.13.0.tar.xz --output /tmp/work-bubblewrap.tar.xz
+          echo '4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765  /tmp/work-bubblewrap.tar.xz' | sha256sum --check
+          tar -xJf /tmp/work-bubblewrap.tar.xz --directory /tmp
+          meson setup /tmp/work-bubblewrap-build /tmp/bubblewrap-0.13.0 -Dtests=false -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled
+          ninja -C /tmp/work-bubblewrap-build
+          sudo install -m 0755 /tmp/work-bubblewrap-build/bwrap /usr/bin/bwrap
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /usr/local/etc/work-module-tests /etc/ssl/work-module-tests
+          # Scope the user-namespace allowance to the system sandbox binary.
+          # No global AppArmor or user-namespace security setting is disabled.
+          if command -v apparmor_parser >/dev/null && test -d /sys/kernel/security/apparmor; then
+            printf '%s\n' 'abi <abi/4.0>,' 'profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, }' | sudo tee /etc/apparmor.d/work-test-bwrap
+            sudo apparmor_parser -r /etc/apparmor.d/work-test-bwrap
+          fi
+      - name: Probe the real Linux boundary
+        env:
+          CATAMORPHIC_TEST_MODULE_CONFINEMENT: "1"
+        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+      - name: Build the desktop
+        run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+      - name: Verify confined modules in Electron
+        env:
+          CATAMORPHIC_TEST_MODULE_CONFINEMENT: "1"
+        run: bun run --cwd apps/desktop test:e2e:ci sidebar-live-sources.e2e --bail=1
+      - name: Measure Linux sandbox overhead
+        run: |
+          mkdir -p test-results
+          bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
+          module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
+          "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > test-results/module-bench-linux.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: module-confinement-linux
+          path: test-results/
+          retention-days: 7
+
   desktop-linux:
     needs: [access, shards]
     if: needs.access.outputs.allowed == 'true'
@@ -322,7 +402,7 @@ jobs:
 
   checks:
     name: checks
-    needs: [access, shards, validation, workspace, pwa, desktop-linux, desktop-macos, container]
+    needs: [access, shards, validation, workspace, pwa, module-confinement-macos, module-confinement-linux, desktop-linux, desktop-macos, container]
     if: always() && needs.access.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5

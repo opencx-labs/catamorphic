@@ -58,6 +58,11 @@ own conversation. Local execution uses an embedded
 database and local sandboxes, so the desktop does not depend on a hosted
 Catamorphic service.
 
+Chat links and images from agents ask before reaching an untrusted host.
+Executable sidebar, palette and chip modules run confined on macOS and Linux with
+declared access to files, hosts and Work's lists. Work asks before their
+access grows, and keeps the person's approvals signed in their profile.
+
 ### Self-hosted server
 
 The Work server ([`apps/server`](apps/server)) gives a personal or company

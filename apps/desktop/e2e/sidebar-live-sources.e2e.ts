@@ -60,27 +60,42 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Live sources',rootPath:${JSON.stringify(projectRoot)}})`,
   );
   fs.mkdirSync(path.join(projectRoot, ".work"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "todo-data"), { recursive: true });
   fs.writeFileSync(
-    path.join(projectRoot, "todos.json"),
+    path.join(projectRoot, "todo-data", "todos.json"),
     JSON.stringify([{ id: "todo", text: "Plan the week", done: false }]),
   );
-  fs.writeFileSync(
-    path.join(projectRoot, ".work/todos.ts"),
+  // Each module lives in a folder of its own, its package.json declaring
+  // all it reaches (ADR 0277).
+  const writeModule = (name: string, access: object, source: string) => {
+    const dir = path.join(projectRoot, ".work", name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ name, private: true, catamorphic: { access } }),
+    );
+    fs.writeFileSync(path.join(dir, "index.ts"), source);
+  };
+  writeModule(
+    "todos",
+    { writes: ["todo-data"] },
     `
     import {watch} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
-      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
-      subscribe({invalidate}){void writeFile('subscribed','yes');const w=watch('.',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('subscribed','no')}},
-      async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todos.tmp',JSON.stringify(ts));await rename('todos.tmp','todos.json')}
+      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todo-data/todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
+      subscribe({invalidate}){void writeFile('todo-data/subscribed','yes');const w=watch('todo-data',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('todo-data/subscribed','no')}},
+      async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todo-data/todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todo-data/todos.tmp',JSON.stringify(ts));await rename('todo-data/todos.tmp','todo-data/todos.json')}
     };`,
   );
-  fs.writeFileSync(
-    path.join(projectRoot, ".work/http.ts"),
+  writeModule(
+    "http",
+    { hosts: [`127.0.0.1:${address.port}`] },
     `export default {async load({signal}){const r=await fetch('http://127.0.0.1:${address.port}',{signal});if(!r.ok)throw Error('Service unavailable: '+r.status);return r.json()}}`,
   );
   // Work's tabs, sorted by name: a module wrapping one of Work's lists.
-  fs.writeFileSync(
-    path.join(projectRoot, ".work/sorted-tabs.ts"),
+  writeModule(
+    "sorted-tabs",
+    { lists: ["tabs"] },
     `export default {
       async load({work,parentId,cursor}){const page=await work.read({source:'tabs',parentId,cursor});return {...page,items:[...page.items].sort((a,b)=>a.label.localeCompare(b.label))}},
       action:({work,itemId,action,values})=>work.execute({source:'tabs',itemId,action,values})
@@ -88,11 +103,26 @@ beforeAll(async () => {
   );
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
-    `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',title:'My todos',source:'.work/todos.ts',height:180},{id:'http',title:'Service',source:'.work/http.ts',height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]},{id:'sorted-tabs',title:'Sorted tabs',source:'.work/sorted-tabs.ts',collections:['tabs']}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',source:'work:files'}]}],right:[] }};`,
+    `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',title:'My todos',source:'.work/todos/index.ts',height:180},{id:'http',title:'Service',source:'.work/http/index.ts',height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]},{id:'sorted-tabs',title:'Sorted tabs',source:'.work/sorted-tabs/index.ts'}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',source:'work:files'}]}],right:[] }};`,
   );
   await app.reload();
+  // Each asks before it runs, and nothing of it runs until allowed.
+  const sections = ["todos", "http", "sorted-tabs"];
+  for (const id of sections)
+    await app.waitFor(
+      `!!document.querySelector('[data-sidebar-section="${id}"] [data-testid="module-access-request"]')`,
+      { label: `${id} asks for its access` },
+    );
+  expect(fs.existsSync(path.join(projectRoot, "todo-data", "subscribed"))).toBe(
+    false,
+  );
+  expect(requests).toBe(0);
+  for (const id of sections)
+    await click(
+      `[data-sidebar-section="${id}"] [data-testid="module-access-allow"]`,
+    );
   await app.waitFor(
-    `!!document.querySelector('[data-sidebar-source="todos"]')`,
+    `!!document.querySelector('[data-sidebar-source="todos"]') && !document.querySelector('[data-testid="module-access-request"]')`,
   );
 });
 afterAll(async () => {
@@ -123,19 +153,23 @@ it("writes a todo with visible busy feedback and follows external atomic edits",
     `!!document.querySelector('[data-sidebar-source="todos"] [aria-label="Reopen"]')`,
   );
   expect(
-    JSON.parse(fs.readFileSync(path.join(projectRoot, "todos.json"), "utf8"))[0]
-      .done,
+    JSON.parse(
+      fs.readFileSync(
+        path.join(projectRoot, "todo-data", "todos.json"),
+        "utf8",
+      ),
+    )[0].done,
   ).toBe(true);
   fs.writeFileSync(
-    path.join(projectRoot, "todos.tmp"),
+    path.join(projectRoot, "todo-data", "todos.tmp"),
     JSON.stringify([
       { id: "todo", text: "Plan revised", done: true },
       { id: "review", text: "Review notes", done: false },
     ]),
   );
   fs.renameSync(
-    path.join(projectRoot, "todos.tmp"),
-    path.join(projectRoot, "todos.json"),
+    path.join(projectRoot, "todo-data", "todos.tmp"),
+    path.join(projectRoot, "todo-data", "todos.json"),
   );
   await app.waitFor(
     `document.body.innerText.includes('Plan revised') && document.body.innerText.includes('Review notes')`,
@@ -191,11 +225,16 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
     `document.querySelector('[role="tab"][aria-label="Other"]')?.getAttribute('aria-selected')==='true'`,
   );
   await expect
-    .poll(() => fs.readFileSync(path.join(projectRoot, "subscribed"), "utf8"))
+    .poll(() =>
+      fs.readFileSync(
+        path.join(projectRoot, "todo-data", "subscribed"),
+        "utf8",
+      ),
+    )
     .toBe("no");
   const before = requests;
   fs.writeFileSync(
-    path.join(projectRoot, "todos.json"),
+    path.join(projectRoot, "todo-data", "todos.json"),
     JSON.stringify(
       Array.from({ length: 500 }, (_, i) => ({
         id: `item-${i}`,
@@ -266,6 +305,28 @@ it("sorts Work's tabs in a module, follows them live and closes through them", a
   await app.waitFor(
     `!document.querySelector('[data-tab-orientation] [data-point-key="${settings}"]') && !document.querySelector('${sorted} [data-point-key="${settings}"]')`,
     { label: "the tab closed through the module, and gone from its list" },
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});
+it("asks again when a module's access grows, naming only what is new", async () => {
+  const http = '[data-sidebar-section="http"]';
+  const manifest = path.join(projectRoot, ".work/http/package.json");
+  const declared = JSON.parse(fs.readFileSync(manifest, "utf8"));
+  declared.catamorphic.access.hosts.push("api.example.test");
+  fs.writeFileSync(manifest, JSON.stringify(declared));
+  await app.waitFor(
+    `document.querySelector('${http} [data-testid="module-access-request"]')?.textContent.includes('now also wants to')`,
+    { label: "the widened module asks again" },
+  );
+  expect(
+    await app.eval<string>(
+      `document.querySelector('${http} [data-testid="module-access-request"] ul').textContent`,
+    ),
+  ).toBe("Reach api.example.test");
+  await click(`${http} [data-testid="module-access-allow"]`);
+  await app.waitFor(
+    `!document.querySelector('${http} [data-testid="module-access-request"]') && document.querySelector('[data-sidebar-source="http"]')?.innerText.includes('Service item')`,
+    { label: "allowed, it runs again" },
   );
   expect(app.getRendererErrors()).toEqual([]);
 });
