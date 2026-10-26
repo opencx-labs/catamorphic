@@ -81,6 +81,12 @@ Peer delivery retains its requested mode and all owner checks still apply
 (ADR 0278). Unconsumed steered inputs say "Waiting for agent"; only deferred
 context says "For the next turn".
 
+Context-only peer reports that render next to each other share one activity
+block, even when a running turn's commands separate them in the stored log.
+Reopening the chat keeps that grouping. The reports remain unread until the
+agent takes them in; grouping never crosses another turn, a person's message,
+or an item that needs attention.
+
 ## Composer and resource integration
 
 Every paste/drop/picker operation yields a visible attachment or actionable error.

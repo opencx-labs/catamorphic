@@ -185,3 +185,23 @@ row beside its toggle, across it, unless the header shares that row. The
 window then drags by the chrome's empty room, as Chrome's does (the tab
 strip's spare end, or the title row). The menu bar still
 closes (File > Close Window), minimizes and enters full screen.
+
+## macOS Dock icon
+
+Settings > Appearance > Dock icon accepts a PNG or JPEG up to 10 MB and 16 megapixels, applies it
+immediately, and offers Reset to restore Work's default icon. The choice is local
+to this app installation and shared by every profile and window. It is independent
+of profile Appearance syncing and project overrides. Search finds it as Dock icon.
+
+Images may be at most 8192 pixels per side.
+The main process validates image headers and dimensions before decoding content, fits it within 1024 pixels while keeping
+its aspect ratio, and atomically stores a managed PNG at `<userData>/dock-icon.png`.
+The source file can then move or be deleted. Startup applies the saved image;
+a damaged saved image falls back to the default and exposes a choose/reset message.
+Reset removes the managed PNG and restores the signed bundle's native icon, including
+Icon Composer rendering, rather than replacing it with a flattened bundled PNG.
+Development builds restore their development Work icon.
+
+This customizes the running macOS Dock icon only. Finder and a pinned Dock tile
+while Work is closed keep the installed bundle icon. Work's application name,
+Dock label and app switcher name remain Work. There is no application-name setting.

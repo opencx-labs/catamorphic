@@ -10,8 +10,7 @@ import type { AppBundleStore } from "./app-bundle-store.js";
 import type { CredentialRef, CredentialVault } from "./credential-vault.js";
 
 const envelopeSchema = z.object({
-  /** Which key sealed the record; absent on records sealed before keyrings. */
-  kid: z.string().optional(),
+  kid: z.string().min(1),
   nonce: z.string(),
   tag: z.string(),
   ciphertext: z.string(),
@@ -105,9 +104,9 @@ export class EncryptedCredentialVault implements CredentialVault {
     }
   }
   private open(recordKey: string, envelope: z.infer<typeof envelopeSchema>) {
-    const candidates = envelope.kid
-      ? this.keys.filter((candidate) => candidate.id === envelope.kid)
-      : this.keys;
+    const candidates = this.keys.filter(
+      (candidate) => candidate.id === envelope.kid,
+    );
     if (candidates.length === 0) {
       throw new Error("Credential was sealed with a key this vault lacks");
     }
@@ -115,12 +114,12 @@ export class EncryptedCredentialVault implements CredentialVault {
       try {
         const tag = Buffer.from(envelope.tag, "base64");
         if (tag.byteLength !== 16) throw new Error("Malformed credential tag");
-        const decipher = createDecipheriv(
-          "aes-256-gcm",
-          candidate.key,
-          Buffer.from(envelope.nonce, "base64"),
-          { authTagLength: 16 },
-        );
+        const nonce = Buffer.from(envelope.nonce, "base64");
+        if (nonce.byteLength !== 12)
+          throw new Error("Malformed credential nonce");
+        const decipher = createDecipheriv("aes-256-gcm", candidate.key, nonce, {
+          authTagLength: 16,
+        });
         decipher.setAAD(Buffer.from(recordKey));
         decipher.setAuthTag(tag);
         return Buffer.concat([

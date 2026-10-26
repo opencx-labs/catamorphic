@@ -1,3 +1,4 @@
+import type { SessionSnapshot } from "@catamorphic/agent-protocol";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
@@ -43,18 +44,32 @@ async function fresh() {
     `[...document.querySelectorAll(${JSON.stringify(chat)})].find(e=>!${JSON.stringify(previous)}.includes(e.dataset.chatLocalId)&&e.querySelector('[data-composer-input]'))?.dataset.chatLocalId`,
   );
 }
-const snapshot = () =>
-  app.eval<{
-    turns: { id: string }[];
-    items: { kind: string; status: string; text?: string; turnId: string }[];
-  }>(`(async () => {
+const snapshotExpression = () => `(async () => {
     const api=window.catamorphicDesktop;
     const dock=await api.dockSnapshot();
     const entry=dock.chats.find(c=>c.entry.localId===${JSON.stringify(localId)}).entry;
     const {url}=await api.getServerState();
     const response=await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/agent/sessions/'+entry.sessionId);
     return (await response.json()).snapshot;
-  })()`);
+  })()`;
+const snapshot = () => app.eval<SessionSnapshot>(snapshotExpression());
+
+const contextReports = (state: SessionSnapshot) =>
+  state.items
+    .filter((item) => item.kind === "inbound_message")
+    .filter((item) => item.text.startsWith("Context report "));
+
+const positions = (state: SessionSnapshot) =>
+  JSON.stringify({
+    turns: state.turns.map(({ id, status }) => ({ id, status })),
+    items: state.items.map(({ id, kind, position, turnId, status }) => ({
+      id,
+      kind,
+      position,
+      turnId,
+      status,
+    })),
+  });
 
 it("receives child reports during the turn and folds them into one expandable status", async () => {
   await fresh();
@@ -117,4 +132,187 @@ it("keeps a failed child result visible in the conversation", async () => {
     ),
   ).toBe(true);
   expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("reloads interleaved context-only peer reports as one loose activity block", async () => {
+  // This case exercises delivery and projection, independently of a native
+  // harness's sign-in refresh while the fixture deliberately stays running.
+  await app.eval(`(async () => {
+    const api=window.catamorphicDesktop;
+    const agent=await api.agentsCreate({name:'Context fixture',harness:'ai-sdk',model:'fake-model-a'});
+    await api.agentsSetDefault(agent.id);
+  })()`);
+  const previousDisplay = await app.eval<string>(
+    "window.catamorphicDesktop.getPrefs().then(prefs=>prefs.chatWorkLive)",
+  );
+  await app.eval("window.catamorphicDesktop.setPrefs({chatWorkLive:'notes'})");
+  try {
+    await fresh();
+    await send("Context reports main");
+    const scope = `section[data-chat-local-id="${localId}"]`;
+    await app.waitFor(
+      `!!document.querySelector(${JSON.stringify(`${scope} [data-testid=chat-stop]`)}) && document.querySelector(${JSON.stringify(scope)})?.textContent.includes('Waiting for independent context reports.')`,
+      { timeoutMs: 30_000, label: "main chat working before peer delivery" },
+    );
+    // An independent session retains message_only. A direct child's reports
+    // deliberately steer the working parent, which the first case covers.
+    const peer = await app.eval<{
+      id: string;
+      parentSessionId: string | null;
+    }>(`(async () => {
+      const api=window.catamorphicDesktop;
+      const dock=await api.dockSnapshot();
+      const mainId=dock.chats.find(c=>c.entry.localId===${JSON.stringify(localId)}).entry.sessionId;
+      const {url}=await api.getServerState();
+      const base=url+'/api/projects/'+${JSON.stringify(projectId)}+'/agent/sessions';
+      const main=await fetch(base+'/'+mainId).then(r=>r.json());
+      const created=await fetch(base, {
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({agentId:main.agentId,title:'Independent context reporter',source:'desktop'})
+      });
+      if(created.status!==201)throw new Error('Create peer: '+created.status+' '+await created.text());
+      const peer=await created.json();
+      const sent=await fetch(base+'/'+peer.id+'/commands', {
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({type:'send',commandId:crypto.randomUUID(),text:'Context reports peer '+mainId})
+      });
+      if(!sent.ok)throw new Error('Start peer: '+sent.status+' '+await sent.text());
+      return {id:peer.id,parentSessionId:peer.parentSessionId};
+    })()`);
+    expect(peer.parentSessionId).toBeNull();
+    const delivered = await app.waitFor<SessionSnapshot>(
+      `(async () => {
+        const state=await ${snapshotExpression()};
+        return state.items.filter(item=>item.kind==='inbound_message'&&item.text.startsWith('Context report ')).length===9?state:false;
+      })()`,
+      { timeoutMs: 30_000, label: "nine independent context-only reports" },
+    );
+    const reports = contextReports(delivered);
+    const mainTurn = delivered.turns[0];
+    expect(delivered.turns, positions(delivered)).toHaveLength(1);
+    expect(mainTurn?.status, positions(delivered)).toBe("running");
+    expect(
+      reports.map(({ turnId, status, dispatch, attention, from }) => ({
+        turnId,
+        status,
+        dispatch,
+        attention,
+        from,
+      })),
+      positions(delivered),
+    ).toEqual(
+      reports.map(() => ({
+        turnId: null,
+        status: "in_progress",
+        dispatch: "message_only",
+        attention: null,
+        from: {
+          kind: "agent",
+          sessionId: peer.id,
+          agentId: expect.any(String),
+        },
+      })),
+    );
+    // The regression requires actual turn-owned work between reports, not
+    // just separate text chunks that the harness might join into one item.
+    expect(
+      reports
+        .slice(1)
+        .map((report, index) =>
+          delivered.items.some(
+            (item) =>
+              item.turnId === mainTurn?.id &&
+              item.kind === "tool_call" &&
+              item.position > (reports[index]?.position ?? 0) &&
+              item.position < report.position,
+          ),
+        ),
+      positions(delivered),
+    ).toEqual(Array.from({ length: 8 }, () => true));
+    const users = delivered.items.filter(
+      (item) => item.kind === "user_message",
+    );
+    expect(users.map((item) => item.text)).toEqual(["Context reports main"]);
+
+    await app.reload();
+    await app.waitFor(
+      `!!document.querySelector(${JSON.stringify(`${scope} [data-composer-input]`)}) && !!document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent]`)})`,
+      { timeoutMs: 30_000, label: "working chat restored with peer activity" },
+    );
+    const restored = await snapshot();
+    expect(contextReports(restored), positions(restored)).toEqual(reports);
+    expect(
+      restored.items.filter((item) => item.kind === "user_message"),
+    ).toEqual(users);
+    expect(restored.turns.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: mainTurn?.id, status: "running" },
+    ]);
+    const rows = await app.eval<{
+      workBlocks: number;
+      agentBlocks: number;
+      agentRows: number;
+      inbound: number;
+      userRows: number;
+      working: boolean;
+      counts: string[];
+    }>(`(() => {
+      const chat=document.querySelector(${JSON.stringify(scope)});
+      const work=[...chat.querySelectorAll('article[data-live-work]')];
+      return {
+        workBlocks:work.length,
+        agentBlocks:work.filter(e=>e.querySelector('[data-step-kind=agent]')).length,
+        agentRows:chat.querySelectorAll('[data-step-kind=agent]').length,
+        inbound:chat.querySelectorAll('[data-testid=chat-inbound-message]').length,
+        userRows:chat.querySelectorAll('[data-testid=chat-user-message]').length,
+        working:!!chat.querySelector('[data-testid=chat-stop]'),
+        counts:work.map(e=>e.querySelector('[data-testid=chat-turn-steps-toggle]')?.textContent.trim())
+      };
+    })()`);
+    expect(
+      rows,
+      `Rows: ${JSON.stringify(rows)}; ${positions(restored)}`,
+    ).toMatchObject({
+      workBlocks: 2,
+      agentBlocks: 1,
+      agentRows: 1,
+      inbound: 0,
+      userRows: 1,
+      working: true,
+    });
+    await click(
+      `${scope} article[data-live-work]:has([data-step-kind=agent]) [data-testid=chat-turn-steps-toggle]`,
+    );
+    await app.waitFor(
+      `(() => {
+        const button=document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent] button`)});
+        if(!button)return false;
+        const r=button.getBoundingClientRect();
+        return !!r.width && !!r.height && button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+      })()`,
+      { label: "expanded peer activity row accepting pointer input" },
+    );
+    await click(`${scope} [data-step-kind=agent] button`);
+    await app.waitFor(
+      `(() => {
+        const row=document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent]`)});
+        const detail=row?.querySelector('[data-testid=chat-step-detail]');
+        return row?.textContent.includes('9 updates') && !!row.querySelector('[data-testid=chat-step-source]') && ${JSON.stringify(reports.map((report) => report.text))}.every(text=>detail?.textContent.includes(text));
+      })()`,
+      { label: "all nine full reports and their source inside one disclosure" },
+    );
+    expect(contextReports(await snapshot())).toEqual(reports);
+    await send("Continue after context reports");
+    await app.waitFor(
+      `document.querySelector(${JSON.stringify(scope)})?.textContent.includes('Continued after the context reports.') && !document.querySelector(${JSON.stringify(`${scope} [data-testid=chat-stop]`)})`,
+      { timeoutMs: 30_000, label: "same main turn continuing after reload" },
+    );
+    const finished = await snapshot();
+    expect(finished.turns).toHaveLength(1);
+    expect(contextReports(finished)).toEqual(reports);
+    expect(app.getRendererErrors()).toEqual([]);
+  } finally {
+    await app.eval(
+      `window.catamorphicDesktop.setPrefs({chatWorkLive:${JSON.stringify(previousDisplay)}})`,
+    );
+  }
 });

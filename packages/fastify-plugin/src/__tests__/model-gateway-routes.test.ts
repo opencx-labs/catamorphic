@@ -122,8 +122,8 @@ describe("model gateway routes", () => {
         body: digest(payload),
       },
     ]);
-    // The admission from before the body is the handler's: one check each.
-    expect(counts.liveGrant).toBe(2);
+    // Admit before the body, then recheck after reading and after review.
+    expect(counts.liveGrant).toBe(6);
   });
 
   it("refuses a missing grant before the body and a path leaving the base", async () => {

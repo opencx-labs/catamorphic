@@ -1015,7 +1015,11 @@ describe("chat flows", () => {
     await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
     await rename("Launch checklist", "Launch notes");
 
-    // The palette's Rename chat opens the same dialog for the chat in front.
+    // Rename current chat remains findable while the current chat is minimized.
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, {
+      label: "current chat minimized before palette rename",
+    });
     await run(`
       const input = $$('textarea[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
@@ -1026,17 +1030,17 @@ describe("chat flows", () => {
       `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
        if (!input) return false;
-       setReactValue(input, '>rename chat');
+       setReactValue(input, '>rename current chat');
        return true;`,
-      { label: "palette asked for Rename chat" },
+      { label: "palette asked for Rename current chat" },
     );
     await runWait(
       `const option = $$('[role="option"]')
-        .find((el) => !el.closest('[inert]') && el.textContent.includes('Rename chat'));
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Rename current chat'));
        if (!option) return false;
        option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
        return true;`,
-      { label: "Rename chat in the palette" },
+      { label: "Rename current chat in the palette" },
     );
     await rename("Launch notes", "Launch plan");
 

@@ -45,8 +45,10 @@ import type {
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceInitial,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
+import type { DockIconState } from "../shared/dock-icon.js";
 import type {
   DockDrag,
   DockRegion,
@@ -98,6 +100,21 @@ export interface ServerInfo {
 }
 
 const api = {
+  dockIconState: (): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-state"),
+  dockIconSet: (bytes: Uint8Array): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-set", bytes),
+  dockIconReset: (): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-reset"),
+  onDockIconChanged: (
+    listener: (state: DockIconState) => void,
+  ): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: DockIconState) =>
+      listener(state);
+    ipcRenderer.on("catamorphic:dock-icon-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:dock-icon-changed", handler);
+  },
   defaultBrowserState: (): Promise<DefaultBrowserState> =>
     invoke("catamorphic:default-browser-state"),
   defaultBrowserRequest: (): Promise<DefaultBrowserState> =>
@@ -109,7 +126,7 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:pending-browser-urls", listener);
   },
-  workspaceInitial: (): Promise<string | undefined> =>
+  workspaceInitial: (): Promise<WorkspaceInitial> =>
     invoke("catamorphic:workspace-initial"),
   dockDraftGet: (localId: string): Promise<ChatDraft | null> =>
     invoke("catamorphic:dock-draft-get", localId),
@@ -123,6 +140,8 @@ const api = {
     ipcRenderer.on("catamorphic:dock-draft", handler);
     return () => ipcRenderer.removeListener("catamorphic:dock-draft", handler);
   },
+  workspaceFlushed: (requestId: string, error?: string): Promise<void> =>
+    invoke("catamorphic:workspace-flushed", requestId, error),
   workspaceClaim: (projectId: string): Promise<boolean> =>
     invoke("catamorphic:workspace-claim", projectId),
   workspaceNavigate: (input: WorkspaceNavigation): Promise<void> =>
@@ -514,8 +533,8 @@ const api = {
   passwordFileForget: (input: { token: string }): Promise<void> =>
     invoke("catamorphic:password-file-forget", input),
 
-  devUpdateRestart: (): Promise<boolean> =>
-    invoke("catamorphic:dev-update-restart"),
+  devUpdateRestart: (options?: { abort?: boolean }): Promise<boolean> =>
+    invoke("catamorphic:dev-update-restart", options),
   devWindow: (action: string, width?: number, height?: number) =>
     invoke("catamorphic:dev-window", action, width, height),
   defaultProjectsDir: (): Promise<string> =>

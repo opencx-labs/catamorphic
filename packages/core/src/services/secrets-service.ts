@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql, type Transaction } from "kysely";
+import { z } from "zod";
 import {
   hasProjectPermission,
   type Identity,
@@ -119,6 +120,7 @@ const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
   "ANTHROPIC_BASE_URL",
   "BASH_ENV",
   "BASHOPTS",
+  "BUN_OPTIONS",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_SECURESTORAGE_CONFIG_DIR",
   "CODEX_HOME",
@@ -127,6 +129,8 @@ const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
   "GIT_CONFIG_COUNT",
   "GIT_CONFIG_GLOBAL",
   "GIT_CONFIG_SYSTEM",
+  "GIT_EXEC_PATH",
+  "GIT_PROXY_COMMAND",
   "GIT_SSH_COMMAND",
   "HOME",
   "HTTP_PROXY",
@@ -137,6 +141,7 @@ const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
   "LOGNAME",
   "NODE_EXTRA_CA_CERTS",
   "NODE_OPTIONS",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
   "NODE_USE_ENV_PROXY",
   "NO_PROXY",
   "OLDPWD",
@@ -149,6 +154,7 @@ const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
   "SHELLOPTS",
   "SSL_CERT_DIR",
   "SSL_CERT_FILE",
+  "SSLKEYLOGFILE",
   "TMPDIR",
   "USER",
 ]);
@@ -190,6 +196,14 @@ export class SecretValueInvalidError extends Error {
   constructor(reason: string) {
     super(reason);
     this.name = "SecretValueInvalidError";
+  }
+}
+
+/** A host cannot store or deliver values without its credential vault. */
+export class SecretsUnavailableError extends Error {
+  constructor() {
+    super("Secret vault is not configured");
+    this.name = "SecretsUnavailableError";
   }
 }
 
@@ -240,8 +254,7 @@ function checkValue(value: string): void {
 type ValueRow = {
   name: string;
   member_external_user_id: string | null;
-  value: string | null;
-  credential_ref: string | null;
+  credential_ref: string;
 };
 
 /**
@@ -249,9 +262,8 @@ type ValueRow = {
  * a plugin, or `project.json` may hold a shared value and one value per
  * member. Values are only read back through {@link loadForRun},
  * {@link value} and {@link resolveForSandbox}; management APIs expose
- * presence metadata, never a value. With a credential vault (ADR 0162) a
- * row holds only a vault reference, so database access alone reveals no
- * secret; rows written before sealing are sealed on first read.
+ * presence metadata, never a value. A row holds only a vault reference,
+ * so database access alone reveals no secret (ADRs 0162, 0281).
  *
  * Code declarations win over `project.json`, since the code reads the value
  * and states how; plugin declarations win over both, except over a project
@@ -292,12 +304,13 @@ export class SecretsService {
     projectId: string;
     name: string;
   }): Promise<string | undefined> {
+    await requireTenantProject(this.db, opts.tenantId, opts.projectId);
     const row = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", opts.projectId)
       .where("name", "=", opts.name)
       .where("member_external_user_id", "is", null)
-      .select(["name", "member_external_user_id", "value", "credential_ref"])
+      .select(["name", "member_external_user_id", "credential_ref"])
       .executeTakeFirst();
     return row ? this.unseal({ ...opts, row }) : undefined;
   }
@@ -307,46 +320,17 @@ export class SecretsService {
     projectId: string;
     row: ValueRow;
   }): Promise<string> {
-    const { row } = args;
-    if (row.credential_ref) {
-      if (!this.deps.vault) throw new Error("Secret vault is not configured");
-      return this.deps.vault.withMaterial({
-        tenantId: args.tenantId,
-        ref: { id: row.credential_ref },
-        use: (material) => new TextDecoder().decode(material),
-      });
-    }
-    const value = row.value ?? "";
     const vault = this.deps.vault;
-    if (vault) {
-      // Seal in place only if the row still holds this plain value: a newer
-      // write that landed meanwhile wins, and our sealed copy is dropped.
-      const sealed = await vault.put({
-        tenantId: args.tenantId,
-        material: new TextEncoder().encode(value),
-      });
-      const updated = await this.db
-        .updateTable("project_secrets")
-        .set({ value: null, credential_ref: sealed.id })
-        .where("project_id", "=", args.projectId)
-        .where("name", "=", row.name)
-        .where((eb) =>
-          row.member_external_user_id === null
-            ? eb("member_external_user_id", "is", null)
-            : eb("member_external_user_id", "=", row.member_external_user_id),
-        )
-        .where("credential_ref", "is", null)
-        .where("value", "=", value)
-        .returning("name")
-        .executeTakeFirst();
-      if (!updated)
-        await vault.delete({ tenantId: args.tenantId, ref: sealed });
-    }
-    return value;
+    if (!vault) throw new SecretsUnavailableError();
+    return vault.withMaterial({
+      tenantId: args.tenantId,
+      ref: { id: args.row.credential_ref },
+      use: (material) => new TextDecoder().decode(material),
+    });
   }
 
   /**
-   * Write one value, sealed when a vault exists, and drop the record it
+   * Write one sealed value and drop the record it
    * replaced. Writers of one value take turns, so each releases exactly
    * the record it displaced.
    */
@@ -360,15 +344,12 @@ export class SecretsService {
     updatedAt: Date;
   }): Promise<void> {
     const vault = this.deps.vault;
-    const sealed = vault
-      ? await vault.put({
-          tenantId: args.tenantId,
-          material: new TextEncoder().encode(args.value),
-        })
-      : undefined;
-    const columns = sealed
-      ? { value: null, credential_ref: sealed.id }
-      : { value: args.value, credential_ref: null };
+    if (!vault) throw new SecretsUnavailableError();
+    const sealed = await vault.put({
+      tenantId: args.tenantId,
+      material: new TextEncoder().encode(args.value),
+    });
+    const columns = { credential_ref: sealed.id };
     let previous: string | null | undefined;
     try {
       previous = await this.db.transaction().execute(async (trx) => {
@@ -813,6 +794,8 @@ export class SecretsService {
     missingRequired: string[];
   }> {
     const { identity, projectId } = opts;
+    if (!mayUseProject(identity, projectId)) throw new AccessDeniedError();
+    await requireTenantProject(this.db, identity.tenantId, projectId);
     const all = await this.declaredSecrets({
       identity,
       projectId,
@@ -877,7 +860,7 @@ export class SecretsService {
           ...(owner ? [eb("member_external_user_id", "=", owner)] : []),
         ]),
       )
-      .select(["name", "member_external_user_id", "value", "credential_ref"])
+      .select(["name", "member_external_user_id", "credential_ref"])
       .execute();
     for (const row of rows) {
       const value = await this.unseal({
@@ -933,6 +916,8 @@ export class SecretsService {
           unmasked: [],
         };
         const { identity, projectId, owner } = opts;
+        if (!mayUseProject(identity, projectId)) throw new AccessDeniedError();
+        await requireTenantProject(this.db, identity.tenantId, projectId);
         const manifest = await this.manifest({ identity, projectId });
         const names = manifest.environments[opts.environment] ?? [];
         if (names.length === 0) return result;
@@ -1009,6 +994,8 @@ export class SecretsService {
     sessionIds: readonly string[];
   }): Promise<Record<string, string[]>> {
     const { identity, projectId } = opts;
+    if (!mayUseProject(identity, projectId)) throw new AccessDeniedError();
+    await requireTenantProject(this.db, identity.tenantId, projectId);
     const values = new Map<string, Set<string>>();
     const add = (name: string, value: string | undefined) => {
       if (value === undefined) return;
@@ -1039,7 +1026,7 @@ export class SecretsService {
             : []),
         ]),
       )
-      .select(["name", "member_external_user_id", "value", "credential_ref"])
+      .select(["name", "member_external_user_id", "credential_ref"])
       .execute();
     for (const row of rows)
       add(
@@ -1049,6 +1036,7 @@ export class SecretsService {
     for (const [name, delivered] of Object.entries(
       await this.remembered({
         tenantId: identity.tenantId,
+        projectId,
         sessionIds: opts.sessionIds,
       }),
     ))
@@ -1070,23 +1058,24 @@ export class SecretsService {
     variables: Readonly<Record<string, string>>;
   }): Promise<void> {
     const vault = this.deps.vault;
+    if (!vault) throw new SecretsUnavailableError();
     const released = await this.db.transaction().execute(async (trx) => {
       const row = await trx
         .selectFrom("agent_sessions")
         .select(["secrets_held_at", "secrets_delivered_ref"])
         .where("id", "=", opts.sessionId)
+        .where((eb) =>
+          eb.exists(
+            eb
+              .selectFrom("projects")
+              .select("id")
+              .whereRef("projects.id", "=", "agent_sessions.project_id")
+              .where("tenant_id", "=", opts.tenantId),
+          ),
+        )
         .forUpdate()
         .executeTakeFirst();
-      if (!row) return undefined;
-      if (!vault) {
-        if (!row.secrets_held_at)
-          await trx
-            .updateTable("agent_sessions")
-            .set({ secrets_held_at: new Date() })
-            .where("id", "=", opts.sessionId)
-            .execute();
-        return undefined;
-      }
+      if (!row) throw new AccessDeniedError();
       const known = row.secrets_delivered_ref
         ? await this.unsealDelivered({
             tenantId: opts.tenantId,
@@ -1126,6 +1115,7 @@ export class SecretsService {
   /** Every value ever delivered to these chats, by name. */
   private async remembered(args: {
     tenantId: string;
+    projectId: string;
     sessionIds: readonly string[];
   }): Promise<Record<string, string[]>> {
     if (!this.deps.vault || args.sessionIds.length === 0) return {};
@@ -1133,6 +1123,7 @@ export class SecretsService {
       .selectFrom("agent_sessions")
       .select("secrets_delivered_ref")
       .where("id", "in", [...args.sessionIds])
+      .where("project_id", "=", args.projectId)
       .where("secrets_delivered_ref", "is not", null)
       .execute();
     const merged: Record<string, string[]> = {};
@@ -1159,22 +1150,7 @@ export class SecretsService {
       ref: { id: args.ref },
       use: (material) => new TextDecoder().decode(material),
     });
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== "object" || parsed === null) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([name, values]) =>
-        Array.isArray(values)
-          ? [
-              [
-                name,
-                values.filter(
-                  (value): value is string => typeof value === "string",
-                ),
-              ],
-            ]
-          : [],
-      ),
-    );
+    return z.record(z.string(), z.array(z.string())).parse(JSON.parse(text));
   }
 
   /** Audit a delivery into a sandbox: names, sources and fingerprints only. */

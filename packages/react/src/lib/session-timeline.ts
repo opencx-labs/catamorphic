@@ -139,7 +139,6 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
   // Items outside the loaded turns: deliveries and notices between turns,
   // and older pages whose turns the snapshot no longer carries.
   const others: { key: string; at: string; items: Item[] }[] = [];
-  let looseActivity: (typeof others)[number] | undefined;
   const unknownTurns = new Map<string, Item[]>();
   for (const item of state.items) {
     // A message answers in its request's place only once it shows: one
@@ -150,12 +149,10 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
     if (questionRequestId && !(itemTurn && hiddenTurn(itemTurn, starting)))
       answeredByMessage.add(questionRequestId);
     if (item.turnId && state.turns[item.turnId]) {
-      looseActivity = undefined;
       const list = turnItems.get(item.turnId);
       if (list) list.push(item);
       else turnItems.set(item.turnId, [item]);
     } else if (item.turnId) {
-      looseActivity = undefined;
       const list = unknownTurns.get(item.turnId);
       if (list) list.push(item);
       else {
@@ -163,14 +160,7 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
         unknownTurns.set(item.turnId, items);
         others.push({ key: item.turnId, at: item.createdAt, items });
       }
-    } else if (isAgentActivity(item)) {
-      if (looseActivity) looseActivity.items.push(item);
-      else {
-        looseActivity = { key: item.id, at: item.createdAt, items: [item] };
-        others.push(looseActivity);
-      }
     } else {
-      looseActivity = undefined;
       others.push({ key: item.id, at: item.createdAt, items: [item] });
     }
   }
@@ -179,6 +169,7 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
     (turn) => !hiddenTurn(turn, starting),
   );
   const out: TimelineTurn[] = [];
+  let looseActivity: Extract<TimelineEntry, { kind: "steps" }> | undefined;
   let otherIndex = 0;
   const flushOthersBefore = (at: string | null) => {
     while (otherIndex < others.length) {
@@ -186,7 +177,25 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
       if (at !== null && other.at >= at) break;
       otherIndex += 1;
       const entries = entriesOf(other.items, context);
-      if (entries.length > 0) out.push({ key: other.key, turn: null, entries });
+      if (entries.length === 0) continue;
+      const entry = entries[0];
+      // Turn-owned commands can separate loose reports in the transcript
+      // even when the reports read together after that turn's work. Group
+      // them where they render, keeping the first report's stable key.
+      if (
+        entries.length === 1 &&
+        entry?.kind === "steps" &&
+        other.items.every(
+          (item) => item.turnId === null && isAgentActivity(item),
+        )
+      ) {
+        if (looseActivity) {
+          looseActivity.steps.push(...entry.steps);
+          continue;
+        }
+        looseActivity = entry;
+      } else looseActivity = undefined;
+      out.push({ key: other.key, turn: null, entries });
     }
   };
   for (const turn of turns) {
@@ -212,6 +221,7 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
           ...items.filter((item) => item !== input && !read.includes(item)),
         ]
       : items;
+    looseActivity = undefined;
     out.push({ key: turn.id, turn, entries: entriesOf(ordered, context) });
   }
   flushOthersBefore(null);

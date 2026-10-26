@@ -129,7 +129,11 @@ export interface AppHandle {
   /** Uncaught renderer exceptions, including failures from lazy screens. */
   getRendererErrors: () => string[];
   userDataDir: string;
-  stop: (opts?: { preserveUserData?: boolean }) => Promise<void>;
+  stop: (opts?: {
+    preserveUserData?: boolean;
+    /** Skip compositor work when testing an immediate Quit boundary. */
+    captureFinalFrame?: boolean;
+  }) => Promise<void>;
   /**
    * SIGKILL without cleanup — simulates a crash/quit mid-operation. The
    * userData dir survives so a follow-up launchApp({ userDataDir }) can
@@ -143,6 +147,8 @@ export interface LaunchOpts {
   urls?: string[];
   /** Installed/packaged binary for release performance checks with isolated data. */
   executablePath?: string;
+  /** Leave native startup visibility/focus untouched for restoration checks. */
+  activateWindow?: boolean;
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
@@ -239,10 +245,12 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     // Launching a child process is not a user activation on every window
     // manager. Activate the real page once on this private desktop before
     // interacting; subsequent focus changes remain entirely native.
-    await client.cdp("Page.bringToFront");
-    await client.waitFor("document.hasFocus()", {
-      label: "launched desktop activated",
-    });
+    if (opts.activateWindow !== false) {
+      await client.cdp("Page.bringToFront");
+      await client.waitFor("document.hasFocus()", {
+        label: "launched desktop activated",
+      });
+    }
     // App iframes with an opaque origin render out of process; their CDP
     // targets appear on the same /json endpoint as the page. Attach a
     // dedicated WebSocket so tests can evaluate inside the frame.
@@ -340,7 +348,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
             path.join(artifactDirectory, "electron.log"),
             output,
           );
-          if (!killedForRecovery) {
+          if (!killedForRecovery && opts?.captureFinalFrame !== false) {
             await client
               .screenshot(path.join(artifactDirectory, "last-frame.png"))
               .catch(() => {});

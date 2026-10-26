@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { WindowSession } from "../src/main/window-state.js";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
@@ -24,7 +27,7 @@ const alive = (pid: number) => {
 };
 
 /** Announce the update quit as the installer would, and wait for the exit. */
-async function restartForUpdate(handle: AppHandle) {
+async function restartForUpdate(handle: AppHandle, beforeQuit = "") {
   const pid = handle.processId;
   if (!pid) throw new Error("Missing app process id");
   // Fire and forget: the reply cannot arrive from a process that exits.
@@ -35,7 +38,7 @@ async function restartForUpdate(handle: AppHandle) {
   // process's exit is what the test judges.
   const request = handle
     .eval(
-      "(() => { void window.catamorphicDesktop.devUpdateRestart(); return true; })()",
+      `(() => { ${beforeQuit}; void window.catamorphicDesktop.devUpdateRestart(); return true; })()`,
     )
     .then(
       () => null,
@@ -148,12 +151,93 @@ describe("update restart", () => {
 
   it("exits with a project window open once the update quit is announced", async () => {
     app = await launchApp();
-    await app.eval(`window.catamorphicDesktop.createProject({
+    const first = await app.eval<{
+      id: string;
+    }>(`window.catamorphicDesktop.createProject({
       name: 'update-restart',
       rootPath: ${JSON.stringify(`${app.userDataDir}/update-restart`)}
     })`);
-    await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(first.id)}})`,
+    );
+    await app.waitFor(
+      `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(first.id)}`,
+    );
+    const second = await app.eval<{
+      id: string;
+    }>(`window.catamorphicDesktop.createProject({
+      name: 'update-restart-second',
+      rootPath: ${JSON.stringify(`${app.userDataDir}/update-restart-second`)}
+    })`);
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(second.id)},newWindow:true})`,
+    );
+    const other = await app.connectToFrame(`project=${second.id}`);
+    try {
+      await other.waitFor(
+        `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second.id)}`,
+      );
+      await other.eval("window.close(); true");
+      await other.waitFor(
+        "window.catamorphicDesktop.devWindow('get').then(state => !state.visible)",
+      );
+    } finally {
+      other.close();
+    }
+    const file = path.join(app.userDataDir, "window-state.json");
     await restartForUpdate(app);
+    const saved: WindowSession = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(saved.windows).toHaveLength(2);
+    expect(
+      saved.windows.find((window) => window.projectIds.includes(first.id)),
+    ).toMatchObject({ visible: true });
+    expect(
+      saved.windows.find((window) => window.projectIds.includes(second.id)),
+    ).toMatchObject({ visible: false });
     // stop() validates the exit status of the process that already left.
   });
+
+  it("flushes a just-opened tab before update restart and keeps saving after an aborted attempt", async () => {
+    app = await launchApp();
+    const handle = app;
+    const project = await handle.eval<{ id: string }>(
+      `window.catamorphicDesktop.createProject({name:'Update flush',rootPath:${JSON.stringify(`${handle.userDataDir}/update-flush`)}})`,
+    );
+    await handle.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
+    );
+    await handle.waitFor(
+      `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]')`,
+    );
+    await handle.eval(
+      `window.catamorphicDesktop.devUpdateRestart({abort:true})`,
+    );
+    await handle.eval(`window.catamorphicDesktop.devWindow('setSize',960,660)`);
+    const file = path.join(handle.userDataDir, "window-state.json");
+    await expect
+      .poll(async () => {
+        const saved: WindowSession = JSON.parse(
+          await fs.readFile(file, "utf8"),
+        );
+        return saved.windows[0]?.state.width;
+      })
+      .toBe(960);
+    await restartForUpdate(
+      handle,
+      `window.dispatchEvent(new KeyboardEvent('keydown',{
+      key:',',altKey:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true
+    }))`,
+    );
+    const userDataDir = handle.userDataDir;
+    await handle.stop({ preserveUserData: true });
+    app = await launchApp({ userDataDir });
+    await app.waitFor(
+      `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(project.id)}).then(state=>
+      state?.tabs.some(tab=>tab.kind==='settings'))`,
+      { label: "tab opened immediately before update persisted" },
+    );
+    await app.waitFor(
+      `window.catamorphicDesktop.devWindow('get').then(state=>state.width===960)`,
+    );
+  }, 180_000);
 });

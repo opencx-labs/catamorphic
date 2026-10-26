@@ -1,4 +1,5 @@
 import path from "node:path";
+import { ProjectNotFoundError } from "@catamorphic/core";
 import { emitLog } from "@catamorphic/otel";
 import {
   loadTelemetryEnvironmentFile,
@@ -12,6 +13,7 @@ import {
   Menu,
   MenuItem,
   type MenuItemConstructorOptions,
+  nativeImage,
   nativeTheme,
   powerMonitor,
   safeStorage,
@@ -36,6 +38,7 @@ import {
   desktopDataDirFromEnvironment,
 } from "./development-paths.js";
 import { dockClicks } from "./dock-clicks.js";
+import { registerDockIcon } from "./dock-icon.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
@@ -47,7 +50,12 @@ import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { registerResourceSupport } from "./resource-monitor.js";
-import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
+import {
+  DESKTOP_TENANT_ID,
+  DESKTOP_USER_ID,
+  type EmbeddedServer,
+  startEmbeddedServer,
+} from "./server/boot.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
 import {
@@ -64,7 +72,13 @@ import {
 } from "./updater.js";
 import { registerVoiceSupport } from "./voice/index.js";
 import { WindowButtons } from "./window-buttons.js";
-import { cascadeWindowState, WindowStateStore } from "./window-state.js";
+import {
+  cascadeWindowState,
+  fitToDisplays,
+  freshWindowState,
+  WindowStateStore,
+  type WorkspaceWindowState,
+} from "./window-state.js";
 import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
 // Electron derives the macOS safeStorage Keychain service from the app name.
@@ -283,6 +297,9 @@ const state: ServerState = {
  * agents) go only to that profile's windows.
  */
 const windowProfiles = new Map<number, string>();
+const windowState = new WindowStateStore(
+  path.join(app.getPath("userData"), "window-state.json"),
+);
 
 export interface WindowProfileRegistry {
   profileFor(sender: WebContents): string;
@@ -370,24 +387,29 @@ function createWindow(
   profileId?: string,
   dock = false,
   initialProjectId?: string,
-  placement: { cascadeFrom?: BrowserWindow } = {},
+  placement: {
+    cascadeFrom?: BrowserWindow;
+    restored?: WorkspaceWindowState;
+    focus?: boolean;
+  } = {},
 ): BrowserWindow {
   const profile = profileId
     ? (profilesStore.get(profileId) ?? profilesStore.lastActiveProfile())
     : profilesStore.lastActiveProfile();
   const stores = profileConfig.forProfile(profile.id);
-  // Placement survives a relaunch (size, position, maximized/fullscreen).
-  const windowState = new WindowStateStore(
-    path.join(app.getPath("userData"), "window-state.json"),
-  );
-  // A window opened from another cascades from it instead (window-state.ts).
+  // Restored windows keep their own placement; a new project window
+  // cascades from its source, and a fresh window uses the last placement.
   const from = placement.cascadeFrom;
-  const saved = from
-    ? cascadeWindowState(
-        from.getNormalBounds(),
-        screen.getDisplayMatching(from.getNormalBounds()).workArea,
-      )
-    : windowState.load();
+  const saved = fitToDisplays(
+    placement.restored?.state ??
+      (from
+        ? cascadeWindowState(
+            from.getNormalBounds(),
+            screen.getDisplayMatching(from.getNormalBounds()).workArea,
+          )
+        : windowState.placement()),
+    screen.getAllDisplays(),
+  );
   const window = new BrowserWindow({
     width: dock ? 780 : saved.width,
     height: dock ? 124 : saved.height,
@@ -439,21 +461,22 @@ function createWindow(
     if (pendingConnectLink) deliverConnectLink(pendingConnectLink);
     notifyBrowserLinks();
   });
+  // Hidden restored windows defer their native modes until shown: entering
+  // fullscreen before show can leave macOS with a blank Space.
+  if (!dock)
+    window.once("show", () => {
+      if (saved.maximized) window.maximize();
+      if (saved.fullscreen) window.setFullScreen(true);
+    });
   window.once("ready-to-show", () => {
     if (dock) window.showInactive();
-    else window.show();
-    // The relaunch after an update starts behind the user's other windows.
-    if (!dock && consumeUpdateRestart(app.getPath("userData"))) {
-      app.focus({ steal: true });
-      window.focus();
+    else if (placement.restored?.visible !== false) {
+      if (placement.focus === false || placement.restored?.minimized)
+        window.showInactive();
+      else window.show();
+      if (placement.restored?.minimized) window.minimize();
     }
-    // Native window managers can ignore zoom requests before the first show.
-    if (!dock && saved.maximized) window.maximize();
-    // Fullscreen after show: entering it on a hidden window leaves macOS
-    // with a blank space until the next repaint.
-    if (!dock && saved.fullscreen) window.setFullScreen(true);
   });
-  if (!dock) windowState.track(window, saved);
   // Captured now: `closed` fires after destruction, when touching
   // window.webContents throws "Object has been destroyed".
   const webContentsId = window.webContents.id;
@@ -464,28 +487,32 @@ function createWindow(
     windowProfiles.delete(webContentsId);
   });
 
+  // Claims are in place before renderer loading, including every retained
+  // project of a restored window. Detached docks never enter this store.
+  const workspaceState = placement.restored
+    ? { ...placement.restored, state: saved }
+    : freshWindowState({
+        profileId: profile.id,
+        projectId: initialProjectId,
+        state: saved,
+      });
+  desktopWorkspaces?.track(window, dock, workspaceState);
+  const query: Record<string, string> = dock
+    ? { surface: "dock", clicks: dockClicks() }
+    : {
+        window: workspaceState.id,
+        ...(initialProjectId ? { project: initialProjectId } : {}),
+      };
   if (process.env.ELECTRON_RENDERER_URL) {
-    const query = new URLSearchParams(
-      dock
-        ? { surface: "dock", clicks: dockClicks() }
-        : initialProjectId
-          ? { project: initialProjectId }
-          : {},
+    void window.loadURL(
+      `${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query)}`,
     );
-    void window.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
   } else {
     void window.loadFile(
       path.join(import.meta.dirname, "../renderer/index.html"),
-      {
-        query: dock
-          ? { surface: "dock", clicks: dockClicks() }
-          : initialProjectId
-            ? { project: initialProjectId }
-            : {},
-      },
+      { query },
     );
   }
-  desktopWorkspaces?.track(window, dock);
   return window;
 }
 
@@ -639,9 +666,15 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  if (!app.isPackaged && process.platform === "darwin") {
-    app.dock?.setIcon(path.join(import.meta.dirname, "../../build/icon.png"));
-  }
+  // An empty native image restores the signed bundle icon on macOS. Keep
+  // Icon Composer rendering under OS control when no custom icon is selected.
+  registerDockIcon({
+    defaultIcon: app.isPackaged
+      ? nativeImage.createEmpty()
+      : nativeImage.createFromPath(
+          path.join(import.meta.dirname, "../../build/icon.png"),
+        ),
+  });
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.
@@ -653,7 +686,11 @@ app.whenReady().then(async () => {
   ) {
     safeStorage.setUsePlainTextEncryption(true);
   }
-  desktopUpdater = registerDesktopUpdater({ broadcast: state.broadcast });
+  desktopUpdater = registerDesktopUpdater({
+    broadcast: state.broadcast,
+    prepareRestart: () => desktopWorkspaces?.prepareQuit() ?? Promise.resolve(),
+    cancelRestart: () => desktopWorkspaces?.resume(),
+  });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
   // directly. Changes fan out only to that profile's windows.
@@ -768,6 +805,10 @@ app.whenReady().then(async () => {
     mcpApps,
     mobilePairing,
     incognitoSessions,
+    {
+      prepareQuit: () => desktopWorkspaces?.prepareQuit() ?? Promise.resolve(),
+      forgetProject: (projectId) => desktopWorkspaces?.forget(projectId),
+    },
   );
   browserSupport = registerBrowserSupport(
     profilesStore,
@@ -821,8 +862,26 @@ app.whenReady().then(async () => {
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
+    windowState,
+    onQuitCancelled: () => desktopUpdater?.cancelRestart(),
     profileForProject: (projectId) =>
       profilesStore.profileForProject(projectId).id,
+    projectExists: async (projectId) => {
+      if (!server) throw new Error("The project server is still starting.");
+      try {
+        await server.catamorphic.core.projects.get(
+          {
+            tenantId: DESKTOP_TENANT_ID,
+            externalUserId: DESKTOP_USER_ID,
+          },
+          projectId,
+        );
+        return true;
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) return false;
+        throw error;
+      }
+    },
     createWindow,
     onReleased: (projectId, from) => terminalSupport?.handOff(projectId, from),
   });
@@ -839,7 +898,50 @@ app.whenReady().then(async () => {
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
-  const window = createWindow();
+  const session = windowState.load();
+  const savedWindows = session.windows.filter(({ profileId }) =>
+    profilesStore.get(profileId),
+  );
+  const restored = savedWindows.map((saved) => ({
+    saved,
+    window: createWindow(saved.profileId, false, saved.activeProjectId, {
+      restored: saved,
+      focus: false,
+    }),
+  }));
+  const startupWindows =
+    restored.length > 0
+      ? restored.map(({ window }) => window)
+      : [createWindow()];
+  // All windows reserve their owners synchronously above. Show them without
+  // taking focus one by one, then restore the last visible workspace once.
+  void Promise.all(
+    startupWindows.map(
+      (window) =>
+        new Promise<void>((resolve) => {
+          window.once("ready-to-show", () => resolve());
+          window.once("closed", () => resolve());
+        }),
+    ),
+  ).then(() => {
+    const target =
+      restored.find(
+        ({ saved }) =>
+          saved.id === session.lastFocusedWindowId &&
+          saved.visible &&
+          !saved.minimized,
+      ) ?? restored.find(({ saved }) => saved.visible && !saved.minimized);
+    const window =
+      target?.window ?? (restored.length === 0 ? startupWindows[0] : undefined);
+    const updateRestart = consumeUpdateRestart(app.getPath("userData"));
+    if (!window || window.isDestroyed()) return;
+    // Restored windows are shown inactive. On macOS, choosing a key window
+    // alone may leave the application inactive on an ordinary relaunch too.
+    // Activate once, then focus only the saved visible workspace selected above.
+    if (updateRestart || (process.platform === "darwin" && restored.length > 0))
+      app.focus({ steal: true });
+    window.focus();
+  });
 
   try {
     const versionBackup = prepareVersionBackup({
@@ -946,7 +1048,6 @@ app.whenReady().then(async () => {
       "Work failed to start",
       `The embedded server could not boot.\n\n${message}`,
     );
-    window.close();
     app.quit();
     return;
   }

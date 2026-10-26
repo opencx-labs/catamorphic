@@ -121,7 +121,8 @@ UI. See [`INTEGRATION.md`](INTEGRATION.md).
   embedded product surface.
 - **A daily-driver dev shell.** Import a monorepo with its existing agent
   instructions. Worktrees, terminals, browser tabs, diffs, pull requests, and
-  multiple coding harnesses live in one window.
+  multiple coding harnesses share workspace windows. Each window returns with its
+  profile, project group, tabs and layout after Quit or an update restart.
 - **An embedded copilot.** Mount the libraries in a SaaS backend, add the
   React surfaces you want, and give the agent the host's skills, tools,
   trigger kinds, look, and doctrine.
@@ -305,7 +306,9 @@ mode can list (Find changed files searches them); PR review opens per-file
 diffs through the CodeHost seam. Terminals are real PTYs with shell
 integration (OSC 133); the embedded browser, which installs Chrome
 extensions from the Chrome Web Store, and the command palette round out the
-shell. All of it degrades quietly for non-technical users.
+shell. On macOS, Settings > Appearance lets you choose a custom Dock icon while
+Work runs, shared by all profiles, and reset to the default at any time.
+All of it degrades quietly for non-technical users.
 (ADRs [0045](docs/decisions/0045-desktop-as-dev-shell.md),
 [0063](docs/decisions/0063-agent-checkout-coordination.md),
 [0203](docs/decisions/0203-work-runs-chrome-extensions-from-the-web-store.md))

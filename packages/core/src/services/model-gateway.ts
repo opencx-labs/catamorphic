@@ -33,12 +33,6 @@ const decoder = new TextDecoder();
 export const MODEL_REQUEST_MAX_BYTES = 32 * 1024 * 1024;
 /** Largest non-streamed answer the gateway reads for its usage. */
 const USAGE_SCAN_MAX_BYTES = 8 * 1024 * 1024;
-/** How long a resolved alias (binding, endpoint, key headers) is reused. */
-const ACCESS_TTL_MS = 30_000;
-/** Most resolved aliases kept at once; the oldest goes first. */
-const ACCESS_CACHE_SIZE = 1024;
-/** A credential this close to expiry is resolved again, so it refreshes. */
-const ACCESS_EXPIRY_MARGIN_MS = 60_000;
 
 /** One HTTP request a sandbox harness sent to `/gateway/model/<alias>/…`. */
 export interface ModelGatewayRequest {
@@ -708,18 +702,10 @@ interface ModelAccess {
   paths: ConnectionModelEndpoint["paths"];
 }
 
-/**
- * A request `admit` let in, handed to `handle` so it is not checked twice.
- * Only this gateway's own admissions count.
- */
-export interface ModelGatewayAdmission {
-  readonly access: ModelAccess;
-}
-
 /** What `admit` decided: a refusal to send, or an admission. */
 export type ModelGatewayAdmitResult =
   | { refused: ModelGatewayResponse }
-  | { admitted: ModelGatewayAdmission };
+  | { admitted: true };
 
 /**
  * Models through the gateway (ADR 0180). A harness in a sandbox sends its
@@ -729,22 +715,11 @@ export type ModelGatewayAdmitResult =
  * connection's base URL with the stored key: the body byte for byte, the
  * answer streamed back unchanged, its usage read on the way.
  *
- * Built for time to first token: one indexed read checks the grant on each
- * call; the resolved alias and its key are reused for 30 seconds per grant
- * and connection revision; audit and usage writes happen off the response.
+ * Every call resolves current authority and its binding before forwarding;
+ * audit and usage writes happen off the response.
  */
 export class ModelGatewayService {
   private readonly fetch: typeof fetch;
-  /**
-   * Replica memory (b): a grant's resolved alias, keyed by the grant and
-   * its connection's revision, and bounded by the key's expiry.
-   */
-  private readonly access = new Map<
-    string,
-    { revision: number; until: number; access: ModelAccess }
-  >();
-  /** Replica memory (a): admissions of requests this process is serving. */
-  private readonly admissions = new WeakSet<ModelGatewayAdmission>();
 
   constructor(
     private readonly deps: {
@@ -758,8 +733,6 @@ export class ModelGatewayService {
       /** How long one rewrite may take before the call is refused. */
       rewriteTimeoutMs?: number;
       fetch?: typeof fetch;
-      /** Clock for the access cache (tests). */
-      now?: () => number;
     },
   ) {
     this.fetch = deps.fetch ?? ((input, init) => fetch(input, init));
@@ -767,26 +740,21 @@ export class ModelGatewayService {
 
   /**
    * Check a request's grant before its body is read, so an unauthenticated
-   * caller cannot make the host buffer a large body. Pass the admission to
-   * `handle`.
+   * caller cannot make the host buffer a large body. `handle` always
+   * rechecks current authority after the body is read.
    */
   async admit(
     request: Pick<ModelGatewayRequest, "alias" | "path" | "headers">,
   ): Promise<ModelGatewayAdmitResult> {
     try {
-      const admission: ModelGatewayAdmission = {
-        access: await this.authorize(request),
-      };
-      this.admissions.add(admission);
-      return { admitted: admission };
+      await this.authorize(request);
+      return { admitted: true };
     } catch (error) {
       return { refused: refusalResponse(requestApi(request), error) };
     }
   }
 
-  async handle(
-    request: ModelGatewayRequest & { admitted?: ModelGatewayAdmission },
-  ): Promise<ModelGatewayResponse> {
+  async handle(request: ModelGatewayRequest): Promise<ModelGatewayResponse> {
     const api = requestApi(request);
     try {
       return await withSpan(
@@ -827,12 +795,9 @@ export class ModelGatewayService {
   }
 
   private async handleUninstrumented(
-    request: ModelGatewayRequest & { admitted?: ModelGatewayAdmission },
+    request: ModelGatewayRequest,
   ): Promise<ModelGatewayResponse> {
-    const access =
-      request.admitted && this.admissions.has(request.admitted)
-        ? request.admitted.access
-        : await this.authorize(request);
+    const access = await this.authorize(request);
     const path = modelRequestPath(request.path);
     const url = path ? upstreamUrl(access.baseUrl, path, request.query) : null;
     if (!path || !url)
@@ -863,11 +828,10 @@ export class ModelGatewayService {
           reason,
           ...(access.sessionId ? { agentSessionId: access.sessionId } : {}),
         })
-        .catch((failure: unknown) =>
-          console.warn(
-            "[catamorphic] Could not audit a model refusal",
-            failure,
-          ),
+        .catch(() =>
+          console.warn("[catamorphic] Could not audit a model refusal", {
+            errorType: "Error",
+          }),
         );
       throw error;
     }
@@ -889,10 +853,19 @@ export class ModelGatewayService {
       ...(access.sessionId ? { agentSessionId: access.sessionId } : {}),
     });
     const audit = (outcome: "allowed" | "error", metadata: Json) => {
-      auditCall(outcome, metadata).catch((error: unknown) =>
-        console.warn("[catamorphic] Could not audit a model call", error),
+      auditCall(outcome, metadata).catch(() =>
+        console.warn("[catamorphic] Could not audit a model call", {
+          errorType: "Error",
+        }),
       );
     };
+    const current = await this.authorize(request);
+    if (JSON.stringify(current) !== JSON.stringify(access))
+      throw new ModelGatewayError(
+        403,
+        "permission_error",
+        "Connection authorization changed; retry the request",
+      );
     // The turn a call belongs to is the one running when it starts; read
     // beside the call, never before it.
     const turn =
@@ -911,12 +884,12 @@ export class ModelGatewayService {
         redirect: "manual",
         ...(body ? { body } : {}),
       });
-    } catch (error) {
+    } catch {
       audit("error", { error: "upstream unreachable" });
       throw new ModelGatewayError(
         502,
         "api_error",
-        `The model provider could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+        "The model provider could not be reached",
       );
     }
     const headers = downstreamResponseHeaders(upstream.headers);
@@ -1092,7 +1065,7 @@ export class ModelGatewayService {
       if (!(error instanceof RewriteTimeoutError))
         console.warn(
           `[catamorphic] The model request rewrite ${rewrite.name} failed`,
-          error,
+          { errorType: "Error" },
         );
       throw new ModelGatewayError(
         403,
@@ -1116,8 +1089,10 @@ export class ModelGatewayService {
     return (async () =>
       this.deps.store.openUsage({
         record: await usageRecord(args),
-      }))().catch((error: unknown) => {
-      console.warn("[catamorphic] Could not open model usage", error);
+      }))().catch(() => {
+      console.warn("[catamorphic] Could not open model usage", {
+        errorType: "Error",
+      });
       return undefined;
     });
   }
@@ -1138,12 +1113,14 @@ export class ModelGatewayService {
         usage: args.usage,
         ...(openId ? { openId } : {}),
       });
-    })().catch((error: unknown) =>
-      console.warn("[catamorphic] Could not record model usage", error),
+    })().catch(() =>
+      console.warn("[catamorphic] Could not record model usage", {
+        errorType: "Error",
+      }),
     );
   }
 
-  /** The grant, checked on every call, and its alias, resolved at most every 30 seconds. */
+  /** The live grant and current alias authority for this call. */
   private async authorize(
     request: Pick<ModelGatewayRequest, "alias" | "headers">,
   ): Promise<ModelAccess> {
@@ -1167,16 +1144,6 @@ export class ModelGatewayService {
         "authentication_error",
         "This session is closed",
       );
-    const now = this.deps.now?.() ?? Date.now();
-    const cached = this.access.get(grant.id);
-    if (
-      cached &&
-      cached.revision === grant.connection.revision &&
-      cached.until > now &&
-      grant.connection.status === "ready"
-    )
-      return cached.access;
-    this.access.delete(grant.id);
     const identity: Identity = {
       tenantId: grant.tenantId,
       externalUserId:
@@ -1203,26 +1170,6 @@ export class ModelGatewayService {
       principalKind: resolved.binding.principalKind,
       paths: resolved.endpoint.paths,
     };
-    const until = Math.min(
-      now + ACCESS_TTL_MS,
-      grant.connection.expiresAt
-        ? grant.connection.expiresAt.getTime() - ACCESS_EXPIRY_MARGIN_MS
-        : Number.POSITIVE_INFINITY,
-    );
-    if (until > now) {
-      // Renewed grants leave their entries behind: drop what has lapsed.
-      for (const [id, entry] of this.access)
-        if (entry.until <= now) this.access.delete(id);
-      if (this.access.size >= ACCESS_CACHE_SIZE) {
-        const oldest = this.access.keys().next().value;
-        if (oldest !== undefined) this.access.delete(oldest);
-      }
-      this.access.set(grant.id, {
-        revision: grant.connection.revision,
-        until,
-        access,
-      });
-    }
     return access;
   }
 }
@@ -1381,8 +1328,10 @@ async function* relay(args: {
     reader.releaseLock();
     try {
       args.onEnd(finished);
-    } catch (error) {
-      console.warn("[catamorphic] Could not settle a model call", error);
+    } catch {
+      console.warn("[catamorphic] Could not settle a model call", {
+        errorType: "Error",
+      });
     }
   }
 }
@@ -1428,7 +1377,9 @@ function refusalResponse(api: ModelApi, error: unknown): ModelGatewayResponse {
               )
             : undefined;
   if (!refusal)
-    console.warn("[catamorphic] Model gateway request failed", error);
+    console.warn("[catamorphic] Model gateway request failed", {
+      errorType: "Error",
+    });
   // Refusals never carry a retryable status: a harness would only retry
   // into the same answer (ADR 0180). Only an unreachable provider is 502.
   const status = refusal?.status ?? 403;

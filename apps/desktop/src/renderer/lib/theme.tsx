@@ -207,11 +207,13 @@ const BACKDROP_MASK = {
 export function ThemeBackdrop({ surface }: { surface: ThemeSurface }) {
   const background = useTheme()?.backgrounds?.[surface];
   const canvas = useRef<HTMLCanvasElement>(null);
+  const picture = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    // A cached picture may load before this runs.
+    setLoaded(Boolean(picture.current?.complete));
     const element = canvas.current;
     if (!background || !element) return;
-    setLoaded(false);
     const image = new Image();
     let observer: ResizeObserver | undefined;
     const draw = () => {
@@ -254,6 +256,26 @@ export function ThemeBackdrop({ surface }: { surface: ThemeSurface }) {
     };
   }, [background]);
   if (!background) return null;
+  // An <img> keeps animated pictures (GIF, WebP) playing; a canvas holds only
+  // the first frame, so it is used only to pixelate.
+  if (background.pixelate === 1) {
+    return (
+      <img
+        ref={picture}
+        src={background.image}
+        alt=""
+        className="theme-backdrop"
+        onLoad={() => setLoaded(true)}
+        style={{
+          opacity: loaded ? background.opacity : 0,
+          filter: background.blur ? `blur(${background.blur}px)` : undefined,
+          objectFit: "cover",
+          objectPosition: `center ${background.position}`,
+          maskImage: BACKDROP_MASK[background.position],
+        }}
+      />
+    );
+  }
   return (
     <canvas
       ref={canvas}

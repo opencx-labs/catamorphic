@@ -22,6 +22,16 @@ const helpers = `
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  // The imported shell renders before its workspace and dock registration
+  // settle. The dock's + needs the ready project's ID to create its chat.
+  const projectReady = async () => {
+    const runtime = $('[data-project-runtime][data-workspace-visible="true"]');
+    const projectId = runtime?.dataset.projectRuntime;
+    if (!projectId || projectId === 'initial' || !runtime.querySelector('[data-workspace-ready]'))
+      return false;
+    const snapshot = await window.catamorphicDesktop.dockSnapshot();
+    return snapshot.activeProjectId === projectId;
+  };
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
@@ -403,8 +413,9 @@ describe.each([false, true])(
         { label: "import submit enabled" },
       );
       await runWait(
-        `return !!byText('[role="tab"], button', 'New Tab') &&
-              !!$('textarea[placeholder*="Search or ask"]');`,
+        `return (async () => await projectReady() &&
+              !!byText('[role="tab"], button', 'New Tab') &&
+              !!$('textarea[placeholder*="Search or ask"]'))();`,
         { timeoutMs: 60_000, label: "workspace after import" },
       );
 
@@ -436,8 +447,12 @@ describe.each([false, true])(
       // A floating chat stays over the surfaces the next tests open; the
       // dock's + floats it (Cmd+N would take the New Tab in front).
       await runWait(
-        `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
-        { label: "the dock's +" },
+        `return (async () => await projectReady() &&
+          !!$('[data-dock-rail] button[aria-label="New chat"]'))();`,
+        { timeoutMs: 60_000, label: "the ready project's dock +" },
+      );
+      await run(
+        `$('[data-dock-rail] button[aria-label="New chat"]').click(); return true;`,
       );
       await runWait(`return !!visibleDock();`);
       await run(`

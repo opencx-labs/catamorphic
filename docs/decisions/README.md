@@ -287,4 +287,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md) | Subagent updates reach the working turn and read as compact activity | Accepted (extends 0240; replaces 0250's parent delivery rule) |
 | [0279](0279-public-pull-request-status-needs-no-sign-in.md) | Public pull request status needs no sign-in | Accepted (extends 0239) |
 | [0280](0280-terminals-use-the-project-theme-and-chat-workspace.md) | Terminals use the project theme and chat workspace | Accepted (builds on 0209, 0215) |
+| [0281](0281-secret-storage-has-one-encrypted-format.md) | Secret storage has one encrypted format | Accepted (amends 0162, 0206) |
 | [0283](0283-linux-modules-use-namespaces-and-seccomp.md) | Linux modules use namespaces and seccomp | Accepted (extends 0277) |
+| [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |

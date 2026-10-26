@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import type { VoicePhase } from "../../shared/voice.js";
+import type { VoicePhase, VoiceTarget } from "../../shared/voice.js";
 
 /**
  * What voice is doing while other apps' audio stays lowered: listening for
@@ -11,6 +11,24 @@ export const QUIET_PHASES: ReadonlySet<VoicePhase> = new Set([
   "hearing",
   "thinking",
 ]);
+
+/** Only a conversation lowers other audio; dictating into a field does not. */
+export function quietForConversation({
+  phase,
+  target,
+  learning,
+}: {
+  phase: VoicePhase;
+  target: VoiceTarget | null;
+  learning: boolean;
+}): boolean {
+  return (
+    !!target &&
+    target.kind !== "dictation" &&
+    !learning &&
+    QUIET_PHASES.has(phase)
+  );
+}
 
 /**
  * Other apps' audio, lowered while voice listens (ADR 0268): the
@@ -61,8 +79,16 @@ export class VoiceQuiet {
     this.child = null;
     this.told = null;
     this.unavailable = null;
-    child?.stdin?.end();
-    child?.kill();
+    if (!child) return;
+    // The helper releases voice processing on `loud` and EOF. Killing it
+    // immediately after ending stdin can skip both cleanup commands.
+    // Give its normal teardown a chance before bounding a stuck helper.
+    const timeout = setTimeout(() => child.kill(), 1000);
+    timeout.unref();
+    const gone = () => clearTimeout(timeout);
+    child.once("exit", gone);
+    child.once("error", gone);
+    child.stdin?.end("loud\n");
   }
 
   private write(line: string): void {

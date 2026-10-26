@@ -2951,6 +2951,7 @@ function ChatDockContent({
           both stay above timeline content scrolled beneath them. */}
           <div
             data-testid="chat-status-controls"
+            data-chat-controls=""
             className={`z-10 flex shrink-0 items-center gap-1 ${presentsAsTab ? "absolute right-2 top-2" : "relative"}`}
           >
             <TodoProgress

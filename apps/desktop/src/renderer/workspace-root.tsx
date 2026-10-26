@@ -5,6 +5,7 @@ import {
 } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { App } from "./app.js";
 import { DockHost } from "./components/dock-host.js";
@@ -23,6 +24,7 @@ import {
 import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { ProjectTheme } from "./lib/theme.js";
 import { WorkspaceContext } from "./lib/workspace-context.js";
+import { flushWorkspaceSaves } from "./lib/workspace-persistence.js";
 
 /** Hiding a project never unmounts its resources or agent tool handlers. */
 export function WorkspaceRoot() {
@@ -151,16 +153,51 @@ export function WorkspaceRoot() {
       }),
     [],
   );
+  useEffect(
+    () =>
+      desktopApi.onWorkspaceEvent((event) => {
+        if (event.kind === "forget") {
+          void queryClient.invalidateQueries({ queryKey: ["cat", "projects"] });
+          setProjects((items) => {
+            const retained = items.filter(
+              (item) => item.projectId !== event.projectId,
+            );
+            return retained.length > 0 ? retained : [{ key: "initial" }];
+          });
+          setAttentionByProject((items) => {
+            const { [event.projectId]: _removed, ...rest } = items;
+            return rest;
+          });
+          return;
+        }
+        if (event.kind !== "flush") return;
+        // Commit any already queued input/layout update before reading the savers.
+        flushSync(() => {});
+        void flushWorkspaceSaves().then(
+          () => desktopApi.workspaceFlushed(event.requestId),
+          (error: unknown) =>
+            desktopApi.workspaceFlushed(
+              event.requestId,
+              error instanceof Error
+                ? error.message
+                : "Could not save the workspace",
+            ),
+        );
+      }),
+    [queryClient],
+  );
   useEffect(() => {
-    void desktopApi.workspaceInitial().then((projectId) => {
-      const initialProjectId =
-        projectId ??
-        new URLSearchParams(location.search).get("project") ??
-        undefined;
-      if (initialProjectId)
-        setProjects([{ key: "initial", projectId: initialProjectId }]);
-      setReady(true);
-    });
+    void desktopApi
+      .workspaceInitial()
+      .then(({ projectIds, activeProjectId }) => {
+        if (projectIds.length > 0) {
+          setProjects(
+            projectIds.map((projectId) => ({ key: projectId, projectId })),
+          );
+          setActive(activeProjectId ?? projectIds[0] ?? "initial");
+        }
+        setReady(true);
+      });
   }, []);
   useEffect(() => {
     const reset = () => {
@@ -172,18 +209,24 @@ export function WorkspaceRoot() {
     return () =>
       window.removeEventListener("catamorphic:profile-refetch", reset);
   }, []);
-  const resolve = useCallback((key: string, projectId: string) => {
-    void desktopApi.workspaceClaim(projectId).then((claimed) => {
-      if (!claimed) return;
-      setProjects((items) =>
-        items.find((item) => item.key === key)?.projectId === projectId
-          ? items
-          : items.map((item) =>
+  const resolve = useCallback(
+    async (key: string, projectId: string): Promise<boolean> => {
+      if (!(await desktopApi.workspaceClaim(projectId))) return false;
+      setProjects((items) => {
+        if (items.some((item) => item.projectId === projectId)) return items;
+        // A successful claim is retained even if a navigation filled the
+        // initial slot while it was pending; it never replaces that navigation.
+        const initial = items.find((item) => item.key === key);
+        return initial && !initial.projectId
+          ? items.map((item) =>
               item.key === key ? { ...item, projectId } : item,
-            ),
-      );
-    });
-  }, []);
+            )
+          : [...items, { key: projectId, projectId }];
+      });
+      return true;
+    },
+    [],
+  );
   useEffect(
     () =>
       desktopApi.onWorkspaceEvent((event) => {
@@ -205,7 +248,13 @@ export function WorkspaceRoot() {
             return existing
               ? items.map((item) =>
                   item.key === key
-                    ? { ...item, projectId, navigation: event.surface }
+                    ? {
+                        ...item,
+                        projectId,
+                        // Revealing the project does not cancel a surface
+                        // that another request is still opening there.
+                        navigation: event.surface ?? item.navigation,
+                      }
                     : item,
                 )
               : [...items, { key, projectId, navigation: event.surface }];
@@ -272,7 +321,7 @@ export function WorkspaceRoot() {
             <ProjectTheme projectId={project.projectId}>
               <App
                 runtimeProjectId={project.projectId}
-                onProjectResolved={(id) => resolve(project.key, id)}
+                onRequestProject={(id) => resolve(project.key, id)}
               />
               {project.key === active && transition > 0 && (
                 <div

@@ -27,7 +27,7 @@ import { startWorkWorker } from "./worker-runtime.js";
 const REAL_KEY = `sk-or-real-${randomUUID()}`;
 const identity: Identity = {
   tenantId: SERVER_TENANT_ID,
-  externalUserId: "acp-gateway-test",
+  externalUserId: "work-setup-agent",
 };
 const TEST_AGENT = path.join(
   import.meta.dirname,

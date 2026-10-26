@@ -50,6 +50,14 @@ contained may inspect but must not edit. Native harness filesystem permissions s
 If host access is unavailable, explain that limitation. A file created inside a
 sandbox does not configure the desktop; do not introduce a mirror directory.
 
+## macOS Dock icon
+
+For a custom macOS Dock icon, direct the person to Settings > Appearance > Dock icon.
+Choose a PNG or JPEG up to 10 MB and 16 megapixels, or Reset to restore Work's default. This is one
+local app-wide choice for all profiles while Work runs, independent of profile
+Appearance syncing. It is not a prefs.json key or project override. The installed
+app name, Dock label and app switcher name stay Work.
+
 ## Preferences: JSON objects, per-key inheritance
 
 The preferences paths have three editable scopes, from low to high precedence:

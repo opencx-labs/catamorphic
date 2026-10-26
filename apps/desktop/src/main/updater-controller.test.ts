@@ -91,6 +91,7 @@ function setup(
       | "installedInPlace"
       | "moveToApplications"
       | "prepareInstall"
+      | "cancelInstall"
       | "downloaded"
       | "checkTimeoutMs"
     >
@@ -323,6 +324,22 @@ describe("DesktopUpdaterController", () => {
     });
     expect(controller.current().message).toBeUndefined();
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("releases prepared workspace state when native installation throws, then permits a retry", async () => {
+    const prepareInstall = vi.fn(async () => {});
+    const cancelInstall = vi.fn();
+    const { controller, updater } = setup({ prepareInstall, cancelInstall });
+    updater.downloaded("0.1.0-alpha.2");
+    updater.quitAndInstall.mockImplementationOnce(() => {
+      throw new Error("Native installation failed");
+    });
+    await controller.install();
+    expect(cancelInstall).toHaveBeenCalledOnce();
+    expect(controller.current().phase).toBe("downloaded");
+    await controller.install();
+    expect(prepareInstall).toHaveBeenCalledTimes(2);
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(2);
   });
 
   it("keeps Work where it is when the person declines the move", async () => {

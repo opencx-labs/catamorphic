@@ -6,6 +6,7 @@ import { PasswordVault } from "./browser-vault.js";
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
     encryptStringAsync: async (value: string) => Buffer.from(value),
     decryptStringAsync: async (value: Buffer) => ({

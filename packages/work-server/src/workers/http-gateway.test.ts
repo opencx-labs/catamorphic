@@ -31,7 +31,7 @@ const UPSTREAM_PASSWORD = `logs-secret-${randomUUID()}`;
 const UPSTREAM_KEY = `reader:${UPSTREAM_PASSWORD}`;
 const identity: Identity = {
   tenantId: SERVER_TENANT_ID,
-  externalUserId: "http-gateway-test",
+  externalUserId: "work-setup-agent",
 };
 
 let root: string;

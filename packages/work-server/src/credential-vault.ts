@@ -6,22 +6,28 @@ import { EncryptedCredentialVault } from "@catamorphic/core";
 /**
  * Work server filesystem storage over the shared encryption implementation.
  * Without configured keys it generates and keeps an owner-only key beside the
- * records (standalone installs); configured keys come first when present.
+ * records (standalone installs); configured keys replace that local key.
  */
 export class EncryptedFileCredentialVault extends EncryptedCredentialVault {
   constructor(directory: string, configuredKeys: readonly Uint8Array[] = []) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     fs.chmodSync(directory, 0o700);
     const keyFile = path.join(directory, "vault.key");
-    try {
-      fs.writeFileSync(keyFile, randomBytes(32), { mode: 0o600, flag: "wx" });
-    } catch (error) {
-      if (
-        !(error instanceof Error && "code" in error && error.code === "EEXIST")
-      )
-        throw error;
+    if (configuredKeys.length === 0) {
+      try {
+        fs.writeFileSync(keyFile, randomBytes(32), { mode: 0o600, flag: "wx" });
+      } catch (error) {
+        if (
+          !(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "EEXIST"
+          )
+        )
+          throw error;
+      }
+      fs.chmodSync(keyFile, 0o600);
     }
-    fs.chmodSync(keyFile, 0o600);
     const records = path.join(directory, "records");
     fs.mkdirSync(records, { recursive: true, mode: 0o700 });
     fs.chmodSync(records, 0o700);
@@ -31,7 +37,8 @@ export class EncryptedFileCredentialVault extends EncryptedCredentialVault {
         `${createHash("sha256").update(key).digest("hex")}.json`,
       );
     super({
-      keys: [...configuredKeys, fs.readFileSync(keyFile)],
+      keys:
+        configuredKeys.length > 0 ? configuredKeys : [fs.readFileSync(keyFile)],
       store: {
         get: async (key) => {
           try {

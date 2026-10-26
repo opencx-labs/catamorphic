@@ -15,13 +15,13 @@ import {
   type McpToolPolicy,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
-import { z } from "zod";
 import {
   DESKTOP_DEFAULT_SANDBOXING,
   effectiveHarnessPermissions,
   type HarnessPermissions,
   type Sandboxing,
 } from "../shared/agent-permissions.js";
+import { credentialEncryptionAvailable } from "./credential-encryption.js";
 
 /**
  * Per-profile AI agent roster: `<userData>/profiles/<id>/agents.json`.
@@ -146,8 +146,30 @@ export interface AgentConfig {
 
 interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
   apiKeyEncrypted?: string;
-  apiKeyPlaintext?: string;
 }
+
+const STORED_AGENT_FIELDS: Record<keyof StoredAgent, true> = {
+  id: true,
+  name: true,
+  harness: true,
+  provider: true,
+  acp: true,
+  model: true,
+  effort: true,
+  auth: true,
+  apiKeyEncrypted: true,
+  instructions: true,
+  sandboxing: true,
+  harnessPermissions: true,
+  coordination: true,
+  environment: true,
+  memory: true,
+  syncSessions: true,
+  connections: true,
+  skills: true,
+  toolPolicies: true,
+  delegation: true,
+};
 
 interface AgentsFile {
   agents: StoredAgent[];
@@ -297,18 +319,45 @@ export class AgentsStore {
   private load(): AgentsFile {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, "utf-8"));
-      if (Array.isArray(raw?.agents)) return raw as AgentsFile;
-    } catch {
-      // First run.
+      if (!Array.isArray(raw?.agents))
+        throw new Error("Invalid agent settings");
+      if (
+        Object.keys(raw).some(
+          (key) =>
+            !["agents", "defaultAgentId", "projectDefaults"].includes(key),
+        ) ||
+        raw.agents.some(
+          (entry: unknown) =>
+            entry === null ||
+            typeof entry !== "object" ||
+            Array.isArray(entry) ||
+            Object.keys(entry).some(
+              (key) => !Object.hasOwn(STORED_AGENT_FIELDS, key),
+            ),
+        )
+      )
+        throw new Error("Unsupported agent settings");
+      for (const agent of raw.agents)
+        if (agent.delegation !== undefined)
+          agent.delegation = AgentDelegationPolicySchema.parse(
+            agent.delegation,
+          );
+      return raw as AgentsFile;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return { agents: [] };
+      throw new Error("Agent settings could not be opened", { cause: error });
     }
-    return { agents: [] };
   }
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(this.data, null, 2)}\n`, {
+    const temporary = `${this.file}.${randomUUID()}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(this.data, null, 2)}\n`, {
       mode: 0o600,
+      flag: "wx",
     });
+    fs.renameSync(temporary, this.file);
   }
 
   list(): AgentConfig[] {
@@ -453,6 +502,11 @@ export class AgentsStore {
   update(id: string, patch: UpdateAgentInput): AgentConfig | undefined {
     const stored = this.data.agents.find((agent) => agent.id === id);
     if (!stored) return undefined;
+    // Encryption failure must leave both the saved and in-memory agent intact.
+    const key =
+      patch.apiKey === undefined
+        ? undefined
+        : this.encrypt(patch.apiKey?.trim() || null);
     if (patch.name !== undefined)
       stored.name = patch.name.trim() || stored.name;
     if (patch.provider !== undefined && stored.harness === "ai-sdk") {
@@ -505,13 +559,7 @@ export class AgentsStore {
     if (patch.delegation !== undefined) {
       stored.delegation = AgentDelegationPolicySchema.parse(patch.delegation);
     }
-    if (patch.apiKey !== undefined) {
-      const { apiKeyEncrypted, apiKeyPlaintext } = this.encrypt(
-        patch.apiKey?.trim() || null,
-      );
-      stored.apiKeyEncrypted = apiKeyEncrypted;
-      stored.apiKeyPlaintext = apiKeyPlaintext;
-    }
+    if (key) stored.apiKeyEncrypted = key.apiKeyEncrypted;
     this.save();
     return this.decrypt(stored);
   }
@@ -544,24 +592,19 @@ export class AgentsStore {
 
   private encrypt(apiKey: string | null): {
     apiKeyEncrypted?: string;
-    apiKeyPlaintext?: string;
   } {
     if (!apiKey) return {};
-    if (safeStorage.isEncryptionAvailable()) {
-      return {
-        apiKeyEncrypted: safeStorage.encryptString(apiKey).toString("base64"),
-      };
-    }
-    console.warn(
-      "[desktop] OS keychain encryption unavailable; storing API key in plaintext.",
-    );
-    return { apiKeyPlaintext: apiKey };
+    if (!credentialEncryptionAvailable())
+      throw new Error("OS credential encryption is unavailable");
+    return {
+      apiKeyEncrypted: safeStorage.encryptString(apiKey).toString("base64"),
+    };
   }
 
   private decrypt(stored: StoredAgent): AgentConfig {
-    const { apiKeyEncrypted, apiKeyPlaintext, ...rest } = stored;
+    const { apiKeyEncrypted, ...rest } = stored;
     let apiKey: string | null = null;
-    if (apiKeyEncrypted) {
+    if (apiKeyEncrypted && credentialEncryptionAvailable()) {
       try {
         apiKey = safeStorage.decryptString(
           Buffer.from(apiKeyEncrypted, "base64"),
@@ -569,54 +612,9 @@ export class AgentsStore {
       } catch {
         apiKey = null;
       }
-    } else {
-      apiKey = apiKeyPlaintext ?? null;
     }
-    const { delegation, ...others } = rest;
-    const grants = delegation ? storedDelegation(delegation) : undefined;
-    return { ...others, ...(grants ? { delegation: grants } : {}), apiKey };
+    return { ...rest, apiKey };
   }
-}
-
-/**
- * Delegation before grants (ADR 0271): routes, each a target and whether
- * the child may delegate onward.
- */
-const LegacyDelegationSchema = z.object({
-  enabled: z.boolean().optional(),
-  maxConcurrentChildren: z.number().int().min(1).max(100).optional(),
-  routes: z.array(
-    z.object({
-      target: z.string().min(1),
-      description: z.string().max(500).optional(),
-      allowFurtherDelegation: z.boolean().optional(),
-    }),
-  ),
-});
-
-/**
- * A saved delegation policy. One from before grants keeps what the person
- * set: on or off, how many at once, and its routes as grants on any model
- * and effort.
- */
-function storedDelegation(value: unknown): AgentDelegationPolicy | undefined {
-  const current = AgentDelegationPolicySchema.safeParse(value);
-  if (current.success) return current.data;
-  const legacy = LegacyDelegationSchema.safeParse(value);
-  if (!legacy.success) return undefined;
-  return AgentDelegationPolicySchema.parse({
-    ...(legacy.data.enabled !== undefined
-      ? { enabled: legacy.data.enabled }
-      : {}),
-    ...(legacy.data.maxConcurrentChildren !== undefined
-      ? { maxConcurrentChildren: legacy.data.maxConcurrentChildren }
-      : {}),
-    agents: legacy.data.routes.map((route) => ({
-      agent: route.target,
-      ...(route.description ? { description: route.description } : {}),
-      delegate: route.allowFurtherDelegation ?? true,
-    })),
-  });
 }
 
 /** Only Claude Code and Codex keep sessions Work can import (ADR 0233). */
@@ -648,11 +646,19 @@ function checkedHarnessPermissions(args: {
 }
 
 export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
-  const { apiKey, ...rest } = agent;
+  const { apiKey } = agent;
   return {
-    ...rest,
+    id: agent.id,
+    name: agent.name,
+    harness: agent.harness,
+    ...(agent.provider ? { provider: agent.provider } : {}),
+    ...(agent.acp ? { acp: agent.acp } : {}),
+    model: agent.model,
+    effort: agent.effort,
+    auth: agent.auth,
+    ...(agent.environment ? { environment: agent.environment } : {}),
     hasApiKey: apiKey !== null,
-    apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
+    apiKeyMasked: apiKey ? "••••••••" : null,
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
     sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,

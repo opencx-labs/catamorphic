@@ -802,11 +802,14 @@ describe("voice", () => {
     // Its shortcut still turns voice on, and the microphone shows meanwhile.
     await openPage();
     await tapTalkKeys();
+    // The previous test changed assistants. Preparing precedes its chat's
+    // creation; stopping then can leave the next test reading the old
+    // assistantSession while the replacement is still being created.
     await runWait(
-      `return dockVoice() === 'shown' && mic().dataset.phase !== 'off';`,
+      `return dockVoice() === 'shown' && mic().dataset.phase === 'listening';`,
       {
         timeoutMs: 30_000,
-        label: "voice on by its shortcut, the microphone back",
+        label: "voice listening by its shortcut, the microphone back",
       },
     );
     await tapTalkKeys();

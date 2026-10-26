@@ -44,6 +44,7 @@ import { BrowserImport } from "../components/browser-import.js";
 import { Collapsible } from "../components/collapsible.js";
 import { CopyButton } from "../components/copy-button.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
+import { DockIconSetting } from "../components/dock-icon-setting.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
 import { SyncedNote } from "../components/profile-settings-sync.js";
@@ -238,6 +239,7 @@ export function SettingsScreen({
         <>
           <ThemeSection projectId={projectId} destination={destination} />
           <TerminalSection />
+          {/Mac/.test(navigator.platform) && <DockIconSetting />}
         </>
       ),
     },
