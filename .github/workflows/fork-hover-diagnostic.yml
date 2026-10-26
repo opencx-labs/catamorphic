@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [control, guardian]
+        variant: [guardian]
     env:
       CATAMORPHIC_REUSE_TESTS: "1"
       DIAG_VARIANT: ${{ matrix.variant }}

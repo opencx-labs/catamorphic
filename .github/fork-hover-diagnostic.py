@@ -39,3 +39,17 @@ p.write_text(s)
 # Preserve the original size-based ordering of the fresh Vitest shard.
 previous = Path('apps/desktop/e2e/chat-trusted-hosts.e2e.ts')
 previous.write_text(previous.read_text() + '\n/* Diagnostic ordering only. ' + ' ' * 6000 + ' */\n')
+
+dock = Path('apps/desktop/src/renderer/components/dock-host.tsx')
+text = dock.read_text()
+old = '''  useEffect(
+    () => localPresentations.acknowledge(remoteSnapshot.activeChatId),
+    [remoteSnapshot.activeChatId],
+  );'''
+new = '''  useEffect(() => {
+    // Main can confirm the activation before the local opening publishes.
+    if (local.pendingActivation)
+      localPresentations.acknowledge(remoteSnapshot.activeChatId);
+  }, [remoteSnapshot.activeChatId, local.pendingActivation]);'''
+assert text.count(old) == 1
+dock.write_text(text.replace(old, new))
