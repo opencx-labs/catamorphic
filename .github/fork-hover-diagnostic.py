@@ -2,7 +2,7 @@ from pathlib import Path
 
 p = Path('apps/desktop/e2e/project-dock-scope.e2e.ts')
 s = p.read_text()
-s = 'import { execFileSync } from "node:child_process";\n' + s
+s = 'import { execFileSync } from "node:child_process";\nimport fs from "node:fs";\n' + s
 s = s.replace('  await app.movePointer(point);', '''  await app.eval(`(() => {
     window.__clickTarget=${JSON.stringify(selector)};
     window.__pointerTrace ??= [];
@@ -36,9 +36,13 @@ s = s.replace('  await app?.stop();', '''  if(app) console.log('FINAL_HOVER_DIAG
     return {selector:window.__clickTarget,rect:r?.toJSON(),hit:r&&document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,200),pointer:window.__pointerTrace,hover:matchMedia('(hover:hover)').matches,anyHover:matchMedia('(any-hover:hover)').matches,fine:matchMedia('(pointer:fine)').matches,coarse:matchMedia('(pointer:coarse)').matches,documentFocus:document.hasFocus(),window:await window.catamorphicDesktop.devWindow('get'),ancestors};
   })()`).catch(e=>String(e))));
   try {
-    console.log('NATIVE_WINDOW_INVENTORY',execFileSync('python3',[process.env.GITHUB_WORKSPACE+'/.github/native-window-state.py'],{encoding:'utf8'}));
+    console.log('NATIVE_WINDOW_INVENTORY',execFileSync('python3',['../../.github/native-window-state.py'],{encoding:'utf8'}));
     execFileSync('screencapture',['-x','/tmp/fork-hover-display.png']);
   } catch(e) { console.log('NATIVE_CAPTURE_ERROR',String(e)); }
+  try {
+    fs.writeFileSync('/tmp/fork-privacy.log',execFileSync('log',['show','--style','compact','--last','10m','--predicate','eventMessage CONTAINS[c] "local network" OR eventMessage CONTAINS[c] "hosted-compute"'],{encoding:'utf8',maxBuffer:20*1024*1024}));
+    fs.writeFileSync('/tmp/fork-processes.log',execFileSync('ps',['-axo','pid,ppid,comm'],{encoding:'utf8'}));
+  } catch(e) { console.log('PRIVACY_LOG_ERROR',String(e)); }
   await app?.stop();''')
 p.write_text(s)
 
@@ -46,9 +50,3 @@ p.write_text(s)
 # of this instrumented file so the diagnostic reproduces the hosted order.
 previous = Path('apps/desktop/e2e/chat-trusted-hosts.e2e.ts')
 previous.write_text(previous.read_text() + '\n/* Diagnostic ordering only. ' + ' ' * 6000 + ' */\n')
-
-main = Path('apps/desktop/src/main/index.ts')
-text = main.read_text()
-needle = '          lanAddresses: () => [e2eMobilePairingAddress],\n'
-assert text.count(needle) == 1
-main.write_text(text.replace(needle, needle + '          // The explicit pairing fixture exercises loopback HTTP and motion.\n          requestLocalNetworkAccess: async () => {},\n'))

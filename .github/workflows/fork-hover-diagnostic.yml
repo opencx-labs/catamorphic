@@ -8,6 +8,8 @@ jobs:
   probe:
     runs-on: macos-15
     timeout-minutes: 25
+    env:
+      CATAMORPHIC_REUSE_TESTS: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/test-setup
@@ -16,8 +18,6 @@ jobs:
           electron: "true"
       - name: Add read-only pointer diagnostics
         run: python3 .github/fork-hover-diagnostic.py
-      - name: Build the desktop and PWA
-        run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-desktop... --filter=catamorphic-pwa...
       - name: Trace the real fork interaction
         env:
           SHELL: /bin/zsh
@@ -25,7 +25,7 @@ jobs:
         run: |
           defaults write com.apple.universalaccess reduceMotion -bool false
           defaults write com.apple.universalaccess reduceTransparency -bool false
-          bun run --cwd apps/desktop test:e2e:ci --bail=0
+          bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force --output-logs=new-only --summarize
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -33,4 +33,6 @@ jobs:
           path: |
             test-results/
             /tmp/fork-hover-display.png
+            /tmp/fork-privacy.log
+            /tmp/fork-processes.log
           retention-days: 7
