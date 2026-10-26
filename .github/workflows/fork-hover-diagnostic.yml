@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [control, listener, geometry]
+        variant: [control, guardian]
     env:
       CATAMORPHIC_REUSE_TESTS: "1"
       DIAG_VARIANT: ${{ matrix.variant }}
@@ -22,7 +22,9 @@ jobs:
           cache-suffix: desktop-macos-7
           electron: "true"
       - name: Add read-only pointer diagnostics
-        run: python3 .github/fork-hover-diagnostic.py
+        run: |
+          python3 .github/decline-runner-lan-prompt.py --self-test
+          DIAG_VARIANT=control python3 .github/fork-hover-diagnostic.py
       - name: Trace the real fork interaction
         env:
           SHELL: /bin/zsh
@@ -30,6 +32,11 @@ jobs:
         run: |
           defaults write com.apple.universalaccess reduceMotion -bool false
           defaults write com.apple.universalaccess reduceTransparency -bool false
+          if [[ "${DIAG_VARIANT}" == "guardian" ]]; then
+            python3 .github/decline-runner-lan-prompt.py --watch > /tmp/fork-permission-guard.log 2>&1 &
+            permission_pid=$!
+            trap 'kill "${permission_pid}" 2>/dev/null || true; wait "${permission_pid}" || true' EXIT
+          fi
           bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force --output-logs=new-only --summarize
       - uses: actions/upload-artifact@v4
         if: always()
@@ -40,4 +47,5 @@ jobs:
             /tmp/fork-hover-display.png
             /tmp/fork-privacy.log
             /tmp/fork-processes.log
+            /tmp/fork-permission-guard.log
           retention-days: 7
