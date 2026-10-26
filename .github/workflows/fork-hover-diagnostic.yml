@@ -30,5 +30,7 @@ jobs:
         if: always()
         with:
           name: fork-hover-diagnostic
-          path: test-results/
+          path: |
+            test-results/
+            /tmp/fork-hover-display.png
           retention-days: 7
