@@ -1,4 +1,9 @@
-import { useEnvironments, useRuns, useTriggerRun } from "@catamorphic/react";
+import {
+  type JsonValue,
+  useEnvironments,
+  useRuns,
+  useTriggerRun,
+} from "@catamorphic/react";
 import type { ParameterInfo } from "@catamorphic/react/types";
 import { friendlyParamName } from "@catamorphic/ui";
 import { ChevronDown, Play } from "lucide-react";
@@ -33,7 +38,7 @@ export function parseWorkflowInput({
 }: {
   parameters: ParameterInfo[];
   values: Record<string, string>;
-}): Record<string, unknown> {
+}): Record<string, JsonValue> {
   return Object.fromEntries(
     parameters.flatMap((param) => {
       const raw = values[param.name] ?? "";
@@ -121,7 +126,7 @@ export function WorkflowRuns({
     if (blocked || trigger.isPending || publishing) return;
     setError(undefined);
     try {
-      const input: unknown = jsonMode
+      const input: JsonValue = jsonMode
         ? JSON.parse(json)
         : parseWorkflowInput({ parameters, values });
       if (!input || typeof input !== "object" || Array.isArray(input))

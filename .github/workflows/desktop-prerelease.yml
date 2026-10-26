@@ -12,6 +12,7 @@ permissions:
 concurrency:
   group: desktop-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   prepare-npm:

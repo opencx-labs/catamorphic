@@ -370,7 +370,11 @@ describe("recovering partial npm publication", () => {
 it("keeps manual release runs read-only and publishes after the desktop using OIDC", () => {
   const rootPath = path.resolve(import.meta.dirname, "..");
   const workflow: {
-    concurrency: { group: string; "cancel-in-progress": boolean };
+    concurrency: {
+      group: string;
+      "cancel-in-progress": boolean;
+      queue: string;
+    };
     jobs: Record<
       string,
       {
@@ -400,6 +404,7 @@ it("keeps manual release runs read-only and publishes after the desktop using OI
   const publish = workflow.jobs["publish-npm"];
   expect(workflow.concurrency.group).not.toContain("github.ref");
   expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+  expect(workflow.concurrency.queue).toBe("max");
   expect(desktop?.needs).toBe("prepare-npm");
   expect(publish?.needs).toContain("build-macos");
   expect(publish?.if).toContain("github.event_name == 'push'");

@@ -2,6 +2,7 @@ import {
   type AgentAuthenticationRequired,
   authenticationRequiredFrom,
   graphAtom,
+  type JsonValue,
   useEnvironments,
   useTriggerRun,
   useWorkflow,
@@ -126,7 +127,13 @@ function WorkflowReviewContent({
           onRun={async (input) => {
             setRunInput(input);
             try {
-              await trigger.mutateAsync({ input, environment });
+              const serializedInput: JsonValue = JSON.parse(
+                JSON.stringify(input),
+              );
+              await trigger.mutateAsync({
+                input: serializedInput,
+                environment,
+              });
               setRunOpen(false);
               setRunsOpen(true);
             } catch (error) {
