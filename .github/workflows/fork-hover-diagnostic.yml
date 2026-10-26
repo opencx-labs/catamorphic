@@ -1,0 +1,33 @@
+name: Diagnose fork hover on macOS
+on:
+  push:
+    branches: [diagnostic/alpha30-fork-hover]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: desktop-macos-7
+          electron: "true"
+      - name: Add read-only pointer diagnostics
+        run: python3 .github/fork-hover-diagnostic.py
+      - name: Build the desktop and PWA
+        run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+      - name: Trace the real fork interaction
+        env:
+          SHELL: /bin/zsh
+        run: |
+          defaults write com.apple.universalaccess reduceMotion -bool false
+          defaults write com.apple.universalaccess reduceTransparency -bool false
+          bun run --cwd apps/desktop test:e2e:ci project-dock-scope --bail=0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fork-hover-diagnostic
+          path: test-results/
+          retention-days: 7
