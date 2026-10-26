@@ -24,6 +24,35 @@ async function click(selector: string) {
   await app.clickPointer(point);
 }
 
+/** Hover wakes a quiet control pill before its button can take a click. */
+async function clickControl() {
+  const selector = `${pane} [data-agent-control-pill] button:last-child`;
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(() => {
+    const button=document.querySelector(${JSON.stringify(selector)});
+    if(!button)return false;
+    const r=button.getBoundingClientRect();
+    return r.width && r.height ? {x:r.x+r.width/2,y:r.y+r.height/2}:false;
+  })()`,
+    { label: "control action's position before hover" },
+  );
+  await app.movePointer(point);
+  const ready = await app.waitFor<{ x: number; y: number }>(
+    `(() => {
+    const button=document.querySelector(${JSON.stringify(selector)});
+    const pill=button?.closest('[data-agent-control-pill]');
+    if(!button || button.disabled || !pill)return false;
+    const style=getComputedStyle(pill);
+    if(style.opacity!=='1' || style.pointerEvents!=='auto')return false;
+    const r=button.getBoundingClientRect();
+    return r.width && r.height && button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))
+      ? {x:r.x+r.width/2,y:r.y+r.height/2}:false;
+  })()`,
+    { label: "revealed control action is visible and takes the pointer" },
+  );
+  await app.clickPointer(ready);
+}
+
 /** Real terminal typing: Ghostty encodes keydown, not Input.insertText. */
 async function typeInTerminal(text: string) {
   for (const char of text) {
@@ -161,7 +190,17 @@ it("hands a live terminal's keys to the person, then marks its actual end", asyn
     `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(terminalId)}).then(buffer=>buffer?.running && buffer.buffer.includes(${JSON.stringify("TAKE_READY\r\n")}))`,
     { label: "interactive command waiting for actual input" },
   );
-  await click(`${pane} [data-agent-control-pill] button:last-child`);
+  await app.movePointer({ x: 1, y: 1 });
+  await app.waitFor(
+    `(() => {
+    const pill=document.querySelector(${JSON.stringify(`${pane} [data-agent-control-pill]`)});
+    if(!pill)return false;
+    const style=getComputedStyle(pill);
+    return style.opacity==='0' && style.pointerEvents==='none';
+  })()`,
+    { label: "live control pill has stepped aside before pointer reveal" },
+  );
+  await clickControl();
   await app.waitFor(
     `!document.querySelector(${JSON.stringify(`${pane} [data-agent-control-pill]`)}) && !!document.activeElement?.closest(${JSON.stringify(pane)})`,
     { label: "terminal focused after the control pill leaves" },
@@ -211,7 +250,7 @@ it("opens a fresh user shell after a finished command, preserving its history an
     ),
   ).toBe(true);
   await app.eval("window.__terminalControlOutput=[];true");
-  await click(`${pane} [data-agent-control-pill] button:last-child`);
+  await clickControl();
   const newId = await app.waitFor<string>(
     `(async () => {
     const data=window.__terminalControlOutput.find(item=>item.sessionId!==${JSON.stringify(oldId)});

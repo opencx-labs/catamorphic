@@ -299,9 +299,21 @@ describe("window state", () => {
         await frame.waitFor(`window.catamorphicDesktop.devWindow('get').then(state =>
           state.visible === ${saved.visible} && state.maximized === ${saved.state.maximized})`);
         if (saved.id === focusedId) {
-          await frame.waitFor(`document.hasFocus()`, {
-            label: "last focused workspace restored",
-          });
+          // The restored page may own keyboard focus inside its webview.
+          // Check the native workspace window, independently of which of its
+          // renderer documents is focused. No test activation may mask it.
+          await expect
+            .poll(
+              () =>
+                frame.eval(`window.catamorphicDesktop.devWindow('get').then(state => ({
+                  focused: state.focused,
+                  visible: state.visible,
+                  documentFocused: document.hasFocus(),
+                  activeElement: document.activeElement?.tagName
+                }))`),
+              { timeout: 15_000, message: "last focused workspace restored" },
+            )
+            .toMatchObject({ focused: true, visible: true });
           await frame.waitFor(
             `Array.from(document.querySelectorAll('[data-workspace-visible="true"] webview')).some(view => view.getURL().startsWith('data:text/html,'))`,
           );
