@@ -189,6 +189,15 @@ function exportedFiles(value: unknown): string[] {
   return Object.values(value).flatMap(exportedFiles);
 }
 
+function isPublicReplayAsset(name: string, file: string): boolean {
+  return (
+    (name === "@catamorphic/codex" &&
+      /^fixtures\/replay\/[^/]+\.json$/.test(file)) ||
+    (name === "@catamorphic/claude-code" &&
+      /^src\/testing\/fixtures\/[^/]+\.json$/.test(file))
+  );
+}
+
 /** Inspect the actual archive, including Bun source exports and runtime assets. */
 export function verifyPackedPackage(input: {
   manifest: Manifest;
@@ -203,9 +212,9 @@ export function verifyPackedPackage(input: {
   if (manifest.private) throw new Error(`${manifest.name}: archive is private`);
   for (const file of files) {
     if (
-      /(^|\/)(?:__tests__|__fixtures__|fixtures|node_modules|\.git)(\/|$)/.test(
-        file,
-      ) ||
+      /(^|\/)(?:__tests__|__fixtures__|node_modules|\.git)(\/|$)/.test(file) ||
+      (/(^|\/)fixtures(\/|$)/.test(file) &&
+        !isPublicReplayAsset(manifest.name, file)) ||
       /\.(?:test|spec)\.[^/]+$/.test(file) ||
       /(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.dev\.vars(?:\..*)?)$/.test(file) ||
       /\.(?:pem|key|p12|pfx)$/.test(file)
@@ -380,6 +389,11 @@ export function smokeReleasePackages(input: {
       JSON.stringify({
         private: true,
         type: "module",
+        devDependencies: {
+          "@types/node": "^24",
+          "@types/bun": "1.4.3",
+          "@types/react": "^19.2.17",
+        },
         dependencies: Object.fromEntries([
           ...peers,
           ...inventory.packages.map((pkg) => [
@@ -404,9 +418,16 @@ export function smokeReleasePackages(input: {
         )
         .map(([key]) => `${pkg.name}${key === "." ? "" : key.slice(1)}`);
     });
-    const program = entries
-      .map((entry) => `await import(${JSON.stringify(entry)});`)
-      .join("\n");
+    const program =
+      entries
+        .map((entry) => `await import(${JSON.stringify(entry)});`)
+        .join("\n") +
+      `
+const { loadCodexFixture, CODEX_REPLAY_FIXTURES } = await import("@catamorphic/codex/testing");
+for (const scenario of CODEX_REPLAY_FIXTURES) await loadCodexFixture(scenario);
+const { loadClaudeTranscript } = await import("@catamorphic/claude-code/testing");
+await loadClaudeTranscript({ scenario: "simple-reply", tokens: { cwd: "/consumer", state: "/state", home: "/home", model: "test" } });
+`;
     writeFileSync(path.join(consumer, "smoke.mjs"), program);
     for (const executable of [runtime.nodePath, "bun"])
       execFileSync(executable, ["smoke.mjs"], {
@@ -447,7 +468,7 @@ try {
       [
         path.join(input.rootPath, "node_modules/typescript/bin/tsc"),
         "--noEmit",
-        "--skipLibCheck",
+        "--strict",
         "--module",
         "NodeNext",
         "--moduleResolution",
@@ -479,6 +500,12 @@ try {
         JSON.stringify({
           private: true,
           type: "module",
+          devDependencies: {
+            "@types/node": "^24",
+            ...(name === "@catamorphic/work-server"
+              ? { "@types/bun": "1.4.3" }
+              : {}),
+          },
           dependencies: { [name]: tarballs[name] },
           overrides: tarballs,
         }),
@@ -494,6 +521,26 @@ try {
           env: runtime.env,
           stdio: "inherit",
         });
+      writeFileSync(
+        path.join(consumer, "isolated.ts"),
+        `import * as library from ${JSON.stringify(name)};`,
+      );
+      execFileSync(
+        runtime.nodePath,
+        [
+          path.join(input.rootPath, "node_modules/typescript/bin/tsc"),
+          "--noEmit",
+          "--strict",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "--target",
+          "ES2022",
+          "isolated.ts",
+        ],
+        { cwd: consumer, env: runtime.env, stdio: "inherit" },
+      );
       if (name === "@catamorphic/work-server") {
         rmSync(path.join(consumer, "server-data"), {
           recursive: true,
@@ -547,6 +594,27 @@ function isRegistryPackage(value: unknown): value is RegistryPackage {
 }
 
 /** Preflight every version before any write. A retry must never overwrite history. */
+function compareReleaseVersions(input: {
+  left: string;
+  right: string;
+}): number {
+  const { left, right } = input;
+  const leftKind = desktopReleaseKind(left);
+  const rightKind = desktopReleaseKind(right);
+  const leftCore = left.split("-")[0]?.split(".") ?? [];
+  const rightCore = right.split("-")[0]?.split(".") ?? [];
+  for (const index of [0, 1, 2]) {
+    const a = BigInt(leftCore[index] ?? "0");
+    const b = BigInt(rightCore[index] ?? "0");
+    if (a !== b) return a > b ? 1 : -1;
+  }
+  if (leftKind !== rightKind) return leftKind === "stable" ? 1 : -1;
+  if (leftKind === "stable") return 0;
+  const a = BigInt(left.slice(left.lastIndexOf(".") + 1));
+  const b = BigInt(right.slice(right.lastIndexOf(".") + 1));
+  return a === b ? 0 : a > b ? 1 : -1;
+}
+
 export function publicationPlan(input: {
   packages: PackageArtifact[];
   registered: RegistryPackage[];
@@ -554,6 +622,17 @@ export function publicationPlan(input: {
   return input.packages.filter((pkg, index) => {
     const registered = input.registered[index];
     if (!registered) throw new Error(`Missing npm lookup for ${pkg.name}`);
+    for (const channel of ["alpha", "latest"]) {
+      const current = registered["dist-tags"]?.[channel];
+      if (
+        current &&
+        current !== "0.0.0-stage" &&
+        compareReleaseVersions({ left: current, right: pkg.version }) > 0
+      )
+        throw new Error(
+          `${pkg.name}: refusing to move ${channel} backward from ${current} to ${pkg.version}`,
+        );
+    }
     const existing = registered.versions?.[pkg.version];
     if (!existing) return true;
     if (existing.dist?.integrity !== pkg.integrity)
@@ -564,7 +643,7 @@ export function publicationPlan(input: {
   });
 }
 
-async function publishReleasePackages(input: {
+async function preflightReleasePackages(input: {
   rootPath: string;
   directory: string;
 }) {
@@ -590,6 +669,15 @@ async function publishReleasePackages(input: {
     inventory.packages.map((pkg) => registeredPackage(pkg.name)),
   );
   const pending = publicationPlan({ packages: inventory.packages, registered });
+  return { inventory, pending };
+}
+
+async function publishReleasePackages(input: {
+  rootPath: string;
+  directory: string;
+}) {
+  const { directory } = input;
+  const { inventory, pending } = await preflightReleasePackages(input);
   for (const pkg of pending) {
     const result = spawnSync(
       "npm",
@@ -702,11 +790,19 @@ if (import.meta.main) {
       rootPath,
       directory: path.resolve(requiredOption("--directory")),
     });
+  } else if (command === "preflight") {
+    const { inventory, pending } = await preflightReleasePackages({
+      rootPath,
+      directory: path.resolve(requiredOption("--directory")),
+    });
+    console.log(
+      `Verified npm channels for ${inventory.packages.length} libraries; ${pending.length} versions pending`,
+    );
   } else if (command === "trust") {
     trustReleaseWorkflow(rootPath);
   } else {
     throw new Error(
-      "Usage: release-packages.ts <version --version X|verify [--version X]|pack --output DIR|smoke --directory DIR|publish --directory DIR|trust>",
+      "Usage: release-packages.ts <version --version X|verify [--version X]|pack --output DIR|smoke --directory DIR|preflight --directory DIR|publish --directory DIR|trust>",
     );
   }
 }

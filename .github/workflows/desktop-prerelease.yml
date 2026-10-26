@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-prerelease-${{ github.ref }}
+  group: desktop-release
   cancel-in-progress: false
 
 jobs:
@@ -47,6 +47,9 @@ jobs:
         run: |
           bun run release:pack --output "${RUNNER_TEMP}/npm-packages"
           bun run release:smoke --directory "${RUNNER_TEMP}/npm-packages"
+      - name: Reject stale npm channels before desktop publication
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: bun scripts/release-packages.ts preflight --directory "${RUNNER_TEMP}/npm-packages"
       - uses: actions/upload-artifact@v4
         with:
           name: npm-packages-${{ steps.release.outputs.version }}

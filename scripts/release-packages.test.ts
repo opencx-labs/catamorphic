@@ -262,6 +262,29 @@ describe("public tarballs", () => {
       }),
     ).toThrow("still uses workspace:");
   });
+
+  it("ships only the replay recordings exposed by public testing helpers", () => {
+    for (const [name, file] of [
+      ["@catamorphic/codex", "fixtures/replay/simple-reply.json"],
+      ["@catamorphic/claude-code", "src/testing/fixtures/simple-reply.json"],
+    ]) {
+      if (!name || !file) throw new Error("Missing replay case");
+      expect(() =>
+        verifyPackedPackage({
+          manifest: { name, version },
+          files: ["LICENSE.txt", file],
+          expected: { name, version },
+        }),
+      ).not.toThrow();
+      expect(() =>
+        verifyPackedPackage({
+          manifest: { name, version },
+          files: ["LICENSE.txt", "fixtures/private/data.json"],
+          expected: { name, version },
+        }),
+      ).toThrow("unexpected archive file");
+    }
+  });
 });
 
 describe("recovering partial npm publication", () => {
@@ -302,11 +325,52 @@ describe("recovering partial npm publication", () => {
       publicationPlan({ packages: [a, b], registered: [{}] }),
     ).toThrow("Missing npm lookup");
   });
+
+  it("rejects an older alpha or stable release before any package can publish", () => {
+    for (const [candidate, current] of [
+      [version, "0.1.0-alpha.31"],
+      ["1.0.0", "1.0.1"],
+      ["0.1.0-alpha.9", "0.1.0-alpha.10"],
+    ]) {
+      if (!candidate || !current) throw new Error("Missing channel case");
+      expect(() =>
+        publicationPlan({
+          packages: [
+            { ...a, version: candidate },
+            { ...b, version: candidate },
+          ],
+          registered: [
+            {},
+            { "dist-tags": { [npmReleaseTag(candidate)]: current } },
+          ],
+        }),
+      ).toThrow("refusing to move");
+    }
+  });
+
+  it("allows forward channels and npm's initial placeholder", () => {
+    for (const [candidate, current] of [
+      [version, "0.1.0-alpha.9"],
+      ["1.0.0", "0.0.0-stage"],
+      ["1.0.0", "0.9.0"],
+    ]) {
+      if (!candidate || !current) throw new Error("Missing channel case");
+      expect(
+        publicationPlan({
+          packages: [{ ...a, version: candidate }],
+          registered: [
+            { "dist-tags": { [npmReleaseTag(candidate)]: current } },
+          ],
+        }),
+      ).toHaveLength(1);
+    }
+  });
 });
 
 it("keeps manual release runs read-only and publishes after the desktop using OIDC", () => {
   const rootPath = path.resolve(import.meta.dirname, "..");
   const workflow: {
+    concurrency: { group: string; "cancel-in-progress": boolean };
     jobs: Record<
       string,
       {
@@ -334,6 +398,8 @@ it("keeps manual release runs read-only and publishes after the desktop using OI
   const prepare = workflow.jobs["prepare-npm"];
   const desktop = workflow.jobs["build-macos"];
   const publish = workflow.jobs["publish-npm"];
+  expect(workflow.concurrency.group).not.toContain("github.ref");
+  expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
   expect(desktop?.needs).toBe("prepare-npm");
   expect(publish?.needs).toContain("build-macos");
   expect(publish?.if).toContain("github.event_name == 'push'");
@@ -342,6 +408,9 @@ it("keeps manual release runs read-only and publishes after the desktop using OI
   expect(publish?.environment).toBeUndefined();
   expect(prepare?.steps.map((step) => step.run).join("\n")).toContain(
     "release:smoke",
+  );
+  expect(prepare?.steps.map((step) => step.run).join("\n")).toContain(
+    "preflight --directory",
   );
   expect(prepare?.steps.map((step) => step.run).join("\n")).not.toContain(
     "publish --directory",

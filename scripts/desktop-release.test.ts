@@ -53,6 +53,7 @@ describe("verifyDesktopRelease", () => {
       "0.1.0-alpha.beta",
       "0.1.0-alpha.01",
       "0.1.0-alpha.1.extra",
+      "0.1.0-alpha.30-extra",
     ])
       expect(() => desktopReleaseKind(version)).toThrow("alpha");
   });

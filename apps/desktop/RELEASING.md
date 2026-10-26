@@ -119,6 +119,10 @@ The publication steps are rerunnable. Existing release assets are replaced,
 and an unchanged cask and feed produce no tap commit. GitHub assets are always
 published before the feed points clients to them.
 
+Release workflow runs are serialized across tags and dry runs. A tag run checks
+existing npm channels before desktop publication and again before npm writes;
+an older release cannot move either managed channel backward.
+
 For npm, every archive is checked against the source version and full package
 inventory before publication. A rerun skips versions with the same SHA-512
 integrity and rejects conflicting immutable versions before writing any package.

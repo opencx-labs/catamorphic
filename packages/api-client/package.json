@@ -12,8 +12,8 @@
   },
   "scripts": {
     "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && cp src/schema.d.ts dist/schema.d.ts",
-    "generate": "openapi-typescript openapi.json -o src/schema.d.ts",
-    "typecheck": "bun check --project ./tsconfig.json"
+    "generate": "bun scripts/generate.ts",
+    "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.tools.json"
   },
   "bundle": {
     "entry": [
@@ -21,7 +21,8 @@
     ]
   },
   "dependencies": {
-    "openapi-fetch": "^0.17.0"
+    "openapi-fetch": "^0.17.0",
+    "@catamorphic/agent-protocol": "workspace:*"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0",

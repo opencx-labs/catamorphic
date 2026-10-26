@@ -57,6 +57,6 @@
     "!**/*.spec.*",
     "!**/__tests__/**",
     "!**/__fixtures__/**",
-    "!**/fixtures/**"
+    "fixtures/replay"
   ]
 }

@@ -3,6 +3,7 @@
  * Do not make direct changes to the file.
  */
 
+import type { JsonValue } from "@catamorphic/agent-protocol";
 export interface paths {
     "/api/me": {
         parameters: {
@@ -17429,9 +17430,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        JsonValueInput: string | number | boolean | (null) | components["schemas"]["JsonValueInput"][] | {
-            [key: string]: components["schemas"]["JsonValueInput"];
-        };
+        JsonValueInput: JsonValue;
         ImportedSessionInput: {
             /** @enum {string} */
             harness: "claude-code" | "codex";
@@ -17440,9 +17439,7 @@ export interface components {
             contentSha256: string;
             sourceModifiedAt: string;
         };
-        ProtocolJsonValueInput: (string | number | boolean | components["schemas"]["ProtocolJsonValueInput"][] | {
-            [key: string]: components["schemas"]["ProtocolJsonValueInput"];
-        }) | null;
+        ProtocolJsonValueInput: JsonValue;
         ProtocolAttachmentInput: {
             /** @enum {string} */
             kind: "image" | "document";
@@ -18308,9 +18305,7 @@ export interface components {
                 message: string;
             } | null;
         };
-        JsonValue: string | number | boolean | (null) | components["schemas"]["JsonValue"][] | {
-            [key: string]: components["schemas"]["JsonValue"];
-        };
+        JsonValue: JsonValue;
         ImportedSession: {
             /** @enum {string} */
             harness: "claude-code" | "codex";
@@ -18319,9 +18314,7 @@ export interface components {
             contentSha256: string;
             sourceModifiedAt: string;
         };
-        ProtocolJsonValue: (string | number | boolean | components["schemas"]["ProtocolJsonValue"][] | {
-            [key: string]: components["schemas"]["ProtocolJsonValue"];
-        }) | null;
+        ProtocolJsonValue: JsonValue;
         ProtocolAttachment: {
             /** @enum {string} */
             kind: "image" | "document";

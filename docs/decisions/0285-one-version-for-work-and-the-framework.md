@@ -31,6 +31,9 @@ and trusted publisher registration are one-time setup; the first real release
 already publishes through OIDC. Routine releases need no npm login, token
 rotation or package approval.
 
+Release runs are serialized. Registry preflight rejects an older version before
+desktop publication and repeats before npm writes, preserving channel order.
+
 ## Consequences
 
 Consumers can install a coherent framework release without a checkout or a
