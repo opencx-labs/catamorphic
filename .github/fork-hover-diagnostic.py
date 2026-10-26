@@ -46,3 +46,9 @@ p.write_text(s)
 # of this instrumented file so the diagnostic reproduces the hosted order.
 previous = Path('apps/desktop/e2e/chat-trusted-hosts.e2e.ts')
 previous.write_text(previous.read_text() + '\n/* Diagnostic ordering only. ' + ' ' * 6000 + ' */\n')
+
+main = Path('apps/desktop/src/main/index.ts')
+text = main.read_text()
+needle = '          lanAddresses: () => [e2eMobilePairingAddress],\n'
+assert text.count(needle) == 1
+main.write_text(text.replace(needle, needle + '          // The explicit pairing fixture exercises loopback HTTP and motion.\n          requestLocalNetworkAccess: async () => {},\n'))
