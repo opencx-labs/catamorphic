@@ -382,6 +382,161 @@ describeIf("unified RunsService integration", () => {
     });
   }, 20_000);
 
+  it("rolls back cancellation when replacement initialization fails", async () => {
+    const worker = core.runs.startWorker({
+      name: "restart-rollback",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+    });
+    const first = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "rollback" },
+      correlationKey: "rollback",
+    });
+    await waitForStatus({ runId: first.id, status: "waiting" });
+    await worker.stop();
+    const before = await core.runs.get({ identity, runId: first.id });
+    const attempts = await db
+      .selectFrom("workflow_step_attempts")
+      .select(["id", "status"])
+      .where("run_id", "=", first.id)
+      .orderBy("id")
+      .execute();
+    const jobs = await db
+      .selectFrom("execution_jobs")
+      .select(["id", "status"])
+      .where("workflow_run_id", "=", first.id)
+      .orderBy("id")
+      .execute();
+    const initialize = vi
+      .spyOn(RunCoordinator.prototype, "initialize")
+      .mockRejectedValueOnce(new Error("replacement initialization failed"));
+    try {
+      await expect(
+        core.runs.triggerProduction({
+          identity,
+          projectId,
+          workflowName: "campaignWorkflow",
+          input: { contactId: "replacement" },
+          correlationKey: "rollback",
+          onConflict: "restart",
+        }),
+      ).rejects.toThrow("replacement initialization failed");
+    } finally {
+      initialize.mockRestore();
+    }
+    const after = await core.runs.get({ identity, runId: first.id });
+    expect(after.status).toBe("waiting");
+    expect(after.activePause?.id).toBe(before.activePause?.id);
+    expect(
+      await db
+        .selectFrom("workflow_step_attempts")
+        .select(["id", "status"])
+        .where("run_id", "=", first.id)
+        .orderBy("id")
+        .execute(),
+    ).toEqual(attempts);
+    expect(
+      await db
+        .selectFrom("execution_jobs")
+        .select(["id", "status"])
+        .where("workflow_run_id", "=", first.id)
+        .orderBy("id")
+        .execute(),
+    ).toEqual(jobs);
+    expect(
+      (
+        await db
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", first.allocationId ?? "")
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe("active");
+    expect(
+      (
+        await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("project_id", "=", projectId)
+          .where("correlation_key", "=", "rollback")
+          .execute()
+      ).map((row) => row.id),
+    ).toEqual([first.id]);
+    await core.runs.cancel({ identity, runId: first.id });
+  });
+
+  it("lets only one competing restart replace an observed generation", async () => {
+    const first = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "competing" },
+      correlationKey: "competing",
+    });
+    const ensure = core.deploymentArtifacts.ensure.bind(
+      core.deploymentArtifacts,
+    );
+    let prepared = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prepare = vi
+      .spyOn(core.deploymentArtifacts, "ensure")
+      .mockImplementation(async (args) => {
+        const artifact = await ensure(args);
+        prepared += 1;
+        if (prepared === 2) release?.();
+        await gate;
+        return artifact;
+      });
+    try {
+      const outcomes = await Promise.allSettled(
+        ["one", "two"].map((contactId) =>
+          core.runs.triggerProduction({
+            identity,
+            projectId,
+            workflowName: "campaignWorkflow",
+            input: { contactId },
+            correlationKey: "competing",
+            onConflict: "restart",
+          }),
+        ),
+      );
+      expect(
+        outcomes.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      const failure = outcomes.find((result) => result.status === "rejected");
+      expect(failure?.status === "rejected" && failure.reason).toBeInstanceOf(
+        RunEnrollmentConflictError,
+      );
+      expect((await core.runs.get({ identity, runId: first.id })).status).toBe(
+        "canceled",
+      );
+      expect(
+        await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("project_id", "=", projectId)
+          .where("correlation_key", "=", "competing")
+          .where("status", "not in", ["completed", "failed", "canceled"])
+          .execute(),
+      ).toHaveLength(1);
+    } finally {
+      release?.();
+      prepare.mockRestore();
+    }
+    await core.runs.cancelByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "competing",
+    });
+  });
+
   it("restarts an enrollment even when the tenant is over its run cap", async () => {
     const worker = core.runs.startWorker({
       name: "campaign-restart-cap",
@@ -617,6 +772,53 @@ describeIf("unified RunsService integration", () => {
     });
   });
 
+  it.each([
+    { workflowName: "statelessWorkflow", statePresent: false },
+    { workflowName: "nullStateWorkflow", statePresent: true },
+  ])(
+    "persists and resumes $workflowName with the intended state presence",
+    async ({ workflowName, statePresent }) => {
+      const worker = core.runs.startWorker({
+        pollIntervalMs: 5,
+        leaseSeconds: 5,
+      });
+      const run = await core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName,
+        input: { orderId: "state-presence" },
+      });
+      await waitForStatus({ runId: run.id, status: "waiting" });
+      const pause = await db
+        .selectFrom("workflow_pauses")
+        .select([
+          "id",
+          "state_present",
+          sql<boolean>`state IS NULL`.as("sql_null"),
+        ])
+        .where("run_id", "=", run.id)
+        .executeTakeFirstOrThrow();
+      expect(pause.state_present).toBe(statePresent);
+      expect(pause.sql_null).toBe(!statePresent);
+      await core.runs.resumePause({
+        identity,
+        runId: run.id,
+        pauseId: pause.id,
+        idempotencyKey: "state-presence",
+        value: { approved: true },
+      });
+      await waitForStatus({ runId: run.id, status: "completed" });
+      expect((await core.runs.get({ identity, runId: run.id })).result).toEqual(
+        {
+          reason: "resumed",
+          value: { approved: true },
+          ...(statePresent ? { state: null } : {}),
+        },
+      );
+      await worker.stop();
+    },
+  );
+
   it("fails the run with the install error when its deployment cannot be prepared", async () => {
     // A fresh runtime must be materialized for the install to run at all.
     await db.deleteFrom("deployment_runtimes").execute();
@@ -685,6 +887,39 @@ describeIf("unified RunsService integration", () => {
       reason: "timed_out",
       state: { requestId: "request-timeout" },
     });
+  });
+
+  it("times out a zero-duration pause instead of waiting indefinitely", async () => {
+    const worker = core.runs.startWorker({
+      name: "zero-pause-timeout",
+      kinds: ["durable_boundary", "durable_pause_timeout"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    try {
+      const run = await core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "timeoutWorkflow",
+        input: { orderId: "zero-timeout", timeout: "0s" },
+      });
+      await waitForStatus({ runId: run.id, status: "completed" });
+      expect((await core.runs.get({ identity, runId: run.id })).result).toEqual(
+        {
+          reason: "timed_out",
+          state: { requestId: "request-timeout" },
+        },
+      );
+      const pause = await db
+        .selectFrom("workflow_pauses")
+        .select(["status", "timeout_at"])
+        .where("run_id", "=", run.id)
+        .executeTakeFirstOrThrow();
+      expect(pause.status).toBe("timed_out");
+      expect(pause.timeout_at).not.toBeNull();
+    } finally {
+      await worker.stop();
+    }
   });
 
   it("creates semantic retries and recursively continues a parent child call", async () => {
@@ -2053,6 +2288,28 @@ async function invokeRuntime(
   if (invocation.kind === "durable-boundary") {
     const stepIndex = invocation.target.stepIndex;
     const input = record(invocation.input).value;
+    if (
+      ["statelessWorkflow", "nullStateWorkflow"].includes(
+        invocation.target.exportName,
+      )
+    ) {
+      const statePresent = invocation.target.exportName === "nullStateWorkflow";
+      return receipt(
+        invocation,
+        completed(
+          stepIndex === 0
+            ? {
+                type: "pause",
+                transition: {
+                  __catamorphicDurableTransition: "pause",
+                  statePresent,
+                  ...(statePresent ? { state: null } : {}),
+                },
+              }
+            : { type: "completed", output: input },
+        ),
+      );
+    }
     if (invocation.target.exportName === "approvalWorkflow") {
       return receipt(
         invocation,
@@ -2100,7 +2357,7 @@ async function invokeRuntime(
                 type: "pause",
                 transition: {
                   __catamorphicDurableTransition: "pause",
-                  timeout: "1ms",
+                  timeout: record(input).timeout ?? "1ms",
                   statePresent: true,
                   state: { requestId: "request-timeout" },
                 },
@@ -2653,6 +2910,20 @@ export const approvalWorkflow = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({ run: ({ input, pause }: BoundaryContext<{ orderId: string }>) =>
       pause<{ approved: boolean }, { requestId: string }>({ state: { requestId: input.orderId } }) }),
     defineBoundary({ run: ({ input }: BoundaryContext<{ reason: "resumed"; value: { approved: boolean }; state: { requestId: string } }>) => input.value }),
+  ],
+}));
+
+export const statelessWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({ run: ({ pause }: BoundaryContext<{ orderId: string }>) => pause<{ approved: boolean }>({}) }),
+    defineBoundary({ run: ({ input }: BoundaryContext<{ reason: "resumed"; value: { approved: boolean } }>) => input }),
+  ],
+}));
+
+export const nullStateWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({ run: ({ pause }: BoundaryContext<{ orderId: string }>) => pause<{ approved: boolean }, null>({ state: null }) }),
+    defineBoundary({ run: ({ input }: BoundaryContext<{ reason: "resumed"; value: { approved: boolean }; state: null }>) => input }),
   ],
 }));
 

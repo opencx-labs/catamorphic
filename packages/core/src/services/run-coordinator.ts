@@ -336,7 +336,8 @@ export class RunCoordinator {
         typeof args.transition.timeout === "string"
           ? parseDuration(args.transition.timeout)
           : undefined;
-      const timeoutAt = timeout ? new Date(now.getTime() + timeout) : null;
+      const timeoutAt =
+        timeout !== undefined ? new Date(now.getTime() + timeout) : null;
       const pauseId = crypto.randomUUID();
       await trx
         .insertInto("workflow_pauses")
@@ -345,7 +346,10 @@ export class RunCoordinator {
           run_id: context.attempt.run_id,
           workflow_step_attempt_id: context.attempt.id,
           state_present: args.transition.statePresent === true,
-          state: jsonColumn(toJson(args.transition.state)),
+          state:
+            args.transition.statePresent === true
+              ? jsonColumn(toJson(args.transition.state))
+              : null,
           timeout_at: timeoutAt,
           signal_name: stringValue(args.transition.signal) ?? null,
         })
@@ -741,8 +745,10 @@ export class RunCoordinator {
     identity: Identity;
     runId: string;
     reason?: string;
+    /** Reuse the caller transaction for atomic enrollment replacement. */
+    trx?: Transaction<DB>;
   }): Promise<Array<{ artifactId: string; invocationId: string }>> {
-    const outcome = await this.db.transaction().execute(async (trx) => {
+    const cancelInTransaction = async (trx: Transaction<DB>) => {
       await requireOwnedRun({
         trx,
         identity: args.identity,
@@ -858,14 +864,18 @@ export class RunCoordinator {
             ? root.id
             : null,
       };
-    });
+    };
+    const outcome = args.trx
+      ? await cancelInTransaction(args.trx)
+      : await this.db.transaction().execute(cancelInTransaction);
     if (outcome.reconcileChildRunId) {
-      await this.db.transaction().execute((trx) =>
+      const reconcile = (trx: Transaction<DB>) =>
         this.reconcileParentFromTerminalChild({
           trx,
           childRunId: outcome.reconcileChildRunId ?? "",
-        }),
-      );
+        });
+      if (args.trx) await reconcile(args.trx);
+      else await this.db.transaction().execute(reconcile);
     }
     return outcome.invocations;
   }
