@@ -129,12 +129,17 @@ describe("MenuPortal", () => {
     ]);
     expect(items[1]?.dataset.disabledReason).toBe("Nothing to paste");
     expect(document.activeElement).toBe(items[0]);
+    const ring = menu.querySelector("[data-menu-focus]");
+    expect(ring).not.toBeNull();
+    expect(ring?.hasAttribute("data-glide")).toBe(false);
     act(() => {
       items[0]?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
       );
     });
     expect(document.activeElement).toBe(items[2]);
+    expect(menu.querySelector("[data-menu-focus]")).toBe(ring);
+    expect(ring?.hasAttribute("data-glide")).toBe(true);
   });
 
   it("closes on a press anywhere else, which the shield under it takes", () => {

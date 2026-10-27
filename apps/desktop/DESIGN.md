@@ -273,6 +273,14 @@ closes. No menu or popover keeps press or Escape listeners of its own; a
 hover card closes on a press in a page too, and when its control turns
 inert or hidden (its list or sidebar closed).
 
+Menu keyboard focus uses one ring per list, gliding between enabled rows
+over 150 ms on the standard curve, like sidebar navigation. It appears in
+place on entry, stays inside its row while scrolling, and changes instantly
+under reduced motion. A submenu owns its own ring. Browser link menus put
+"Copy link" directly under "Copy"; without selected text, "Copy" is disabled
+and the link can still be copied. Email and phone links retain their
+address-only copy commands too.
+
 Design lint fails a file with more menu controls (`aria-haspopup` "menu"
 or "true", an overflow icon) than menus it draws (`MenuPortal`) or asks
 main for (`desktopApi.*Menu`), a `role="menu"` outside the primitive, and
@@ -423,6 +431,7 @@ screen, or under reduced motion.
 | `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
 | `[data-tree-focus]` glide (a list's keyboard ring following focus from row to row: its `top` and `left`, only while it moves between rows, `data-glide`; arriving in a list it appears in place, and otherwise it rides its row's own 200ms slide when rows move under it) | 150ms | itself: the ring turns from where it is when the arrows outpace it |
+| `[data-menu-focus]` glide (one keyboard ring following enabled menu rows, each submenu in its own scroller) | 150ms | itself, reversing from its current place; first entry appears in place |
 | `.overlay-scrollbar` fade (the scroll position of the sidebar's panel, on its outer edge, and of a section's list that asks for a thumb, `scrollbar: true`, a lane in, while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
 | Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |

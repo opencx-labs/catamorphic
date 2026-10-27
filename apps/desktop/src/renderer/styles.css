@@ -1386,6 +1386,29 @@ kbd {
     left 150ms var(--ease-standard);
 }
 
+/* Menus carry one keyboard ring between rows on the sidebar's curve.
+   Each scroller owns its ring, so a submenu and a long menu stay aligned. */
+[data-sidebar-menu] [data-item-id][role]:focus-visible {
+  outline: none;
+}
+[data-menu-focus] {
+  border-radius: var(--radius-md);
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+  visibility: hidden;
+  transition:
+    top 200ms var(--ease-standard),
+    left 200ms var(--ease-standard);
+}
+div:has(> button:focus-visible) > [data-menu-focus] {
+  visibility: visible;
+}
+[data-menu-focus][data-glide] {
+  transition:
+    top 150ms var(--ease-standard),
+    left 150ms var(--ease-standard);
+}
+
 /* Expanding or collapsing a branch moves the rows below it and resizes the
    tree with the same 200ms standard curve the section collapsible uses. */
 [role="tree"] {
@@ -1416,6 +1439,7 @@ kbd {
   [role="tree"] [role="treeitem"],
   [role="tree"] [role="treeitem"] > *,
   [data-tree-focus],
+  [data-menu-focus],
   [data-drop-zone] > li,
   [data-tree-drop-line] {
     transition: none;
