@@ -734,6 +734,39 @@ describeIf("unified RunsService integration", () => {
     });
   });
 
+  it("times out a zero-duration pause instead of waiting indefinitely", async () => {
+    const worker = core.runs.startWorker({
+      name: "zero-pause-timeout",
+      kinds: ["durable_boundary", "durable_pause_timeout"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    try {
+      const run = await core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "timeoutWorkflow",
+        input: { orderId: "zero-timeout", timeout: "0s" },
+      });
+      await waitForStatus({ runId: run.id, status: "completed" });
+      expect((await core.runs.get({ identity, runId: run.id })).result).toEqual(
+        {
+          reason: "timed_out",
+          state: { requestId: "request-timeout" },
+        },
+      );
+      const pause = await db
+        .selectFrom("workflow_pauses")
+        .select(["status", "timeout_at"])
+        .where("run_id", "=", run.id)
+        .executeTakeFirstOrThrow();
+      expect(pause.status).toBe("timed_out");
+      expect(pause.timeout_at).not.toBeNull();
+    } finally {
+      await worker.stop();
+    }
+  });
+
   it("creates semantic retries and recursively continues a parent child call", async () => {
     const worker = core.runs.startWorker({
       name: "retry-child",
@@ -2169,7 +2202,7 @@ async function invokeRuntime(
                 type: "pause",
                 transition: {
                   __catamorphicDurableTransition: "pause",
-                  timeout: "1ms",
+                  timeout: record(input).timeout ?? "1ms",
                   statePresent: true,
                   state: { requestId: "request-timeout" },
                 },
