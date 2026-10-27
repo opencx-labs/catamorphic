@@ -66,6 +66,7 @@ import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
+import type { RunSignalReceipt, SignalRunInput } from "./run-signals.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
 import type { TenantPoliciesService } from "./tenant-policies-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
@@ -422,19 +423,6 @@ export class RunEnrollmentConflictError extends Error {
       `Workflow '${workflowName}' already has an active run for correlation key '${correlationKey}'`,
     );
     this.name = "RunEnrollmentConflictError";
-  }
-}
-
-export class RunSignalNotFoundError extends Error {
-  constructor(
-    readonly workflowName: string,
-    readonly correlationKey: string,
-    readonly signal: string,
-  ) {
-    super(
-      `Workflow '${workflowName}' has no run awaiting signal '${signal}' for correlation key '${correlationKey}'`,
-    );
-    this.name = "RunSignalNotFoundError";
   }
 }
 
@@ -1240,53 +1228,24 @@ export class RunsService {
     );
   }
 
-  /**
-   * Delivers an external event to whichever run is currently waiting on a named
-   * signal for this correlation key.
-   *
-   * This is the read side of enrollment: the caller knows the contact, not the
-   * run. Resolution is by (workflow, key, signal name), so a webhook handler
-   * never has to track run ids.
-   */
-  async signalByKey(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    correlationKey: string;
-    signal: string;
-    idempotencyKey: string;
-    value: Json;
-  }): Promise<Run> {
-    assertProjectPermission(args.identity, args.projectId, "runs:write");
-    const run = await this.findActiveByKey(args);
-    if (!run) {
-      throw new RunSignalNotFoundError(
-        args.workflowName,
-        args.correlationKey,
-        args.signal,
-      );
-    }
-    const pause = await this.db
-      .selectFrom("workflow_pauses")
-      .where("run_id", "=", run.id)
-      .where("signal_name", "=", args.signal)
-      .where("status", "=", "open")
-      .select("id")
-      .executeTakeFirst();
-    if (!pause) {
-      throw new RunSignalNotFoundError(
-        args.workflowName,
-        args.correlationKey,
-        args.signal,
-      );
-    }
-    return this.resumePause({
-      identity: args.identity,
-      runId: run.id,
-      pauseId: pause.id,
-      idempotencyKey: args.idempotencyKey,
-      value: args.value,
-    });
+  /** Buffer or deliver a named callback to the explicitly addressed generation. */
+  async signalByKey(args: SignalRunInput): Promise<RunSignalReceipt> {
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.signal",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        assertProjectPermission(args.identity, args.projectId, "runs:write");
+        await this.requireProject(args.identity, args.projectId);
+        return this.deps.coordinator.signalByKey(args);
+      },
+    );
   }
 
   /**

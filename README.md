@@ -274,7 +274,7 @@ TypeScript automations in git, rendered as a visual graph for
 non-technical users, executed durably on Postgres. One model: every
 workflow is an exported `defineWorkflow` value, every run executes a
 deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
-and signals, correlation keys, shared rate budgets, retention, and
+and buffered named signals fenced to a run generation, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
 sync-until-first-wait firing, project-defined kinds, and declarative `where`
 filters. Full authoring model below.
@@ -667,16 +667,16 @@ export const nurtureContact = defineWorkflow(({ defineBoundary }) => ({
 
 ```ts
 // Enrolling twice for the same contact is a no-op, so webhook redelivery is safe.
-await client.runs.triggerProduction({
+const enrollment = await client.runs.triggerProduction({
   projectId, workflowName: "nurtureContact",
   input: { contactId: "contact-42" },
   correlationKey: "contact-42",           // onConflict: "ignore" | "error" | "restart"
 });
 
-// External events address the contact, not a run id.
+// Carry the enrollment generation in the callback to fence late events.
 await client.runs.signalByKey({
   projectId, workflowName: "nurtureContact",
-  correlationKey: "contact-42",
+  correlationKey: "contact-42", runId: enrollment.id,
   signal: "reply", idempotencyKey: replyEventId, value: { clicked: true },
 });
 
@@ -686,6 +686,18 @@ await client.runs.cancelByKey({
   correlationKey: "contact-42", reason: "unsubscribed",
 });
 ```
+
+A named signal may arrive before its matching pause. It buffers only for the
+specified active run generation; the oldest matching signal resumes one pause.
+The receipt reports `buffered`, `resumed` with a pause id, or `discarded` after
+termination. Retry the same event with the same idempotency key and JSON value;
+changing its name or value conflicts. Signals never create a run or follow a
+restart. A receipt does not prove that business effects have completed.
+
+Signal values are limited to 64 KiB, with 256 pending and 1,024 lifetime receipts
+per run. Cancellation or completion clears pending values; normal run retention
+also deletes receipts. For larger event streams, use an application-owned ledger.
+Targeted pause-id resumption remains available for explicit approvals.
 
 Waiting for capacity is not failure: a boundary that cannot reserve is
 rescheduled without consuming a retry and without holding a sandbox. When a

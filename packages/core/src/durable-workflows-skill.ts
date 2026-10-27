@@ -98,6 +98,36 @@ A pause without a timeout has no automatic timeout result. Cancellation is a
 separate authenticated terminal control, declared with \`controls: { cancel: true }\`.
 Do not invent \`context.cancel()\` or a cancelled \`PauseResult\` branch.
 
+## Callbacks before a named wait
+
+Use an ordinary authenticated webhook or server hook to call
+\`client.runs.signalByKey({ projectId, workflowName, correlationKey, runId,
+  signal: "reviewReady", idempotencyKey: eventId, value })\`.
+Carry the enrollment's run id in the external operation's callback metadata.
+The id fences its generation: a late callback cannot reach a restart. A signal
+never creates a run or queues for a missing, terminal or canceling generation.
+
+A matching \`pause({ signal: "reviewReady", state })\` consumes the oldest buffered
+value once, even when the callback arrived before the pause. An unnamed pause
+or another signal name does not consume it. An expired pause times out first;
+the event remains available for a later matching pause. Exact pause-id resume
+still targets only that existing pause and never buffers.
+
+The receipt reports \`buffered\`, \`resumed\` with its pause id, or \`discarded\` when
+termination cleared an unconsumed event. Retrying the same idempotency key with
+the same name and JSON value returns that receipt's current state. Reusing the
+key with different content conflicts. Receiving a receipt does not mean the
+workflow's business effects completed. Current \`runs:write\` authority is required
+even for duplicate receipt reads; accepting a signal never grants execution
+rights to the run's owner.
+
+Each value is at most 64 KiB; a run accepts at most 256 pending signals and
+1,024 lifetime receipts. Limits reject atomically. Termination clears pending
+values and keeps bounded deduplication receipts until ordinary run retention.
+Use an application-owned inbox for larger streams, indefinite history, events
+before enrollment, or cross-generation business delivery. This glue belongs in
+normal workflow and host code; no native integration is required.
+
 ## Carry state across a call
 
 A call's result alone reaches the next boundary. To keep what the call does

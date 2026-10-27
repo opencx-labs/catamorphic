@@ -30,10 +30,7 @@ import {
 } from "../services/execution-jobs-service.js";
 import { RateReservationsService } from "../services/rate-reservations-service.js";
 import { RunCoordinator } from "../services/run-coordinator.js";
-import {
-  RunEnrollmentConflictError,
-  RunSignalNotFoundError,
-} from "../services/runs-service.js";
+import { RunEnrollmentConflictError } from "../services/runs-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -242,8 +239,9 @@ describeIf("unified RunsService integration", () => {
       }),
     ).rejects.toBeInstanceOf(RunEnrollmentConflictError);
 
-    // The caller knows the contact, not the run id.
+    // The callback carries the enrollment's generation id.
     const signaled = await core.runs.signalByKey({
+      runId: run.id,
       identity,
       projectId,
       workflowName: "campaignWorkflow",
@@ -252,7 +250,7 @@ describeIf("unified RunsService integration", () => {
       idempotencyKey: "reply-1",
       value: { optedOut: false },
     });
-    expect(signaled.id).toBe(run.id);
+    expect(signaled).toMatchObject({ runId: run.id, status: "resumed" });
     await waitForStatus({ runId: run.id, status: "completed" });
     await worker.stop();
 
@@ -439,7 +437,7 @@ describeIf("unified RunsService integration", () => {
     }
   }, 20_000);
 
-  it("rejects an unknown signal instead of guessing a pause", async () => {
+  it("buffers an unmatched signal without guessing a pause", async () => {
     const worker = core.runs.startWorker({
       name: "campaign-unknown-signal",
       kinds: ["durable_boundary"],
@@ -458,6 +456,7 @@ describeIf("unified RunsService integration", () => {
 
     await expect(
       core.runs.signalByKey({
+        runId: run.id,
         identity,
         projectId,
         workflowName: "campaignWorkflow",
@@ -466,7 +465,14 @@ describeIf("unified RunsService integration", () => {
         idempotencyKey: "bounce-1",
         value: {},
       }),
-    ).rejects.toBeInstanceOf(RunSignalNotFoundError);
+    ).resolves.toMatchObject({
+      runId: run.id,
+      status: "buffered",
+      pauseId: null,
+    });
+    expect((await core.runs.get({ identity, runId: run.id })).status).toBe(
+      "waiting",
+    );
 
     await core.runs.cancel({ identity, runId: run.id });
   });
@@ -504,6 +510,7 @@ describeIf("unified RunsService integration", () => {
     });
     await waitForStatus({ runId: run.id, status: "waiting" });
     await core.runs.signalByKey({
+      runId: run.id,
       identity,
       projectId,
       workflowName: "campaignWorkflow",

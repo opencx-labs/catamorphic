@@ -3609,6 +3609,8 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** Format: uuid */
+                        runId: string;
                         correlationKey: string;
                         signal: string;
                         idempotencyKey: string;
@@ -3627,86 +3629,40 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
-                            projectId: string;
-                            workflowName: string;
-                            correlationKey: string | null;
-                            environment: string | null;
-                            /** Format: uuid */
-                            allocationId: string | null;
-                            capabilities: {
-                                cancel: boolean;
-                                pauseProcessing: boolean;
-                                resumeProcessing: boolean;
-                                submitInput: boolean;
-                                inspectItems: boolean;
-                            };
+                            runId: string;
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
-                            /** @enum {string} */
-                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
-                            currentStepIndex: number | null;
-                            activePause: {
-                                /** Format: uuid */
-                                id: string;
-                                /** @enum {string} */
-                                status: "open" | "resumed" | "timed_out" | "canceled";
-                                state: unknown;
-                                /** Format: date-time */
-                                timeoutAt: string | null;
-                                /** Format: date-time */
-                                createdAt: string;
-                                /** Format: date-time */
-                                resolvedAt: string | null;
-                            } | null;
-                            connectionActionRequired: {
-                                /** Format: uuid */
-                                id: string;
-                                environment: string;
-                                alias: string;
-                                /** @enum {string} */
-                                status: "pending";
-                                /** Format: date-time */
-                                createdAt: string;
-                            } | null;
-                            batchScopes: {
-                                /** Format: uuid */
-                                workflowStepAttemptId: string;
-                                stepIndex: number;
-                                nodeId: string;
-                                attempt: number;
-                                /** @enum {string} */
-                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
-                                estimated: number | null;
-                                discovered: number;
-                                succeeded: number;
-                                failed: number;
-                                skipped: number;
-                                sinkCompletedChunks: number;
-                                sinkTotalChunks: number;
-                                artifact: unknown;
-                            }[];
-                            provenance: {
-                                commitSha?: string;
-                                displayName?: string;
-                            };
-                            artifact?: {
-                                /** Format: uuid */
-                                deploymentArtifactId: string;
-                            };
-                            initiatedBy: string | null;
-                            input: unknown;
-                            result: unknown;
-                            error: string | null;
+                            status: "buffered";
+                            /** @enum {string|null} */
+                            pauseId: null;
+                        } | {
                             /** Format: uuid */
-                            parentRunId: string | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                            /** Format: date-time */
-                            startedAt: string | null;
-                            /** Format: date-time */
-                            completedAt: string | null;
+                            id: string;
+                            /** Format: uuid */
+                            runId: string;
+                            /** @enum {string} */
+                            status: "resumed";
+                            /** Format: uuid */
+                            pauseId: string;
+                        } | {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            runId: string;
+                            /** @enum {string} */
+                            status: "discarded";
+                            /** @enum {string|null} */
+                            pauseId: null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -3723,6 +3679,17 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
