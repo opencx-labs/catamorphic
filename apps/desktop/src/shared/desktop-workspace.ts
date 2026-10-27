@@ -27,6 +27,7 @@ export type DockData = Pick<
   | "chips"
   | "chipsModule"
   | "pullSelectionNonce"
+  | "chipsRefreshNonce"
   | "archived"
   | "inspectRequestNonce"
   | "runtimeSettingsError"

@@ -86,6 +86,7 @@ export function useChips({
   enabled,
   session,
   defaults,
+  refreshNonce = 0,
 }: {
   projectId: string;
   /** The chips module's path, when the project has one and may run it. */
@@ -95,6 +96,8 @@ export function useChips({
   session: SidebarSourceSession | undefined;
   /** Work's chips for this chat, as it publishes them. */
   defaults: readonly Chip[];
+  /** A calling agent requested a fresh read of this chat's chips. */
+  refreshNonce?: number;
 }): ChipsView {
   const work = useMemo(() => chipsSource(), []);
   const source = useMemo(
@@ -171,7 +174,7 @@ export function useChips({
       },
     );
     return () => controller.abort();
-  }, [source, key, reads, session, enabled]);
+  }, [source, key, reads, session, enabled, refreshNonce]);
   if (!source || !session) return { chips: defaults, source: work, session };
   const shown = state.key === key ? state : undefined;
   const asked = shown?.access;

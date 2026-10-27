@@ -33,16 +33,25 @@ const wait = <T = unknown>(
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
 /** A workspace tool the fake agent calls for real, and what it returned. */
-async function tool(name: string, input: Record<string, unknown>) {
+async function tool(
+  name: string,
+  input: Record<string, unknown>,
+  target: Pick<AppHandle, "eval" | "waitFor"> = app,
+) {
+  const evaluate = (body: string) => `(() => { ${helpers}\n${body} })()`;
   serial++;
   const prefix = `E2E result ${serial}: `;
   const prompt = `E2E workspace tool ${JSON.stringify({ name, input, serial })}`;
-  await run(
-    `setReactValue(composer(), ${JSON.stringify(prompt)}); composer().closest('form').requestSubmit(); return true;`,
+  await target.eval(
+    evaluate(
+      `setReactValue(composer(), ${JSON.stringify(prompt)}); composer().closest('form').requestSubmit(); return true;`,
+    ),
   );
-  const result = await wait<string>(
-    `const text = logs(); const start = text.lastIndexOf(${JSON.stringify(prefix)});
+  const result = await target.waitFor<string>(
+    evaluate(
+      `const text = logs(); const start = text.lastIndexOf(${JSON.stringify(prefix)});
      return start < 0 ? false : text.slice(start + ${prefix.length}).split('E2E end')[0];`,
+    ),
     { timeoutMs: 30_000, label: `${name} answered` },
   );
   return JSON.parse(result) as { metadata?: Record<string, unknown> };
@@ -393,15 +402,17 @@ it("runs the project's chips module once allowed: its order, its chip and its bu
       catamorphic: { access: { lists: ["chips"] } },
     }),
   );
+  fs.writeFileSync(path.join(projectRoot, "chip-state.txt"), "Building");
   fs.writeFileSync(
     path.join(projectRoot, ".work/chips/index.ts"),
-    `export default {
+    `import { readFile } from 'node:fs/promises';
+    export default {
       async load({ work, parentId, session }) {
         const page = await work.read({ source: 'chips', parentId });
         if (parentId) return page;
         const prs = page.items.filter((c) => c.data?.kind === 'pull-request');
         return { items: [
-          { id: 'standup', label: 'Standup for ' + (session?.title ?? 'chat'), icon: 'NotebookPen', tone: 'accent',
+          { id: 'standup', label: await readFile('chip-state.txt', 'utf8'), icon: 'NotebookPen', tone: 'accent',
             actions: [{ action: 'ping', label: 'Ping the team', icon: 'Bell' }], data: { kind: 'standup' } },
           ...prs,
         ] };
@@ -436,6 +447,42 @@ it("runs the project's chips module once allowed: its order, its chip and its bu
     { timeoutMs: 30_000, label: "module chips" },
   );
   expect(await run(`return chip('standup').dataset.tone;`)).toBe("accent");
+  fs.writeFileSync(
+    path.join(projectRoot, "chip-state.txt"),
+    "Live after refresh",
+  );
+  expect(await tool("refresh_chips", {})).toEqual({ requested: true });
+  await wait(
+    `return chip('standup')?.textContent.includes('Live after refresh');`,
+    {
+      label: "the agent refreshed its custom chip source",
+    },
+  );
+  await app.eval("window.catamorphicDesktop.dockDetach(true)");
+  const detached = await app.connectToFrame("surface=dock");
+  try {
+    await detached.waitFor(
+      `(() => { ${helpers}\nreturn !!composer() && !!chip('standup'); })()`,
+    );
+    fs.writeFileSync(
+      path.join(projectRoot, "chip-state.txt"),
+      "Refreshed in detached dock",
+    );
+    expect(await tool("refresh_chips", {}, detached)).toEqual({
+      requested: true,
+    });
+    await detached.waitFor(
+      `(() => { ${helpers}\nreturn chip('standup')?.textContent.includes('Refreshed in detached dock'); })()`,
+    );
+    expect(detached.getRendererErrors()).toEqual([]);
+  } finally {
+    detached.close();
+    await app.eval("window.catamorphicDesktop.dockDetach(false)");
+  }
+  await wait(`return !!composer() && !!chip('standup');`, {
+    label: "chat back in workspace",
+  });
+
   await run(
     `chip('standup').querySelector('[data-chip-button="ping"]').click(); return true;`,
   );

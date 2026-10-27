@@ -58,7 +58,7 @@ async function click(selector: string) {
   await app.clickPointer(settled);
 }
 
-it("keeps foreign attention chats and forks in their project, and keeps them open in all-projects mode", async () => {
+it("keeps foreign main chats in their project and child chats out of every dock", async () => {
   await click('[data-dock-rail] button[aria-label="New chat"]');
   const original = await app.waitFor<string>(
     "document.querySelector('section[data-floating-chat]:not([inert])')?.dataset.chatLocalId",
@@ -113,10 +113,10 @@ it("keeps foreign attention chats and forks in their project, and keeps them ope
 
   await app.eval("window.catamorphicDesktop.setPrefs({dockMultiProject:true})");
   await app.waitFor(
-    `${JSON.stringify(ids)}.every(id=>!!document.querySelector('[data-chat-bubble="'+id+'"]'))`,
-    { label: "all-projects mode shows both foreign chats" },
+    `!!document.querySelector('[data-chat-bubble="${original}"]') && !document.querySelector('[data-chat-bubble="${fork}"]')`,
+    { label: "all-projects mode shows only the foreign main chat" },
   );
-  for (const id of ids) {
+  for (const id of [original]) {
     await click(`[data-chat-bubble="${id}"] button[aria-label^="Open "]`);
     await app
       .waitFor(

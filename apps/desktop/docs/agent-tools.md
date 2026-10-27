@@ -50,6 +50,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202). A copy of the agent unless `agent` names another, on the `model` and `effort` its grants allow; `read_only` (where the harness has a read-only mode) and `delegate: false` need no grant (ADR 0271) |
 | `interrupt_subsession` | Deferred, stops a direct child |
 | `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0226) |
+| `refresh_chips` | Deferred, requests a fresh read of only the calling chat's chips through their existing owners; no metadata write or focus change |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
 | `point_at`, `set_chat_icon` | Deferred, optional presentation; `target: null` clears highlighting |
 | `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |

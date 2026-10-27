@@ -517,6 +517,7 @@ function ChatDockContent({
   onOpenMcpApp,
   onFocusRequest,
   pullSelectionNonce = 0,
+  chipsRefreshNonce = 0,
   onUnsplit,
   onLinkClick: openLinkDirectly,
   onFileClick,
@@ -988,6 +989,7 @@ function ChatDockContent({
   const pullRequestStatuses = usePullRequestStatuses({
     urls: pullRequestUrls,
     enabled: frontSurface,
+    refreshNonce: chipsRefreshNonce,
   });
   const builtChips = useMemo(() => {
     // One chip per id: an app tab the workspace holds that this turn also
@@ -1144,6 +1146,7 @@ function ChatDockContent({
     enabled: frontSurface,
     session: chipSession,
     defaults: defaultChips,
+    refreshNonce: chipsRefreshNonce,
   });
   const chipRailRef = useRef<ChipRailHandle | null>(null);
   const registerChipRail = useCallback((handle: ChipRailHandle) => {

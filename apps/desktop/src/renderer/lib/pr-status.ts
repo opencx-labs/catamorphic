@@ -25,10 +25,13 @@ export const prStatusQueryKey = (url: string) =>
 export function usePullRequestStatuses({
   urls,
   enabled,
+  refreshNonce = 0,
 }: {
   urls: readonly string[];
   enabled: boolean;
+  refreshNonce?: number;
 }): ReadonlyMap<string, PullRequestStatus | null> {
+  const queryClient = useQueryClient();
   const results = useQueries({
     queries: urls.map((url) => ({
       queryKey: prStatusQueryKey(url),
@@ -51,10 +54,29 @@ export function usePullRequestStatuses({
       retry: 1,
     })),
   });
+  const addresses = urls.join("\u0000");
+  // Explicit requests use the existing observers, bypassing freshness and
+  // disabled polling for this chat alone. Failed reads keep the last data.
+  // A session's metadata can arrive after its refresh request, while its
+  // hidden queries are still disabled. Those addresses need the read too.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: addresses versions the queries, not observer result changes
+  useEffect(() => {
+    if (!refreshNonce) return;
+    void Promise.allSettled(
+      urls.map(async (url, index) => {
+        // refetch alone can reuse an initial read with no cached data.
+        // Discard that read so a pre-mutation result cannot win afterward.
+        await queryClient.cancelQueries({
+          queryKey: prStatusQueryKey(url),
+          exact: true,
+        });
+        await results[index]?.refetch();
+      }),
+    );
+  }, [refreshNonce, addresses]);
   // Read again when the window comes back to the front, a read that failed
   // meanwhile included. The query client listens to the document becoming
   // visible, which switching apps never changes in a desktop window.
-  const queryClient = useQueryClient();
   useEffect(() => {
     if (!enabled) return;
     const onFocus = () =>

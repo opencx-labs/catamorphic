@@ -61,6 +61,8 @@ export interface TurnHolder {
 }
 
 export interface WorkspaceBridge {
+  /** Ask the calling chat's chip owners to refresh their state. */
+  refreshChips(input: { projectId: string; sessionId: string }): Promise<void>;
   /** Tabs, chats, and sidebar items of the project's open workspace. */
   overview(projectId: string): Promise<unknown>;
   /**
@@ -642,6 +644,18 @@ export function registerAgentBridge(
   );
 
   const bridge: WorkspaceBridge = {
+    async refreshChips(input) {
+      const result = await rpc<{ requested: true } | { error: string }>(
+        "refreshChips",
+        input,
+      );
+      if (!result || "error" in result)
+        throw new Error(
+          result && "error" in result
+            ? result.error
+            : "This chat's chips are not available in an open workspace.",
+        );
+    },
     async overview(projectId) {
       const result = await rpc("overview", { projectId });
       if (!result) {

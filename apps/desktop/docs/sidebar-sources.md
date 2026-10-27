@@ -296,3 +296,17 @@ refresh every minute. A merged PR stops polling, while a closed PR can reopen.
 A failed refresh retains the last good read. When live information is unavailable,
 the chip labels its saved metadata **Recorded**. GitHub CLI access is an explicit
 profile connection; a working CLI login alone does not enable that connection.
+
+An agent can discover `refresh_chips` and call it with no input after changing
+something a chip shows, such as merging a PR. It requests a fresh read of its own
+chat's chips without changing recorded metadata or focus. The request follows
+chat presentation into a detached dock too. PR chips use their existing queries
+immediately, bypassing freshness and polling intervals, even in a hidden chat.
+A custom chips source reuses its normal `load` operation while visible, or when
+next shown; its existing grants, cancellation, last good rows and Retry still
+apply. The response acknowledges the request, not completion of network reads.
+
+Work's chat rows keep checkout details in their inspector; externally assigned
+checkouts add no badge. Chat disclosure counts use the list's authorization and
+visibility filters. PR row states live in their icon and inspector, with no
+status badge; composer chip metrics remain available.

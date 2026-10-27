@@ -3846,3 +3846,15 @@ one icon, so the choice applies to every profile and stays outside profile setti
 and their syncing. Work keeps its own normalized image in host storage; the original
 file is no longer needed. Reset restores the OS-rendered bundle icon, preserving
 Icon Composer on newer macOS releases. The application name stays Work.
+
+### 2026-10-27: Quiet rows, explicit chip refresh, and main-chat bubbles
+
+Chat rows omit the External checkout badge, PR rows leave state to their icons
+and inspectors, and disclosure counts match the visible hierarchy. The dock's
+bubbles represent main chats only; child chats stay with their parent and in the
+sidebar. Shift with either Return or keypad Enter inserts a composer line break.
+
+An agent can request `refresh_chips` after changing a PR or another chip's data
+(ADR 0286). The request reaches its own chat in either workspace or detached dock,
+without changing focus or metadata. Existing chip queries and source loads own
+the refresh and retain their normal access and failure behavior.

@@ -554,7 +554,7 @@ export type WorkspaceEvent =
   | { type: "float"; key: string; previous?: string }
   | { type: "toggle-chat"; localId: string }
   | { type: "reveal-chat"; localId: string }
-  | { type: "cycle-chat"; direction: -1 | 1 }
+  | { type: "cycle-chat"; direction: -1 | 1; exclude?: readonly string[] }
   | { type: "reorder"; key: string; beforeKey: string | null }
   /** A tab joins a tab chat's group (or, with null, leaves its chat). */
   | {
@@ -1282,7 +1282,12 @@ function applyWorkspaceEvent(
     }
     case "cycle-chat": {
       const { direction } = event;
-      const cycle = ws.chats.filter((chat) => chat.mode !== "tab");
+      const cycle = ws.chats.filter(
+        (chat) =>
+          chat.mode !== "tab" &&
+          !chat.parentLocalId &&
+          !event.exclude?.includes(chat.localId),
+      );
       if (cycle.length === 0) return ws;
       const index = cycle.findIndex(
         (chat) => chat.localId === ws.activeChatId && chat.mode === "partial",

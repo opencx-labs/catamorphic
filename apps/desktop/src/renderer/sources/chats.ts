@@ -86,7 +86,8 @@ export function chatRow({
   if (imported) badges.push({ label: imported });
   if (session.owner === "project")
     badges.push({ label: "Project", icon: "Box" });
-  if (branch) badges.push({ label: branch, icon: "GitBranch" });
+  if (branch && checkout?.kind !== "external")
+    badges.push({ label: branch, icon: "GitBranch" });
   const menu: SidebarMenuEntry[] = chatSessionMenu({
     unread,
     archived: session.visibility === "archived",

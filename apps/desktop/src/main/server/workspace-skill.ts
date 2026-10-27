@@ -216,7 +216,10 @@ other keys; keep the ones they ask for.
 
 Chips sit above your chat's composer: the tabs you opened, your subagents and
 app views, and every pull request in pull_requests, wide, with its live state,
-size, comments and checks. To keep anything else in view (a preview deploy, a
+size, comments and checks. After changing a chip's underlying state (for example,
+merging a pull request), discover refresh_chips and call it with no input to
+request a fresh read of this chat's chips. The source keeps its own fetching
+logic; hidden custom sources catch up when shown. To keep anything else in view (a preview deploy, a
 ticket, a report you wrote), attach a chip: ${SESSION_CHIPS_CONTRACT} For
 example { id: "preview", label: "Preview", url: "https://...", icon: "Rocket",
 tone: "success", wide: true, badges: [{ label: "Live", tone: "success" }] }.

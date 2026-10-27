@@ -372,6 +372,32 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       true,
     );
     expect(visibleRoots.items.some((item) => item.id === first.id)).toBe(false);
+
+    // Disclosure counts follow the same per-person visibility as a branch.
+    await sessions.archive(viewer, projectId, first.id);
+    await db
+      .updateTable("agent_session_views")
+      .set({ visibility: "latent" })
+      .where("session_id", "=", second.id)
+      .where("external_user_id", "=", viewer.externalUserId)
+      .execute();
+    const promoted = await sessions.list(viewer, projectId, {
+      rootsOnly: true,
+      visibility: "promoted",
+      limit: 100,
+    });
+    expect(
+      promoted.items.find((item) => item.id === parent.id)?.childCount,
+    ).toBe(0);
+    const branch = await sessions.list(viewer, projectId, {
+      parentSessionId: parent.id,
+      visibility: "promoted",
+    });
+    expect(branch.items).toEqual([]);
+    const allChildren = await sessions.list(viewer, projectId, {
+      parentSessionId: parent.id,
+    });
+    expect(allChildren.total).toBe(2);
   });
 
   it("persists an agent-owned todo snapshot with stable item ids", async () => {

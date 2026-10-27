@@ -1818,6 +1818,10 @@ export class AgentSessionsService {
       );
     }
 
+    // Child counts describe the same authorized, visibility-filtered list
+    // as its branches, before selecting a particular parent or roots.
+    const visibleSessions = query;
+
     if (input.parentSessionId) {
       await this.requireSession(identity, projectId, input.parentSessionId);
       query = query.where("parent_session_id", "=", input.parentSessionId);
@@ -1923,24 +1927,11 @@ export class AgentSessionsService {
     const running = await this.runningSessionIds(rows.map((row) => row.id));
 
     const children = rows.length
-      ? await query
-          .clearWhere()
-          .where("project_id", "=", projectId)
+      ? await visibleSessions
           .where(
             "parent_session_id",
             "in",
             rows.map((row) => row.id),
-          )
-          .$if(!this.readsAllSessions(identity, projectId), (visible) =>
-            visible
-              .where("external_user_id", "=", identity.externalUserId)
-              .$if(!this.ownOnAnyAgent(identity, projectId), (own) =>
-                own.where(
-                  "agent_id",
-                  "in",
-                  this.coveredAgentIds(identity, projectId),
-                ),
-              ),
           )
           .select(["parent_session_id"])
           .select((eb) => eb.fn.countAll<number>().as("count"))

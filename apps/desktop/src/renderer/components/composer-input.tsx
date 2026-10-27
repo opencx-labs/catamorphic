@@ -532,6 +532,21 @@ export const ComposerInput = forwardRef<
       }
     }
     onKeyDown?.(event);
+    // macOS gives keypad Enter a different native editing action. Use
+    // the same undo-aware line break as the editable's Shift+Return.
+    if (
+      !event.defaultPrevented &&
+      event.code === "NumpadEnter" &&
+      event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      document.execCommand("insertLineBreak");
+      sync();
+    }
   };
 
   // Size changes glide instead of snapping, a wrapping pill's included.

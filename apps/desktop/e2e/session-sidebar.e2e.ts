@@ -208,8 +208,8 @@ it("shows the chat's worktree and a pull request its agent records, live", async
   // The agent updates the state; the row follows without a reload.
   await send("record pr: 42 merged");
   await app.waitFor(
-    `document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]')?.textContent.includes('Merged')`,
-    { timeoutMs: 60_000, label: "the merged state" },
+    `!!document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]')?.querySelector('svg.lucide-git-merge')`,
+    { timeoutMs: 60_000, label: "the merged state icon" },
   );
   // The number stays whole; the title gives way when the row is narrow.
   expect(
