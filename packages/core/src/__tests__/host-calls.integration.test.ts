@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { EchoAdapter } from "@catamorphic/agent-runner";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import type {
@@ -12,9 +13,22 @@ import type {
 } from "@catamorphic/sandbox";
 import { DOCUMENTS_CAPABILITY } from "@catamorphic/sandbox";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import type {
+  HostCallContext,
+  HostCallFunction,
+} from "../services/capability-providers.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -230,6 +244,20 @@ function invokeRuntime(
   });
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = (_value: T) => {
+    throw new Error("Promise has not initialized");
+  };
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+let runtimeOverride:
+  | ((args: RuntimeInvocation) => Promise<RuntimeInvocationReceipt>)
+  | undefined;
+
 class FakeSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
   readonly deploymentRuntime: DeploymentRuntimeProvider = {
@@ -243,7 +271,8 @@ class FakeSandboxProvider implements SandboxProvider {
       generation: "1",
       status: "healthy",
     }),
-    invoke: (args) => invokeRuntime(args),
+    invoke: (args) =>
+      runtimeOverride ? runtimeOverride(args) : invokeRuntime(args),
     cancel: async () => {},
     getHealth: async ({ runtimeId }) => ({
       runtimeId,
@@ -286,6 +315,8 @@ describeIf("host calls from workflows (ADR 0055)", () => {
   let db: ReturnType<typeof createDatabase>;
   let projectId: string;
   const crmCalls: Array<{ caller: Identity; args: unknown }> = [];
+  let hostOverride: HostCallFunction | undefined;
+  let memberPreparation: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-hostcalls-"));
@@ -297,15 +328,30 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     await migrateToLatest({ db, schema });
     const sandboxProvider = new FakeSandboxProvider();
     core = new CatamorphicCore({
+      hostId: "host-call-fixture",
+      codingAgent: {
+        id: "echo",
+        harness: { placement: "host", adapter: new EchoAdapter() },
+        topology: "native",
+      },
+      resolveMemberIdentity: async ({ tenantId, externalUserId }) => {
+        if (externalUserId === "recipient") await memberPreparation?.();
+        return { tenantId, externalUserId };
+      },
       db,
       projectManager,
       sandboxProvider,
       environmentProvider: testEnvironmentProvider(sandboxProvider),
+      credentialVault: new MemoryCredentialVault(),
+      connectionProviders: [
+        { kind: "fake", displayName: "Fake", invoke: async () => null },
+      ],
       capabilityProviders: [
         {
           name: "acme.crm",
           calls: {
             lookupAccount: (context, args) => {
+              if (hostOverride) return hostOverride(context, args);
               crmCalls.push({ caller: context.caller, args });
               return {
                 name: `Account ${String((args as { id: string }).id)}`,
@@ -348,6 +394,321 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     await sql.raw(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).execute(db);
     await db.destroy();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  afterEach(async () => {
+    await core.runs.stopWorkers();
+    runtimeOverride = undefined;
+    hostOverride = undefined;
+    memberPreparation = undefined;
+    vi.restoreAllMocks();
+  });
+
+  async function enqueue(workflowName = "lookupAccount", remainingMs?: number) {
+    const run = await core.runs.triggerProduction({
+      identity: root,
+      projectId,
+      workflowName,
+      input: { id: "bounded", customer: "acme" },
+    });
+    if (remainingMs !== undefined) {
+      await db
+        .updateTable("workflow_step_attempts")
+        .set({ started_at: new Date(Date.now() - 300_000 + remainingMs) })
+        .where("run_id", "=", run.id)
+        .execute();
+    }
+    return run;
+  }
+
+  const startWorker = () =>
+    core.runs.startWorker({
+      kinds: ["durable_boundary"],
+      concurrency: 1,
+      pollIntervalMs: 5,
+      leaseSeconds: 3,
+    });
+
+  // Deadline tests exercise the coordinator and calls directly. Source and
+  // deployment preparation are covered separately; they must not consume this
+  // deliberately short remaining attempt budget on a loaded CI machine.
+  function stubCall(input: {
+    type: string;
+    transition: Record<string, unknown>;
+    delayMs?: number;
+  }) {
+    const invoked =
+      deferred<Parameters<typeof core.runs.invokeProductionRuntime>[0]>();
+    vi.spyOn(core.runs, "invokeProductionRuntime").mockImplementation(
+      async (invocation) => {
+        invoked.resolve(invocation);
+        if (input.delayMs)
+          await new Promise((resolve) => setTimeout(resolve, input.delayMs));
+        return {
+          runtimeId: "deadline-fixture",
+          invocationId: invocation.invocationId,
+          events: [],
+          terminal: {
+            status: "completed",
+            steps: [],
+            result: { type: input.type, transition: input.transition },
+          },
+        };
+      },
+    );
+    return invoked.promise;
+  }
+
+  it("shares the persisted attempt deadline with its callback and hung host call, then fences a late result", async () => {
+    const late = deferred<unknown>();
+    const called = deferred<HostCallContext>();
+    const invoked = stubCall({
+      type: "host_call",
+      delayMs: 50,
+      transition: {
+        capability: "acme.crm",
+        fn: "lookupAccount",
+        args: { id: "bounded" },
+      },
+    });
+    hostOverride = (context) => {
+      called.resolve(context);
+      return late.promise;
+    };
+    const run = await enqueue("lookupAccount", 5_000);
+    const persisted = await db
+      .selectFrom("workflow_step_attempts")
+      .select("started_at")
+      .where("run_id", "=", run.id)
+      .executeTakeFirstOrThrow();
+    startWorker();
+    const context = await called.promise;
+    const invocation = await invoked;
+    expect(context.signal).toBe(invocation.signal);
+    expect(context.deadlineAt).toBe(invocation.deadlineAt);
+    expect(Date.parse(context.deadlineAt)).toBe(
+      persisted.started_at!.getTime() + 300_000,
+    );
+    await expect
+      .poll(
+        async () =>
+          (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 10_000 },
+      )
+      .toBe("failed");
+    expect(context.signal.aborted).toBe(true);
+    late.resolve({ shouldNeverPersist: true });
+    await core.runs.stopWorkers();
+    const result = await core.runs.get({ identity: root, runId: run.id });
+    expect(result.error).toMatch(/five-minute deadline/);
+    expect(result.result).not.toEqual({ shouldNeverPersist: true });
+  });
+
+  it("does not reset an expired attempt's budget on job redelivery", async () => {
+    const invoke = vi.fn(invokeRuntime);
+    runtimeOverride = invoke;
+    const run = await enqueue("lookupAccount", -1);
+    startWorker();
+    await expect
+      .poll(
+        async () =>
+          (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 5_000 },
+      )
+      .toBe("failed");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("refuses a returned call when cancellation lands before dispatch", async () => {
+    const host = vi.fn(() => ({ accepted: true }));
+    hostOverride = host;
+    const run = await enqueue();
+    runtimeOverride = async (invocation) => {
+      const receipt = await invokeRuntime(invocation);
+      await core.runs.cancel({ identity: root, runId: run.id });
+      return receipt;
+    };
+    const worker = startWorker();
+    await expect
+      .poll(
+        async () =>
+          (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 5_000 },
+      )
+      .toBe("canceled");
+    await worker.stop();
+    expect(host).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight host call on cancellation and frees the lane even when it ignores the signal", async () => {
+    const late = deferred<unknown>();
+    const called = deferred<HostCallContext>();
+    hostOverride = (context) => {
+      called.resolve(context);
+      return late.promise;
+    };
+    const run = await enqueue();
+    startWorker();
+    const context = await called.promise;
+    await core.runs.cancel({ identity: root, runId: run.id });
+    const next = await enqueue("whoAmI");
+    await expect
+      .poll(() => context.signal.aborted, { timeout: 4_000 })
+      .toBe(true);
+    await expect
+      .poll(
+        async () =>
+          (await core.runs.get({ identity: root, runId: next.id })).status,
+        { timeout: 5_000 },
+      )
+      .toBe("completed");
+    late.resolve({ shouldNeverPersist: true });
+    await core.runs.stopWorkers();
+    expect(
+      (await core.runs.get({ identity: root, runId: run.id })).status,
+    ).toBe("canceled");
+  });
+
+  it("bounds a returned connection call and passes the callback's deadline to the broker", async () => {
+    const broker = core.connectionBroker;
+    if (!broker) throw new Error("Fixture needs a connection broker");
+    const called = deferred<Parameters<typeof broker.invoke>[0]>();
+    const invoked = stubCall({
+      type: "connection_call",
+      transition: { alias: "fake", action: "read", args: {} },
+    });
+    vi.spyOn(broker, "invoke").mockImplementation((args) => {
+      called.resolve(args);
+      return new Promise(() => {});
+    });
+    const run = await enqueue("lookupAccount", 5_000);
+    startWorker();
+    const context = await called.promise;
+    const invocation = await invoked;
+    expect(context.signal).toBe(invocation.signal);
+    expect(context.deadlineAt).toBe(invocation.deadlineAt);
+    await expect
+      .poll(
+        async () =>
+          (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 10_000 },
+      )
+      .toBe("failed");
+    expect(context.signal?.aborted).toBe(true);
+  });
+
+  it("worker shutdown aborts a hung provider without awaiting its cooperation", async () => {
+    const called = deferred<HostCallContext>();
+    hostOverride = (context) => {
+      called.resolve(context);
+      return new Promise(() => {});
+    };
+    const run = await enqueue();
+    const worker = startWorker();
+    const context = await called.promise;
+    await worker.stop();
+    expect(context.signal.aborted).toBe(true);
+    const job = await db
+      .selectFrom("execution_jobs")
+      .select("status")
+      .where("workflow_run_id", "=", run.id)
+      .executeTakeFirstOrThrow();
+    expect(job.status).toBe("pending");
+    await core.runs.cancel({ identity: root, runId: run.id });
+  });
+
+  it("lease loss aborts a hung call and rejects its late receipt", async () => {
+    const called = deferred<HostCallContext>();
+    const late = deferred<unknown>();
+    hostOverride = (context) => {
+      called.resolve(context);
+      return late.promise;
+    };
+    const run = await enqueue();
+    const worker = startWorker();
+    const context = await called.promise;
+    await db
+      .updateTable("execution_jobs")
+      .set({ lease_expires_at: new Date(0) })
+      .where("workflow_run_id", "=", run.id)
+      .execute();
+    await expect
+      .poll(() => context.signal.aborted, { timeout: 4_000 })
+      .toBe(true);
+    late.resolve({ late: true });
+    await worker.stop();
+    const attempt = await db
+      .selectFrom("workflow_step_attempts")
+      .select(["status", "output"])
+      .where("run_id", "=", run.id)
+      .executeTakeFirstOrThrow();
+    expect(attempt.status).toBe("running");
+    expect(attempt.output).toBeNull();
+    await core.runs.cancel({ identity: root, runId: run.id });
+  });
+
+  it("bounds a hung documents operation under the same attempt deadline", async () => {
+    vi.spyOn(core.documents, "read").mockImplementation(
+      () => new Promise(() => {}),
+    );
+    stubCall({
+      type: "host_call",
+      transition: {
+        capability: DOCUMENTS_CAPABILITY,
+        fn: "read",
+        args: { path: "store/customers/acme/notes.md" },
+      },
+    });
+    const run = await enqueue("briefCustomer", 5_000);
+    startWorker();
+    await expect
+      .poll(
+        async () =>
+          (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 10_000 },
+      )
+      .toBe("failed");
+  });
+
+  it("does not create a chat or deliver after cancellation during recipient preparation", async () => {
+    const prepared = deferred<void>();
+    const release = deferred<void>();
+    memberPreparation = async () => {
+      prepared.resolve();
+      await release.promise;
+    };
+    const run = await enqueue();
+    const abort = new AbortController();
+    const operation = core.capabilities.call(
+      "catamorphic.sessions",
+      "deliver",
+      {
+        caller: root,
+        projectId,
+        runId: run.id,
+        workflowName: "lookupAccount",
+        signal: abort.signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
+      },
+      {
+        key: "canceled-recipient",
+        audience: { member: "recipient" },
+        content: "must not arrive",
+      },
+    );
+    const rejected = expect(operation).rejects.toThrow("preparation canceled");
+    await prepared.promise;
+    abort.abort(new Error("preparation canceled"));
+    release.resolve();
+    await rejected;
+    const chats = await db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("project_id", "=", projectId)
+      .where("chat_key", "=", "canceled-recipient")
+      .execute();
+    expect(chats).toEqual([]);
+    await core.runs.cancel({ identity: root, runId: run.id });
   });
 
   it("the caller rides into every invocation, and a workflow can read it", async () => {

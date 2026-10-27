@@ -409,15 +409,18 @@ export class ExecutionJobsService {
 
   /**
    * The next job a sync driver would run for this run: the oldest
-   * non-terminal job, pending or already claimed by someone else.
+   * non-terminal job, pending or already claimed by someone else. Readiness
+   * uses the same database clock as job claims, never the host's wall clock:
+   * these machines may have different time.
    */
   async nextForRun(args: {
     tenantId: string;
     runId: string;
-  }): Promise<ExecutionJob | null> {
+  }): Promise<(ExecutionJob & { due: boolean }) | null> {
     const row = await this.db
       .selectFrom("execution_jobs")
       .selectAll()
+      .select(sql<boolean>`available_at <= clock_timestamp()`.as("due"))
       .where("tenant_id", "=", args.tenantId)
       .where("workflow_run_id", "=", args.runId)
       .where("status", "in", ["pending", "running"])
@@ -425,7 +428,7 @@ export class ExecutionJobsService {
       .orderBy("id", "asc")
       .limit(1)
       .executeTakeFirst();
-    return row ? mapExecutionJob(row) : null;
+    return row ? { ...mapExecutionJob(row), due: row.due } : null;
   }
 
   async heartbeat(args: {

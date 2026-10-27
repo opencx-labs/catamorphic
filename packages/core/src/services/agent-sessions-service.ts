@@ -2755,6 +2755,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     input: {
+      signal?: AbortSignal;
       content: string;
       author: SessionMessageAuthor;
       mode: DispatchMode;
@@ -2769,12 +2770,14 @@ export class AgentSessionsService {
       workspace?: SessionWorkspaceRequest;
     },
   ): Promise<SessionDeliveryReceipt> {
+    input.signal?.throwIfAborted();
     if (input.workspace)
       await this.requestWorkspace(
         identity,
         projectId,
         sessionId,
         input.workspace,
+        { signal: input.signal },
       );
     const causation =
       input.causation ??
@@ -2790,7 +2793,9 @@ export class AgentSessionsService {
       text: input.content,
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
+    input.signal?.throwIfAborted();
     return this.deliverInput(identity, projectId, sessionId, {
+      signal: input.signal,
       input:
         message.kind === "inbound_message" && input.alert
           ? { ...message, alert: input.alert }
@@ -2844,6 +2849,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     delivery: {
+      signal?: AbortSignal;
       input: SessionInput;
       mode: DispatchMode;
       attention?: "required" | "none";
@@ -2855,6 +2861,7 @@ export class AgentSessionsService {
     // owner's own sign-in answers only their own doing (ADR 0199).
     const deliveredBy = identity.externalUserId;
     const session = await this.requireSession(identity, projectId, sessionId);
+    delivery.signal?.throwIfAborted();
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
     if (
@@ -2862,6 +2869,7 @@ export class AgentSessionsService {
       session.authority_host_id !== this.hostId
     )
       return this.mailboxes.enqueue(identity, projectId, sessionId, {
+        signal: delivery.signal,
         destination: {
           hostId: session.authority_host_id,
           revision: Number(session.authority_revision),
@@ -2886,6 +2894,7 @@ export class AgentSessionsService {
           : {}),
         ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
+    delivery.signal?.throwIfAborted();
     await this.claimLocalAuthority(session);
     const receipt = await this.db.transaction().execute(async (trx) => {
       const locked = await trx
@@ -2896,7 +2905,8 @@ export class AgentSessionsService {
         .executeTakeFirstOrThrow();
       if (locked.status !== "active")
         throw new AgentSessionClosedError(sessionId);
-      return this.deliverIn(trx, {
+      delivery.signal?.throwIfAborted();
+      const result = await this.deliverIn(trx, {
         session: locked,
         input: delivery.input,
         dispatch: delivery.mode,
@@ -2907,6 +2917,8 @@ export class AgentSessionsService {
         deliveredBy,
         ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
+      delivery.signal?.throwIfAborted();
+      return result;
     });
     // Work delivered to an archived chat runs; the chat comes back into view.
     if (receipt.created && receipt.turnId)
@@ -3295,7 +3307,11 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    options: { turnId?: string; notifyParent?: boolean } = {},
+    options: {
+      turnId?: string;
+      notifyParent?: boolean;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<void> {
     const session = await this.requireSession(identity, projectId, sessionId);
     const commandId = `host:interrupt:${randomUUID()}`;
@@ -3303,13 +3319,17 @@ export class AgentSessionsService {
       sessionId,
       commandId,
       type: "interrupt",
-      run: (trx) =>
-        this.interruptIn(trx, {
+      run: async (trx) => {
+        options.signal?.throwIfAborted();
+        const result = await this.interruptIn(trx, {
           identity,
           session,
           ...(options.turnId ? { turnId: options.turnId } : {}),
           commandId,
-        }),
+        });
+        options.signal?.throwIfAborted();
+        return result;
+      },
     });
     if (options.notifyParent !== false)
       await this.interruptDelegation(identity, projectId, sessionId);
@@ -5818,6 +5838,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       systemPrompt?: string;
       agentId?: string;
@@ -5850,6 +5871,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       origin?: SessionOperationOrigin;
       systemPrompt?: string;
@@ -5890,6 +5912,7 @@ export class AgentSessionsService {
         await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
+      input.signal?.throwIfAborted();
       return prepared.insert(transaction);
     };
     const row = input.transaction
@@ -5907,6 +5930,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       systemPrompt?: string;
       agentId?: string;
@@ -6037,6 +6061,7 @@ export class AgentSessionsService {
           bindings: connections,
         })
       : null;
+    input.signal?.throwIfAborted();
     if (workspace && agent.topology !== "native")
       await this.projectManager.setSessionBase({
         tenantId: identity.tenantId,
@@ -6050,6 +6075,7 @@ export class AgentSessionsService {
     return {
       visibility,
       insert: async (transaction: Transaction<DB>) => {
+        input.signal?.throwIfAborted();
         // The machine admitted may fill up before the Allocation is made:
         // the chat then waits too, where its Environment lets it.
         const allocation = admitted
@@ -6089,6 +6115,7 @@ export class AgentSessionsService {
             limitMinutes: wait.waitMinutes,
             transaction,
           });
+        input.signal?.throwIfAborted();
         const session = await transaction
           .insertInto("agent_sessions")
           .values({
@@ -6132,6 +6159,7 @@ export class AgentSessionsService {
             previous_visibility: visibility,
           })
           .execute();
+        input.signal?.throwIfAborted();
         return session;
       },
     };
@@ -6149,6 +6177,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     workspace: SessionWorkspaceRequest,
+    options: { signal?: AbortSignal } = {},
   ): Promise<void> {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active")
@@ -6166,17 +6195,22 @@ export class AgentSessionsService {
       ...target,
       update: workspace.update ?? "rebase",
     };
-    await this.db
-      .updateTable("agent_sessions")
-      .set({
-        workspace_move:
-          current?.commit === target.commit && current.ref === target.ref
-            ? null
-            : workspaceMoveJson(move),
-        updated_at: new Date(),
-      })
-      .where("id", "=", sessionId)
-      .execute();
+    options.signal?.throwIfAborted();
+    await this.db.transaction().execute(async (trx) => {
+      options.signal?.throwIfAborted();
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          workspace_move:
+            current?.commit === target.commit && current.ref === target.ref
+              ? null
+              : workspaceMoveJson(move),
+          updated_at: new Date(),
+        })
+        .where("id", "=", sessionId)
+        .execute();
+      options.signal?.throwIfAborted();
+    });
   }
 
   /** The connection bindings of the session's current Allocation. */
@@ -7574,6 +7608,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       key: string;
       /** The workflow delivering, recorded on the chat. */
       workflowName?: string;
@@ -7600,6 +7635,7 @@ export class AgentSessionsService {
         .executeTakeFirst();
 
     let row = await findExisting();
+    input.signal?.throwIfAborted();
     let sessionCreated = false;
     if (!row) {
       try {
@@ -7608,6 +7644,7 @@ export class AgentSessionsService {
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
           chatKey: input.key,
+          signal: input.signal,
           ...(input.workflowName ? { chatWorkflow: input.workflowName } : {}),
           ...(input.workspace ? { workspace: input.workspace } : {}),
           origin: input.origin,
@@ -7632,20 +7669,34 @@ export class AgentSessionsService {
         `The chat for key ${input.key} already belongs to a different agent`,
       );
     }
+    input.signal?.throwIfAborted();
     if (input.workspace && !sessionCreated)
-      await this.requestWorkspace(identity, projectId, row.id, input.workspace);
-    if (input.workflowName)
-      await this.db
-        .updateTable("agent_sessions")
-        .set({
-          chat_workflows: sql`chat_workflows || jsonb_build_array(${input.workflowName}::text)`,
-        })
-        .where("id", "=", row.id)
-        .where(
-          sql<boolean>`NOT (chat_workflows @> jsonb_build_array(${input.workflowName}::text))`,
-        )
-        .execute();
-    await this.restoreArchived([row.id]);
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        row.id,
+        input.workspace,
+        { signal: input.signal },
+      );
+    input.signal?.throwIfAborted();
+    if (input.workflowName) {
+      await this.db.transaction().execute(async (trx) => {
+        input.signal?.throwIfAborted();
+        await trx
+          .updateTable("agent_sessions")
+          .set({
+            chat_workflows: sql`chat_workflows || jsonb_build_array(${input.workflowName}::text)`,
+          })
+          .where("id", "=", row.id)
+          .where(
+            sql<boolean>`NOT (chat_workflows @> jsonb_build_array(${input.workflowName}::text))`,
+          )
+          .execute();
+        input.signal?.throwIfAborted();
+      });
+    }
+    input.signal?.throwIfAborted();
+    await this.restoreArchived([row.id], { signal: input.signal });
     return { sessionId: row.id, sessionCreated };
   }
 
@@ -7674,18 +7725,26 @@ export class AgentSessionsService {
    * a chat runs and is seen, never silently held (ADR 0173). A released
    * workspace is admitted again when the chat's next turn is claimed.
    */
-  private async restoreArchived(sessionIds: readonly string[]): Promise<void> {
+  private async restoreArchived(
+    sessionIds: readonly string[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
     if (sessionIds.length === 0) return;
-    const restored = await this.db
-      .updateTable("agent_session_views")
-      .set(({ ref }) => ({
-        visibility: ref("previous_visibility"),
-        archived_at: null,
-        updated_at: new Date(),
-      }))
-      .where("session_id", "in", [...sessionIds])
-      .where("visibility", "=", "archived")
-      .executeTakeFirst();
+    const restored = await this.db.transaction().execute(async (trx) => {
+      options.signal?.throwIfAborted();
+      const result = await trx
+        .updateTable("agent_session_views")
+        .set(({ ref }) => ({
+          visibility: ref("previous_visibility"),
+          archived_at: null,
+          updated_at: new Date(),
+        }))
+        .where("session_id", "in", [...sessionIds])
+        .where("visibility", "=", "archived")
+        .executeTakeFirst();
+      options.signal?.throwIfAborted();
+      return result;
+    });
     if (restored.numUpdatedRows > 0n) this.chatsChanged();
   }
 
@@ -8010,6 +8069,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     patch: {
+      signal?: AbortSignal;
       agentId?: string;
       model?: string | null;
       effort?: AgentEffort | null;
@@ -8089,11 +8149,13 @@ export class AgentSessionsService {
           : [];
       // The old workspace is given back: personal files and logins leave
       // it now, and the next turn delivers them to the new one (ADR 0184).
+      patch.signal?.throwIfAborted();
       await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
       reallocatedRow = await this.db
         .transaction()
         .execute(async (transaction) => {
           await this.lockIdleSession({ sessionId, transaction });
+          patch.signal?.throwIfAborted();
           if (previousAllocationId)
             await this.executionAllocations.release({
               identity,
@@ -8114,12 +8176,15 @@ export class AgentSessionsService {
           updates.environment_name = admission.environmentName;
           updates.placement = toPlacementJson(placementOf(admission));
           updates.sandbox_id = null;
-          return transaction
+          patch.signal?.throwIfAborted();
+          const result = await transaction
             .updateTable("agent_sessions")
             .set({ ...updates, updated_at: new Date() })
             .where("id", "=", sessionId)
             .returningAll()
             .executeTakeFirstOrThrow();
+          patch.signal?.throwIfAborted();
+          return result;
         });
       if (previousAllocationId)
         await this.connectionGrants?.revokeAllocation({
@@ -8134,12 +8199,15 @@ export class AgentSessionsService {
       reallocatedRow ??
       (await this.db.transaction().execute(async (transaction) => {
         await this.lockIdleSession({ sessionId, transaction });
-        return transaction
+        patch.signal?.throwIfAborted();
+        const result = await transaction
           .updateTable("agent_sessions")
           .set({ ...updates, updated_at: new Date() })
           .where("id", "=", sessionId)
           .returningAll()
           .executeTakeFirstOrThrow();
+        patch.signal?.throwIfAborted();
+        return result;
       }));
 
     // The change reaches every viewer through the log, with a notice in the
@@ -8559,7 +8627,11 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { messageId?: string; sourceActionId?: string } = {},
+    input: {
+      messageId?: string;
+      sourceActionId?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -8607,7 +8679,9 @@ export class AgentSessionsService {
         const forkSystemPrompt = [session.system_prompt, forkNote]
           .filter((part): part is string => Boolean(part))
           .join("\n\n");
+        input.signal?.throwIfAborted();
         const forkInput = {
+          signal: input.signal,
           ...(session.agent_id ? { agentId: session.agent_id } : {}),
           ...(session.model ? { model: session.model } : {}),
           ...(session.model_effort
@@ -8738,11 +8812,13 @@ export class AgentSessionsService {
             data: { parentSessionId: sessionId },
           });
           // As the log made it (its harness, say).
-          return trx
+          const result = await trx
             .selectFrom("agent_sessions")
             .selectAll()
             .where("id", "=", forkId)
             .executeTakeFirstOrThrow();
+          input.signal?.throwIfAborted();
+          return result;
         });
         return mapSession(row, false, this.hostId, this.authorityLeaseMs);
       },
@@ -8759,6 +8835,7 @@ export class AgentSessionsService {
     projectId: string,
     sourceSessionId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       origin?: SessionOperationOrigin;
       /** Omitted: a copy of the source agent. */
@@ -8955,7 +9032,9 @@ export class AgentSessionsService {
     if (!task) throw new Error("A subsession task is required");
     const contextMode = input.contextMode ?? "fresh";
     const allowFurtherDelegation = grant.delegate && input.delegate !== false;
+    input.signal?.throwIfAborted();
     const childInput = {
+      signal: input.signal,
       sourceActionId: input.sourceActionId,
       agentId: targetAgentId,
       ...settings,
@@ -9026,6 +9105,7 @@ export class AgentSessionsService {
         );
       }
 
+      input.signal?.throwIfAborted();
       const child = await this.createInner(identity, projectId, {
         ...childInput,
         prepared: preparedChild,
@@ -9076,6 +9156,7 @@ export class AgentSessionsService {
         dispatch: "queue",
         idempotencyKey: `delegation:${delegation.id}:task`,
       });
+      input.signal?.throwIfAborted();
       return { child, delegation, receipt };
     });
     if (created.receipt.turnId) {
@@ -10306,7 +10387,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { origin?: SessionOperationOrigin } = {},
+    input: { origin?: SessionOperationOrigin; signal?: AbortSignal } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -10327,7 +10408,14 @@ export class AgentSessionsService {
         );
         const cancelOpenTurns = (trx: Transaction<DB>) =>
           this.stopSessionTurns(trx, { sessionIds, reason: "Chat closed" });
-        await this.db.transaction().execute(cancelOpenTurns);
+        input.signal?.throwIfAborted();
+        await this.db.transaction().execute((trx) =>
+          this.stopSessionTurns(trx, {
+            sessionIds,
+            reason: "Chat closed",
+            signal: input.signal,
+          }),
+        );
         await this.archiveResources?.stop({
           identity,
           projectId,
@@ -10401,7 +10489,11 @@ export class AgentSessionsService {
    */
   private async stopSessionTurns(
     trx: Transaction<DB>,
-    input: { sessionIds: readonly string[]; reason: string },
+    input: {
+      sessionIds: readonly string[];
+      reason: string;
+      signal?: AbortSignal;
+    },
   ): Promise<void> {
     if (input.sessionIds.length === 0) return;
     // Under the sessions' locks, in one order: a turn settling meanwhile is
@@ -10414,6 +10506,7 @@ export class AgentSessionsService {
       .where("session_id", "in", [...input.sessionIds])
       .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
       .execute();
+    input.signal?.throwIfAborted();
     const now = new Date().toISOString();
     const bySession = new Map<string, SessionEvent[]>();
     for (const row of rows) {
@@ -10446,10 +10539,12 @@ export class AgentSessionsService {
     for (const [sessionId, events] of bySession)
       await this.log.append(trx, { sessionId, events });
     // Nothing of them is queued, so nothing waits for a machine (ADR 0258).
+    input.signal?.throwIfAborted();
     await this.placementWaits.clear({
       rootWorkloadIds: input.sessionIds,
       transaction: trx,
     });
+    input.signal?.throwIfAborted();
   }
 
   /**
@@ -10752,7 +10847,11 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { confirmStop?: boolean; origin?: SessionOperationOrigin } = {},
+    input: {
+      confirmStop?: boolean;
+      origin?: SessionOperationOrigin;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<{ impact: AgentSessionArchiveImpact; sessions: AgentSession[] }> {
     const impact = await this.archiveImpact(identity, projectId, sessionId);
     if (impact.requiresConfirmation && !input.confirmStop) {
@@ -10771,6 +10870,7 @@ export class AgentSessionsService {
       this.stopSessionTurns(trx, {
         sessionIds: impact.sessionIds,
         reason: "Session archived",
+        signal: input.signal,
       }),
     );
     await this.archiveResources?.stop({
@@ -10948,7 +11048,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { origin?: SessionOperationOrigin } = {},
+    input: { origin?: SessionOperationOrigin; signal?: AbortSignal } = {},
   ): Promise<AgentSession[]> {
     await this.requireSession(identity, projectId, sessionId);
     const sessionIds = await this.descendantSessionIds(projectId, sessionId);
@@ -10967,6 +11067,7 @@ export class AgentSessionsService {
     for (const row of retired) {
       await this.update(identity, projectId, row.id, {
         environment: row.environment_name ?? undefined,
+        signal: input.signal,
       });
     }
     await this.db.transaction().execute(async (transaction) => {
@@ -10974,6 +11075,7 @@ export class AgentSessionsService {
         await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
+      input.signal?.throwIfAborted();
       await transaction
         .updateTable("agent_session_views")
         .set(({ ref }) => ({
@@ -10985,6 +11087,7 @@ export class AgentSessionsService {
         .where("external_user_id", "=", identity.externalUserId)
         .where("session_id", "in", sessionIds)
         .execute();
+      input.signal?.throwIfAborted();
     });
     this.chatsChanged();
     const rows = await this.db
@@ -12297,17 +12400,22 @@ export class AgentSessionsService {
    * 0176). The latest delivery that names approvers replaces them.
    */
   async setApprovers(args: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     sessionId: string;
     approvers: { members?: string[]; roles?: string[] };
   }): Promise<void> {
     await this.requireSession(args.identity, args.projectId, args.sessionId);
-    await this.db
-      .updateTable("agent_sessions")
-      .set({ approvers: args.approvers })
-      .where("id", "=", args.sessionId)
-      .execute();
+    args.signal?.throwIfAborted();
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("agent_sessions")
+        .set({ approvers: args.approvers })
+        .where("id", "=", args.sessionId)
+        .execute();
+      args.signal?.throwIfAborted();
+    });
   }
 
   /**

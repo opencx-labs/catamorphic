@@ -12,6 +12,8 @@ import type { DocumentsService } from "./documents-service.js";
  * may not see, whether or not they remember to filter.
  */
 export interface HostCallInput {
+  signal: AbortSignal;
+  deadlineAt: string;
   caller: Identity;
   projectId: string;
   runId: string;
@@ -25,6 +27,7 @@ export async function executeHostCall(
   deps: { documents: DocumentsService; capabilities: CapabilityRegistry },
   input: HostCallInput,
 ): Promise<unknown> {
+  input.signal.throwIfAborted();
   if (input.capability === DOCUMENTS_CAPABILITY) {
     return callDocuments(deps.documents, input);
   }
@@ -36,6 +39,8 @@ export async function executeHostCall(
       projectId: input.projectId,
       runId: input.runId,
       workflowName: input.workflowName,
+      signal: input.signal,
+      deadlineAt: input.deadlineAt,
     },
     input.args,
   );
@@ -112,6 +117,7 @@ async function callDocuments(
     }
     case "write":
       return documents.write({
+        signal: input.signal,
         identity,
         projectId,
         path: str(args.path, "path"),
@@ -125,6 +131,7 @@ async function callDocuments(
       });
     case "delete":
       return documents.delete({
+        signal: input.signal,
         identity,
         projectId,
         path: str(args.path, "path"),
