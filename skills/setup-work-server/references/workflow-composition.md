@@ -58,7 +58,9 @@ A clean application sequence:
    Inventory tagged resources absent from the ledger. Add an independent expiry
    mechanism when a control-plane outage must not leave compute running.
 
-Do not hold database transactions over external IO. Database leases need
+Keep business-state transactions short. A dedicated serialization row lock may
+bracket bounded external IO when intents and receipts commit independently,
+as in the deployment-owned review publisher. Database leases need
 fencing/generation checks before effects, not just a timeout. An external API
 may accept an action after a local timeout or cancellation: reconcile the
 outcome instead of assuming it failed.
