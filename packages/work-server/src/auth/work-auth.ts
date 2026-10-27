@@ -1,8 +1,11 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { mcp } from "@better-auth/mcp";
+import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { betterAuth } from "better-auth";
-import { bearer, genericOAuth, mcp, username } from "better-auth/plugins";
+import { bearer, genericOAuth, username } from "better-auth/plugins";
+import { z } from "zod";
 import {
   parseWorkAuthConfig,
   type ResolvedWorkAuthConfig,
@@ -54,13 +57,17 @@ export function createWorkAuth(options: {
       // Starting a provider sign-in guesses nothing: the identity provider
       // authenticates. An office behind one address must not queue for it.
       customRules: {
-        "/sign-in/oauth2": PROVIDER_SIGN_IN_LIMIT,
         "/sign-in/social": PROVIDER_SIGN_IN_LIMIT,
       },
     },
     // The Work server resolves the client behind trusted proxies itself;
     // Better Auth sees only headers, never the connection's peer.
-    advanced: { ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER] } },
+    advanced: {
+      ipAddress: { ipAddressHeaders: [CLIENT_ADDRESS_HEADER] },
+      // Work migrates under its own transaction/replica lock. An eager
+      // vendor check would cache the old schema while that migration runs.
+      database: { validateSchema: false },
+    },
     plugins: [
       username(),
       bearer(),
@@ -93,22 +100,33 @@ export function createWorkAuth(options: {
       }),
       mcp({
         loginPage: `${options.baseURL}/login`,
+        consentPage: `${options.baseURL}/oauth/consent`,
         resource: `${options.baseURL}/api`,
-        oidcConfig: {
-          loginPage: `${options.baseURL}/login`,
-          allowDynamicClientRegistration: true,
-          requirePKCE: true,
-          accessTokenExpiresIn: config.sessions.accessTokenSeconds,
-          refreshTokenExpiresIn: config.sessions.idleSeconds,
-          allowPlainCodeChallengeMethod: false,
-          consentPage: `${options.baseURL}/oauth/consent`,
-        },
+        // Work checks and revokes opaque grants on every request (ADR 0161).
+        disableJwtPlugin: true,
+        allowDynamicClientRegistration: true,
+        allowUnauthenticatedClientRegistration: true,
+        clientRegistrationDefaultApplicationType: "infer",
+        clientRegistrationRequirePKCE: true,
+        grantTypes: ["authorization_code", "refresh_token"],
+        accessTokenExpiresIn: config.sessions.accessTokenSeconds,
+        refreshTokenExpiresIn: config.sessions.idleSeconds,
+        refreshTokenReuseInterval: 0,
       }),
     ],
   });
 
   return {
-    migrate: () => options.database.migrate({ options: auth.options }),
+    verifyAuthorizationQuery: ({ query }) =>
+      verifyOAuthQueryParams(query, options.secret),
+    migrate: async () => {
+      await options.database.migrate({
+        options: auth.options,
+        resource: `${options.baseURL}/api`,
+      });
+      // Validate only after the schema and its data conversion have committed.
+      await (await auth.$context).explicitSchemaCheck?.();
+    },
     createLocalUser: async (args) => {
       if (!config.local.enabled) {
         throw new Error(
@@ -165,18 +183,39 @@ export function createWorkAuth(options: {
       return found ? workAuthUser(found.user) : null;
     },
     resolveAccessToken: async ({ authorization }) => {
-      const result = await auth.api.getMcpSession({
-        headers: new Headers({ authorization }),
-      });
-      if (!result?.userId) return null;
+      const bearerToken = /^Bearer ([^\s]+)$/i.exec(authorization)?.[1];
+      if (!bearerToken) return null;
       const context = await auth.$context;
-      const user = await context.internalAdapter.findUserById(result.userId);
+      const parsed = AccessGrant.safeParse(
+        await context.adapter.findOne({
+          model: "oauthAccessToken",
+          where: [{ field: "token", value: authTokenHash(bearerToken) }],
+        }),
+      );
+      if (!parsed.success) return null;
+      const grant = parsed.data;
+      if (
+        !grant.userId ||
+        grant.revoked ||
+        !grant.resources?.includes(`${options.baseURL}/api`) ||
+        grant.confirmation != null ||
+        grant.expiresAt.getTime() <= Date.now()
+      )
+        return null;
+      const client = z.object({ disabled: z.boolean().nullish() }).safeParse(
+        await context.adapter.findOne({
+          model: "oauthClient",
+          where: [{ field: "clientId", value: grant.clientId }],
+        }),
+      );
+      if (!client.success || client.data.disabled === true) return null;
+      const user = await context.internalAdapter.findUserById(grant.userId);
       if (!user) return null;
       return {
-        userId: result.userId,
+        userId: grant.userId,
         email: user.email,
         emailVerified: user.emailVerified,
-        scopes: result.scopes.split(" ").filter(Boolean),
+        scopes: grant.scopes,
       };
     },
     accountsFor: async ({ userId }) => {
@@ -192,31 +231,64 @@ export function createWorkAuth(options: {
       return toGrant(
         await context.adapter.findOne({
           model: "oauthAccessToken",
-          where: [{ field: "accessToken", value: accessToken }],
+          where: [{ field: "token", value: authTokenHash(accessToken) }],
         }),
       );
     },
     grantByRefreshToken: async ({ refreshToken }) => {
       const context = await auth.$context;
+      const refresh = z.object({ id: z.string() }).safeParse(
+        await context.adapter.findOne({
+          model: "oauthRefreshToken",
+          where: [{ field: "token", value: authTokenHash(refreshToken) }],
+        }),
+      );
+      if (!refresh.success) return null;
       return toGrant(
         await context.adapter.findOne({
           model: "oauthAccessToken",
-          where: [{ field: "refreshToken", value: refreshToken }],
+          where: [{ field: "refreshId", value: refresh.data.id }],
         }),
       );
     },
     deleteGrants: async ({ ids }) => {
       if (ids.length === 0) return;
       const context = await auth.$context;
+      const grants = await context.adapter.findMany({
+        model: "oauthAccessToken",
+        where: [{ field: "id", operator: "in", value: [...ids] }],
+      });
+      const refreshIds = grants.flatMap((grant) =>
+        typeof grant === "object" &&
+        grant !== null &&
+        "refreshId" in grant &&
+        typeof grant.refreshId === "string"
+          ? [grant.refreshId]
+          : [],
+      );
       await context.adapter.deleteMany({
         model: "oauthAccessToken",
         where: [{ field: "id", operator: "in", value: [...ids] }],
       });
+      if (refreshIds.length) {
+        await context.adapter.deleteMany({
+          model: "oauthAccessToken",
+          where: [{ field: "refreshId", operator: "in", value: refreshIds }],
+        });
+        await context.adapter.deleteMany({
+          model: "oauthRefreshToken",
+          where: [{ field: "id", operator: "in", value: refreshIds }],
+        });
+      }
     },
     signOutEverywhere: async ({ userId }) => {
       const context = await auth.$context;
       await context.adapter.deleteMany({
         model: "oauthAccessToken",
+        where: [{ field: "userId", value: userId }],
+      });
+      await context.adapter.deleteMany({
+        model: "oauthRefreshToken",
         where: [{ field: "userId", value: userId }],
       });
       await context.internalAdapter.deleteUserSessions(userId);
@@ -226,9 +298,10 @@ export function createWorkAuth(options: {
       const now = new Date();
       const [grants, sessions] = await Promise.all([
         context.adapter.findMany({
-          model: "oauthAccessToken",
+          model: "oauthRefreshToken",
           where: [
-            { field: "refreshTokenExpiresAt", operator: "gt", value: now },
+            { field: "expiresAt", operator: "gt", value: now },
+            { field: "revoked", value: null },
           ],
         }),
         context.adapter.findMany({
@@ -265,6 +338,22 @@ export function createWorkAuth(options: {
     },
     close: () => options.database.close(),
   };
+}
+
+const AccessGrant = z.object({
+  id: z.string(),
+  userId: z.string().nullish(),
+  clientId: z.string(),
+  expiresAt: z.coerce.date(),
+  revoked: z.coerce.date().nullish(),
+  scopes: z.array(z.string()),
+  resources: z.array(z.string()).nullish(),
+  confirmation: z.unknown().nullish(),
+});
+
+/** Better Auth's default opaque-token storage format. */
+export function authTokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
 }
 
 function toGrant(row: unknown): WorkAuthGrant | null {

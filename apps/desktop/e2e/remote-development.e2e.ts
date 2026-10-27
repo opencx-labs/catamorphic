@@ -229,7 +229,7 @@ async function accessToken(username: string): Promise<string> {
   const cookie = await sessionCookie(username);
   const redirectUri = "http://127.0.0.1:49152/callback";
   const client = await json<{ client_id: string }>(
-    `${serverBase}/api/auth/mcp/register`,
+    `${serverBase}/api/auth/oauth2/register`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -248,20 +248,47 @@ async function accessToken(username: string): Promise<string> {
     redirect_uri: redirectUri,
     response_type: "code",
     scope: "openid profile email offline_access",
+    resource: `${publicUrl}/api`,
     state: "e2e",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
   });
   const authorized = await fetch(
-    `${serverBase}/api/auth/mcp/authorize?${authorize}`,
-    { headers: { cookie }, redirect: "manual" },
+    `${serverBase}/api/auth/oauth2/authorize?${authorize}`,
+    { headers: { cookie, accept: "application/json" }, redirect: "manual" },
   );
-  const code =
-    new URL(
-      authorized.headers.get("location") ?? "http://invalid",
-    ).searchParams.get("code") ?? "";
+  const authorization: unknown = await authorized.json();
+  if (
+    !authorized.ok ||
+    typeof authorization !== "object" ||
+    authorization === null ||
+    !("url" in authorization) ||
+    typeof authorization.url !== "string"
+  )
+    throw new Error(`authorization ${authorized.status}`);
+  const consent = new URL(authorization.url);
+  const consentPage = await fetch(consent, {
+    headers: { cookie },
+    redirect: "manual",
+  });
+  if (!consentPage.ok) {
+    throw new Error(`consent page ${consentPage.status}`);
+  }
+  const accepted = await fetch(`${publicUrl}/oauth/consent`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      accept: "true",
+      oauth_query: consent.search.slice(1),
+    }),
+    redirect: "manual",
+  });
+  const code = new URL(accepted.headers.get("location") ?? "").searchParams.get(
+    "code",
+  );
+  if (!code) throw new Error("authorization returned no code");
   const token = await json<{ access_token: string }>(
-    `${serverBase}/api/auth/mcp/token`,
+    `${serverBase}/api/auth/oauth2/token`,
     {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -326,7 +353,21 @@ function startProxy(target: number): Promise<number> {
           },
         },
         (answer) => {
-          res.writeHead(answer.statusCode ?? 502, answer.headers);
+          res.writeHead(answer.statusCode ?? 502, {
+            ...answer.headers,
+            ...(cookie
+              ? {
+                  "set-cookie": [
+                    ...(answer.headers["set-cookie"] ?? []),
+                    ...cookie
+                      .split("; ")
+                      .map(
+                        (value) => `${value}; Path=/; HttpOnly; SameSite=Lax`,
+                      ),
+                  ],
+                }
+              : {}),
+          });
           answer.pipe(res);
         },
       );
@@ -334,7 +375,7 @@ function startProxy(target: number): Promise<number> {
       req.pipe(upstream);
     };
     const url = new URL(req.url ?? "/", publicUrl);
-    if (url.pathname === "/api/auth/mcp/authorize" && !req.headers.cookie) {
+    if (url.pathname === "/api/auth/oauth2/authorize" && !req.headers.cookie) {
       sessionCookie("bob").then(forward, () => res.destroy());
       return;
     }
@@ -521,6 +562,20 @@ describe("remote development on a Work server", () => {
       `const button = $('[data-testid="remote-connect-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
       { label: "connect" },
     );
+    const consent = await app.connectToFrame(`${publicUrl}/oauth/consent`, {
+      timeoutMs: 30_000,
+    });
+    try {
+      await consent.waitFor(
+        "!!document.querySelector('form[action=\"/oauth/consent\"] button[name=accept][value=true]')",
+        { label: "server access consent" },
+      );
+      await consent.eval(
+        `document.querySelector('form[action="/oauth/consent"] button[name=accept][value=true]').click()`,
+      );
+    } finally {
+      consent.close();
+    }
     // Until the window knows the project is on a server, its Secrets and
     // Remote environment refuse, and when it does, every list is read again
     // and the Server row drawn anew: its workspace is ready only then.

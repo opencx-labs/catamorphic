@@ -6,11 +6,12 @@ import { getMigrations } from "better-auth/db/migration";
 import {
   type DatabaseIntrospector,
   type Dialect,
-  type Kysely,
+  Kysely,
   PGliteDialect,
   type PostgresPool,
 } from "kysely";
 import { Pool, type PoolClient, types } from "pg";
+import { migrateLegacyOAuth } from "./migrate-legacy-oauth.js";
 import { SchemaScopedPostgresDialect } from "./schema-scoped-postgres-dialect.js";
 
 const AUTH_SCHEMA = "catamorphic_auth";
@@ -24,7 +25,10 @@ export interface OpenWorkAuthDatabaseOptions {
 
 export interface WorkAuthDatabase {
   database: NonNullable<BetterAuthOptions["database"]>;
-  migrate(args: { options: BetterAuthOptions }): Promise<void>;
+  migrate(args: {
+    options: BetterAuthOptions;
+    resource?: string;
+  }): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -49,10 +53,20 @@ export async function openWorkAuthDatabase(
     dialect: new BetterAuthTypeNames(new PGliteDialect({ pglite })),
     type: "postgres",
   };
+  const db = new Kysely<unknown>({ dialect: database.dialect });
 
   return {
     database,
-    migrate: migrateBetterAuth,
+    migrate: (args) =>
+      db.transaction().execute((transaction) =>
+        migrateBetterAuth({
+          ...args,
+          options: {
+            ...args.options,
+            database: { db: transaction, type: "postgres" },
+          },
+        }),
+      ),
     close: () => pglite.close(),
   };
 }
@@ -125,6 +139,7 @@ async function openPostgresAuthDatabase(
           `catamorphic-auth:${authSchema}`,
         ]);
         await migrateBetterAuth({
+          resource: args.resource,
           options: {
             ...args.options,
             database: {
@@ -152,9 +167,24 @@ async function openPostgresAuthDatabase(
 
 async function migrateBetterAuth(args: {
   options: BetterAuthOptions;
+  resource?: string;
 }): Promise<void> {
+  const database = args.options.database;
+  if (!database || !("db" in database || "dialect" in database)) {
+    throw new Error("Work auth migrations require a Kysely database");
+  }
+  const db =
+    "db" in database
+      ? database.db
+      : new Kysely<unknown>({ dialect: database.dialect });
+  const restore = await migrateLegacyOAuth({
+    db,
+    resource: args.resource,
+    secret: args.options.secret,
+  });
   const migrations = await getMigrations(args.options);
   await migrations.runMigrations();
+  await restore();
 }
 
 /**

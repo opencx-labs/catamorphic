@@ -1,4 +1,9 @@
-import { createHash, randomBytes } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+} from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -9,7 +14,7 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { testServerOptions } from "../test-support.js";
+import { acceptOAuthConsent, testServerOptions } from "../test-support.js";
 
 /**
  * Shares end to end (ADR 0165): a customer's identity provider (a fake OIDC
@@ -31,6 +36,16 @@ function jwtPart(value: object): string {
 }
 
 function startIdp(): Promise<void> {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+  });
+  const jwk = {
+    ...publicKey.export({ format: "jwk" }),
+    kid: "share-idp",
+    alg: "RS256",
+    use: "sig",
+  };
+  const nonces = new Map<string, string>();
   idp = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (url.pathname === "/.well-known/openid-configuration") {
@@ -49,9 +64,16 @@ function startIdp(): Promise<void> {
       );
       return;
     }
+    if (url.pathname === "/jwks") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ keys: [jwk] }));
+      return;
+    }
     if (url.pathname === "/authorize") {
+      const code = randomBytes(16).toString("hex");
+      nonces.set(code, url.searchParams.get("nonce") ?? "");
       const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
-      redirect.searchParams.set("code", "fake-code");
+      redirect.searchParams.set("code", code);
       redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
       response.statusCode = 302;
       response.setHeader("location", redirect.toString());
@@ -59,25 +81,42 @@ function startIdp(): Promise<void> {
       return;
     }
     if (url.pathname === "/token") {
-      const now = Math.floor(Date.now() / 1000);
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          access_token: "idp-access",
-          token_type: "Bearer",
-          expires_in: 3600,
-          id_token: `${jwtPart({ alg: "RS256", typ: "JWT" })}.${jwtPart({
+      const body: Buffer[] = [];
+      request.on("data", (chunk) => body.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const form = new URLSearchParams(Buffer.concat(body).toString());
+        const code = form.get("code") ?? "";
+        const nonce = nonces.get(code);
+        nonces.delete(code);
+        const now = Math.floor(Date.now() / 1000);
+        const unsigned = `${jwtPart({ alg: "RS256", typ: "JWT", kid: jwk.kid })}.${jwtPart(
+          {
             iss: idpBase,
             aud: "customers-client",
             sub: guest.sub,
             email: guest.email,
             email_verified: true,
             name: guest.name,
+            nonce,
             iat: now,
             exp: now + 3600,
-          })}.signature`,
-        }),
-      );
+          },
+        )}`;
+        const signature = sign(
+          "RSA-SHA256",
+          Buffer.from(unsigned),
+          privateKey,
+        ).toString("base64url");
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            access_token: "idp-access",
+            token_type: "Bearer",
+            expires_in: 3600,
+            id_token: `${unsigned}.${signature}`,
+          }),
+        );
+      });
       return;
     }
     response.statusCode = 404;
@@ -136,7 +175,7 @@ async function tokenFor(cookie: string) {
   const redirectUri = "http://127.0.0.1:49152/callback";
   const registered = await server.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/register",
+    url: "/api/auth/oauth2/register",
     payload: {
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
@@ -151,6 +190,7 @@ async function tokenFor(cookie: string) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
+    resource: "http://127.0.0.1:4700/api",
     scope: "openid profile email offline_access",
     state: "share",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
@@ -158,14 +198,18 @@ async function tokenFor(cookie: string) {
   });
   const authorized = await server.app.inject({
     method: "GET",
-    url: `/api/auth/mcp/authorize?${authorize}`,
+    url: `/api/auth/oauth2/authorize?${authorize}`,
     headers: { cookie },
   });
-  const code =
-    new URL(authorized.headers.location ?? "").searchParams.get("code") ?? "";
+  const callback = await acceptOAuthConsent({
+    app: server.app,
+    location: String(authorized.headers.location ?? ""),
+    cookie,
+  });
+  const code = new URL(callback).searchParams.get("code") ?? "";
   const token = await server.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/token",
+    url: "/api/auth/oauth2/token",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({
       grant_type: "authorization_code",

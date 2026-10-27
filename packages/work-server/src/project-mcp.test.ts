@@ -102,7 +102,7 @@ beforeAll(async () => {
   server = await createWorkServer(
     testServerOptions({
       dataDir,
-      publicBases: ["http://work.local:4700"],
+      publicBases: ["https://work.local:4700"],
       env: { WORK_FAKE_AGENT: "1", PATH: process.env.PATH },
     }),
   );
