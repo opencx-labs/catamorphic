@@ -1098,6 +1098,8 @@ export class CatamorphicCore {
       ...(this.connectionBroker
         ? {
             callConnection: (args: {
+              signal: AbortSignal;
+              deadlineAt: string;
               caller: Identity;
               allocationId: string;
               alias: string;
@@ -1111,6 +1113,8 @@ export class CatamorphicCore {
                 action: args.action,
                 input: args.input,
                 caller: "workflow",
+                signal: args.signal,
+                deadlineAt: args.deadlineAt,
               }),
             parkConnectionCall: (args: {
               caller: Identity;

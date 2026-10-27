@@ -16,9 +16,12 @@ import type {
  *
  * `calls` (ADR 0055) are host functions a workflow reaches as
  * `context.host.<name>.<fn>(args)`: each runs on the host with the run's
- * caller attached by core (`{ caller, projectId, runId, workflowName }`) —
+ * caller attached by core (`{ caller, projectId, runId, workflowName, signal, deadlineAt }`) —
  * a workflow cannot claim to be anyone — and its result feeds the next
- * step. Either or both of `resolve` / `calls` may be given.
+ * step. Pass `signal` to SDK/HTTP transports and check it before effects; the
+ * absolute ISO `deadlineAt` is shared with the boundary callback (ADR 0288).
+ * Cancellation cannot undo an external effect already accepted. Either or both
+ * of `resolve` / `calls` may be given.
  *
  * Register the result under `createCatamorphic({ capabilityProviders })`,
  * or bundle it into a `definePlugin` host half.

@@ -292,3 +292,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |
 | [0285](0285-one-version-for-work-and-the-framework.md) | One version for Work and the framework | Accepted (extends 0082, 0085, 0159) |
 | [0286](0286-agents-request-chip-refresh-from-the-owning-chat.md) | Agents request chip refresh from the owning chat | Accepted (extends 0239) |
+| [0288](0288-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |

@@ -24,6 +24,51 @@ function provider(overrides: { paths?: string[] } = {}) {
 }
 
 describe("brokered HTTP API connections (ADR 0162)", () => {
+  it("aborts the HTTP transport when its workflow attempt is canceled", async () => {
+    const abort = new AbortController();
+    let started = () => {};
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const api = defineHttpApiConnectionProvider({
+      kind: "bounded",
+      displayName: "Bounded",
+      baseUrl: "https://api.test",
+      fetch: async (_url, init) => {
+        started();
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true },
+          );
+        });
+      },
+    });
+    const request = api.invoke({
+      material: KEY,
+      connection: CONNECTION,
+      capabilities: ["get"],
+      action: "get",
+      input: { path: "/slow" },
+      signal: abort.signal,
+    });
+    const rejected = expect(request).rejects.toThrow("workflow canceled");
+    await ready;
+    abort.abort(new Error("workflow canceled"));
+    await rejected;
+    await expect(
+      api.invoke({
+        material: KEY,
+        connection: CONNECTION,
+        capabilities: ["get"],
+        action: "get",
+        input: { path: "/slow" },
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("workflow canceled");
+  });
+
   it("collects an API key through a secret form field and grants every method", async () => {
     const { api } = provider();
     const begun = await api.beginAuthorization?.({

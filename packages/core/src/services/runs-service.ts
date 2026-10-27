@@ -1564,6 +1564,7 @@ export class RunsService {
     input: unknown;
     attempt: number;
     timeoutSeconds?: number;
+    deadlineAt?: string;
     signal?: AbortSignal;
   }): Promise<RuntimeInvocationReceipt> {
     return withSpan(
@@ -1613,12 +1614,14 @@ export class RunsService {
             `Deployment artifact '${args.artifactId}' does not match run`,
           );
         }
+        args.signal?.throwIfAborted();
         const runtime = await deploymentRuntime.ensure({
           projectId: args.projectId,
           artifact,
           files: source.files,
           plugins: runtimePackagesForArtifact,
         });
+        args.signal?.throwIfAborted();
         const base = {
           protocolVersion: RUNTIME_PROTOCOL_VERSION,
           runtimeId: runtime.runtimeId,
@@ -1629,9 +1632,11 @@ export class RunsService {
           runtimeVersion: artifact.runtimeVersion,
           input: args.input,
           attempt: args.attempt,
-          deadlineAt: new Date(
-            Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
-          ).toISOString(),
+          deadlineAt:
+            args.deadlineAt ??
+            new Date(
+              Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
+            ).toISOString(),
           env: plugins?.secrets,
           signal: args.signal,
         } as const;

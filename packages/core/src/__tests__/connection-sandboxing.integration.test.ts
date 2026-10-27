@@ -237,6 +237,39 @@ describe("connection actions by agent sandboxing (ADR 0182)", () => {
       agentSessionId: "session-1",
     });
 
+  it("passes workflow cancellation and the deadline through the broker, and refuses a canceled dispatch", async () => {
+    const original = declared.invoke;
+    const calls: Array<Parameters<ConnectionProvider["invoke"]>[0]> = [];
+    declared.invoke = async (args) => {
+      calls.push(args);
+      return { ok: true };
+    };
+    const abort = new AbortController();
+    const deadlineAt = new Date(Date.now() + 300_000).toISOString();
+    const input = {
+      identity: admin,
+      allocationId,
+      alias: "directory",
+      action: "users.list",
+      input: {},
+      caller: "workflow" as const,
+      signal: abort.signal,
+      deadlineAt,
+    };
+    try {
+      await broker.invoke(input);
+      expect(calls[0]?.signal).toBe(abort.signal);
+      expect(calls[0]?.deadlineAt).toBe(deadlineAt);
+      abort.abort(new Error("canceled before dispatch"));
+      await expect(broker.invoke(input)).rejects.toThrow(
+        "canceled before dispatch",
+      );
+      expect(calls).toHaveLength(1);
+    } finally {
+      declared.invoke = original;
+    }
+  });
+
   it("lets a contained agent read and refuses what could change the system", async () => {
     sandboxing = "contained";
     invoked.length = 0;

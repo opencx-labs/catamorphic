@@ -614,6 +614,7 @@ export class DocumentsService {
     content: Uint8Array | string;
     contentType?: string;
     ifVersion?: number;
+    signal?: AbortSignal;
   }): Promise<DocumentEntry> {
     return withSpan(
       {
@@ -634,6 +635,7 @@ export class DocumentsService {
           );
         this.assertAccess(args.identity, args.projectId, normalized, "write");
         await this.refreshLocal({ ...args, path: normalized });
+        args.signal?.throwIfAborted();
         const result = await this.writeInner(args);
         return result;
       },
@@ -648,6 +650,7 @@ export class DocumentsService {
       content: Uint8Array | string;
       contentType?: string;
       ifVersion?: number;
+      signal?: AbortSignal;
     },
     localRefresh = false,
   ): Promise<DocumentEntry> {
@@ -678,6 +681,7 @@ export class DocumentsService {
       : args.identity.externalUserId;
 
     return this.db.transaction().execute(async (trx) => {
+      args.signal?.throwIfAborted();
       await trx
         .insertInto("store_documents")
         .values({
@@ -699,6 +703,7 @@ export class DocumentsService {
         .forUpdate()
         .selectAll()
         .executeTakeFirstOrThrow();
+      args.signal?.throwIfAborted();
       const currentVersion = current.version;
       if (args.ifVersion !== undefined && args.ifVersion !== currentVersion)
         throw new DocumentConflictError(path, currentVersion);
@@ -721,6 +726,7 @@ export class DocumentsService {
           inlineBytes = Buffer.from(bytes);
         }
       }
+      args.signal?.throwIfAborted();
       const writtenAt = new Date();
       await trx
         .insertInto("store_document_versions")
@@ -762,8 +768,13 @@ export class DocumentsService {
           const target = await localDocumentPath(root, path);
           await fs.mkdir(pathModule.dirname(target), { recursive: true });
           const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-          await fs.writeFile(temporary, bytes);
-          await fs.rename(temporary, target);
+          try {
+            await fs.writeFile(temporary, bytes, { signal: args.signal });
+            args.signal?.throwIfAborted();
+            await fs.rename(temporary, target);
+          } finally {
+            await fs.rm(temporary, { force: true }).catch(() => {});
+          }
         }
       }
       return {
@@ -784,6 +795,7 @@ export class DocumentsService {
     projectId: string;
     path: string;
     ifVersion?: number;
+    signal?: AbortSignal;
   }): Promise<{ version: number }> {
     return withSpan(
       {
@@ -805,6 +817,7 @@ export class DocumentsService {
         }
         this.assertAccess(args.identity, args.projectId, path, "write");
         await this.refreshLocal({ ...args, path });
+        args.signal?.throwIfAborted();
         return this.deleteInner({ ...args, path });
       },
     );
@@ -816,6 +829,7 @@ export class DocumentsService {
       projectId: string;
       path: string;
       ifVersion?: number;
+      signal?: AbortSignal;
     },
     localRefresh = false,
   ): Promise<{ version: number }> {
@@ -831,6 +845,7 @@ export class DocumentsService {
         .forUpdate()
         .selectAll()
         .executeTakeFirst();
+      args.signal?.throwIfAborted();
       if (!current || current.deleted) throw new DocumentNotFoundError(path);
       if (args.ifVersion !== undefined && args.ifVersion !== current.version) {
         throw new DocumentConflictError(path, current.version);
@@ -867,6 +882,7 @@ export class DocumentsService {
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
       });
+      args.signal?.throwIfAborted();
       if (root && !localRefresh)
         await fs.rm(await localDocumentPath(root, path), { force: true });
       return { version };

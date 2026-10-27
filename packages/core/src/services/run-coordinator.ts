@@ -134,6 +134,27 @@ export class RunCoordinator {
     return result;
   }
 
+  /** The original attempt clock survives execution-job redelivery (ADR 0288). */
+  async boundaryDeadline(args: { job: ExecutionJob }): Promise<string | null> {
+    const workflowStepAttemptId = args.job.workflowStepAttemptId;
+    if (!workflowStepAttemptId) return null;
+    return this.db.transaction().execute(async (trx) => {
+      const context = await this.lockActiveAttempt({
+        trx,
+        workflowStepAttemptId,
+      });
+      if (
+        context?.attempt.status !== "running" ||
+        !context.attempt.started_at ||
+        !(await ownsJob({ trx, job: args.job }))
+      )
+        return null;
+      return new Date(
+        context.attempt.started_at.getTime() + 300_000,
+      ).toISOString();
+    });
+  }
+
   /**
    * Moves a run between batch phases.
    *

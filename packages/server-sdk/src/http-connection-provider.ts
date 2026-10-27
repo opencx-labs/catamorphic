@@ -165,7 +165,8 @@ export function defineHttpApiConnectionProvider(
       (named
         ? named.find((candidate) => candidate.name === action)?.method
         : methodNamed(action)) === "get",
-    invoke: async ({ material, action, input }) => {
+    invoke: async ({ material, action, input, signal }) => {
+      signal?.throwIfAborted();
       const operation = named?.find((candidate) => candidate.name === action);
       const method = named ? operation?.method : methodNamed(action);
       if (!method) throw new Error(`Unknown action '${action}'`);
@@ -202,7 +203,10 @@ export function defineHttpApiConnectionProvider(
         headers,
         // A redirect could carry the key elsewhere; the caller sees it instead.
         redirect: "manual",
-        signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(options.timeoutMs ?? 30_000),
+          ...(signal ? [signal] : []),
+        ]),
         ...(hasBody ? { body: JSON.stringify(request.body) } : {}),
       });
       return readResponse({
