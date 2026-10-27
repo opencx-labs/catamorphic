@@ -382,6 +382,161 @@ describeIf("unified RunsService integration", () => {
     });
   }, 20_000);
 
+  it("rolls back cancellation when replacement initialization fails", async () => {
+    const worker = core.runs.startWorker({
+      name: "restart-rollback",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+    });
+    const first = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "rollback" },
+      correlationKey: "rollback",
+    });
+    await waitForStatus({ runId: first.id, status: "waiting" });
+    await worker.stop();
+    const before = await core.runs.get({ identity, runId: first.id });
+    const attempts = await db
+      .selectFrom("workflow_step_attempts")
+      .select(["id", "status"])
+      .where("run_id", "=", first.id)
+      .orderBy("id")
+      .execute();
+    const jobs = await db
+      .selectFrom("execution_jobs")
+      .select(["id", "status"])
+      .where("workflow_run_id", "=", first.id)
+      .orderBy("id")
+      .execute();
+    const initialize = vi
+      .spyOn(RunCoordinator.prototype, "initialize")
+      .mockRejectedValueOnce(new Error("replacement initialization failed"));
+    try {
+      await expect(
+        core.runs.triggerProduction({
+          identity,
+          projectId,
+          workflowName: "campaignWorkflow",
+          input: { contactId: "replacement" },
+          correlationKey: "rollback",
+          onConflict: "restart",
+        }),
+      ).rejects.toThrow("replacement initialization failed");
+    } finally {
+      initialize.mockRestore();
+    }
+    const after = await core.runs.get({ identity, runId: first.id });
+    expect(after.status).toBe("waiting");
+    expect(after.activePause?.id).toBe(before.activePause?.id);
+    expect(
+      await db
+        .selectFrom("workflow_step_attempts")
+        .select(["id", "status"])
+        .where("run_id", "=", first.id)
+        .orderBy("id")
+        .execute(),
+    ).toEqual(attempts);
+    expect(
+      await db
+        .selectFrom("execution_jobs")
+        .select(["id", "status"])
+        .where("workflow_run_id", "=", first.id)
+        .orderBy("id")
+        .execute(),
+    ).toEqual(jobs);
+    expect(
+      (
+        await db
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", first.allocationId ?? "")
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe("active");
+    expect(
+      (
+        await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("project_id", "=", projectId)
+          .where("correlation_key", "=", "rollback")
+          .execute()
+      ).map((row) => row.id),
+    ).toEqual([first.id]);
+    await core.runs.cancel({ identity, runId: first.id });
+  });
+
+  it("lets only one competing restart replace an observed generation", async () => {
+    const first = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      input: { contactId: "competing" },
+      correlationKey: "competing",
+    });
+    const ensure = core.deploymentArtifacts.ensure.bind(
+      core.deploymentArtifacts,
+    );
+    let prepared = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prepare = vi
+      .spyOn(core.deploymentArtifacts, "ensure")
+      .mockImplementation(async (args) => {
+        const artifact = await ensure(args);
+        prepared += 1;
+        if (prepared === 2) release?.();
+        await gate;
+        return artifact;
+      });
+    try {
+      const outcomes = await Promise.allSettled(
+        ["one", "two"].map((contactId) =>
+          core.runs.triggerProduction({
+            identity,
+            projectId,
+            workflowName: "campaignWorkflow",
+            input: { contactId },
+            correlationKey: "competing",
+            onConflict: "restart",
+          }),
+        ),
+      );
+      expect(
+        outcomes.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      const failure = outcomes.find((result) => result.status === "rejected");
+      expect(failure?.status === "rejected" && failure.reason).toBeInstanceOf(
+        RunEnrollmentConflictError,
+      );
+      expect((await core.runs.get({ identity, runId: first.id })).status).toBe(
+        "canceled",
+      );
+      expect(
+        await db
+          .selectFrom("workflow_runs")
+          .select("id")
+          .where("project_id", "=", projectId)
+          .where("correlation_key", "=", "competing")
+          .where("status", "not in", ["completed", "failed", "canceled"])
+          .execute(),
+      ).toHaveLength(1);
+    } finally {
+      release?.();
+      prepare.mockRestore();
+    }
+    await core.runs.cancelByKey({
+      identity,
+      projectId,
+      workflowName: "campaignWorkflow",
+      correlationKey: "competing",
+    });
+  });
+
   it("restarts an enrollment even when the tenant is over its run cap", async () => {
     const worker = core.runs.startWorker({
       name: "campaign-restart-cap",

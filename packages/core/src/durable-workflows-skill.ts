@@ -136,6 +136,15 @@ export const briefOrder = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
+## Keyed restarts
+
+Keyed enrollment with \`onConflict: "restart"\` cancels the observed live run
+and commits its replacement and first job together. Failed admission or job
+initialization preserves the old run. A competing restart surfaces a conflict.
+Physical cancellation and cleanup follow the commit; external effects still
+need application operation identities and reconciliation. A correlation key
+identifies a live journey, not permanent business deduplication.
+
 ## Retry policy and diagnostics
 
 Set \`retry: { maxAttempts: 3, backoff: { initial: "1s", maximum: "30s", multiplier: 2 } }\`
