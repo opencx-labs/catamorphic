@@ -371,6 +371,15 @@ export const BUILTIN_ACTIONS = [
     keywords: ["editor", "code", "file", "open", "monaco", "edit"],
   },
   {
+    id: "new-markdown-file",
+    label: "New markdown file",
+    icon: "FileText",
+    description:
+      "create an untitled markdown file in your personal folder and open it",
+    defaultBinding: null,
+    keywords: ["markdown", "md", "note", "document", "doc", "file", "write"],
+  },
+  {
     id: "toggle-right-sidebar",
     label: "Toggle right sidebar",
     icon: "PanelRight",

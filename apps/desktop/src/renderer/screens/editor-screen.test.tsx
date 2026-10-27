@@ -52,7 +52,10 @@ vi.mock("@monaco-editor/react", () => ({
 vi.mock("../components/file-inspector.js", () => ({
   FileInspector: () => null,
 }));
-vi.mock("../lib/theme.js", () => ({ useTheme: () => null }));
+vi.mock("../lib/theme.js", () => ({
+  useTheme: () => null,
+  themeStyle: () => ({}),
+}));
 vi.mock("../lib/monaco-setup.js", () => ({ useMonacoTheme: () => "dark" }));
 vi.mock("../lib/local-project-files.js", () => ({
   localEditorPath: async (_projectId: string, filePath: string) =>
@@ -62,6 +65,7 @@ vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
     editorFileRead: vi.fn(),
     editorFileWrite: vi.fn(),
+    editorFileRename: vi.fn(),
     projectRoot: vi.fn().mockResolvedValue("/projects/p1"),
     onGitChanged: vi.fn((listener: (change: { projectId: string }) => void) => {
       gitListeners.add(listener);
@@ -246,6 +250,63 @@ it("reads the open file again when its window is back, unless a draft holds it",
     expect(desktopApi.editorFileRead).toHaveBeenCalledTimes(2);
   } finally {
     focusManager.setFocused(undefined);
+    act(() => root.unmount());
+  }
+});
+
+it("names an untitled file when it is first saved, and the tab follows it", async () => {
+  vi.mocked(desktopApi.editorFileRead).mockResolvedValue({ content: "" });
+  vi.mocked(desktopApi.editorFileWrite).mockResolvedValue(undefined);
+  vi.mocked(desktopApi.editorFileRename).mockResolvedValue(
+    "/projects/p1/.work/personal/me/Plan.txt",
+  );
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  const onRename = vi.fn();
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={workQueryClient({ retry: 0, staleTime: 0 })}>
+        <EditorScreen
+          active
+          projectId="p1"
+          filePath=".work/personal/me/Untitled.txt"
+          onFindFile={() => {}}
+          onDirtyChange={() => {}}
+          onRename={onRename}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  const editor = () =>
+    node.querySelector<HTMLTextAreaElement>("[data-testid=editor]");
+  await settle(() => editor() !== null);
+  try {
+    const textarea = editor();
+    if (!textarea) throw new Error("editor did not mount");
+    await type(textarea, "# Plan\nfirst steps");
+    await act(async () =>
+      node
+        .querySelector<HTMLButtonElement>("[data-testid=editor-save]")
+        ?.click(),
+    );
+    expect(desktopApi.editorFileWrite).not.toHaveBeenCalled();
+    const name = document.querySelector<HTMLInputElement>("input[name=name]");
+    expect(name?.value).toBe("Plan");
+    await act(async () => name?.form?.requestSubmit());
+    await settle(() => onRename.mock.calls.length > 0);
+    expect(desktopApi.editorFileWrite).toHaveBeenCalledWith({
+      filePath: "/projects/p1/.work/personal/me/Untitled.txt",
+      content: "# Plan\nfirst steps",
+      expectedContent: "",
+    });
+    expect(desktopApi.editorFileRename).toHaveBeenCalledWith({
+      filePath: "/projects/p1/.work/personal/me/Untitled.txt",
+      name: "Plan",
+    });
+    expect(onRename).toHaveBeenCalledWith(".work/personal/me/Plan.txt");
+  } finally {
     act(() => root.unmount());
   }
 });

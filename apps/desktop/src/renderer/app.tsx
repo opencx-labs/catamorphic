@@ -4614,6 +4614,27 @@ export function App({
       openTerminalTab({ side: mode === "side", floating: mode === "floating" }),
     "new-editor-tab": (mode) =>
       openEditorTab({ side: mode === "side", floating: mode === "floating" }),
+    "new-markdown-file": (mode) => {
+      const originProject = projectIdRef.current;
+      if (!originProject) return;
+      void desktopApi
+        .personalFileCreate({ projectId: originProject, extension: "md" })
+        .then((filePath) => {
+          if (projectIdRef.current !== originProject) return;
+          openEditorTab({
+            filePath,
+            side: mode === "side",
+            floating: mode === "floating",
+          });
+        })
+        .catch((cause: unknown) =>
+          setLinkError(
+            cause instanceof Error
+              ? cause.message
+              : "Could not create the markdown file",
+          ),
+        );
+    },
     "toggle-right-sidebar": () => {
       const open = !rightSidebarOpen;
       if (open) setRightSidebarFocusRequest((count) => count + 1);
@@ -6488,6 +6509,7 @@ export function App({
     "server-connections":
       remoteSurfaceStatus?.capabilities?.administrator === true,
     "new-workflow": !memberShell,
+    "new-markdown-file": projectId !== undefined,
     "search-changes": !memberShell,
     "toggle-chat-minimized": paletteTargetChat !== undefined,
     "chat-to-tab":
@@ -8016,6 +8038,9 @@ export function App({
                             }
                             onDirtyChange={(dirty) =>
                               onEditorState(editor.localId, { dirty })
+                            }
+                            onRename={(filePath) =>
+                              onEditorState(editor.localId, { filePath })
                             }
                             onShare={
                               editor.filePath?.startsWith(

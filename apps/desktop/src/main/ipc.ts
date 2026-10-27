@@ -82,7 +82,11 @@ import {
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
-import { readEditorFile, writeEditorFile } from "./editor-files.js";
+import {
+  readEditorFile,
+  renameEditorFile,
+  writeEditorFile,
+} from "./editor-files.js";
 import { copyFileToClipboard, runAppleScript } from "./file-clipboard.js";
 import { readFilePreview, readProjectImage } from "./file-preview.js";
 import { searchProjectFiles } from "./file-search.js";
@@ -120,7 +124,7 @@ import {
   projectRelativePath,
   updatePersonalEnvironmentConfig,
 } from "./personal-environment-config.js";
-import { listPersonalFiles } from "./personal-files.js";
+import { createPersonalFile, listPersonalFiles } from "./personal-files.js";
 import {
   e2ePullRequestStatus,
   pullRequestAddress,
@@ -3145,6 +3149,29 @@ export function registerIpcHandlers(
         profileId: windows.profileFor(event.sender),
       });
       return [...files.map((file) => ({ path: file.path })), ...personal];
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:personal-file-create",
+    async (event, input: { projectId: string; extension: string }) => {
+      if (
+        typeof input?.projectId !== "string" ||
+        typeof input.extension !== "string"
+      )
+        throw new Error("Invalid file");
+      return createPersonalFile({
+        root: await requireRoot(input.projectId),
+        profileId: windows.profileFor(event.sender),
+        extension: input.extension,
+      });
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:editor-file-rename",
+    (_event, input: { filePath: string; name: string }) => {
+      if (typeof input?.filePath !== "string" || typeof input.name !== "string")
+        throw new Error("Invalid rename");
+      return renameEditorFile(input);
     },
   );
   ipcMain.handle(
