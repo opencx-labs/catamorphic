@@ -429,20 +429,53 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       leaseSeconds: 3,
     });
 
+  // Deadline tests exercise the coordinator and calls directly. Source and
+  // deployment preparation are covered separately; they must not consume this
+  // deliberately short remaining attempt budget on a loaded CI machine.
+  function stubCall(input: {
+    type: string;
+    transition: Record<string, unknown>;
+    delayMs?: number;
+  }) {
+    const invoked =
+      deferred<Parameters<typeof core.runs.invokeProductionRuntime>[0]>();
+    vi.spyOn(core.runs, "invokeProductionRuntime").mockImplementation(
+      async (invocation) => {
+        invoked.resolve(invocation);
+        if (input.delayMs)
+          await new Promise((resolve) => setTimeout(resolve, input.delayMs));
+        return {
+          runtimeId: "deadline-fixture",
+          invocationId: invocation.invocationId,
+          events: [],
+          terminal: {
+            status: "completed",
+            steps: [],
+            result: { type: input.type, transition: input.transition },
+          },
+        };
+      },
+    );
+    return invoked.promise;
+  }
+
   it("shares the persisted attempt deadline with its callback and hung host call, then fences a late result", async () => {
     const late = deferred<unknown>();
     const called = deferred<HostCallContext>();
-    const invoked = deferred<RuntimeInvocation>();
-    runtimeOverride = async (invocation) => {
-      invoked.resolve(invocation);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      return invokeRuntime(invocation);
-    };
+    const invoked = stubCall({
+      type: "host_call",
+      delayMs: 50,
+      transition: {
+        capability: "acme.crm",
+        fn: "lookupAccount",
+        args: { id: "bounded" },
+      },
+    });
     hostOverride = (context) => {
       called.resolve(context);
       return late.promise;
     };
-    const run = await enqueue("lookupAccount", 1_500);
+    const run = await enqueue("lookupAccount", 5_000);
     const persisted = await db
       .selectFrom("workflow_step_attempts")
       .select("started_at")
@@ -450,7 +483,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       .executeTakeFirstOrThrow();
     startWorker();
     const context = await called.promise;
-    const invocation = await invoked.promise;
+    const invocation = await invoked;
     expect(context.signal).toBe(invocation.signal);
     expect(context.deadlineAt).toBe(invocation.deadlineAt);
     expect(Date.parse(context.deadlineAt)).toBe(
@@ -460,7 +493,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       .poll(
         async () =>
           (await core.runs.get({ identity: root, runId: run.id })).status,
-        { timeout: 5_000 },
+        { timeout: 10_000 },
       )
       .toBe("failed");
     expect(context.signal.aborted).toBe(true);
@@ -540,38 +573,25 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     const broker = core.connectionBroker;
     if (!broker) throw new Error("Fixture needs a connection broker");
     const called = deferred<Parameters<typeof broker.invoke>[0]>();
-    const invoked = deferred<RuntimeInvocation>();
+    const invoked = stubCall({
+      type: "connection_call",
+      transition: { alias: "fake", action: "read", args: {} },
+    });
     vi.spyOn(broker, "invoke").mockImplementation((args) => {
       called.resolve(args);
       return new Promise(() => {});
     });
-    runtimeOverride = async (invocation) => {
-      invoked.resolve(invocation);
-      return {
-        runtimeId: invocation.runtimeId,
-        invocationId: invocation.invocationId,
-        events: [],
-        terminal: {
-          status: "completed",
-          steps: [],
-          result: {
-            type: "connection_call",
-            transition: { alias: "fake", action: "read", args: {} },
-          },
-        },
-      };
-    };
-    const run = await enqueue("lookupAccount", 1_500);
+    const run = await enqueue("lookupAccount", 5_000);
     startWorker();
     const context = await called.promise;
-    const invocation = await invoked.promise;
+    const invocation = await invoked;
     expect(context.signal).toBe(invocation.signal);
     expect(context.deadlineAt).toBe(invocation.deadlineAt);
     await expect
       .poll(
         async () =>
           (await core.runs.get({ identity: root, runId: run.id })).status,
-        { timeout: 5_000 },
+        { timeout: 10_000 },
       )
       .toBe("failed");
     expect(context.signal?.aborted).toBe(true);
@@ -631,13 +651,21 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     vi.spyOn(core.documents, "read").mockImplementation(
       () => new Promise(() => {}),
     );
-    const run = await enqueue("briefCustomer", 1_500);
+    stubCall({
+      type: "host_call",
+      transition: {
+        capability: DOCUMENTS_CAPABILITY,
+        fn: "read",
+        args: { path: "store/customers/acme/notes.md" },
+      },
+    });
+    const run = await enqueue("briefCustomer", 5_000);
     startWorker();
     await expect
       .poll(
         async () =>
           (await core.runs.get({ identity: root, runId: run.id })).status,
-        { timeout: 5_000 },
+        { timeout: 10_000 },
       )
       .toBe("failed");
   });

@@ -32,6 +32,59 @@ beforeEach(() => {
 });
 
 describe("Postgres transaction-pool cancellation", () => {
+  it.each(["ROLLBACK", "DISCARD ALL"])(
+    "never cancels a released backend when abort arrives during %s",
+    async (cleanup) => {
+      let entered = () => {};
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let finish = () => {};
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      fake.query.mockImplementation(async (query: string) => {
+        if (query === cleanup) {
+          entered();
+          await gate;
+        }
+        return {
+          rows: query === "SELECT pg_backend_pid() AS pid" ? [{ pid: 22 }] : [],
+        };
+      });
+      const provider = definePostgresConnectionProvider({
+        kind: "cleanup",
+        displayName: "Cleanup",
+      });
+      const abort = new AbortController();
+      const operation = provider.invoke({
+        material: new TextEncoder().encode(
+          JSON.stringify({
+            connectionString: "postgresql://fixture.invalid/db",
+          }),
+        ),
+        connection: { id: "cleanup", revision: 1 },
+        action: "explain",
+        capabilities: ["explain"],
+        input: { sql: "SELECT 1" },
+        signal: abort.signal,
+      });
+      try {
+        await ready;
+        // ROLLBACK can already have returned PID 22 to a different caller.
+        abort.abort();
+        finish();
+        await operation;
+        expect(fake.cancelQuery).not.toHaveBeenCalled();
+        await expect.poll(() => fake.release.mock.calls.length).toBe(1);
+        expect(fake.release).toHaveBeenCalledWith(true);
+      } finally {
+        finish();
+        await provider.close();
+      }
+    },
+  );
+
   it("captures the backend pinned by BEGIN instead of the backend returned by an earlier statement", async () => {
     let inTransaction = false;
     let fetched = () => {};

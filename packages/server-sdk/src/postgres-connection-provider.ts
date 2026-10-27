@@ -225,8 +225,9 @@ export function definePostgresConnectionProvider(
       const abort = () => {
         if (released) return;
         released = true;
+        const cancellationPid = backendPid;
         const cancel = async () => {
-          if (backendPid === undefined) return;
+          if (cancellationPid === undefined) return;
           const { connectionString } = parseMaterial(material);
           const cancellation = new pg.Client({
             connectionString,
@@ -237,7 +238,7 @@ export function definePostgresConnectionProvider(
           try {
             await cancellation.connect();
             await cancellation.query("SELECT pg_cancel_backend($1)", [
-              backendPid,
+              cancellationPid,
             ]);
           } finally {
             await cancellation.end().catch(() => {});
@@ -296,6 +297,9 @@ export function definePostgresConnectionProvider(
         }
         return await runCursor(client, sql, request.params, limits, plan);
       } finally {
+        // ROLLBACK unpins a transaction-pooled backend. Never send a PID
+        // cancellation after cleanup starts; abort may only drop the socket.
+        backendPid = undefined;
         // ROLLBACK leaves session state a statement can still take (an
         // advisory lock survives it); DISCARD ALL returns the session to
         // how it connected before the next call borrows it.

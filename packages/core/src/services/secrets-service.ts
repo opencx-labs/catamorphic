@@ -386,6 +386,7 @@ export class SecretsService {
             }),
           )
           .execute();
+        args.signal?.throwIfAborted();
         return current?.credential_ref;
       });
     } catch (error) {
@@ -412,7 +413,7 @@ export class SecretsService {
     const removed = await this.db.transaction().execute(async (trx) => {
       await lockValue({ trx, ...args });
       args.signal?.throwIfAborted();
-      return trx
+      const result = await trx
         .deleteFrom("project_secrets")
         .where("project_id", "=", args.projectId)
         .where("name", "=", args.name)
@@ -423,6 +424,8 @@ export class SecretsService {
         )
         .returning("credential_ref")
         .executeTakeFirst();
+      args.signal?.throwIfAborted();
+      return result;
     });
     if (removed?.credential_ref && this.deps.vault)
       await this.deps.vault
