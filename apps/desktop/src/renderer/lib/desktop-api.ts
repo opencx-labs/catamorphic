@@ -1599,6 +1599,16 @@ export interface CatamorphicDesktopApi {
     content: string;
     expectedContent: string;
   }) => Promise<void>;
+  /** Renames a file where it is; the new absolute path. */
+  editorFileRename: (input: {
+    filePath: string;
+    name: string;
+  }) => Promise<string>;
+  /** An empty `Untitled` file in the profile's personal folder; its project path. */
+  personalFileCreate: (input: {
+    projectId: string;
+    extension: string;
+  }) => Promise<string>;
   projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalGhosttyAppearance: () => Promise<TerminalAppearanceResult>;

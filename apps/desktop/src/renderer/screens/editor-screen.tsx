@@ -3,6 +3,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { ActionInputDialog } from "../components/action-input-dialog.js";
 import { FileInspector } from "../components/file-inspector.js";
 import { PendingButton } from "../components/pending-button.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -19,6 +20,28 @@ import { useTheme } from "../lib/theme.js";
 const PERSONAL_PREFIX_PATTERN = new RegExp(
   `^(?:.*/)?${PROJECT_PERSONAL_DIR.replaceAll(".", "\\.")}/[^/]+/`,
 );
+
+/** The names Work gives the files it creates (Untitled.md, Untitled 2.md). */
+const UNTITLED_NAME = /^Untitled(?: \d+)?\.[^./]+$/;
+
+const baseName = (path: string) => path.split("/").at(-1) ?? path;
+const withoutExtension = (name: string) => name.replace(/\.[^.]+$/, "");
+
+/** A name for a new file from its first line ("# Plan" names it Plan). */
+function suggestedName(content: string | undefined): string {
+  const firstLine =
+    content
+      ?.split("\n")
+      .map((line) =>
+        line
+          .replace(/^[#>\-*\s]+/, "")
+          .replace(/[/\\:*?"<>|]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .find(Boolean) ?? "";
+  return firstLine.slice(0, 60).trim() || "Untitled";
+}
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
@@ -56,6 +79,8 @@ export interface EditorScreenProps {
   onShare?: (filePath: string) => void;
   onPropose?: (filePath: string) => void;
   onSharePersonal?: (filePath: string, intent: "publish" | "propose") => void;
+  /** The file was renamed: the tab follows it to its new path. */
+  onRename?: (filePath: string) => void;
 }
 
 export function EditorScreen({
@@ -70,6 +95,7 @@ export function EditorScreen({
   onShare,
   onPropose,
   onSharePersonal,
+  onRename,
 }: EditorScreenProps) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -171,11 +197,26 @@ export function EditorScreen({
     });
   };
 
+  // A file Work named Untitled asks for its name when it is first saved;
+  // keeping that name saves it as it is from then on.
+  const [naming, setNaming] = useState<"save" | "rename" | null>(null);
+  const keptNamesRef = useRef(new Set<string>());
+  const personal = filePath ? PERSONAL_PREFIX_PATTERN.test(filePath) : false;
+
   const saveRef = useRef(() => {});
   saveRef.current = () => {
     if (!filePath) return;
     const content = draftsRef.current[filePath];
     if (content === undefined || writeFile.isPending) return;
+    if (
+      onRename &&
+      personal &&
+      UNTITLED_NAME.test(baseName(filePath)) &&
+      !keptNamesRef.current.has(filePath)
+    ) {
+      setNaming("save");
+      return;
+    }
     writeFile.mutate(
       { path: filePath, content },
       {
@@ -204,6 +245,22 @@ export function EditorScreen({
       });
     }
     action(filePath);
+  };
+
+  const renameTo = async (name: string) => {
+    if (!filePath || !onRename) return;
+    const renamed = await desktopApi.editorFileRename({
+      filePath: await localEditorPath(projectId, filePath),
+      name,
+    });
+    const nextPath = filePath.replace(/[^/]*$/, baseName(renamed));
+    if (nextPath === filePath) return;
+    // An unsaved draft is the file's, whatever it is called.
+    setDrafts((current) => {
+      const { [filePath]: moved, ...rest } = current;
+      return moved === undefined ? current : { ...rest, [nextPath]: moved };
+    });
+    onRename(nextPath);
   };
 
   // Selection channel: while this pane's editor has focus, chats can pull
@@ -304,6 +361,7 @@ export function EditorScreen({
             dirty={draft !== undefined}
             saving={writeFile.isPending}
             onSave={() => saveRef.current()}
+            onRename={onRename ? () => setNaming("rename") : undefined}
             onPublish={onShare ? () => saveBeforeAction(onShare) : undefined}
             onPropose={
               onPropose ? () => saveBeforeAction(onPropose) : undefined
@@ -331,6 +389,39 @@ export function EditorScreen({
           )}
         </span>
       </div>
+      <ActionInputDialog
+        selectInitialValue
+        request={
+          naming && {
+            label: naming === "save" ? "Save file" : "Rename file",
+            input: {
+              title: naming === "save" ? "Save file" : "Rename file",
+              submit: naming === "save" ? "Save" : "Rename",
+              fields: [
+                {
+                  name: "name",
+                  label: "Name",
+                  value:
+                    naming === "save"
+                      ? suggestedName(draft)
+                      : withoutExtension(baseName(filePath)),
+                  placeholder: "File name",
+                },
+              ],
+            },
+            run: async (values) => {
+              const name = values.name?.trim() ?? "";
+              if (!name) throw new Error("Name the file.");
+              if (naming === "save") {
+                await saveBeforeAction(() => undefined);
+                keptNamesRef.current.add(filePath);
+              }
+              await renameTo(name);
+            },
+          }
+        }
+        onClose={() => setNaming(null)}
+      />
       {(fileQuery.error || writeFile.error) && (
         <p role="alert" className="p-3 text-xs text-danger">
           {fileQuery.error?.message ?? writeFile.error?.message}
