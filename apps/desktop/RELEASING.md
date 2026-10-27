@@ -131,6 +131,22 @@ publication partly succeeds, retain the published packages and recover the
 workflow; never unpublish or move the release tag. A release is unfinished until
 the desktop, image and all npm libraries have been verified.
 
+When npm replaces a new package's `0.0.0-stage` placeholder, it can also assign
+the first real alpha to `latest` despite `--tag alpha`. The publisher removes
+that accidental tag only if no stable version exists. It preserves a valid
+stable `latest` and refuses to guess a previous stable version.
+
+To recover this channel-only failure on an immutable older tag, dispatch
+`Desktop release` from `main` with `repair_npm_run` set to the original tag run
+ID. This mode skips preparation, signing and publication. It binds the original
+repository, workflow, tag commit and successful preparation/desktop jobs, then
+downloads the retained original npm artifact. Every archive and all published
+integrities must match before any tag is removed. Missing/expired artifacts,
+newer channels and ambiguous stable versions fail without rebuilding packages.
+After repair, rerun only the original failed npm job; it skips identical
+published versions and verifies the complete release. Ordinary dispatch with
+the input empty still only builds and tests.
+
 The packaged app includes the audited Claude Code and Codex TypeScript
 adapters but excludes their large platform packages. If either dependency is
 updated, update the matching platform version, tarball URL, and SHA-512 pins in
@@ -162,7 +178,14 @@ each package, the trusted publisher is:
 - Repository: `opencx-labs/catamorphic`
 - Workflow filename: `desktop-prerelease.yml`
 - Environment: unset (the npm job already follows the protected desktop job)
-- Permission: direct publication
+- Permissions: direct publication and **Allow npm dist-tag**
+
+Dist-tag management is a separate trusted-publisher permission, disabled by
+default. Enable **Allow npm dist-tag** for the same repository/workflow in each
+package's npm settings. The pinned CLI's `release:trust` registration does not
+grant it. This is one-time owner setup so routine releases and channel recovery
+can use OIDC without package-by-package approval. See
+[npm's dist-tag permission](https://docs.npmjs.com/trusted-publishers/#managing-dist-tags-with-trusted-publishing).
 
 Verify the first OIDC publication before calling setup complete. npm requires a
 new trust configuration's first successful publication within two days; an

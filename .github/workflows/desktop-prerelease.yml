@@ -5,6 +5,12 @@ on:
     tags:
       - "desktop-v*"
   workflow_dispatch:
+    inputs:
+      repair_npm_run:
+        description: "Optional original tag run ID: repair bootstrap npm channels only"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -17,6 +23,7 @@ concurrency:
 jobs:
   prepare-npm:
     name: Build and verify npm packages
+    if: github.event_name != 'workflow_dispatch' || inputs.repair_npm_run == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -309,3 +316,28 @@ jobs:
           path: ${{ runner.temp }}/npm-packages
       - name: Publish the verified tarballs
         run: bun scripts/release-packages.ts publish --directory "${RUNNER_TEMP}/npm-packages"
+
+  repair-npm-channels:
+    name: Repair original bootstrap npm channels
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.repair_npm_run != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.1
+      - name: Install the OIDC-capable npm client
+        run: npm install --global npm@11.21.1 --ignore-scripts
+      - name: Verify original release artifacts and repair only bootstrap channels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPAIR_RUN: ${{ inputs.repair_npm_run }}
+        run: bun scripts/release-packages.ts repair-bootstrap --run "${REPAIR_RUN}" --directory "${RUNNER_TEMP}/npm-channel-repair"

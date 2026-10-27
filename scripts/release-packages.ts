@@ -645,6 +645,250 @@ export function publicationPlan(input: {
   });
 }
 
+/** npm can promote the first real version when replacing its staging placeholder. */
+export function bootstrapLatestRemovals(input: {
+  packages: PackageArtifact[];
+  registered: RegistryPackage[];
+}): PackageArtifact[] {
+  if (publicationPlan(input).length)
+    throw new Error(
+      "Channel repair requires every exact version to be published",
+    );
+  return input.packages.filter((pkg, index) => {
+    if (npmReleaseTag(pkg.version) !== "alpha") return false;
+    const registered = input.registered[index];
+    if (registered?.["dist-tags"]?.alpha !== pkg.version)
+      throw new Error(`${pkg.name}: unexpected alpha channel during repair`);
+    if (registered["dist-tags"]?.latest !== pkg.version) return false;
+    if (
+      Object.keys(registered.versions ?? {}).some((version) =>
+        /^\d+\.\d+\.\d+$/.test(version),
+      )
+    )
+      throw new Error(`${pkg.name}: cannot infer the previous stable latest`);
+    return true;
+  });
+}
+
+async function reconcileBootstrapChannels(inventory: Inventory) {
+  const registered = await Promise.all(
+    inventory.packages.map((pkg) => registeredPackage(pkg.name)),
+  );
+  // Validate the complete release before the first metadata mutation.
+  const removals = bootstrapLatestRemovals({
+    packages: inventory.packages,
+    registered,
+  });
+  for (const pkg of removals) {
+    // Recheck immediately before removing only this release's accidental tag.
+    const fresh = await registeredPackage(pkg.name);
+    if (
+      !bootstrapLatestRemovals({ packages: [pkg], registered: [fresh] }).length
+    )
+      continue;
+    const result = spawnSync(
+      "npm",
+      [
+        "dist-tag",
+        "rm",
+        pkg.name,
+        "latest",
+        "--registry",
+        NPM_REGISTRY,
+        `--@catamorphic:registry=${NPM_REGISTRY}`,
+      ],
+      { stdio: "inherit" },
+    );
+    if (result.error) throw result.error;
+    if (result.status !== 0)
+      throw new Error(
+        `${pkg.name}: channel repair failed; trusted publishing also needs Allow npm dist-tag`,
+      );
+  }
+}
+
+export interface NpmRepairRun {
+  id: number;
+  event: string;
+  path: string;
+  head_branch: string;
+  head_sha: string;
+  status: string;
+  repository: { full_name: string };
+}
+
+export function verifyNpmRepairRun(input: {
+  run: NpmRepairRun;
+  runId: string;
+  version: string;
+  tagCommit: string;
+  jobs: { jobs: { name: string; conclusion: string | null }[] };
+}) {
+  const { run, runId, version, tagCommit, jobs } = input;
+  desktopReleaseKind(version);
+  if (
+    !/^[1-9]\d*$/.test(runId) ||
+    String(run.id) !== runId ||
+    run.repository.full_name !== "opencx-labs/catamorphic" ||
+    run.event !== "push" ||
+    run.path !== ".github/workflows/desktop-prerelease.yml" ||
+    run.head_branch !== `desktop-v${version}` ||
+    !/^[a-f0-9]{40}$/.test(tagCommit) ||
+    run.head_sha !== tagCommit ||
+    run.status !== "completed"
+  )
+    throw new Error("Repair source does not match the immutable release tag");
+  for (const name of [
+    "Build and verify npm packages",
+    "Build, sign, and notarize macOS",
+  ])
+    if (
+      !jobs.jobs.some(
+        (job) => job.name === name && job.conclusion === "success",
+      )
+    )
+      throw new Error(`Repair requires successful original job: ${name}`);
+}
+
+/** Read committed metadata only; never execute scripts from an old release. */
+export function releasePackageNamesAtCommit(input: {
+  rootPath: string;
+  commit: string;
+  version: string;
+}): string[] {
+  if (!/^[a-f0-9]{40}$/.test(input.commit))
+    throw new Error("Release inventory requires an exact commit");
+  const git = (args: string[]) =>
+    execFileSync("git", args, { cwd: input.rootPath, encoding: "utf8" });
+  const filenames = git([
+    "ls-tree",
+    "-r",
+    "--name-only",
+    input.commit,
+    "--",
+    "packages",
+    "apps",
+  ])
+    .trim()
+    .split("\n")
+    .filter((filename) =>
+      /^(packages|apps)\/[^/]+\/package\.json$/.test(filename),
+    );
+  const manifests: Manifest[] = filenames.map((filename) =>
+    JSON.parse(git(["show", `${input.commit}:${filename}`])),
+  );
+  if (
+    !manifests.length ||
+    manifests.some((manifest) => manifest.version !== input.version)
+  )
+    throw new Error("Original workspace versions do not match the release");
+  return manifests
+    .filter((manifest) => !manifest.private)
+    .map((manifest) => manifest.name)
+    .sort();
+}
+
+async function repairBootstrapRelease(input: {
+  rootPath: string;
+  directory: string;
+  runId: string;
+}) {
+  if (
+    process.env.GITHUB_ACTIONS !== "true" ||
+    process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    process.env.GITHUB_REF !== "refs/heads/main" ||
+    !/^[1-9]\d*$/.test(input.runId)
+  )
+    throw new Error(
+      "Channel repair must run explicitly from main on GitHub Actions",
+    );
+  const gh = (args: string[]) =>
+    execFileSync("gh", args, { cwd: input.rootPath, encoding: "utf8" });
+  const run: NpmRepairRun = JSON.parse(
+    gh(["api", `repos/opencx-labs/catamorphic/actions/runs/${input.runId}`]),
+  );
+  const jobPages: { jobs: { name: string; conclusion: string | null }[] }[] =
+    JSON.parse(
+      gh([
+        "api",
+        `repos/opencx-labs/catamorphic/actions/runs/${input.runId}/jobs?filter=all&per_page=100`,
+        "--paginate",
+        "--slurp",
+      ]),
+    );
+  const jobs = { jobs: jobPages.flatMap((page) => page.jobs) };
+  const tag = run.head_branch;
+  const version = tag.replace(/^desktop-v/, "");
+  verifyDesktopRelease({ tag, packageVersion: version });
+  if (npmReleaseTag(version) !== "alpha")
+    throw new Error("Bootstrap channel repair is only for a Preview release");
+  execFileSync(
+    "git",
+    ["fetch", "origin", `refs/tags/${tag}:refs/tags/${tag}`],
+    {
+      cwd: input.rootPath,
+      stdio: "inherit",
+    },
+  );
+  const tagCommit = execFileSync("git", ["rev-parse", `${tag}^{commit}`], {
+    cwd: input.rootPath,
+    encoding: "utf8",
+  }).trim();
+  verifyNpmRepairRun({
+    run,
+    runId: input.runId,
+    version,
+    tagCommit,
+    jobs,
+  });
+  const artifacts: {
+    artifacts: { id: number; name: string; expired: boolean }[];
+  } = JSON.parse(
+    gh([
+      "api",
+      `repos/opencx-labs/catamorphic/actions/runs/${input.runId}/artifacts?per_page=100`,
+    ]),
+  );
+  const matches = artifacts.artifacts.filter(
+    (artifact) =>
+      artifact.name === `npm-packages-${version}` && !artifact.expired,
+  );
+  if (matches.length !== 1)
+    throw new Error(
+      "The original retained npm artifact must exist exactly once",
+    );
+  // Download only the original run's retained archives; never repack or publish.
+  gh([
+    "run",
+    "download",
+    input.runId,
+    "--repo",
+    "opencx-labs/catamorphic",
+    "--name",
+    `npm-packages-${version}`,
+    "--dir",
+    input.directory,
+  ]);
+  const inventory = readInventory(input.directory);
+  const expectedNames = releasePackageNamesAtCommit({
+    rootPath: input.rootPath,
+    commit: tagCommit,
+    version,
+  });
+  if (
+    inventory.version !== version ||
+    inventory.packages
+      .map((pkg) => pkg.name)
+      .sort()
+      .join("\n") !== expectedNames.join("\n")
+  )
+    throw new Error(
+      "The original artifact does not contain this complete release",
+    );
+  await reconcileBootstrapChannels(inventory);
+  await verifyPublishedRelease(inventory);
+}
+
 async function preflightReleasePackages(input: {
   rootPath: string;
   directory: string;
@@ -703,6 +947,11 @@ async function publishReleasePackages(input: {
         `npm publication failed for ${pkg.name}; preserve already published versions and rerun this release`,
       );
   }
+  await reconcileBootstrapChannels(inventory);
+  await verifyPublishedRelease(inventory);
+}
+
+async function verifyPublishedRelease(inventory: Inventory) {
   for (const pkg of inventory.packages) {
     const registered = await registeredPackage(pkg.name);
     if (registered.versions?.[pkg.version]?.dist?.integrity !== pkg.integrity)
@@ -800,11 +1049,17 @@ if (import.meta.main) {
     console.log(
       `Verified npm channels for ${inventory.packages.length} libraries; ${pending.length} versions pending`,
     );
+  } else if (command === "repair-bootstrap") {
+    await repairBootstrapRelease({
+      rootPath,
+      directory: path.resolve(requiredOption("--directory")),
+      runId: requiredOption("--run"),
+    });
   } else if (command === "trust") {
     trustReleaseWorkflow(rootPath);
   } else {
     throw new Error(
-      "Usage: release-packages.ts <version --version X|verify [--version X]|pack --output DIR|smoke --directory DIR|preflight --directory DIR|publish --directory DIR|trust>",
+      "Usage: release-packages.ts <version --version X|verify [--version X]|pack --output DIR|smoke --directory DIR|preflight --directory DIR|publish --directory DIR|repair-bootstrap --run ID --directory DIR|trust>",
     );
   }
 }
