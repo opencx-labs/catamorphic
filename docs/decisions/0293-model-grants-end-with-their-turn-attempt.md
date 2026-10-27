@@ -37,6 +37,9 @@ older grant revisions. The runner's model contract is `grantDirectory`, and
 HTTP exposes `_GRANT_DIRECTORY` with a reader helper. There is no mutable
 current-token file, pointer, filesystem mutex or legacy file fallback. This
 incompatible `AttemptStart` change bumps the runner protocol to version 2.
+Metadata templates and rendered outputs stay in each invocation's staging
+until a completed file is atomically renamed. Installing the shared Git include
+retries Git's own config lock; it adds no filesystem mutex.
 
 Authorization is checked again after body processing and guards, immediately
 before forwarding. Calls already admitted may finish streaming after a turn

@@ -282,7 +282,7 @@ function gatewayEnvTemplate(aliases: readonly SandboxHttpAlias[]): string {
  * each line with `$root` literally, whatever the path holds (spaces, #, &).
  */
 function withRoot(from: string, to: string): string {
-  return `while IFS= read -r line; do case "$line" in *${ROOT}*) printf '%s%s%s\\n' "\${line%%${ROOT}*}" "$root" "\${line#*${ROOT}}";; *) printf '%s\\n' "$line";; esac; done < ${from} > ${to}`;
+  return `while IFS= read -r line; do case "$line" in *${ROOT}*) printf '%s%s%s\\n' "\${line%%${ROOT}*}" "$root" "\${line#*${ROOT}}";; *) printf '%s\\n' "$line";; esac; done < ${shellQuote(from)} > ${shellQuote(to)}`;
 }
 
 /**
@@ -291,13 +291,28 @@ function withRoot(from: string, to: string): string {
  * aliases, take an earlier turn's away. Values are single-quoted, so a
  * session directory whose path holds a quote gets no file.
  */
-function gatewayEnvScript(write: boolean): string {
+function gatewayEnvScript(input: { write: boolean; stage: string }): string {
   const file = GATEWAY_ENV_IN_SESSION_DIRECTORY;
-  if (!write) return `rm -f ${file} ${file}.in`;
+  if (!input.write) return `rm -f ${shellQuote(file)}`;
+  const template = `${input.stage}/${file}.in`;
+  const rendered = `${input.stage}/${file}`;
   return [
     "root=$(pwd -P)",
-    `case "$root" in *\\'*) rm -f ${file} ${file}.in;; *) ${withRoot(`${file}.in`, `${file}.new`)} && chmod 644 ${file}.new && mv -f ${file}.new ${file} && rm -f ${file}.in;; esac`,
+    `case "$root" in *\\'*) rm -f ${shellQuote(file)};; *) ${withRoot(template, rendered)} && chmod 644 ${shellQuote(rendered)} && mkdir -p ${shellQuote(path.posix.dirname(file))} && mv -f ${shellQuote(rendered)} ${shellQuote(file)};; esac`,
   ].join(" && ");
+}
+
+/** Git already serializes config writes; retry that lock, never create another. */
+function installGitInclude(): string {
+  return [
+    "git_include_tries=0",
+    'until git config --global --get-all include.path 2>/dev/null | grep -Fqx "$root/gitconfig"; do',
+    '  if git config --global --fixed-value --replace-all include.path "$root/gitconfig" "$root/gitconfig" 2>/dev/null; then break; fi',
+    "  git_include_tries=$((git_include_tries + 1))",
+    '  if [ "$git_include_tries" -ge 100 ]; then echo "Could not install the gateway Git include" >&2; exit 1; fi',
+    "  sleep 0.05",
+    "done",
+  ].join("\n");
 }
 
 /**
@@ -410,25 +425,22 @@ export async function configureSandboxGateway(input: {
       ...(input.renewOnly
         ? []
         : [
-            ...(gatewayEnv
-              ? [
-                  `mkdir -p ${shellQuote(path.posix.dirname(GATEWAY_ENV_IN_SESSION_DIRECTORY))}`,
-                  `mv -f ${shellQuote(`${stage}/${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`)} ${shellQuote(`${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`)}`,
-                ]
-              : []),
             ...(git
               ? [
                   `mv -f ${shellQuote(`${stage}/git-credential-work`)} git-credential-work`,
                   "chmod 700 git-credential-work",
-                  `mv -f ${shellQuote(`${stage}/gitconfig.in`)} gitconfig.in`,
                   "root=$(pwd -P)",
                   `case "$root" in *[\\'\\"\\\\]*) echo "The sandbox path $root holds a quote or backslash" >&2; exit 1;; esac`,
-                  withRoot("gitconfig.in", "gitconfig"),
-                  "rm -f gitconfig.in",
-                  `(git config --global --get-all include.path 2>/dev/null | grep -Fqx "$root/gitconfig" || git config --global --add include.path "$root/gitconfig")`,
+                  withRoot(`${stage}/gitconfig.in`, `${stage}/gitconfig`),
+                  `chmod 600 ${shellQuote(`${stage}/gitconfig`)}`,
+                  `mv -f ${shellQuote(`${stage}/gitconfig`)} gitconfig`,
+                  installGitInclude(),
                 ]
-              : ["{ [ ! -f gitconfig ] || : > gitconfig; }"]),
-            gatewayEnvScript(gatewayEnv !== undefined),
+              : [
+                  `: > ${shellQuote(`${stage}/gitconfig`)}`,
+                  `mv -f ${shellQuote(`${stage}/gitconfig`)} gitconfig`,
+                ]),
+            gatewayEnvScript({ write: gatewayEnv !== undefined, stage }),
           ]),
     ].join("\n"),
   });
