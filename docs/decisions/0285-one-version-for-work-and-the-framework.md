@@ -25,14 +25,21 @@ Previews use `x.y.z-alpha.n` and npm's `alpha` tag; Stable uses `x.y.z` and
 
 The desktop workflow packs and tests every archive outside the monorepo before
 building the desktop. It publishes those exact archives after the desktop
-succeeds, using npm trusted publishing with GitHub OIDC. Manual dispatch only
-builds and tests. Account/scope ownership, npm's staged package-name reservation
+succeeds, using npm trusted publishing with GitHub OIDC. Default manual dispatch
+only builds and tests. An explicit main-only bootstrap channel repair can use
+an original tag run's retained archives to remove an accidental first-alpha
+`latest` tag. It verifies every published integrity before any metadata write,
+requires successful original package preparation and desktop jobs, and cannot
+rebuild or publish packages. Account/scope ownership, npm's staged package-name reservation
 and trusted publisher registration are one-time setup; the first real release
 already publishes through OIDC. Routine releases need no npm login, token
 rotation or package approval.
 
 Release runs are serialized. Registry preflight rejects an older version before
 desktop publication and repeats before npm writes, preserving channel order.
+Preview publication corrects npm's first-version placeholder promotion only
+when `latest` points to that exact alpha and no stable version exists. A valid
+stable `latest` is preserved; an ambiguous previous stable channel is rejected.
 
 ## Consequences
 

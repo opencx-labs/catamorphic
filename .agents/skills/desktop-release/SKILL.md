@@ -16,8 +16,9 @@ Read these completely before changing or publishing anything:
 - [apps/desktop/RELEASING.md](../../../apps/desktop/RELEASING.md): setup, secrets,
   dry run, publication steps, channels, and clean-account checks.
 - [.github/workflows/desktop-prerelease.yml](../../../.github/workflows/desktop-prerelease.yml)
-  (workflow name "Desktop release"): tag pushes publish, manual dispatch only
-  builds and verifies.
+  (workflow name "Desktop release"): tag pushes publish; default manual dispatch
+  only builds and verifies. The explicit main-only bootstrap channel repair
+  changes only already-published npm metadata, as described in RELEASING.md.
 - [.github/workflows/work-server-image.yml](../../../.github/workflows/work-server-image.yml)
   (workflow name "Work server image"): the same tag publishes the multi-arch
   `work-server` image to GHCR; manual dispatch builds and smoke-tests only.
@@ -130,6 +131,14 @@ commit), so rerunning the same tag's workflow is safe once the cause was transie
 or external. If the tagged code is wrong, keep the tag as history, fix it in a new
 PR, and release a new version. Never move, delete or reuse a published tag. If
 publication partly succeeded, leave the partial state and report it exactly.
+
+For npm's accidental first-alpha `latest` tag, use the exceptional
+`repair_npm_run` dispatch documented in
+[RELEASING.md](../../../apps/desktop/RELEASING.md). It verifies the original
+immutable run, tag and retained package inventory before changing channels;
+it never rebuilds or publishes packages. The same trusted publisher needs the
+separate **Allow npm dist-tag** permission. Preserve validated publisher IDs
+when enabling this permission. Ordinary dry runs remain read-only.
 
 ## 4. Verify the public release
 

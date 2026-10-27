@@ -10,13 +10,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  bootstrapLatestRemovals,
   NPM_REGISTRY,
   npmReleaseTag,
   packReleasePackages,
   publicationOrder,
   publicationPlan,
   registeredPackage,
+  releasePackageNamesAtCommit,
   setReleaseVersion,
+  verifyNpmRepairRun,
   verifyPackedPackage,
   verifyReleasePackages,
   workspacePackages,
@@ -384,9 +387,184 @@ describe("recovering partial npm publication", () => {
       ).toHaveLength(1);
     }
   });
+
+  it("removes only an accidental first-alpha latest and tolerates partial repair", () => {
+    const registered = (latest?: string) => ({
+      versions: {
+        "0.0.0-stage": { dist: { integrity: "sha512-placeholder" } },
+        [version]: { dist: { integrity: a.integrity } },
+      },
+      "dist-tags": { alpha: version, ...(latest ? { latest } : {}) },
+    });
+    expect(
+      bootstrapLatestRemovals({
+        packages: [a],
+        registered: [registered(version)],
+      }),
+    ).toEqual([a]);
+    expect(
+      bootstrapLatestRemovals({ packages: [a], registered: [registered()] }),
+    ).toEqual([]);
+    expect(
+      bootstrapLatestRemovals({
+        packages: [a],
+        registered: [registered("0.0.0-stage")],
+      }),
+    ).toEqual([]);
+    expect(
+      bootstrapLatestRemovals({
+        packages: [a],
+        registered: [
+          {
+            ...registered("0.0.1"),
+            versions: {
+              ...registered().versions,
+              "0.0.1": { dist: { integrity: "sha512-stable" } },
+            },
+          },
+        ],
+      }),
+    ).toEqual([]);
+    expect(() =>
+      bootstrapLatestRemovals({
+        packages: [a],
+        registered: [
+          {
+            ...registered(version),
+            versions: {
+              ...registered().versions,
+              "0.0.1": { dist: { integrity: "sha512-stable" } },
+            },
+          },
+        ],
+      }),
+    ).toThrow("cannot infer");
+  });
+
+  it("refuses any repair when a release version, integrity or alpha channel is wrong", () => {
+    const good = {
+      versions: { [version]: { dist: { integrity: a.integrity } } },
+      "dist-tags": { alpha: version, latest: version },
+    };
+    const other = {
+      versions: { [version]: { dist: { integrity: b.integrity } } },
+    };
+    for (const { registered, message } of [
+      { registered: {}, message: "requires every exact version" },
+      {
+        registered: {
+          versions: { [version]: { dist: { integrity: "sha512-conflict" } } },
+        },
+        message: "exists with different content",
+      },
+      {
+        registered: {
+          ...other,
+          "dist-tags": { alpha: "0.1.0-alpha.29", latest: version },
+        },
+        message: "unexpected alpha channel",
+      },
+      {
+        registered: {
+          ...other,
+          "dist-tags": { alpha: "0.1.0-alpha.31", latest: version },
+        },
+        message: "refusing to move",
+      },
+    ])
+      expect(() =>
+        bootstrapLatestRemovals({
+          packages: [a, b],
+          registered: [good, registered],
+        }),
+      ).toThrow(message);
+  });
 });
 
-it("keeps manual release runs read-only and publishes after the desktop using OIDC", () => {
+it("binds channel repair to the original completed tag run and successful preparation and desktop", () => {
+  const tagCommit = "a".repeat(40);
+  const input = {
+    runId: "123",
+    version,
+    tagCommit,
+    run: {
+      id: 123,
+      event: "push",
+      path: ".github/workflows/desktop-prerelease.yml",
+      head_branch: `desktop-v${version}`,
+      head_sha: tagCommit,
+      status: "completed",
+      repository: { full_name: "opencx-labs/catamorphic" },
+    },
+    jobs: {
+      jobs: [
+        { name: "Build and verify npm packages", conclusion: "success" },
+        { name: "Build, sign, and notarize macOS", conclusion: "success" },
+      ],
+    },
+  };
+  expect(() => verifyNpmRepairRun(input)).not.toThrow();
+  for (const delta of [
+    { id: 124 },
+    { event: "workflow_dispatch" },
+    { path: "other.yml" },
+    { head_branch: "main" },
+    { head_sha: "b".repeat(40) },
+    { status: "in_progress" },
+    { repository: { full_name: "other/repo" } },
+  ])
+    expect(() =>
+      verifyNpmRepairRun({ ...input, run: { ...input.run, ...delta } }),
+    ).toThrow("immutable");
+  expect(() =>
+    verifyNpmRepairRun({ ...input, runId: "123; echo unsafe" }),
+  ).toThrow("immutable");
+  expect(() => verifyNpmRepairRun({ ...input, jobs: { jobs: [] } })).toThrow(
+    "successful original",
+  );
+});
+
+it("reads a repaired release inventory from its immutable commit after main advances", () => {
+  const { rootPath, write, library } = fixture();
+  const git = (args: string[]) =>
+    execFileSync("git", args, { cwd: rootPath, encoding: "utf8" });
+  git(["init", "--quiet"]);
+  git(["add", "."]);
+  git([
+    "-c",
+    "user.name=Release fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "Original release",
+  ]);
+  const commit = git(["rev-parse", "HEAD"]).trim();
+  setReleaseVersion({ rootPath, version: "0.1.0-alpha.31" });
+  write(
+    "packages/new-library/package.json",
+    JSON.stringify({ ...library("new-library"), version: "0.1.0-alpha.31" }),
+  );
+  expect(releasePackageNamesAtCommit({ rootPath, commit, version })).toEqual([
+    "@catamorphic/app",
+    "@catamorphic/workflow",
+  ]);
+  expect(() =>
+    releasePackageNamesAtCommit({
+      rootPath,
+      commit,
+      version: "0.1.0-alpha.31",
+    }),
+  ).toThrow("Original workspace versions");
+  expect(() =>
+    releasePackageNamesAtCommit({ rootPath, commit: "HEAD", version }),
+  ).toThrow("exact commit");
+});
+
+it("keeps default dispatch read-only, isolates bootstrap repair and publishes only after desktop tags", () => {
   const rootPath = path.resolve(import.meta.dirname, "..");
   const workflow: {
     concurrency: {
@@ -421,6 +599,7 @@ it("keeps manual release runs read-only and publishes after the desktop using OI
   const prepare = workflow.jobs["prepare-npm"];
   const desktop = workflow.jobs["build-macos"];
   const publish = workflow.jobs["publish-npm"];
+  const repair = workflow.jobs["repair-npm-channels"];
   expect(workflow.concurrency.group).not.toContain("github.ref");
   expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
   expect(workflow.concurrency.queue).toBe("max");
@@ -447,4 +626,19 @@ it("keeps manual release runs read-only and publishes after the desktop using OI
   );
   expect(upload?.with?.name).toContain("npm-packages-");
   expect(download?.with?.name).toContain("needs.prepare-npm.outputs.version");
+  expect(prepare?.if).toContain("inputs.repair_npm_run == ''");
+  expect(repair?.if).toContain("github.event_name == 'workflow_dispatch'");
+  expect(repair?.if).toContain("github.ref == 'refs/heads/main'");
+  expect(repair?.if).toContain("inputs.repair_npm_run != ''");
+  expect(repair?.permissions).toEqual({
+    actions: "read",
+    contents: "read",
+    "id-token": "write",
+  });
+  expect(repair?.needs).toBeUndefined();
+  const repairCommands = repair?.steps.map((step) => step.run).join("\n");
+  expect(repairCommands).toContain("repair-bootstrap --run");
+  expect(repairCommands).not.toMatch(
+    /publish --directory|release:pack|bun run build|bun run.* package/,
+  );
 });
