@@ -84,7 +84,9 @@ and limit which hosts they reach, with a wider list for its setup alone
 (package registries) while agents reach only the gateway; an agent's
 sandboxing decides what leaves its sandbox, apart from its harness's own
 permission mode. Claude Code, Codex and ACP agents such as OpenCode run in
-those sandboxes on the organization's model keys, held by the gateway, which
+those sandboxes on the organization's model keys, held by the gateway. New model
+calls require the turn's exact attempt and live lease; Git and HTTP
+background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
 wait for one, and machine rules can create machines on demand and remove
 them when idle. See

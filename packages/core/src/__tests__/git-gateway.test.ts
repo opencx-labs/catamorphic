@@ -464,9 +464,61 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "model", grant: "grant-three" }],
+      grants: [
+        { alias: "model", grant: "grant-three", modelAttemptId: "attempt-one" },
+      ],
       gitAliases: [],
     });
+    expect(
+      await fs.readFile(
+        path.join(
+          root,
+          "workspace",
+          ".work-session",
+          "model-grants",
+          "attempt-one",
+          "model",
+        ),
+        "utf8",
+      ),
+    ).toBe("grant-three");
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        { alias: "model", grant: "grant-next", modelAttemptId: "attempt-two" },
+      ],
+      gitAliases: [],
+    });
+    // A late old renewal writes only its own model key file.
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-old-renewed",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+      renewOnly: true,
+    });
+    expect(
+      await fs.readFile(
+        path.join(
+          root,
+          "workspace",
+          ".work-session",
+          "model-grants",
+          "attempt-two",
+          "model",
+        ),
+        "utf8",
+      ),
+    ).toBe("grant-next");
     const plain = await execute(
       "git",
       ["ls-remote", "--get-url", "https://git.example.test/org/repo.git"],

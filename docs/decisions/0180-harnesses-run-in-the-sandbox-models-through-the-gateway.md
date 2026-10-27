@@ -1,6 +1,6 @@
 # 0180: Harnesses run in the sandbox; models through the gateway
 
-- **Status:** Accepted (control loop placement superseded by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md), [0199](0199-subscription-sign-ins-stay-on-the-machine.md) and [0256](0256-the-gateway-rewrites-model-requests.md): a provider may rewrite request bodies)
+- **Status:** Accepted (control loop placement superseded by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0184](0184-personal-credentials-reach-a-members-own-sessions.md), [0199](0199-subscription-sign-ins-stay-on-the-machine.md) and [0256](0256-the-gateway-rewrites-model-requests.md): a provider may rewrite request bodies; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md))
 - **Date:** 2026-09-27
 - **Refines:** 0050, 0057, 0162, 0164, 0174, 0175, 0176
 
@@ -43,12 +43,13 @@ guard needs it) and the guards (connection kind `model`, action = method and
 path, `POST v1/messages`; input = provider, model, stream, never the
 prompt), and adds the stored key. Endpoint and spending rules are guards,
 host code (ADR 0183): the gateway has no endpoint list and no token budget,
-and a session's calls between turns pass like any other. Usage is a passive
+and model calls require the issuing turn attempt and live lease (ADR 0293).
+Between-turn model calls are denied. Usage is a passive
 side channel: the gateway reads each POST's answer or its server-sent events
 as they pass (Anthropic Messages, OpenAI Responses, and Chat Completions when
 the caller asked for `stream_options.include_usage`) into one `model_usage`
 row per call (migration 035, ADR 0057's token fields, per session and the
-turn running when the call started); an answer in a format it does not
+grant's issuing turn); an answer in a format it does not
 recognize, or cut short before reporting, counts what it reported, often
 zero. Each call is audited as `connection.model` without its prompt.
 Refusals, including an unavailable connection, use the calling API's own
@@ -58,7 +59,7 @@ through unchanged. When a harness reports no usage for a turn, the settled
 reply's `metadata.usage` comes from these rows.
 
 **Time to first token comes first.** Each call costs one indexed read
-before it is forwarded: the grant with its Allocation, session and
+before it is forwarded: the grant with its Allocation, session, turn attempt, lease and
 connection revision, so a revoked grant, a released Allocation or a closed
 session stops working on the next call on every replica. The alias's
 resolution (binding, workflow enablement, provider, refreshed and decrypted
@@ -74,7 +75,9 @@ the session's `sandbox`-channel grants for its aliases served as protocols
 them every 20 minutes (ADR 0175). Harnesses read the grant file at each use
 (Claude Code through `apiKeyHelper`, Codex through its provider `auth`
 command), so renewal needs no restart. Closing, idle release, and archive
-revoke them with the Allocation.
+revoke them with the Allocation. Model authority additionally ends with the
+issuing attempt or lease; other capabilities on a mixed alias keep their
+existing lifetime. Model readers use an attempt-specific grant file (ADR 0293).
 
 **Harnesses run in the session sandbox.** `ClaudeCodeAgent` and `CodexAgent`
 take `sandbox: { command? }`. Their control loop stays on the control plane
@@ -104,8 +107,9 @@ from the Environment's image (ADR 0176).
 
 Considered and dropped: a per-turn output budget reserved before forwarding
 (a transaction and an advisory lock on every call's critical path, request
-rewriting to clamp output limits, and a refusal between turns). Hosts that
-need spending limits write a guard over `model_usage`.
+rewriting to clamp output limits). A refusal between turns was originally
+dropped too, and is now required by ADR 0293 as an authority boundary. Hosts
+that need spending limits write a guard over `model_usage`.
 
 The acceptance holds end to end: a `claude-code` agent runs on a
 local-process worker, edits and runs commands in its sandbox, calls its model

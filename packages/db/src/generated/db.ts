@@ -498,6 +498,9 @@ export interface ConnectionCapabilityGrants {
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;
   id: Generated<string>;
+  model_attempt_id: string | null;
+  model_lease_token: string | null;
+  model_turn_id: string | null;
   project_id: string;
   revoked_at: Timestamp | null;
   tenant_id: string;

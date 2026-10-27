@@ -212,8 +212,13 @@ export interface SandboxGitAlias {
 export function sandboxGrantFile(input: {
   provider: SandboxProvider;
   alias: string;
+  /** Model readers stay on their own attempt during overlapping renewal uploads. */
+  modelAttemptId?: string;
 }): string {
-  return `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}/grants/${input.alias}`;
+  const relative = input.modelAttemptId
+    ? `model-grants/${input.modelAttemptId}/${input.alias}`
+    : `grants/${input.alias}`;
+  return `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}/${relative}`;
 }
 
 /**
@@ -304,7 +309,7 @@ export async function configureSandboxGateway(input: {
   sandboxId: string;
   /** `<gateway>/git`, as the sandbox reaches it. */
   gatewayGitUrl: string;
-  grants: readonly { alias: string; grant: string }[];
+  grants: readonly { alias: string; grant: string; modelAttemptId?: string }[];
   gitAliases: readonly SandboxGitAlias[];
   /** HTTP API aliases code in the sandbox may call (ADR 0212). */
   httpAliases?: readonly SandboxHttpAlias[];
@@ -321,7 +326,17 @@ export async function configureSandboxGateway(input: {
     input.sandboxId,
     {
       ...Object.fromEntries(
-        input.grants.map((grant) => [`grants/${grant.alias}`, grant.grant]),
+        input.grants.flatMap((grant) => [
+          [`grants/${grant.alias}`, grant.grant],
+          ...(grant.modelAttemptId
+            ? [
+                [
+                  `model-grants/${grant.modelAttemptId}/${grant.alias}`,
+                  grant.grant,
+                ],
+              ]
+            : []),
+        ]),
       ),
       ...(gatewayEnv
         ? { [`${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`]: gatewayEnv }
@@ -329,6 +344,9 @@ export async function configureSandboxGateway(input: {
     },
     directory,
   );
+  const permissions = input.grants.some((grant) => grant.modelAttemptId)
+    ? "chmod 600 grants/* && chmod 700 model-grants model-grants/* && find model-grants -type f -exec chmod 600 {} +"
+    : "chmod 600 grants/*";
   // A turn's aliases stand for its whole turn: renewing leaves them be.
   const env = input.renewOnly
     ? []
@@ -341,7 +359,7 @@ export async function configureSandboxGateway(input: {
       // Without Git aliases, an earlier turn's rewrites must not send
       // remotes to aliases this session no longer holds.
       command: [
-        "chmod 600 grants/*",
+        permissions,
         ...(input.renewOnly
           ? []
           : ["{ [ ! -f gitconfig ] || : > gitconfig; }"]),
@@ -390,7 +408,7 @@ export async function configureSandboxGateway(input: {
     what: "configure Git for the gateway",
     command: [
       "chmod 700 git-credential-work",
-      "chmod 600 grants/*",
+      permissions,
       "root=$(pwd -P)",
       // Quoted in the config and for the shell; these would need escaping.
       `case "$root" in *[\\'\\"\\\\]*) echo "The sandbox path $root holds a quote or backslash" >&2; exit 1;; esac`,
@@ -419,7 +437,7 @@ export async function removeSandboxGateway(input: {
     ...input,
     cwd: input.projectDir,
     what: "remove the session's gateway grants",
-    command: `rm -rf ${session}/grants ${file} ${file}.in ${file}.new`,
+    command: `rm -rf ${session}/grants ${session}/model-grants ${file} ${file}.in ${file}.new`,
   });
 }
 

@@ -5003,6 +5003,7 @@ export class AgentSessionsService {
     session: SessionRow;
     turn: Turn;
     attempt: Attempt;
+    leaseToken: string;
     signal: AbortSignal;
   }): Promise<PreparedAttempt> {
     const { identity, turn } = input;
@@ -5153,6 +5154,11 @@ export class AgentSessionsService {
         identity,
         projectId,
         sessionId,
+        modelTurn: {
+          turnId: turn.id,
+          attemptId: input.attempt.id,
+          leaseToken: input.leaseToken,
+        },
         provider: runtime.provider,
         sandboxProviderId,
         afterSetup: widened !== undefined,
@@ -5259,6 +5265,11 @@ export class AgentSessionsService {
           projectId,
           sessionId,
           allocationId: session.allocation_id,
+          modelTurn: {
+            turnId: turn.id,
+            attemptId: input.attempt.id,
+            leaseToken: input.leaseToken,
+          },
           provider: runtime.provider,
           sandboxProviderId,
           renewOnly: true,
@@ -6328,6 +6339,7 @@ export class AgentSessionsService {
     identity: Identity;
     projectId: string;
     sessionId: string;
+    modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
     provider: SandboxProvider;
     sandboxProviderId: string;
     /** The sandbox holds its base and what a setup made on it (ADR 0257). */
@@ -6373,6 +6385,7 @@ export class AgentSessionsService {
       projectId: input.projectId,
       sessionId: input.sessionId,
       allocationId: row.allocation_id,
+      ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
       provider: input.provider,
       sandboxProviderId: input.sandboxProviderId,
       renewOnly: false,
@@ -6397,6 +6410,7 @@ export class AgentSessionsService {
     projectId: string;
     sessionId: string;
     allocationId: string;
+    modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
     provider: SandboxProvider;
     sandboxProviderId: string;
     renewOnly: boolean;
@@ -6449,12 +6463,20 @@ export class AgentSessionsService {
         identity: input.identity,
         allocationId: input.allocationId,
         agentSessionId: input.sessionId,
+        ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
         alias: binding.alias,
         ttlSeconds: 3600,
         channel: "sandbox",
         keepPrevious: true,
       });
-      issued.push({ alias: binding.alias, grant: grant.token, id: grant.id });
+      issued.push({
+        alias: binding.alias,
+        grant: grant.token,
+        id: grant.id,
+        ...(binding.api && input.modelTurn
+          ? { modelAttemptId: input.modelTurn.attemptId }
+          : {}),
+      });
     }
     await configureSandboxGateway({
       provider: input.provider,
@@ -6490,6 +6512,9 @@ export class AgentSessionsService {
               keyFile: sandboxGrantFile({
                 provider: input.provider,
                 alias: binding.alias,
+                ...(input.modelTurn
+                  ? { modelAttemptId: input.modelTurn.attemptId }
+                  : {}),
               }),
             },
           ]
@@ -6503,14 +6528,20 @@ export class AgentSessionsService {
   ): void {
     const previous = this.grantRenewals.get(input.sessionId);
     if (previous) clearInterval(previous);
+    let renewing = false;
     const timer = setInterval(() => {
-      void this.configureSandboxGateway({ ...input, renewOnly: true }).catch(
-        (error: unknown) =>
+      if (renewing) return;
+      renewing = true;
+      void this.configureSandboxGateway({ ...input, renewOnly: true })
+        .catch((error: unknown) =>
           console.warn(
             `[catamorphic] Could not renew the sandbox grants of session ${input.sessionId}`,
             error,
           ),
-      );
+        )
+        .finally(() => {
+          renewing = false;
+        });
     }, GRANT_RENEWAL_MS);
     timer.unref?.();
     this.grantRenewals.set(input.sessionId, timer);

@@ -220,3 +220,10 @@ review that never reaches GitHub shows in `postReviews`' runs: a turn whose
 reply has no valid `work-review` block marks the commit `action_required`
 with the reason (when no review marked it yet), and a report for a commit
 the chat no longer stands on posts nothing at all.
+
+Model access through the gateway lasts only for the exact review turn attempt
+and its live lease (ADR 0293). Background code cannot start model requests with
+that turn's old grant after interruption, completion or lease loss, or during a
+later turn. Git and HTTP grants keep their normal background lifetime. Calls
+already admitted may finish streaming; clean up cloud resources independently
+and enforce spending policy in connection guards.

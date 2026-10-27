@@ -226,6 +226,7 @@ export {
   ConnectionCapabilityGrantsService,
   type ConnectionGrantChannel,
   MAX_GRANT_TTL_SECONDS,
+  type ModelGrantFence,
   type ValidConnectionGrant,
 } from "./services/connection-capability-grants.js";
 export {

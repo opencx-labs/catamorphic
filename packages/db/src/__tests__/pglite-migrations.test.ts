@@ -147,6 +147,7 @@ describe("PGlite migrations", () => {
       "067_step_call_state.sql",
       "068_subsession_grants.sql",
       "069_encrypted_project_secrets_only.sql",
+      "074_turn_bound_model_grants.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
