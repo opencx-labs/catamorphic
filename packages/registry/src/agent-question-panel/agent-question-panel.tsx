@@ -254,7 +254,9 @@ export function AgentQuestionPanel({
       requestFocus(index);
     else
       requestAnimationFrame(() =>
-        panelRefs.current[index]?.querySelector<HTMLElement>("button")?.focus(),
+        panelRefs.current[index]
+          ?.querySelector<HTMLElement>("button")
+          ?.focus({ preventScroll: true }),
       );
   };
 
@@ -287,7 +289,7 @@ export function AgentQuestionPanel({
   return (
     <section
       ref={sectionRef}
-      className="animate-question-in mx-3 mb-1 overflow-hidden rounded-xl border border-accent/35 bg-bg-overlay/60"
+      className="animate-question-in mx-3 mb-1 overflow-clip rounded-xl border border-accent/35 bg-bg-overlay/60"
       aria-label="The agent has a question"
     >
       <header className="flex items-center gap-2 border-b border-border px-3 pt-2.5 pb-0">
@@ -365,8 +367,11 @@ export function AgentQuestionPanel({
         </span>
       </header>
 
+      {/* Clip, never scroll: a hidden overflow is a scroll container, and
+          focus landing in a question mid-slide scrolled it, leaving the
+          next panel (invisible) in view or the question cut off at the top. */}
       <div
-        className="overflow-hidden transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
+        className="overflow-clip transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
         style={panelHeight === undefined ? undefined : { height: panelHeight }}
       >
         <div
