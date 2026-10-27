@@ -1119,9 +1119,7 @@ export class RunsService {
           continue;
         }
         if (job.kind !== "durable_boundary") return suspended("batch");
-        if (new Date(job.availableAt).getTime() > Date.now()) {
-          return suspended("backoff");
-        }
+        if (!job.due) return suspended("backoff");
         const claimedAt = performance.now();
         const claimed = await this.deps.executionJobs.claimById({
           jobId: job.id,
