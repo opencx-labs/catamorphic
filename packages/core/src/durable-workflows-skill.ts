@@ -36,20 +36,15 @@ Use independent scheduled reconciliation for cleanup after cancellation,
 exhausted retries, superseded work and orphaned resources. Cancellation stops
 continuation and fences late results. It does not run remaining boundaries,
 guarantee a JavaScript finally block, or undo an accepted external request.
-Host/connection providers currently need their own bounded IO; execution
-cancellation is not propagated into those calls. Never hold a database
-transaction open over network IO.
+Host and connection calls share the persisted attempt deadline described above.
+Their providers must observe cancellation before effects. Keep business-state
+transactions short. A dedicated serialization lock may bracket bounded network
+IO when effect intents and receipts commit independently.
 
-Signals currently deliver only to an existing matching open pause. Persist an
-authenticated callback in an application inbox before acknowledging it; use a
-later event or reconciliation to consume it. Correlation keys deduplicate live
-runs, not permanent business jobs. Restart cancels the old run before replacement
-commits, so persist desired state independently when losing that intent matters.
-
-Waiting runs currently retain their root allocation reservation. For many
-external jobs, short reconciliation runs avoid reserving a workspace throughout
-each wait; size separate cleanup capacity if using long-lived waiting roots.
-Do not mistake a parked execution job for released allocation capacity.
+Named callbacks can buffer within an existing run generation. Persist an
+authenticated callback in an application inbox when acceptance must outlive
+that generation. Correlation keys deduplicate live runs, not permanent business
+jobs; keep desired business state and command identities in the application.
 
 Serialize publications by business identity and generation, and store destination
 object ids. Read-before-create stamps alone race. Model allowed verdict

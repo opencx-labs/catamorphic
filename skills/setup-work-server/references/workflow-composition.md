@@ -73,25 +73,37 @@ See [AWS's idempotency contract](https://docs.aws.amazon.com/ec2/latest/devguide
 - Boundary results, retries/backoff, waits, child continuations and execution
   leases are durable. A `"use step"` helper is visual detail within one retry
   boundary, not its own checkpoint.
-- Cancellation fences late run results and stops continuation. It does not undo
-  external effects or execute trailing cleanup. Host and connection calls
-  currently need their own IO deadlines and are not passed execution cancellation.
-- Signals require an existing matching open pause. They are not a durable inbox
-  for callbacks arriving early. Keep the application inbox when acceptance must
-  survive a crash or a callback-before-wait race.
+- A boundary callback and its returned host, document or connection call share
+  one persisted five-minute attempt deadline. Providers receive cancellation and
+  that deadline; job lease loss/cancellation is observed through heartbeats.
+  The host bounds its await even when a provider ignores abort. Synchronous code
+  cannot be preempted, and an accepted external action still needs reconciliation.
+- Named signals can buffer before a matching pause within an existing active run
+  generation. Send the enrollment receipt's run id with the correlation key and
+  a stable callback id. A host kickoff hook receives that run id in its stamped
+  context. Receipts deduplicate delivery; each event resumes one pause. A restart
+  never inherits the previous run's inbox. Use an application inbox when
+  acceptance must survive beyond that generation or exceed its bounded inbox.
 - A correlation key deduplicates live runs, not permanent business jobs. Restart
-  cancels the existing run before the replacement commits; retain desired intent
-  separately so reconciliation can repair a failed replacement.
-- Waiting roots retain allocation reservations. A parked execution job is not
-  a released workspace. Short reconciliation workflows avoid reserving one slot
-  per external job; otherwise size capacity for waiting roots and cleanup.
+  commits cancellation and replacement enrollment together; failure rolls back
+  both. External side effects are separate. After an uncertain enrollment
+  response, inspect the active generation and reconcile the application's
+  desired state rather than blindly requesting another restart.
+- Durable waits give back their shared physical workspace after confirmed
+  teardown, once all root, child and batch compute waits. Continuations receive
+  fresh owner, Environment and connection admission with the same artifact and
+  journal. Workspace files and processes do not survive parking; failed teardown
+  still holds capacity. Logical active-run limits still count waiting runs.
 - Neither an external Postgres ledger nor a retry boundary makes an external
   write exactly once. Side-effect identities and destination receipts remain
   application responsibilities.
 - Container sandboxes enforce supported CPU/memory limits but reject disk quotas.
   Disposable per-job machines and bounded volumes provide a deployment limit.
-- Grants can remain valid between turns while the session and allocation remain
-  live. End-of-job cleanup must revoke/release them; set provider spend limits.
+- New sandbox model calls require the issuing turn attempt and its live lease.
+  Idle calls and old bearers on later turns are denied. Already admitted streams
+  may finish; Git and HTTP background grants retain their ordinary lifetime.
+  End-of-job cleanup must release resources; provider spending policy stays in
+  host guards and provider limits.
 
 ## External Postgres and deployment
 
