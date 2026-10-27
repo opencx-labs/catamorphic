@@ -743,6 +743,7 @@ export class DocumentsService {
           written_at: writtenAt,
         })
         .execute();
+      args.signal?.throwIfAborted();
       await trx
         .updateTable("store_documents")
         .set({
@@ -758,11 +759,13 @@ export class DocumentsService {
         })
         .where("id", "=", documentId)
         .execute();
+      args.signal?.throwIfAborted();
       if (!localRefresh) {
         const root = await this.projectManager.localPath({
           tenantId: args.identity.tenantId,
           projectId: args.projectId,
         });
+        args.signal?.throwIfAborted();
         if (root) {
           await protectLocalDocuments(root);
           const target = await localDocumentPath(root, path);
@@ -777,6 +780,7 @@ export class DocumentsService {
           }
         }
       }
+      args.signal?.throwIfAborted();
       return {
         path,
         source: "store",
@@ -864,6 +868,7 @@ export class DocumentsService {
           written_at: writtenAt,
         })
         .execute();
+      args.signal?.throwIfAborted();
       await trx
         .updateTable("store_documents")
         .set({
@@ -885,6 +890,7 @@ export class DocumentsService {
       args.signal?.throwIfAborted();
       if (root && !localRefresh)
         await fs.rm(await localDocumentPath(root, path), { force: true });
+      args.signal?.throwIfAborted();
       return { version };
     });
     return result;
