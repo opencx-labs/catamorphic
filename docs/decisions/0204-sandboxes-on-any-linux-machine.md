@@ -54,7 +54,9 @@ they ask the machine's own name servers. A restricted one has no network
 interface but loopback. Its only way out is a socket of its own, mounted
 from the machine, on which the worker serves an HTTP proxy that admits the
 allowlist (`CONNECT` for TLS, absolute URLs for plain HTTP) and resolves
-names itself. The proxy reads a host strictly (names of letters, digits and
+names itself. A restricted proxy admits the hostname and port before DNS:
+forbidden names cause no lookup. IP entries admit literal addresses only;
+a name resolving to a listed IP must itself also be listed. The proxy reads a host strictly (names of letters, digits and
 hyphens, or IP literals; anything else, a control character included, is a
 400 before any lookup), checks every address a name resolves to, IPv4-mapped
 IPv6 as IPv4, and connects to a checked address. The machine's own

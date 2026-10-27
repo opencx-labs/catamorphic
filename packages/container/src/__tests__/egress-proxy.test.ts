@@ -410,7 +410,7 @@ describe("egress proxy", () => {
   // through an IP entry naming it, as a development gateway does.
   it("forwards absolute-form HTTP to an allowed host, its own Host, closing", async () => {
     const { socketPath } = await proxy({
-      allow: [`127.0.0.1:${originPort}`],
+      allow: [`127.0.0.1:${originPort}`, "loop.test"],
     });
     const reply = await exchange(
       socketPath,
@@ -425,7 +425,9 @@ describe("egress proxy", () => {
   });
 
   it("tunnels CONNECT to an allowed host", async () => {
-    const { socketPath } = await proxy({ allow: [`127.0.0.1:${echoPort}`] });
+    const { socketPath } = await proxy({
+      allow: [`127.0.0.1:${echoPort}`, "loop.test"],
+    });
     const reply = await exchange(
       socketPath,
       `CONNECT loop.test:${echoPort} HTTP/1.1\r\nHost: loop.test:${echoPort}\r\n\r\n`,
@@ -520,9 +522,9 @@ describe("egress proxy", () => {
     expect(refused).toHaveLength(6);
   });
 
-  it("reaches loopback through an IP entry naming it, by address or name", async () => {
+  it("requires both a name and an IP entry to reach loopback by name", async () => {
     const { socketPath } = await proxy({
-      allow: [`127.0.0.1:${originPort}`],
+      allow: [`127.0.0.1:${originPort}`, "loop.test"],
     });
     const byAddress = await exchange(
       socketPath,
@@ -534,6 +536,39 @@ describe("egress proxy", () => {
       `GET http://loop.test:${originPort}/named HTTP/1.1\r\n\r\n`,
     );
     expect(byName).toContain("origin saw /named");
+  });
+
+  it("refuses forbidden names and ports before DNS, including with IP rules", async () => {
+    const lookedUp: string[] = [];
+    const { socketPath } = await proxy(
+      {
+        allow: [
+          "allowed.test:443",
+          "*.allowed.test:443",
+          `127.0.0.1:${originPort}`,
+        ],
+      },
+      {
+        lookup: async (host) => {
+          lookedUp.push(host);
+          return [{ address: "127.0.0.1", family: 4 }];
+        },
+      },
+    );
+    for (const target of [
+      "secret.forbidden.test:443",
+      "allowed.test:80",
+      "secret.allowed.test:80",
+      `loop.test:${originPort}`,
+    ]) {
+      const reply = await exchange(
+        socketPath,
+        `CONNECT ${target} HTTP/1.1\r\n\r\n`,
+      );
+      expect(reply).toMatch(/^HTTP\/1\.1 403/);
+    }
+    expect(lookedUp).toEqual([]);
+    expect(seen).toEqual([]);
   });
 
   it("answers 400 to requests that are not proxy requests", async () => {

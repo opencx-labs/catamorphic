@@ -204,7 +204,8 @@ const MAX_CONNECTIONS = 256;
 
 /**
  * Decide where a request may go (ADR 0204); `host` is valid already. A
- * name is resolved here, once: every address it resolves to is checked,
+ * name must be admitted before DNS is consulted. It is resolved here,
+ * once: every address it resolves to is checked,
  * and the connection goes to a checked address. A name on the allowlist
  * (or any name, for an open policy) reaches public addresses. The
  * machine's own addresses ({@link machineLocal}) are reached only when an
@@ -222,6 +223,10 @@ export async function egressDecision(args: {
   const { rules, host, port } = args;
   const literal = net.isIP(host) !== 0;
   const named = args.any || hostAllowed(rules, { host, port });
+  // DNS is an external effect too: resolving a forbidden name can disclose
+  // data in its labels even when the later TCP connection is refused. An
+  // IP rule admits that literal, never arbitrary names resolving to it.
+  if (!named) return refused(host, port);
   const resolved = literal
     ? [host]
     : (await args.lookup(host).catch(() => [])).map((entry) => entry.address);
