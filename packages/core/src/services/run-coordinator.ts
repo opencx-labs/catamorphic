@@ -324,7 +324,10 @@ export class RunCoordinator {
           run_id: context.attempt.run_id,
           workflow_step_attempt_id: context.attempt.id,
           state_present: args.transition.statePresent === true,
-          state: jsonColumn(toJson(args.transition.state)),
+          state:
+            args.transition.statePresent === true
+              ? jsonColumn(toJson(args.transition.state))
+              : null,
           timeout_at: timeoutAt,
           signal_name: stringValue(args.transition.signal) ?? null,
         })
