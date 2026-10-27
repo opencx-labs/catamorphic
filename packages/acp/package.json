@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/acp",
-  "version": "0.1.0-alpha.30",
+  "version": "0.1.0-alpha.31",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
