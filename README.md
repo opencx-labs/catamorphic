@@ -277,7 +277,9 @@ deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
 and signals, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
 sync-until-first-wait firing, project-defined kinds, and declarative `where`
-filters. Full authoring model below.
+filters. Durable waits give back physical workspace capacity after teardown;
+continuations use fresh admission and the same deployed revision. Full authoring
+model below.
 
 Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and

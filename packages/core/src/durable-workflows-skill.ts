@@ -24,6 +24,22 @@ JSON-compatible. Carry ids and data across boundaries, not resources or function
 The output of one boundary becomes the next input; it does not implicitly merge
 with earlier inputs. A returned call can carry state across, below.
 
+## Durable waits and capacity
+
+A durable wait keeps the run's deployed artifact and journal. When no sharing
+child or batch work is runnable and all invocations have ended, the root gives
+back its physical workspace. Capacity returns only after sandbox teardown
+succeeds; a failed teardown still holds its budget. Pause timeouts do not need
+a workspace. A continuation receives a fresh Allocation in the same Environment,
+with current owner and connection checks, and may run on another machine.
+
+Carry state in boundary data or declared persistent storage. Files and background
+processes in a workflow workspace do not survive parking. A parent waiting for a
+runnable child, or one waiting batch item beside runnable items, keeps the shared
+Allocation. Logical active-run limits remain in force while physical slots are
+free. Use independent workflows to reconcile external resources; parking does
+not clean up AWS instances or undo an accepted external request.
+
 ## Return one transition
 
 \`pause\`, \`callWorkflow\`, \`documents\`, \`host\`, and \`connections\` are boundary

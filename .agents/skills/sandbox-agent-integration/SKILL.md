@@ -228,6 +228,12 @@ Rules that hold across harnesses:
   keep the operator recovery path for ambiguous create/destroy outcomes.
 - Requested limits must reach sandbox creation, including through client
   runner RPC. Native CLI paths do not gain limits by declaring them.
+- Durable workflow waits retire the root's Allocation with reason `idle` once
+  no sharing child or batch compute is runnable and all invocations/jobs ended
+  (ADR 0289). Existing node cleanup returns capacity only after destruction.
+  Continuations re-admit current authority and selected connections; they keep
+  the pinned artifact/journal and rebuild their workspace. Pause timeouts are
+  control-plane jobs; queued continuations record ordinary placement demand.
 - Verify real VM CPU/memory, concurrent admission races, cleanup failures,
   archive/restore, and worker fencing.
 

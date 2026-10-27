@@ -172,13 +172,14 @@ export interface ExecutionAllocation {
 }
 
 /**
- * Why an Allocation ended. `idle`: a chat gave its workspace back while
- * waiting (ADR 0173). `node_lost`: its machine stopped for good and the
+ * Why an Allocation ended. `idle`: a chat or durable workflow gave its
+ * workspace back while waiting (ADRs 0173, 0289). `node_lost`: its machine stopped for good and the
  * workload moved on (ADR 0190). `connection_ended`: a member's machine
  * connected again, and its earlier connection's workspace is gone (ADR
  * 0192). `retired`: the workload ended. A chat is admitted again on its
- * next turn after any release; a workflow run moved off a lost machine gets
- * its new Allocation at once.
+ * next turn after any release. A parked workflow gets a fresh Allocation
+ * when its next compute is runnable; work moved off a lost machine uses
+ * the same admission and runtime lifecycle.
  */
 export type AllocationReleaseReason =
   | "idle"

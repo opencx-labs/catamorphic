@@ -1776,6 +1776,17 @@ async function releaseAllocation(args: {
   now: Date;
 }): Promise<void> {
   await args.trx
+    .deleteFrom("placement_waits")
+    .where(
+      "root_workload_id",
+      "in",
+      args.trx
+        .selectFrom("execution_allocations")
+        .select("root_workload_id")
+        .where("id", "=", args.allocationId),
+    )
+    .execute();
+  await args.trx
     .updateTable("connection_capability_grants")
     .set({ revoked_at: args.now })
     .where("allocation_id", "=", args.allocationId)
