@@ -89,6 +89,9 @@ export async function recordScenario(input: {
 export async function modelServer(
   responses: ModelResponse[],
   problems: string[],
+  options?: {
+    authorize?: (input: { authorization: string }) => Promise<boolean>;
+  },
 ): Promise<{
   url: string;
   served: () => number;
@@ -102,6 +105,23 @@ export async function modelServer(
       // Codex refreshes its model catalog; an empty one is fine.
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ object: "list", data: [] }));
+      return;
+    }
+    if (
+      options?.authorize &&
+      !(await options.authorize({
+        authorization: req.headers.authorization ?? "",
+      }))
+    ) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: {
+            type: "authentication_error",
+            message: "The old claim was revoked",
+          },
+        }),
+      );
       return;
     }
     count += 1;

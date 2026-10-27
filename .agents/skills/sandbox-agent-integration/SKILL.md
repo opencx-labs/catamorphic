@@ -225,6 +225,15 @@ may finish after the turn ends, and usage remains attributed to its issuing
 turn. Hosts own spend policy through guards; this fence is not a budget or a
 substitute for resource isolation and cleanup.
 
+The native CLIs cache helper output. The pinned Claude Code and Codex rerun
+it after a 401, so a surviving process recovers from a claim change without
+waiting for its normal refresh interval. Keep the loopback rotation cases in
+`packages/claude-code/src/__tests__/adapter.native.test.ts` and
+`packages/codex/src/__tests__/adapter.native.test.ts` passing when changing
+the grant reader, cache configuration or pinned executable. Do not infer
+helper refresh behavior from replayed configuration or change TTL semantics
+without exercising the actual CLI.
+
 ## Placement, Environments, and machines
 
 - Environments and immutable Allocations select provider, resources, and
