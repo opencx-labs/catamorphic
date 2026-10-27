@@ -78,6 +78,14 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
   `CATAMORPHIC_WORKFLOW_FILE`; its input arrives in the `init` message, never
   the environment, which caps one variable at 128 KiB. Providers that support persistent local data
   set `WORK_APP_DATA_DIR`; it is absent otherwise.
+- A boundary callback and its returned host, documents, or connection operation
+  share one five-minute attempt deadline from persisted `started_at`
+  ([ADR 0288](../../../docs/decisions/0288-boundary-attempts-bound-host-and-connection-calls.md)).
+  Job redelivery retains it. Forward the execution lease/shutdown signal and
+  absolute `deadlineAt`; pass the signal into SDK/HTTP transports. Core stops
+  awaiting an uncooperative async provider and fences late receipts, but cannot
+  preempt blocking code or undo accepted effects. Keep cloud jobs asynchronous
+  with resource ids, durable waits, idempotency, and independent reconciliation.
 - Tables: `workflow_runs` (one per invocation), `workflow_run_states`,
   `workflow_step_attempts`, `workflow_pauses`, `workflow_run_steps`,
   `workflow_run_events`, `execution_jobs`, plus batch item/sink tables.
@@ -241,6 +249,12 @@ substitute for resource isolation and cleanup.
   keep the operator recovery path for ambiguous create/destroy outcomes.
 - Requested limits must reach sandbox creation, including through client
   runner RPC. Native CLI paths do not gain limits by declaring them.
+- Durable workflow waits retire the root's Allocation with reason `idle` once
+  no sharing child or batch compute is runnable and all invocations/jobs ended
+  (ADR 0289). Existing node cleanup returns capacity only after destruction.
+  Continuations re-admit current authority and selected connections; they keep
+  the pinned artifact/journal and rebuild their workspace. Pause timeouts are
+  control-plane jobs; queued continuations record ordinary placement demand.
 - Verify real VM CPU/memory, concurrent admission races, cleanup failures,
   archive/restore, and worker fencing.
 

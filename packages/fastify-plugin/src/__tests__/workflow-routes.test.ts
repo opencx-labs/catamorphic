@@ -1,4 +1,10 @@
-import type { CatamorphicCore } from "@catamorphic/core";
+import {
+  type CatamorphicCore,
+  RunResumeConflictError,
+  RunSignalInvalidError,
+  RunSignalLimitError,
+  RunSignalNotFoundError,
+} from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
@@ -163,5 +169,98 @@ describe("workflow route contracts", () => {
     });
 
     expect(response.statusCode).toBe(500);
+  });
+});
+
+describe("named signal route", () => {
+  const runId = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
+  const id = "c3d4e5f6-a7b8-4890-acde-123456789012";
+  const pauseId = "d4e5f6a7-b8c9-4890-8efa-234567890123";
+  const payload = {
+    runId,
+    correlationKey: "subject",
+    signal: "reply",
+    idempotencyKey: "event-1",
+    value: { approved: true },
+  };
+  const url = `/api/projects/${PROJECT_ID}/workflows/journey/signals`;
+
+  it.each([
+    { id, runId, status: "buffered", pauseId: null },
+    { id, runId, status: "resumed", pauseId },
+    { id, runId, status: "discarded", pauseId: null },
+  ])(
+    "returns the $status receipt and forwards its generation",
+    async (receipt) => {
+      const signalByKey = vi.fn(async () => receipt);
+      const app = createTestApp({
+        core: { runs: { signalByKey } } as unknown as CatamorphicCore,
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: "POST",
+        url,
+        headers,
+        payload,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(receipt);
+      expect(signalByKey).toHaveBeenCalledWith({
+        ...payload,
+        identity: { tenantId: "tenant-1", externalUserId: "user-1" },
+        projectId: PROJECT_ID,
+        workflowName: "journey",
+      });
+    },
+  );
+
+  it("requires an explicit run generation", async () => {
+    const signalByKey = vi.fn();
+    const app = createTestApp({
+      core: { runs: { signalByKey } } as unknown as CatamorphicCore,
+    });
+    apps.push(app);
+    const { runId: omitted, ...unfenced } = payload;
+    expect(omitted).toBe(runId);
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: unfenced,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(signalByKey).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      error: new RunSignalLimitError("Signal value exceeds 64 KiB"),
+      status: 429,
+    },
+    { error: new RunSignalInvalidError("Invalid name"), status: 400 },
+    {
+      error: new RunSignalNotFoundError("journey", "subject", "reply"),
+      status: 404,
+    },
+    {
+      error: new RunResumeConflictError("Run generation is not active"),
+      status: 409,
+    },
+  ])("maps $status signal errors", async ({ error, status }) => {
+    const signalByKey = vi.fn(async () => {
+      throw error;
+    });
+    const app = createTestApp({
+      core: { runs: { signalByKey } } as unknown as CatamorphicCore,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers,
+      payload,
+    });
+    expect(response.statusCode).toBe(status);
+    expect(response.json()).toEqual({ error: error.message });
   });
 });

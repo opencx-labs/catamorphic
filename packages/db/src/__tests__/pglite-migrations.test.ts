@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -147,6 +149,7 @@ describe("PGlite migrations", () => {
       "067_step_call_state.sql",
       "068_subsession_grants.sql",
       "069_encrypted_project_secrets_only.sql",
+      "072_workflow_signal_inbox.sql",
       "074_turn_bound_model_grants.sql",
     ]);
 
@@ -173,7 +176,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(100);
+    expect(tables.rows[0]?.count).toBe(101);
   });
 
   it("supports the runtime primitives core relies on", {
@@ -251,6 +254,3 @@ describe("splitSqlStatements", () => {
     expect(statements).toHaveLength(2);
   });
 });
-
-import fs from "node:fs";
-import path from "node:path";

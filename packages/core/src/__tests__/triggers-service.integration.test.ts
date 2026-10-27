@@ -392,6 +392,65 @@ describeIf("TriggersService end to end", () => {
     expect(again.runs[0]?.runId).toBe(runId);
   });
 
+  it("runs.call completes due work when the host clock trails the database", async () => {
+    const realNow = Date.now;
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => realNow() - 60_000);
+    try {
+      const outcome = await core.runs.call({
+        identity,
+        projectId,
+        workflowName: "escalateTicket",
+        input: { ticketId: "clock-behind" },
+        budgetMs: 20_000,
+      });
+      expect(outcome).toMatchObject({
+        status: "completed",
+        output: { escalated: "clock-behind" },
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("leaves a database-future job in backoff when the host clock is ahead", async () => {
+    const run = await core.runs.triggerProduction({
+      identity,
+      projectId,
+      workflowName: "escalateTicket",
+      input: { ticketId: "clock-ahead" },
+    });
+    await db
+      .updateTable("execution_jobs")
+      .set({ available_at: sql<Date>`clock_timestamp() + interval '1 minute'` })
+      .where("workflow_run_id", "=", run.id)
+      .execute();
+    const realNow = Date.now;
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => realNow() + 3_600_000);
+    try {
+      const outcome = await core.runs.driveInline({
+        tenantId: identity.tenantId,
+        runId: run.id,
+        deadline: Date.now() + 5_000,
+      });
+      expect(outcome).toMatchObject({
+        status: "suspended",
+        suspendedOn: "backoff",
+      });
+      const job = await db
+        .selectFrom("execution_jobs")
+        .select(["status", "attempt"])
+        .where("workflow_run_id", "=", run.id)
+        .executeTakeFirstOrThrow();
+      expect(job).toEqual({ status: "pending", attempt: 0 });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("fires sync: completes a non-suspending workflow inline", async () => {
     const result = await core.triggers.fire({
       identity,

@@ -624,6 +624,16 @@ export {
   RunPluginsLoader,
 } from "./services/run-plugins-loader.js";
 export {
+  RUN_SIGNAL_MAX_BYTES,
+  RUN_SIGNAL_MAX_PENDING,
+  RUN_SIGNAL_MAX_RECEIPTS,
+  RunSignalInvalidError,
+  RunSignalLimitError,
+  RunSignalNotFoundError,
+  type RunSignalReceipt,
+  type SignalRunInput,
+} from "./services/run-signals.js";
+export {
   type BatchItem,
   type BatchItemStatus,
   type BatchItemStep,
@@ -655,7 +665,6 @@ export {
   type RunPause,
   type RunPhase,
   type RunProvenance,
-  RunSignalNotFoundError,
   type RunStatus,
   type RunStep,
   type RunSuspensionReason,

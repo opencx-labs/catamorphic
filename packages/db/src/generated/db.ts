@@ -1322,6 +1322,20 @@ export interface WorkflowRunSteps {
   status: Generated<string>;
 }
 
+export interface WorkflowSignals {
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  idempotency_key: string;
+  pause_id: string | null;
+  payload_hash: string;
+  resolved_at: Timestamp | null;
+  run_id: string;
+  sequence: Generated<Int8>;
+  signal_name: string;
+  status: Generated<string>;
+  value: Json | null;
+}
+
 export interface WorkflowStepAttempts {
   attempt: number;
   call_state: Json | null;
@@ -1585,5 +1599,6 @@ export interface DB {
   workflow_run_states: WorkflowRunStates;
   workflow_run_steps: WorkflowRunSteps;
   workflow_runs: WorkflowRuns;
+  workflow_signals: WorkflowSignals;
   workflow_step_attempts: WorkflowStepAttempts;
 }

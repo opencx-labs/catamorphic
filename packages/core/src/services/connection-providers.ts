@@ -188,6 +188,10 @@ export interface ConnectionProvider {
     privateState?: Uint8Array;
   }): Promise<ConnectionAuthorizationResult>;
   invoke(args: {
+    /** Workflow attempt cancellation, including lease loss and shutdown. */
+    signal?: AbortSignal;
+    /** Absolute ISO deadline of the workflow attempt, when invoked by one. */
+    deadlineAt?: string;
     material: Uint8Array;
     action: string;
     input: Json;

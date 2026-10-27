@@ -28,6 +28,8 @@ import type {
   Run,
   RunCallOutcome,
   RunDetail,
+  RunSignalReceipt,
+  SignalRunInput,
   TriggerBindingInfo,
   TriggerFireResult,
   TriggerKindInfo,
@@ -154,15 +156,10 @@ export interface RunsResource {
   list(args: Omit<ListRunsInput, "identity">): Promise<ListRunsResult>;
   get(args: Omit<GetRunInput, "identity">): Promise<RunDetail>;
   cancel(args: Omit<CancelRunInput, "identity">): Promise<Run>;
-  /** Delivers an external event to the run awaiting a named signal for a key. */
-  signalByKey(args: {
-    projectId: string;
-    workflowName: string;
-    correlationKey: string;
-    signal: string;
-    idempotencyKey: string;
-    value: Json;
-  }): Promise<Run>;
+  /** Buffer or deliver a callback to one explicitly addressed run generation. */
+  signalByKey(
+    args: Omit<SignalRunInput, "identity">,
+  ): Promise<RunSignalReceipt>;
   /** Terminates the live run for a key. Resolves null when none was live. */
   cancelByKey(args: {
     projectId: string;
