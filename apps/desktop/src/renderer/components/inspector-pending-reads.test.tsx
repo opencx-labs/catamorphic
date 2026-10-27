@@ -38,6 +38,7 @@ describe("the chat popup's reads", () => {
   const client = new QueryClient();
 
   beforeEach(() => {
+    vi.useFakeTimers();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     container = document.createElement("div");
     document.body.append(container);
@@ -49,6 +50,7 @@ describe("the chat popup's reads", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
@@ -77,6 +79,20 @@ describe("the chat popup's reads", () => {
     expect(panel()?.getAttribute("data-open")).toBeNull();
     reads.checkout = { isPending: false, data: undefined };
     await act(async () => render(folder()));
+    expect(panel()?.getAttribute("data-open")).toBe("true");
+  });
+
+  it("opens after its grace period even if a read is still pending", async () => {
+    await act(async () =>
+      render(
+        <dl>
+          <ChatFolder projectId="p" sessionId="s" busy={false} />
+        </dl>,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.focus());
+    expect(panel()?.getAttribute("data-open")).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
     expect(panel()?.getAttribute("data-open")).toBe("true");
   });
 
