@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { nativeGit } from "@catamorphic/git";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import {
+  readConnectionGrant,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   advertisedDefaultBranch,
@@ -475,8 +478,8 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       gitAliases: [],
     });
     expect(
-      await fs.readFile(
-        path.join(
+      await readConnectionGrant({
+        directory: path.join(
           root,
           "workspace",
           ".work-session",
@@ -484,8 +487,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
           "attempt-one",
           "model",
         ),
-        "utf8",
-      ),
+      }),
     ).toBe("grant-three");
     await configureSandboxGateway({
       provider,
@@ -510,7 +512,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
         {
           alias: "model",
           grant: "grant-old-renewed",
-          publicationRevision: "5",
+          publicationRevision: "3",
           modelAttemptId: "attempt-one",
         },
       ],
@@ -518,8 +520,8 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       renewOnly: true,
     });
     expect(
-      await fs.readFile(
-        path.join(
+      await readConnectionGrant({
+        directory: path.join(
           root,
           "workspace",
           ".work-session",
@@ -527,8 +529,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
           "attempt-two",
           "model",
         ),
-        "utf8",
-      ),
+      }),
     ).toBe("grant-next");
     const plain = await execute(
       "git",
@@ -595,52 +596,27 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
     await old;
     const session = path.join(root, "workspace", ".work-session");
     expect(
-      await fs.readFile(path.join(session, "grants", "mixed"), "utf8"),
+      await readConnectionGrant({
+        directory: path.join(session, "grants", "mixed"),
+      }),
     ).toBe("live-new");
     expect(
-      await fs.readFile(
-        path.join(session, "model-grants", "surviving-attempt", "mixed"),
-        "utf8",
-      ),
+      await readConnectionGrant({
+        directory: path.join(
+          session,
+          "model-grants",
+          "surviving-attempt",
+          "mixed",
+        ),
+      }),
     ).toBe("live-new");
-    expect(
-      (
-        await fs.readFile(path.join(session, "gateway-revision"), "utf8")
-      ).trim(),
-    ).toBe("21");
+
     const readHttp = await provider.executeCommand(
       "s",
-      `${sandboxSecretsPrelude()}; cat "$WORK_HTTP_MIXED_GRANT_FILE"`,
+      `${sandboxSecretsPrelude()}; "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_MIXED_GRANT_DIRECTORY"`,
       { cwd: "/workspace/project" },
     );
     expect(readHttp.result).toBe("live-new");
-  });
-
-  it("recovers publication after its previous sandbox shell died", async () => {
-    const lock = path.join(
-      root,
-      "workspace",
-      ".work-session",
-      "gateway-publication.lock",
-    );
-    await fs.mkdir(lock, { recursive: true });
-    await fs.writeFile(path.join(lock, "dead-owner"), "2147483647\n");
-    await configureSandboxGateway({
-      provider,
-      sandboxId: "s",
-      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [
-        { alias: "mixed", grant: "recovered", publicationRevision: "25" },
-      ],
-      gitAliases: [],
-    });
-    expect(
-      await fs.readFile(
-        path.join(root, "workspace", ".work-session", "grants", "mixed"),
-        "utf8",
-      ),
-    ).toBe("recovered");
-    await expect(fs.stat(lock)).rejects.toThrow();
   });
 
   it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0212)", async () => {
@@ -672,7 +648,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       (
         await provider.executeCommand(
           "s",
-          `${sandboxSecretsPrelude()}; printf '%s|%s|%s|%s' "\${WORK_HTTP_LOGS_EU:-unset}" "\${WORK_HTTP_LOGS_EU_GRANT_FILE:-unset}" "\${WORK_HTTP_BILLING:-unset}" "$(cat "\${WORK_HTTP_LOGS_EU_GRANT_FILE:-/dev/null}")"`,
+          `${sandboxSecretsPrelude()}; printf '%s|%s|%s|%s' "\${WORK_HTTP_LOGS_EU:-unset}" "\${WORK_HTTP_LOGS_EU_GRANT_DIRECTORY:-unset}" "\${WORK_HTTP_BILLING:-unset}" "$(if [ -n "\${WORK_HTTP_LOGS_EU_GRANT_DIRECTORY:-}" ]; then "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_EU_GRANT_DIRECTORY"; fi)"`,
           { cwd: "/workspace/project" },
         )
       ).result;

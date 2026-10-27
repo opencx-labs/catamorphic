@@ -1202,9 +1202,11 @@ provider, action = the lowercase method, input = `{ path, query }`; each
 request is audited as `connection.http`. At each sandbox turn core issues a
 `sandbox` grant per HTTP alias and writes `.work-session/env/gateway.sh`
 exporting `WORK_HTTP_<ALIAS>` (`<gatewayUrl>/http/<alias>`) and
-`WORK_HTTP_<ALIAS>_GRANT_FILE`; the runner (`AttemptStart.envFiles`),
+`WORK_HTTP_<ALIAS>_GRANT_DIRECTORY`; the runner (`AttemptStart.envFiles`),
 host harnesses' commands, setup and terminals load it beside `secrets.sh`.
-Grants rotate on renewal, so code reads the file per request.
+Grants are immutable revision files; `WORK_GATEWAY_READ_GRANT` selects the
+greatest numeric revision in that directory for each request. Delayed older
+uploads cannot displace a newer bearer.
 
 Personal credentials (ADRs 0184, 0199): a member's listed files may reach
 sandboxes that run only that member's work. The member's client calls

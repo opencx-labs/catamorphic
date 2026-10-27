@@ -8,6 +8,7 @@ import type {
   McpServerSpec,
   ThreadBinding,
 } from "@catamorphic/agent-protocol/runner";
+import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import type { AttemptOutcome, ScriptedHostBehavior } from "./host.js";
 import { pinnedClaudeExecutable } from "./pinned-cli.js";
 import type { ScriptedReply, ScriptedRequest } from "./scripted-model.js";
@@ -71,7 +72,7 @@ export function scenarioAttempt(input: {
     providerThreadId: stableUuid(`${input.scenario}:thread`),
   };
   const start: AttemptStart = {
-    protocol: 1,
+    protocol: RUNNER_PROTOCOL_VERSION,
     sessionId: `session-${input.scenario}`,
     projectId: "project-fixture",
     turnId: `turn-${input.scenario}-${input.turn}`,
@@ -94,7 +95,7 @@ export function scenarioAttempt(input: {
       kind: "gateway",
       api: "anthropic",
       baseUrl: context.modelUrl,
-      keyFile: path.join(context.state, "model-key"),
+      grantDirectory: path.join(context.state, "model-key"),
     },
     toolPolicies: {},
     toolAnnotations: {},

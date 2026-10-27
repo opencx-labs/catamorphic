@@ -15,6 +15,7 @@ import type {
   AttemptStart,
   McpServerSpec,
 } from "@catamorphic/agent-protocol/runner";
+import { MODEL_GRANT_READER } from "@catamorphic/sandbox";
 import { hostToolServer } from "./host-tools.js";
 
 /**
@@ -583,7 +584,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     ...(access.kind === "gateway"
       ? {
           ANTHROPIC_BASE_URL: access.baseUrl,
-          WORK_MODEL_KEY_FILE: access.keyFile,
+          WORK_MODEL_GRANT_DIRECTORY: access.grantDirectory,
           CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(API_KEY_HELPER_TTL_MS),
         }
       : {}),
@@ -618,7 +619,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
       ? {
           // The session's grant, read from its file at each use, so a
           // renewal applies without a restart (ADR 0180).
-          settings: { apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"' },
+          settings: { apiKeyHelper: MODEL_GRANT_READER },
         }
       : {}),
     ...(attempt.model ? { model: attempt.model } : {}),

@@ -467,14 +467,14 @@ describe("stdio processes in a sandbox (ADR 0180)", () => {
         args: ["--print", "it's"],
         cwd: "/workspace/project",
         pathEnv: {
-          WORK_MODEL_KEY_FILE: "/workspace/.work-session/grants/model",
+          WORK_MODEL_GRANT_DIRECTORY: "/workspace/.work-session/grants/model",
         },
         stderrPath: "/workspace/.work-session/claude.stderr",
       }),
     ).toBe(
       [
         "mkdir -p ../.work-session",
-        'export WORK_MODEL_KEY_FILE="$(cd ../.work-session/grants && pwd -P)"/model',
+        'export WORK_MODEL_GRANT_DIRECTORY="$(cd ../.work-session/grants && pwd -P)"/model',
         "exec claude --print 'it'\\''s' 2>>../.work-session/claude.stderr",
       ].join("\n"),
     );

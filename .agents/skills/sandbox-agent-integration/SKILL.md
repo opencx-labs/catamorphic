@@ -217,8 +217,10 @@ actual claim when issuing or renewing; never resolve the latest turn by session.
 The model gateway denies new calls after cancellation, attempt replacement,
 settlement or lease expiry, and between turns. An old token cannot become valid
 on the next turn. Git, HTTP and MCP retain their existing lifetime, including on
-a mixed alias. Model readers use the attempt-specific key file given in their
-model access; do not assume the ordinary alias grant path. An admitted stream
+a mixed alias. Model readers use the attempt-specific grant directory given in their
+model access; read its greatest numeric publication revision on each use. Git and HTTP
+read the greatest revision in their shared alias directory, through
+`WORK_GATEWAY_READ_GRANT`; uploads never overwrite a current-token file. An admitted stream
 may finish after the turn ends, and usage remains attributed to its issuing
 turn. Hosts own spend policy through guards; this fence is not a budget or a
 substitute for resource isolation and cleanup.

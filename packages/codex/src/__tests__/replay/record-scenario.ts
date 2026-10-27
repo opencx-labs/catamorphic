@@ -37,7 +37,8 @@ export async function recordScenario(input: {
     await mkdir(path.join(root, "work"), { recursive: true });
     for (const [file, text] of Object.entries(WORKSPACE_FILES))
       await writeFile(path.join(root, "work", file), text);
-    await writeFile(path.join(root, "model-key"), "fixture-model-key");
+    await mkdir(path.join(root, "model-key"), { recursive: true });
+    await writeFile(path.join(root, "model-key", "1"), "fixture-model-key");
     const context = {
       root,
       model: model.url,
