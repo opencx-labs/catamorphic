@@ -476,6 +476,7 @@ export class ExecutionWorkerService {
     }
     const jobController = new AbortController();
     const abortJob = () => jobController.abort();
+    if (args.signal.aborted) abortJob();
     args.signal.addEventListener("abort", abortJob, { once: true });
     // Stop the step before its lease could have lapsed, measured from when
     // the last renewal that landed was sent. A process frozen past its lease
@@ -518,6 +519,7 @@ export class ExecutionWorkerService {
       Math.max(1_000, Math.floor(leaseMs / 3)),
     );
     try {
+      jobController.signal.throwIfAborted();
       await handler({ job: args.job, signal: jobController.signal });
       if (jobController.signal.aborted) {
         await this.jobs.release({

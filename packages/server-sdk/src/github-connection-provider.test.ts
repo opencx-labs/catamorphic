@@ -263,6 +263,57 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow();
   });
 
+  it("passes workflow cancellation to both REST and typed GitHub transports", async () => {
+    for (const action of ["get", "pull_request_files"] as const) {
+      const abort = new AbortController();
+      let started = () => {};
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const provider = defineGithubConnectionProvider({
+        fetch: async (_url, init) => {
+          started();
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason),
+              { once: true },
+            );
+          });
+        },
+      });
+      const material = new TextEncoder().encode(
+        JSON.stringify({
+          kind: "user",
+          login: "fixture",
+          userId: 1,
+          tokens: {
+            accessToken: "fixture-only",
+            expiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
+          },
+        }),
+      );
+      const request = provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action,
+        input:
+          action === "get"
+            ? { path: "/repos/octo/hello/pulls" }
+            : { repository: "octo/hello", number: 7 },
+        capabilities: [action],
+        repositories: REPOS,
+        signal: abort.signal,
+      });
+      const rejected = expect(request).rejects.toThrow("attempt canceled");
+      await ready;
+      abort.abort(new Error("attempt canceled"));
+      await rejected;
+    }
+  });
+
   it("mints a token narrowed to the repository a REST path addresses", async () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);

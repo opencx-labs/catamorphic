@@ -40,6 +40,27 @@ Allocation. Logical active-run limits remain in force while physical slots are
 free. Use independent workflows to reconcile external resources; parking does
 not clean up AWS instances or undo an accepted external request.
 
+## Attempt deadlines and cancellation
+
+A boundary attempt has one five-minute budget from its persisted start. Its
+callback and returned host, documents, or connection operation share that
+absolute deadline. A recovered execution job retains it; a boundary-policy
+retry starts a new attempt. Admission waiting happens before the clock starts.
+A durable pause or child wait holds no execution timer after the boundary returns.
+
+Host functions receive \`signal\` and the ISO \`deadlineAt\` in their first
+context argument. Connection providers receive them with the invocation. Pass
+\`signal\` into SDK/HTTP requests (for example \`fetch(url, { signal })\` or
+an AWS SDK call's \`{ abortSignal: signal }\`) and check it before effects.
+Cancellation and lease loss are observed through the existing job heartbeat;
+worker shutdown aborts directly. The host stops awaiting an uncooperative async
+provider, but it cannot preempt synchronous code or undo an accepted external
+write. Late results cannot complete a canceled or superseded attempt.
+
+Long cloud jobs should return their resource id promptly, then wait through
+ordinary pauses, callbacks, or bounded polls. Use resource ledgers, idempotency
+keys, and independent reconciliation for cleanup and uncertain external effects.
+
 ## Return one transition
 
 \`pause\`, \`callWorkflow\`, \`documents\`, \`host\`, and \`connections\` are boundary
@@ -151,6 +172,15 @@ export const briefOrder = defineWorkflow(({ defineBoundary }) => ({
   ],
 }));
 \`\`\`
+
+## Keyed restarts
+
+Keyed enrollment with \`onConflict: "restart"\` cancels the observed live run
+and commits its replacement and first job together. Failed admission or job
+initialization preserves the old run. A competing restart surfaces a conflict.
+Physical cancellation and cleanup follow the commit; external effects still
+need application operation identities and reconciliation. A correlation key
+identifies a live journey, not permanent business deduplication.
 
 ## Retry policy and diagnostics
 

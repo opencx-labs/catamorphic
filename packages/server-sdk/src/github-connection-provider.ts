@@ -607,6 +607,7 @@ export function defineGithubConnectionProvider(
     method: RestAction;
     path: string;
     body: unknown;
+    signal?: AbortSignal;
   }): Promise<void> => {
     const branch = branchWritten(args);
     if (branch === undefined) return;
@@ -621,7 +622,10 @@ export function defineGithubConnectionProvider(
       path: `/repos/${full}`,
       apiBaseUrl,
       fetch: doFetch,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(args.signal ? [args.signal] : []),
+      ]),
     });
     const defaultBranch = jsonField(metadata.body, "default_branch");
     if (metadata.status !== 200 || typeof defaultBranch !== "string")
@@ -702,6 +706,7 @@ export function defineGithubConnectionProvider(
     credential: Material;
     repository: { owner: string; name: string };
     number: number;
+    signal?: AbortSignal;
   }): Promise<GithubPermissions | undefined> => {
     if (args.credential.kind !== "app") return undefined;
     const reader = await tokenFor({
@@ -712,7 +717,10 @@ export function defineGithubConnectionProvider(
     const kind = await new GithubApi(reader, {
       fetch: doFetch,
       baseUrl: apiBaseUrl,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(args.signal ? [args.signal] : []),
+      ]),
     }).issueKind({
       fullName: `${args.repository.owner}/${args.repository.name}`,
       number: args.number,
@@ -744,6 +752,7 @@ export function defineGithubConnectionProvider(
     action: TypedAction;
     input: Json;
     repositories: readonly string[] | undefined;
+    signal?: AbortSignal;
   }): Promise<unknown> => {
     // Validate before minting anything.
     TypedSchemas[args.action].parse(args.input);
@@ -756,6 +765,7 @@ export function defineGithubConnectionProvider(
             credential: args.credential,
             repository: { owner, name },
             number: TypedSchemas.issue_comment.parse(args.input).number,
+            signal: args.signal,
           })
         : TYPED_PERMISSIONS[args.action];
     const token = await tokenFor({
@@ -766,7 +776,10 @@ export function defineGithubConnectionProvider(
     const api = new GithubApi(token, {
       fetch: doFetch,
       baseUrl: apiBaseUrl,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(args.signal ? [args.signal] : []),
+      ]),
     });
     try {
       switch (args.action) {
@@ -1120,6 +1133,7 @@ export function defineGithubConnectionProvider(
     method: RestAction;
     input: Json;
     repositories: readonly string[] | undefined;
+    signal?: AbortSignal;
   }): Promise<unknown> => {
     const input = RestSchemas[args.method].parse(args.input);
     // Resolve first: a path GitHub would read differently is refused here.
@@ -1145,6 +1159,7 @@ export function defineGithubConnectionProvider(
         method: args.method,
         path: input.path,
         body: "body" in input ? input.body : undefined,
+        signal: args.signal,
       });
     const response = await githubRestRequest({
       token,
@@ -1163,7 +1178,10 @@ export function defineGithubConnectionProvider(
         : {}),
       apiBaseUrl,
       fetch: doFetch,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(args.signal ? [args.signal] : []),
+      ]),
     });
     expireOn401(args.credential, response.status);
     // A read GitHub failed to serve is not an answer: throwing lets the
@@ -1399,7 +1417,15 @@ export function defineGithubConnectionProvider(
     listActions: async ({ capabilities }) =>
       actions.filter((action) => capabilities.includes(action.name)),
 
-    invoke: async ({ material, action, input, capabilities, repositories }) => {
+    invoke: async ({
+      material,
+      action,
+      input,
+      capabilities,
+      repositories,
+      signal,
+    }) => {
+      signal?.throwIfAborted();
       if (!capabilities.includes(action)) {
         throw new Error(
           `GitHub action '${action}' is outside the connection grant`,
@@ -1408,12 +1434,24 @@ export function defineGithubConnectionProvider(
       const credential = decodeMaterial(material);
       if (isRestAction(action)) {
         return toJson(
-          await invokeRest({ credential, method: action, input, repositories }),
+          await invokeRest({
+            credential,
+            method: action,
+            input,
+            repositories,
+            signal,
+          }),
         );
       }
       if (isTypedAction(action)) {
         return toJson(
-          await invokeTyped({ credential, action, input, repositories }),
+          await invokeTyped({
+            credential,
+            action,
+            input,
+            repositories,
+            signal,
+          }),
         );
       }
       throw new Error(`Unknown GitHub action '${action}'`);

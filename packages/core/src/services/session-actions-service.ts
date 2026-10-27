@@ -115,6 +115,7 @@ export class SessionActionsService {
   ) {}
 
   async execute(input: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     operation: SessionActionOperation;
@@ -257,6 +258,7 @@ export class SessionActionsService {
           args.sessionId,
           "change",
         );
+        input.signal?.throwIfAborted();
         const accepted = await this.db
           .insertInto("session_actions")
           .values({
@@ -311,6 +313,7 @@ export class SessionActionsService {
             );
         }
         if (action.status === "completed") return action.result;
+        input.signal?.throwIfAborted();
         if (
           "expectedStateRevision" in args &&
           args.expectedStateRevision !== undefined &&
@@ -328,6 +331,7 @@ export class SessionActionsService {
             input.projectId,
             args.sessionId,
             {
+              signal: input.signal,
               destination: {
                 hostId: session.authorityHostId,
                 revision: session.authorityRevision,
@@ -379,6 +383,7 @@ export class SessionActionsService {
             .catch(() => {});
         }, 30_000);
         try {
+          input.signal?.throwIfAborted();
           const sourceActionId = `action:${action.id}`;
           let result: unknown;
           switch (input.operation) {
@@ -389,6 +394,7 @@ export class SessionActionsService {
                 {
                   ...SESSION_ACTION_SCHEMAS.create.parse(args),
                   sourceActionId,
+                  signal: input.signal,
                 },
               );
               break;
@@ -397,7 +403,11 @@ export class SessionActionsService {
                 input.identity,
                 input.projectId,
                 args.sessionId,
-                { ...SESSION_ACTION_SCHEMAS.fork.parse(args), sourceActionId },
+                {
+                  ...SESSION_ACTION_SCHEMAS.fork.parse(args),
+                  sourceActionId,
+                  signal: input.signal,
+                },
               );
               break;
             case "spawn":
@@ -409,6 +419,7 @@ export class SessionActionsService {
                   ...SESSION_ACTION_SCHEMAS.spawn.parse(args),
                   sourceActionId,
                   origin: input,
+                  signal: input.signal,
                 },
               );
               break;
@@ -420,6 +431,7 @@ export class SessionActionsService {
                 {
                   ...SESSION_ACTION_SCHEMAS.archive.parse(args),
                   origin: input,
+                  signal: input.signal,
                 },
               );
               break;
@@ -428,7 +440,7 @@ export class SessionActionsService {
                 input.identity,
                 input.projectId,
                 args.sessionId,
-                { origin: input },
+                { origin: input, signal: input.signal },
               );
               break;
             case "close":
@@ -438,7 +450,7 @@ export class SessionActionsService {
                 input.identity,
                 input.projectId,
                 args.sessionId,
-                { origin: input },
+                { origin: input, signal: input.signal },
               );
               result = {
                 sessionId: args.sessionId,
@@ -451,7 +463,7 @@ export class SessionActionsService {
                   input.identity,
                   input.projectId,
                   args.sessionId,
-                  { turnId: action.target_turn_id },
+                  { turnId: action.target_turn_id, signal: input.signal },
                 );
               result = { interrupted: action.target_turn_id !== null };
               break;
@@ -461,6 +473,7 @@ export class SessionActionsService {
                   identity: input.identity,
                   projectId: input.projectId,
                   sessionId: args.sessionId,
+                  signal: input.signal,
                   watcherId:
                     SESSION_ACTION_SCHEMAS.stopWatcher.parse(args).watcherId,
                 }),
@@ -484,6 +497,7 @@ export class SessionActionsService {
               .forUpdate()
               .executeTakeFirst();
             if (!owned) throw new Error("Session action lease was replaced");
+            input.signal?.throwIfAborted();
             await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.author, causation: input.causation ?? [] })}, true)`.execute(
               trx,
             );
@@ -506,6 +520,7 @@ export class SessionActionsService {
                   "Session state changed; inspect it before retrying this action",
                 );
             }
+            input.signal?.throwIfAborted();
             if (input.operation === "complete" || input.operation === "reopen")
               await trx
                 .updateTable("agent_sessions")
@@ -544,6 +559,7 @@ export class SessionActionsService {
               })
               .where("id", "=", action.id)
               .execute();
+            input.signal?.throwIfAborted();
           });
           return json(result);
         } catch (error) {
