@@ -73,17 +73,17 @@ it("keeps foreign attention chats and forks in their project, and keeps them ope
   const fork = await app.waitFor<string>(
     `window.catamorphicDesktop.dockSnapshot().then(s=>s.chats.find(c=>c.entry.parentLocalId===${JSON.stringify(original)})?.entry.localId)`,
   );
+  await app.waitFor(
+    `window.catamorphicDesktop.dockSnapshot().then(s=>s.chats.some(c=>c.entry.localId===${JSON.stringify(original)}&&c.entry.mode==='min'))`,
+    { label: "fork leaves its floating parent in the dock" },
+  );
+  await app.waitFor(
+    `!document.querySelector(${JSON.stringify(front(original))})`,
+  );
   await click(`${front(fork)} button[aria-label="Minimize chat to bubble"]`);
   await app.waitFor(
     `window.catamorphicDesktop.dockSnapshot().then(s=>s.chats.some(c=>c.entry.localId===${JSON.stringify(fork)}&&c.entry.mode==='min'))`,
     { label: "fork minimized" },
-  );
-  await click(
-    `${front(original)} button[aria-label="Minimize chat to bubble"]`,
-  );
-  await app.waitFor(
-    `window.catamorphicDesktop.dockSnapshot().then(s=>s.chats.some(c=>c.entry.localId===${JSON.stringify(original)}&&c.entry.mode==='min'))`,
-    { label: "parent minimized" },
   );
   const ids = [original, fork];
   await app.eval(

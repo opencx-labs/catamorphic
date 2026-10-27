@@ -3642,7 +3642,14 @@ export function App({
                 : null;
             return {
               ...ws,
-              chats: [...ws.chats, entry],
+              chats: [
+                ...ws.chats.map((chat) =>
+                  chat.mode === "partial"
+                    ? { ...chat, mode: "min" as const }
+                    : chat,
+                ),
+                entry,
+              ],
               activeChatId: entry.localId,
               activeTabKey: key,
               split,

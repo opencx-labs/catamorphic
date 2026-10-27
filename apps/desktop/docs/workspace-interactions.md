@@ -116,6 +116,10 @@ chat to floating shows Escape. A normal link from a floating
 chat preserves that chat over the page; a floating resource preview minimizes it.
 Its bubble restores the same conversation and draft.
 
+A fork opens as a tab tiled beside the current view. A chat floating over that
+view minimizes to its bubble so it cannot cover the new pane; a tabbed parent
+keeps its place.
+
 A working floating chat can compact when the background receives focus. Hover or
 focus expands it; leaving compacts it again. Completion or a question expands it.
 Both panes of a valid split are visible regardless of keyboard focus. Visible
