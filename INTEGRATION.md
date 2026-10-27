@@ -1337,9 +1337,9 @@ Project capabilities live in an independent `.work/` Bun workspace; code
 builds its paths and Git names from `@catamorphic/workflow/project-layout`.
 Hosts check it the way publishing does (the project MCP `program_check`
 tool). `bun install --cwd .work` and `bun run --cwd .work check` do the same
-locally, but the `@catamorphic/*` packages are not yet on a public registry,
-so the install needs a registry that serves them (the repository's dev-only
-`infra/local-registry`).
+locally, using the pinned public `@catamorphic/*` release that matches the
+host. Framework development can instead use the repository's dev-only
+`infra/local-registry` to exercise an unpublished checkout.
 Imports and ordinary agent work leave existing repository files untouched.
 The workspace is created when workflows, apps, or other capabilities need it.
 

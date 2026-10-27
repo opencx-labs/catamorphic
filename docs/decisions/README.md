@@ -267,7 +267,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
 | [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
-| [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Accepted (refines 0059, 0160; amends 0256) |
+| [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Superseded by 0287 |
 | [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181) |
 | [0263](0263-theme-pictures-behind-sidebars-and-chat.md) | A theme can put a picture behind the sidebars and the chat | Accepted |
 | [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
@@ -292,6 +292,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |
 | [0285](0285-one-version-for-work-and-the-framework.md) | One version for Work and the framework | Accepted (extends 0082, 0085, 0159) |
 | [0286](0286-agents-request-chip-refresh-from-the-owning-chat.md) | Agents request chip refresh from the owning chat | Accepted (extends 0239) |
+| [0287](0287-work-server-deployments-compose-libraries-and-workflows.md) | Work server deployments compose libraries and workflows; no stock image | Accepted (supersedes 0261; amends 0059, 0159, 0160, 0285) |
 | [0288](0288-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |
+| [0289](0289-workflow-waits-give-back-physical-capacity.md) | Workflow waits give back physical capacity through Allocation retirement and fresh admission | Accepted (extends 0100, 0173, 0190) |
 | [0290](0290-restarts-commit-cancellation-and-replacement-together.md) | Restarts commit cancellation and replacement together | Accepted (amends 0027) |
+| [0291](0291-named-signals-buffer-within-a-run-generation.md) | Named signals buffer within one run generation | Accepted (amends 0027) |
 | [0292](0292-review-publication-is-serialized-application-code.md) | Review publication is serialized application code | Accepted |
+| [0293](0293-model-grants-end-with-their-turn-attempt.md) | Model grants end with their turn attempt | Accepted (amends 0180, 0255) |

@@ -1,5 +1,5 @@
 import type { DB } from "@catamorphic/db";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import { hashBearer, randomBearer } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
@@ -11,6 +11,13 @@ import { toJson } from "./run-coordinator.js";
  * sandbox for the Git gateway and renewed while the session runs.
  */
 export type ConnectionGrantChannel = "mcp" | "sandbox";
+
+/** The exact claim preparing a sandbox attempt, never its session's latest turn. */
+export interface ModelGrantFence {
+  turnId: string;
+  attemptId: string;
+  leaseToken: string;
+}
 
 /** A grant as the gateway sees it once its bearer checks out. */
 export interface ValidConnectionGrant {
@@ -48,7 +55,14 @@ export class ConnectionCapabilityGrantsService {
     ttlSeconds?: number;
     channel?: ConnectionGrantChannel;
     keepPrevious?: boolean;
-  }): Promise<{ id: string; token: string; expiresAt: string }> {
+    /** Model authority only; Git, HTTP and MCP retain their ordinary lifetime. */
+    modelTurn?: ModelGrantFence;
+  }): Promise<{
+    id: string;
+    token: string;
+    expiresAt: string;
+    publicationRevision: string;
+  }> {
     const channel = args.channel ?? "mcp";
     const allocation = await this.allocations.get({
       identity: args.identity,
@@ -78,6 +92,46 @@ export class ConnectionCapabilityGrantsService {
       if (live?.status !== "active") {
         throw new Error("Connection grant cannot be issued");
       }
+      const modelTurn = args.modelTurn;
+      if (modelTurn) {
+        if (!args.agentSessionId)
+          throw new Error("Connection model grant needs its live turn attempt");
+        const turn = await trx
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("id", "=", modelTurn.turnId)
+          .where("session_id", "=", args.agentSessionId)
+          .where("active_attempt_id", "=", modelTurn.attemptId)
+          .where("lease_token", "=", modelTurn.leaseToken)
+          .where("lease_expires_at", ">", sql<Date>`clock_timestamp()`)
+          .where("cancellation_requested_at", "is", null)
+          .where("status", "in", ["preparing", "running", "waiting"])
+          .where((eb) =>
+            eb.exists(
+              eb
+                .selectFrom("agent_sessions")
+                .select("id")
+                .whereRef("id", "=", "agent_turns.session_id")
+                .where("allocation_id", "=", allocation.id)
+                .where("status", "=", "active"),
+            ),
+          )
+          .where((eb) =>
+            eb.exists(
+              eb
+                .selectFrom("agent_turn_attempts")
+                .select("id")
+                .where("id", "=", modelTurn.attemptId)
+                .whereRef("turn_id", "=", "agent_turns.id")
+                .whereRef("session_id", "=", "agent_turns.session_id")
+                .where("status", "in", ["preparing", "running"]),
+            ),
+          )
+          .forShare()
+          .executeTakeFirst();
+        if (!turn)
+          throw new Error("Connection model grant needs its live turn attempt");
+      }
       if (args.agentSessionId && !args.keepPrevious) {
         await trx
           .updateTable("connection_capability_grants")
@@ -101,11 +155,19 @@ export class ConnectionCapabilityGrantsService {
           capabilities: toJson(binding.capabilities),
           expires_at: expiresAt,
           channel,
+          model_turn_id: args.modelTurn?.turnId ?? null,
+          model_attempt_id: args.modelTurn?.attemptId ?? null,
+          model_lease_token: args.modelTurn?.leaseToken ?? null,
         })
-        .returning("id")
+        .returning(["id", "publication_revision"])
         .executeTakeFirstOrThrow();
     });
-    return { id: inserted.id, token, expiresAt: expiresAt.toISOString() };
+    return {
+      id: inserted.id,
+      token,
+      expiresAt: expiresAt.toISOString(),
+      publicationRevision: String(inserted.publication_revision),
+    };
   }
 
   /**
@@ -118,15 +180,43 @@ export class ConnectionCapabilityGrantsService {
     channel: ConnectionGrantChannel;
     keepId: string;
   }): Promise<void> {
-    await this.db
-      .updateTable("connection_capability_grants")
-      .set({ revoked_at: new Date() })
-      .where("agent_session_id", "=", args.agentSessionId)
-      .where("alias", "=", args.alias)
-      .where("channel", "=", args.channel)
-      .where("id", "!=", args.keepId)
-      .where("revoked_at", "is", null)
-      .execute();
+    await this.db.transaction().execute(async (trx) => {
+      const keep = await trx
+        .selectFrom("connection_capability_grants")
+        .selectAll()
+        .where("id", "=", args.keepId)
+        .where("agent_session_id", "=", args.agentSessionId)
+        .where("alias", "=", args.alias)
+        .where("channel", "=", args.channel)
+        .where("revoked_at", "is", null)
+        .executeTakeFirst();
+      if (!keep) return;
+      if (keep.model_turn_id) {
+        const live = await trx
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("id", "=", keep.model_turn_id)
+          .where("active_attempt_id", "=", keep.model_attempt_id)
+          .where("lease_token", "=", keep.model_lease_token)
+          .where("lease_expires_at", ">", sql<Date>`clock_timestamp()`)
+          .where("cancellation_requested_at", "is", null)
+          .where("status", "in", ["preparing", "running", "waiting"])
+          .forShare()
+          .executeTakeFirst();
+        if (!live) return;
+      }
+      await trx
+        .updateTable("connection_capability_grants")
+        .set({ revoked_at: new Date() })
+        .where("agent_session_id", "=", args.agentSessionId)
+        .where("alias", "=", args.alias)
+        .where("channel", "=", args.channel)
+        .where("publication_revision", "<", keep.publication_revision)
+        .where("revoked_at", "is", null)
+        // An unbound workspace preparation cannot revoke a turn's grants.
+        .$if(!keep.model_turn_id, (qb) => qb.where("model_turn_id", "is", null))
+        .execute();
+    });
   }
 
   async validate(args: {

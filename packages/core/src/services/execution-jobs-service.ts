@@ -398,6 +398,7 @@ export class ExecutionJobsService {
           this.db,
           this.workerNode,
           "execution_jobs.workflow_run_id",
+          "execution_jobs.kind",
         ),
       )
       .where("status", "=", "pending")
@@ -451,6 +452,7 @@ export class ExecutionJobsService {
           this.db,
           this.workerNode,
           "execution_jobs.workflow_run_id",
+          "execution_jobs.kind",
         ),
       )
       .where("status", "=", "running")
@@ -1133,7 +1135,7 @@ async function selectClaimableJobs(args: {
           AND job.status = 'pending'
           AND job.available_at <= clock_timestamp()
           AND job.kind IN (${sql.join(kinds)})
-          AND ${workerPlacement(args.trx, args.workerNode, "job.workflow_run_id")}
+          AND ${workerPlacement(args.trx, args.workerNode, "job.workflow_run_id", "job.kind")}
         ORDER BY job.priority DESC, job.created_at, job.id
         LIMIT GREATEST(1, ${args.limit} * candidate.queue_weight)
       ) AS top
@@ -1164,25 +1166,40 @@ function workerPlacement(
   db: Kysely<DB>,
   node: { id: string; token: string } | undefined,
   runId: string,
+  kind: string,
 ) {
   const placement = db
     .selectFrom("workflow_runs as placement_run")
-    .leftJoin(
+    .innerJoin(
       "execution_allocations as placement",
       "placement.id",
       "placement_run.allocation_id",
     )
     .select("placement_run.id")
-    .where("placement_run.id", "=", sql<string>`${sql.ref(runId)}`);
-  if (!node)
-    return sql<boolean>`EXISTS (${placement.where("placement.worker_node_id", "is", null)})`;
-  return sql<boolean>`EXISTS (${placement
+    .where("placement_run.id", "=", sql<string>`${sql.ref(runId)}`)
+    .where("placement.status", "=", "active");
+  // Timeouts advance the journal only. They neither touch a sandbox nor
+  // need one admitted, including when the original machine is gone.
+  // Claiming and parking exclude each other on the Allocation alone;
+  // workflow row locks belong to the coordinator's ordered tree locking.
+  const timeout = sql<boolean>`${sql.ref(kind)} = 'durable_pause_timeout'`;
+  if (!node) {
+    const unplaced = db
+      .selectFrom("workflow_runs as unplaced_run")
+      .select("id")
+      .where("id", "=", sql<string>`${sql.ref(runId)}`)
+      .where("allocation_id", "is", null);
+    return sql<boolean>`(${timeout} OR EXISTS (${unplaced}) OR EXISTS (${placement
+      .where("placement.worker_node_id", "is", null)
+      .modifyEnd(sql`FOR SHARE OF placement`)}))`;
+  }
+  return sql<boolean>`(${timeout} OR EXISTS (${placement
     .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
-    .where("placement.status", "=", "active")
     .where("node.id", "=", node.id)
     .where("node.lease_token", "=", node.token)
     .where("node.enabled", "=", true)
-    .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`)})`;
+    .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`)
+    .modifyEnd(sql`FOR SHARE OF placement`)}))`;
 }
 
 function escapeLike(value: string): string {

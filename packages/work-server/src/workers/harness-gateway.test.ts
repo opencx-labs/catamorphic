@@ -13,6 +13,8 @@ import {
   type WorkServer,
 } from "../server.js";
 import {
+  createTestDatabase,
+  enqueue,
   filesHolding,
   filesUnder,
   replyOf,
@@ -40,6 +42,12 @@ let base: string;
 let projectId: string;
 let workerDir: string;
 let upstream: http.Server;
+let database: Awaited<ReturnType<typeof createTestDatabase>> | undefined;
+const extraServers: WorkServer[] = [];
+const SHARED_SECRET = "model-takeover-test-secret-with-at-least-32-characters";
+const SHARED_OPERATOR_SECRET =
+  "model-takeover-operator-secret-at-least-32-characters";
+const SHARED_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
 const upstreamKeys: string[] = [];
 const upstreamBodies: string[] = [];
 const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
@@ -178,6 +186,8 @@ const nightGuard: ConnectionActionGuard = {
 };
 
 beforeAll(async () => {
+  if (process.env.DATABASE_URL)
+    database = await createTestDatabase("model_takeover");
   root = fs.mkdtempSync(path.join(os.tmpdir(), "work-harness-gateway-"));
   upstream = fakeAnthropic();
   await new Promise<void>((resolve) =>
@@ -218,6 +228,14 @@ beforeAll(async () => {
       dataDir: path.join(root, "control-plane"),
       publicBases: [base],
       env: {
+        ...(database
+          ? {
+              DATABASE_URL: database.url,
+              WORK_SECRET: SHARED_SECRET,
+              WORK_OPERATOR_SECRET: SHARED_OPERATOR_SECRET,
+              WORK_VAULT_KEY: SHARED_VAULT_KEY,
+            }
+          : {}),
         WORK_FAKE_AGENT: "1",
         WORK_CONTROL_PLANE_WORKLOADS: "workflow",
         WORK_GATEWAY_CONFIG: gatewayFile,
@@ -227,9 +245,14 @@ beforeAll(async () => {
     hooks: { connectionGuards: [nightGuard] },
   });
   await server.app.listen({ port, host: "127.0.0.1" });
-  const operatorSecret = fs
-    .readFileSync(path.join(root, "control-plane", "operator-secret"), "utf8")
-    .trim();
+  const operatorSecret = database
+    ? SHARED_OPERATOR_SECRET
+    : fs
+        .readFileSync(
+          path.join(root, "control-plane", "operator-secret"),
+          "utf8",
+        )
+        .trim();
   const core = server.catamorphic.core;
   const project = await core.projects.create(identity, { name: "Harnesses" });
   projectId = project.id;
@@ -334,7 +357,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await Promise.all(workers.map((running) => running.stop()));
+  await Promise.all(extraServers.map((entry) => entry.shutdown()));
   await server?.shutdown();
+  await database?.drop();
   upstream?.closeAllConnections();
   await new Promise((resolve) => upstream?.close(resolve));
   fs.rmSync(root, { recursive: true, force: true });
@@ -478,41 +503,17 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
     expect(fs.readFileSync(file, "utf8").trim()).toMatch(/\S{20,}/);
   }, 120_000);
 
-  it("refuses models outside the binding and those a guard denies", async () => {
+  it("refuses all model calls between turns before model policy or forwarding", async () => {
     const file = grantFile();
     if (!file) throw new Error("No grant file in the sandbox");
     const grant = fs.readFileSync(file, "utf8").trim();
     const calls = upstreamKeys.length;
-    const other = await gatewayCall(grant, "gpt-5");
-    expect(other.status).toBe(403);
-    expect(await other.json()).toMatchObject({
-      type: "error",
-      error: { type: "permission_error" },
-    });
-    const forbidden = await gatewayCall(grant, "claude-forbidden");
-    expect(forbidden.status).toBe(403);
-    expect(await forbidden.text()).toContain(
-      "claude-forbidden is not for agents",
-    );
+    for (const model of ["gpt-5", "claude-forbidden", "claude-test"]) {
+      const response = await gatewayCall(grant, model);
+      expect(response.status).toBe(401);
+      await response.text();
+    }
     expect(upstreamKeys).toHaveLength(calls);
-    // Between turns the grant still reaches the model: spending rules are
-    // guards (ADR 0180), and the call is counted without a turn.
-    const idle = await gatewayCall(grant, "claude-test");
-    expect(idle.status).toBe(200);
-    await idle.text();
-    expect(upstreamKeys).toEqual([...upstreamKeys.slice(0, calls), REAL_KEY]);
-    await waitFor(
-      async () =>
-        (
-          await server.catamorphic.core.db
-            .selectFrom("model_usage")
-            .select("id")
-            .where("agent_session_id", "=", sessionId)
-            .where("turn_id", "is", null)
-            .execute()
-        ).length === 1,
-      "the between-turn call's usage",
-    );
   }, 60_000);
 
   it("stops honoring the grant once the chat is closed", async () => {
@@ -527,4 +528,151 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
       error: { type: "authentication_error" },
     });
   }, 60_000);
+  it.skipIf(!process.env.DATABASE_URL)(
+    "refreshes model authority before a surviving runner continues on a new replica",
+    async () => {
+      if (!database) throw new Error("A shared database is required");
+      const account = await server.workAuth.createLocalUser({
+        username: "reviewer",
+        name: "Reviewer",
+        password: "model-recovery-test-password",
+      });
+      const admin = { tenantId: SERVER_TENANT_ID, externalUserId: account.id };
+      const core = server.catamorphic.core;
+      await core.deployment.deploy(
+        SERVER_TENANT_ID,
+        projectId,
+        identity.externalUserId,
+        {
+          message: "Permit the reviewer",
+          files: {
+            ".work/roles/reviewer.json": JSON.stringify({
+              version: 1,
+              name: "Reviewer",
+              agents: ["coder"],
+              environments: ["build"],
+              connections: [
+                {
+                  environment: "build",
+                  alias: "anthropic",
+                  capabilities: ["model"],
+                },
+              ],
+            }),
+          },
+        },
+      );
+      await core.memberships.grant({
+        identity,
+        projectId,
+        externalUserId: account.id,
+        roles: ["reviewer"],
+      });
+      const member = await core.memberships.identityFor({
+        ...admin,
+        projectId,
+      });
+      if (!member) throw new Error("Missing reviewer identity");
+      const chat = await sessions().create(member, projectId, {
+        agentId: `project:${projectId}:coder`,
+        environment: "build",
+      });
+      const marker = `resume-model-${randomUUID()}`;
+      const turnId = await enqueue({
+        sessions: sessions(),
+        identity: member,
+        projectId,
+        sessionId: chat.id,
+        text: `run: touch ${marker}.started; while [ ! -f ${marker}.continue ]; do sleep 0.05; done; printf recovered`,
+      });
+      await waitFor(
+        async () =>
+          filesUnder(workerDir).some((file) =>
+            file.endsWith(`${marker}.started`),
+          ),
+        "the runner's blocked command",
+      );
+      const before = await core.db
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("id", "=", turnId)
+        .executeTakeFirstOrThrow();
+      const attemptId = before.active_attempt_id;
+      if (!attemptId) throw new Error("No active attempt");
+      const file = filesUnder(workerDir).find((entry) =>
+        entry.endsWith(path.join("model-grants", attemptId, "anthropic")),
+      );
+      if (!file) throw new Error("No attempt model grant");
+      const old = fs.readFileSync(file, "utf8");
+      await sessions().stopLocalTurns({ timeoutMs: 10_000, handBack: "all" });
+      const b = await createWorkServer({
+        ...testServerOptions({
+          dataDir: path.join(root, "replica-b"),
+          publicBases: [base],
+          env: {
+            DATABASE_URL: database.url,
+            WORK_SECRET: SHARED_SECRET,
+            WORK_OPERATOR_SECRET: SHARED_OPERATOR_SECRET,
+            WORK_VAULT_KEY: SHARED_VAULT_KEY,
+            WORK_CONTROL_PLANE_WORKLOADS: "workflow",
+            WORK_FAKE_AGENT: "1",
+            WORK_GATEWAY_CONFIG: path.join(root, "gateway.json"),
+            PATH: process.env.PATH,
+          },
+        }),
+        hooks: { connectionGuards: [nightGuard] },
+      });
+      extraServers.push(b);
+      await waitFor(async () => {
+        const current = await core.db
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("id", "=", turnId)
+          .executeTakeFirstOrThrow();
+        return (
+          current.lease_token !== before.lease_token &&
+          current.active_attempt_id === attemptId &&
+          fs.readFileSync(file, "utf8") !== old
+        );
+      }, "the new replica's grant publication");
+      const current = await core.db
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("id", "=", turnId)
+        .executeTakeFirstOrThrow();
+      expect(current.active_attempt_id).toBe(attemptId);
+      const refreshed = await gatewayCall(
+        fs.readFileSync(file, "utf8").trim(),
+        "claude-test",
+      );
+      expect(refreshed.status).toBe(200);
+      await refreshed.text();
+      expect((await gatewayCall(old.trim(), "claude-test")).status).toBe(401);
+      // The same CLI makes another model call after its Bash command completes.
+      const started = filesUnder(workerDir).find((entry) =>
+        entry.endsWith(`${marker}.started`),
+      );
+      if (!started) throw new Error("Missing runner marker");
+      fs.writeFileSync(started.replace(/\.started$/, ".continue"), "go");
+      await waitFor(
+        async () =>
+          (
+            await core.db
+              .selectFrom("agent_turns")
+              .select("status")
+              .where("id", "=", turnId)
+              .executeTakeFirstOrThrow()
+          ).status === "completed",
+        "the surviving runner to finish",
+        60_000,
+      );
+      const attempts = await core.db
+        .selectFrom("agent_turn_attempts")
+        .select("id")
+        .where("turn_id", "=", turnId)
+        .execute();
+      expect(attempts.map((entry) => entry.id)).toEqual([attemptId]);
+    },
+    120_000,
+  );
 });

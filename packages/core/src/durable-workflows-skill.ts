@@ -45,6 +45,49 @@ Long cloud jobs should return their resource id promptly, then wait through
 ordinary pauses, callbacks, or bounded polls. Use resource ledgers, idempotency
 keys, and independent reconciliation for cleanup and uncertain external effects.
 
+## Durable waits and capacity
+
+A durable wait keeps the run's deployed artifact and journal. When no sharing
+child or batch work is runnable and all invocations have ended, the root gives
+back its physical workspace. Capacity returns only after sandbox teardown
+succeeds; a failed teardown still holds its budget. Pause timeouts do not need
+a workspace. A continuation receives a fresh Allocation in the same Environment,
+with current owner and connection checks, and may run on another machine.
+
+Carry state in boundary data or declared persistent storage. Files and background
+processes in a workflow workspace do not survive parking. A parent waiting for a
+runnable child, or one waiting batch item beside runnable items, keeps the shared
+Allocation. Logical active-run limits remain in force while physical slots are
+free. Use independent workflows to reconcile external resources; parking does
+not clean up AWS instances or undo an accepted external request.
+
+## External resources, callbacks, and cancellation
+
+Durability records progress; it does not make an external API and a database
+transaction atomic. Workflow glue using SDKs, HTTP and an application Postgres
+ledger is normal. For resources such as cloud machines, persist intent and a
+stable operation id before dispatch, retain receipts, and reconcile an uncertain
+response before repeating a create. Keep launch parameters fixed across retries.
+
+Use independent scheduled reconciliation for cleanup after cancellation,
+exhausted retries, superseded work and orphaned resources. Cancellation stops
+continuation and fences late results. It does not run remaining boundaries,
+guarantee a JavaScript finally block, or undo an accepted external request.
+Host and connection calls share the persisted attempt deadline described above.
+Their providers must observe cancellation before effects. Keep business-state
+transactions short. A dedicated serialization lock may bracket bounded network
+IO when effect intents and receipts commit independently.
+
+Named callbacks can buffer within an existing run generation. Persist an
+authenticated callback in an application inbox when acceptance must outlive
+that generation. Correlation keys deduplicate live runs, not permanent business
+jobs; keep desired business state and command identities in the application.
+
+Serialize publications by business identity and generation, and store destination
+object ids. Read-before-create stamps alone race. Model allowed verdict
+transitions explicitly; an old success must not overwrite a newer failure.
+Work's database never makes an arbitrary external side effect exactly once.
+
 ## Return one transition
 
 \`pause\`, \`callWorkflow\`, \`documents\`, \`host\`, and \`connections\` are boundary
@@ -115,9 +158,40 @@ export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
-A pause without a timeout has no automatic timeout result. Cancellation is a
+A zero-duration timeout is immediately due. A pause without a timeout has no
+automatic timeout result. Cancellation is a
 separate authenticated terminal control, declared with \`controls: { cancel: true }\`.
 Do not invent \`context.cancel()\` or a cancelled \`PauseResult\` branch.
+
+## Callbacks before a named wait
+
+Use an ordinary authenticated webhook or server hook to call
+\`client.runs.signalByKey({ projectId, workflowName, correlationKey, runId,
+  signal: "reviewReady", idempotencyKey: eventId, value })\`.
+Carry the enrollment's run id in the external operation's callback metadata.
+The id fences its generation: a late callback cannot reach a restart. A signal
+never creates a run or queues for a missing, terminal or canceling generation.
+
+A matching \`pause({ signal: "reviewReady", state })\` consumes the oldest buffered
+value once, even when the callback arrived before the pause. An unnamed pause
+or another signal name does not consume it. An expired pause times out first;
+the event remains available for a later matching pause. Exact pause-id resume
+still targets only that existing pause and never buffers.
+
+The receipt reports \`buffered\`, \`resumed\` with its pause id, or \`discarded\` when
+termination cleared an unconsumed event. Retrying the same idempotency key with
+the same name and JSON value returns that receipt's current state. Reusing the
+key with different content conflicts. Receiving a receipt does not mean the
+workflow's business effects completed. Current \`runs:write\` authority is required
+even for duplicate receipt reads; accepting a signal never grants execution
+rights to the run's owner.
+
+Each value is at most 64 KiB; a run accepts at most 256 pending signals and
+1,024 lifetime receipts. Limits reject atomically. Termination clears pending
+values and keeps bounded deduplication receipts until ordinary run retention.
+Use an application-owned inbox for larger streams, indefinite history, events
+before enrollment, or cross-generation business delivery. This glue belongs in
+normal workflow and host code; no native integration is required.
 
 ## Carry state across a call
 

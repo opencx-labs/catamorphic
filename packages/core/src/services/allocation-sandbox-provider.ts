@@ -630,6 +630,10 @@ async function retireAllocation(args: {
       if (allocation.sandbox_provider_id)
         await args.provider.destroySandbox(allocation.sandbox_provider_id);
       await args.db
+        .deleteFrom("deployment_runtimes")
+        .where("binding_id", "=", allocation.id)
+        .execute();
+      await args.db
         .updateTable("execution_allocations")
         .set({ capacity_released_at: sql`now()` })
         .where("id", "=", allocation.id)

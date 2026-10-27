@@ -18,10 +18,10 @@ Related guidance:
 - [embedding-guide](../embedding-guide/SKILL.md): composing the UI (workflow
   editor, inspectors, member consent, sessions, registry components).
 - [setup-work-server](../../../skills/setup-work-server/SKILL.md):
-  stock-server setup, machine enrollment, and multi-instance deployment.
+  Work server composition, machine enrollment, and multi-instance deployment.
 - Reference hosts: the desktop's embedded server
   [`apps/desktop/src/main/server/boot.ts`](../../../apps/desktop/src/main/server/boot.ts)
-  (PGlite, local execution, fixed identity) and the stock server `apps/server`
+  (PGlite, local execution, fixed identity) and the reference Work server process `apps/server`
   (single-tenant, Better Auth, local processes).
 
 ## Choose the surfaces

@@ -390,7 +390,7 @@ describe("sandbox runner", () => {
       provider,
       sandboxId: sandbox.id,
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "logs", grant: "grant-one" }],
+      grants: [{ alias: "logs", grant: "grant-one", publicationRevision: "1" }],
       gitAliases: [],
       httpAliases: [
         { alias: "logs", url: "http://127.0.0.1:9/api/gateway/http/logs" },

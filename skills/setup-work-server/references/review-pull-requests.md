@@ -8,15 +8,27 @@ and 0259):
 the `pull-request-reviews` pack holds every file. This guide is the
 server side: GitHub, the service connections, and the review machines.
 
+For a different review algorithm, cloud allocator or external Postgres ledger,
+compose the same primitives rather than requiring a native integration or
+forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
+The pack includes a deployment-owned publisher hook and an application Postgres
+ledger. Install both before enabling publication. All publishing replicas share
+the ledger and serialize each pull request; stable effect receipts reconcile a
+write whose response was lost. An uncertain effect with no confirmed destination
+receipt blocks later writes for that pull request rather than guessing it is
+safe to repeat a create.
+
 What runs where:
 
 - The **control plane** receives GitHub's signed webhook, runs the
   workflows, and holds every credential: the App's key, the replica's
   password, Slack's token. It also **posts**: when a review chat's turn ends,
   the `postReviews` workflow (in the workflow-only `github-poster`
-  Environment) reads the review the agent reported, checks it, and writes the
-  review, the check run, thread replies and resolutions, and the summary in
-  the pull request's description.
+  Environment) returns one host call with the session and turn ids. The hook
+  reads and validates the actual report, checks its current generation and head,
+  then posts a commit-bound review, check run and optional reply through the
+  connection broker. The default publisher leaves description edits, dismissal
+  of earlier change requests and thread resolution to people.
 - A **review machine** (a worker labelled `pool=review`, opened to the
   project) runs each pull request's chat in the `review` Environment: its own
   sandbox from the project's image, with Docker inside it, checked out at the
@@ -28,8 +40,8 @@ What runs where:
   forges in the chat is only a report the poster validates.
 
 The review is advice, not a merge gate. The code under review runs where
-the review is written, so it can sway the verdict, the "Work review" check,
-and the dismissal of earlier change requests on its next commit. Protect
+the review is written, so it can sway the verdict and the "Work review" check.
+Protect
 the base branch with a person's approval (branch protection or rulesets),
 and if you also require the "Work review" check, pick the App as its
 expected source so a run another workflow names alike does not count.
@@ -43,16 +55,16 @@ on the repository, and attach the repository as the project
 (`POST /_work/operator/projects` with `"repository": "acme/web"`). The App
 needs, and the manifest requests:
 
-- **Pull requests: write**: reviews and inline comments, replies and
-  answers in the conversation, resolving threads, dismissing its own change
-  requests, the description's summary.
+- **Pull requests: write**: reviews and inline comments, and replies to
+  review comments.
 - **Checks: write**: the "Work review" check run.
 - **Contents: read**: fetching the change. Reviews need no more; the
   manifest asks for write, which the project's own sync uses.
 
-The manifest also asks for Issues: write. Reviews need it only if you add
-automations that edit or delete the App's conversation comments
-(`update_issue_comment`, `delete_issue_comment`); the poster does neither.
+The manifest also asks for Issues: write. A pull request conversation can use
+pull-request permissions; automations that edit or delete the App's issue
+comments need Issues: write. The publisher reads App-owned conversation comments
+to reconcile receipts and never edits or deletes them.
 
 It subscribes to pull request, pull request review comment, and issue
 comment events.
@@ -169,16 +181,39 @@ adds:
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
   `answerReviewComments`, `closePullRequestChats`, and `postReviews`.
 
-Replace `acme/web` in each trigger's `where`, and in `REVIEWED_REPOSITORY`,
-with the project's repository, so events from the App's other repositories
-start nothing. Map GitHub logins
+Replace `acme/web` in each trigger's `where`,
+with the project's repository, and use the same repository in the deployment
+publisher. Events from the App's other repositories must start nothing. Map GitHub logins
 to members in `GITHUB_MEMBERS` (they approve the chat's escalations) or
 commit a `reviewers` role. Check it with the project MCP `program_check`
-tool (`bun run --cwd .work check` needs the `@catamorphic/*` packages, which
-are not yet on a public registry), then propose the change; it lands through
+tool (or `bun run --cwd .work check`, with the project's pinned public
+`@catamorphic/*` packages installed), then propose the change; it lands through
 a pull request like any other.
 
-## 5. Turn it on
+## 5. Install the publisher in the deployment
+
+Copy the pack's `.work/server/review-publisher.ts`, `review-report.ts` and
+`review-publisher.sql` into the company-owned server source. These are templates;
+Work never loads privileged code automatically from a project's mutable files.
+Apply the SQL to the application Postgres database. Its schema is independent
+of Work's tables and is shared by all replicas that publish these reviews.
+
+The deployment installs `pg` at runtime and `@types/pg` when typechecking. Create
+distinct dedicated `lockPool` and `ledgerPool` instances pointing to the same
+database. This keeps lock waiters from starving intent and receipt commits.
+Each needs at least one connection; transaction poolers are supported because
+coordination uses transaction row locks. Close both pools during deployment
+shutdown.
+
+Register `reviewPublicationCapability` under `hooks.capabilityProviders`. It
+provides `company.review-publication`, the host call used by `postReviews`.
+Configure its actual project and repository, and give it the initialized SDK
+through the getter shown in the installed pack skill. The hook resolves the
+stamped caller, run and connection authority; the workflow passes ids, never
+posting credentials or an unverified report. Follow the pack's tested wiring
+example rather than importing these templates from a live project at boot.
+
+## 6. Turn it on
 
 Someone with `automations:write`, in a role whose `environments` list
 `default` and `github-poster` and whose `connections` include
@@ -190,19 +225,17 @@ the `default` Environment, and `postReviews` in `github-poster`, with its
 `GET /api/projects/:id/webhooks` shows its URL, which the App registered from
 a manifest already uses.
 
-## 6. Verify
+## 7. Verify
 
 1. Open a small pull request. A project chat `pr-acme/web-<number>` appears:
    Environment `review`, a review machine (created for it when none was
    free), workspace at the pull request's head commit, and its setup's log
    in `.work-session/setup.log`. When its turn ends, a `postReviews` run posts the
-   review (inline comments), a "Work review" check run, and a summary between
-   `<!-- work-review:start -->` and `<!-- work-review:end -->` in the
-   description.
-2. Push to the branch: the same chat moves to the new head; the next review
-   resolves the threads it fixed and, once the new commit passes, dismisses
-   the App's change requests on earlier commits. A commit's check only holds
-   or tightens: a failure stands until the next push.
+   commit-bound review with inline comments and a "Work review" check run.
+   The description and earlier change requests remain under human control.
+2. Push to the branch: the same chat moves to the new head. A stale report
+   posts nothing. Each commit's check only holds or tightens, so an overlapping
+   passing report cannot replace a failure on that commit.
 3. Comment `@work is this migration safe on production?`: the answer arrives
    as a reply, with no new review when nothing else changed.
 4. Merge or close it: the chat closes, its sandbox and containers are gone,
@@ -220,3 +253,17 @@ review that never reaches GitHub shows in `postReviews`' runs: a turn whose
 reply has no valid `work-review` block marks the commit `action_required`
 with the reason (when no review marked it yet), and a report for a commit
 the chat no longer stands on posts nothing at all.
+
+Model access through the gateway lasts only for the exact review turn attempt
+and its live lease (ADR 0293). Background code cannot start model requests with
+that turn's old grant after interruption, completion or lease loss, or during a
+later turn. Git and HTTP grants keep their normal background lifetime. Calls
+already admitted may finish streaming; clean up cloud resources independently
+and enforce spending policy in connection guards.
+Before unattended use, interleave two publishers and stop one after GitHub has
+accepted a create but before its receipt commits. The next attempt must find the
+exact App-owned receipt. If it cannot, publication stays blocked while the
+operator reconciles the destination; a missing list result is not proof that an
+older request cannot still arrive. Stop the old poster and reconcile its writes
+before upgrading. This is application policy built from ordinary hooks and
+Postgres, not a universal exactly-once external write guarantee.

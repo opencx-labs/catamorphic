@@ -300,7 +300,7 @@ A guard reviews each action on the connection kinds it names, from agents and
 workflows alike, and answers `allow`, `deny`, or `escalate`. What a company
 allows is its own policy, so Work ships no guards and the gateway file
 declares none (ADR 0183): a guard is a few lines of code in a custom server.
-The stock image runs without guards; the connection's limits, bindings,
+The library supplies no company guards; the connection's limits, bindings,
 capabilities, and Git push rules still apply.
 
 The server keeps the mechanics. A deny refuses. An escalation asks the person
@@ -310,12 +310,10 @@ that does not answer within `connectionGuardTimeoutMs` (default 30 seconds)
 escalates. Every verdict is in the connection audit. Give each guard `kinds`
 so it reviews only the connections it judges.
 
-Your own server (ADRs 0160, 0261) passes guards as `hooks.connectionGuards`:
-copy `apps/server/src/index.ts` into an image built from the published one
-([your own image](../../../packages/work-server/README.md#your-own-image)),
-add the model client for the classifier there
-(`RUN cd /app/apps/server && bun add @anthropic-ai/sdk zod`), and fill in
-the file's `hooks` with these:
+Your server passes guards as `hooks.connectionGuards` (ADRs 0160, 0287).
+Install the model client in your own Bun project, build your own image
+([deployment guide](../../../packages/work-server/README.md#your-own-image)),
+and add the guard to your entry point's `hooks`:
 
 ```ts
 // apps/server/custom/server.ts

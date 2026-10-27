@@ -798,6 +798,8 @@ Answer what was asked first. Reveal complexity only when it helps the person dec
 
 When something should happen repeatedly, on a schedule, or when an event occurs, offer to automate it with a workflow; for a one-off, just do the task. When the person needs a tool with a screen, build an app. Before writing a workflow or an app, load the matching skill (writing-workflows, workflow-lifecycle, building-apps, or work-projects for project structure and roles) and follow it. Describe the result in the person's terms: what it does, when it runs, and where they can see it.
 
+Workflows run ordinary TypeScript, npm and IO. Glue in workflows and host hooks is normal; compose primitives before requiring native integrations. Use workflow-lifecycle and durable-workflows to assess a concrete missing guarantee. Hooks own credentials and authorization.
+
 Saving, sharing, publishing, and turning on an automation are separate outcomes. Report only the ones that actually succeeded.`;
 
 export function buildAgentSystemPrompt({
@@ -4972,6 +4974,9 @@ export class AgentSessionsService {
   private async reattachRunner(input: {
     identity: Identity;
     session: SessionRow;
+    turn: Turn;
+    attempt: Attempt;
+    leaseToken: string;
     location: Extract<RunnerLocation, { kind: "sandbox_process" }>;
   }): Promise<RunnerChannel | undefined> {
     const allocation = await this.executionAllocations.get({
@@ -5006,9 +5011,33 @@ export class AgentSessionsService {
           ),
         () => false,
       );
-    return present
-      ? sandboxChannel({ provider, location: input.location })
-      : undefined;
+    if (!present) return undefined;
+    if (
+      input.turn.activeAttemptId === input.attempt.id &&
+      ["preparing", "running", "waiting"].includes(input.turn.status) &&
+      ["preparing", "running"].includes(input.attempt.status)
+    ) {
+      const grantInput = {
+        identity: input.identity,
+        projectId: input.session.project_id,
+        sessionId: input.session.id,
+        allocationId: allocation.id,
+        provider,
+        sandboxProviderId: input.location.sandboxId,
+        renewOnly: true,
+        modelTurn: {
+          turnId: input.turn.id,
+          attemptId: input.attempt.id,
+          leaseToken: input.leaseToken,
+        },
+      };
+      // The runner survived its holder, but its old model grant did not.
+      // Refresh the exact new claim before answering or reading it again.
+      await this.configureSandboxGateway(grantInput);
+      this.startGrantRenewal(grantInput);
+      await this.keepConnectionGrants(input.session.id);
+    }
+    return sandboxChannel({ provider, location: input.location });
   }
 
   /**
@@ -5023,6 +5052,7 @@ export class AgentSessionsService {
     session: SessionRow;
     turn: Turn;
     attempt: Attempt;
+    leaseToken: string;
     signal: AbortSignal;
   }): Promise<PreparedAttempt> {
     const { identity, turn } = input;
@@ -5173,6 +5203,11 @@ export class AgentSessionsService {
         identity,
         projectId,
         sessionId,
+        modelTurn: {
+          turnId: turn.id,
+          attemptId: input.attempt.id,
+          leaseToken: input.leaseToken,
+        },
         provider: runtime.provider,
         sandboxProviderId,
         afterSetup: widened !== undefined,
@@ -5279,6 +5314,11 @@ export class AgentSessionsService {
           projectId,
           sessionId,
           allocationId: session.allocation_id,
+          modelTurn: {
+            turnId: turn.id,
+            attemptId: input.attempt.id,
+            leaseToken: input.leaseToken,
+          },
           provider: runtime.provider,
           sandboxProviderId,
           renewOnly: true,
@@ -6362,6 +6402,7 @@ export class AgentSessionsService {
     identity: Identity;
     projectId: string;
     sessionId: string;
+    modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
     provider: SandboxProvider;
     sandboxProviderId: string;
     /** The sandbox holds its base and what a setup made on it (ADR 0257). */
@@ -6407,6 +6448,7 @@ export class AgentSessionsService {
       projectId: input.projectId,
       sessionId: input.sessionId,
       allocationId: row.allocation_id,
+      ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
       provider: input.provider,
       sandboxProviderId: input.sandboxProviderId,
       renewOnly: false,
@@ -6431,6 +6473,7 @@ export class AgentSessionsService {
     projectId: string;
     sessionId: string;
     allocationId: string;
+    modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
     provider: SandboxProvider;
     sandboxProviderId: string;
     renewOnly: boolean;
@@ -6483,12 +6526,21 @@ export class AgentSessionsService {
         identity: input.identity,
         allocationId: input.allocationId,
         agentSessionId: input.sessionId,
+        ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
         alias: binding.alias,
         ttlSeconds: 3600,
         channel: "sandbox",
         keepPrevious: true,
       });
-      issued.push({ alias: binding.alias, grant: grant.token, id: grant.id });
+      issued.push({
+        alias: binding.alias,
+        grant: grant.token,
+        id: grant.id,
+        publicationRevision: grant.publicationRevision,
+        ...(binding.api && input.modelTurn
+          ? { modelAttemptId: input.modelTurn.attemptId }
+          : {}),
+      });
     }
     await configureSandboxGateway({
       provider: input.provider,
@@ -6524,6 +6576,9 @@ export class AgentSessionsService {
               keyFile: sandboxGrantFile({
                 provider: input.provider,
                 alias: binding.alias,
+                ...(input.modelTurn
+                  ? { modelAttemptId: input.modelTurn.attemptId }
+                  : {}),
               }),
             },
           ]
@@ -6537,14 +6592,20 @@ export class AgentSessionsService {
   ): void {
     const previous = this.grantRenewals.get(input.sessionId);
     if (previous) clearInterval(previous);
+    let renewing = false;
     const timer = setInterval(() => {
-      void this.configureSandboxGateway({ ...input, renewOnly: true }).catch(
-        (error: unknown) =>
+      if (renewing) return;
+      renewing = true;
+      void this.configureSandboxGateway({ ...input, renewOnly: true })
+        .catch((error: unknown) =>
           console.warn(
             `[catamorphic] Could not renew the sandbox grants of session ${input.sessionId}`,
             error,
           ),
-      );
+        )
+        .finally(() => {
+          renewing = false;
+        });
     }, GRANT_RENEWAL_MS);
     timer.unref?.();
     this.grantRenewals.set(input.sessionId, timer);

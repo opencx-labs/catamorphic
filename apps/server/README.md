@@ -1,18 +1,18 @@
 # Work server
 
-The prebuilt, self-hostable Work server (ADRs 0059, 0159), built on the
-Catamorphic libraries. Every release publishes it as the multi-architecture
-`work-server` image in the GitHub Container Registry, tagged with the release
-version, `alpha` (every release), and `latest` (Stable releases), with a signed
-build provenance attestation. Configuration variables use the `WORK_` prefix;
-`WORK_SECRET` is the deployment secret. Build it locally with
-`docker build -f apps/server/Dockerfile -t work-server .` from the repository
-root. The image runs as an unprivileged user and keeps everything under `/data`.
+The reference process source for `@catamorphic/work-server`
+([library and deployment guide](../../packages/work-server/README.md)).
+Deployments own their entry point and image, install an exact library release,
+and add hooks for their company and use case (ADR 0287). Work does not publish
+a stock server image. Build on Bun, include git and system CA certificates,
+run unprivileged, and handle shutdown and replica lease loss. `apps/server`
+remains the development host used by the repository's orchestrator and tests.
 
-The server is the `@catamorphic/work-server` package
-([README](../../packages/work-server/README.md)); this app is the image's
-process. A company that needs custom code extends the image with a small
-server file that calls `createWorkServer` with its own hooks.
+Configuration variables use the `WORK_` prefix. The reference process keeps
+state under `/data`; mount it for a PGlite deployment. Network Postgres mode
+uses shared durable storage and explicitly supplied secrets. See
+[workflow composition](../../skills/setup-work-server/references/workflow-composition.md)
+for workflows, external services and application-owned state.
 
 GitHub is an ordinary connection (ADR 0177). An organization administrator
 connects a GitHub App installation as the `github` service connection, or the
@@ -34,8 +34,8 @@ every changed path, including the old path of renamed files.
 ## Machines and execution Environments
 
 One server is a complete brain. To add execution capacity, enroll workers: the
-same image started as `bun apps/server/src/worker.ts`, holding only a machine
-credential exchanged once for an operator's single-use enrollment code. Workers
+deployment-owned worker image started as `bun apps/server/src/worker.ts`,
+holding only a machine credential exchanged once for an operator's single-use enrollment code. Workers
 dial out to the control plane over HTTPS and run agent sandboxes; workflow runs
 and every credential stay on the control plane. For availability, run
 control-plane replicas on shared Postgres with the same `WORK_SECRET`,
@@ -127,11 +127,9 @@ the same vault; their database rows hold only references.
 
 Agents and workflows reach company systems through the connection gateway:
 `WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, Git hosts, model APIs,
-and read-only database connections. The image ships no guards and changes no
-model request: a company that wants each action reviewed (a model
-classifier, a required approval) or its model routing pinned copies
-[`src/index.ts`](src/index.ts), the whole stock server, into its own image
-and adds hooks (ADRs 0183, 0261;
+and read-only database connections. Add company guards and model routing
+policy in the hooks of your own entry point (ADRs 0183, 0287;
+reference source: [`src/index.ts`](src/index.ts);
 [your own image](../../packages/work-server/README.md#your-own-image)). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
 
@@ -156,7 +154,7 @@ API. Members see an Environment's aliases and authorize their own accounts at
 `/api/projects/:id/environments/:environment/connections`.
 
 Provider drivers and OAuth application details are deployment configuration.
-The stock image does not ship a shared Slack or Google OAuth identity. Register
+The library does not supply a shared Slack or Google OAuth identity. Register
 your own provider applications (an `mcp` gateway entry takes a pre-registered
 `oauth.client`), configure their HTTPS callback URLs, and inject further
 connection providers with the `connectionProviders` hook. Service accounts

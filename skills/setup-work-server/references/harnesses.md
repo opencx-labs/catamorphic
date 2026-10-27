@@ -42,13 +42,12 @@ harnesses never receive them.
 
 ### Pin what requests carry: your own server image
 
-The stock server forwards what the agent sends. An aggregator such as
-OpenRouter routes a request to whichever providers it names, so deciding
-the routing (only providers that keep no data, no fallback models) is
-control-plane code: build your own image from the stock server file
-([your own image](../../../packages/work-server/README.md#your-own-image),
-ADR 0261) and add a model request rewrite (ADR 0256). In the copied
-`apps/server/src/index.ts`:
+Without a rewrite, the gateway forwards what the agent sends. An aggregator
+such as OpenRouter routes a request to whichever providers it names, so
+routing policy belongs in your control-plane code. Add a model request
+rewrite (ADR 0256) to your own entry point
+([deployment guide](../../../packages/work-server/README.md#your-own-image),
+ADR 0287):
 
 ```ts
 import {

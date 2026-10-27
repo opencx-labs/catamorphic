@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
 import { hashBearer } from "../services/connections-service.js";
+import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { dbModelGatewayStore } from "../services/model-gateway.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -49,6 +51,9 @@ describeIf("the model gateway's store (ADR 0180)", () => {
     const sessionId = crypto.randomUUID();
     const allocationId = crypto.randomUUID();
     const token = crypto.randomUUID();
+    const turnId = crypto.randomUUID();
+    const attemptId = crypto.randomUUID();
+    const leaseToken = crypto.randomUUID();
     await db
       .insertInto("execution_allocations")
       .values({
@@ -59,7 +64,28 @@ describeIf("the model gateway's store (ADR 0180)", () => {
         binding_id: "managed",
         workload_kind: "agent",
         root_workload_id: sessionId,
-        policy_snapshot: JSON.stringify({}),
+        policy_snapshot: JSON.stringify({
+          binding: {
+            id: "managed",
+            label: "Managed",
+            trust: "managed",
+            isolation: "sandbox",
+            workloads: ["agent"],
+            agentTopologies: ["contained"],
+            capabilities: [],
+            resources: {},
+          },
+          requirements: { workload: "agent", topology: "contained" },
+          connections: [
+            {
+              alias: "anthropic",
+              connectionId,
+              providerKind: "anthropic",
+              principalKind: "tenant_service",
+              capabilities: ["model", "git:read", "http:GET"],
+            },
+          ],
+        }),
       })
       .execute();
     await db
@@ -72,6 +98,30 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       })
       .execute();
     await db
+      .insertInto("agent_turns")
+      .values({
+        id: turnId,
+        session_id: sessionId,
+        ordinal: 1,
+        status: "running",
+        active_attempt_id: attemptId,
+        lease_owner: "replica-1",
+        lease_token: leaseToken,
+        lease_expires_at: new Date(Date.now() + 60_000),
+      })
+      .execute();
+    await db
+      .insertInto("agent_turn_attempts")
+      .values({
+        id: attemptId,
+        turn_id: turnId,
+        session_id: sessionId,
+        ordinal: 1,
+        reason: "initial",
+        status: "running",
+      })
+      .execute();
+    await db
       .insertInto("connection_capability_grants")
       .values({
         tenant_id: tenantId,
@@ -81,12 +131,15 @@ describeIf("the model gateway's store (ADR 0180)", () => {
         alias: "anthropic",
         connection_id: connectionId,
         token_hash: hashBearer(token),
-        capabilities: JSON.stringify(["model"]),
+        capabilities: JSON.stringify(["model", "git:read", "http:GET"]),
+        model_turn_id: turnId,
+        model_attempt_id: attemptId,
+        model_lease_token: leaseToken,
         expires_at: new Date(Date.now() + 60_000),
         channel: "sandbox",
       })
       .execute();
-    return { sessionId, allocationId, token };
+    return { sessionId, allocationId, token, turnId, attemptId, leaseToken };
   }
 
   it("reads a live grant with its session and connection revision in one query", async () => {
@@ -106,7 +159,7 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       .set({ status: "closed" })
       .where("id", "=", sessionId)
       .execute();
-    expect((await store.liveGrant({ token }))?.session?.active).toBe(false);
+    expect(await store.liveGrant({ token })).toBeUndefined();
   });
 
   it("ends a grant with its Allocation or its revocation", async () => {
@@ -125,6 +178,232 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       .where("allocation_id", "=", revoked.allocationId)
       .execute();
     expect(await store.liveGrant({ token: revoked.token })).toBeUndefined();
+  });
+
+  const grants = new ConnectionCapabilityGrantsService(
+    db,
+    new ExecutionAllocationsService(db),
+  );
+  const identity = { tenantId, externalUserId: "member-1" };
+  function issueArgs(fixture: Awaited<ReturnType<typeof grant>>) {
+    return {
+      identity,
+      allocationId: fixture.allocationId,
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox" as const,
+      keepPrevious: true,
+      modelTurn: {
+        turnId: fixture.turnId,
+        attemptId: fixture.attemptId,
+        leaseToken: fixture.leaseToken,
+      },
+    };
+  }
+
+  it("denies unbound model use while preserving mixed alias background capabilities", async () => {
+    const fixture = await grant();
+    const unbound = await grants.issue({
+      ...issueArgs(fixture),
+      modelTurn: undefined,
+    });
+    const store = dbModelGatewayStore(db);
+    expect(await store.liveGrant({ token: unbound.token })).toBeUndefined();
+    expect(await grants.validate({ token: unbound.token })).toMatchObject({
+      capabilities: ["model", "git:read", "http:GET"],
+    });
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "completed" })
+      .where("id", "=", fixture.turnId)
+      .execute();
+    expect(await store.liveGrant({ token: fixture.token })).toBeUndefined();
+    expect(await grants.validate({ token: fixture.token })).not.toBeNull();
+    await expect(grants.issue(issueArgs(fixture))).rejects.toThrow(
+      "live turn attempt",
+    );
+  });
+
+  it("denies new calls as soon as cancellation, finalization, lease loss or attempt replacement is persisted", async () => {
+    const store = dbModelGatewayStore(db);
+    for (const cause of [
+      "cancel",
+      "finalize",
+      "expiry",
+      "lease",
+      "attempt",
+      "move",
+      "capability",
+    ]) {
+      const fixture = await grant();
+      expect(await store.liveGrant({ token: fixture.token })).toMatchObject({
+        turnId: fixture.turnId,
+      });
+      if (cause === "move")
+        await db
+          .updateTable("agent_sessions")
+          .set({ allocation_id: null })
+          .where("id", "=", fixture.sessionId)
+          .execute();
+      else if (cause === "capability")
+        await db
+          .updateTable("connection_capability_grants")
+          .set({ capabilities: JSON.stringify(["git:read"]) })
+          .where("token_hash", "=", hashBearer(fixture.token))
+          .execute();
+      else
+        await db
+          .updateTable("agent_turns")
+          .set({
+            ...(cause === "cancel"
+              ? { cancellation_requested_at: new Date() }
+              : {}),
+            ...(cause === "finalize" ? { status: "finalizing" } : {}),
+            ...(cause === "expiry"
+              ? { lease_expires_at: new Date(Date.now() - 1000) }
+              : {}),
+            ...(cause === "lease" ? { lease_token: crypto.randomUUID() } : {}),
+            ...(cause === "attempt"
+              ? { active_attempt_id: crypto.randomUUID() }
+              : {}),
+          })
+          .where("id", "=", fixture.turnId)
+          .execute();
+      expect(
+        await store.liveGrant({ token: fixture.token }),
+        cause,
+      ).toBeUndefined();
+      if (cause !== "capability")
+        await expect(grants.issue(issueArgs(fixture)), cause).rejects.toThrow(
+          "live turn attempt",
+        );
+    }
+  });
+
+  it("never lets late renewal cleanup revoke a newer publication on the same live claim", async () => {
+    const fixture = await grant();
+    const first = await grants.issue(issueArgs(fixture));
+    const second = await grants.issue(issueArgs(fixture));
+    expect(BigInt(second.publicationRevision)).toBeGreaterThan(
+      BigInt(first.publicationRevision),
+    );
+    await grants.revokeOthers({
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox",
+      keepId: first.id,
+    });
+    expect(
+      await dbModelGatewayStore(db).liveGrant({ token: second.token }),
+    ).toMatchObject({ turnId: fixture.turnId });
+    await grants.revokeOthers({
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox",
+      keepId: second.id,
+    });
+    expect(await grants.validate({ token: first.token })).toBeNull();
+    expect(
+      await dbModelGatewayStore(db).liveGrant({ token: second.token }),
+    ).toMatchObject({ turnId: fixture.turnId });
+  });
+
+  it("never reactivates an old bearer on a later turn, even after extension and late renewal cleanup", async () => {
+    const fixture = await grant();
+    const oldRenewal = await grants.issue(issueArgs(fixture));
+    await db
+      .updateTable("agent_turns")
+      .set({ status: "completed" })
+      .where("id", "=", fixture.turnId)
+      .execute();
+    const turnId = crypto.randomUUID();
+    const attemptId = crypto.randomUUID();
+    const leaseToken = crypto.randomUUID();
+    await db
+      .insertInto("agent_turns")
+      .values({
+        id: turnId,
+        session_id: fixture.sessionId,
+        ordinal: 2,
+        status: "running",
+        active_attempt_id: attemptId,
+        lease_token: leaseToken,
+        lease_expires_at: new Date(Date.now() + 60_000),
+        lease_owner: "replica-2",
+      })
+      .execute();
+    await db
+      .insertInto("agent_turn_attempts")
+      .values({
+        id: attemptId,
+        turn_id: turnId,
+        session_id: fixture.sessionId,
+        ordinal: 1,
+        status: "running",
+        reason: "initial",
+      })
+      .execute();
+    const next = await grants.issue(
+      issueArgs({ ...fixture, turnId, attemptId, leaseToken }),
+    );
+    await grants.revokeOthers({
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox",
+      keepId: oldRenewal.id,
+    });
+    await grants.extend({
+      agentSessionId: fixture.sessionId,
+      channel: "sandbox",
+    });
+    const store = dbModelGatewayStore(db);
+    expect(await store.liveGrant({ token: fixture.token })).toBeUndefined();
+    expect(await store.liveGrant({ token: oldRenewal.token })).toBeUndefined();
+    expect(await store.liveGrant({ token: next.token })).toMatchObject({
+      turnId,
+    });
+    await expect(grants.issue(issueArgs(fixture))).rejects.toThrow(
+      "live turn attempt",
+    );
+    await grants.revokeOthers({
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox",
+      keepId: next.id,
+    });
+    expect(await grants.validate({ token: oldRenewal.token })).toBeNull();
+    expect(await store.liveGrant({ token: next.token })).toMatchObject({
+      turnId,
+    });
+  });
+
+  it("does not issue a model grant past a concurrent stop under the turn lock", async () => {
+    const fixture = await grant();
+    let markLocked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      markLocked = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stopping = db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("agent_turns")
+        .set({ cancellation_requested_at: new Date() })
+        .where("id", "=", fixture.turnId)
+        .execute();
+      markLocked();
+      await released;
+    });
+    await locked;
+    const issuing = grants.issue(issueArgs(fixture));
+    release();
+    await stopping;
+    await expect(issuing).rejects.toThrow("live turn attempt");
+    expect(
+      await dbModelGatewayStore(db).liveGrant({ token: fixture.token }),
+    ).toBeUndefined();
   });
 
   it("records usage per session and turn", async () => {
@@ -160,7 +439,6 @@ describeIf("the model gateway's store (ADR 0180)", () => {
       reasoningTokens: 0,
     });
     expect((await store.usage({ sessionId }))?.outputTokens).toBe(36);
-    expect(await store.runningTurn({ sessionId })).toBeUndefined();
 
     // A call still streaming is open: it counts once it settles.
     const openId = await store.openUsage({ record: { ...record, turnId } });

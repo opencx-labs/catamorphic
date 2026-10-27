@@ -210,6 +210,19 @@ Rules that hold across harnesses:
   `signIn` places only on a machine reporting the chat owner's sign-in, and
   Work never reads or moves the credential.
 
+## Sandbox model authority (ADR 0293)
+
+Model grants are bound to the exact prepared turn, attempt and lease. Pass the
+actual claim when issuing or renewing; never resolve the latest turn by session.
+The model gateway denies new calls after cancellation, attempt replacement,
+settlement or lease expiry, and between turns. An old token cannot become valid
+on the next turn. Git, HTTP and MCP retain their existing lifetime, including on
+a mixed alias. Model readers use the attempt-specific key file given in their
+model access; do not assume the ordinary alias grant path. An admitted stream
+may finish after the turn ends, and usage remains attributed to its issuing
+turn. Hosts own spend policy through guards; this fence is not a budget or a
+substitute for resource isolation and cleanup.
+
 ## Placement, Environments, and machines
 
 - Environments and immutable Allocations select provider, resources, and
@@ -236,6 +249,12 @@ Rules that hold across harnesses:
   keep the operator recovery path for ambiguous create/destroy outcomes.
 - Requested limits must reach sandbox creation, including through client
   runner RPC. Native CLI paths do not gain limits by declaring them.
+- Durable workflow waits retire the root's Allocation with reason `idle` once
+  no sharing child or batch compute is runnable and all invocations/jobs ended
+  (ADR 0289). Existing node cleanup returns capacity only after destruction.
+  Continuations re-admit current authority and selected connections; they keep
+  the pinned artifact/journal and rebuild their workspace. Pause timeouts are
+  control-plane jobs; queued continuations record ordinary placement demand.
 - Verify real VM CPU/memory, concurrent admission races, cleanup failures,
   archive/restore, and worker fencing.
 

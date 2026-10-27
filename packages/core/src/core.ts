@@ -1068,8 +1068,13 @@ export class CatamorphicCore {
       environments: this.executionEnvironments,
       allocations: this.executionAllocations,
       coordinator,
+      connections: this.connectionAdmission,
+      waits: this.placementWaits,
       // Read at call time: memberships are constructed further down.
       resolveOwner: (args) => this.resolveMember(args),
+    });
+    executionWorker.registerAllocationMaintenance({
+      handler: (args) => this.nodeRecovery.reconcileWorkflowWaits(args),
     });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),

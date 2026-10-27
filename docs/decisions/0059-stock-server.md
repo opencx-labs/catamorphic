@@ -8,6 +8,8 @@ Single-node storage assumption superseded by
 [0099](0099-shared-postgres-server-environments.md) for managed multi-machine
 deployments. The standalone PGlite mode remains supported.
 
+Image distribution is superseded by [0287](0287-work-server-deployments-compose-libraries-and-workflows.md): deployments build their own images from the libraries.
+
 ## Context
 
 ADR 0055 settled identity and TODO.md promised a "default self-hostable
