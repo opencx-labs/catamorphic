@@ -574,6 +574,14 @@ const api = {
     content: string;
     expectedContent: string;
   }): Promise<void> => invoke("catamorphic:editor-file-write", input),
+  editorFileRename: (input: {
+    filePath: string;
+    name: string;
+  }): Promise<string> => invoke("catamorphic:editor-file-rename", input),
+  personalFileCreate: (input: {
+    projectId: string;
+    extension: string;
+  }): Promise<string> => invoke("catamorphic:personal-file-create", input),
   projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
     invoke("catamorphic:project-open-file", projectId, filePath),
   authorizationStatus: (): Promise<{

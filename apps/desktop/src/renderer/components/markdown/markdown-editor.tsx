@@ -14,7 +14,12 @@ import { DOMSerializer } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
 import { ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
@@ -303,6 +308,10 @@ export function MarkdownEditor({
           options: {
             placement: "top",
             offset: 8,
+            // Flip is checked before the offset applies, so it needs the
+            // offset's room too, or a bar that barely fits is clipped by
+            // the scroller above the first line.
+            flip: { padding: 12 },
             onShow: bubbleMotion.show,
             onHide: bubbleMotion.hide,
           },
@@ -548,7 +557,13 @@ export function MarkdownEditor({
         }
       }}
     >
-      <div className="cat-mdedit-scroll">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: a click in the margins places the caret; the editor itself is the focusable control */}
+      <div
+        className="cat-mdedit-scroll"
+        onMouseDown={(event) => {
+          if (editor && event.button === 0) placeCaretFromMargin(editor, event);
+        }}
+      >
         <div ref={mountRef} className="cat-mdedit">
           {frontmatter !== null && (
             <div className="cat-mdedit-frontmatter">
@@ -592,6 +607,38 @@ export function MarkdownEditor({
       </div>
     </div>
   );
+}
+
+/**
+ * A press in the page around the text (below the last line, beside a
+ * line) puts the caret where the text nearest to it is, as a page does.
+ */
+function placeCaretFromMargin(editor: Editor, event: ReactMouseEvent) {
+  const target = event.target;
+  if (
+    !(target instanceof Element) ||
+    !target.closest(".cat-mdedit-scroll") ||
+    target.closest(
+      ".ProseMirror, .cat-mdedit-frontmatter, .cat-mdedit-bubble-layer, .cat-mdedit-handle, .cat-mdedit-rowgrip",
+    )
+  )
+    return;
+  event.preventDefault();
+  const dom = editor.view.dom;
+  const box = dom.getBoundingClientRect();
+  if (event.clientY >= box.bottom) {
+    editor.commands.focus("end");
+    return;
+  }
+  const style = getComputedStyle(dom);
+  const left = box.left + Number.parseFloat(style.paddingLeft) + 1;
+  const right = box.right - Number.parseFloat(style.paddingRight) - 1;
+  const found = editor.view.posAtCoords({
+    left: Math.min(Math.max(event.clientX, left), right),
+    top: Math.min(Math.max(event.clientY, box.top + 1), box.bottom - 1),
+  });
+  if (found) editor.chain().focus().setTextSelection(found.pos).run();
+  else editor.commands.focus("end");
 }
 
 export default MarkdownEditor;

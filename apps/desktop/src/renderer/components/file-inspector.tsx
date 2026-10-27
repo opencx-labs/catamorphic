@@ -1,6 +1,12 @@
 import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import { useQuery } from "@tanstack/react-query";
-import { CircleDot, FileText, FolderOpen, LoaderCircle } from "lucide-react";
+import {
+  CircleDot,
+  FileText,
+  FolderOpen,
+  LoaderCircle,
+  PencilLine,
+} from "lucide-react";
 import { useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { localEditorPath } from "../lib/local-project-files.js";
@@ -14,6 +20,7 @@ export function FileInspector({
   dirty,
   saving,
   onSave,
+  onRename,
   onPublish,
   onPropose,
   onSharePersonal,
@@ -23,6 +30,7 @@ export function FileInspector({
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
+  onRename?: () => void;
   onPublish?: () => Promise<void>;
   onPropose?: () => Promise<void>;
   onSharePersonal?: (intent: "publish" | "propose") => Promise<void>;
@@ -107,6 +115,19 @@ export function FileInspector({
                   Your agent will prepare this file for sharing.
                 </p>
               </>
+            )}
+            {onRename && (
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={saving}
+                onClick={onRename}
+              >
+                <span className="flex items-center gap-2">
+                  <PencilLine className="size-3.5" />
+                  Rename…
+                </span>
+              </button>
             )}
             <button
               type="button"
