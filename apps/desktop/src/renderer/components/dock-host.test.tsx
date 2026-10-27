@@ -196,7 +196,7 @@ describe("dock project scope", () => {
     },
   );
 
-  it("keeps an all-projects chat open when opening acknowledges its attention", async () => {
+  it("keeps an all-projects child chat open without a dock bubble", async () => {
     if (!state.snapshot) throw new Error("Missing fixture snapshot");
     const foreign = chat("catamorphic", "foreign", true);
     foreign.entry.mode = "partial";
@@ -218,7 +218,7 @@ describe("dock project scope", () => {
         attention: false,
       })),
     });
-    expect(container.querySelector('[data-bubble="foreign"]')).not.toBeNull();
+    expect(container.querySelector('[data-bubble="foreign"]')).toBeNull();
     expect(
       container.querySelector('[data-chat="foreign"][data-mode="partial"]'),
     ).not.toBeNull();

@@ -278,6 +278,7 @@ export function DockHost({
   const scoped = snapshot.chats.filter(
     (chat) => snapshot.multiProject || chat.projectId === currentProjectId,
   );
+  const mainChats = scoped.filter((chat) => !chat.fork);
   const active =
     scoped.find((chat) => chat.entry.localId === snapshot.activeChatId) ??
     (!snapshot.multiProject
@@ -314,7 +315,7 @@ export function DockHost({
     ? 142
     : Math.min(
         780,
-        scoped.filter((chat) => chat.entry.mode !== "tab").length * 42 + 174,
+        mainChats.filter((chat) => chat.entry.mode !== "tab").length * 42 + 174,
       );
   // Transparent headroom above the strip gives hints room to open above a
   // bubble instead of being clamped onto it.
@@ -550,7 +551,9 @@ export function DockHost({
       if (direction) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        const entries = scoped.filter((chat) => chat.entry.mode !== "tab");
+        const entries = scoped.filter(
+          (chat) => chat.entry.mode !== "tab" && !chat.fork,
+        );
         const index = entries.findIndex(
           (item) => item.entry.localId === chat?.entry.localId,
         );
@@ -1046,7 +1049,7 @@ export function DockHost({
                   (chat) => chat.projectId === currentProjectId,
                 )?.projectName
               }
-              entries={scoped.map((chat) => chat.entry)}
+              entries={mainChats.map((chat) => chat.entry)}
               labels={Object.fromEntries(
                 scoped.map((chat) => [
                   chat.entry.localId,

@@ -223,10 +223,10 @@ export function prsSource(deps: WorkSourceDeps): SectionSource {
             label: pr.title,
             description: `#${pr.number}`,
             icon: "GitPullRequest",
-            ...(pr.draft ? { badges: ["Draft"] } : {}),
             preview: {
               title: pr.title,
               metadata: [
+                { label: "State", value: pr.draft ? "Draft" : "Open" },
                 { label: "Author", value: pr.author },
                 { label: "Branch", value: `${pr.head} → ${pr.base}` },
               ],

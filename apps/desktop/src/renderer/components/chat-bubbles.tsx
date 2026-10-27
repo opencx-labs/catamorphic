@@ -106,7 +106,7 @@ export interface ChatBubblesProps {
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
-  /** All chats; tab-mode chats contribute indicators but no strip bubble. */
+  /** All chats; only main chats outside tabs get a strip bubble. */
   entries: ChatDockEntry[];
   labels: Record<string, string>;
   /** Agent-chosen conversation icons ("<name>:<color>") per chat. */
@@ -401,10 +401,10 @@ export function ChatBubbles({
           setDockMenuOpen(true);
         }
       : undefined;
-  // Tab-mode chats live in the tab bar; only docked/minimized chats get a
-  // bubble in the strip. The pill itself always renders so chats never
-  // silently vanish from the screen.
-  const stripEntries = entries.filter((entry) => entry.mode !== "tab");
+  // Subsessions live with their parent; main chats outside tabs get bubbles.
+  const stripEntries = entries.filter(
+    (entry) => entry.mode !== "tab" && !forks[entry.localId],
+  );
 
   // Bubbles present on mount appear statically; bubbles added later pop in.
   // Once an id qualifies, the animation class sticks — removing it mid-run

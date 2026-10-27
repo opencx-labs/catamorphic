@@ -327,6 +327,7 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   // Recorded a few times in a chat, when something worth showing happens
   // (a pull request opened): discovered, not on every turn (ADR 0226).
   set_session_metadata: presentation,
+  refresh_chips: presentation,
   read_todo_list: read,
   update_todo_list: { ...presentation, eager: true },
   list_worktrees: { ...read, nativeOnly: true },
@@ -630,6 +631,20 @@ export function buildWorkspaceToolkit(
                 ctx.sessionId,
               ),
         };
+      },
+    },
+    {
+      name: "refresh_chips",
+      description:
+        "Ask this chat's chips to refresh their state now, for example after merging a pull request. Each chip source keeps its own fetching logic. Does not change the chat's recorded metadata.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        await bridge.refreshChips({
+          projectId: ctx.projectId,
+          sessionId: ctx.sessionId,
+        });
+        return { requested: true };
       },
     },
     {

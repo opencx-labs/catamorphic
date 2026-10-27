@@ -27,8 +27,20 @@ const status = {
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
-function Probe({ enabled = true }: { enabled?: boolean }) {
-  const results = usePullRequestStatuses({ urls: [url], enabled });
+function Probe({
+  enabled = true,
+  refreshNonce = 0,
+  urls = [url],
+}: {
+  enabled?: boolean;
+  refreshNonce?: number;
+  urls?: readonly string[];
+}) {
+  const results = usePullRequestStatuses({
+    urls,
+    enabled,
+    refreshNonce,
+  });
   return <div>{results.get(url)?.state ?? "unavailable"}</div>;
 }
 const advance = async (ms: number) => {
@@ -39,11 +51,15 @@ const advance = async (ms: number) => {
     await vi.advanceTimersByTimeAsync(2);
   });
 };
-const render = async (enabled = true) => {
+const render = async (
+  enabled = true,
+  refreshNonce = 0,
+  urls: readonly string[] = [url],
+) => {
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
-        <Probe enabled={enabled} />
+        <Probe enabled={enabled} refreshNonce={refreshNonce} urls={urls} />
       </QueryClientProvider>,
     );
   });
@@ -123,4 +139,58 @@ it("does not read statuses for a hidden chat", async () => {
   expect(read).not.toHaveBeenCalled();
   await render();
   expect(read).toHaveBeenCalledTimes(1);
+});
+
+it("forces a fresh read after merge even while hidden, without refreshing unrelated PRs", async () => {
+  read.mockResolvedValue({ status, source: "public" });
+  await render();
+  const unrelated = vi.fn().mockResolvedValue("unchanged");
+  await client.fetchQuery({
+    queryKey: ["desktop", "pr-status", "other"],
+    queryFn: unrelated,
+  });
+  read.mockResolvedValue({
+    status: { ...status, state: "merged" },
+    source: "public",
+  });
+  // Still inside the five-minute anonymous freshness window. Polling is off.
+  await render(false, 1);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toBe("merged");
+  expect(unrelated).toHaveBeenCalledTimes(1);
+  await render(false, 1);
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("discards an initial read started before the requested refresh", async () => {
+  let resolveFirst: (value: PullRequestStatusRead) => void = () => {
+    throw new Error("The initial read did not start");
+  };
+  const first = new Promise<PullRequestStatusRead>((resolve) => {
+    resolveFirst = resolve;
+  });
+  read.mockReturnValueOnce(first).mockResolvedValue({
+    status: { ...status, state: "merged" },
+    source: "public",
+  });
+  await render();
+  expect(container.textContent).toBe("unavailable");
+  await render(true, 1);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toBe("merged");
+  await act(async () => resolveFirst({ status, source: "public" }));
+  await advance(1);
+  expect(container.textContent).toBe("merged");
+});
+
+it("refreshes a hidden chat when its recorded PR arrives after the request", async () => {
+  read.mockResolvedValue({
+    status: { ...status, state: "merged" },
+    source: "public",
+  });
+  await render(false, 1, []);
+  expect(read).not.toHaveBeenCalled();
+  await render(false, 1, [url]);
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toBe("merged");
 });

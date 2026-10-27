@@ -63,6 +63,7 @@ export function ChatRegistration(
       chips: props.chips,
       chipsModule: props.chipsModule,
       pullSelectionNonce: props.pullSelectionNonce,
+      chipsRefreshNonce: props.chipsRefreshNonce,
     };
     const serialized = JSON.stringify(data);
     if (last.current === serialized) return;

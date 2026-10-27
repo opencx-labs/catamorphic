@@ -26,6 +26,28 @@ const context: ExtraToolContext = {
 };
 
 describe("workspace coordination tools", () => {
+  it("defers chip refresh and binds it only to the calling chat", async () => {
+    const refreshChips = vi
+      .fn<WorkspaceBridge["refreshChips"]>()
+      .mockResolvedValue(undefined);
+    const bridge = {} as WorkspaceBridge;
+    bridge.refreshChips = refreshChips;
+    const toolkit = buildWorkspaceToolkit(bridge);
+    const tool = toolkit.tools.find((entry) => entry.name === "refresh_chips");
+    if (!tool) throw new Error("Missing refresh_chips");
+    expect(tool.parameters).toEqual({});
+    expect(tool.eager).toBe(false);
+    expect(tool.readOnly).toBe(true);
+    expect(await tool.execute({}, context)).toEqual({ requested: true });
+    expect(refreshChips).toHaveBeenCalledExactlyOnceWith({
+      projectId: "project",
+      sessionId: "session",
+    });
+    await expect(
+      tool.execute({}, { ...context, sessionId: undefined }),
+    ).rejects.toThrow("no chat session");
+    expect(refreshChips).toHaveBeenCalledTimes(1);
+  });
   it("keeps the eager surface explicit, complete, and small", () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     expect(toolkit.tools.map((tool) => tool.name).sort()).toEqual(

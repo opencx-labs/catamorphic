@@ -107,7 +107,7 @@ restored with its window, keeps its back and forward list.
 
 Full-tab chats stay in the tab bar when another resource takes focus, with no dock
 bubble; switching to or from one is as instant as switching pages. Floating and
-minimized chats have bubbles, and only they speak through the dock: the folded
+minimized main chats have bubbles, and only they speak through the dock: the folded
 bubble shows their activity and what needs the person, while a chat in a tab says
 so on its tab. Maximizing a floating chat makes it a normal tab, removes its
 bubble, and keeps it visible when the dock collapses. Chat controls show their
@@ -225,7 +225,9 @@ for the next attempt. Positions unavailable on the current screens are recentere
 
 The profile can show chats from the current project or all its projects, attach
 or detach the dock, and choose edge or centered expansion. Current-project scope
-also applies to chats needing attention, including subagents and forks. Opening
+also applies to main chats needing attention. Subsessions and forks have no dock
+bubbles; they remain accessible through their parent or the sidebar, and an open
+child chat keeps its floating or tabbed presentation. Opening
 and acknowledging a chat never changes which project it belongs to. Drag the collapsed
 bubble or expanded handle horizontally to change bottom corners. It lands on
 the resting spot nearest its centre, leaving its own after 40% of the way to

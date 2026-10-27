@@ -171,6 +171,8 @@ export interface ChatDockProps {
    * editor selection as if it had just come to the front.
    */
   pullSelectionNonce?: number;
+  /** An agent asked this chat's chips to read their state again. */
+  chipsRefreshNonce?: number;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /**

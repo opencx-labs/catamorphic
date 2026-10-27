@@ -27,6 +27,7 @@ vi.mock("../lib/desktop-api.js", () => ({
     },
     sessionCheckouts: async () => [
       { sessionId: "c1", kind: "managed", branch: "fix-login" },
+      { sessionId: "c0", kind: "external", branch: "external-work" },
     ],
   },
 }));
@@ -184,6 +185,7 @@ it("draws a chat as a row: its address, signals, branch and own verbs", async ()
     ],
     data: { id: "c1" },
   });
+  expect(collection.getItem("c0")?.badges).toEqual([]);
   expect(collection.getItem("c2")).toMatchObject({ signal: "unread" });
   await source.action?.({
     itemId: "c1",

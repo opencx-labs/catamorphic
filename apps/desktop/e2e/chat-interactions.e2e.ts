@@ -4,6 +4,8 @@ import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 let app: AppHandle;
 const dock = "document.querySelector('[data-chat-local-id]:not([inert])')";
 const input = `${dock}.querySelector('[data-composer-input]')`;
+const draftText =
+  "Review the example document and keep this composer steady while changing chat size.";
 
 async function click(selector: string) {
   const point = await app.waitFor<{ x: number; y: number }>(`(() => {
@@ -11,6 +13,19 @@ async function click(selector: string) {
     const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:false;
   })()`);
   await app.clickPointer(point);
+}
+
+/** Select the fixture text without depending on platform menu shortcuts. */
+async function selectComposerContents() {
+  await app.eval(`(() => {
+    const editor = ${input}; editor.focus();
+    const range = document.createRange(); range.selectNodeContents(editor);
+    const selection = getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  })()`);
+  await app.waitFor(`document.activeElement === ${input}
+    && !getSelection().isCollapsed
+    && ${input}.contains(getSelection().anchorNode)`);
 }
 
 beforeAll(async () => {
@@ -28,9 +43,7 @@ beforeAll(async () => {
   await app.waitFor(`${dock}.textContent.includes('You said: Hello layout')`);
   await app.waitFor(`!${dock}.querySelector('[aria-label="Stop the agent"]')`);
   await click("[data-floating-chat]:not([inert]) [data-composer-input]");
-  await app.insertText(
-    "Review the example document and keep this composer steady while changing chat size.",
-  );
+  await app.insertText(draftText);
 });
 afterAll(async () => {
   await app?.stop();
@@ -90,6 +103,37 @@ async function observeResize(action: () => Promise<void>) {
     ).toBeLessThanOrEqual(Math.max(...ends) + 1);
   }
 }
+
+it("inserts a line break with Shift+keypad Enter without sending", async () => {
+  await focusWindow(app);
+  await click("[data-floating-chat]:not([inert]) [data-composer-input]");
+  await selectComposerContents();
+  await app.insertText("First line");
+  await app.cdp("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Enter",
+    code: "NumpadEnter",
+    location: 3,
+    windowsVirtualKeyCode: 13,
+    modifiers: 8,
+  });
+  await app.cdp("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Enter",
+    code: "NumpadEnter",
+    location: 3,
+    windowsVirtualKeyCode: 13,
+    modifiers: 8,
+  });
+  await app.insertText("Second line");
+  expect(await app.eval(`${input}.innerText`)).toBe("First line\nSecond line");
+  expect(
+    await app.eval(`${dock}.querySelector('[role="log"]').textContent`),
+  ).not.toContain("You said: First line");
+  // The later resize checks retain the suite's shared draft.
+  await selectComposerContents();
+  await app.insertText(draftText);
+});
 
 it("keeps the composer from narrowing and wrapping during maximize and float", async () => {
   await observeResize(() =>

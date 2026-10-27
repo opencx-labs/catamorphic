@@ -2693,6 +2693,9 @@ export function App({
   const [selectionPulls, setSelectionPulls] = useState<Record<string, number>>(
     {},
   );
+  const [chipsRefreshes, setChipsRefreshes] = useState<Record<string, number>>(
+    {},
+  );
 
   // Live message senders per chat dock — how anything outside a dock
   // (post-auth continuations) speaks into an already open chat. Sends
@@ -4334,7 +4337,11 @@ export function App({
   // narrates the swap).
   const cycleChat = (direction: -1 | 1) =>
     updateWorkspace((ws) =>
-      transitionWorkspace(ws, { type: "cycle-chat", direction }),
+      transitionWorkspace(ws, {
+        type: "cycle-chat",
+        direction,
+        exclude: Object.keys(chatForks).filter((id) => chatForks[id]),
+      }),
     );
 
   // Cmd+M / Cmd+Shift+M act on the active chat, falling back to the most
@@ -5108,6 +5115,17 @@ export function App({
         return null;
       const ws = workspaceRef.current;
       switch (method) {
+        case "refreshChips": {
+          const chat = ws.chats.find(
+            (entry) => entry.sessionId === params.sessionId,
+          );
+          if (!chat) return { error: "This chat is not open here." };
+          setChipsRefreshes((current) => ({
+            ...current,
+            [chat.localId]: (current[chat.localId] ?? 0) + 1,
+          }));
+          return { requested: true };
+        }
         case "overview": {
           const keys = orderedTabKeys(ws, { includeCollapsed: true });
           const tabs: Record<string, unknown>[] = keys.map((key) => {
@@ -8241,6 +8259,7 @@ export function App({
                         openPalettePicker("permission-mode");
                       }}
                       pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
+                      chipsRefreshNonce={chipsRefreshes[entry.localId] ?? 0}
                       onFocusRequest={
                         split &&
                         viewSlots[chatTabKey(entry.localId)] &&

@@ -3,7 +3,10 @@ import {
   sessionPullRequests,
 } from "@catamorphic/agent-protocol";
 import { workflowKeys } from "@catamorphic/react";
-import type { PullRequestStatus } from "../../shared/pr-details.js";
+import type {
+  PullRequestStatus,
+  PullRequestStatusRead,
+} from "../../shared/pr-details.js";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { chatFolderView } from "../components/chat-folder.js";
 import {
@@ -142,7 +145,6 @@ function pullRequestRow(
     icon: looks.icon,
     ...(looks.tone ? { tone: looks.tone } : {}),
     url: pr.url,
-    ...(state !== "open" ? { badges: [looks.label] } : {}),
     preview: {
       title: label,
       description: pr.url,
@@ -191,9 +193,9 @@ export function sessionSource(deps: WorkSourceDeps): SectionSource {
         checkout?.path && checkout.present && checkout.available,
       );
       const statusOf = (url: string) =>
-        deps.queryClient.getQueryData<PullRequestStatus | null>(
+        deps.queryClient.getQueryData<PullRequestStatusRead>(
           prStatusQueryKey(url),
-        );
+        )?.status;
       return {
         items: [
           ...(folder

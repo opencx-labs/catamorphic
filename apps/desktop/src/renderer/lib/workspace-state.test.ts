@@ -232,6 +232,32 @@ it("closing a tab skips a page its folded group hides", () => {
   expect(ws.activeTabKey).toBe("chat:c");
 });
 
+it("cycles main dock chats past local and restored child chats", () => {
+  const ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    chats: [
+      { localId: "a", mode: "partial" },
+      { localId: "child", mode: "min", parentLocalId: "a" },
+      { localId: "restored-child", mode: "min", sessionId: "child-session" },
+      { localId: "b", mode: "min" },
+    ],
+    activeChatId: "a",
+  };
+  const next = transitionWorkspace(ws, {
+    type: "cycle-chat",
+    direction: 1,
+    exclude: ["restored-child"],
+  });
+  expect(next.activeChatId).toBe("b");
+  expect(
+    transitionWorkspace(next, {
+      type: "cycle-chat",
+      direction: -1,
+      exclude: ["restored-child"],
+    }).activeChatId,
+  ).toBe("a");
+});
+
 it("closes a New Tab nobody typed into once something else is shown in its place", () => {
   const ws: Workspace = {
     ...initial(),
