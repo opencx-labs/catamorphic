@@ -123,7 +123,12 @@ not declare it here.
 - `postgres`: each service connection keeps up to `poolSize` sessions (at most
   16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
   credential rotates or is revoked. Every call still gets its own read-only
-  transaction, timeouts, cost ceiling, and cursor budget.
+  transaction, timeouts, cost ceiling, and cursor budget. Workflow calls also
+  propagate the attempt's signal and absolute deadline. Cancellation requests
+  `pg_cancel_backend` through a bounded connection of the same database role,
+  then destroys the borrowed socket; no broader role is required. If the
+  database cannot be reached for cancellation, its statement timeout remains
+  the backstop.
 - `mcp`: `oauth.client` names a client registered in advance with the MCP
   server's authorization server, for servers that do not register clients
   dynamically (Slack's). Register the redirect URI

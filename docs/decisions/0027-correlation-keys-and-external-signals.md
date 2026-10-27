@@ -3,6 +3,8 @@
 - **Status:** Accepted (signal delivery amended by [0291](0291-named-signals-buffer-within-a-run-generation.md))
 - **Date:** 2026-07-25
 
+Atomic replacement is specified by [0290](0290-restarts-commit-cancellation-and-replacement-together.md).
+
 ## Context
 
 Runs were addressable only by their surrogate id, and pauses only by `(runId, pauseId)`. Any workflow driven by external events — a marketing sequence, a dunning flow, an approval, a trial expiry — has the same shape: a long-lived journey per business entity, interrupted by events that arrive knowing the *entity*, not the run.

@@ -782,7 +782,7 @@ A capability provider may also expose **calls** — host functions a workflow
 reaches as `context.host.<capability>.<fn>(args)`. Runs are stamped with the
 identity that triggered them (`workflow_runs.caller_scope`); a boundary that
 returns a host call ends there, core executes the function **as that
-caller** (`{ caller, projectId, runId, workflowName }` is the first
+caller** (`{ caller, projectId, runId, workflowName, signal, deadlineAt }` is the first
 argument — a workflow cannot claim to be anyone), and the result is the next
 step's input, exactly like `callWorkflow`. A throw fails the step; the
 step's retry policy re-runs the call (at-least-once, like any step IO).
@@ -791,14 +791,25 @@ step's retry policy re-runs the call (at-least-once, like any step IO).
 defineCapability({
   name: "acme.crm",
   calls: {
-    lookupAccount: async ({ caller }, args: { id: string }) =>
-      crm.accounts.get(args.id, { asUser: caller.externalUserId }),
+    lookupAccount: async ({ caller, signal }, args: { id: string }) =>
+      crm.accounts.get(args.id, { asUser: caller.externalUserId, signal }),
   },
 });
 // in a workflow:
 defineBoundary({ run: ({ input, host }: BoundaryContext<{ id: string }>) => host.acme.crm.lookupAccount({ id: input.id }) }),
 defineBoundary({ run: ({ input }: BoundaryContext<{ name: string }>) => ... }),
 ```
+
+A boundary attempt's sandbox callback and returned host, documents, or connection
+operation share one five-minute deadline from its persisted start (ADR 0288).
+Job recovery preserves that deadline; a boundary-policy retry gets a new one.
+Host calls receive the combined `signal` and ISO `deadlineAt`; connection providers
+receive them in `invoke`. Pass `signal` to SDK or HTTP transports and check it
+before side effects. Shutdown aborts directly; cancellation on another replica
+arrives through the execution job heartbeat. Core stops awaiting even an async
+provider that ignores abort, and fences late receipts, but cannot preempt blocking
+JavaScript or undo accepted external effects. Keep cloud jobs asynchronous with
+resource ids and durable waits, and reconcile uncertain writes independently.
 
 `context.documents` is the first built-in such capability: `list`, `read`,
 `write`, `delete`, `history`, `search` over the project's one path

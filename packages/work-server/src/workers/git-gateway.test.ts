@@ -367,6 +367,8 @@ describe("a pull request review chat with Git through the gateway", () => {
         projectId,
         runId,
         workflowName: "reviewPullRequests",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
       },
       {
         key: "pr-42",
@@ -581,6 +583,8 @@ describe("a pull request review chat with Git through the gateway", () => {
         projectId,
         runId,
         workflowName: "reviewPullRequests",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
       },
       {
         key: "pr-42-inspect",

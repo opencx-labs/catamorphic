@@ -402,6 +402,7 @@ export class WorkflowEnablementsService {
   }
 
   async disable(input: {
+    signal?: AbortSignal;
     identity: Identity;
     enablementId: string;
   }): Promise<WorkflowEnablement> {
@@ -747,7 +748,7 @@ export class WorkflowEnablementsService {
   }
 
   private async setStatus(
-    input: { identity: Identity; enablementId: string },
+    input: { identity: Identity; enablementId: string; signal?: AbortSignal },
     status: WorkflowEnablementStatus,
     reason: string | null,
     eventType: string,
@@ -757,6 +758,7 @@ export class WorkflowEnablementsService {
       input.identity.tenantId,
     );
     this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+    input.signal?.throwIfAborted();
     await this.db.transaction().execute(async (trx) => {
       await trx
         .updateTable("workflow_enablements")
@@ -775,6 +777,7 @@ export class WorkflowEnablementsService {
         eventType,
         reason,
       );
+      input.signal?.throwIfAborted();
     });
     return this.get(input);
   }

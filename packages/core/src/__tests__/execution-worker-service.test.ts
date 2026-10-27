@@ -215,6 +215,32 @@ describe("execution worker resilience", () => {
 });
 
 describe("execution worker lease fence", () => {
+  it("refuses an already-aborted caller before dispatching its handler", async () => {
+    const jobs = {
+      correlationForJob: async () => ({}),
+      release: async () => true,
+    } as unknown as ExecutionJobsService;
+    const service = new ExecutionWorkerService(jobs);
+    let calls = 0;
+    service.registerHandler({
+      kind: "durable_boundary",
+      handler: async () => {
+        calls += 1;
+      },
+    });
+    const abort = new AbortController();
+    abort.abort();
+    expect(
+      await service.runClaimedJob({
+        job: job("already-canceled"),
+        workerId: "worker",
+        leaseSeconds: 3,
+        signal: abort.signal,
+      }),
+    ).toEqual({ outcome: "released" });
+    expect(calls).toBe(0);
+  });
+
   it("stops a step before its lease could lapse when renewals stop landing", async () => {
     const released: string[] = [];
     const jobs = {

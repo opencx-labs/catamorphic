@@ -143,6 +143,27 @@ export class RunCoordinator {
     return result;
   }
 
+  /** The original attempt clock survives execution-job redelivery (ADR 0288). */
+  async boundaryDeadline(args: { job: ExecutionJob }): Promise<string | null> {
+    const workflowStepAttemptId = args.job.workflowStepAttemptId;
+    if (!workflowStepAttemptId) return null;
+    return this.db.transaction().execute(async (trx) => {
+      const context = await this.lockActiveAttempt({
+        trx,
+        workflowStepAttemptId,
+      });
+      if (
+        context?.attempt.status !== "running" ||
+        !context.attempt.started_at ||
+        !(await ownsJob({ trx, job: args.job }))
+      )
+        return null;
+      return new Date(
+        context.attempt.started_at.getTime() + 300_000,
+      ).toISOString();
+    });
+  }
+
   /**
    * Moves a run between batch phases.
    *
@@ -883,8 +904,10 @@ export class RunCoordinator {
     identity: Identity;
     runId: string;
     reason?: string;
+    /** Reuse the caller transaction for atomic enrollment replacement. */
+    trx?: Transaction<DB>;
   }): Promise<Array<{ artifactId: string; invocationId: string }>> {
-    const outcome = await this.db.transaction().execute(async (trx) => {
+    const cancelInTransaction = async (trx: Transaction<DB>) => {
       await requireOwnedRun({
         trx,
         identity: args.identity,
@@ -1000,14 +1023,18 @@ export class RunCoordinator {
             ? root.id
             : null,
       };
-    });
+    };
+    const outcome = args.trx
+      ? await cancelInTransaction(args.trx)
+      : await this.db.transaction().execute(cancelInTransaction);
     if (outcome.reconcileChildRunId) {
-      await this.db.transaction().execute((trx) =>
+      const reconcile = (trx: Transaction<DB>) =>
         this.reconcileParentFromTerminalChild({
           trx,
           childRunId: outcome.reconcileChildRunId ?? "",
-        }),
-      );
+        });
+      if (args.trx) await reconcile(args.trx);
+      else await this.db.transaction().execute(reconcile);
     }
     return outcome.invocations;
   }
@@ -1938,6 +1965,17 @@ async function releaseAllocation(args: {
   allocationId: string;
   now: Date;
 }): Promise<void> {
+  await args.trx
+    .deleteFrom("placement_waits")
+    .where(
+      "root_workload_id",
+      "in",
+      args.trx
+        .selectFrom("execution_allocations")
+        .select("root_workload_id")
+        .where("id", "=", args.allocationId),
+    )
+    .execute();
   await args.trx
     .updateTable("connection_capability_grants")
     .set({ revoked_at: args.now })

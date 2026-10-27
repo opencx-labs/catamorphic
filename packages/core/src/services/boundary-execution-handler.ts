@@ -19,6 +19,11 @@ import type {
   RateReservationsService,
 } from "./rate-reservations-service.js";
 import {
+  BoundaryAttemptTimeoutError,
+  requireAttemptTime,
+  runAbortable,
+} from "./run-abortable.js";
+import {
   jsonColumn,
   jsonRecord,
   type RunCoordinator,
@@ -78,6 +83,7 @@ export class BoundaryExecutionHandler {
         input: unknown;
         attempt: number;
         signal?: AbortSignal;
+        deadlineAt: string;
       }): Promise<RuntimeInvocationReceipt>;
       resolveChild(args: {
         identity: Identity;
@@ -95,6 +101,8 @@ export class BoundaryExecutionHandler {
        * documents capability and the registry's `calls` both live here.
        */
       callHost(args: {
+        signal: AbortSignal;
+        deadlineAt: string;
         caller: Identity;
         projectId: string;
         runId: string;
@@ -104,6 +112,8 @@ export class BoundaryExecutionHandler {
         args: unknown;
       }): Promise<unknown>;
       callConnection?(args: {
+        signal: AbortSignal;
+        deadlineAt: string;
         caller: Identity;
         allocationId: string;
         alias: string;
@@ -165,29 +175,97 @@ export class BoundaryExecutionHandler {
       return;
     }
 
+    const deadlineAt = await this.deps.coordinator.boundaryDeadline({
+      job: args.job,
+    });
+    if (!deadlineAt) return;
+    const deadline = new AbortController();
+    const timeoutError = new BoundaryAttemptTimeoutError();
+    const remaining = Date.parse(deadlineAt) - Date.now();
+    if (remaining <= 0) deadline.abort(timeoutError);
+    const timer = setTimeout(
+      () => deadline.abort(timeoutError),
+      Math.max(0, remaining),
+    );
+    const signal = AbortSignal.any([args.signal, deadline.signal]);
+    try {
+      signal.throwIfAborted();
+      await this.executeAttempt({
+        ...args,
+        context,
+        invocationId,
+        deadlineAt,
+        signal,
+      });
+    } catch (error) {
+      if (
+        signal.reason !== timeoutError &&
+        !(error instanceof BoundaryAttemptTimeoutError)
+      )
+        throw error;
+      deadline.abort(timeoutError);
+      await this.deps.coordinator.failStep({
+        workflowStepAttemptId: context.workflowStepAttemptId,
+        job: args.job,
+        error: timeoutError.message,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async requireDispatch(args: {
+    job: ExecutionJob;
+    signal: AbortSignal;
+    deadlineAt: string;
+  }): Promise<void> {
+    requireAttemptTime(args);
+    if (!(await this.deps.coordinator.boundaryDeadline({ job: args.job }))) {
+      throw new Error(
+        "Boundary call lost its active attempt or execution lease",
+      );
+    }
+    requireAttemptTime(args);
+  }
+
+  private async executeAttempt(args: {
+    job: ExecutionJob;
+    signal: AbortSignal;
+    context: BoundaryRuntimeContext;
+    invocationId: string;
+    deadlineAt: string;
+  }): Promise<void> {
+    const { context, invocationId } = args;
     const receipt: RuntimeInvocationReceipt =
       await this.deps.coordinator.invokeRuntime({
         job: args.job,
         invocationId,
         invoke: () =>
-          this.deps.invokeRuntime({
-            ...context,
-            invocationId,
-            kind: "durable-boundary",
-            // The caller rides beside the input (never inside it — input is
-            // author-typed) so the boundary can read `context.caller`.
-            input: {
-              value: context.input,
-              caller: {
-                externalUserId: context.caller.externalUserId,
-                ...(context.caller.scope
-                  ? { scope: toJson(context.caller.scope) }
-                  : {}),
-              },
-            },
+          runAbortable({
             signal: args.signal,
+            deadlineAt: args.deadlineAt,
+            operation: () =>
+              this.deps.invokeRuntime({
+                ...context,
+                invocationId,
+                kind: "durable-boundary",
+                // The caller rides beside the input (never inside it — input is
+                // author-typed) so the boundary can read `context.caller`.
+                input: {
+                  value: context.input,
+                  caller: {
+                    externalUserId: context.caller.externalUserId,
+                    ...(context.caller.scope
+                      ? { scope: toJson(context.caller.scope) }
+                      : {}),
+                  },
+                },
+                signal: args.signal,
+                deadlineAt: args.deadlineAt,
+              }),
           }),
       });
+    requireAttemptTime(args);
     if (receipt.terminal.status === "rate_limited") {
       // The provider is the authority on its own limits, so its answer blocks
       // every workflow sharing these buckets, not just this run.
@@ -258,7 +336,7 @@ export class BoundaryExecutionHandler {
         commitSha: context.commitSha,
         workflowName,
       });
-      args.signal.throwIfAborted();
+      requireAttemptTime(args);
       await this.deps.coordinator.suspendForChild({
         workflowStepAttemptId: context.workflowStepAttemptId,
         job: args.job,
@@ -293,16 +371,25 @@ export class BoundaryExecutionHandler {
       // A throw fails the step; the step's retry policy re-runs the call.
       let output: unknown;
       try {
-        output = await this.deps.callHost({
-          caller: context.caller,
-          projectId: context.projectId,
-          runId: context.runId,
-          workflowName: context.workflowName,
-          capability,
-          fn,
-          args: transition.args,
+        await this.requireDispatch(args);
+        output = await runAbortable({
+          signal: args.signal,
+          deadlineAt: args.deadlineAt,
+          operation: () =>
+            this.deps.callHost({
+              signal: args.signal,
+              deadlineAt: args.deadlineAt,
+              caller: context.caller,
+              projectId: context.projectId,
+              runId: context.runId,
+              workflowName: context.workflowName,
+              capability,
+              fn,
+              args: transition.args,
+            }),
         });
       } catch (error) {
+        requireAttemptTime(args);
         await this.deps.coordinator.failStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           job: args.job,
@@ -312,7 +399,7 @@ export class BoundaryExecutionHandler {
         });
         return;
       }
-      args.signal.throwIfAborted();
+      requireAttemptTime(args);
       await this.deps.coordinator.completeStep({
         workflowStepAttemptId: context.workflowStepAttemptId,
         job: args.job,
@@ -340,20 +427,32 @@ export class BoundaryExecutionHandler {
         });
         return;
       }
+      const allocationId = context.allocationId;
+      const callConnection = this.deps.callConnection;
       try {
-        const output = await this.deps.callConnection({
-          caller: context.caller,
-          allocationId: context.allocationId,
-          alias,
-          action,
-          input: toJson(transition.args),
+        await this.requireDispatch(args);
+        const output = await runAbortable({
+          signal: args.signal,
+          deadlineAt: args.deadlineAt,
+          operation: () =>
+            callConnection({
+              signal: args.signal,
+              deadlineAt: args.deadlineAt,
+              caller: context.caller,
+              allocationId,
+              alias,
+              action,
+              input: toJson(transition.args),
+            }),
         });
+        requireAttemptTime(args);
         await this.deps.coordinator.completeStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           job: args.job,
           output: carried({ transition, output }),
         });
       } catch (error) {
+        requireAttemptTime(args);
         if (
           error instanceof ConnectionUnavailableError &&
           error.connectionId &&
