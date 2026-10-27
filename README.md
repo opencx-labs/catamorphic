@@ -276,13 +276,16 @@ whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 TypeScript automations in git, rendered as a visual graph for
 non-technical users, executed durably on Postgres. One model: every
 workflow is an exported `defineWorkflow` value, every run executes a
-deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
+deployed commit. Boundaries (retry scopes), batch scopes, pauses
 and buffered named signals fenced to a run generation, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
 sync-until-first-wait firing, project-defined kinds, and declarative `where`
 filters. Durable waits give back physical workspace capacity after teardown;
-continuations use fresh admission and the same deployed revision. Full authoring
-model below.
+continuations use fresh admission and the same deployed revision. A boundary
+callback and its returned host, document or connection call share one persisted
+five-minute attempt deadline, with cancellation passed to providers. Accepted
+external effects still need application reconciliation. Full authoring model
+below.
 
 Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and
