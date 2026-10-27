@@ -335,6 +335,7 @@ export class SecretsService {
    * the record it displaced.
    */
   private async store(args: {
+    signal?: AbortSignal;
     tenantId: string;
     projectId: string;
     name: string;
@@ -345,6 +346,7 @@ export class SecretsService {
   }): Promise<void> {
     const vault = this.deps.vault;
     if (!vault) throw new SecretsUnavailableError();
+    args.signal?.throwIfAborted();
     const sealed = await vault.put({
       tenantId: args.tenantId,
       material: new TextEncoder().encode(args.value),
@@ -365,6 +367,7 @@ export class SecretsService {
           )
           .select("credential_ref")
           .executeTakeFirst();
+        args.signal?.throwIfAborted();
         await trx
           .insertInto("project_secrets")
           .values({
@@ -400,6 +403,7 @@ export class SecretsService {
 
   /** Remove one value and its vault record; whether one existed. */
   private async remove(args: {
+    signal?: AbortSignal;
     tenantId: string;
     projectId: string;
     name: string;
@@ -407,6 +411,7 @@ export class SecretsService {
   }): Promise<boolean> {
     const removed = await this.db.transaction().execute(async (trx) => {
       await lockValue({ trx, ...args });
+      args.signal?.throwIfAborted();
       return trx
         .deleteFrom("project_secrets")
         .where("project_id", "=", args.projectId)
@@ -624,6 +629,7 @@ export class SecretsService {
 
   /** Set or replace the shared value. Needs `secrets:write`. */
   async upsert(opts: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     name: string;
@@ -634,7 +640,9 @@ export class SecretsService {
     checkValue(value);
     await requireTenantProject(this.db, identity.tenantId, projectId);
     await this.writable({ identity, projectId, name, purpose: "manage" });
+    opts.signal?.throwIfAborted();
     await this.store({
+      signal: opts.signal,
       tenantId: identity.tenantId,
       projectId,
       name,
@@ -658,6 +666,7 @@ export class SecretsService {
 
   /** Remove the shared value. Needs `secrets:write`. */
   async delete(opts: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     name: string;
@@ -665,7 +674,9 @@ export class SecretsService {
     const { identity, projectId, name } = opts;
     assertProjectPermission(identity, projectId, "secrets:write");
     await requireTenantProject(this.db, identity.tenantId, projectId);
+    opts.signal?.throwIfAborted();
     const removed = await this.remove({
+      signal: opts.signal,
       tenantId: identity.tenantId,
       projectId,
       name,
@@ -708,6 +719,7 @@ export class SecretsService {
    * chats receive it instead of the shared value.
    */
   async setMember(opts: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     name: string;
@@ -739,7 +751,9 @@ export class SecretsService {
         `'${name}' verifies webhook deliveries and holds only a shared value`,
       );
     const updatedAt = new Date();
+    opts.signal?.throwIfAborted();
     await this.store({
+      signal: opts.signal,
       tenantId: identity.tenantId,
       projectId,
       name,
@@ -759,6 +773,7 @@ export class SecretsService {
 
   /** Remove one member's own value; whether one existed. */
   async deleteMember(opts: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     name: string;
@@ -767,7 +782,9 @@ export class SecretsService {
     const { identity, projectId, name, member } = opts;
     await this.authorizeMember({ identity, projectId, member });
     await requireTenantProject(this.db, identity.tenantId, projectId);
+    opts.signal?.throwIfAborted();
     const removed = await this.remove({
+      signal: opts.signal,
       tenantId: identity.tenantId,
       projectId,
       name,

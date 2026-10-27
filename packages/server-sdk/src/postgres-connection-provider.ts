@@ -253,14 +253,17 @@ export function definePostgresConnectionProvider(
       try {
         if (signal?.aborted) abort();
         signal?.throwIfAborted();
+        await client.query("BEGIN TRANSACTION READ ONLY");
+        signal?.throwIfAborted();
         if (signal) {
+          // Transaction poolers pin this backend only after BEGIN. An earlier
+          // PID can belong to someone else's transaction by cancellation time.
           const backend = await client.query<{ pid: number }>(
             "SELECT pg_backend_pid() AS pid",
           );
           backendPid = backend.rows[0]?.pid;
         }
         signal?.throwIfAborted();
-        await client.query("BEGIN TRANSACTION READ ONLY");
         const statementTimeoutMs = deadlineAt
           ? Math.max(
               1,

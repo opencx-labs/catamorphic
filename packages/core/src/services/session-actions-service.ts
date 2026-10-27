@@ -115,6 +115,7 @@ export class SessionActionsService {
   ) {}
 
   async execute(input: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     operation: SessionActionOperation;
@@ -257,6 +258,7 @@ export class SessionActionsService {
           args.sessionId,
           "change",
         );
+        input.signal?.throwIfAborted();
         const accepted = await this.db
           .insertInto("session_actions")
           .values({
@@ -311,6 +313,7 @@ export class SessionActionsService {
             );
         }
         if (action.status === "completed") return action.result;
+        input.signal?.throwIfAborted();
         if (
           "expectedStateRevision" in args &&
           args.expectedStateRevision !== undefined &&

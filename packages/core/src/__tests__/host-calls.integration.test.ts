@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { EchoAdapter } from "@catamorphic/agent-runner";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import type {
@@ -315,6 +316,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
   let projectId: string;
   const crmCalls: Array<{ caller: Identity; args: unknown }> = [];
   let hostOverride: HostCallFunction | undefined;
+  let memberPreparation: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-hostcalls-"));
@@ -326,6 +328,16 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     await migrateToLatest({ db, schema });
     const sandboxProvider = new FakeSandboxProvider();
     core = new CatamorphicCore({
+      hostId: "host-call-fixture",
+      codingAgent: {
+        id: "echo",
+        harness: { placement: "host", adapter: new EchoAdapter() },
+        topology: "native",
+      },
+      resolveMemberIdentity: async ({ tenantId, externalUserId }) => {
+        if (externalUserId === "recipient") await memberPreparation?.();
+        return { tenantId, externalUserId };
+      },
       db,
       projectManager,
       sandboxProvider,
@@ -388,6 +400,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     await core.runs.stopWorkers();
     runtimeOverride = undefined;
     hostOverride = undefined;
+    memberPreparation = undefined;
     vi.restoreAllMocks();
   });
 
@@ -467,6 +480,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       .poll(
         async () =>
           (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 5_000 },
       )
       .toBe("failed");
     expect(invoke).not.toHaveBeenCalled();
@@ -486,6 +500,7 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       .poll(
         async () =>
           (await core.runs.get({ identity: root, runId: run.id })).status,
+        { timeout: 5_000 },
       )
       .toBe("canceled");
     await worker.stop();
@@ -625,6 +640,47 @@ describeIf("host calls from workflows (ADR 0055)", () => {
         { timeout: 5_000 },
       )
       .toBe("failed");
+  });
+
+  it("does not create a chat or deliver after cancellation during recipient preparation", async () => {
+    const prepared = deferred<void>();
+    const release = deferred<void>();
+    memberPreparation = async () => {
+      prepared.resolve();
+      await release.promise;
+    };
+    const run = await enqueue();
+    const abort = new AbortController();
+    const operation = core.capabilities.call(
+      "catamorphic.sessions",
+      "deliver",
+      {
+        caller: root,
+        projectId,
+        runId: run.id,
+        workflowName: "lookupAccount",
+        signal: abort.signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
+      },
+      {
+        key: "canceled-recipient",
+        audience: { member: "recipient" },
+        content: "must not arrive",
+      },
+    );
+    const rejected = expect(operation).rejects.toThrow("preparation canceled");
+    await prepared.promise;
+    abort.abort(new Error("preparation canceled"));
+    release.resolve();
+    await rejected;
+    const chats = await db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("project_id", "=", projectId)
+      .where("chat_key", "=", "canceled-recipient")
+      .execute();
+    expect(chats).toEqual([]);
+    await core.runs.cancel({ identity: root, runId: run.id });
   });
 
   it("the caller rides into every invocation, and a workflow can read it", async () => {

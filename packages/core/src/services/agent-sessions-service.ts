@@ -2755,6 +2755,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     input: {
+      signal?: AbortSignal;
       content: string;
       author: SessionMessageAuthor;
       mode: DispatchMode;
@@ -2769,6 +2770,7 @@ export class AgentSessionsService {
       workspace?: SessionWorkspaceRequest;
     },
   ): Promise<SessionDeliveryReceipt> {
+    input.signal?.throwIfAborted();
     if (input.workspace)
       await this.requestWorkspace(
         identity,
@@ -2790,7 +2792,9 @@ export class AgentSessionsService {
       text: input.content,
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
+    input.signal?.throwIfAborted();
     return this.deliverInput(identity, projectId, sessionId, {
+      signal: input.signal,
       input:
         message.kind === "inbound_message" && input.alert
           ? { ...message, alert: input.alert }
@@ -2844,6 +2848,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     delivery: {
+      signal?: AbortSignal;
       input: SessionInput;
       mode: DispatchMode;
       attention?: "required" | "none";
@@ -2855,6 +2860,7 @@ export class AgentSessionsService {
     // owner's own sign-in answers only their own doing (ADR 0199).
     const deliveredBy = identity.externalUserId;
     const session = await this.requireSession(identity, projectId, sessionId);
+    delivery.signal?.throwIfAborted();
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
     if (
@@ -2886,6 +2892,7 @@ export class AgentSessionsService {
           : {}),
         ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
+    delivery.signal?.throwIfAborted();
     await this.claimLocalAuthority(session);
     const receipt = await this.db.transaction().execute(async (trx) => {
       const locked = await trx
@@ -2896,6 +2903,7 @@ export class AgentSessionsService {
         .executeTakeFirstOrThrow();
       if (locked.status !== "active")
         throw new AgentSessionClosedError(sessionId);
+      delivery.signal?.throwIfAborted();
       return this.deliverIn(trx, {
         session: locked,
         input: delivery.input,
@@ -5850,6 +5858,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       origin?: SessionOperationOrigin;
       systemPrompt?: string;
@@ -5890,6 +5899,7 @@ export class AgentSessionsService {
         await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
+      input.signal?.throwIfAborted();
       return prepared.insert(transaction);
     };
     const row = input.transaction
@@ -7574,6 +7584,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       key: string;
       /** The workflow delivering, recorded on the chat. */
       workflowName?: string;
@@ -7600,6 +7611,7 @@ export class AgentSessionsService {
         .executeTakeFirst();
 
     let row = await findExisting();
+    input.signal?.throwIfAborted();
     let sessionCreated = false;
     if (!row) {
       try {
@@ -7608,6 +7620,7 @@ export class AgentSessionsService {
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
           chatKey: input.key,
+          signal: input.signal,
           ...(input.workflowName ? { chatWorkflow: input.workflowName } : {}),
           ...(input.workspace ? { workspace: input.workspace } : {}),
           origin: input.origin,
@@ -7632,8 +7645,10 @@ export class AgentSessionsService {
         `The chat for key ${input.key} already belongs to a different agent`,
       );
     }
+    input.signal?.throwIfAborted();
     if (input.workspace && !sessionCreated)
       await this.requestWorkspace(identity, projectId, row.id, input.workspace);
+    input.signal?.throwIfAborted();
     if (input.workflowName)
       await this.db
         .updateTable("agent_sessions")
@@ -12297,12 +12312,14 @@ export class AgentSessionsService {
    * 0176). The latest delivery that names approvers replaces them.
    */
   async setApprovers(args: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     sessionId: string;
     approvers: { members?: string[]; roles?: string[] };
   }): Promise<void> {
     await this.requireSession(args.identity, args.projectId, args.sessionId);
+    args.signal?.throwIfAborted();
     await this.db
       .updateTable("agent_sessions")
       .set({ approvers: args.approvers })
