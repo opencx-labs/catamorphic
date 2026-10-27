@@ -129,12 +129,15 @@ async function ask(name: string) {
 }
 
 async function approve(always = false) {
-  const point = await app.eval<{ x: number; y: number }>(`(() => {${helpers}
+  const point = await app.waitFor<{ x: number; y: number }>(
+    `(() => {${helpers}
     const button=pill.querySelectorAll('button')[${always ? 1 : 0}];
     const r=button.getBoundingClientRect();
-    if (!button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))) throw new Error('Approval is not clickable');
+    if (button.disabled || !r.width || !r.height || !button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))) return false;
     return {x:r.x+r.width/2,y:r.y+r.height/2};
-  })()`);
+  })()`,
+    { label: "image approval ready for a pointer click" },
+  );
   for (const type of ["mousePressed", "mouseReleased"])
     await app.cdp("Input.dispatchMouseEvent", {
       type,

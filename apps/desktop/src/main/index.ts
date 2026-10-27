@@ -786,6 +786,8 @@ app.whenReady().then(async () => {
     ...(e2eMobilePairingAddress && e2eDataDir
       ? {
           lanAddresses: () => [e2eMobilePairingAddress],
+          // The explicit pairing fixture exercises loopback HTTP and motion.
+          requestLocalNetworkAccess: async () => {},
         }
       : {}),
   });

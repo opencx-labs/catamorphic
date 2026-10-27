@@ -74,10 +74,11 @@ export function DockHost({
     ],
     activeChatId: local.pendingActivation ?? remoteSnapshot.activeChatId,
   };
-  useEffect(
-    () => localPresentations.acknowledge(remoteSnapshot.activeChatId),
-    [remoteSnapshot.activeChatId],
-  );
+  useEffect(() => {
+    // Main can confirm the activation before the local opening publishes.
+    if (local.pendingActivation)
+      localPresentations.acknowledge(remoteSnapshot.activeChatId);
+  }, [remoteSnapshot.activeChatId, local.pendingActivation]);
   const [signals, setSignals] = useState<Record<string, ChatSignals>>({});
   const dragStart = useRef<{
     x: number;
@@ -275,10 +276,7 @@ export function DockHost({
     [],
   );
   const scoped = snapshot.chats.filter(
-    (chat) =>
-      snapshot.multiProject ||
-      chat.projectId === currentProjectId ||
-      chat.attention,
+    (chat) => snapshot.multiProject || chat.projectId === currentProjectId,
   );
   const active =
     scoped.find((chat) => chat.entry.localId === snapshot.activeChatId) ??

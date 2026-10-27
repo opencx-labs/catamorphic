@@ -1599,10 +1599,19 @@ describe("chat motion", () => {
       return {x:r.x+r.width/2,y:r.y+r.height/2};`);
     await app.clickPointer(maximize);
     await runWait(
-      "return frontDock().hasAttribute('data-chat-tab') && !frontDock().getAnimations().some(a=>a.playState==='running');",
+      `const dock=frontDock();
+       if(!dock.hasAttribute('data-chat-tab'))return false;
+       // The wrapper's padding and the header's collapse resize the log
+       // after the section itself has stopped animating.
+       for(let node=dock;node;node=node.parentElement)
+         if(node.getAnimations({subtree:node===dock}).some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity))return false;
+       return true;`,
       { label: "navigation chat is a settled tab" },
     );
     await run("composer().focus(); return true;");
+    await runWait("return document.activeElement === composer();", {
+      label: "tab navigation composer has focus",
+    });
     await key("ArrowUp", false, 1);
     await key("ArrowUp", true, 1);
     await app.cdp("Input.dispatchKeyEvent", {

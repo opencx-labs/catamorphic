@@ -914,15 +914,42 @@ describe("context pills", () => {
         label: "new tab in front of the selected editor",
       },
     );
-    await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(
-      `return !!frontDock() && composer() === document.activeElement;`,
-      {
-        label: "new chat in the New Tab",
-      },
-    );
-    expect(
-      await run(`return pills().filter(p => p.source === 'selection').length;`),
-    ).toBe(0);
+    // Reading visibility on the retained editor flushes styles across all
+    // chat transcripts. A pane outside the workspace's slots needs no
+    // browser visibility read, even while its model keeps a selection.
+    await run(`
+      const pane = window.__catMarkdownEditor.editor.view.dom.closest('[data-project-runtime]').querySelector('[data-editor-toolbar]').parentElement;
+      const original = pane.checkVisibility;
+      window.__hiddenSelectionVisibilityReads = 0;
+      pane.checkVisibility = function(...args) {
+        window.__hiddenSelectionVisibilityReads++;
+        return original.apply(this, args);
+      };
+      window.__restoreSelectionVisibility = () => {
+        delete pane.checkVisibility;
+        delete window.__hiddenSelectionVisibilityReads;
+        delete window.__restoreSelectionVisibility;
+      };
+      return true;
+    `);
+    try {
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(
+        `return !!frontDock() && composer() === document.activeElement;`,
+        {
+          label: "new chat in the New Tab",
+        },
+      );
+      expect(
+        await run(
+          `return pills().filter(p => p.source === 'selection').length;`,
+        ),
+      ).toBe(0);
+      expect(await run(`return window.__hiddenSelectionVisibilityReads;`)).toBe(
+        0,
+      );
+    } finally {
+      await run(`window.__restoreSelectionVisibility(); return true;`);
+    }
   });
 });

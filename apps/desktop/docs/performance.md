@@ -49,6 +49,12 @@ are recorded in 100 ms batches. Rules that follow:
 - **Routine reads are invisible.** A poll must not read a query's
   fetching state or report `refreshing`; collections take
   `{ type: "invalidate", quiet: true }`.
+- **Use known pane state before measuring visibility.** A chat becoming
+  active pulls the editor selection. Retained editors outside a slot in the
+  visible workspace return no selection before calling `checkVisibility`;
+  an empty selection needs no visibility read either. That browser read can
+  synchronously flush styles across every retained transcript. A visible
+  editor with selected text still checks CSS visibility before sharing it.
 - **Infinite animations cost frames for as long as they run.** Each one
   keeps the compositor and GPU drawing at the display's rate. In the
   test desktop, a working chat's five spinners and two pulses cost about

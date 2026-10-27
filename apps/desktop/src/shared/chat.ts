@@ -108,6 +108,8 @@ export interface ChatDockProps {
   tabActive: boolean;
   /** Keep this visible chat fresh when another client writes while it is idle. */
   refreshWhileIdle?: boolean;
+  /** Latest requested attention from the host's session list, if still unseen. */
+  attentionRevision?: number;
   /**
    * Where the tab sits in the content view: the full area, or one half
    * of a split. Floating/minimized modes ignore it.

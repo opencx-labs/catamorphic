@@ -44,6 +44,7 @@ export function ChatRegistration(
       fork: props.fork,
       unread: props.unread,
       attention: props.attention,
+      attentionRevision: props.attentionRevision,
       menu: props.menu,
       archived: props.archived,
       inspectRequestNonce: props.inspectRequestNonce,

@@ -1,28 +1,53 @@
 // @vitest-environment jsdom
 import { focusManager, QueryClientProvider } from "@tanstack/react-query";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { desktopApi } from "../lib/desktop-api.js";
+import { readEditorSelection } from "../lib/editor-selection.js";
 import { workQueryClient } from "../lib/query-client.js";
 import { EditorScreen } from "./editor-screen.js";
 
 const gitListeners = new Set<(change: { projectId: string }) => void>();
+const selection = vi.hoisted(() => ({ text: "" }));
 
 vi.mock("@monaco-editor/react", () => ({
   default: ({
     value,
     onChange,
+    onMount,
   }: {
     value: string;
     onChange: (next: string) => void;
-  }) => (
-    <textarea
-      data-testid="editor"
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    />
-  ),
+    onMount: (editor: unknown, monaco: unknown) => void;
+  }) => {
+    // biome-ignore lint/correctness/useExhaustiveDependencies: Monaco calls onMount once; retained panes keep that reader across visibility changes.
+    useEffect(() => {
+      onMount(
+        {
+          addCommand() {},
+          onDidChangeCursorSelection() {},
+          onDidFocusEditorText() {},
+          focus() {},
+          getSelection: () => ({
+            isEmpty: () => !selection.text,
+            startLineNumber: 1,
+            endLineNumber: 1,
+            endColumn: selection.text.length + 1,
+          }),
+          getModel: () => ({ getValueInRange: () => selection.text }),
+        },
+        { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 1 } },
+      );
+    }, []);
+    return (
+      <textarea
+        data-testid="editor"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  },
 }));
 vi.mock("../components/file-inspector.js", () => ({
   FileInspector: () => null,
@@ -47,32 +72,90 @@ vi.mock("../lib/desktop-api.js", () => ({
 
 beforeEach(() => {
   gitListeners.clear();
+  selection.text = "";
   vi.mocked(desktopApi.editorFileRead).mockReset();
 });
 
-async function mount() {
+async function mount(active = true) {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   const node = document.createElement("div");
   document.body.append(node);
   const root = createRoot(node);
   const client = workQueryClient({ retry: 0, staleTime: 0 });
-  await act(async () =>
+  const render = (shown: boolean) =>
     root.render(
       <QueryClientProvider client={client}>
         <EditorScreen
+          active={shown}
           projectId="p1"
           filePath="notes.txt"
           onFindFile={() => {}}
           onDirtyChange={() => {}}
         />
       </QueryClientProvider>,
-    ),
-  );
+    );
+  await act(async () => render(active));
   const editor = () =>
     node.querySelector<HTMLTextAreaElement>("[data-testid=editor]");
   await settle(() => editor() !== null);
-  return { editor, root };
+  return {
+    editor,
+    root,
+    screen: node.querySelector<HTMLElement>("[data-editor-toolbar]")
+      ?.parentElement,
+    setActive: (shown: boolean) => act(async () => render(shown)),
+  };
 }
+
+it("does not ask the browser to lay out an inactive editor's selection", async () => {
+  vi.mocked(desktopApi.editorFileRead).mockResolvedValue({ content: "before" });
+  selection.text = "selected words";
+  const mounted = await mount(false);
+  const visible = vi.fn(() => true);
+  Object.defineProperty(mounted.screen, "checkVisibility", { value: visible });
+  try {
+    expect(readEditorSelection()).toBeNull();
+    expect(visible).not.toHaveBeenCalled();
+    await mounted.setActive(true);
+    expect(readEditorSelection()).toMatchObject({
+      filePath: "notes.txt",
+      text: "selected words",
+    });
+    expect(visible).toHaveBeenCalledTimes(1);
+    await mounted.setActive(false);
+    expect(readEditorSelection()).toBeNull();
+    expect(visible).toHaveBeenCalledTimes(1);
+  } finally {
+    act(() => mounted.root.unmount());
+  }
+});
+
+it("needs no browser visibility read when the visible editor has no selection", async () => {
+  vi.mocked(desktopApi.editorFileRead).mockResolvedValue({ content: "before" });
+  const mounted = await mount();
+  const visible = vi.fn(() => true);
+  Object.defineProperty(mounted.screen, "checkVisibility", { value: visible });
+  try {
+    expect(readEditorSelection()).toBeNull();
+    expect(visible).not.toHaveBeenCalled();
+  } finally {
+    act(() => mounted.root.unmount());
+  }
+});
+
+it("still excludes a selected editor hidden by CSS while its pane is active", async () => {
+  vi.mocked(desktopApi.editorFileRead).mockResolvedValue({ content: "before" });
+  selection.text = "selected words";
+  const mounted = await mount();
+  const visible = vi.fn(() => false);
+  Object.defineProperty(mounted.screen, "checkVisibility", { value: visible });
+  try {
+    expect(readEditorSelection()).toBeNull();
+    expect(visible).toHaveBeenCalledTimes(1);
+  } finally {
+    act(() => mounted.root.unmount());
+  }
+});
 
 // React Query delivers results on a timer; let a few run.
 async function settle(done: () => boolean = () => false) {

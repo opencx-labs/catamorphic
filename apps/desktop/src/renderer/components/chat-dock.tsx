@@ -500,6 +500,7 @@ function ChatDockContent({
   placeholder,
   tabActive,
   refreshWhileIdle = false,
+  attentionRevision,
   slot = "full",
   splitRatio = 0.5,
   splitResizing = false,
@@ -648,17 +649,23 @@ function ChatDockContent({
   useEffect(() => {
     const acknowledge = () => {
       const session = chat.session;
+      // An idle transcript can be cached while the host's session list
+      // has already received a new attention request for this chat.
+      const revision =
+        attentionRevision ??
+        (session?.attentionRequired ? session.attentionRevision : undefined);
       if (
         !refreshWhileIdle ||
         !document.hasFocus() ||
-        !session?.attentionRequired
+        !session ||
+        revision === undefined
       )
         return;
-      const key = `${session.id}:${session.attentionRevision}`;
+      const key = `${session.id}:${revision}`;
       if (acknowledgingAttention.current === key) return;
       acknowledgingAttention.current = key;
       acknowledgeAttention.mutate(
-        { sessionId: session.id, observedRevision: session.attentionRevision },
+        { sessionId: session.id, observedRevision: revision },
         {
           onError: () => {
             acknowledgingAttention.current = undefined;
@@ -669,7 +676,7 @@ function ChatDockContent({
     acknowledge();
     window.addEventListener("focus", acknowledge);
     return () => window.removeEventListener("focus", acknowledge);
-  }, [refreshWhileIdle, chat.session, acknowledgeAttention]);
+  }, [refreshWhileIdle, attentionRevision, chat.session, acknowledgeAttention]);
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
