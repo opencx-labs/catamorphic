@@ -315,7 +315,8 @@ export class RunCoordinator {
         typeof args.transition.timeout === "string"
           ? parseDuration(args.transition.timeout)
           : undefined;
-      const timeoutAt = timeout ? new Date(now.getTime() + timeout) : null;
+      const timeoutAt =
+        timeout !== undefined ? new Date(now.getTime() + timeout) : null;
       const pauseId = crypto.randomUUID();
       await trx
         .insertInto("workflow_pauses")
