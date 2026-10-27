@@ -189,11 +189,30 @@ it.skipIf(!process.env.DATABASE_URL)(
             "allocation.id",
             "run.allocation_id",
           )
-          .select(["allocation.worker_node_id", "allocation.status"])
+          .select([
+            "allocation.id",
+            "allocation.worker_node_id",
+            "allocation.status",
+            "allocation.release_reason",
+            "allocation.capacity_released_at",
+            "run.deployment_artifact_id",
+          ])
           .where("run.id", "=", run.id)
           .executeTakeFirstOrThrow();
-      expect((await placement()).worker_node_id).toBe(aNode);
-      // The run holds the tenant's only slot.
+      await expect
+        .poll(async () => (await placement()).status, {
+          timeout: 30_000,
+          interval: 250,
+        })
+        .toBe("released");
+      const parked = await placement();
+      expect(parked).toMatchObject({
+        worker_node_id: aNode,
+        release_reason: "idle",
+      });
+      expect(parked.deployment_artifact_id).not.toBeNull();
+      // Parking gives back physical capacity, but the logical run still
+      // holds the tenant's only active-run slot.
       await expect(
         core.runs.triggerProduction({
           identity,
@@ -275,12 +294,6 @@ it.skipIf(!process.env.DATABASE_URL)(
         await c.app.inject({ method: "GET", url: "/healthz" })
       ).json().machine.id;
       await expect
-        .poll(async () => (await placement()).worker_node_id, {
-          timeout: 30_000,
-          interval: 500,
-        })
-        .toBe(cNode);
-      await expect
         .poll(
           async () =>
             await core.db
@@ -291,6 +304,25 @@ it.skipIf(!process.env.DATABASE_URL)(
           { timeout: 30_000, interval: 500 },
         )
         .toBeUndefined();
+      // A wait needs no replacement workspace (ADR 0289). Recovery fences
+      // the old node and releases its capacity, retaining its Allocation
+      // as history until the continuation is ready for fresh admission.
+      const recovered = await placement();
+      expect(recovered).toMatchObject({
+        id: parked.id,
+        worker_node_id: aNode,
+        status: "released",
+        release_reason: "idle",
+        deployment_artifact_id: parked.deployment_artifact_id,
+      });
+      expect(recovered.capacity_released_at).not.toBeNull();
+      expect(
+        await core.db
+          .selectFrom("execution_allocations")
+          .select("id")
+          .where("root_workload_id", "=", run.id)
+          .execute(),
+      ).toEqual([{ id: parked.id }]);
 
       // The paused run resumes and completes on the new replica.
       const pause = await core.db
@@ -314,6 +346,12 @@ it.skipIf(!process.env.DATABASE_URL)(
         .toBe("completed");
       expect((await core.runs.get({ identity, runId: run.id })).result).toEqual(
         { order: "order-7", approved: true },
+      );
+      const continued = await placement();
+      expect(continued.id).not.toBe(parked.id);
+      expect(continued.worker_node_id).toBe(cNode);
+      expect(continued.deployment_artifact_id).toBe(
+        parked.deployment_artifact_id,
       );
 
       // Its slot is free again.
