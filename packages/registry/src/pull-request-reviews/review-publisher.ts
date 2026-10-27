@@ -4,8 +4,15 @@ import type {
   CapabilityProviderRuntime,
   Catamorphic,
 } from "@catamorphic/server-sdk";
-import type { Pool } from "pg";
-import { diffLines, list, parseWorkReview, record } from "./review-report.js";
+import type { Pool, QueryResultRow } from "pg";
+import {
+  diffLines,
+  list,
+  parseWorkReview,
+  publicationText,
+  record,
+  renderedPath,
+} from "./review-report.js";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Input = { sessionId: string; turnId: string };
@@ -67,14 +74,101 @@ export function reviewPublicationCapability({
     name: "company.review-publication",
     calls: {
       async publish(context, raw) {
+        const deadline = Date.parse(context.deadlineAt);
+        if (!Number.isFinite(deadline))
+          throw new Error("Invalid publication deadline");
+        const signal = AbortSignal.any([
+          context.signal,
+          AbortSignal.timeout(Math.max(0, deadline - Date.now())),
+        ]);
+        const assertLive = () => {
+          signal.throwIfAborted();
+          if (deadline <= Date.now())
+            throw new DOMException(
+              "Publication deadline exceeded",
+              "TimeoutError",
+            );
+        };
+        const wait = async <T>(operation: () => Promise<T>): Promise<T> => {
+          assertLive();
+          return new Promise<T>((resolve, reject) => {
+            const abort = () => {
+              signal.removeEventListener("abort", abort);
+              reject(signal.reason);
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            void Promise.resolve()
+              .then(() => {
+                assertLive();
+                return operation();
+              })
+              .then((value) => {
+                assertLive();
+                resolve(value);
+              })
+              .catch(reject)
+              .finally(() => signal.removeEventListener("abort", abort));
+          });
+        };
+        const acquire = async (pool: Pool) => {
+          assertLive();
+          const pending = pool.connect();
+          try {
+            return await wait(() => pending);
+          } catch (error) {
+            // A pool cannot cancel a queued acquisition. Release a client that
+            // arrives after our budget expired instead of leaking it.
+            void pending.then(
+              (client) => client.release(true),
+              () => {},
+            );
+            throw error;
+          }
+        };
+        const ledgerQuery = async <Row extends QueryResultRow = QueryResultRow>(
+          text: string,
+          values: unknown[] = [],
+        ) => {
+          const client = await acquire(ledgerPool);
+          let released = false;
+          const destroy = () => {
+            if (!released) {
+              released = true;
+              client.release(true);
+            }
+          };
+          client.on("error", destroy);
+          signal.addEventListener("abort", destroy, { once: true });
+          try {
+            return await wait(() => client.query<Row>(text, values));
+          } finally {
+            signal.removeEventListener("abort", destroy);
+            client.off("error", destroy);
+            if (!released) client.release(signal.aborted);
+          }
+        };
+        const receive = async ({
+          id,
+          receipt,
+        }: {
+          id: string;
+          receipt: unknown;
+        }) => {
+          await ledgerQuery(
+            "UPDATE work_review_publication.effects SET state='received',receipt=$2::jsonb WHERE id=$1",
+            [id, JSON.stringify(receipt)],
+          );
+        };
         const input = parseInput(raw);
         const sdk = core();
         const loadRun = async () => {
           const run = record(
-            await sdk.runs.get({
-              identity: context.caller,
-              runId: context.runId,
-            }),
+            await wait(() =>
+              sdk.runs.get({
+                identity: context.caller,
+                runId: context.runId,
+              }),
+            ),
           );
           const event = record(run.input);
           const payload = record(event.payload);
@@ -98,24 +192,28 @@ export function reviewPublicationCapability({
           const allocationId = await loadRun();
           if (!sdk.connectionBroker)
             throw new Error("Connection broker unavailable");
-          return sdk.connectionBroker.invoke({
-            identity: context.caller,
-            allocationId,
-            alias: "github",
-            action,
-            input: args,
-            caller: "workflow",
-          });
+          const broker = sdk.connectionBroker;
+          return wait(() =>
+            broker.invoke({
+              signal,
+              deadlineAt: context.deadlineAt,
+              identity: context.caller,
+              allocationId,
+              alias: "github",
+              action,
+              input: args,
+              caller: "workflow",
+            }),
+          );
         };
         const loadChat = async () => {
           await loadRun();
           if (!sdk.agentSessions)
             throw new Error("Session service unavailable");
+          const sessions = sdk.agentSessions;
           const chat = record(
-            await sdk.agentSessions.get(
-              context.caller,
-              context.projectId,
-              input.sessionId,
+            await wait(() =>
+              sessions.get(context.caller, context.projectId, input.sessionId),
             ),
           );
           const prefix = `pr-${repository}-`;
@@ -144,7 +242,15 @@ export function reviewPublicationCapability({
           repository,
           initial.number,
         ]);
-        const lock = await lockPool.connect();
+        const lock = await acquire(lockPool);
+        let released = false;
+        const destroyLock = () => {
+          if (!released) {
+            released = true;
+            lock.release(true);
+          }
+        };
+        signal.addEventListener("abort", destroyLock, { once: true });
         let transaction = false;
         let lockError: Error | undefined;
         const failedLock = (error: Error) => {
@@ -152,23 +258,32 @@ export function reviewPublicationCapability({
         };
         lock.on("error", failedLock);
         try {
-          await ledgerPool.query(
+          await ledgerQuery(
             "INSERT INTO work_review_publication.pulls(scope) VALUES ($1) ON CONFLICT DO NOTHING",
             [scope],
           );
-          await lock.query("BEGIN");
+          await wait(() => lock.query("BEGIN"));
           transaction = true;
-          await lock.query(
-            "SELECT scope FROM work_review_publication.pulls WHERE scope=$1 FOR UPDATE",
-            [scope],
+          const remaining = `${Math.max(1, deadline - Date.now())}ms`;
+          await wait(() =>
+            lock.query(
+              "SELECT set_config('lock_timeout',$1,true),set_config('statement_timeout',$1,true),set_config('idle_in_transaction_session_timeout',$1,true)",
+              [remaining],
+            ),
+          );
+          await wait(() =>
+            lock.query(
+              "SELECT scope FROM work_review_publication.pulls WHERE scope=$1 FOR UPDATE",
+              [scope],
+            ),
           );
           const liveLock = () => {
             if (lockError) throw lockError;
-            return lock.query("SELECT 1");
+            return wait(() => lock.query("SELECT 1"));
           };
           // Every uncertain write, including an older head/turn, must resolve
           // before ANY new write. Missing from a list does not prove it failed.
-          const uncertain = await ledgerPool.query<Effect>(
+          const uncertain = await ledgerQuery<Effect>(
             "SELECT * FROM work_review_publication.effects WHERE scope=$1 AND state='uncertain' ORDER BY id",
             [scope],
           );
@@ -183,7 +298,7 @@ export function reviewPublicationCapability({
               throw new Error(
                 `Publication blocked: uncertain effect ${effect.id}; reconcile with the operator`,
               );
-            await receive({ pool: ledgerPool, id: effect.id, receipt });
+            await receive({ id: effect.id, receipt });
           }
           const current = await loadChat();
           if (current.number !== initial.number)
@@ -193,6 +308,7 @@ export function reviewPublicationCapability({
             .map(record)
             .sort((a, b) => Number(b.ordinal) - Number(a.ordinal));
           const turn = turns[0];
+          const attempt = latestAttempt(snapshot, input.turnId);
           const commit = record(current.chat.workspace).commit;
           if (
             !turn ||
@@ -211,6 +327,8 @@ export function reviewPublicationCapability({
             if (
               latest?.id !== input.turnId ||
               latest.status !== turn.status ||
+              latestAttempt(record(chat.snapshot), input.turnId)?.id !==
+                attempt?.id ||
               record(chat.workspace).commit !== commit
             )
               throw new Error("Review generation changed before publication");
@@ -232,6 +350,12 @@ export function reviewPublicationCapability({
             .map(record)
             .filter(
               (item) =>
+                attempt?.status === "completed" &&
+                (!turn.activeAttemptId ||
+                  turn.activeAttemptId === attempt.id) &&
+                item.attemptId === attempt.id &&
+                item.parentItemId === null &&
+                item.agentId === current.chat.agentId &&
                 item.kind === "assistant_message" &&
                 item.turnId === input.turnId &&
                 item.status === "completed",
@@ -253,6 +377,7 @@ export function reviewPublicationCapability({
             input.sessionId,
             input.turnId,
             turn.ordinal,
+            attempt?.id ?? null,
             commit,
           ]);
           const plan = (
@@ -272,14 +397,14 @@ export function reviewPublicationCapability({
                 ...args,
                 stamp,
                 ...(typeof args.body === "string"
-                  ? { body: `${args.body}\n\n${stamp}` }
+                  ? { body: `${publicationText(args.body)}\n\n${stamp}` }
                   : {}),
               },
             };
           };
           const dispatch = async (effect: Plan) => {
             const digest = hash(JSON.stringify(effect.input));
-            const earlier = await ledgerPool.query<Effect>(
+            const earlier = await ledgerQuery<Effect>(
               "SELECT * FROM work_review_publication.effects WHERE id=$1",
               [effect.id],
             );
@@ -291,7 +416,7 @@ export function reviewPublicationCapability({
               return;
             }
             await fresh();
-            await ledgerPool.query(
+            await ledgerQuery(
               "INSERT INTO work_review_publication.effects(id,scope,commit_sha,turn_id,run_id,action,input,input_digest,stamp,state) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,'uncertain')",
               [
                 effect.id,
@@ -311,7 +436,7 @@ export function reviewPublicationCapability({
             const receipt = await call(effect.action, effect.input);
             if (!validReceipt(receipt))
               throw new Error("GitHub create returned no destination id");
-            await receive({ pool: ledgerPool, id: effect.id, receipt });
+            await receive({ id: effect.id, receipt });
           };
           const checks = list(
             record(
@@ -333,7 +458,7 @@ export function reviewPublicationCapability({
               ? 3
               : 2
             : 1;
-          const stored = await ledgerPool.query<{
+          const stored = await ledgerQuery<{
             strength: number;
             check_plan: Plan | null;
           }>(
@@ -366,7 +491,7 @@ export function reviewPublicationCapability({
                 ? null
                 : (old?.check_plan ?? null);
           // Preserve the strongest check plan across a crash before dispatch.
-          await ledgerPool.query(
+          await ledgerQuery(
             "INSERT INTO work_review_publication.verdicts(scope,commit_sha,strength,check_plan) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(scope,commit_sha) DO UPDATE SET strength=EXCLUDED.strength,check_plan=EXCLUDED.check_plan",
             [scope, commit, strongest, JSON.stringify(check)],
           );
@@ -384,7 +509,7 @@ export function reviewPublicationCapability({
             .filter((comment) => !fits(comment))
             .map(
               (comment) =>
-                `- \`${comment.path}:${comment.line}\`: ${comment.body}`,
+                `- ${renderedPath(comment.path)}:${comment.line}: ${comment.body}`,
             );
           const own = list(
             record(
@@ -451,9 +576,19 @@ export function reviewPublicationCapability({
           }
           return { published: true, conclusion };
         } finally {
-          if (transaction) await lock.query("ROLLBACK").catch(() => {});
+          if (transaction && !released) {
+            try {
+              await wait(() => lock.query("ROLLBACK"));
+            } catch {
+              destroyLock();
+            }
+          }
+          signal.removeEventListener("abort", destroyLock);
           lock.off("error", failedLock);
-          lock.release(lockError);
+          if (!released) {
+            released = true;
+            lock.release(lockError || signal.aborted);
+          }
         }
       },
     },
@@ -487,20 +622,6 @@ function parseInput(value: unknown): Input {
 function validReceipt(value: unknown): boolean {
   const id = record(value).id;
   return typeof id === "number" && Number.isSafeInteger(id) && id > 0;
-}
-async function receive({
-  pool,
-  id,
-  receipt,
-}: {
-  pool: Pool;
-  id: string;
-  receipt: unknown;
-}) {
-  await pool.query(
-    "UPDATE work_review_publication.effects SET state='received',receipt=$2::jsonb WHERE id=$1",
-    [id, JSON.stringify(receipt)],
-  );
 }
 async function findReceipt({
   effect,
@@ -548,4 +669,11 @@ async function findReceipt({
             entry.body.includes(effect.stamp)),
     );
   return validReceipt(receipt) ? receipt : null;
+}
+
+function latestAttempt(snapshot: Record<string, unknown>, turnId: string) {
+  return list(snapshot.attempts)
+    .map(record)
+    .filter((attempt) => attempt.turnId === turnId)
+    .sort((left, right) => Number(right.ordinal) - Number(left.ordinal))[0];
 }

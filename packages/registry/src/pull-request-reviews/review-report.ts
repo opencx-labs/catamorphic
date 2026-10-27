@@ -61,7 +61,7 @@ export function diffLines(result: unknown): Set<string> {
  * "@name" and "@org/team" stop notifying, and HTML comments (a fake stamp,
  * a summary marker) are taken apart.
  */
-function plain(text: string): string {
+export function publicationText(text: string): string {
   return text.replace(/@(?=[A-Za-z0-9])/g, "@​").replace(/<!--|-->/g, "");
 }
 
@@ -123,8 +123,8 @@ export function parseWorkReview(content: string): WorkReview | string {
     reviewedCommit,
     verdict,
     score,
-    summary: plain(summary),
-    checkSummary: plain(checkSummary),
+    summary: publicationText(summary),
+    checkSummary: publicationText(checkSummary),
     comments: [],
     reply: null,
   };
@@ -144,7 +144,7 @@ export function parseWorkReview(content: string): WorkReview | string {
       !text(body, 1500)
     )
       return "a comment is not { path, line, side?, body } within its limits";
-    checked.comments.push({ path, line, side, body: plain(body) });
+    checked.comments.push({ path, line, side, body: publicationText(body) });
   }
   if (report.reply != null) {
     const reply = record(report.reply);
@@ -160,7 +160,7 @@ export function parseWorkReview(content: string): WorkReview | string {
       return "reply is not { inReplyTo?, body } within its limits";
     checked.reply = {
       ...(typeof inReplyTo === "number" ? { inReplyTo } : {}),
-      body: plain(body),
+      body: publicationText(body),
     };
   }
   return checked;
@@ -178,4 +178,14 @@ function parseJson(source: string): { value: unknown } | null {
   } catch {
     return null;
   }
+}
+
+/** A filename rendered as literal Markdown text, with no code-span breakout. */
+export function renderedPath(path: string): string {
+  return path
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[\r\n]/g, " ")
+    .replace(/[\\`*_{}[\]()#+.!|~-]/g, "\\$&");
 }

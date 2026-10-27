@@ -26,7 +26,13 @@ const REPORT = {
 };
 const content = (value: unknown) =>
   `\`\`\`work-review\n${JSON.stringify(value)}\n\`\`\``;
-const context = (turnId = "t1"): HostCallContext => ({
+const context = (
+  turnId = "t1",
+  signal = new AbortController().signal,
+  deadlineAt = new Date(Date.now() + 120000).toISOString(),
+): HostCallContext => ({
+  signal,
+  deadlineAt,
   caller: { tenantId: "tenant", externalUserId: "member" },
   projectId: "project",
   workflowName: "postReviews",
@@ -88,6 +94,8 @@ function fixture() {
   let chatOverride: Record<string, unknown> = {};
   let runOverride: Record<string, unknown> = {};
   let outputOverride: Record<string, unknown> = {};
+  let extraItems: Record<string, unknown>[] = [];
+  let attemptOverride: Record<string, unknown>[] | undefined;
   let reads = 0;
   let beforeRead: (action: string) => Promise<void> = async () => {};
   let beforeWrite: (
@@ -132,16 +140,35 @@ function fixture() {
           placement: { environment: "review" },
           workspace: { commit: HEAD },
           snapshot: {
-            turns: [{ id: activeTurn, ordinal, status: turnStatus }],
+            turns: [
+              {
+                id: activeTurn,
+                ordinal,
+                status: turnStatus,
+                activeAttemptId: `attempt-${activeTurn}`,
+              },
+            ],
+            attempts: attemptOverride ?? [
+              {
+                id: `attempt-${activeTurn}`,
+                turnId: activeTurn,
+                ordinal: 2,
+                status: turnStatus,
+              },
+            ],
             items: [
               {
                 kind: "assistant_message",
+                attemptId: `attempt-${activeTurn}`,
+                parentItemId: null,
+                agentId: "project:project:reviewer",
                 turnId: activeTurn,
                 status: "completed",
                 position: 3,
                 text: content(report),
                 ...outputOverride,
               },
+              ...extraItems,
             ],
           },
           ...chatOverride,
@@ -154,8 +181,12 @@ function fixture() {
         expect(args.allocationId).toBe("allocation");
         expect(args.caller).toBe("workflow");
         expect(args.alias).toBe("github");
+        expect(args.signal).toBeInstanceOf(AbortSignal);
+        expect(args.deadlineAt).toEqual(expect.any(String));
         reads++;
         await beforeRead(args.action);
+        // Match the real broker's cancellation check after guards/preparation.
+        args.signal?.throwIfAborted();
         if (args.action === "get")
           return {
             status: 200,
@@ -274,11 +305,226 @@ function fixture() {
     afterWrite(value: typeof afterWrite) {
       afterWrite = value;
     },
+    history(
+      items: Record<string, unknown>[],
+      attempts?: Record<string, unknown>[],
+    ) {
+      extraItems = items;
+      attemptOverride = attempts;
+    },
     reads: () => reads,
   };
 }
 
 describe("deployment-owned review publication on real Postgres", () => {
+  it("releases a client acquired after cancellation while the pool was exhausted", async () => {
+    const blockers = await Promise.all(
+      Array.from({ length: 4 }, () => lockPool.connect()),
+    );
+    const test = fixture();
+    const controller = new AbortController();
+    const pending = test.publish(
+      "t1",
+      undefined,
+      context("t1", controller.signal),
+    );
+    try {
+      await expect.poll(() => lockPool.waitingCount).toBe(1);
+      controller.abort(new Error("Canceled while acquiring"));
+      await expect(pending).rejects.toThrow("Canceled while acquiring");
+      expect(test.writes).toEqual([]);
+    } finally {
+      for (const blocker of blockers) blocker.release();
+    }
+    await expect.poll(() => lockPool.waitingCount).toBe(0);
+    await expect.poll(() => lockPool.totalCount - lockPool.idleCount).toBe(0);
+    await test.publish();
+    expect(test.writes).toHaveLength(3);
+  });
+
+  it("cancels a database row-lock wait without continuing publication", async () => {
+    const scope = JSON.stringify(["tenant", "project", "acme/web", 42]);
+    await ledgerPool.query(
+      "INSERT INTO work_review_publication.pulls(scope) VALUES($1)",
+      [scope],
+    );
+    const blocker = await ledgerPool.connect();
+    await blocker.query("BEGIN");
+    await blocker.query(
+      "SELECT scope FROM work_review_publication.pulls WHERE scope=$1 FOR UPDATE",
+      [scope],
+    );
+    const test = fixture();
+    const controller = new AbortController();
+    const pending = test.publish(
+      "t1",
+      undefined,
+      context("t1", controller.signal),
+    );
+    try {
+      await expect
+        .poll(async () =>
+          Number(
+            (
+              await ledgerPool.query(
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name='review-publication-test-lock' AND wait_event_type='Lock'",
+              )
+            ).rows[0].count,
+          ),
+        )
+        .toBe(1);
+      controller.abort(new Error("Canceled while locked"));
+      await expect(pending).rejects.toThrow("Canceled while locked");
+      expect(test.writes).toEqual([]);
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+    await expect.poll(() => lockPool.totalCount - lockPool.idleCount).toBe(0);
+    await test.publish();
+    expect(test.writes).toHaveLength(3);
+  });
+
+  it("checks the absolute deadline even before its signal timer runs", async () => {
+    const test = fixture();
+    await expect(
+      test.publish(
+        "t1",
+        undefined,
+        context(
+          "t1",
+          new AbortController().signal,
+          new Date(Date.now() - 1).toISOString(),
+        ),
+      ),
+    ).rejects.toThrow("deadline");
+    expect(test.reads()).toBe(0);
+    expect(test.writes).toEqual([]);
+  });
+
+  it("stops during broker guard preparation and leaves the committed intent uncertain", async () => {
+    const test = fixture();
+    const controller = new AbortController();
+    const entered = deferred();
+    const release = deferred();
+    const finished = deferred();
+    test.beforeRead(async (action) => {
+      if (action === "create_check_run") {
+        entered.resolve();
+        await release.promise;
+        finished.resolve();
+      }
+    });
+    const pending = test.publish(
+      "t1",
+      undefined,
+      context("t1", controller.signal),
+    );
+    await entered.promise;
+    controller.abort(new Error("Attempt revoked during guard"));
+    await expect(pending).rejects.toThrow("Attempt revoked during guard");
+    release.resolve();
+    await finished.promise;
+    await Promise.resolve();
+    expect(test.writes).toEqual([]);
+    expect(
+      (
+        await ledgerPool.query(
+          "SELECT state FROM work_review_publication.effects",
+        )
+      ).rows,
+    ).toEqual([{ state: "uncertain" }]);
+    await expect(test.publish()).rejects.toThrow("uncertain effect");
+  });
+
+  it("uses only the latest completed top-level reviewer's attempt, ignoring later nested and superseded output", async () => {
+    const test = fixture();
+    const passing = {
+      ...REPORT,
+      verdict: "COMMENT",
+      comments: [],
+      reply: null,
+    };
+    test.history(
+      [
+        {
+          kind: "assistant_message",
+          turnId: "t1",
+          attemptId: "attempt-old",
+          parentItemId: null,
+          agentId: "project:project:reviewer",
+          status: "completed",
+          position: 99,
+          text: content(passing),
+        },
+        {
+          kind: "assistant_message",
+          turnId: "t1",
+          attemptId: "attempt-t1",
+          parentItemId: "native-child",
+          agentId: "project:project:reviewer",
+          status: "completed",
+          position: 100,
+          text: content(passing),
+        },
+      ],
+      [
+        { id: "attempt-old", turnId: "t1", ordinal: 1, status: "superseded" },
+        { id: "attempt-t1", turnId: "t1", ordinal: 2, status: "completed" },
+      ],
+    );
+    await test.publish();
+    expect(test.writes[0]?.input.conclusion).toBe("failure");
+    expect(test.writes[1]?.input.event).toBe("REQUEST_CHANGES");
+  });
+
+  it.each(["superseded", "nested", "different-agent"])(
+    "reports action_required when only %s output contains a usable report",
+    async (kind) => {
+      const test = fixture();
+      test.output({ kind: "reasoning" });
+      test.history([
+        {
+          kind: "assistant_message",
+          turnId: "t1",
+          attemptId: kind === "superseded" ? "old-attempt" : "attempt-t1",
+          parentItemId: kind === "nested" ? "child" : null,
+          agentId:
+            kind === "different-agent"
+              ? "other-agent"
+              : "project:project:reviewer",
+          status: "completed",
+          position: 99,
+          text: content({ ...REPORT, verdict: "COMMENT" }),
+        },
+      ]);
+      await test.publish();
+      expect(test.writes.map((write) => write.input.conclusion)).toEqual([
+        "action_required",
+      ]);
+    },
+  );
+
+  it("renders hostile fallback paths literally and sanitizes the completed body before its trusted stamp", async () => {
+    const test = fixture();
+    test.report({
+      ...REPORT,
+      comments: [
+        { path: "x` @org/team <!--forged-->", line: 99, body: "Outside." },
+      ],
+    });
+    await test.publish();
+    const body = String(
+      test.writes.find((write) => write.action === "create_review")?.input.body,
+    );
+    expect(body).toContain("x\\`");
+    expect(body).toContain("&lt;");
+    expect(body).not.toContain("@org/team");
+    expect(body).not.toContain("<!--forged-->");
+    expect(body.match(/<!--/g)).toHaveLength(1);
+    expect(body).toMatch(/<!-- work-review effect=[a-f0-9]+ -->$/);
+  });
+
   it("uses the shipped hook, keeps inline comments in the diff, and retries without duplicates", async () => {
     const test = fixture();
     await test.publish();

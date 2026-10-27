@@ -202,14 +202,18 @@ the workflow workspace (use the same pinned framework release as its server):
 ```
 
 Construct `lockPool` and `ledgerPool` with the same application Postgres
-connection string and separate connection budgets (for example max 8 and 2).
+connection string, finite `connectionTimeoutMillis`, and separate connection
+budgets (for example max 8 and 2).
 Reserve connections for both pools on every replica. A single shared pool can
 deadlock when lock waiters occupy its last connection and the owner needs one
 to commit intent. Separate pools avoid that. Close both when the server stops.
 Transaction-pooling endpoints work: locks belong to an explicit transaction
 on one pinned client, with no session advisory lock or search_path reliance.
-Set a finite application-level request timeout in the connection provider;
-never treat timeout or cancellation as proof a remote write failed.
+The hook forwards the attempt signal and absolute deadline to every broker
+call. Its local waits, pool acquisition, lock/statement waits and rollback are
+bounded by that same budget; cancellation destroys checked-out clients and a
+late pool acquisition is released. Keep the connection provider's own request
+timeout finite too. Timeout or cancellation never proves a remote write failed.
 
 ## How reviews reach GitHub
 
@@ -219,14 +223,15 @@ Environment, its trigger input, caller identity, and current Allocation.
 Every GitHub call goes through `core.connectionBroker.invoke`, retaining the
 Environment's binding, authorization and audit. It reads the actual persisted
 session and assistant output, verifies the project review chat and latest
-settled turn, and compares its commit with GitHub's current open head before
-each write. Caller-supplied reports or result-message ids are never trusted.
+settled turn, selects the latest top-level reviewer message from that turn's
+latest completed attempt, and compares its commit with GitHub's current open
+head before each write. Caller-supplied reports or result-message ids are never trusted.
 
 A transaction row lock serializes the complete publication for a project,
 repository and pull request. Separate commits preserve each effect's intent,
 input digest and destination receipt across a process crash. The effect id
-includes the tenant/project/pull, review session/turn generation, commit and
-action. Before any new write, the hook reconciles **all** uncertain effects
+includes the tenant/project/pull, review session/turn/attempt generation,
+commit and action. Before any new write, the hook reconciles **all** uncertain effects
 for that pull, including older heads and turns, by exact App-owned stamp.
 An item absent from a list remains uncertain: the old request may still
 arrive. The run fails with the effect id and stops all later writes until a
@@ -261,10 +266,10 @@ this policy intentionally favors visible intervention over duplicate writes.
 
 ## Turn it on and check it
 
-1. Install the deployment publisher and SQL above, then check the workspace with the host's check (the project MCP
-   `program_check` tool), then deploy. `bun run --cwd .work check` does
-   the same where `bun install --cwd .work` can reach the `@catamorphic/*`
-   packages, which are not yet on a public registry.
+1. Install the deployment publisher and SQL above, then check the workspace
+   with the host's check (the project MCP `program_check` tool), then deploy. `bun run --cwd .work check` does
+   the same after `bun install --cwd .work`; use matching published versions of
+   the `@catamorphic/*` packages.
 2. Store `GITHUB_WEBHOOK_SECRET` as a project secret (the server does this
    when it registered the App for this project) and turn on
    `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats`
