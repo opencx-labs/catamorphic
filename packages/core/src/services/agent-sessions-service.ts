@@ -4952,6 +4952,9 @@ export class AgentSessionsService {
   private async reattachRunner(input: {
     identity: Identity;
     session: SessionRow;
+    turn: Turn;
+    attempt: Attempt;
+    leaseToken: string;
     location: Extract<RunnerLocation, { kind: "sandbox_process" }>;
   }): Promise<RunnerChannel | undefined> {
     const allocation = await this.executionAllocations.get({
@@ -4986,9 +4989,33 @@ export class AgentSessionsService {
           ),
         () => false,
       );
-    return present
-      ? sandboxChannel({ provider, location: input.location })
-      : undefined;
+    if (!present) return undefined;
+    if (
+      input.turn.activeAttemptId === input.attempt.id &&
+      ["preparing", "running", "waiting"].includes(input.turn.status) &&
+      ["preparing", "running"].includes(input.attempt.status)
+    ) {
+      const grantInput = {
+        identity: input.identity,
+        projectId: input.session.project_id,
+        sessionId: input.session.id,
+        allocationId: allocation.id,
+        provider,
+        sandboxProviderId: input.location.sandboxId,
+        renewOnly: true,
+        modelTurn: {
+          turnId: input.turn.id,
+          attemptId: input.attempt.id,
+          leaseToken: input.leaseToken,
+        },
+      };
+      // The runner survived its holder, but its old model grant did not.
+      // Refresh the exact new claim before answering or reading it again.
+      await this.configureSandboxGateway(grantInput);
+      this.startGrantRenewal(grantInput);
+      await this.keepConnectionGrants(input.session.id);
+    }
+    return sandboxChannel({ provider, location: input.location });
   }
 
   /**
@@ -6473,6 +6500,7 @@ export class AgentSessionsService {
         alias: binding.alias,
         grant: grant.token,
         id: grant.id,
+        publicationRevision: grant.publicationRevision,
         ...(binding.api && input.modelTurn
           ? { modelAttemptId: input.modelTurn.attemptId }
           : {}),

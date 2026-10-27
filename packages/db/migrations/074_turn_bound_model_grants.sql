@@ -1,6 +1,7 @@
 -- Model authority ends with the exact attempt and lease that issued it.
 -- Other capabilities on the same alias keep their existing lifetime.
 ALTER TABLE connection_capability_grants
+  ADD COLUMN publication_revision bigserial NOT NULL,
   ADD COLUMN model_turn_id uuid,
   ADD COLUMN model_attempt_id uuid,
   ADD COLUMN model_lease_token uuid,

@@ -280,6 +280,34 @@ describeIf("the model gateway's store (ADR 0180)", () => {
     }
   });
 
+  it("never lets late renewal cleanup revoke a newer publication on the same live claim", async () => {
+    const fixture = await grant();
+    const first = await grants.issue(issueArgs(fixture));
+    const second = await grants.issue(issueArgs(fixture));
+    expect(BigInt(second.publicationRevision)).toBeGreaterThan(
+      BigInt(first.publicationRevision),
+    );
+    await grants.revokeOthers({
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox",
+      keepId: first.id,
+    });
+    expect(
+      await dbModelGatewayStore(db).liveGrant({ token: second.token }),
+    ).toMatchObject({ turnId: fixture.turnId });
+    await grants.revokeOthers({
+      agentSessionId: fixture.sessionId,
+      alias: "anthropic",
+      channel: "sandbox",
+      keepId: second.id,
+    });
+    expect(await grants.validate({ token: first.token })).toBeNull();
+    expect(
+      await dbModelGatewayStore(db).liveGrant({ token: second.token }),
+    ).toMatchObject({ turnId: fixture.turnId });
+  });
+
   it("never reactivates an old bearer on a later turn, even after extension and late renewal cleanup", async () => {
     const fixture = await grant();
     const oldRenewal = await grants.issue(issueArgs(fixture));

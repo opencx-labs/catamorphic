@@ -502,6 +502,7 @@ export interface ConnectionCapabilityGrants {
   model_lease_token: string | null;
   model_turn_id: string | null;
   project_id: string;
+  publication_revision: Generated<Int8>;
   revoked_at: Timestamp | null;
   tenant_id: string;
   token_hash: string;

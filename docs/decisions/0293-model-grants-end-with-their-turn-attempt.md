@@ -25,7 +25,12 @@ that also serve models. They remain usable by authorized background work.
 Usage belongs to the grant's turn, even when its answer ends after that turn.
 Issuance checks the fence under a turn lock; stale renewal cleanup cannot
 revoke a later generation's grants. Model key files are attempt-specific, so
-a late upload cannot replace the next attempt's model bearer.
+a late upload cannot replace the next attempt's model bearer. A surviving
+runner receives grants for its new claim and restarts renewal before takeover
+continues. Grant rows carry a monotonic publication revision. Uploads stage
+immutable files, then the sandbox serializes revision checking and atomic file
+replacement, including the shared Git and HTTP aliases. Delayed older
+publication is skipped; cleanup revokes only older revisions.
 
 Authorization is checked again after body processing and guards, immediately
 before forwarding. Calls already admitted may finish streaming after a turn

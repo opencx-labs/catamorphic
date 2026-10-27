@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { formatEnvFile } from "@catamorphic/agent-protocol/runner";
 import {
@@ -198,7 +199,7 @@ export async function removeSessionCredentials(input: {
     ...input,
     cwd: input.provider.workspaceRoot,
     what: "clear the sandbox's grants and variables",
-    command: `rm -rf ${SESSION_DIRECTORY}/grants ${SESSION_DIRECTORY}/env ${SESSION_DIRECTORY}/gitconfig`,
+    command: `rm -rf ${SESSION_DIRECTORY}/grants ${SESSION_DIRECTORY}/model-grants ${SESSION_DIRECTORY}/grant-staging ${SESSION_DIRECTORY}/gateway-revision ${SESSION_DIRECTORY}/env ${SESSION_DIRECTORY}/gitconfig`,
   });
 }
 
@@ -309,12 +310,32 @@ export async function configureSandboxGateway(input: {
   sandboxId: string;
   /** `<gateway>/git`, as the sandbox reaches it. */
   gatewayGitUrl: string;
-  grants: readonly { alias: string; grant: string; modelAttemptId?: string }[];
+  grants: readonly {
+    alias: string;
+    grant: string;
+    publicationRevision: string;
+    modelAttemptId?: string;
+  }[];
   gitAliases: readonly SandboxGitAlias[];
   /** HTTP API aliases code in the sandbox may call (ADR 0212). */
   httpAliases?: readonly SandboxHttpAlias[];
   renewOnly?: boolean;
 }): Promise<void> {
+  if (!input.grants.length) return;
+  for (const grant of input.grants)
+    if (!/^[1-9][0-9]*$/.test(grant.publicationRevision))
+      throw new Error(
+        "A sandbox grant needs its persisted publication revision",
+      );
+  const revision = input.grants.reduce(
+    (latest, grant) =>
+      BigInt(grant.publicationRevision) > BigInt(latest)
+        ? grant.publicationRevision
+        : latest,
+    "0",
+  );
+  const publicationId = randomUUID();
+  const stage = `grant-staging/${publicationId}`;
   const directory = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;
   const gateway = input.gatewayGitUrl.replace(/\/+$/, "");
   const httpAliases = input.httpAliases ?? [];
@@ -322,6 +343,31 @@ export async function configureSandboxGateway(input: {
     !input.renewOnly && httpAliases.length > 0
       ? gatewayEnvTemplate(httpAliases)
       : undefined;
+  const git = !input.renewOnly && input.gitAliases.length > 0;
+  const helper = [
+    "#!/bin/sh",
+    '[ "$2" = get ] || exit 0',
+    "cat >/dev/null",
+    'dir=$(cd "$(dirname "$0")" && pwd)',
+    `printf 'username=work\\npassword=%s\\n' "$(cat "$dir/grants/$1")"`,
+    "",
+  ].join("\n");
+  const config = [
+    `[credential "${originOf(gateway)}"]`,
+    "\tuseHttpPath = true",
+    ...input.gitAliases.flatMap((alias) => [
+      `[credential "${gateway}/${alias.alias}/"]`,
+      "\thelper =",
+      `\thelper = "!'@ROOT@/git-credential-work' ${alias.alias}"`,
+      `[url "${gateway}/${alias.alias}/"]`,
+      ...alias.remoteBaseUrls.map(
+        (base) => `\tinsteadOf = ${base.endsWith("/") ? base : `${base}/`}`,
+      ),
+    ]),
+    "",
+  ].join("\n");
+  // Upload only immutable staging paths. A delayed upload can never touch a
+  // live alias; revision checking and publication happen together below.
   await input.provider.uploadFiles(
     input.sandboxId,
     {
@@ -341,83 +387,103 @@ export async function configureSandboxGateway(input: {
       ...(gatewayEnv
         ? { [`${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`]: gatewayEnv }
         : {}),
+      ...(git ? { "git-credential-work": helper, "gitconfig.in": config } : {}),
     },
-    directory,
+    `${directory}/${stage}`,
   );
-  const permissions = input.grants.some((grant) => grant.modelAttemptId)
-    ? "chmod 600 grants/* && chmod 700 model-grants model-grants/* && find model-grants -type f -exec chmod 600 {} +"
-    : "chmod 600 grants/*";
-  // A turn's aliases stand for its whole turn: renewing leaves them be.
-  const env = input.renewOnly
-    ? []
-    : [gatewayEnvScript(gatewayEnv !== undefined)];
-  if (input.renewOnly || input.gitAliases.length === 0) {
-    await run({
-      ...input,
-      cwd: directory,
-      what: "renew the session's gateway grants",
-      // Without Git aliases, an earlier turn's rewrites must not send
-      // remotes to aliases this session no longer holds.
-      command: [
-        permissions,
-        ...(input.renewOnly
-          ? []
-          : ["{ [ ! -f gitconfig ] || : > gitconfig; }"]),
-        ...env,
-      ].join(" && "),
-    });
-    return;
-  }
-  const helper = [
-    "#!/bin/sh",
-    "# Work's Git gateway credential helper (ADR 0175). It answers with this",
-    "# session's current grant for one connection alias; the control plane",
-    "# renews the grant while the session runs. A grant works only against",
-    "# the gateway, never against the remote itself.",
-    '[ "$2" = get ] || exit 0',
-    "cat >/dev/null",
-    'dir=$(cd "$(dirname "$0")" && pwd)',
-    `printf 'username=work\\npassword=%s\\n' "$(cat "$dir/grants/$1")"`,
-    "",
-  ].join("\n");
-  const config = [
-    `[credential "${originOf(gateway)}"]`,
-    "\tuseHttpPath = true",
-    ...input.gitAliases.flatMap((alias) => [
-      `[credential "${gateway}/${alias.alias}/"]`,
-      // An empty helper first drops system helpers (a keychain) for the
-      // gateway, so a grant is never stored outside the sandbox's files.
-      "\thelper =",
-      // A shell command (`!`), so the path can be quoted.
-      `\thelper = "!'@ROOT@/git-credential-work' ${alias.alias}"`,
-      `[url "${gateway}/${alias.alias}/"]`,
-      ...alias.remoteBaseUrls.map(
-        (base) => `\tinsteadOf = ${base.endsWith("/") ? base : `${base}/`}`,
-      ),
+  const publish = (file: string) => [
+    `mkdir -p ${shellQuote(path.posix.dirname(file))}`,
+    `chmod 600 ${shellQuote(`${stage}/${file}`)}`,
+    `mv -f ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)}`,
+  ];
+  const commands = [
+    ...input.grants.flatMap((grant) => [
+      ...publish(`grants/${grant.alias}`),
+      ...(grant.modelAttemptId
+        ? publish(`model-grants/${grant.modelAttemptId}/${grant.alias}`)
+        : []),
     ]),
-    "",
-  ].join("\n");
-  await input.provider.uploadFiles(
-    input.sandboxId,
-    { "git-credential-work": helper, "gitconfig.in": config },
-    directory,
-  );
+    ...(input.grants.some((grant) => grant.modelAttemptId)
+      ? ["chmod 700 model-grants model-grants/*"]
+      : []),
+    ...(input.renewOnly
+      ? []
+      : [
+          ...(gatewayEnv
+            ? [
+                `mkdir -p ${shellQuote(path.posix.dirname(GATEWAY_ENV_IN_SESSION_DIRECTORY))}`,
+                `mv -f ${shellQuote(`${stage}/${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`)} ${shellQuote(`${GATEWAY_ENV_IN_SESSION_DIRECTORY}.in`)}`,
+              ]
+            : []),
+          ...(git
+            ? [
+                `mv -f ${shellQuote(`${stage}/git-credential-work`)} git-credential-work`,
+                "chmod 700 git-credential-work",
+                `mv -f ${shellQuote(`${stage}/gitconfig.in`)} gitconfig.in`,
+                "root=$(pwd -P)",
+                `case "$root" in *[\\'\\"\\\\]*) echo "The sandbox path $root holds a quote or backslash" >&2; exit 1;; esac`,
+                withRoot("gitconfig.in", "gitconfig"),
+                "rm -f gitconfig.in",
+                `(git config --global --get-all include.path 2>/dev/null | grep -Fqx "$root/gitconfig" || git config --global --add include.path "$root/gitconfig")`,
+              ]
+            : ["{ [ ! -f gitconfig ] || : > gitconfig; }"]),
+          gatewayEnvScript(gatewayEnv !== undefined),
+        ]),
+    `printf '%s\\n' ${shellQuote(revision)} > gateway-revision.new`,
+    "mv -f gateway-revision.new gateway-revision",
+  ];
   await run({
     ...input,
     cwd: directory,
-    what: "configure Git for the gateway",
-    command: [
-      "chmod 700 git-credential-work",
-      permissions,
-      "root=$(pwd -P)",
-      // Quoted in the config and for the shell; these would need escaping.
-      `case "$root" in *[\\'\\"\\\\]*) echo "The sandbox path $root holds a quote or backslash" >&2; exit 1;; esac`,
-      withRoot("gitconfig.in", "gitconfig"),
-      "rm -f gitconfig.in",
-      `(git config --global --get-all include.path 2>/dev/null | grep -Fqx "$root/gitconfig" || git config --global --add include.path "$root/gitconfig")`,
-      ...env,
-    ].join(" && "),
+    what: "publish the session's gateway grants",
+    command: grantPublicationScript({
+      publicationId,
+      stage,
+      revision,
+      commands,
+    }),
   });
+}
+
+/**
+ * A portable sandbox-local lock, including recovery after its shell dies.
+ * Owner filenames are unique: a stale cleaner can remove only the dead
+ * owner's file. Removing a new, still empty lock makes acquisition retry;
+ * it can never remove a live owner's file or enter its critical section.
+ */
+function grantPublicationScript(input: {
+  publicationId: string;
+  stage: string;
+  revision: string;
+  commands: string[];
+}): string {
+  return [
+    "set -e",
+    "lock=gateway-publication.lock",
+    `owner=${shellQuote(input.publicationId)}`,
+    `stage=${shellQuote(input.stage)}`,
+    "tries=0",
+    "while :; do",
+    '  if mkdir "$lock" 2>/dev/null; then',
+    '    if (printf "%s\\n" "$$" > "$lock/$owner") 2>/dev/null; then break; fi',
+    "  else",
+    '    for held in "$lock"/*; do',
+    '      [ -f "$held" ] || continue',
+    '      pid=$(cat "$held" 2>/dev/null || true)',
+    '      case "$pid" in ""|*[!0-9]*) continue;; esac',
+    '      if ! kill -0 "$pid" 2>/dev/null; then rm -f "$held"; fi',
+    "    done",
+    '    rmdir "$lock" 2>/dev/null || true',
+    "  fi",
+    "  tries=$((tries + 1))",
+    '  if [ "$tries" -ge 600 ]; then echo "Gateway grant publication stayed locked" >&2; exit 1; fi',
+    "  sleep 0.05",
+    "done",
+    `trap 'rm -f "$lock/$owner"; rmdir "$lock" 2>/dev/null || true; rm -rf "$stage"' EXIT`,
+    "current=$(cat gateway-revision 2>/dev/null || printf 0)",
+    `if [ "$current" -ge ${shellQuote(input.revision)} ]; then exit 0; fi`,
+    ...input.commands,
+  ].join("\n");
 }
 
 /**
@@ -437,7 +503,7 @@ export async function removeSandboxGateway(input: {
     ...input,
     cwd: input.projectDir,
     what: "remove the session's gateway grants",
-    command: `rm -rf ${session}/grants ${session}/model-grants ${file} ${file}.in ${file}.new`,
+    command: `rm -rf ${session}/grants ${session}/model-grants ${session}/grant-staging ${session}/gateway-revision ${file} ${file}.in ${file}.new`,
   });
 }
 

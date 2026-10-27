@@ -421,7 +421,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "code", grant: "grant-one" }],
+      grants: [{ alias: "code", grant: "grant-one", publicationRevision: "1" }],
       gitAliases: [
         { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
       ],
@@ -452,7 +452,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "code", grant: "grant-two" }],
+      grants: [{ alias: "code", grant: "grant-two", publicationRevision: "2" }],
       gitAliases: [
         { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
       ],
@@ -465,7 +465,12 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
       grants: [
-        { alias: "model", grant: "grant-three", modelAttemptId: "attempt-one" },
+        {
+          alias: "model",
+          grant: "grant-three",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
       ],
       gitAliases: [],
     });
@@ -487,7 +492,12 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
       grants: [
-        { alias: "model", grant: "grant-next", modelAttemptId: "attempt-two" },
+        {
+          alias: "model",
+          grant: "grant-next",
+          publicationRevision: "4",
+          modelAttemptId: "attempt-two",
+        },
       ],
       gitAliases: [],
     });
@@ -500,6 +510,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
         {
           alias: "model",
           grant: "grant-old-renewed",
+          publicationRevision: "5",
           modelAttemptId: "attempt-one",
         },
       ],
@@ -527,12 +538,117 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
     expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
   });
 
+  it("does not publish an older upload after a newer model, Git and HTTP grant", async () => {
+    let markBlocked = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      markBlocked = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: SandboxProvider = {
+      ...provider,
+      uploadFiles: async (id, files, base) => {
+        markBlocked();
+        await released;
+        await provider.uploadFiles(id, files, base);
+      },
+    };
+    const config = {
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      gitAliases: [
+        { alias: "mixed", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+      httpAliases: [
+        { alias: "mixed", url: "http://127.0.0.1:9/api/gateway/http/mixed" },
+      ],
+    };
+    const old = configureSandboxGateway({
+      ...config,
+      provider: slow,
+      renewOnly: true,
+      grants: [
+        {
+          alias: "mixed",
+          grant: "revoked-old",
+          publicationRevision: "20",
+          modelAttemptId: "surviving-attempt",
+        },
+      ],
+    });
+    await blocked;
+    await configureSandboxGateway({
+      ...config,
+      provider,
+      grants: [
+        {
+          alias: "mixed",
+          grant: "live-new",
+          publicationRevision: "21",
+          modelAttemptId: "surviving-attempt",
+        },
+      ],
+    });
+    release();
+    await old;
+    const session = path.join(root, "workspace", ".work-session");
+    expect(
+      await fs.readFile(path.join(session, "grants", "mixed"), "utf8"),
+    ).toBe("live-new");
+    expect(
+      await fs.readFile(
+        path.join(session, "model-grants", "surviving-attempt", "mixed"),
+        "utf8",
+      ),
+    ).toBe("live-new");
+    expect(
+      (
+        await fs.readFile(path.join(session, "gateway-revision"), "utf8")
+      ).trim(),
+    ).toBe("21");
+    const readHttp = await provider.executeCommand(
+      "s",
+      `${sandboxSecretsPrelude()}; cat "$WORK_HTTP_MIXED_GRANT_FILE"`,
+      { cwd: "/workspace/project" },
+    );
+    expect(readHttp.result).toBe("live-new");
+  });
+
+  it("recovers publication after its previous sandbox shell died", async () => {
+    const lock = path.join(
+      root,
+      "workspace",
+      ".work-session",
+      "gateway-publication.lock",
+    );
+    await fs.mkdir(lock, { recursive: true });
+    await fs.writeFile(path.join(lock, "dead-owner"), "2147483647\n");
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        { alias: "mixed", grant: "recovered", publicationRevision: "25" },
+      ],
+      gitAliases: [],
+    });
+    expect(
+      await fs.readFile(
+        path.join(root, "workspace", ".work-session", "grants", "mixed"),
+        "utf8",
+      ),
+    ).toBe("recovered");
+    await expect(fs.stat(lock)).rejects.toThrow();
+  });
+
   it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0212)", async () => {
     const session = path.join(root, "workspace", ".work-session");
     const file = path.join(session, "env", "gateway.sh");
     const gateway = "http://127.0.0.1:9/api/gateway";
     const configure = (input: {
-      grants: { alias: string; grant: string }[];
+      grants: { alias: string; grant: string; publicationRevision: string }[];
       http: string[];
       git?: boolean;
       renewOnly?: boolean;
@@ -563,10 +679,10 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     await configure({
       grants: [
-        { alias: "code", grant: "grant-code" },
-        { alias: "logs-eu", grant: "grant-logs" },
-        { alias: "logs_eu", grant: "grant-other" },
-        { alias: "billing", grant: "grant-billing" },
+        { alias: "code", grant: "grant-code", publicationRevision: "6" },
+        { alias: "logs-eu", grant: "grant-logs", publicationRevision: "7" },
+        { alias: "logs_eu", grant: "grant-other", publicationRevision: "8" },
+        { alias: "billing", grant: "grant-billing", publicationRevision: "9" },
       ],
       // `logs_eu` would share `logs-eu`'s names, so it gets none.
       http: ["logs-eu", "logs_eu", "billing"],
@@ -585,7 +701,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     // Renewing replaces the grants; the file names the same paths.
     await configure({
-      grants: [{ alias: "logs-eu", grant: "grant-renewed" }],
+      grants: [
+        { alias: "logs-eu", grant: "grant-renewed", publicationRevision: "10" },
+      ],
       http: ["logs-eu"],
       renewOnly: true,
     });
@@ -595,7 +713,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     // A later turn without HTTP aliases leaves no variables behind.
     await configure({
-      grants: [{ alias: "model", grant: "grant-model" }],
+      grants: [
+        { alias: "model", grant: "grant-model", publicationRevision: "11" },
+      ],
       http: [],
     });
     await expect(fs.stat(file)).rejects.toThrow();
@@ -603,7 +723,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     // Given back with the workspace, the grants and the file go.
     await configure({
-      grants: [{ alias: "logs-eu", grant: "grant-again" }],
+      grants: [
+        { alias: "logs-eu", grant: "grant-again", publicationRevision: "12" },
+      ],
       http: ["logs-eu"],
     });
     await removeSandboxGateway({

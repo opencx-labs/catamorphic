@@ -57,7 +57,12 @@ export class ConnectionCapabilityGrantsService {
     keepPrevious?: boolean;
     /** Model authority only; Git, HTTP and MCP retain their ordinary lifetime. */
     modelTurn?: ModelGrantFence;
-  }): Promise<{ id: string; token: string; expiresAt: string }> {
+  }): Promise<{
+    id: string;
+    token: string;
+    expiresAt: string;
+    publicationRevision: string;
+  }> {
     const channel = args.channel ?? "mcp";
     const allocation = await this.allocations.get({
       identity: args.identity,
@@ -154,10 +159,15 @@ export class ConnectionCapabilityGrantsService {
           model_attempt_id: args.modelTurn?.attemptId ?? null,
           model_lease_token: args.modelTurn?.leaseToken ?? null,
         })
-        .returning("id")
+        .returning(["id", "publication_revision"])
         .executeTakeFirstOrThrow();
     });
-    return { id: inserted.id, token, expiresAt: expiresAt.toISOString() };
+    return {
+      id: inserted.id,
+      token,
+      expiresAt: expiresAt.toISOString(),
+      publicationRevision: String(inserted.publication_revision),
+    };
   }
 
   /**
@@ -201,7 +211,7 @@ export class ConnectionCapabilityGrantsService {
         .where("agent_session_id", "=", args.agentSessionId)
         .where("alias", "=", args.alias)
         .where("channel", "=", args.channel)
-        .where("id", "!=", args.keepId)
+        .where("publication_revision", "<", keep.publication_revision)
         .where("revoked_at", "is", null)
         // An unbound workspace preparation cannot revoke a turn's grants.
         .$if(!keep.model_turn_id, (qb) => qb.where("model_turn_id", "is", null))
