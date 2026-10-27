@@ -5,6 +5,7 @@ import type {
   CapabilityProviderRuntime,
   HostCallContext,
 } from "./capability-providers.js";
+import { requireAttemptTime } from "./run-abortable.js";
 import {
   SecretMemberNotFoundError,
   type SecretsService,
@@ -89,6 +90,7 @@ export function secretsCapability(deps: {
     calls: {
       list: async (context, args) => {
         parse(ListSchema, args, "list");
+        requireAttemptTime(context);
         assertProjectPermission(
           context.caller,
           context.projectId,
@@ -120,8 +122,10 @@ export function secretsCapability(deps: {
           "secrets:write",
         );
         const member = await memberId(context, input.member);
+        requireAttemptTime(context);
         if (member === null) {
           const status = await service().upsert({
+            signal: context.signal,
             identity: context.caller,
             projectId: context.projectId,
             name: input.name,
@@ -134,6 +138,7 @@ export function secretsCapability(deps: {
           };
         }
         return service().setMember({
+          signal: context.signal,
           identity: context.caller,
           projectId: context.projectId,
           name: input.name,
@@ -149,14 +154,17 @@ export function secretsCapability(deps: {
           "secrets:write",
         );
         const member = await memberId(context, input.member);
+        requireAttemptTime(context);
         const deleted =
           member === null
             ? await service().delete({
+                signal: context.signal,
                 identity: context.caller,
                 projectId: context.projectId,
                 name: input.name,
               })
             : await service().deleteMember({
+                signal: context.signal,
                 identity: context.caller,
                 projectId: context.projectId,
                 name: input.name,

@@ -144,6 +144,8 @@ describe("Work server", () => {
           projectId: "project",
           runId: "run",
           workflowName: "reconcile",
+          signal: new AbortController().signal,
+          deadlineAt: new Date(Date.now() + 30_000).toISOString(),
           capability: "example.lifecycle",
           fn: "observe",
           args: { operationId: "launch-1" },

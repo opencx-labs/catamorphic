@@ -66,6 +66,7 @@ import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
+import type { RunSignalReceipt, SignalRunInput } from "./run-signals.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
 import type { TenantPoliciesService } from "./tenant-policies-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
@@ -422,19 +423,6 @@ export class RunEnrollmentConflictError extends Error {
       `Workflow '${workflowName}' already has an active run for correlation key '${correlationKey}'`,
     );
     this.name = "RunEnrollmentConflictError";
-  }
-}
-
-export class RunSignalNotFoundError extends Error {
-  constructor(
-    readonly workflowName: string,
-    readonly correlationKey: string,
-    readonly signal: string,
-  ) {
-    super(
-      `Workflow '${workflowName}' has no run awaiting signal '${signal}' for correlation key '${correlationKey}'`,
-    );
-    this.name = "RunSignalNotFoundError";
   }
 }
 
@@ -1119,9 +1107,7 @@ export class RunsService {
           continue;
         }
         if (job.kind !== "durable_boundary") return suspended("batch");
-        if (new Date(job.availableAt).getTime() > Date.now()) {
-          return suspended("backoff");
-        }
+        if (!job.due) return suspended("backoff");
         const claimedAt = performance.now();
         const claimed = await this.deps.executionJobs.claimById({
           jobId: job.id,
@@ -1240,53 +1226,24 @@ export class RunsService {
     );
   }
 
-  /**
-   * Delivers an external event to whichever run is currently waiting on a named
-   * signal for this correlation key.
-   *
-   * This is the read side of enrollment: the caller knows the contact, not the
-   * run. Resolution is by (workflow, key, signal name), so a webhook handler
-   * never has to track run ids.
-   */
-  async signalByKey(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    correlationKey: string;
-    signal: string;
-    idempotencyKey: string;
-    value: Json;
-  }): Promise<Run> {
-    assertProjectPermission(args.identity, args.projectId, "runs:write");
-    const run = await this.findActiveByKey(args);
-    if (!run) {
-      throw new RunSignalNotFoundError(
-        args.workflowName,
-        args.correlationKey,
-        args.signal,
-      );
-    }
-    const pause = await this.db
-      .selectFrom("workflow_pauses")
-      .where("run_id", "=", run.id)
-      .where("signal_name", "=", args.signal)
-      .where("status", "=", "open")
-      .select("id")
-      .executeTakeFirst();
-    if (!pause) {
-      throw new RunSignalNotFoundError(
-        args.workflowName,
-        args.correlationKey,
-        args.signal,
-      );
-    }
-    return this.resumePause({
-      identity: args.identity,
-      runId: run.id,
-      pauseId: pause.id,
-      idempotencyKey: args.idempotencyKey,
-      value: args.value,
-    });
+  /** Buffer or deliver a named callback to the explicitly addressed generation. */
+  async signalByKey(args: SignalRunInput): Promise<RunSignalReceipt> {
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.signal",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        assertProjectPermission(args.identity, args.projectId, "runs:write");
+        await this.requireProject(args.identity, args.projectId);
+        return this.deps.coordinator.signalByKey(args);
+      },
+    );
   }
 
   /**
@@ -1334,9 +1291,8 @@ export class RunsService {
 
   /**
    * Decides what an enrollment should do about an already-live run for the same
-   * key. Deliberately performs no writes: a `restart` cancels only once the new
-   * run is ready to be inserted, so a failure in between cannot leave the
-   * subject with no journey at all.
+   * key. This observation performs no writes; replacement rechecks and locks
+   * the observed generation in its enrollment transaction (ADR 0290).
    */
   private async resolveEnrollmentConflict(args: {
     identity: Identity;
@@ -1564,6 +1520,7 @@ export class RunsService {
     input: unknown;
     attempt: number;
     timeoutSeconds?: number;
+    deadlineAt?: string;
     signal?: AbortSignal;
   }): Promise<RuntimeInvocationReceipt> {
     return withSpan(
@@ -1613,12 +1570,14 @@ export class RunsService {
             `Deployment artifact '${args.artifactId}' does not match run`,
           );
         }
+        args.signal?.throwIfAborted();
         const runtime = await deploymentRuntime.ensure({
           projectId: args.projectId,
           artifact,
           files: source.files,
           plugins: runtimePackagesForArtifact,
         });
+        args.signal?.throwIfAborted();
         const base = {
           protocolVersion: RUNTIME_PROTOCOL_VERSION,
           runtimeId: runtime.runtimeId,
@@ -1629,9 +1588,11 @@ export class RunsService {
           runtimeVersion: artifact.runtimeVersion,
           input: args.input,
           attempt: args.attempt,
-          deadlineAt: new Date(
-            Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
-          ).toISOString(),
+          deadlineAt:
+            args.deadlineAt ??
+            new Date(
+              Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
+            ).toISOString(),
           env: plugins?.secrets,
           signal: args.signal,
         } as const;
@@ -1944,18 +1905,25 @@ export class RunsService {
           workflowPackage: source.workflowPackage,
         }),
       });
-      // Deferred to here so everything that can fail an enrollment — source
-      // preparation, artifact build — has already succeeded. Cancelling any
-      // earlier risks ending the old journey without starting a new one.
-      if (supersededRunId) {
-        await this.cancel({
-          identity: args.identity,
-          runId: supersededRunId,
-          reason: `Re-enrolled for correlation key '${correlationKey}'`,
-        });
-      }
+      // Resolve the old runtime while its allocation is still active, but
+      // do not touch execution until cancellation and replacement commit.
+      if (supersededRunId)
+        await this.assertRunPermission(
+          args.identity,
+          supersededRunId,
+          "runs:write",
+        );
+      const previous = supersededRunId
+        ? await this.get({ identity: args.identity, runId: supersededRunId })
+        : undefined;
+      const previousRuntime = previous?.allocationId
+        ? await this.runtimeForAllocation({
+            identity: args.identity,
+            allocationId: previous.allocationId,
+          }).catch(() => undefined)
+        : undefined;
       try {
-        await this.db.transaction().execute(async (trx) => {
+        const invocations = await this.db.transaction().execute(async (trx) => {
           // Enrollment and retirement serialize on the retained source row.
           // Source preparation may race discard; it must not enqueue work after it.
           const retained = args.remoteBranch
@@ -1997,10 +1965,41 @@ export class RunsService {
             )
               throw new AccessDeniedError();
           }
-          // A restart replaces a run it already cancelled, so it cannot grow
-          // the active set. Counting it would let a cap lowered under existing
-          // load strand the subject: cancelled, then refused re-entry.
-          if (!supersededRunId) {
+          // Lock the live generation again after preparation. A competing
+          // restart must not lend us authority over its replacement.
+          const replacing =
+            supersededRunId && correlationKey
+              ? await trx
+                  .selectFrom("workflow_runs")
+                  .select("id")
+                  .where("project_id", "=", args.projectId)
+                  .where("workflow_name", "=", args.workflowName)
+                  .where("correlation_key", "=", correlationKey)
+                  .where("status", "not in", [
+                    "completed",
+                    "failed",
+                    "canceled",
+                  ])
+                  .forUpdate()
+                  .executeTakeFirst()
+              : undefined;
+          if (replacing && replacing.id !== supersededRunId)
+            throw new RunEnrollmentConflictError(
+              args.workflowName,
+              correlationKey ?? "",
+              replacing.id,
+            );
+          const canceled = replacing
+            ? await this.deps.coordinator.cancel({
+                identity: args.identity,
+                runId: replacing.id,
+                reason: `Re-enrolled for correlation key '${correlationKey}'`,
+                trx,
+              })
+            : [];
+          // Replacing a live run cannot grow the logical active set, even
+          // when an operator lowered the limit below existing load.
+          if (!replacing) {
             await this.deps.tenantPolicies.assertActiveRunCapacity({
               trx,
               tenantId: args.identity.tenantId,
@@ -2084,7 +2083,14 @@ export class RunsService {
             execution: source.graph.execution,
             input,
           });
+          return canceled;
         });
+        const runtime = previousRuntime?.runtime ?? this.deps.deploymentRuntime;
+        await Promise.all(
+          invocations.map((invocation) =>
+            runtime?.cancel(invocation).catch(() => {}),
+          ),
+        );
       } catch (error) {
         if (correlationKey && isCorrelationKeyConflict(error)) {
           return this.resolveEnrollmentRace({

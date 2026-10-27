@@ -110,6 +110,7 @@ export function defineMcpConnectionProvider(args: {
       action: string;
       input: unknown;
       capabilities: readonly string[];
+      signal?: AbortSignal;
     }): Promise<unknown> {
       if (!input.capabilities.includes(input.action)) {
         throw new Error(
@@ -119,8 +120,10 @@ export function defineMcpConnectionProvider(args: {
       const server = await connectWithCredentialOrExpire(
         serverConfig,
         input.material,
+        input.signal,
       );
       try {
+        input.signal?.throwIfAborted();
         const callArgs =
           typeof input.input === "object" &&
           input.input !== null &&
@@ -159,27 +162,32 @@ export function mcpToolActions(input: {
 async function connectWithCredential(
   serverConfig: HostMcpServerConfig,
   material: Uint8Array,
+  signal?: AbortSignal,
 ) {
   const credential = decodeCredential(material);
-  return connectMcpServer({
-    ...serverConfig,
-    ...(serverConfig.transport === "stdio"
-      ? { ...(credential.env ? { env: credential.env } : {}) }
-      : {
-          headers: {
-            ...credential.headers,
-            ...bearerHeaders(credential.oauth),
-          },
-        }),
-  } as AgentMcpServerConfig);
+  return connectMcpServer(
+    {
+      ...serverConfig,
+      ...(serverConfig.transport === "stdio"
+        ? { ...(credential.env ? { env: credential.env } : {}) }
+        : {
+            headers: {
+              ...credential.headers,
+              ...bearerHeaders(credential.oauth),
+            },
+          }),
+    } as AgentMcpServerConfig,
+    { signal },
+  );
 }
 
 async function connectWithCredentialOrExpire(
   serverConfig: HostMcpServerConfig,
   material: Uint8Array,
+  signal?: AbortSignal,
 ) {
   try {
-    return await connectWithCredential(serverConfig, material);
+    return await connectWithCredential(serverConfig, material, signal);
   } catch (error) {
     if (looksLikeAuthorizationFailure(error)) {
       throw new McpAuthorizationExpiredError();

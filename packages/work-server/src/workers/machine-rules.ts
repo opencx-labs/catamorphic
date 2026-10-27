@@ -1440,18 +1440,7 @@ export class MachineReconciler {
         ])
         .where("placement_waits.tenant_id", "=", this.deps.tenantId)
         .where("placement_waits.last_tried_at", ">", waitFresh())
-        .where(({ exists, selectFrom }) =>
-          exists(
-            selectFrom("agent_turns")
-              .select("agent_turns.id")
-              .whereRef(
-                "agent_turns.session_id",
-                "=",
-                "placement_waits.root_workload_id",
-              )
-              .where("agent_turns.status", "=", "queued"),
-          ),
-        )
+        .where(queuedPlacementWait(this.deps.db))
         .orderBy("placement_waits.waiting_since")
         .execute(),
       this.deps.workers.machines(),
@@ -1557,18 +1546,7 @@ export class MachineReconciler {
           )
           .where("tenant_id", "=", this.deps.tenantId)
           .where("last_tried_at", ">", waitFresh())
-          .where(({ exists, selectFrom }) =>
-            exists(
-              selectFrom("agent_turns")
-                .select("agent_turns.id")
-                .whereRef(
-                  "agent_turns.session_id",
-                  "=",
-                  "placement_waits.root_workload_id",
-                )
-                .where("agent_turns.status", "=", "queued"),
-            ),
-          )
+          .where(queuedPlacementWait(this.deps.db))
           .as("waits"),
         eb
           .selectFrom("execution_allocations")
@@ -1947,4 +1925,30 @@ function canonical(value: unknown): string {
         )
       : entry,
   );
+}
+
+/** Both kinds of work reuse placement demand; waiting journals alone are no demand. */
+function queuedPlacementWait(db: Kysely<DB>) {
+  const turns = db
+    .selectFrom("agent_turns")
+    .select("id")
+    .where("session_id", "=", sql<string>`placement_waits.root_workload_id`)
+    .where("status", "=", "queued");
+  const jobs = db
+    .selectFrom("workflow_runs as root")
+    .innerJoin(
+      "workflow_runs as run",
+      "run.allocation_id",
+      "root.allocation_id",
+    )
+    .innerJoin("execution_jobs as job", "job.workflow_run_id", "run.id")
+    .select("job.id")
+    .where("root.id", "=", sql<string>`placement_waits.root_workload_id`)
+    .where("root.status", "in", ["pending", "running", "waiting"])
+    .where("run.status", "in", ["pending", "running", "waiting"])
+    .where("job.status", "=", "pending")
+    .where("job.kind", "!=", "durable_pause_timeout")
+    .where("job.available_at", "<=", sql<Date>`now()`);
+  return sql<boolean>`((placement_waits.workload_kind = 'agent' AND EXISTS (${turns})) OR
+    (placement_waits.workload_kind = 'workflow' AND EXISTS (${jobs})))`;
 }

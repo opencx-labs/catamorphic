@@ -663,6 +663,8 @@ describe("keyed chats on workers (ADR 0173)", () => {
         projectId,
         runId,
         workflowName: "reviewPullRequests",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
       },
       {
         key: "pr-11",

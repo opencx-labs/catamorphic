@@ -635,14 +635,21 @@ sandboxes. A replica that dies is lost once its lease has lapsed
 for 30 seconds (about a minute and a quarter after its last renewal). Every
 replica checks for lost replicas every ten seconds and recovers their work:
 
-- each workflow run, paused durable runs included, gets a workspace on a
-  live replica in its own Environment. Its sandbox is rebuilt from the
+- runnable workflow runs get a workspace on a live replica in their own
+  Environment. Durable waits park their root's Allocation once no sharing
+  child or batch compute is runnable and every invocation has ended. Cleanup
+  must destroy the old sandbox before its physical capacity returns. Paused
+  roots stay parked when their former machine is lost; a continuation gets
+  fresh admission with current owner and connection authority. Its sandbox is rebuilt from the
   deployed commit and its step journal carries on; a step whose outcome was
   uncertain retries as after a restart. The run is placed for its owner
   with their current access, as a chat's next turn is. A run that no replica
   can take waits for one; a run whose Environment the project removed, or
   whose owner may no longer act, fails with the reason.
-  Tenant run capacity is freed when the run ends, as always;
+  Logical tenant run capacity is freed when the run ends. A parked run keeps
+  its deployed artifact and journal, not its workspace files or processes.
+  A runnable continuation with no available machine records ordinary placement
+  demand, including for on-demand machine rules;
 - each chat's workspace on that replica is released; its next turn is
   admitted on a live machine and restores the workspace from its
   `sessions/<id>` branch. Chats on workers and on members' machines keep

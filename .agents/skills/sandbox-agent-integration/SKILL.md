@@ -78,6 +78,14 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
   `CATAMORPHIC_WORKFLOW_FILE`; its input arrives in the `init` message, never
   the environment, which caps one variable at 128 KiB. Providers that support persistent local data
   set `WORK_APP_DATA_DIR`; it is absent otherwise.
+- A boundary callback and its returned host, documents, or connection operation
+  share one five-minute attempt deadline from persisted `started_at`
+  ([ADR 0288](../../../docs/decisions/0288-boundary-attempts-bound-host-and-connection-calls.md)).
+  Job redelivery retains it. Forward the execution lease/shutdown signal and
+  absolute `deadlineAt`; pass the signal into SDK/HTTP transports. Core stops
+  awaiting an uncooperative async provider and fences late receipts, but cannot
+  preempt blocking code or undo accepted effects. Keep cloud jobs asynchronous
+  with resource ids, durable waits, idempotency, and independent reconciliation.
 - Tables: `workflow_runs` (one per invocation), `workflow_run_states`,
   `workflow_step_attempts`, `workflow_pauses`, `workflow_run_steps`,
   `workflow_run_events`, `execution_jobs`, plus batch item/sink tables.
@@ -202,6 +210,19 @@ Rules that hold across harnesses:
   `signIn` places only on a machine reporting the chat owner's sign-in, and
   Work never reads or moves the credential.
 
+## Sandbox model authority (ADR 0293)
+
+Model grants are bound to the exact prepared turn, attempt and lease. Pass the
+actual claim when issuing or renewing; never resolve the latest turn by session.
+The model gateway denies new calls after cancellation, attempt replacement,
+settlement or lease expiry, and between turns. An old token cannot become valid
+on the next turn. Git, HTTP and MCP retain their existing lifetime, including on
+a mixed alias. Model readers use the attempt-specific key file given in their
+model access; do not assume the ordinary alias grant path. An admitted stream
+may finish after the turn ends, and usage remains attributed to its issuing
+turn. Hosts own spend policy through guards; this fence is not a budget or a
+substitute for resource isolation and cleanup.
+
 ## Placement, Environments, and machines
 
 - Environments and immutable Allocations select provider, resources, and
@@ -228,6 +249,12 @@ Rules that hold across harnesses:
   keep the operator recovery path for ambiguous create/destroy outcomes.
 - Requested limits must reach sandbox creation, including through client
   runner RPC. Native CLI paths do not gain limits by declaring them.
+- Durable workflow waits retire the root's Allocation with reason `idle` once
+  no sharing child or batch compute is runnable and all invocations/jobs ended
+  (ADR 0289). Existing node cleanup returns capacity only after destruction.
+  Continuations re-admit current authority and selected connections; they keep
+  the pinned artifact/journal and rebuild their workspace. Pause timeouts are
+  control-plane jobs; queued continuations record ordinary placement demand.
 - Verify real VM CPU/memory, concurrent admission races, cleanup failures,
   archive/restore, and worker fencing.
 

@@ -83,6 +83,56 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     );
   });
 
+  it("destroys the borrowed transport on cancellation, interrupting a running query", async () => {
+    const provider = definePostgresConnectionProvider({
+      kind: "abort-db",
+      displayName: "Cancelable",
+      statementTimeoutMs: 15_000,
+    });
+    const material = await authorize(provider, urlFor(reader));
+    const abort = new AbortController();
+    const operation = provider.invoke({
+      material,
+      action: "query",
+      input: { sql: "SELECT pg_sleep(10)", purpose: "Test cancellation" },
+      capabilities: ["query"],
+      connection: CONNECTION,
+      signal: abort.signal,
+    });
+    const rejected = expect(operation).rejects.toThrow();
+    try {
+      await expect
+        .poll(
+          async () => {
+            const anyActive = await admin.query(
+              "SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = $1 AND state = 'active' AND query ILIKE 'FETCH%'",
+              [reader],
+            );
+            return anyActive.rows[0]?.n;
+          },
+          { timeout: 3_000 },
+        )
+        .toBeGreaterThan(0);
+      abort.abort(new Error("attempt canceled"));
+      await rejected;
+      await expect
+        .poll(
+          async () =>
+            (
+              await admin.query(
+                "SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = $1 AND state = 'active'",
+                [reader],
+              )
+            ).rows[0]?.n,
+          { timeout: 3_000 },
+        )
+        .toBe(0);
+    } finally {
+      abort.abort();
+      await provider.release?.({ connectionId: CONNECTION.id });
+    }
+  });
+
   it("returns bounded rows for one read statement", async () => {
     const provider = definePostgresConnectionProvider({
       kind: "prod-db",

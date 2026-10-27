@@ -137,13 +137,15 @@ function harness(options: {
     store: {
       liveGrant: async ({ token }): Promise<LiveModelGrant | undefined> => {
         counts.liveGrant++;
-        if (token !== GRANT || state.revoked) return undefined;
+        if (token !== GRANT || state.revoked || options.runningTurn === false)
+          return undefined;
         return {
           id: "grant-1",
           tenantId: "tenant-1",
           allocationId: "allocation-1",
           agentSessionId: "session-1",
           alias: "model",
+          turnId: options.runningTurn || "turn-1",
           session: {
             ownerId: "member-1",
             active: options.sessionActive ?? true,
@@ -156,10 +158,6 @@ function harness(options: {
           },
         };
       },
-      runningTurn: async () =>
-        options.runningTurn === false
-          ? undefined
-          : (options.runningTurn ?? "turn-1"),
       openUsage: async () => {
         const id = String(open.size + recorded.length + 1);
         open.add(id);
@@ -714,15 +712,15 @@ describe("the model gateway", () => {
     await bodyText(listed);
   });
 
-  it("serves calls between turns, recorded without a turn", async () => {
+  it("refuses calls between turns before forwarding", async () => {
     const idle = harness({ api: "anthropic", runningTurn: false });
     const response = await idle.gateway.handle(
       messages({ model: "claude-test-1", max_tokens: 10 }),
     );
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(401);
     await bodyText(response);
-    await waitFor(() => idle.recorded.length === 1);
-    expect(idle.recorded[0]?.turnId).toBeNull();
+    expect(idle.recorded).toEqual([]);
+    expect(idle.upstreamCalls).toEqual([]);
   });
 
   it("resolves authority on every call and uses a rotated credential immediately", async () => {
@@ -749,6 +747,47 @@ describe("the model gateway", () => {
     const refused = await gateway.handle(messages({ model: "claude-x" }));
     expect(refused.status).toBe(401);
     expect(upstreamCalls).toHaveLength(1);
+  });
+
+  it("lets an admitted stream finish after revocation and attributes it to its bound turn", async () => {
+    const { gateway, state, recorded, upstreamCalls } = harness({
+      api: "anthropic",
+      runningTurn: "turn-original",
+      upstream: () =>
+        new Response(streamOf(anthropicStream), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    });
+    const response = await gateway.handle(
+      messages({ model: "claude-test-1", stream: true }),
+    );
+    state.revoked = true;
+    expect(
+      (await gateway.handle(messages({ model: "claude-test-1" }))).status,
+    ).toBe(401);
+    expect(await bodyText(response)).toBe(anthropicStream);
+    await waitFor(() => recorded.length === 1);
+    expect(recorded[0]?.turnId).toBe("turn-original");
+    expect(upstreamCalls).toHaveLength(1);
+  });
+
+  it("rechecks the turn fence after a host rewrite before forwarding", async () => {
+    const h = harness({
+      api: "anthropic",
+      rewrites: [
+        {
+          name: "turn ends",
+          rewrite: async ({ body }) => {
+            h.state.revoked = true;
+            return body;
+          },
+        },
+      ],
+    });
+    expect(
+      (await h.gateway.handle(messages({ model: "claude-test-1" }))).status,
+    ).toBe(401);
+    expect(h.upstreamCalls).toEqual([]);
   });
 
   it("ends the answer without waiting on usage or audit writes", async () => {

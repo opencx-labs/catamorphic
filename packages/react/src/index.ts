@@ -406,6 +406,7 @@ export type {
   RunItemsList,
   RunPause,
   RunPhase,
+  RunSignalReceipt,
   RunStatus,
   RunStep,
   RunsList,
