@@ -15,6 +15,19 @@ async function click(selector: string) {
   await app.clickPointer(point);
 }
 
+/** Select the fixture text without depending on platform menu shortcuts. */
+async function selectComposerContents() {
+  await app.eval(`(() => {
+    const editor = ${input}; editor.focus();
+    const range = document.createRange(); range.selectNodeContents(editor);
+    const selection = getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  })()`);
+  await app.waitFor(`document.activeElement === ${input}
+    && !getSelection().isCollapsed
+    && ${input}.contains(getSelection().anchorNode)`);
+}
+
 beforeAll(async () => {
   app = await launchApp();
   await app.eval(
@@ -92,11 +105,9 @@ async function observeResize(action: () => Promise<void>) {
 }
 
 it("inserts a line break with Shift+keypad Enter without sending", async () => {
+  await focusWindow(app);
   await click("[data-floating-chat]:not([inert]) [data-composer-input]");
-  await app.press(
-    "a",
-    (await app.eval<boolean>("/Mac/.test(navigator.platform)")) ? 4 : 2,
-  );
+  await selectComposerContents();
   await app.insertText("First line");
   await app.cdp("Input.dispatchKeyEvent", {
     type: "keyDown",
@@ -120,10 +131,7 @@ it("inserts a line break with Shift+keypad Enter without sending", async () => {
     await app.eval(`${dock}.querySelector('[role="log"]').textContent`),
   ).not.toContain("You said: First line");
   // The later resize checks retain the suite's shared draft.
-  await app.press(
-    "a",
-    (await app.eval<boolean>("/Mac/.test(navigator.platform)")) ? 4 : 2,
-  );
+  await selectComposerContents();
   await app.insertText(draftText);
 });
 
