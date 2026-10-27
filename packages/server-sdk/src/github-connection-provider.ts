@@ -125,16 +125,16 @@ const MAX_ITEMS = 20;
 /** Reviews one call may dismiss: a pull request's own change requests. */
 const MAX_DISMISSALS = 100;
 /**
- * A marker that makes a write happen once: when this connection already
- * posted one carrying it, that one is returned and nothing is posted, so a
- * retried or redelivered call repeats nothing.
+ * A retry marker looked up before a create. Concurrent calls can both miss it.
+ * An absent item also does not prove an earlier uncertain request cannot still
+ * arrive. Applications must serialize writes and reconcile uncertain results.
  */
 const Stamp = z
   .string()
   .min(4)
   .max(200)
   .describe(
-    "Posts once: an item of this connection's already carrying this marker is returned instead",
+    "Retry lookup only, without concurrent exclusion: an item of this connection's already carrying this marker is returned instead",
   );
 const CheckRunFields = {
   status: z.enum(["queued", "in_progress", "completed"]).optional(),
@@ -231,7 +231,7 @@ const TypedSchemas = {
       .max(100)
       .optional(),
     stamp: Stamp.optional().describe(
-      "Posts once: the body must contain it, and a review of this connection's on the pull request already containing it is returned instead",
+      "Retry lookup only, without concurrent exclusion: the body must contain it, and a review of this connection's on the pull request already containing it is returned instead",
     ),
   }),
   create_check_run: z.strictObject({
@@ -240,7 +240,7 @@ const TypedSchemas = {
     headSha: z.string().regex(/^[0-9a-f]{40}$/),
     ...CheckRunFields,
     stamp: Stamp.optional().describe(
-      "Posts once: becomes the run's external id, and a run of this App's with the same name and external id on the commit is returned instead",
+      "Retry lookup only, without concurrent exclusion: becomes the run's external id, and a run of this App's with the same name and external id on the commit is returned instead",
     ),
   }),
   update_check_run: z.strictObject({
@@ -254,7 +254,7 @@ const TypedSchemas = {
     number: Number_,
     body: z.string().min(1),
     stamp: Stamp.optional().describe(
-      "Posts once: the body must contain it, and a comment of this connection's on the issue already containing it is returned instead",
+      "Retry lookup only, without concurrent exclusion: the body must contain it, and a comment of this connection's on the issue already containing it is returned instead",
     ),
   }),
   review_threads: z.strictObject({ repository: Repository, number: Number_ }),
@@ -285,6 +285,7 @@ const TypedSchemas = {
     number: Number_,
     body: z.string().max(MAX_BODY).describe("The whole new description"),
   }),
+  issue_comments: z.strictObject({ repository: Repository, number: Number_ }),
   list_reviews: z.strictObject({ repository: Repository, number: Number_ }),
   dismiss_review: z.strictObject({
     repository: Repository,
@@ -300,7 +301,7 @@ const TypedSchemas = {
     ),
     body: Body,
     stamp: Stamp.optional().describe(
-      "Posts once: the body must contain it, and a reply of this connection's in the thread already containing it is returned instead",
+      "Retry lookup only, without concurrent exclusion: the body must contain it, and a reply of this connection's in the thread already containing it is returned instead",
     ),
   }),
   update_issue_comment: z.strictObject({
@@ -335,6 +336,7 @@ const TYPED_ACTIONS: readonly TypedAction[] = [
   "resolve_review_thread",
   "update_pull_request",
   "list_reviews",
+  "issue_comments",
   "dismiss_review",
   "reply_to_review_comment",
   "update_issue_comment",
@@ -346,6 +348,7 @@ const TYPED_READS: ReadonlySet<TypedAction> = new Set([
   "review_threads",
   "check_runs",
   "list_reviews",
+  "issue_comments",
 ]);
 /** Every action; roles narrow them through the binding's capabilities. */
 export const GITHUB_CONNECTION_ACTIONS: readonly string[] = [
@@ -367,6 +370,7 @@ const TYPED_PERMISSIONS: Record<TypedAction, GithubPermissions | undefined> = {
   resolve_review_thread: { pull_requests: "write" },
   update_pull_request: { pull_requests: "write" },
   list_reviews: { pull_requests: "read" },
+  issue_comments: undefined,
   dismiss_review: { pull_requests: "write" },
   reply_to_review_comment: { pull_requests: "write" },
   // Editing or deleting a pull request's conversation comment: Issues.
@@ -390,6 +394,8 @@ const DESCRIPTIONS: Record<TypedAction, string> = {
   resolve_review_thread:
     "Resolve review threads of the pull request (up to 20), each with an optional reply; only threads this connection opened",
   update_pull_request: "Replace a pull request's description",
+  issue_comments:
+    "Read issue or pull request conversation comments, including connection ownership",
   list_reviews:
     "List a pull request's reviews: id, state, author, whether this connection wrote it (own), and the commit reviewed",
   dismiss_review:
@@ -699,6 +705,7 @@ export function defineGithubConnectionProvider(
    * issues on an issue; reading which it is takes a read-only token.
    */
   const issueCommentPermissions = async (args: {
+    access: "read" | "write";
     credential: Material;
     repository: { owner: string; name: string };
     number: number;
@@ -718,8 +725,8 @@ export function defineGithubConnectionProvider(
       number: args.number,
     });
     return kind === "pull_request"
-      ? { pull_requests: "write" }
-      : { issues: "write" };
+      ? { pull_requests: args.access }
+      : { issues: args.access };
   };
 
   /** Refuse a conversation comment this connection did not write. */
@@ -751,11 +758,12 @@ export function defineGithubConnectionProvider(
     const [owner = "", name = ""] = repositoryField.split("/");
     requireRepository({ owner, name }, args.repositories);
     const permissions =
-      args.action === "issue_comment"
+      args.action === "issue_comment" || args.action === "issue_comments"
         ? await issueCommentPermissions({
+            access: args.action === "issue_comments" ? "read" : "write",
             credential: args.credential,
             repository: { owner, name },
-            number: TypedSchemas.issue_comment.parse(args.input).number,
+            number: TypedSchemas[args.action].parse(args.input).number,
           })
         : TYPED_PERMISSIONS[args.action];
     const token = await tokenFor({
@@ -976,6 +984,22 @@ export function defineGithubConnectionProvider(
             number: input.number,
             body: input.body,
           });
+        }
+        case "issue_comments": {
+          const input = TypedSchemas.issue_comments.parse(args.input);
+          const own = await ownAuthor(args.credential);
+          const comments = await api.issueComments({
+            fullName: input.repository,
+            number: input.number,
+          });
+          return {
+            comments: comments.map((comment) => ({
+              id: comment.id,
+              body: comment.body,
+              own: own(comment.author),
+              url: comment.url,
+            })),
+          };
         }
         case "list_reviews": {
           const input = TypedSchemas.list_reviews.parse(args.input);
