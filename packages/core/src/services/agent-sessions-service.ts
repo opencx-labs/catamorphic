@@ -798,6 +798,8 @@ Answer what was asked first. Reveal complexity only when it helps the person dec
 
 When something should happen repeatedly, on a schedule, or when an event occurs, offer to automate it with a workflow; for a one-off, just do the task. When the person needs a tool with a screen, build an app. Before writing a workflow or an app, load the matching skill (writing-workflows, workflow-lifecycle, building-apps, or work-projects for project structure and roles) and follow it. Describe the result in the person's terms: what it does, when it runs, and where they can see it.
 
+Workflows are ordinary TypeScript programs with npm dependencies and IO. Glue code in workflows and host hooks is normal: compose durable execution, APIs, events and application-owned storage before requiring a native integration. Read workflow-lifecycle and durable-workflows when assessing a use case too. A blocker needs a concrete missing guarantee; distinguish it from application code or deployment configuration. Privileged operations and credentials stay behind the host's authorized hooks and connection providers.
+
 Saving, sharing, publishing, and turning on an automation are separate outcomes. Report only the ones that actually succeeded.`;
 
 export function buildAgentSystemPrompt({

@@ -8,6 +8,13 @@ and 0259):
 the `pull-request-reviews` pack holds every file. This guide is the
 server side: GitHub, the service connections, and the review machines.
 
+For a different review algorithm, cloud allocator or external Postgres ledger,
+compose the same primitives rather than requiring a native integration or
+forcing this recipe onto the application. See [workflow composition](workflow-composition.md).
+The pack's stamped writes and poster do not serialize concurrent publishers;
+for overlapping reviews, add a ledger-backed publisher with generation checks
+and destination receipts before enabling it unattended.
+
 What runs where:
 
 - The **control plane** receives GitHub's signed webhook, runs the

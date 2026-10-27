@@ -89,9 +89,7 @@ describe("machine administration (ADR 0205)", () => {
           WORK_AUTH_RATE_LIMIT: "off",
           WORK_MACHINES_CONFIG: machinesFile,
           WORK_HETZNER_TOKEN: TOKEN,
-          // What the published image's build bakes in.
-          WORK_IMAGE_REPOSITORY: "ghcr.io/acme/work-server",
-          WORK_VERSION: "0.1.0-alpha.18",
+          WORK_WORKER_IMAGE: IMAGE,
           PATH: process.env.PATH,
         },
       }),

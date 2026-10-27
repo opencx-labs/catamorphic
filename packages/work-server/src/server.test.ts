@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SessionMirrorDivergedError } from "@catamorphic/core";
+import { executeHostCall, SessionMirrorDivergedError } from "@catamorphic/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { projectAssistantId } from "./agents.js";
 import {
@@ -42,8 +42,8 @@ beforeAll(async () => {
     path.join(pwaDist, "manifest.webmanifest"),
     JSON.stringify({ name: "Work", start_url: "/" }),
   );
-  server = await createWorkServer(
-    testServerOptions({
+  server = await createWorkServer({
+    ...testServerOptions({
       dataDir,
       publicBases: ["http://work.local:4700"],
       env: {
@@ -52,7 +52,21 @@ beforeAll(async () => {
         PATH: process.env.PATH,
       },
     }),
-  );
+    hooks: {
+      capabilityProviders: [
+        {
+          name: "example.lifecycle",
+          calls: {
+            observe: (context, input) => ({
+              caller: context.caller,
+              runId: context.runId,
+              input,
+            }),
+          },
+        },
+      ],
+    },
+  });
 }, 120_000);
 
 afterAll(async () => {
@@ -114,6 +128,29 @@ const MANAGER_ROLE = {
 };
 
 describe("Work server", () => {
+  it("serves workflow host calls through the SDK capability provider hook", async () => {
+    const caller = {
+      tenantId: SERVER_TENANT_ID,
+      externalUserId: "lifecycle-owner",
+    };
+    expect(
+      await executeHostCall(
+        {
+          documents: server.catamorphic.core.documents,
+          capabilities: server.catamorphic.core.capabilities,
+        },
+        {
+          caller,
+          projectId: "project",
+          runId: "run",
+          workflowName: "reconcile",
+          capability: "example.lifecycle",
+          fn: "observe",
+          args: { operationId: "launch-1" },
+        },
+      ),
+    ).toEqual({ caller, runId: "run", input: { operationId: "launch-1" } });
+  });
   it("refuses token requests with repeated or unsupported parameters", async () => {
     const token = (body: string) =>
       server.app.inject({

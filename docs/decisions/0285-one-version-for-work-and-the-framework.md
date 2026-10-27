@@ -3,6 +3,8 @@
 - **Status:** Accepted (extends 0082, 0085 and 0159)
 - **Date:** 2026-10-26
 
+Image distribution is superseded by [0287](0287-work-server-deployments-compose-libraries-and-workflows.md): deployments build their own images from the libraries.
+
 ## Context
 
 Work already releases the desktop and server image from one immutable tag.

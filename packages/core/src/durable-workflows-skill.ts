@@ -24,6 +24,38 @@ JSON-compatible. Carry ids and data across boundaries, not resources or function
 The output of one boundary becomes the next input; it does not implicitly merge
 with earlier inputs. A returned call can carry state across, below.
 
+## External resources, callbacks, and cancellation
+
+Durability records progress; it does not make an external API and a database
+transaction atomic. Workflow glue using SDKs, HTTP and an application Postgres
+ledger is normal. For resources such as cloud machines, persist intent and a
+stable operation id before dispatch, retain receipts, and reconcile an uncertain
+response before repeating a create. Keep launch parameters fixed across retries.
+
+Use independent scheduled reconciliation for cleanup after cancellation,
+exhausted retries, superseded work and orphaned resources. Cancellation stops
+continuation and fences late results. It does not run remaining boundaries,
+guarantee a JavaScript finally block, or undo an accepted external request.
+Host/connection providers currently need their own bounded IO; execution
+cancellation is not propagated into those calls. Never hold a database
+transaction open over network IO.
+
+Signals currently deliver only to an existing matching open pause. Persist an
+authenticated callback in an application inbox before acknowledging it; use a
+later event or reconciliation to consume it. Correlation keys deduplicate live
+runs, not permanent business jobs. Restart cancels the old run before replacement
+commits, so persist desired state independently when losing that intent matters.
+
+Waiting runs currently retain their root allocation reservation. For many
+external jobs, short reconciliation runs avoid reserving a workspace throughout
+each wait; size separate cleanup capacity if using long-lived waiting roots.
+Do not mistake a parked execution job for released allocation capacity.
+
+Serialize publications by business identity and generation, and store destination
+object ids. Read-before-create stamps alone race. Model allowed verdict
+transitions explicitly; an old success must not overwrite a newer failure.
+Work's database never makes an arbitrary external side effect exactly once.
+
 ## Return one transition
 
 \`pause\`, \`callWorkflow\`, \`documents\`, \`host\`, and \`connections\` are boundary
@@ -94,7 +126,8 @@ export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
-A pause without a timeout has no automatic timeout result. Cancellation is a
+A zero-duration timeout is immediately due. A pause without a timeout has no
+automatic timeout result. Cancellation is a
 separate authenticated terminal control, declared with \`controls: { cancel: true }\`.
 Do not invent \`context.cancel()\` or a cancelled \`PauseResult\` branch.
 

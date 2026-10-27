@@ -66,9 +66,10 @@ access grows, and keeps the person's approvals signed in their profile.
 ### Self-hosted server
 
 The Work server ([`apps/server`](apps/server)) gives a personal or company
-brain an always-on home. Every release publishes it as a multi-architecture
-`work-server` image to the GitHub Container Registry, next to the desktop
-release. It serves the mobile PWA, remote agents, project apps,
+brain an always-on home. Install the pinned `@catamorphic/work-server` library
+in your own Bun project, compose its hooks, and build your own image
+([deployment guide](packages/work-server/README.md#your-own-image)). There is
+no stock server image. It serves the mobile PWA, remote agents, project apps,
 and MCP endpoints. Desktop and mobile clients sign in through OAuth with PKCE;
 the Work server supports local credentials and configured OAuth or OIDC
 providers. Invitations grant admission after sign-in, and committed project
@@ -384,7 +385,7 @@ Also worth knowing, because it's easy to miss from the package list:
   doctrine (`designing-apps`). Coding agents learn Catamorphic's authoring
   model at the moment they need it. The public
   [`skills/setup-work-server`](skills/setup-work-server/SKILL.md)
-  skill extends the same idea to stock-server setup and integrating
+  skill extends the same idea to Work server setup and integrating
   Catamorphic into an existing app without replacing its auth or deployment.
 - **One Run model.** Boundary and batch workflows all share the same Runs
   API, hooks, and UI: capabilities, not categories. Every run executes a
@@ -773,9 +774,10 @@ persistently. Start them in a separate terminal only when you need them:
 bun run dev:infra
 ```
 
-The framework packages are embed-only. In production, run either the stock
-server host or an application that boots Catamorphic in-process. For local
-development, `bun run dev` starts the combined desktop and stock-server manual
+The framework packages are embed-only. In production, compose your own Work
+server from `@catamorphic/work-server`, or boot Catamorphic in an existing
+application. For local
+development, `bun run dev` starts the combined desktop and reference-server manual
 environment. `bun run dev:desktop` and `bun run dev:server` are focused
 variants of the same orchestrator, which assigns each worktree its own data
 directories and loopback ports. To iterate on Catamorphic alongside your own
@@ -787,7 +789,7 @@ section).
 
 ```bash
 bun install         # Install dependencies in this worktree
-bun run dev         # Combined desktop and stock-server manual environment
+bun run dev         # Combined desktop and reference-server manual environment
 bun run dev:desktop # Desktop-focused development environment
 bun run dev:server  # Stock-server-focused development environment
 bun run dev:infra   # Optional OTel, ClickHouse, and sandbox-bridge services

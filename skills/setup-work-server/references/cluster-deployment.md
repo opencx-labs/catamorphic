@@ -109,7 +109,7 @@ brain become replicas. Never add a replica just for capacity.
    (`curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`;
    the enrollment response's `install` is that command). It installs Docker,
    and gVisor on a machine without KVM, and starts the worker. Or run the
-   same image version with the worker command yourself. With the container
+   your pinned worker image with its worker command yourself. With the container
    backend the worker drives the machine's Docker daemon, so it gets the
    daemon's socket (and its group, since the image runs as an unprivileged
    user) and its data directory from the machine at the same path:
@@ -122,7 +122,7 @@ brain become replicas. Never add a replica just for capacity.
      -e WORK_CONTROL_PLANE_URL=https://brain.example.com \
      -e WORK_WORKER_ENROLLMENT=<code> \
      -e WORK_MAX_WORKSPACES=4 \
-     <work-server image> bun apps/server/src/worker.ts
+     <your worker image> bun apps/server/src/worker.ts
    ```
 
    `WORK_SANDBOX` defaults to `auto` ([sandbox backends](#sandbox-backends)):
@@ -333,12 +333,10 @@ rule that names a class it does not know.
 ### Hetzner Cloud
 
 1. Set `WORK_PUBLIC_URL` (the HTTPS origin machines dial),
-   `WORK_HETZNER_TOKEN`, and `WORK_MACHINES_CONFIG`. The published image
-   knows where it was published and which release it is
-   (`WORK_IMAGE_REPOSITORY` and `WORK_VERSION`, set by its build) and gives
-   machines that same image; `WORK_WORKER_IMAGE` overrides it (a server
-   built from source must set it). Until one of them is known, no machine is
-   created and the rule's status says why.
+   `WORK_HETZNER_TOKEN`, `WORK_MACHINES_CONFIG`, and `WORK_WORKER_IMAGE`
+   (your pinned worker image). The image must provide the worker entry point
+   described in [Your own image](../../../packages/work-server/README.md#your-own-image).
+   Without an explicit image, no machine is created and the rule says why.
 2. Write a rule: `PUT /_work/operator/machine-rules/desks` with
    `{ "group": "eng@example.com", "machines": "each-member", "class": "desk" }`.
    `{ "machines": { "shared": 3 } }` gives the group three shared machines

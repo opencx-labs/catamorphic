@@ -129,7 +129,7 @@ integrity and rejects conflicting immutable versions before writing any package.
 After publication, it checks every version, integrity and channel tag. If npm
 publication partly succeeds, retain the published packages and recover the
 workflow; never unpublish or move the release tag. A release is unfinished until
-the desktop, image and all npm libraries have been verified.
+the desktop and all npm libraries have been verified.
 
 When npm replaces a new package's `0.0.0-stage` placeholder, it can also assign
 the first real alpha to `latest` despite `--tag alpha`. The publisher removes
@@ -196,24 +196,11 @@ automatic release too. The root and application manifests, including the
 deployed Cloudflare Worker, remain private; all importable framework libraries
 publish with public access.
 
-## Work server image
+## Work server deployments
 
-Every release tag also runs `.github/workflows/work-server-image.yml`
-([ADR 0159](../../docs/decisions/0159-work-server-identity-and-image.md)). It
-builds `apps/server/Dockerfile` natively for `linux/amd64` and `linux/arm64`,
-boots each image and checks health, OAuth discovery, the unprivileged user and
-the boot banner, then publishes one multi-architecture `work-server` image to
-the GitHub Container Registry of the repository owner. Tags are the release
-version and `alpha` for every release, plus `latest` for Stable releases. The
-workflow attaches a signed build provenance attestation to the image digest.
-
-One-time setup: after the first publication, open the `work-server` package in
-the owner's GitHub packages, connect it to this repository, grant this
-repository's Actions write access, and set its visibility to public so servers
-can pull it without credentials. A manual dispatch of the workflow builds and
-smoke-tests both architectures without publishing; run it alongside the
-desktop dry run. Verify a published image with
-`gh attestation verify oci://<image>:<version> --repo <owner>/<repository>`.
+Releases publish `@catamorphic/work-server` with the other libraries.
+Deployments pin it and build their own server and worker images (ADR 0287).
+There is no stock server image publication or image release gate.
 
 ## User install and upgrade
 
