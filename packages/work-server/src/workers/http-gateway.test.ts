@@ -287,7 +287,9 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
     filesUnder(workerDir).filter(
       (file) =>
         file.endsWith(path.join(".work-session", "env", "gateway.sh")) ||
-        file.endsWith(path.join(".work-session", "grants", "logs")),
+        path
+          .dirname(file)
+          .endsWith(path.join(".work-session", "grants", "logs")),
     );
   let sessionId = "";
 
@@ -368,8 +370,8 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
         headers: { authorization: `Bearer ${grant}` },
       });
     // The test may find either chat's grant: close both.
-    const before = gatewayFiles().length;
-    expect(before).toBeGreaterThan(0);
+    const before = gatewayFiles();
+    expect(before.some((file) => path.dirname(file) === grantFile)).toBe(true);
     for (const opened of chats)
       await sessions().close(identity, projectId, opened);
     const refused = await select();
