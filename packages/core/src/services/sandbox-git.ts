@@ -415,8 +415,10 @@ export async function configureSandboxGateway(input: {
       ...files.flatMap(([file]) => [
         `mkdir -p ${shellQuote(path.posix.dirname(file))}`,
         `chmod 600 ${shellQuote(`${stage}/${file}`)}`,
-        // Same revision means the same persisted bearer. A retry never replaces it.
-        `mv -n ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)}`,
+        // Both paths share a filesystem. Link a finished revision atomically;
+        // an existing, identical revision is an idempotent retry on every OS.
+        // A conflict or any other publication failure must still fail preparation.
+        `ln ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)} 2>/dev/null || { [ -f ${shellQuote(file)} ] && cmp -s ${shellQuote(`${stage}/${file}`)} ${shellQuote(file)} || { echo ${shellQuote(`Could not publish immutable grant ${file}`)} >&2; exit 1; }; }`,
       ]),
       "chmod 700 grants",
       ...(input.grants.some((grant) => grant.modelAttemptId)
