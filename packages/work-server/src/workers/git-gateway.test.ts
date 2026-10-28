@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Identity } from "@catamorphic/core";
+import { readConnectionGrant } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -367,6 +368,8 @@ describe("a pull request review chat with Git through the gateway", () => {
         projectId,
         runId,
         workflowName: "reviewPullRequests",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
       },
       {
         key: "pr-42",
@@ -537,11 +540,13 @@ describe("a pull request review chat with Git through the gateway", () => {
   }, 120_000);
 
   it("stops honoring the grant once the chat is closed", async () => {
-    const grantFile = filesUnder(workerDir).find((file) =>
-      file.endsWith(path.join(".work-session", "grants", "code")),
-    );
-    if (!grantFile) throw new Error("No grant file in the sandbox");
-    const grant = fs.readFileSync(grantFile, "utf8").trim();
+    const grantDirectory = filesUnder(workerDir)
+      .map((file) => path.dirname(file))
+      .find((directory) =>
+        directory.endsWith(path.join(".work-session", "grants", "code")),
+      );
+    if (!grantDirectory) throw new Error("No grant directory in the sandbox");
+    const grant = await readConnectionGrant({ directory: grantDirectory });
     const infoRefs = () =>
       fetch(
         `${base}/api/gateway/git/code/repo.git/info/refs?service=git-upload-pack`,
@@ -581,6 +586,8 @@ describe("a pull request review chat with Git through the gateway", () => {
         projectId,
         runId,
         workflowName: "reviewPullRequests",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
       },
       {
         key: "pr-42-inspect",

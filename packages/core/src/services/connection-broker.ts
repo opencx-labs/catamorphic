@@ -30,6 +30,7 @@ import {
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import { bindingRepositories, repositoryBelow } from "./git-repositories.js";
+import { requireAttemptTime } from "./run-abortable.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -151,6 +152,8 @@ export class ConnectionBroker {
     input: Json;
     caller?: "agent" | "workflow";
     agentSessionId?: string;
+    signal?: AbortSignal;
+    deadlineAt?: string;
   }): Promise<Json> {
     return withSpan(
       {
@@ -176,7 +179,10 @@ export class ConnectionBroker {
     input: Json;
     caller?: "agent" | "workflow";
     agentSessionId?: string;
+    signal?: AbortSignal;
+    deadlineAt?: string;
   }): Promise<Json> {
+    args.signal?.throwIfAborted();
     const { allocation, binding, provider } =
       await this.resolveInvocation(args);
     const digest = createHash("sha256")
@@ -280,16 +286,26 @@ export class ConnectionBroker {
       const result = await this.connections.withCredential({
         identity: args.identity,
         connectionId: binding.connectionId,
-        use: (material, connection) =>
-          provider.invoke({
+        use: (material, connection) => {
+          args.signal?.throwIfAborted();
+          if (args.signal && args.deadlineAt)
+            requireAttemptTime({
+              signal: args.signal,
+              deadlineAt: args.deadlineAt,
+            });
+          return provider.invoke({
+            ...(args.signal ? { signal: args.signal } : {}),
+            ...(args.deadlineAt ? { deadlineAt: args.deadlineAt } : {}),
             material,
             action: args.action,
             input: args.input,
             capabilities: binding.capabilities,
             connection: { id: connection.id, revision: connection.revision },
             ...(repositories ? { repositories } : {}),
-          }),
+          });
+        },
       });
+      args.signal?.throwIfAborted();
       await this.connections.audit({
         identity: args.identity,
         projectId: allocation.projectId,

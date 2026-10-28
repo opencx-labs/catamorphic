@@ -4,6 +4,8 @@
 - **Date:** 2026-09-25
 - **Refines:** 0059, 0071, 0159
 
+Image distribution is superseded by [0294](0294-work-server-deployments-compose-libraries-and-workflows.md): deployments build their own images from the libraries.
+
 ## Context
 
 The Work server composed the Catamorphic libraries inside `apps/server`, read

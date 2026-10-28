@@ -655,6 +655,7 @@ async function createClient(
 export type KeyName = keyof typeof KEY_CODES;
 
 const KEY_CODES = {
+  l: { windowsVirtualKeyCode: 76, code: "KeyL" },
   p: { windowsVirtualKeyCode: 80, code: "KeyP" },
   Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
   Slash: { key: "/", windowsVirtualKeyCode: 191, code: "Slash", text: "/" },

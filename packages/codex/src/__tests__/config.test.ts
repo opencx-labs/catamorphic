@@ -26,7 +26,7 @@ describe("codexLaunch", () => {
     const result = launch({});
     expect(result.spawn.command).toBe("codex");
     expect(result.spawn.env).toEqual({
-      WORK_MODEL_KEY_FILE: "/work-root/model-key",
+      WORK_MODEL_GRANT_DIRECTORY: "/work-root/model-key",
       CODEX_HOME: "/work-root/state/codex-home",
     });
     expect(result.home).toBe("/work-root/state/codex-home");
@@ -55,7 +55,7 @@ describe("codexLaunch", () => {
     expect(result.spawn.env).toEqual({
       CLICKHOUSE_API_KEY: "ch-key",
       BASH_ENV: "/workspace/.work-session/env/secrets.sh",
-      WORK_MODEL_KEY_FILE: "/work-root/model-key",
+      WORK_MODEL_GRANT_DIRECTORY: "/work-root/model-key",
       CODEX_HOME: "/work-root/state/codex-home",
     });
   });
@@ -68,7 +68,7 @@ describe("codexLaunch", () => {
           kind: "gateway",
           api: "anthropic",
           baseUrl: "https://gateway.example",
-          keyFile: "/key",
+          grantDirectory: "/key",
         },
       }),
     ).toBe(

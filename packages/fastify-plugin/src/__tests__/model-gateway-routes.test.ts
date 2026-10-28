@@ -33,6 +33,7 @@ function appWithGateway() {
               allocationId: "allocation-1",
               agentSessionId: null,
               alias: "anthropic",
+              turnId: "turn-1",
               connection: {
                 id: "connection-1",
                 revision: 1,
@@ -42,7 +43,6 @@ function appWithGateway() {
             }
           : undefined;
       },
-      runningTurn: async () => undefined,
       openUsage: async () => "1",
       recordUsage: async () => {},
       openCalls: async () => 0,

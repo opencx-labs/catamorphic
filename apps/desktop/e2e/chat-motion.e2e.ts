@@ -149,7 +149,7 @@ interface Frame {
 }
 
 /** Samples the front chat on every frame until stopped. */
-const RECORDER = `(() => {
+const RECORDER = (captureClosing: boolean) => `(() => {
   const round = (n) => Math.round(n * 10) / 10;
   const box = (el) => {
     if (!el) return null;
@@ -158,6 +158,55 @@ const RECORDER = `(() => {
   };
   const frames = [];
   const beats = [];
+  const closing = {anchor:null,duration:null,samples:[],error:null,at:null,activity:null};
+  let lastSteadyHeight = null;
+  let closingObserver;
+  if (${captureClosing}) {
+    closingObserver = new MutationObserver((changes) => {
+      const row = frontDock()?.querySelector('[data-testid="chat-activity"]');
+      const reveal = row?.closest('.cat-reveal');
+      const answer = [...(frontDock()?.querySelectorAll('[role="log"] article') ?? [])]
+        .some(article => article.textContent.includes('Fixed: the lexer'));
+      if (!answer) return;
+      if (!reveal?.hasAttribute('data-closed') ||
+          !changes.some(change => change.target === reveal)) return;
+      closingObserver.disconnect();
+      closing.anchor = lastSteadyHeight;
+      closing.at = round(performance.now());
+      closing.activity = row.textContent;
+      const saved = [];
+      try {
+        const motions = reveal.getAnimations().filter(a => a instanceof CSSTransition);
+        const height = motions.find(a => a.transitionProperty === 'grid-template-rows');
+        const duration = height?.effect?.getComputedTiming().duration;
+        if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0)
+          throw new Error('The activity line did not start a closing grid transition');
+        if (height.playState !== 'running' || typeof height.currentTime !== 'number' ||
+            !Number.isFinite(height.currentTime))
+          throw new Error('The closing grid transition is not running');
+        closing.duration = duration;
+        for (const motion of motions) saved.push([motion,motion.currentTime]);
+        // Seek and restore in one task. Pausing across awaits lets the
+        // line's retention timer remove it before the probe can finish.
+        // Stay short of the endpoint so no transition-end event is queued.
+        for (const fraction of [0,0.1,0.2,0.3,0.5,0.7,0.9,0.9995]) {
+          const time = duration * fraction;
+          for (const motion of motions) motion.currentTime = time;
+          closing.samples.push({time,height:round(reveal.getBoundingClientRect().height)});
+        }
+      } catch (error) {
+        closing.error = String(error);
+      } finally {
+        for (const [motion,time] of saved) {
+          try { motion.currentTime = time; }
+          catch (error) { closing.error ??= String(error); }
+        }
+      }
+    });
+    closingObserver.observe(frontDock(), {
+      attributes:true,subtree:true,attributeFilter:['data-closed'],
+    });
+  }
   const onBeat = (event) => {
     if (event.animationName !== 'catamorphic-swap-out') return;
     const node = event.target;
@@ -184,6 +233,9 @@ const RECORDER = `(() => {
     const first = live?.querySelector('[data-testid="chat-step"]');
     const firstButton = first?.querySelector('button');
     const articles = log ? [...log.querySelectorAll('article')] : [];
+    const reveal = row?.closest('.cat-reveal');
+    if (reveal && !reveal.matches('[data-moving], [data-entering], [data-closed]'))
+      lastSteadyHeight = round(reveal.getBoundingClientRect().height);
     frames.push({
       t: round(performance.now()),
       beats: beats.splice(0),
@@ -220,7 +272,8 @@ const RECORDER = `(() => {
   };
   requestAnimationFrame(sample);
   window.__chatMotion = {
-    stop() { on = false; document.removeEventListener('animationend', onBeat, true); return frames; },
+    stop() { on = false; closingObserver?.disconnect(); document.removeEventListener('animationend', onBeat, true); return frames; },
+    closing,
     // Frames sampled since a moment: a window waits for enough of them,
     // whatever stalls the renderer meanwhile.
     since(t) { return frames.filter((frame) => frame.t >= t).length; },
@@ -317,6 +370,7 @@ async function recordTurn(
     cpuSlowdown?: number;
     stalls?: boolean;
     minWorkFrames?: number;
+    captureClosing?: boolean;
   } = {},
 ): Promise<Frame[]> {
   // A renderer this many times slower: frames come late, and what mounted
@@ -362,6 +416,7 @@ async function recordTurn(
       holding,
       options.stalls,
       options.minWorkFrames,
+      options.captureClosing,
     );
   } finally {
     fs.rmSync(paceGate, { force: true });
@@ -380,8 +435,9 @@ async function sampleTurn(
   during?: () => Promise<void>,
   stalls = false,
   minWorkFrames?: number,
+  captureClosing = false,
 ): Promise<Frame[]> {
-  await run(RECORDER);
+  await run(RECORDER(captureClosing));
   if (stalls) await run(`return ${STALLS};`);
   await run(`
     const input = composer(); input.focus();
@@ -410,11 +466,17 @@ async function sampleTurn(
   const frames = await run<Frame[]>("return window.__chatMotion.stop();");
   // Kept with the run's diagnostics, to read when an assertion fails.
   const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
-  if (artifacts)
+  if (artifacts) {
     fs.writeFileSync(
       path.join(artifacts, `chat-motion-${name}.json`),
       JSON.stringify(frames),
     );
+    if (captureClosing)
+      fs.writeFileSync(
+        path.join(artifacts, `chat-motion-${name}-closing.json`),
+        JSON.stringify(await run("return window.__chatMotion.closing;")),
+      );
+  }
   return frames;
 }
 
@@ -610,6 +672,7 @@ describe("chat motion", () => {
           `(() => { Date.now = window.__realNow; return true; })()`,
         );
       },
+      { captureClosing: true },
     );
     const work = workPhase(frames);
     const live = work.filter((frame) => frame.spinner && frame.toggle);
@@ -670,15 +733,36 @@ describe("chat motion", () => {
     for (const frame of silent) expect(frame.stallOnLine).toBe(true);
 
     expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
-    // At the end the activity line closes its height before it goes.
-    const closing = frames
-      .filter((frame) => frame.answer && frame.reveal)
-      .map((frame) => frame.reveal?.[3] ?? 0);
-    const full = Math.max(...closing);
+    // Probe the real close at explicit times, separately from natural RAF
+    // recording: a busy renderer can miss the entire 200 ms interval.
+    const closing = await run<{
+      anchor: number | null;
+      duration: number | null;
+      error: string | null;
+      samples: { time: number; height: number }[];
+    }>("return window.__chatMotion.closing;");
+    const detail = JSON.stringify(closing);
+    expect(closing.error, detail).toBeNull();
+    expect(closing.duration ?? 0, detail).toBeGreaterThan(0);
+    expect(closing.anchor ?? 0, detail).toBeGreaterThan(1);
+    expect(closing.samples.length, detail).toBeGreaterThan(2);
+    const full = closing.anchor ?? 0;
     expect(
-      closing.filter((height) => height > 1 && height < full - 1).length,
-      "frames between open and closed",
+      Math.abs((closing.samples[0]?.height ?? -1) - full),
+      detail,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      closing.samples.filter(({ height }) => height > 1 && height < full - 1)
+        .length,
+      `frames between open and closed: ${detail}`,
     ).toBeGreaterThan(0);
+    expect(closing.samples.at(-1)?.height ?? full, detail).toBeLessThan(1);
+    expect(
+      closing.samples.filter(
+        ({ height }) => height < -0.5 || height > full + 0.5,
+      ),
+      detail,
+    ).toEqual([]);
     expect(
       await run<number>(
         `return frontDock().querySelectorAll('[role="log"] [role="timer"]').length;`,
@@ -912,8 +996,11 @@ describe("chat motion", () => {
       "selecting",
       "pace the work quickly at length",
       async () => {
-        await streamingLong();
         let at = { x: 0, y: 0 };
+        let lastX = 0;
+        let pressed = false;
+        let failed = false;
+        let cleanup: PromiseSettledResult<unknown>[] = [];
         const mouse = (type: string, x: number, buttons: number) =>
           app.cdp("Input.dispatchMouseEvent", {
             type,
@@ -923,72 +1010,177 @@ describe("chat motion", () => {
             buttons,
             clickCount: 1,
           });
-        // The answer moves up as it streams until it is pressed, so a press
-        // that reaches the page a moment after the line was found can land
-        // between two blocks, or on the pixel row at a line's edge, which
-        // Chromium hits as the line but places the caret between blocks
-        // for (macOS CI pressed one). A drag selects nothing from either,
-        // so only a press clear of a line's edges goes on; another tries
-        // again. Each press races the stream anew, and it streams for
-        // seconds yet.
-        for (let attempt = 1; ; attempt++) {
-          // A line of the answer in the middle of the view.
-          at = await runWait<{ x: number; y: number }>(
-            `const s = logScroller();
-             const view = s.getBoundingClientRect();
-             const line = [...s.querySelectorAll('.cat-markdown:not([data-testid]) :is(p, li)')].find((el) => {
-               const r = el.getBoundingClientRect();
-               return r.width > 160 && r.top > view.top + view.height * 0.25 &&
-                 r.bottom < view.top + view.height * 0.6 &&
-                 el.contains(document.elementFromPoint(r.left + 6, r.top + r.height / 2));
-             });
-             if (!line) return false;
-             s.querySelector('[data-e2e-held]')?.removeAttribute('data-e2e-held');
-             line.setAttribute('data-e2e-held', '');
-             window.__pressedText = undefined;
-             document.addEventListener('pointerdown', (event) => {
-               const hit = event.target instanceof Element
-                 ? event.target.closest('.cat-markdown :is(p, li)')
-                 : null;
-               const r = hit?.getBoundingClientRect();
-               window.__pressedText = !!r &&
-                 event.clientY > r.top + 1 && event.clientY < r.bottom - 1;
-             }, { capture: true, once: true });
-             const r = line.getBoundingClientRect();
-             return { x: Math.round(r.left + 6), y: Math.round(r.top + r.height / 2) };`,
-            { label: "a line in the middle of the view" },
+        try {
+          await focusWindow(app);
+          await streamingLong();
+          await run(`
+            window.__selectionPresses=[];
+            window.__selectionSamples=[];
+            window.__selectionSnapshot=(phase)=>{
+              const selection=document.getSelection();
+              const line=logScroller()?.querySelector('[data-e2e-held]');
+              const node=window.__heldTextNode;
+              const entry={phase,t:performance.now(),focused:document.hasFocus(),
+                selected:selection?.toString()??'',
+                anchorHeld:selection?.anchorNode===node,
+                focusHeld:selection?.focusNode===node,
+                nodeConnected:node?.isConnected??false,
+                lineConnected:line?.isConnected??false,
+                scroll:logScroller()?.scrollTop};
+              window.__selectionSamples.push(entry);
+              return entry;
+            };
+            const changed=()=>window.__selectionSnapshot('selectionchange');
+            document.addEventListener('selectionchange',changed);
+            window.__stopSelectionTrace=()=>document.removeEventListener('selectionchange',changed);
+            return true;`);
+          // A paragraph's midpoint can lie between wrapped visual lines.
+          // Use a text Range, as in markdown.e2e.ts, and verify the same
+          // rendered text at the real press. A missed press can try again;
+          // an empty measured drag still fails without retrying.
+          for (let attempt = 1; ; attempt++) {
+            at = await runWait<{ x: number; y: number }>(
+              `const s=logScroller(),view=s.getBoundingClientRect();
+               let chosen;
+               for(const line of s.querySelectorAll('.cat-markdown:not([data-testid]) :is(p,li)')) {
+                 const walker=document.createTreeWalker(line,NodeFilter.SHOW_TEXT);
+                 for(let node=walker.nextNode();node;node=walker.nextNode()) {
+                   if(node.parentElement.closest('pre,code,a,button'))continue;
+                   const start=node.textContent.search(/\\S/);if(start<0)continue;
+                   const range=document.createRange();range.setStart(node,start);
+                   range.setEnd(node,node.textContent.length);
+                   const visual=range.getClientRects()[0];
+                   if(!visual||visual.width<120||visual.top<=view.top+view.height*.25
+                     ||visual.bottom>=view.top+view.height*.6)continue;
+                   range.setEnd(node,start+1);
+                   const glyph=range.getClientRects()[0];if(!glyph?.width)continue;
+                   const point={x:Math.round(glyph.left+glyph.width/2),y:Math.round(glyph.top+glyph.height/2)};
+                   const hit=document.elementFromPoint(point.x,point.y)?.closest('.cat-markdown :is(p,li)');
+                   if(hit!==line||point.x+100>=visual.right-1)continue;
+                   chosen={line,node,point};break;
+                 }
+                 if(chosen)break;
+               }
+               if(!chosen)return false;
+               s.querySelector('[data-e2e-held]')?.removeAttribute('data-e2e-held');
+               chosen.line.setAttribute('data-e2e-held','');
+               window.__heldTextNode=chosen.node;
+               window.__pressedText=undefined;
+               window.__stopSelectionPress?.();
+               const check=event=>{
+                 const pressedAt=performance.now();
+                 const line=s.querySelector('[data-e2e-held]'),node=window.__heldTextNode;
+                 const hit=event.target instanceof Element?event.target.closest('.cat-markdown :is(p,li)'):null;
+                 const caret=document.caretPositionFromPoint(event.clientX,event.clientY);
+                 const range=document.createRange();range.selectNodeContents(node);
+                 const onText=[...range.getClientRects()].some(r=>
+                   event.clientX>=r.left&&event.clientX+100<r.right-1
+                   &&event.clientY>r.top&&event.clientY<r.bottom);
+                 const valid=hit===line&&node.isConnected&&line?.contains(node)
+                   &&caret?.offsetNode===node&&onText;
+                 window.__pressedText=!!valid;
+                 if(valid)(window.__marks??={}).pressed=pressedAt;
+                 window.__selectionPresses.push({t:pressedAt,x:event.clientX,y:event.clientY,
+                   valid:!!valid,hitHeld:hit===line,caretHeld:caret?.offsetNode===node,
+                   caretOffset:caret?.offset,onText,focused:document.hasFocus(),
+                   nodeConnected:node.isConnected});
+               };
+               document.addEventListener('pointerdown',check,{capture:true,once:true});
+               window.__stopSelectionPress=()=>document.removeEventListener('pointerdown',check,true);
+               return chosen.point;`,
+              { label: "rendered text with room for the full selection drag" },
+            );
+            lastX = at.x;
+            pressed = true;
+            await mouse("mousePressed", at.x, 1);
+            await run("window.__selectionSnapshot('after-press');return true;");
+            if (await run<boolean>("return window.__pressedText === true;"))
+              break;
+            await mouse("mouseReleased", at.x, 0);
+            pressed = false;
+            expect(attempt, "presses that missed every text line").toBeLessThan(
+              6,
+            );
+            await run(`toLatest(); return true;`);
+            await runWait(`return following();`, {
+              label: "following again",
+              timeoutMs: 10_000,
+            });
+          }
+          for (const dx of [20, 40, 60, 80, 100]) {
+            lastX = at.x + dx;
+            await mouse("mouseMoved", lastX, 1);
+            await sleep(80);
+          }
+          await sleep(1200);
+          await run(
+            "window.__selectionSnapshot('before-release');return true;",
           );
-          await mouse("mousePressed", at.x, 1);
-          if (await run<boolean>("return window.__pressedText === true;"))
-            break;
-          await mouse("mouseReleased", at.x, 0);
-          expect(attempt, "presses that missed every line").toBeLessThan(6);
-          await run(`toLatest(); return true;`);
-          await runWait(`return following();`, {
-            label: "following again",
-            timeoutMs: 10_000,
-          });
+          await mouse("mouseReleased", lastX, 0);
+          pressed = false;
+          await run("window.__selectionSnapshot('after-release');return true;");
+          expect(
+            await run<string>(
+              `return document.getSelection()?.toString() ?? '';`,
+            ),
+            "text was selected",
+          ).not.toBe("");
+          await sleep(800);
+          await mark("after");
+          expect(await run<boolean>(`return !following();`)).toBe(true);
+          await run(
+            `document.getSelection()?.removeAllRanges(); toLatest(); return true;`,
+          );
+        } catch (cause) {
+          failed = true;
+          throw cause;
+        } finally {
+          cleanup = await Promise.allSettled(
+            pressed ? [mouse("mouseReleased", lastX, 0)] : [],
+          );
+          const captured = await Promise.allSettled([
+            run(`return {presses:window.__selectionPresses,samples:window.__selectionSamples,
+              marks:window.__marks,point:${JSON.stringify(at)},
+              final:window.__selectionSnapshot?.('cleanup')};`),
+            ...(failed
+              ? [run<Frame[]>("return window.__chatMotion.stop();")]
+              : []),
+          ]);
+          cleanup.push(
+            ...captured,
+            ...(await Promise.allSettled([
+              run(`window.__stopSelectionPress?.();window.__stopSelectionTrace?.();
+              delete window.__stopSelectionPress;delete window.__stopSelectionTrace;
+              delete window.__selectionSnapshot;return true;`),
+            ])),
+          );
+          const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+          if (artifacts) {
+            const input = captured[0];
+            if (input?.status === "fulfilled")
+              cleanup.push(
+                ...(await Promise.allSettled([
+                  fs.promises.writeFile(
+                    path.join(artifacts, "chat-motion-selecting-input.json"),
+                    JSON.stringify(input.value),
+                  ),
+                ])),
+              );
+            const frames = captured[1];
+            if (frames?.status === "fulfilled")
+              cleanup.push(
+                ...(await Promise.allSettled([
+                  fs.promises.writeFile(
+                    path.join(artifacts, "chat-motion-selecting.json"),
+                    JSON.stringify(frames.value),
+                  ),
+                ])),
+              );
+          }
         }
-        await mark("pressed");
-        for (const dx of [20, 40, 60, 80, 100]) {
-          await mouse("mouseMoved", at.x + dx, 1);
-          await sleep(80);
-        }
-        await sleep(1200);
-        await mouse("mouseReleased", at.x + 100, 0);
-        expect(
-          await run<string>(
-            `return document.getSelection()?.toString() ?? '';`,
-          ),
-          "text was selected",
-        ).not.toBe("");
-        await sleep(800);
-        await mark("after");
-        // A selection lets go of the latest words: they wait below.
-        expect(await run<boolean>(`return !following();`)).toBe(true);
-        await run(
-          `document.getSelection()?.removeAllRanges(); toLatest(); return true;`,
-        );
+        // Only reached after success; cleanup cannot replace a test failure.
+        for (const result of cleanup)
+          if (result.status === "rejected") throw result.reason;
       },
     );
     const marks = await readMarks();

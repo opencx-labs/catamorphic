@@ -202,17 +202,80 @@ export function definePostgresConnectionProvider(
       actions.filter((action) => capabilities.includes(action.name)),
     // A read-only role in a read-only transaction: every action reads.
     readOnly: () => true,
-    invoke: async ({ material, action, input, connection }) => {
+    invoke: async ({
+      material,
+      action,
+      input,
+      connection,
+      signal,
+      deadlineAt,
+    }) => {
+      signal?.throwIfAborted();
       const request = parseInput(input);
       const client = await (await poolFor(material, connection)).connect();
       // Every per-call safety step still runs on a pooled session: a fresh
       // read-only transaction with its own timeouts, ended by ROLLBACK, which
       // also closes the cursor and resets every SET LOCAL.
       let reusable = false;
+      // Closing a socket does not interrupt a server-side query. Cancel it
+      // using the same database role (which can cancel its own backends), then
+      // destroy the borrowed socket. Keep it out of the pool while doing so.
+      let backendPid: number | undefined;
+      let released = false;
+      const abort = () => {
+        if (released) return;
+        released = true;
+        const cancellationPid = backendPid;
+        const cancel = async () => {
+          if (cancellationPid === undefined) return;
+          const { connectionString } = parseMaterial(material);
+          const cancellation = new pg.Client({
+            connectionString,
+            connectionTimeoutMillis: 2_000,
+            query_timeout: 2_000,
+            application_name: "work-gateway-cancel",
+          });
+          try {
+            await cancellation.connect();
+            await cancellation.query("SELECT pg_cancel_backend($1)", [
+              cancellationPid,
+            ]);
+          } finally {
+            await cancellation.end().catch(() => {});
+          }
+        };
+        // A lost database can refuse cancellation. The original connection's
+        // statement_timeout remains the backstop; never wait on it here.
+        void cancel()
+          .finally(() => client.release(true))
+          .catch(() => {});
+      };
+      signal?.addEventListener("abort", abort, { once: true });
       try {
+        if (signal?.aborted) abort();
+        signal?.throwIfAborted();
         await client.query("BEGIN TRANSACTION READ ONLY");
+        signal?.throwIfAborted();
+        if (signal) {
+          // Transaction poolers pin this backend only after BEGIN. An earlier
+          // PID can belong to someone else's transaction by cancellation time.
+          const backend = await client.query<{ pid: number }>(
+            "SELECT pg_backend_pid() AS pid",
+          );
+          backendPid = backend.rows[0]?.pid;
+        }
+        signal?.throwIfAborted();
+        const statementTimeoutMs = deadlineAt
+          ? Math.max(
+              1,
+              Math.min(
+                limits.statementTimeoutMs,
+                Date.parse(deadlineAt) - Date.now(),
+              ),
+            )
+          : limits.statementTimeoutMs;
         await client.query(
-          `SET LOCAL statement_timeout = ${limits.statementTimeoutMs}`,
+          `SET LOCAL statement_timeout = ${statementTimeoutMs}`,
         );
         await client.query(`SET LOCAL lock_timeout = ${limits.lockTimeoutMs}`);
         if (action === "schema") return await listSchema(client, request);
@@ -234,16 +297,25 @@ export function definePostgresConnectionProvider(
         }
         return await runCursor(client, sql, request.params, limits, plan);
       } finally {
+        // ROLLBACK unpins a transaction-pooled backend. Never send a PID
+        // cancellation after cleanup starts; abort may only drop the socket.
+        backendPid = undefined;
         // ROLLBACK leaves session state a statement can still take (an
         // advisory lock survives it); DISCARD ALL returns the session to
         // how it connected before the next call borrows it.
-        reusable = await client
-          .query("ROLLBACK")
-          .then(() => client.query("DISCARD ALL"))
-          .then(() => true)
-          .catch(() => false);
-        // A session whose rollback failed is destroyed, never reused.
-        client.release(!reusable);
+        if (!released) {
+          reusable = await client
+            .query("ROLLBACK")
+            .then(() => client.query("DISCARD ALL"))
+            .then(() => true)
+            .catch(() => false);
+          // A session whose rollback failed is destroyed, never reused.
+          if (!released) {
+            released = true;
+            client.release(!reusable);
+          }
+        }
+        signal?.removeEventListener("abort", abort);
       }
     },
     release: async ({ connectionId }) => {

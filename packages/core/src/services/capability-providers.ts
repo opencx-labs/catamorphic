@@ -43,6 +43,10 @@ export interface CapabilityProviderRuntime {
 
 /** What a host function learns about the call it serves. */
 export interface HostCallContext {
+  /** Combined attempt deadline, execution lease, and worker shutdown signal. */
+  signal: AbortSignal;
+  /** Absolute ISO deadline shared with the boundary callback (ADR 0295). */
+  deadlineAt: string;
   /** The run's caller: tenant, user and — for viewers — their scope. */
   caller: Identity;
   projectId: string;

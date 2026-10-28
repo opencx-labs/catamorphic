@@ -57,6 +57,7 @@ describe("ChatTimeline DOM contract", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
@@ -293,6 +294,7 @@ describe("ChatTimeline DOM contract", () => {
   });
 
   it("reads live work as an article whose running step is marked", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
     await render({
       timeline: timelineOf({
         turns: [

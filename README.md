@@ -66,9 +66,10 @@ access grows, and keeps the person's approvals signed in their profile.
 ### Self-hosted server
 
 The Work server ([`apps/server`](apps/server)) gives a personal or company
-brain an always-on home. Every release publishes it as a multi-architecture
-`work-server` image to the GitHub Container Registry, next to the desktop
-release. It serves the mobile PWA, remote agents, project apps,
+brain an always-on home. Install the pinned `@catamorphic/work-server` library
+in your own Bun project, compose its hooks, and build your own image
+([deployment guide](packages/work-server/README.md#your-own-image)). There is
+no stock server image. It serves the mobile PWA, remote agents, project apps,
 and MCP endpoints. Desktop and mobile clients sign in through OAuth with PKCE;
 the Work server supports local credentials and configured OAuth or OIDC
 providers. Invitations grant admission after sign-in, and committed project
@@ -84,7 +85,9 @@ and limit which hosts they reach, with a wider list for its setup alone
 (package registries) while agents reach only the gateway; an agent's
 sandboxing decides what leaves its sandbox, apart from its harness's own
 permission mode. Claude Code, Codex and ACP agents such as OpenCode run in
-those sandboxes on the organization's model keys, held by the gateway, which
+those sandboxes on the organization's model keys, held by the gateway. New model
+calls require the turn's exact attempt and live lease; Git and HTTP
+background access keep their normal grant lifetime. The gateway
 can pin the providers an aggregator routes to; work that needs a machine can
 wait for one, and machine rules can create machines on demand and remove
 them when idle. See
@@ -273,11 +276,16 @@ whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
 TypeScript automations in git, rendered as a visual graph for
 non-technical users, executed durably on Postgres. One model: every
 workflow is an exported `defineWorkflow` value, every run executes a
-deployed commit. Boundaries (atomic retry scopes), batch scopes, pauses
-and signals, correlation keys, shared rate budgets, retention, and
+deployed commit. Boundaries (retry scopes), batch scopes, pauses
+and buffered named signals fenced to a run generation, correlation keys, shared rate budgets, retention, and
 triggers, including host-defined trigger kinds with typed payloads and
 sync-until-first-wait firing, project-defined kinds, and declarative `where`
-filters. Full authoring model below.
+filters. Durable waits give back physical workspace capacity after teardown;
+continuations use fresh admission and the same deployed revision. A boundary
+callback and its returned host, document or connection call share one persisted
+five-minute attempt deadline, with cancellation passed to providers. Accepted
+external effects still need application reconciliation. Full authoring model
+below.
 
 Role access is separate from unattended consent. Each member previews and
 enables an exact deployed workflow with its trigger, Environment, agent, and
@@ -384,7 +392,7 @@ Also worth knowing, because it's easy to miss from the package list:
   doctrine (`designing-apps`). Coding agents learn Catamorphic's authoring
   model at the moment they need it. The public
   [`skills/setup-work-server`](skills/setup-work-server/SKILL.md)
-  skill extends the same idea to stock-server setup and integrating
+  skill extends the same idea to Work server setup and integrating
   Catamorphic into an existing app without replacing its auth or deployment.
 - **One Run model.** Boundary and batch workflows all share the same Runs
   API, hooks, and UI: capabilities, not categories. Every run executes a
@@ -617,8 +625,10 @@ gateway connection whose named operations are its capabilities
 The `pull-request-reviews` pack is the larger one: a code and
 security review of every pull request, in a chat per pull request on a
 dedicated review pool, verified by running the change and reported to a
-workflow outside the sandbox that posts it as a review, a check run, and a
-summary in the description
+workflow outside the sandbox that calls a deployment-owned publisher hook.
+The hook serializes commit-bound reviews, check runs and replies through an
+application Postgres ledger, reconciles uncertain writes, and leaves mutable
+PR descriptions, dismissals and thread resolution to people
 ([Review pull requests](skills/setup-work-server/references/review-pull-requests.md)).
 See [`INTEGRATION.md`](INTEGRATION.md) and ADRs
 [0039](docs/decisions/0039-custom-trigger-kinds.md) /
@@ -667,16 +677,16 @@ export const nurtureContact = defineWorkflow(({ defineBoundary }) => ({
 
 ```ts
 // Enrolling twice for the same contact is a no-op, so webhook redelivery is safe.
-await client.runs.triggerProduction({
+const enrollment = await client.runs.triggerProduction({
   projectId, workflowName: "nurtureContact",
   input: { contactId: "contact-42" },
   correlationKey: "contact-42",           // onConflict: "ignore" | "error" | "restart"
 });
 
-// External events address the contact, not a run id.
+// Carry the enrollment generation in the callback to fence late events.
 await client.runs.signalByKey({
   projectId, workflowName: "nurtureContact",
-  correlationKey: "contact-42",
+  correlationKey: "contact-42", runId: enrollment.id,
   signal: "reply", idempotencyKey: replyEventId, value: { clicked: true },
 });
 
@@ -686,6 +696,18 @@ await client.runs.cancelByKey({
   correlationKey: "contact-42", reason: "unsubscribed",
 });
 ```
+
+A named signal may arrive before its matching pause. It buffers only for the
+specified active run generation; the oldest matching signal resumes one pause.
+The receipt reports `buffered`, `resumed` with a pause id, or `discarded` after
+termination. Retry the same event with the same idempotency key and JSON value;
+changing its name or value conflicts. Signals never create a run or follow a
+restart. A receipt does not prove that business effects have completed.
+
+Signal values are limited to 64 KiB, with 256 pending and 1,024 lifetime receipts
+per run. Cancellation or completion clears pending values; normal run retention
+also deletes receipts. For larger event streams, use an application-owned ledger.
+Targeted pause-id resumption remains available for explicit approvals.
 
 Waiting for capacity is not failure: a boundary that cannot reserve is
 rescheduled without consuming a retry and without holding a sandbox. When a
@@ -773,9 +795,10 @@ persistently. Start them in a separate terminal only when you need them:
 bun run dev:infra
 ```
 
-The framework packages are embed-only. In production, run either the stock
-server host or an application that boots Catamorphic in-process. For local
-development, `bun run dev` starts the combined desktop and stock-server manual
+The framework packages are embed-only. In production, compose your own Work
+server from `@catamorphic/work-server`, or boot Catamorphic in an existing
+application. For local
+development, `bun run dev` starts the combined desktop and reference-server manual
 environment. `bun run dev:desktop` and `bun run dev:server` are focused
 variants of the same orchestrator, which assigns each worktree its own data
 directories and loopback ports. To iterate on Catamorphic alongside your own
@@ -787,7 +810,7 @@ section).
 
 ```bash
 bun install         # Install dependencies in this worktree
-bun run dev         # Combined desktop and stock-server manual environment
+bun run dev         # Combined desktop and reference-server manual environment
 bun run dev:desktop # Desktop-focused development environment
 bun run dev:server  # Stock-server-focused development environment
 bun run dev:infra   # Optional OTel, ClickHouse, and sandbox-bridge services

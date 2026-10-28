@@ -11,14 +11,13 @@ import {
 } from "@catamorphic/work-server";
 
 /**
- * The Work server, the prebuilt Catamorphic host (ADR 0059, 0159). Zero
+ * The Work server, a composable Catamorphic host (ADR 0059, 0159). Zero
  * external services: everything lives under the data dir (default /data;
  * mount it as a volume).
  *
- * This file is the whole stock server. A company that needs its own code
- * (guards, model request rewrites, connection providers, a machine
- * provisioner, routes) copies it into its own image and fills in `hooks`
- * (ADR 0261; packages/work-server/README.md).
+ * Reference entry point for development and company-owned builds. Deployments
+ * pin @catamorphic/work-server and compose their own hooks and image
+ * (ADR 0294; packages/work-server/README.md).
  *
  *   PORT                 listen port (default 4700)
  *   WORK_OPERATOR_PORT   loopback-only setup port (default 4701)
@@ -81,7 +80,7 @@ const reachableBases = [
 
 const server = await createWorkServer({
   config,
-  // A company's own code, in its own image (ADR 0261).
+  // The deployment's own code (ADR 0294).
   hooks: {},
   log: (line) => console.log(line),
 });

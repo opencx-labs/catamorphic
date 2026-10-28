@@ -17,6 +17,8 @@ import {
 
 /** Extra behavior a caller can wire into a connection. */
 export interface ConnectMcpOpts {
+  /** Cancels connection setup and the requests made through this client. */
+  signal?: AbortSignal;
   /**
    * How to answer `elicitation/create` requests — a form or a URL the
    * server needs the user to complete (OAuth handoffs, config). Declaring
@@ -182,9 +184,20 @@ async function connectTransport(
   opts?: ConnectMcpOpts,
 ) {
   const connect = async (transport: Parameters<Client["connect"]>[0]) => {
+    opts?.signal?.throwIfAborted();
     const client = buildClient(opts);
+    const abort = () => {
+      void client.close().catch(() => {});
+    };
+    opts?.signal?.addEventListener("abort", abort, { once: true });
+    const close = client.close.bind(client);
+    client.close = async () => {
+      opts?.signal?.removeEventListener("abort", abort);
+      return close();
+    };
     try {
-      await client.connect(transport);
+      await client.connect(transport, { signal: opts?.signal });
+      opts?.signal?.throwIfAborted();
       return client;
     } catch (error) {
       await client.close().catch(() => {});
@@ -301,7 +314,7 @@ export async function connectMcpServer(
 ): Promise<ConnectedMcpServer> {
   const client = await connectTransport(config, opts);
   try {
-    const listed = await client.listTools();
+    const listed = await client.listTools(undefined, { signal: opts?.signal });
     const tools: McpToolInfo[] = listed.tools.map((tool) => ({
       name: tool.name,
       ...(tool.title ? { title: tool.title } : {}),
@@ -322,16 +335,19 @@ export async function connectMcpServer(
       tools,
       protocolVersion: client.getDiscoverResult() ? "2026-07-28" : undefined,
       async callTool(name, args) {
-        const result = await client.callTool({ name, arguments: args });
+        const result = await client.callTool(
+          { name, arguments: args },
+          { signal: opts?.signal },
+        );
         return flattenToolResult(
           result as Parameters<typeof flattenToolResult>[0],
         );
       },
       async callToolRaw(name, args) {
-        return (await client.callTool({ name, arguments: args })) as Record<
-          string,
-          unknown
-        >;
+        return (await client.callTool(
+          { name, arguments: args },
+          { signal: opts?.signal },
+        )) as Record<string, unknown>;
       },
       async readResource(uri) {
         const result = await client.readResource({ uri });

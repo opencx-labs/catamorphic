@@ -42,6 +42,15 @@ handoff for turns it missed. Agent changes clear conversation model and effort
 overrides. A working turn must settle before the agent can change. A model value that
 cannot change explains why on hover; the idle model picker uses the palette.
 
+## Selections when content disappears
+
+A collapsed caret in ordinary text is discarded when that text disappears
+(ADR 0288). It is invisible, but retaining its browser-adjusted boundary can
+make every frame search through long hidden chats. The next Shift-click
+starts a fresh selection. Editor carets and highlighted text retain the
+existing selection and inert-surface restoration behavior; moving content
+or selecting somewhere else does not trigger this cleanup.
+
 ## Contained project workspace
 
 Project capabilities live in `.work/`, including the independent Bun
@@ -326,6 +335,11 @@ on the focused row's box, which glides to the next row as the arrows move
 it. Its rows touch, so that ring sits wholly inside the row, offset by its
 full width rather than the 1px inset (ADR 0238). Text fields keep their
 border-and-glow focus instead.
+
+Browser address focus follows availability, not a fixed animation frame. Cmd+L
+waits for a field outside inert or hidden content, verifies that focus landed,
+and yields to a later action by the person. The wait is bounded and canceled
+when the browser leaves the foreground.
 
 - **The keyboard leads.** `lib/focus-modality.ts` marks the root `pointer`
   after a pointer press and `keyboard` after Tab, arrows, Home/End,

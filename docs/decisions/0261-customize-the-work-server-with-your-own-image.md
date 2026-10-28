@@ -1,6 +1,6 @@
 # 0261: Customize the Work server with your own image
 
-- **Status:** Accepted (refines 0059, 0160; amends 0256)
+- **Status:** Superseded by [0294](0294-work-server-deployments-compose-libraries-and-workflows.md) (stock image removed; config remains typed data and hooks remain code)
 - **Date:** 2026-10-19
 
 ## Context

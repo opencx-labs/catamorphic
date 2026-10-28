@@ -496,6 +496,104 @@ describe("machines on demand (ADR 0258)", () => {
     await deleteRule("burst");
   });
 
+  it("scales for a runnable workflow continuation, excluding a parked journal and timeout jobs", async () => {
+    await putRule("continuation", {
+      projects: [projectId],
+      machines: { demand: { max: 2 } },
+      class: "review-16",
+      labels: { pool: "continuation" },
+    });
+    try {
+      const runId = randomUUID();
+      const allocationId = randomUUID();
+      await db()
+        .insertInto("execution_allocations")
+        .values({
+          id: allocationId,
+          tenant_id: SERVER_TENANT_ID,
+          project_id: projectId,
+          environment_name: "review",
+          binding_id: "fixture",
+          workload_kind: "workflow",
+          root_workload_id: runId,
+          policy_snapshot: {},
+          status: "released",
+          release_reason: "retired",
+          released_at: new Date(),
+          capacity_released_at: new Date(),
+        })
+        .execute();
+      await db()
+        .insertInto("workflow_runs")
+        .values({
+          id: runId,
+          project_id: projectId,
+          workflow_name: "wait",
+          allocation_id: allocationId,
+          provenance: {},
+          status: "waiting",
+        })
+        .execute();
+      await db()
+        .insertInto("placement_waits")
+        .values({
+          root_workload_id: runId,
+          tenant_id: SERVER_TENANT_ID,
+          project_id: projectId,
+          workload_kind: "workflow",
+          environment_name: "review",
+          pool: { pool: "continuation" },
+          owner: null,
+          requirements: { resources: {}, capabilities: [] },
+          reason: "capacity",
+        })
+        .execute();
+      await db()
+        .insertInto("execution_jobs")
+        .values({
+          tenant_id: SERVER_TENANT_ID,
+          workflow_run_id: runId,
+          kind: "durable_pause_timeout",
+          payload: {},
+          available_at: new Date(Date.now() + 60_000),
+        })
+        .execute();
+      await reconcile();
+      expect((await status()).continuation).toMatchObject({
+        desired: 0,
+        queued: 0,
+      });
+      const job = await db()
+        .insertInto("execution_jobs")
+        .values({
+          tenant_id: SERVER_TENANT_ID,
+          workflow_run_id: runId,
+          kind: "durable_boundary",
+          payload: {},
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      await reconcile();
+      expect((await status()).continuation).toMatchObject({
+        desired: 1,
+        queued: 1,
+      });
+      await db()
+        .updateTable("execution_jobs")
+        .set({ status: "canceled", completed_at: new Date() })
+        .where("id", "=", job.id)
+        .execute();
+      await reconcile();
+      // An already-starting machine remains until its normal enrollment deadline.
+      expect((await status()).continuation).toMatchObject({ queued: 0 });
+      expect(
+        platform.created.filter((machine) => machine.rule === "continuation"),
+      ).toHaveLength(1);
+    } finally {
+      await deleteRule("continuation");
+    }
+  });
+
   it("waits for a machine that enrolled to connect, and stops making machines when one never does", async () => {
     await putRule("slow", {
       projects: [projectId],

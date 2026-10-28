@@ -72,6 +72,18 @@ branch prefix, checkpoint author, app-data env and mount) from
 This framework repository's `.agents/skills/`, `apps/`, and `packages/` are its own
 engineering layout. They are not generated user-project paths and stay in place.
 
+### Compose before declaring a blocker
+
+A use case does not need a native integration for every service it touches.
+Workflows run ordinary TypeScript and npm dependencies with full IO. Glue code
+in workflows and Work server hooks is expected product use: workflows own
+orchestration and recovery; hooks own privileged operations, credentials,
+authorization, and routes. External Postgres may store application-owned state
+without becoming a framework table. An external runner does not have to enroll
+as a Work worker; enrollment is for Work-managed sandbox and agent execution.
+Assess a missing guarantee with a concrete failing case before proposing a new
+primitive. Follow `skills/setup-work-server/references/workflow-composition.md`.
+
 ### Infrastructure priorities
 
 - **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare`), local sandboxes (`@catamorphic/microsandbox`, or `@catamorphic/container` under gVisor on any Linux machine with Docker and gVisor, ADR 0204), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
@@ -100,7 +112,7 @@ Public developer surface:
 - `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
 - `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface. Its dependency-free `project-layout` subpath names the user-project layout (`.work/` paths, `refs/work/published`, the `work/` branch prefix).
-- `packages/work-server` — **`@catamorphic/work-server`**: the Work server as a library (ADR 0160): `createWorkServer({ config, hooks })` with typed data as `config` and code as `hooks` (ADR 0183), `workServerConfigFromEnv` (the only reader of `WORK_*` variables and files), typed hooks (agent capabilities, connection providers and guards, directories, a machine provisioner, project seeds, routes). `apps/server` is only its image process. Framework packages never import it.
+- `packages/work-server` — **`@catamorphic/work-server`**: the Work server as a library (ADR 0160): `createWorkServer({ config, hooks })` with typed data as `config` and code as `hooks` (ADR 0183), `workServerConfigFromEnv` (the only reader of `WORK_*` variables and files), typed hooks (agent capabilities, connection providers and guards, directories, a machine provisioner, project seeds, routes). `apps/server` supplies reference process source; deployments own their image (ADR 0294). Framework packages never import it.
 - `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
 Internal packages:
@@ -134,7 +146,7 @@ Apps:
 
 - `apps/desktop` — the Work desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, changes and pull requests as sidebar sources, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
 - `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), OAuth server connections, and local profiles. Reaches a server through a credential-free invite, direct host sign-in, or desktop QR pairing (ADR 0060). See `apps/pwa/AGENTS.md`.
-- `apps/server` — the Work server, the prebuilt self-hostable server (ADRs 0059, 0159; `WORK_*` configuration, `work-server` image published with every release): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution), Better Auth with built-in local auth and optional OAuth/OIDC providers, agent-driven machine-local provisioning, credential-free project invitations, unique-per-install mDNS hostname for LAN reach, and `DATABASE_URL` opt-in for real Postgres. Microsandbox is selectable for isolated remote development with per-agent limits and managed workspace budgets (ADR 0100). **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
+- `apps/server` is the Work server reference process and development host. Deployments pin `@catamorphic/work-server`, own their entry point and image, and compose hooks (ADR 0294). The library supplies Better Auth, OAuth/OIDC, setup operations, project invitations, PGlite or network Postgres, and execution providers. **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md` and `packages/work-server/README.md`.
 
 How the three connect (setting up / troubleshooting, read in this order):
 

@@ -190,9 +190,9 @@ content holds no caret position, and Chromium recomputes the visible
 selection before every frame that follows a DOM or style change
 (`WidgetBase::UpdateSelectionBounds`, `FrameCaret::UpdateAppearance`), and
 on focus changes (`WebViewImpl::SetPageFocus`). Each time,
-`CanonicalPositionOf` walks backwards through every inert element to the
-first usable position, checking each one's `content-visibility` ancestors on
-the way. The cost grows with the inert content ahead of the caret.
+`CanonicalPositionOf` searches through inert elements for a usable position,
+checking each one's `content-visibility` ancestors on the way. The search
+can run forwards or backwards; its cost grows with the content it crosses.
 
 Measured 2026-10-15 on an Apple M3 Pro, macOS 26.5.2, in an installed
 0.1.0-alpha.22 (Electron 45.0.0-beta.1, Chromium 156) with a real profile:
@@ -238,6 +238,42 @@ A press inside places its own caret instead.
 minimised-draft test covers the chat, and `app.e2e.ts`'s "Cmd+W closes the
 tab behind the floating chat when the tab has focus" fails if a caret
 returns before its editor has focus.
+
+The guard finds the nearest inert ancestor holding **both** endpoints. A
+folded region can hold only the anchor while the hidden workspace around
+it holds the whole selection. Stopping at the anchor's nearest inert
+element missed that geometry, leaving Chromium to resolve the selection
+on subsequent frames. The Electron `inert-selection.e2e.ts` regression
+places the selection after the inert attributes settle, then checks release
+and restoration of the original endpoints in both directions.
+
+Measured 2026-10-28 in a standalone headless Chrome 156 fixture, with two
+6,000-paragraph hidden regions and a small transform changing each frame:
+the nested-inert case consumed 1,223 ms of renderer task time during a
+1.2-second sample before the guard fix, and 13 ms after it. Script and
+style work were each below 3 ms; layout time was zero. This isolates the
+native selection cost. It does not measure end-to-end Work interaction
+latency or establish the exact selection in a live window.
+
+Plain carets are also discarded when their observed text disappears (ADR
+0288, approved by Tabaza). The guard retains the raw node to establish that
+it was removed or emptied, plus a cloned live range following the browser's
+boundary adjustments. Cleanup requires the current collapsed, non-editor
+selection to match that adjusted position exactly. Moving content, typing
+in an editor, selecting elsewhere, and splitting or normalizing surviving
+text keep their existing selection behavior. The next Shift-click after
+discarded plain content starts a fresh selection.
+
+In the same headless fixture, an observed caret whose paragraph was removed
+consumed 1,222 ms of task time before cleanup and 12 ms after; emptying its
+text node took 1,226 ms before and 16 ms after. The original selectionchange
+settled before the mutation in both cases. These are controlled native-work
+measurements, not a claim that every intermittent Work stall is resolved.
+An unobserved caret created and removed in one JavaScript task, an arbitrary
+parent boundary, and highlights spanning separate hidden regions remain
+outside this provenance-based correction. The observer performs no layout
+reads and does not scan removed subtrees. Native regressions cover cleanup,
+continued editor input, moves, new selections, and split/merge boundaries.
 
 A caret left in a tab hidden with `display: none` (inactive tabs) has no
 measurable cost. Measured 2026-10-16 in a test copy at 13,372 elements,

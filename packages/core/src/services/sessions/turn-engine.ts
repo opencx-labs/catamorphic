@@ -177,12 +177,16 @@ export interface TurnEngineHost {
     session: SessionRow;
     turn: Turn;
     attempt: Attempt;
+    leaseToken: string;
     signal: AbortSignal;
   }): Promise<PreparedAttempt>;
   /** Find a sandbox runner again through the session's Allocation. */
   reattach(input: {
     identity: Identity;
     session: SessionRow;
+    turn: Turn;
+    attempt: Attempt;
+    leaseToken: string;
     location: Extract<RunnerLocation, { kind: "sandbox_process" }>;
   }): Promise<RunnerChannel | undefined>;
   hostTool(input: {
@@ -1013,6 +1017,7 @@ export class TurnEngine {
       session: ctx.session,
       turn,
       attempt,
+      leaseToken: local.claim.leaseToken,
       signal: local.abort.signal,
     });
     if (local.abort.signal.aborted) return { kind: "settled" };
@@ -1602,6 +1607,9 @@ export class TurnEngine {
           : await this.deps.host.reattach({
               identity: ctx.identity,
               session: ctx.session,
+              turn: ctx.turn,
+              attempt: ctx.attempt,
+              leaseToken: local.claim.leaseToken,
               location: runner.location,
             });
       if (!channel) {
@@ -2896,6 +2904,9 @@ export class TurnEngine {
       channel = await this.deps.host.reattach({
         identity: ctx.identity,
         session: ctx.session,
+        turn: ctx.turn,
+        attempt: ctx.attempt,
+        leaseToken: local.claim.leaseToken,
         location,
       });
     } catch (error) {

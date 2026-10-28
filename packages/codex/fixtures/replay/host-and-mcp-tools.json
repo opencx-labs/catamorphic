@@ -13,7 +13,7 @@
           "-c",
           "model_provider=\"work\"",
           "-c",
-          "model_providers={\"work\"={\"name\"=\"Work gateway\",\"base_url\"=\"{{model}}\",\"wire_api\"=\"responses\",\"auth\"={\"command\"=\"sh\",\"args\"=[\"-c\",\"cat \\\"$WORK_MODEL_KEY_FILE\\\"\"],\"refresh_interval_ms\"=300000}}}",
+          "model_providers={\"work\"={\"name\"=\"Work gateway\",\"base_url\"=\"{{model}}\",\"wire_api\"=\"responses\",\"auth\"={\"command\"=\"sh\",\"args\"=[\"-c\",\"set -- \\\"$WORK_MODEL_GRANT_DIRECTORY\\\"; revision=$(for file in \\\"$1\\\"/*; do [ -f \\\"$file\\\" ] && printf '%s\\\\n' \\\"${file##*/}\\\"; done | sed -n \\\"/^[1-9][0-9]*$/p\\\" | LC_ALL=C sort -n | tail -n 1); [ -n \\\"$revision\\\" ] || exit 1; cat \\\"$1/$revision\\\"\"],\"refresh_interval_ms\"=300000}}}",
           "-c",
           "mcp_servers={\"computer\"={\"command\"=\"{{node}}\",\"args\"=[\"{{fixtures}}/computer-use-mcp.mjs\"],\"default_tools_approval_mode\"=\"prompt\"}}",
           "-c",
@@ -34,7 +34,7 @@
         "env": {
           "CATAMORPHIC_SESSION_ID": "session-1",
           "CATAMORPHIC_PROJECT_ID": "project-1",
-          "WORK_MODEL_KEY_FILE": "{{root}}/model-key",
+          "WORK_MODEL_GRANT_DIRECTORY": "{{root}}/model-key",
           "CODEX_HOME": "{{root}}/state/codex-home"
         }
       }

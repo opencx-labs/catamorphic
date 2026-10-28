@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { nativeGit } from "@catamorphic/git";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { nativeGit, shellQuote } from "@catamorphic/git";
+import {
+  MODEL_GRANT_READER,
+  readConnectionGrant,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   advertisedDefaultBranch,
@@ -297,7 +301,10 @@ describe("workspace move notes (ADR 0178)", () => {
 });
 
 /** A sandbox that is a directory on this machine, like local-process. */
-function directorySandbox(root: string): SandboxProvider {
+function directorySandbox(
+  root: string,
+  environment: Record<string, string> = {},
+): SandboxProvider {
   const real = (virtual: string) =>
     path.join(root, virtual.replace(/^\/workspace/, "workspace"));
   const unused = () => {
@@ -319,6 +326,7 @@ function directorySandbox(root: string): SandboxProvider {
           env: {
             PATH: process.env.PATH ?? "",
             HOME: path.join(root, "home"),
+            ...environment,
           },
         });
         return { exitCode: 0, result: stdout };
@@ -421,7 +429,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "code", grant: "grant-one" }],
+      grants: [{ alias: "code", grant: "grant-one", publicationRevision: "1" }],
       gitAliases: [
         { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
       ],
@@ -452,7 +460,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "code", grant: "grant-two" }],
+      grants: [{ alias: "code", grant: "grant-two", publicationRevision: "2" }],
       gitAliases: [
         { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
       ],
@@ -464,9 +472,70 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       provider,
       sandboxId: "s",
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "model", grant: "grant-three" }],
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-three",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
       gitAliases: [],
     });
+    expect(
+      await readConnectionGrant({
+        directory: path.join(
+          root,
+          "workspace",
+          ".work-session",
+          "model-grants",
+          "attempt-one",
+          "model",
+        ),
+      }),
+    ).toBe("grant-three");
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-next",
+          publicationRevision: "4",
+          modelAttemptId: "attempt-two",
+        },
+      ],
+      gitAliases: [],
+    });
+    // A late old publication retries its own immutable model revision.
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-three",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+      renewOnly: true,
+    });
+    expect(
+      await readConnectionGrant({
+        directory: path.join(
+          root,
+          "workspace",
+          ".work-session",
+          "model-grants",
+          "attempt-two",
+          "model",
+        ),
+      }),
+    ).toBe("grant-next");
     const plain = await execute(
       "git",
       ["ls-remote", "--get-url", "https://git.example.test/org/repo.git"],
@@ -475,12 +544,311 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
     expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
   });
 
+  it("retries identical immutable revisions concurrently without replacing them", async () => {
+    const config = {
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "mixed",
+          grant: "persisted-bearer",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+      renewOnly: true,
+    };
+    await configureSandboxGateway(config);
+    await Promise.all([
+      configureSandboxGateway(config),
+      configureSandboxGateway(config),
+    ]);
+    const session = path.join(root, "workspace", ".work-session");
+    for (const directory of [
+      path.join(session, "grants", "mixed"),
+      path.join(session, "model-grants", "attempt-one", "mixed"),
+    ]) {
+      expect(await fs.readdir(directory)).toEqual(["3"]);
+      expect(await readConnectionGrant({ directory })).toBe("persisted-bearer");
+    }
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+
+    // A revision belongs to one persisted bearer, even if a caller misuses it.
+    await expect(
+      configureSandboxGateway({
+        ...config,
+        grants: config.grants.map((grant) => ({
+          ...grant,
+          grant: "conflicting-bearer",
+        })),
+      }),
+    ).rejects.toThrow("Could not publish immutable grant grants/mixed/3");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "grants", "mixed"),
+      }),
+    ).toBe("persisted-bearer");
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
+  it("reports a failed immutable publication when the destination is absent", async () => {
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "ln"), "#!/bin/sh\nexit 13\n", {
+      mode: 0o700,
+    });
+    await expect(
+      configureSandboxGateway({
+        provider: directorySandbox(root, {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        }),
+        sandboxId: "s",
+        gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+        grants: [{ alias: "mixed", grant: "bearer", publicationRevision: "3" }],
+        gitAliases: [],
+        renewOnly: true,
+      }),
+    ).rejects.toThrow("Could not publish immutable grant grants/mixed/3");
+    const session = path.join(root, "workspace", ".work-session");
+    expect(await fs.readdir(path.join(session, "grants", "mixed"))).toEqual([]);
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
+  it("does not publish an older upload after a newer model, Git and HTTP grant", async () => {
+    let markBlocked = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      markBlocked = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: SandboxProvider = {
+      ...provider,
+      uploadFiles: async (id, files, base) => {
+        markBlocked();
+        await released;
+        await provider.uploadFiles(id, files, base);
+      },
+    };
+    const config = {
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      gitAliases: [
+        { alias: "mixed", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+      httpAliases: [
+        { alias: "mixed", url: "http://127.0.0.1:9/api/gateway/http/mixed" },
+      ],
+    };
+    const old = configureSandboxGateway({
+      ...config,
+      provider: slow,
+      renewOnly: true,
+      grants: [
+        {
+          alias: "mixed",
+          grant: "revoked-old",
+          publicationRevision: "20",
+          modelAttemptId: "surviving-attempt",
+        },
+      ],
+    });
+    await blocked;
+    await configureSandboxGateway({
+      ...config,
+      provider,
+      grants: [
+        {
+          alias: "mixed",
+          grant: "live-new",
+          publicationRevision: "21",
+          modelAttemptId: "surviving-attempt",
+        },
+      ],
+    });
+    release();
+    await old;
+    const session = path.join(root, "workspace", ".work-session");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "grants", "mixed"),
+      }),
+    ).toBe("live-new");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(
+          session,
+          "model-grants",
+          "surviving-attempt",
+          "mixed",
+        ),
+      }),
+    ).toBe("live-new");
+
+    const readHttp = await provider.executeCommand(
+      "s",
+      `${sandboxSecretsPrelude()}; "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_MIXED_GRANT_DIRECTORY"`,
+      { cwd: "/workspace/project" },
+    );
+    expect(readHttp.result).toBe("live-new");
+  });
+
+  it("stages metadata privately during overlapping initial publications and retries Git's config lock", async () => {
+    const session = path.join(root, "workspace", ".work-session");
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    const git = (await execute("sh", ["-c", "command -v git"])).stdout.trim();
+    await fs.writeFile(
+      path.join(bin, "git"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = config ] && [ "$2" = --global ] && [ "$3" = --fixed-value ] && [ ! -f "$PUBLISH_GATE/allow" ]; then',
+        '  : > "$PUBLISH_GATE/git-writer-$PUBLISHER"',
+        "  exit 4",
+        "fi",
+        `exec ${shellQuote(git)} "$@"`,
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    const controlled = (label: string): SandboxProvider => {
+      const base = directorySandbox(root, {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PUBLISH_GATE: root,
+        PUBLISHER: label,
+      });
+      return {
+        ...base,
+        executeCommand: (id, command, options) =>
+          base.executeCommand(
+            id,
+            command.replace(
+              "while IFS= read -r line;",
+              [
+                `: > ${shellQuote(path.join(root, `metadata-ready-${label}`))}`,
+                `while [ ! -f ${shellQuote(path.join(root, `metadata-go-${label}`))} ]; do sleep 0.01; done`,
+                "while IFS= read -r line;",
+              ].join("\n"),
+            ),
+            options,
+          ),
+      };
+    };
+    const waitFor = async (name: string) => {
+      await expect
+        .poll(
+          () =>
+            fs.stat(path.join(root, name)).then(
+              () => true,
+              () => false,
+            ),
+          { timeout: 5_000 },
+        )
+        .toBe(true);
+    };
+    const config = {
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      gitAliases: [
+        { alias: "mixed", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+      httpAliases: [
+        { alias: "mixed", url: "http://127.0.0.1:9/api/gateway/http/mixed" },
+      ],
+    };
+    const first = configureSandboxGateway({
+      ...config,
+      provider: controlled("a"),
+      grants: [
+        {
+          alias: "mixed",
+          grant: "first",
+          publicationRevision: "30",
+          modelAttemptId: "attempt",
+        },
+      ],
+    });
+    await waitFor("metadata-ready-a");
+    const second = configureSandboxGateway({
+      ...config,
+      provider: controlled("b"),
+      grants: [
+        {
+          alias: "mixed",
+          grant: "second",
+          publicationRevision: "31",
+          modelAttemptId: "attempt",
+        },
+      ],
+    });
+    await waitFor("metadata-ready-b");
+    // Both initial publications uploaded templates. A consumes first while B
+    // still waits; neither may delete or render the other's template/output.
+    await fs.writeFile(path.join(root, "metadata-go-a"), "go");
+    await waitFor("git-writer-a");
+    await fs.writeFile(path.join(root, "metadata-go-b"), "go");
+    await waitFor("git-writer-b");
+    // Both writers first fail on the existing Git serialization boundary.
+    await fs.writeFile(path.join(root, "allow"), "go");
+    await Promise.all([first, second]);
+    const env = { PATH: process.env.PATH ?? "", HOME: path.join(root, "home") };
+    const realSession = await fs.realpath(session);
+    const includes = (
+      await execute(
+        "git",
+        ["config", "--global", "--get-all", "include.path"],
+        { env },
+      )
+    ).stdout
+      .trim()
+      .split("\n");
+    expect(
+      includes.filter((value) => value === path.join(realSession, "gitconfig")),
+    ).toHaveLength(1);
+    expect(
+      (
+        await execute(
+          "git",
+          ["ls-remote", "--get-url", "https://git.example.test/repo.git"],
+          { cwd: project(), env },
+        )
+      ).stdout.trim(),
+    ).toBe("http://127.0.0.1:9/api/gateway/git/mixed/repo.git");
+    const credential = await provider.executeCommand(
+      "s",
+      "./git-credential-work mixed get </dev/null",
+      { cwd: "/workspace/.work-session" },
+    );
+    expect(credential.result).toContain("password=second");
+    const http = await provider.executeCommand(
+      "s",
+      `${sandboxSecretsPrelude()}; "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_MIXED_GRANT_DIRECTORY"`,
+      { cwd: "/workspace/project" },
+    );
+    expect(http.result).toBe("second");
+    const model = await provider.executeCommand(
+      "s",
+      `WORK_MODEL_GRANT_DIRECTORY=${shellQuote(path.join(session, "model-grants", "attempt", "mixed"))}; ${MODEL_GRANT_READER}`,
+      { cwd: "/workspace/project" },
+    );
+    expect(model.result).toBe("second");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "model-grants", "attempt", "mixed"),
+      }),
+    ).toBe("second");
+    expect(await fs.readdir(path.join(session, "env"))).toEqual(["gateway.sh"]);
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
   it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0212)", async () => {
     const session = path.join(root, "workspace", ".work-session");
     const file = path.join(session, "env", "gateway.sh");
     const gateway = "http://127.0.0.1:9/api/gateway";
     const configure = (input: {
-      grants: { alias: string; grant: string }[];
+      grants: { alias: string; grant: string; publicationRevision: string }[];
       http: string[];
       git?: boolean;
       renewOnly?: boolean;
@@ -504,17 +872,17 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       (
         await provider.executeCommand(
           "s",
-          `${sandboxSecretsPrelude()}; printf '%s|%s|%s|%s' "\${WORK_HTTP_LOGS_EU:-unset}" "\${WORK_HTTP_LOGS_EU_GRANT_FILE:-unset}" "\${WORK_HTTP_BILLING:-unset}" "$(cat "\${WORK_HTTP_LOGS_EU_GRANT_FILE:-/dev/null}")"`,
+          `${sandboxSecretsPrelude()}; printf '%s|%s|%s|%s' "\${WORK_HTTP_LOGS_EU:-unset}" "\${WORK_HTTP_LOGS_EU_GRANT_DIRECTORY:-unset}" "\${WORK_HTTP_BILLING:-unset}" "$(if [ -n "\${WORK_HTTP_LOGS_EU_GRANT_DIRECTORY:-}" ]; then "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_EU_GRANT_DIRECTORY"; fi)"`,
           { cwd: "/workspace/project" },
         )
       ).result;
 
     await configure({
       grants: [
-        { alias: "code", grant: "grant-code" },
-        { alias: "logs-eu", grant: "grant-logs" },
-        { alias: "logs_eu", grant: "grant-other" },
-        { alias: "billing", grant: "grant-billing" },
+        { alias: "code", grant: "grant-code", publicationRevision: "6" },
+        { alias: "logs-eu", grant: "grant-logs", publicationRevision: "7" },
+        { alias: "logs_eu", grant: "grant-other", publicationRevision: "8" },
+        { alias: "billing", grant: "grant-billing", publicationRevision: "9" },
       ],
       // `logs_eu` would share `logs-eu`'s names, so it gets none.
       http: ["logs-eu", "logs_eu", "billing"],
@@ -533,7 +901,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     // Renewing replaces the grants; the file names the same paths.
     await configure({
-      grants: [{ alias: "logs-eu", grant: "grant-renewed" }],
+      grants: [
+        { alias: "logs-eu", grant: "grant-renewed", publicationRevision: "10" },
+      ],
       http: ["logs-eu"],
       renewOnly: true,
     });
@@ -543,7 +913,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     // A later turn without HTTP aliases leaves no variables behind.
     await configure({
-      grants: [{ alias: "model", grant: "grant-model" }],
+      grants: [
+        { alias: "model", grant: "grant-model", publicationRevision: "11" },
+      ],
       http: [],
     });
     await expect(fs.stat(file)).rejects.toThrow();
@@ -551,7 +923,9 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
 
     // Given back with the workspace, the grants and the file go.
     await configure({
-      grants: [{ alias: "logs-eu", grant: "grant-again" }],
+      grants: [
+        { alias: "logs-eu", grant: "grant-again", publicationRevision: "12" },
+      ],
       http: ["logs-eu"],
     });
     await removeSandboxGateway({

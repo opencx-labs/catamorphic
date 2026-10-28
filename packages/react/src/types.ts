@@ -78,6 +78,9 @@ export type SubmitRunInput =
 export type SignalRunInput =
   paths["/api/projects/{projectId}/workflows/{name}/signals"]["post"]["requestBody"]["content"]["application/json"];
 
+export type RunSignalReceipt =
+  paths["/api/projects/{projectId}/workflows/{name}/signals"]["post"]["responses"][200]["content"]["application/json"];
+
 export type CancelRunByKeyInput =
   paths["/api/projects/{projectId}/workflows/{name}/cancellations"]["post"]["requestBody"]["content"]["application/json"];
 
