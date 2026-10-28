@@ -328,6 +328,15 @@ const windows: WindowProfileRegistry = {
   },
   assign(sender, profileId) {
     const previousProfileId = windows.profileFor(sender);
+    // A closed workspace still owns its projects. Bring it back before an
+    // empty window can adopt its profile and fail to claim those projects.
+    if (
+      previousProfileId !== profileId &&
+      desktopWorkspaces?.activateProfile(profileId)
+    ) {
+      profilesStore.setLastActiveProfile(profileId);
+      return;
+    }
     windowProfiles.set(sender.id, profileId);
     if (previousProfileId !== profileId)
       desktopWorkspaces?.reassign(sender, previousProfileId);
