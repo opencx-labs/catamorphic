@@ -1975,6 +1975,13 @@ is a glance; the title and the activity are what it is for.
 
 ### 2026-09-23: Passwords work like Chrome's
 
+Capture correction, 2026-10-28: embedded sign-ins use the same save card.
+The submitting frame's real origin names the saved site, including when
+an email-first login redirects the tab or removes its iframe. Empty parent
+and sibling frames do not count as success while the sign-in frame is
+still present. Opaque frames cannot submit a login. Suggestions and filling
+remain in the top frame. See the correction in ADR 0151.
+
 Saving passwords felt broken. Any click in a form offered to save, even
 a password the site had just rejected. The offer vanished when a sign-in
 redirected to another subdomain. Sign-ins that used a plain button were
