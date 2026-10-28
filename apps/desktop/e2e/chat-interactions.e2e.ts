@@ -50,56 +50,77 @@ afterAll(async () => {
 });
 
 interface SizeFrame {
+  time: number;
   width: number;
   inputWidth: number;
   inputHeight: number;
 }
-async function observeResize(action: () => Promise<void>) {
+async function observeResize(tab: boolean, action: () => Promise<void>) {
+  await app.waitFor(
+    `${dock}.parentElement.getAnimations({subtree:true}).every(a=>
+      a.playState!=='running' || a.effect?.getTiming().iterations===Infinity)`,
+    { label: "chat is at rest before resizing" },
+  );
   await app.eval(`(() => {
     window.__chatSizeFrames=[];
-    function sample() {
+    window.__sampleChatSize=(time)=>{
       const s=${dock};const i=${input};
       if(s&&i){const r=s.getBoundingClientRect();const c=i.getBoundingClientRect();
-        window.__chatSizeFrames.push({width:r.width,inputWidth:c.width,inputHeight:c.height});}
-    }
-    sample();
-    let nextFrame=requestAnimationFrame(function frame() {
-      sample();nextFrame=requestAnimationFrame(frame);
-    });
-    window.__stopChatSizeCapture=()=>{cancelAnimationFrame(nextFrame);sample();};return true;
+        window.__chatSizeFrames.push({time,width:r.width,inputWidth:c.width,inputHeight:c.height});}
+    };
+    window.__sampleChatSize(-1);return true;
   })()`);
+  // Sample the actual CSS transitions at explicit times. A busy renderer can
+  // skip every intermediate real-time RAF during the 250 ms resize.
+  await app.cdp("Animation.enable");
+  await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
   try {
     await action();
-    // Native input can take longer than the resize itself to arrive on a
-    // loaded host. Keep sampling through its actual transition, including
-    // the starting geometry, instead of spending a fixed recording window
-    // waiting for the pointer helper to launch.
     await app.waitFor(
       `(() => {
-      const frames=window.__chatSizeFrames;
-      return frames.some(f=>Math.abs(f.width-frames[0].width)>1)
-        && !${dock}.getAnimations({subtree:true}).some(a=>
-          a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);
+      const chat=${dock};
+      return (chat.dataset.chatTab==='true')===${tab}
+        && chat.getAnimations().some(a=>a instanceof CSSTransition
+          && a.transitionProperty==='max-width');
     })()`,
-      { label: "chat resize changed size and settled" },
+      { label: `chat ${tab ? "tab" : "floating"} pose has a width transition` },
     );
+    await app.eval(`(async () => {
+      const nextFrame=()=>new Promise(requestAnimationFrame);
+      const moving=${dock}.parentElement.getAnimations({subtree:true})
+        .filter(a=>a.effect?.getTiming().iterations!==Infinity);
+      // Include the parent padding transition as well as the card and
+      // composer, keeping their timelines aligned. Preserve the pre-action
+      // sample and t=0 so an instantaneous layout jump still fails.
+      for(const time of [0,1,25,50,75,100,125,150,175,200,225,250,300]) {
+        for(const animation of moving)animation.currentTime=time;
+        await nextFrame();window.__sampleChatSize(time);
+      }
+      for(const animation of moving)animation.finish();
+      await nextFrame();await nextFrame();window.__sampleChatSize(320);
+      return true;
+    })()`);
   } finally {
-    await app.eval("window.__stopChatSizeCapture();true");
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    await app.cdp("Animation.disable");
+    await app.eval("delete window.__sampleChatSize;true");
   }
   const frames = await app.eval<SizeFrame[]>("window.__chatSizeFrames");
-  expect(frames.length).toBeGreaterThan(2);
-  expect(new Set(frames.map((f) => Math.round(f.width))).size).toBeGreaterThan(
-    2,
-  );
+  const detail = JSON.stringify(frames);
+  expect(frames.length, detail).toBeGreaterThan(2);
+  expect(
+    new Set(frames.map((f) => Math.round(f.width))).size,
+    detail,
+  ).toBeGreaterThan(2);
   for (const field of ["inputWidth", "inputHeight"] as const) {
     const ends = [frames[0]?.[field] ?? 0, frames.at(-1)?.[field] ?? 0];
     expect(
       Math.min(...frames.map((f) => f[field])),
-      `${field} never undershoots its endpoints`,
+      `${field} never undershoots its endpoints: ${detail}`,
     ).toBeGreaterThanOrEqual(Math.min(...ends) - 1);
     expect(
       Math.max(...frames.map((f) => f[field])),
-      `${field} never overshoots its endpoints`,
+      `${field} never overshoots its endpoints: ${detail}`,
     ).toBeLessThanOrEqual(Math.max(...ends) + 1);
   }
 }
@@ -136,10 +157,18 @@ it("inserts a line break with Shift+keypad Enter without sending", async () => {
 });
 
 it("keeps the composer from narrowing and wrapping during maximize and float", async () => {
-  await observeResize(() =>
-    click('[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]'),
-  );
-  await observeResize(() => app.press("Escape"));
+  for (const width of [1280, 1024]) {
+    await app.eval(
+      `window.catamorphicDesktop.devWindow('setSize',${width},730)`,
+    );
+    await app.waitFor(`innerWidth===${width}`);
+    await observeResize(true, () =>
+      click(
+        '[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]',
+      ),
+    );
+    await observeResize(false, () => app.press("Escape"));
+  }
 });
 
 it("focuses the composer from the empty sides without taking text selection", async () => {
@@ -227,8 +256,8 @@ it("focuses the composer from the empty sides without taking text selection", as
 it("keeps resize bounded in a narrow window and respects reduced motion", async () => {
   await app.eval("window.catamorphicDesktop.devWindow('setSize',760,850)");
   await app.waitFor("innerWidth<=760");
-  await observeResize(() => app.press("Escape"));
-  await observeResize(() =>
+  await observeResize(false, () => app.press("Escape"));
+  await observeResize(true, () =>
     click('[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]'),
   );
   await app.cdp("Emulation.setEmulatedMedia", {
