@@ -1,10 +1,11 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { InProcessRunner } from "@catamorphic/agent-runner";
 import { expect, it } from "vitest";
-import { createClaudeCodeAdapter } from "../index.js";
+import { type ClaudeQueryHandle, createClaudeCodeAdapter } from "../index.js";
 import {
   CLAUDE_SCENARIOS,
   driveAttempt,
@@ -69,7 +70,7 @@ it.each(["simple-reply", "ask-user-question", "steer", "retry-same-input"])(
   60_000,
 );
 
-it("refreshes a cached model grant after a 401 in the same pinned CLI process", async () => {
+async function nativeGrantCase(input: { timeout: boolean }): Promise<void> {
   const root = await realpath(
     await mkdtemp(path.join(tmpdir(), "claude-native-grant-")),
   );
@@ -90,10 +91,18 @@ it("refreshes a cached model grant after a 401 in the same pinned CLI process", 
   );
   await writeFile(path.join(grants, "1"), "old-grant");
   const seen: string[] = [];
+  let releaseModel = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    releaseModel = resolve;
+  });
   const model = await startScriptedModel({
     reply: async (request) => {
       const bearer = request.authorization ?? "";
       seen.push(bearer);
+      if (input.timeout) {
+        await blocked;
+        return { blocks: [{ type: "text", text: "released during cleanup" }] };
+      }
       if (request.index === 0) {
         // The first request was admitted. Replace its claim while its model
         // answer runs a tool, so the next request uses the CLI's cached key.
@@ -121,6 +130,13 @@ it("refreshes a cached model grant after a 401 in the same pinned CLI process", 
     },
   });
   let launches = 0;
+  let handle: ClaudeQueryHandle | undefined;
+  let child: ChildProcessWithoutNullStreams | undefined;
+  let childClosed = false;
+  let resolveClosed = () => {};
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   try {
     const outcome = await driveAttempt({
       runner: new InProcessRunner({
@@ -128,11 +144,32 @@ it("refreshes a cached model grant after a 401 in the same pinned CLI process", 
         adapters: {
           "claude-code": createClaudeCodeAdapter({
             query: (parameters) => {
-              launches += 1;
               expect(
                 parameters.options.env?.CLAUDE_CODE_API_KEY_HELPER_TTL_MS,
               ).toBe("300000");
-              return sdkQuery(parameters);
+              handle = sdkQuery({
+                ...parameters,
+                options: {
+                  ...parameters.options,
+                  spawnClaudeCodeProcess: (options) => {
+                    launches += 1;
+                    const process = spawn(options.command, options.args, {
+                      cwd: options.cwd,
+                      env: options.env,
+                      signal: options.signal,
+                      stdio: ["pipe", "pipe", "pipe"],
+                      windowsHide: true,
+                    });
+                    child = process;
+                    process.once("close", () => {
+                      childClosed = true;
+                      resolveClosed();
+                    });
+                    return process;
+                  },
+                },
+              });
+              return handle;
             },
           }),
         },
@@ -150,7 +187,7 @@ it("refreshes a cached model grant after a 401 in the same pinned CLI process", 
       }),
       host: {},
       nativeState: new ScriptedNativeState(),
-      timeoutMs: 45_000,
+      timeoutMs: input.timeout ? 2_000 : 45_000,
     });
     expect(launches).toBe(1);
     expect(seen).toEqual([
@@ -160,7 +197,49 @@ it("refreshes a cached model grant after a 401 in the same pinned CLI process", 
     ]);
     expect(outcome.completed?.status).toBe("completed");
   } finally {
-    await model.close();
-    await rm(root, { recursive: true, force: true });
+    try {
+      // The driver can throw before the runner exits. Own the actual SDK
+      // query and OS child, then join it before removing its working files.
+      void handle?.interrupt({ cancelQueued: true }).catch(() => {});
+      handle?.close();
+      if (child) {
+        child.stdin.end();
+        const term = setTimeout(() => child?.kill("SIGTERM"), 1_000);
+        const kill = setTimeout(() => child?.kill("SIGKILL"), 3_000);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            closed,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () =>
+                  reject(new Error("The native Claude child did not close")),
+                6_000,
+              );
+            }),
+          ]);
+          expect(childClosed).toBe(true);
+        } finally {
+          clearTimeout(term);
+          clearTimeout(kill);
+          clearTimeout(timer);
+        }
+      }
+    } finally {
+      releaseModel();
+      await model.close();
+      if (!child || childClosed)
+        await rm(root, { recursive: true, force: true });
+    }
   }
+}
+
+it("refreshes a cached model grant after a 401 in the same pinned CLI process", async () => {
+  await nativeGrantCase({ timeout: false });
 }, 60_000);
+
+it("closes and joins the pinned Claude child when its host driver times out", async () => {
+  await expect(nativeGrantCase({ timeout: true })).rejects.toThrow(
+    "did not exit in time",
+  );
+}, 20_000);
