@@ -89,7 +89,7 @@ export function attemptBase(
       kind: "gateway",
       api: "openai",
       baseUrl: context.model,
-      keyFile: path.join(context.root, "model-key"),
+      grantDirectory: path.join(context.root, "model-key"),
     },
     toolPolicies: {},
     toolAnnotations: {},

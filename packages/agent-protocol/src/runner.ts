@@ -25,7 +25,7 @@ import type {
 } from "./model.js";
 
 /** Bumped on any incompatible change to frames, commands or {@link AttemptStart}. */
-export const RUNNER_PROTOCOL_VERSION = 1;
+export const RUNNER_PROTOCOL_VERSION = 2;
 
 /**
  * The session an attempt's harness process works for, and its project, in
@@ -146,12 +146,12 @@ export type McpServerSpec =
 
 /** How the harness reaches its model. */
 export type ModelAccess =
-  /** Through the gateway with the session's grant, read from `keyFile` (ADR 0180). */
+  /** Through the gateway with the session's grant, read from `grantDirectory` (ADR 0180). */
   | {
       kind: "gateway";
       api: "anthropic" | "openai";
       baseUrl: string;
-      keyFile: string;
+      grantDirectory: string;
     }
   /**
    * The chat owner's own sign-in on this machine, in the harness's own

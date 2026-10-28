@@ -472,29 +472,32 @@ never the key.
   only reads (GET and HEAD).
 - Each turn writes `.work-session/env/gateway.sh` beside the project folder:
   `WORK_HTTP_<ALIAS>` (the alias in capitals, `-` as `_`) is the alias's
-  gateway URL, and `WORK_HTTP_<ALIAS>_GRANT_FILE` the file holding the
-  session's grant. The agent's commands, terminals and workspace setup load
-  it; a shell started some other way runs
+  gateway URL, and `WORK_HTTP_<ALIAS>_GRANT_DIRECTORY` the directory holding the
+  session's published grant revisions. `WORK_GATEWAY_READ_GRANT` names the
+  helper that reads the greatest numeric revision. The agent's commands,
+  terminals and workspace setup load it; a shell started some other way runs
   `. ../.work-session/env/gateway.sh` from the project folder.
 - Send the API's own requests to `$WORK_HTTP_<ALIAS>` with the grant as a
   bearer, as the HTTP Basic password (any user name), or in `x-work-grant`.
   The gateway replaces whatever authorization was sent with the stored key.
   The grant renews every 20 minutes and with each turn, with a new value, so
-  read the file for each request (or again after a 401); never copy it into
+  invoke the helper for each request (or again after a 401); never copy it into
   a config file.
 
 ```sh
 # A query from a terminal or a test script.
-curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" \
+curl -sS -u "work:$("$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_GRANT_DIRECTORY")" \
   "$WORK_HTTP_LOGS/?query=SELECT%20count()%20FROM%20events"
 ```
 
 ```ts
 // A dev server's query helper: the grant read for each request.
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 export async function queryLogs(sql: string): Promise<string> {
-  const grant = readFileSync(process.env.WORK_HTTP_LOGS_GRANT_FILE ?? "", "utf8");
+  const grant = execFileSync(process.env.WORK_GATEWAY_READ_GRANT ?? "", [
+    process.env.WORK_HTTP_LOGS_GRANT_DIRECTORY ?? "",
+  ], { encoding: "utf8" }).trim();
   const response = await fetch(
     `${process.env.WORK_HTTP_LOGS}/?query=${encodeURIComponent(sql)}`,
     { headers: { authorization: `Bearer ${grant}` } },

@@ -98,6 +98,11 @@ export {
 } from "./coding-agent/warm-sessions.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
+  CONNECTION_GRANT_READER,
+  MODEL_GRANT_READER,
+  readConnectionGrant,
+} from "./connection-grants.js";
+export {
   gitCloneFailure,
   gitCloneUrl,
   redactUrlCredentials,

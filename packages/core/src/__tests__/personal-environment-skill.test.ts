@@ -41,7 +41,7 @@ describe("the personal-environment skill", () => {
     expect(SKILL).toContain(`. ../${SANDBOX_SECRETS_PATH}`);
     // Company APIs through the gateway (ADR 0212): the file and names.
     expect(SKILL).toContain(`. ../${SANDBOX_GATEWAY_ENV_PATH}`);
-    expect(SKILL).toContain(`$${httpAliasVariable("logs")}_GRANT_FILE`);
+    expect(SKILL).toContain(`$${httpAliasVariable("logs")}_GRANT_DIRECTORY`);
     const note =
       sandboxSecretsNote({
         environment: "dev",

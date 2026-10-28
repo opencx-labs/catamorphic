@@ -82,16 +82,17 @@ of every sandbox.
 When the Environment binds an HTTP API connection, code in this workspace (a
 dev server, a script, tests) calls it without its key. \`WORK_HTTP_<ALIAS>\`
 (the alias in capitals, \`-\` as \`_\`) is the API's address through the
-gateway, and \`WORK_HTTP_<ALIAS>_GRANT_FILE\` is the file holding this
-session's grant. Send the API's own requests to that address with the grant
+gateway, and \`WORK_HTTP_<ALIAS>_GRANT_DIRECTORY\` names this session's
+append-only grant directory. The helper in \`WORK_GATEWAY_READ_GRANT\` reads
+its greatest published revision. Send the API's own requests with the grant
 as a bearer, as the HTTP Basic password (any user name), or in
 \`x-work-grant\`; the gateway adds the real key:
 
 \`\`\`sh
-curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" "$WORK_HTTP_LOGS/?query=SELECT%201"
+curl -sS -u "work:$("$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_GRANT_DIRECTORY")" "$WORK_HTTP_LOGS/?query=SELECT%201"
 \`\`\`
 
-The grant changes as it renews, so read the file for each request (or again
+The grant changes as it renews, so invoke the helper for each request (or again
 after a 401) and never write it into a config file. \`env | grep WORK_HTTP_\`
 lists the APIs here; \`. ../.work-session/env/gateway.sh\` from the project
 folder loads them in a shell started some other way. The binding decides

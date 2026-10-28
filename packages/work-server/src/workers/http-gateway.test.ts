@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
+import { readConnectionGrant } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createWorkServer,
@@ -281,7 +282,7 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
     ).content;
   /** A query as a dev server would send it: the grant read per request. */
   const query = (sql: string) =>
-    `curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" "$WORK_HTTP_LOGS/?query=${encodeURIComponent(sql)}"`;
+    `curl -sS -u "work:$("$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_GRANT_DIRECTORY")" "$WORK_HTTP_LOGS/?query=${encodeURIComponent(sql)}"`;
   const gatewayFiles = () =>
     filesUnder(workerDir).filter(
       (file) =>
@@ -294,19 +295,21 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
     sessionId = await open("developer");
     const named = await run(
       sessionId,
-      'printf "%s\\n%s" "$WORK_HTTP_LOGS" "$WORK_HTTP_LOGS_GRANT_FILE"',
+      'printf "%s\\n%s" "$WORK_HTTP_LOGS" "$WORK_HTTP_LOGS_GRANT_DIRECTORY"',
     );
     const [status, url, grantFile] = named.split("\n");
     expect(status).toBe("exit=0");
     expect(url).toBe(`${base}/api/gateway/http/logs`);
     expect(grantFile).toMatch(/\/\.work-session\/grants\/logs$/);
-    expect(fs.readFileSync(grantFile ?? "", "utf8")).toMatch(/^\S+$/);
+    expect(await readConnectionGrant({ directory: grantFile ?? "" })).toMatch(
+      /^\S+$/,
+    );
 
     expect(await run(sessionId, query("SELECT 1"))).toBe("exit=0\n1");
     expect(
       await run(
         sessionId,
-        `curl -sS -H "x-work-grant: $(cat "$WORK_HTTP_LOGS_GRANT_FILE")" --data-binary '{"level":"info"}' "$WORK_HTTP_LOGS/?query=INSERT%20INTO%20logs%20FORMAT%20JSONEachRow"`,
+        `curl -sS -H "x-work-grant: $("$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_GRANT_DIRECTORY")" --data-binary '{"level":"info"}' "$WORK_HTTP_LOGS/?query=INSERT%20INTO%20logs%20FORMAT%20JSONEachRow"`,
       ),
     ).toBe("exit=0\ninserted 16");
     expect(received).toEqual([
@@ -343,7 +346,7 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
     expect(await run(inspector, query("SELECT 2"))).toBe("exit=0\n1");
     const written = await run(
       inspector,
-      `curl -sS -w ' %{http_code}' -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" --data-binary 'x' "$WORK_HTTP_LOGS/?query=INSERT%20INTO%20logs"`,
+      `curl -sS -w ' %{http_code}' -u "work:$("$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_GRANT_DIRECTORY")" --data-binary 'x' "$WORK_HTTP_LOGS/?query=INSERT%20INTO%20logs"`,
     );
     expect(written).toContain("sandboxing is contained");
     expect(written).toMatch(/ 403$/);
@@ -353,11 +356,13 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
   }, 120_000);
 
   it("stops honoring the grant, and takes the files out, once the chat is closed", async () => {
-    const grantFile = filesUnder(workerDir).find((file) =>
-      file.endsWith(path.join(".work-session", "grants", "logs")),
-    );
+    const grantFile = filesUnder(workerDir)
+      .map((file) => path.dirname(file))
+      .find((file) =>
+        file.endsWith(path.join(".work-session", "grants", "logs")),
+      );
     if (!grantFile) throw new Error("No grant file in the sandbox");
-    const grant = fs.readFileSync(grantFile, "utf8").trim();
+    const grant = await readConnectionGrant({ directory: grantFile });
     const select = () =>
       fetch(`${base}/api/gateway/http/logs?query=SELECT%203`, {
         headers: { authorization: `Bearer ${grant}` },

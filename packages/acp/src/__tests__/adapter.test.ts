@@ -979,16 +979,24 @@ describe("ACP adapter", () => {
 
 /**
  * A stand-in for the gateway's model route: a Chat Completions API that
- * answers only the grant now in `keyFile`, echoing the model it was asked
+ * answers only the grant now in `grantDirectory`, echoing the model it was asked
  * for. `rotate` renews the grant as the gateway does, the old one refused
  * at once; `renewDuringNextCall` renews it while the next call is on its
  * way, so that call arrives with the grant just revoked.
  */
-async function fakeGateway(keyFile: string) {
+async function fakeGateway(grantDirectory: string) {
   const seen: Array<{ authorization: string; body: string }> = [];
   let grant = "grant-1";
   let renewal: string | undefined;
-  fs.writeFileSync(keyFile, `${grant}\n`);
+  let revision = 0;
+  const publish = (value: string) => {
+    fs.mkdirSync(grantDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(grantDirectory, String(++revision)),
+      `${value}\n`,
+    );
+  };
+  publish(grant);
   const server = http.createServer((request, response) => {
     let body = "";
     request.on("data", (chunk: Buffer) => {
@@ -1000,7 +1008,7 @@ async function fakeGateway(keyFile: string) {
       if (renewal) {
         grant = renewal;
         renewal = undefined;
-        fs.writeFileSync(keyFile, `${grant}\n`);
+        publish(grant);
       }
       if (
         authorization !== `Bearer ${grant}` ||
@@ -1029,7 +1037,7 @@ async function fakeGateway(keyFile: string) {
     baseUrl: `http://127.0.0.1:${port}/gateway/model/models`,
     rotate: (next: string) => {
       grant = next;
-      fs.writeFileSync(keyFile, `${next}\n`);
+      publish(next);
     },
     renewDuringNextCall: (next: string) => {
       renewal = next;
@@ -1054,7 +1062,7 @@ describe("ACP agents on a model connection (ADR 0255)", () => {
         kind: "gateway",
         api: "openai",
         baseUrl: gateway.baseUrl,
-        keyFile: path.join(space.dir, "grant"),
+        grantDirectory: path.join(space.dir, "grant"),
       },
       env: { TEST_AGENT_STATE: space.stateFile, ...env },
     });
@@ -1263,11 +1271,12 @@ async function upstreamServer(
 }
 
 describe("the loopback model endpoint", () => {
-  const keyFile = () => {
+  const grantDirectory = () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-model-"));
     dirs.push(dir);
     const file = path.join(dir, "grant");
-    fs.writeFileSync(file, "grant-a\n");
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, "1"), "grant-a\n");
     return file;
   };
   const until = async (check: () => boolean) => {
@@ -1294,7 +1303,7 @@ describe("the loopback model endpoint", () => {
         kind: "gateway",
         api: "anthropic",
         baseUrl: `${upstream.baseUrl}/gateway/model/anthropic`,
-        keyFile: keyFile(),
+        grantDirectory: grantDirectory(),
       },
     });
     try {
@@ -1341,7 +1350,7 @@ describe("the loopback model endpoint", () => {
         kind: "gateway",
         api: "openai",
         baseUrl: upstream.baseUrl,
-        keyFile: keyFile(),
+        grantDirectory: grantDirectory(),
       },
     });
     try {
@@ -1378,7 +1387,7 @@ describe("the loopback model endpoint", () => {
         kind: "gateway",
         api: "openai",
         baseUrl: upstream.baseUrl,
-        keyFile: keyFile(),
+        grantDirectory: grantDirectory(),
       },
     });
     try {
@@ -1408,7 +1417,7 @@ describe("the loopback model endpoint", () => {
         kind: "gateway",
         api: "openai",
         baseUrl: upstream.baseUrl,
-        keyFile: keyFile(),
+        grantDirectory: grantDirectory(),
       },
     });
     try {
@@ -1429,14 +1438,14 @@ describe("the loopback model endpoint", () => {
   it("opens only to its own key, reads the grant per request, and retries once after a renewal", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-model-"));
     dirs.push(dir);
-    const keyFile = path.join(dir, "grant");
-    const gateway = await fakeGateway(keyFile);
+    const grantDirectory = path.join(dir, "grant");
+    const gateway = await fakeGateway(grantDirectory);
     const model = await serveLoopbackModel({
       access: {
         kind: "gateway",
         api: "openai",
         baseUrl: gateway.baseUrl,
-        keyFile,
+        grantDirectory,
       },
     });
     const ask = (key: string) =>
@@ -1472,7 +1481,7 @@ describe("the loopback model endpoint", () => {
         "Bearer grant-3",
       ]);
       // A refusal the grant file cannot fix comes back as the gateway said.
-      fs.writeFileSync(keyFile, "grant-revoked\n");
+      fs.writeFileSync(path.join(grantDirectory, "999"), "grant-revoked\n");
       const refused = await ask(model.apiKey);
       expect(refused.status).toBe(401);
       expect(gateway.seen).toHaveLength(5);

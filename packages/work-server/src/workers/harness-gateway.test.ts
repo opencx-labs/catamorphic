@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { ConnectionActionGuard, Identity } from "@catamorphic/core";
+import { readConnectionGrant } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -387,9 +388,11 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
       }),
     });
   const grantFile = () =>
-    filesUnder(workerDir).find((file) =>
-      file.endsWith(path.join(".work-session", "grants", "anthropic")),
-    );
+    filesUnder(workerDir)
+      .map((file) => path.dirname(file))
+      .find((file) =>
+        file.endsWith(path.join(".work-session", "grants", "anthropic")),
+      );
 
   it("edits a file and runs a command in its sandbox on the worker", async () => {
     const session = await sessions().create(identity, projectId, {
@@ -500,13 +503,13 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
     expect(filesHolding(workerDir, REAL_KEY)).toEqual([]);
     const file = grantFile();
     if (!file) throw new Error("No grant file in the sandbox");
-    expect(fs.readFileSync(file, "utf8").trim()).toMatch(/\S{20,}/);
+    expect(await readConnectionGrant({ directory: file })).toMatch(/\S{20,}/);
   }, 120_000);
 
   it("refuses all model calls between turns before model policy or forwarding", async () => {
     const file = grantFile();
     if (!file) throw new Error("No grant file in the sandbox");
-    const grant = fs.readFileSync(file, "utf8").trim();
+    const grant = await readConnectionGrant({ directory: file });
     const calls = upstreamKeys.length;
     for (const model of ["gpt-5", "claude-forbidden", "claude-test"]) {
       const response = await gatewayCall(grant, model);
@@ -519,7 +522,7 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
   it("stops honoring the grant once the chat is closed", async () => {
     const file = grantFile();
     if (!file) throw new Error("No grant file in the sandbox");
-    const grant = fs.readFileSync(file, "utf8").trim();
+    const grant = await readConnectionGrant({ directory: file });
     await sessions().close(identity, projectId, sessionId);
     const refused = await gatewayCall(grant, "claude-test");
     expect(refused.status).toBe(401);
@@ -599,11 +602,13 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
         .executeTakeFirstOrThrow();
       const attemptId = before.active_attempt_id;
       if (!attemptId) throw new Error("No active attempt");
-      const file = filesUnder(workerDir).find((entry) =>
-        entry.endsWith(path.join("model-grants", attemptId, "anthropic")),
-      );
+      const file = filesUnder(workerDir)
+        .map((entry) => path.dirname(entry))
+        .find((entry) =>
+          entry.endsWith(path.join("model-grants", attemptId, "anthropic")),
+        );
       if (!file) throw new Error("No attempt model grant");
-      const old = fs.readFileSync(file, "utf8");
+      const old = await readConnectionGrant({ directory: file });
       await sessions().stopLocalTurns({ timeoutMs: 10_000, handBack: "all" });
       const b = await createWorkServer({
         ...testServerOptions({
@@ -632,7 +637,7 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
         return (
           current.lease_token !== before.lease_token &&
           current.active_attempt_id === attemptId &&
-          fs.readFileSync(file, "utf8") !== old
+          (await readConnectionGrant({ directory: file })) !== old
         );
       }, "the new replica's grant publication");
       const current = await core.db
@@ -642,7 +647,7 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
         .executeTakeFirstOrThrow();
       expect(current.active_attempt_id).toBe(attemptId);
       const refreshed = await gatewayCall(
-        fs.readFileSync(file, "utf8").trim(),
+        await readConnectionGrant({ directory: file }),
         "claude-test",
       );
       expect(refreshed.status).toBe(200);

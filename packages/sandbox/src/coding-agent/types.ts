@@ -176,7 +176,7 @@ export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 /**
  * A model reached through the connection gateway from inside a sandbox
  * (ADR 0180). The harness process there sends the provider's own HTTP API
- * to `baseUrl` with the session's grant, read from `keyFile` at each use,
+ * to `baseUrl` with the session's grant, read from `grantDirectory` at each use,
  * as its API key; the gateway forwards with the real key.
  */
 export interface SandboxModelGateway {
@@ -190,8 +190,8 @@ export interface SandboxModelGateway {
    * `OPENAI_BASE_URL`).
    */
   baseUrl: string;
-  /** Absolute sandbox path of the file holding the current grant. */
-  keyFile: string;
+  /** Absolute sandbox path of immutable grant files named by publication revision. */
+  grantDirectory: string;
 }
 
 /** What a host-supplied tool knows about the session it runs in. */
