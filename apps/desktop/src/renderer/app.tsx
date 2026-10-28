@@ -1242,7 +1242,13 @@ export function App({
     if (completingSwitchRef.current) return;
     completingSwitchRef.current = true;
     try {
-      await desktopApi.windowSetProfile(profile.id);
+      const assignedProfileId = await desktopApi.windowSetProfile(profile.id);
+      // Main may have brought an existing window forward instead. This
+      // window keeps its own profile, resources and preferences.
+      if (assignedProfileId !== profile.id) {
+        setProfileVeil({ stage: "out" });
+        return;
+      }
       // Unknown until the refetch lands — anything keyed on the agent
       // roster (the setup-tab auto-open, chat gating) must not act on the
       // OLD profile's roster while the NEW profile's project is active.

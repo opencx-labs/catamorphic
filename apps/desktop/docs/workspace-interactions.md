@@ -202,7 +202,11 @@ from the one it came from and carries its project's name, so the macOS Window
 menu lists it and Cmd+` reaches it. Closing an occupied window hides it;
 explicit Quit owns shutdown. The palette's **Close current Work window** uses
 that same lifecycle, including in an empty window. Cmd+W continues to close the
-focused tab or chat. **Rename current chat…** uses the existing rename dialog
+focused tab or chat. Selecting a profile brings its existing workspace window
+forward, including one hidden by Close window. An empty window changes profiles
+in place only when that profile has no workspace window. If an empty duplicate
+already exists, profile selection prefers a window retaining that profile's work.
+**Rename current chat…** uses the existing rename dialog
 and can name the current chat while its bubble is minimized.
 
 A restart, including an update, restores every workspace window with its profile,

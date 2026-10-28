@@ -848,8 +848,21 @@ export class DesktopWorkspaces {
   }
 
   activateProfile(profileId: string): boolean {
-    const window = this.lastWindows.get(profileId);
-    if (!window || window.isDestroyed()) return false;
+    const candidates = this.options.windows
+      .windowsFor(profileId)
+      .filter((window) => this.isWorkspace(window) && !window.isDestroyed());
+    const last = this.lastWindows.get(profileId);
+    const occupied = candidates.filter((window) =>
+      [...this.owners.values()].includes(window.webContents),
+    );
+    // An empty duplicate must not hide the profile's retained work. The
+    // last window may also have closed or switched to a different profile.
+    const window =
+      occupied.find((window) => window === last) ??
+      occupied[0] ??
+      candidates.find((window) => window === last) ??
+      candidates[0];
+    if (!window) return false;
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();
