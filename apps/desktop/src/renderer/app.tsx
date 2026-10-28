@@ -6188,13 +6188,12 @@ export function App({
     if (slot) return SLOT_CLASSES[slot] + paneGeometryTransition;
     // What a floating chat grows over as it becomes a tab stays in place
     // beneath it until the chat covers it (useRecedingSurface).
-    if (key === recedingSurface)
-      return `${SLOT_CLASSES.full} pointer-events-none`;
+    if (key === recedingSurface) return SLOT_CLASSES.full;
     // Browser panes keep their layout while hidden — a display:none
     // webview detaches its guest and background pages would stop
     // loading (worse for agent-driven tabs).
     return key.startsWith("browser:")
-      ? `${busyBrowsers.has(key.slice("browser:".length)) ? "opacity-0" : "invisible"} pointer-events-none absolute inset-0 flex flex-col`
+      ? `${busyBrowsers.has(key.slice("browser:".length)) ? "opacity-0" : "invisible"} absolute inset-0 flex flex-col`
       : "hidden";
   };
   /** Ratio-driven pane geometry (50/50 until the divider is dragged). */
@@ -6209,6 +6208,11 @@ export function App({
   const isSplitSlot = (key: string) =>
     viewSlots[key] === "left" || viewSlots[key] === "right";
   const paneFocusProps = (key: string) => ({
+    // A pane out of sight takes none of the person's input, whatever it
+    // holds: a page an agent works in stays laid out over the shown one,
+    // transparent, and its agent veil asks for the pointer. The agent's
+    // own input reaches its page through the guest, not through here.
+    inert: viewSlots[key] ? undefined : true,
     "data-workspace-slot": viewSlots[key],
     "data-surface-key": key,
     "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
