@@ -293,3 +293,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0285](0285-one-version-for-work-and-the-framework.md) | One version for Work and the framework | Accepted (extends 0082, 0085, 0159) |
 | [0286](0286-agents-request-chip-refresh-from-the-owning-chat.md) | Agents request chip refresh from the owning chat | Accepted (extends 0239) |
 | [0287](0287-better-auth-17-preserves-work-grants.md) | Better Auth 1.7 preserves Work's OAuth grants | Accepted (implements 0055, 0161) |
+| [0288](0288-discard-plain-carets-when-their-text-disappears.md) | Discard plain carets when their text disappears | Accepted |
