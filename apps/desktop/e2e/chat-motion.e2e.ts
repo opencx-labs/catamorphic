@@ -149,7 +149,7 @@ interface Frame {
 }
 
 /** Samples the front chat on every frame until stopped. */
-const RECORDER = `(() => {
+const RECORDER = (captureClosing: boolean) => `(() => {
   const round = (n) => Math.round(n * 10) / 10;
   const box = (el) => {
     if (!el) return null;
@@ -158,6 +158,55 @@ const RECORDER = `(() => {
   };
   const frames = [];
   const beats = [];
+  const closing = {anchor:null,duration:null,samples:[],error:null,at:null,activity:null};
+  let lastSteadyHeight = null;
+  let closingObserver;
+  if (${captureClosing}) {
+    closingObserver = new MutationObserver((changes) => {
+      const row = frontDock()?.querySelector('[data-testid="chat-activity"]');
+      const reveal = row?.closest('.cat-reveal');
+      const answer = [...(frontDock()?.querySelectorAll('[role="log"] article') ?? [])]
+        .some(article => article.textContent.includes('Fixed: the lexer'));
+      if (!answer) return;
+      if (!reveal?.hasAttribute('data-closed') ||
+          !changes.some(change => change.target === reveal)) return;
+      closingObserver.disconnect();
+      closing.anchor = lastSteadyHeight;
+      closing.at = round(performance.now());
+      closing.activity = row.textContent;
+      const saved = [];
+      try {
+        const motions = reveal.getAnimations().filter(a => a instanceof CSSTransition);
+        const height = motions.find(a => a.transitionProperty === 'grid-template-rows');
+        const duration = height?.effect?.getComputedTiming().duration;
+        if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0)
+          throw new Error('The activity line did not start a closing grid transition');
+        if (height.playState !== 'running' || typeof height.currentTime !== 'number' ||
+            !Number.isFinite(height.currentTime))
+          throw new Error('The closing grid transition is not running');
+        closing.duration = duration;
+        for (const motion of motions) saved.push([motion,motion.currentTime]);
+        // Seek and restore in one task. Pausing across awaits lets the
+        // line's retention timer remove it before the probe can finish.
+        // Stay short of the endpoint so no transition-end event is queued.
+        for (const fraction of [0,0.1,0.2,0.3,0.5,0.7,0.9,0.9995]) {
+          const time = duration * fraction;
+          for (const motion of motions) motion.currentTime = time;
+          closing.samples.push({time,height:round(reveal.getBoundingClientRect().height)});
+        }
+      } catch (error) {
+        closing.error = String(error);
+      } finally {
+        for (const [motion,time] of saved) {
+          try { motion.currentTime = time; }
+          catch (error) { closing.error ??= String(error); }
+        }
+      }
+    });
+    closingObserver.observe(frontDock(), {
+      attributes:true,subtree:true,attributeFilter:['data-closed'],
+    });
+  }
   const onBeat = (event) => {
     if (event.animationName !== 'catamorphic-swap-out') return;
     const node = event.target;
@@ -184,6 +233,9 @@ const RECORDER = `(() => {
     const first = live?.querySelector('[data-testid="chat-step"]');
     const firstButton = first?.querySelector('button');
     const articles = log ? [...log.querySelectorAll('article')] : [];
+    const reveal = row?.closest('.cat-reveal');
+    if (reveal && !reveal.matches('[data-moving], [data-entering], [data-closed]'))
+      lastSteadyHeight = round(reveal.getBoundingClientRect().height);
     frames.push({
       t: round(performance.now()),
       beats: beats.splice(0),
@@ -220,7 +272,8 @@ const RECORDER = `(() => {
   };
   requestAnimationFrame(sample);
   window.__chatMotion = {
-    stop() { on = false; document.removeEventListener('animationend', onBeat, true); return frames; },
+    stop() { on = false; closingObserver?.disconnect(); document.removeEventListener('animationend', onBeat, true); return frames; },
+    closing,
     // Frames sampled since a moment: a window waits for enough of them,
     // whatever stalls the renderer meanwhile.
     since(t) { return frames.filter((frame) => frame.t >= t).length; },
@@ -317,6 +370,7 @@ async function recordTurn(
     cpuSlowdown?: number;
     stalls?: boolean;
     minWorkFrames?: number;
+    captureClosing?: boolean;
   } = {},
 ): Promise<Frame[]> {
   // A renderer this many times slower: frames come late, and what mounted
@@ -362,6 +416,7 @@ async function recordTurn(
       holding,
       options.stalls,
       options.minWorkFrames,
+      options.captureClosing,
     );
   } finally {
     fs.rmSync(paceGate, { force: true });
@@ -380,8 +435,9 @@ async function sampleTurn(
   during?: () => Promise<void>,
   stalls = false,
   minWorkFrames?: number,
+  captureClosing = false,
 ): Promise<Frame[]> {
-  await run(RECORDER);
+  await run(RECORDER(captureClosing));
   if (stalls) await run(`return ${STALLS};`);
   await run(`
     const input = composer(); input.focus();
@@ -410,11 +466,17 @@ async function sampleTurn(
   const frames = await run<Frame[]>("return window.__chatMotion.stop();");
   // Kept with the run's diagnostics, to read when an assertion fails.
   const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
-  if (artifacts)
+  if (artifacts) {
     fs.writeFileSync(
       path.join(artifacts, `chat-motion-${name}.json`),
       JSON.stringify(frames),
     );
+    if (captureClosing)
+      fs.writeFileSync(
+        path.join(artifacts, `chat-motion-${name}-closing.json`),
+        JSON.stringify(await run("return window.__chatMotion.closing;")),
+      );
+  }
   return frames;
 }
 
@@ -610,6 +672,7 @@ describe("chat motion", () => {
           `(() => { Date.now = window.__realNow; return true; })()`,
         );
       },
+      { captureClosing: true },
     );
     const work = workPhase(frames);
     const live = work.filter((frame) => frame.spinner && frame.toggle);
@@ -670,15 +733,36 @@ describe("chat motion", () => {
     for (const frame of silent) expect(frame.stallOnLine).toBe(true);
 
     expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
-    // At the end the activity line closes its height before it goes.
-    const closing = frames
-      .filter((frame) => frame.answer && frame.reveal)
-      .map((frame) => frame.reveal?.[3] ?? 0);
-    const full = Math.max(...closing);
+    // Probe the real close at explicit times, separately from natural RAF
+    // recording: a busy renderer can miss the entire 200 ms interval.
+    const closing = await run<{
+      anchor: number | null;
+      duration: number | null;
+      error: string | null;
+      samples: { time: number; height: number }[];
+    }>("return window.__chatMotion.closing;");
+    const detail = JSON.stringify(closing);
+    expect(closing.error, detail).toBeNull();
+    expect(closing.duration ?? 0, detail).toBeGreaterThan(0);
+    expect(closing.anchor ?? 0, detail).toBeGreaterThan(1);
+    expect(closing.samples.length, detail).toBeGreaterThan(2);
+    const full = closing.anchor ?? 0;
     expect(
-      closing.filter((height) => height > 1 && height < full - 1).length,
-      "frames between open and closed",
+      Math.abs((closing.samples[0]?.height ?? -1) - full),
+      detail,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      closing.samples.filter(({ height }) => height > 1 && height < full - 1)
+        .length,
+      `frames between open and closed: ${detail}`,
     ).toBeGreaterThan(0);
+    expect(closing.samples.at(-1)?.height ?? full, detail).toBeLessThan(1);
+    expect(
+      closing.samples.filter(
+        ({ height }) => height < -0.5 || height > full + 0.5,
+      ),
+      detail,
+    ).toEqual([]);
     expect(
       await run<number>(
         `return frontDock().querySelectorAll('[role="log"] [role="timer"]').length;`,
