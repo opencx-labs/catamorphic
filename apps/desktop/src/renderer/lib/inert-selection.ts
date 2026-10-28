@@ -6,12 +6,13 @@
  * palette or modal, another project's workspace) become inert. A caret left
  * inside one, as typing in a chat and then minimising it leaves it, is no
  * position the caret can take, and Chromium recomputes the visible selection
- * before every frame: each time it walks backwards through every inert
- * element looking for one it can use. Behind a few long minimised chats that
+ * before every frame: each time it walks through inert
+ * elements looking for one it can use. Behind a few long minimised chats that
  * walk took 60 to 130 ms a frame. A selection lying within one region that
  * turns inert, or that anything places in a region already inert, is
- * released; one only reaching in is left alone (an inert end's walk stops
- * at the region it is in).
+ * released; one only reaching in is left alone.
+ * Nested inert regions still share their outer region: the nearest inert
+ * ancestor of one endpoint need not contain the other endpoint.
  *
  * What was released comes back without moving focus, in its direction. A
  * highlight outside any editor returns with its container, or the ancestor
@@ -23,12 +24,76 @@
  * whatever the person had focused meanwhile (app.e2e.ts, "Cmd+W closes the
  * tab behind the floating chat when the tab has focus"). A press inside
  * places its own caret, so the saved one is dropped.
+ *
+ * Plain text that disappears leaves no invisible caret behind (ADR 0288).
+ * Keep its raw node until a mutation arrives: a live Range would already
+ * have moved to the surrounding boundary, which can precede a long hidden
+ * transcript and cause the same native search. Editor carets and highlights
+ * keep their existing behavior.
  */
 export function installInertSelectionGuard(
   doc: Document = document,
 ): () => void {
   /** Released selections, by the inert element that held them. */
   const released = new Map<Element, Saved>();
+  let plainCaret: { node: Node; hadText: boolean; position: Range } | null =
+    null;
+
+  const rememberPlainCaret = () => {
+    const selection = doc.getSelection();
+    const node = selection?.anchorNode;
+    plainCaret =
+      selection?.rangeCount &&
+      selection.isCollapsed &&
+      node &&
+      !editingHost(node)
+        ? {
+            node,
+            hadText: node.nodeType === Node.TEXT_NODE && node.nodeValue !== "",
+            position: selection.getRangeAt(0).cloneRange(),
+          }
+        : null;
+  };
+
+  const discardDisappearedCaret = (mutations: MutationRecord[]) => {
+    if (!plainCaret) return;
+    const { node, hadText, position } = plainCaret;
+    if (node.isConnected && !(hadText && node.nodeValue === "")) return;
+    // splitText(0) empties the original node but adds its surviving text
+    // beside it. A caret at zero stays in that original node in Chromium.
+    const next = node.nextSibling;
+    if (
+      node.isConnected &&
+      next?.nodeType === Node.TEXT_NODE &&
+      next.nodeValue !== "" &&
+      mutations.some(
+        (mutation) =>
+          mutation.type === "childList" &&
+          mutation.target === node.parentNode &&
+          [...mutation.addedNodes].includes(next),
+      )
+    )
+      return;
+    const selection = doc.getSelection();
+    if (
+      !selection?.rangeCount ||
+      !selection.isCollapsed ||
+      !selection.anchorNode ||
+      (selection.anchorNode.nodeType === Node.TEXT_NODE &&
+        selection.anchorNode.nodeValue !== "") ||
+      editingHost(selection.anchorNode)
+    )
+      return;
+    // The raw node proves its text disappeared; the cloned live range
+    // follows every DOM adjustment. A selection subsequently made elsewhere
+    // differs in node or offset and must remain alone.
+    if (
+      selection.anchorNode === position.startContainer &&
+      selection.anchorOffset === position.startOffset
+    ) {
+      selection.removeAllRanges();
+    }
+  };
 
   const release = (container: Element) => {
     const selection = doc.getSelection();
@@ -66,8 +131,10 @@ export function installInertSelectionGuard(
   };
 
   const observer = new MutationObserver((mutations) => {
+    discardDisappearedCaret(mutations);
     const returned: Element[] = [];
-    for (const { target } of mutations) {
+    for (const { type, target } of mutations) {
+      if (type !== "attributes") continue;
       if (!(target instanceof Element)) continue;
       if (target.hasAttribute("inert")) release(target);
       else returned.push(target);
@@ -88,13 +155,25 @@ export function installInertSelectionGuard(
         putBack(container, saved);
       }
     }
+    rememberPlainCaret();
   });
 
   const onSelectionChange = () => {
+    rememberPlainCaret();
     const selection = doc.getSelection();
-    if (!selection?.anchorNode) return;
-    const inert = elementOf(selection.anchorNode)?.closest("[inert]");
-    if (inert) release(inert);
+    if (!selection?.anchorNode || !selection.focusNode) return;
+    // A folded region can hold just the anchor while its inert workspace
+    // holds both ends. Find that common inert ancestor before releasing.
+    for (
+      let inert = elementOf(selection.anchorNode)?.closest("[inert]");
+      inert;
+      inert = inert.parentElement?.closest("[inert]")
+    ) {
+      if (!inert.contains(selection.focusNode)) continue;
+      release(inert);
+      rememberPlainCaret();
+      return;
+    }
   };
 
   const onPointerDown = (event: PointerEvent) => {
@@ -116,8 +195,11 @@ export function installInertSelectionGuard(
   observer.observe(doc.documentElement, {
     attributes: true,
     attributeFilter: ["inert"],
+    childList: true,
+    characterData: true,
     subtree: true,
   });
+  rememberPlainCaret();
   doc.addEventListener("selectionchange", onSelectionChange);
   doc.addEventListener("pointerdown", onPointerDown, true);
   doc.addEventListener("focus", onFocus, true);
@@ -127,6 +209,7 @@ export function installInertSelectionGuard(
     doc.removeEventListener("pointerdown", onPointerDown, true);
     doc.removeEventListener("focus", onFocus, true);
     released.clear();
+    plainCaret = null;
   };
 }
 

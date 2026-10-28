@@ -289,6 +289,63 @@ describe("inert selection guard", () => {
     });
   });
 
+  it.each([false, true])(
+    "releases a selection inside one inert ancestor across a nested inert boundary (backward: %s)",
+    async (backward) => {
+      uninstall = installInertSelectionGuard();
+      const workspace = document.createElement("section");
+      const folded = document.createElement("div");
+      const inside = paragraph("folded work", folded).firstChild;
+      const outside = paragraph("another reply", workspace).firstChild;
+      if (backward) workspace.append(folded);
+      else workspace.prepend(folded);
+      document.body.append(workspace);
+      folded.setAttribute("inert", "");
+      workspace.setAttribute("inert", "");
+      await settle();
+      if (inside && outside) {
+        selection()?.setBaseAndExtent(inside, 2, outside, 4);
+      }
+      document.dispatchEvent(new Event("selectionchange"));
+      expect(selection()?.rangeCount).toBe(0);
+      workspace.removeAttribute("inert");
+      await settle();
+      // One endpoint remains inert: do not restore into it.
+      expect(selection()?.rangeCount).toBe(0);
+    },
+  );
+
+  it.each([false, true])(
+    "restores the released highlight after both nested regions return (backward: %s)",
+    async (backward) => {
+      uninstall = installInertSelectionGuard();
+      const workspace = document.createElement("section");
+      const folded = document.createElement("div");
+      const inside = paragraph("folded work", folded).firstChild;
+      const outside = paragraph("another reply", workspace).firstChild;
+      if (backward) workspace.append(folded);
+      else workspace.prepend(folded);
+      document.body.append(workspace);
+      folded.setAttribute("inert", "");
+      workspace.setAttribute("inert", "");
+      await settle();
+      if (inside && outside) {
+        selection()?.setBaseAndExtent(inside, 2, outside, 4);
+      }
+      document.dispatchEvent(new Event("selectionchange"));
+      expect(selection()?.rangeCount).toBe(0);
+      folded.removeAttribute("inert");
+      await settle();
+      expect(selection()?.rangeCount).toBe(0);
+      workspace.removeAttribute("inert");
+      await settle();
+      expect(selection()?.anchorNode).toBe(inside);
+      expect(selection()?.anchorOffset).toBe(2);
+      expect(selection()?.focusNode).toBe(outside);
+      expect(selection()?.focusOffset).toBe(4);
+    },
+  );
+
   it("stops watching once uninstalled", async () => {
     installInertSelectionGuard()();
     const { surface } = surfaceWithCaret();
@@ -296,4 +353,163 @@ describe("inert selection guard", () => {
     await settle();
     expect(selection()?.rangeCount).toBe(1);
   });
+
+  it("discards the plain caret relocated to a parent after its text is removed", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    selection()?.collapse(reply.firstChild, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    reply.remove();
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+  });
+
+  it("follows successive removals to the browser's final parent boundary", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    const text = reply.firstChild;
+    selection()?.collapse(text, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    text?.remove();
+    reply.remove();
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+  });
+
+  it("discards a plain caret when its text node becomes empty", async () => {
+    uninstall = installInertSelectionGuard();
+    const text = document.createTextNode("a transient reply");
+    document.body.append(text);
+    selection()?.collapse(text, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    text.data = "";
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+  });
+
+  it("keeps a caret when plain text is edited but remains", async () => {
+    uninstall = installInertSelectionGuard();
+    const text = document.createTextNode("a reply");
+    document.body.append(text);
+    selection()?.collapse(text, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    text.data = "edited reply";
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+    expect(selection()?.anchorNode).toBe(text);
+  });
+
+  it("preserves a highlighted selection when its content is removed", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    const text = reply.firstChild;
+    if (text) selection()?.setBaseAndExtent(text, 2, text, 5);
+    document.dispatchEvent(new Event("selectionchange"));
+    reply.remove();
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+  });
+
+  it("preserves an editor caret when its text is removed", async () => {
+    uninstall = installInertSelectionGuard();
+    const { composer, text } = surfaceWithCaret();
+    document.dispatchEvent(new Event("selectionchange"));
+    text?.remove();
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+    expect(selection()?.anchorNode).toBe(composer);
+  });
+
+  it("keeps the selection when its content moves instead of disappearing", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a reply");
+    const destination = document.createElement("section");
+    document.body.append(destination);
+    selection()?.collapse(reply.firstChild, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    destination.append(reply);
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+  });
+
+  it("keeps a new caret placed elsewhere in the same removal task", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    const elsewhere = paragraph("another reply").firstChild;
+    selection()?.collapse(reply.firstChild, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    reply.remove();
+    selection()?.collapse(elsewhere, 2);
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+    expect(selection()?.anchorNode).toBe(elsewhere);
+    expect(selection()?.anchorOffset).toBe(2);
+  });
+
+  it("ignores removals outside the caret's text", async () => {
+    uninstall = installInertSelectionGuard();
+    const text = paragraph("a reply").firstChild;
+    const removed = paragraph("another reply");
+    selection()?.collapse(text, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    removed.remove();
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+    expect(selection()?.anchorNode).toBe(text);
+    expect(selection()?.anchorOffset).toBe(3);
+  });
+
+  it("keeps a new caret at a different offset in the same parent", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    paragraph("another reply");
+    selection()?.collapse(reply.firstChild, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    reply.remove();
+    selection()?.collapse(document.body, 1);
+    await settle();
+    expect(selection()?.rangeCount).toBe(1);
+    expect(selection()?.anchorNode).toBe(document.body);
+    expect(selection()?.anchorOffset).toBe(1);
+  });
+
+  it("tracks the removed caret through later sibling changes", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    const sibling = paragraph("another reply");
+    selection()?.collapse(reply.firstChild, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    reply.remove();
+    sibling.before(document.createElement("hr"));
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+  });
+
+  it("discards the caret when added sibling text disappears with its container", async () => {
+    uninstall = installInertSelectionGuard();
+    const reply = paragraph("a transient reply");
+    const text = reply.firstChild;
+    selection()?.collapse(text, 3);
+    document.dispatchEvent(new Event("selectionchange"));
+    text?.after(document.createTextNode("extra"));
+    reply.remove();
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+  });
+
+  it.each([0, 3])(
+    "preserves a caret at %s when splitting leaves its text visible",
+    async (offset) => {
+      uninstall = installInertSelectionGuard();
+      const text = document.createTextNode("a reply");
+      document.body.append(text);
+      selection()?.collapse(text, offset);
+      document.dispatchEvent(new Event("selectionchange"));
+      const remainder = text.splitText(0);
+      await settle();
+      expect(selection()?.rangeCount).toBe(1);
+      expect(selection()?.anchorNode).toBe(offset === 0 ? text : remainder);
+      expect(selection()?.anchorOffset).toBe(offset);
+    },
+  );
 });

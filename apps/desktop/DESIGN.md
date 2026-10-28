@@ -42,6 +42,15 @@ handoff for turns it missed. Agent changes clear conversation model and effort
 overrides. A working turn must settle before the agent can change. A model value that
 cannot change explains why on hover; the idle model picker uses the palette.
 
+## Selections when content disappears
+
+A collapsed caret in ordinary text is discarded when that text disappears
+(ADR 0288). It is invisible, but retaining its browser-adjusted boundary can
+make every frame search through long hidden chats. The next Shift-click
+starts a fresh selection. Editor carets and highlighted text retain the
+existing selection and inert-surface restoration behavior; moving content
+or selecting somewhere else does not trigger this cleanup.
+
 ## Contained project workspace
 
 Project capabilities live in `.work/`, including the independent Bun
