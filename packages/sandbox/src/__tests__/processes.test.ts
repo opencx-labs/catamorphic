@@ -75,6 +75,7 @@ describe("shellSandboxProcesses", () => {
     const first = await processes.readProcessOutput({
       sandboxId,
       processId: started.processId,
+      maxBytes: Buffer.byteLength("one hé llo\n"),
       waitMs: 5_000,
     });
     expect(first.chunk).toBe("one hé llo\n");
