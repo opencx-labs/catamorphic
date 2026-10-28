@@ -153,31 +153,28 @@ describe("Work server", () => {
       ),
     ).toEqual({ caller, runId: "run", input: { operationId: "launch-1" } });
   });
-  it.each(["/api/auth/oauth2/token", "/api/auth/mcp/token"])(
-    "refuses repeated or unsupported token parameters at %s",
-    async (tokenEndpoint) => {
-      const token = (body: string) =>
-        server.app.inject({
-          method: "POST",
-          url: tokenEndpoint,
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          payload: body,
-        });
-      const repeated = await token(
-        "grant_type=authorization_code&grant_type=refresh_token&refresh_token=x",
-      );
-      expect(repeated.statusCode).toBe(400);
-      expect(repeated.json().error).toBe("invalid_request");
-      const empty = await token(
-        "grant_type=refresh_token&refresh_token=&refresh_token=x",
-      );
-      expect(empty.json().error).toBe("invalid_request");
-      const missing = await token("grant_type=refresh_token");
-      expect(missing.json().error).toBe("invalid_request");
-      const other = await token("grant_type=client_credentials");
-      expect(other.json().error).toBe("unsupported_grant_type");
-    },
-  );
+  it("refuses repeated or unsupported token parameters", async () => {
+    const token = (body: string) =>
+      server.app.inject({
+        method: "POST",
+        url: "/api/auth/oauth2/token",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        payload: body,
+      });
+    const repeated = await token(
+      "grant_type=authorization_code&grant_type=refresh_token&refresh_token=x",
+    );
+    expect(repeated.statusCode).toBe(400);
+    expect(repeated.json().error).toBe("invalid_request");
+    const empty = await token(
+      "grant_type=refresh_token&refresh_token=&refresh_token=x",
+    );
+    expect(empty.json().error).toBe("invalid_request");
+    const missing = await token("grant_type=refresh_token");
+    expect(missing.json().error).toBe("invalid_request");
+    const other = await token("grant_type=client_credentials");
+    expect(other.json().error).toBe("unsupported_grant_type");
+  });
 
   it("publishes OAuth authorization and protected-resource discovery", async () => {
     const authorization = await server.app.inject({

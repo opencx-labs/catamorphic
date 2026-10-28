@@ -85,7 +85,7 @@ function startFakeServer(): Promise<void> {
       return send(200, {
         issuer: origin,
         authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
-        token_endpoint: `${origin}/api/auth/mcp/token`,
+        token_endpoint: `${origin}/api/auth/oauth2/token`,
         registration_endpoint: `${origin}/api/auth/mcp/register`,
         code_challenge_methods_supported: ["S256"],
       });
@@ -105,7 +105,7 @@ function startFakeServer(): Promise<void> {
       }, 500);
       return;
     }
-    if (req.method === "POST" && url.pathname === "/api/auth/mcp/token") {
+    if (req.method === "POST" && url.pathname === "/api/auth/oauth2/token") {
       return send(200, {
         access_token: TOKEN,
         refresh_token: "desktop-refresh-token",

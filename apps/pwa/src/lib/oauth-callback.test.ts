@@ -26,7 +26,7 @@ function fetchForCallback(options: {
     if (url.pathname === "/.well-known/oauth-authorization-server") {
       return Response.json({
         authorization_endpoint: "https://brain.acme.dev/api/auth/mcp/authorize",
-        token_endpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        token_endpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         registration_endpoint: "https://brain.acme.dev/api/auth/mcp/register",
         code_challenge_methods_supported: ["S256"],
       });
@@ -34,7 +34,7 @@ function fetchForCallback(options: {
     if (url.pathname === "/api/auth/mcp/register") {
       return Response.json({ client_id: "pwa-client" }, { status: 201 });
     }
-    if (url.pathname === "/api/auth/mcp/token") {
+    if (url.pathname === "/api/auth/oauth2/token") {
       return Response.json({
         access_token: "access-token",
         refresh_token: "refresh-token",

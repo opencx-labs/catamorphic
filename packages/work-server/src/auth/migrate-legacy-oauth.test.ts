@@ -405,7 +405,7 @@ function migrationTests(databaseUrl?: string) {
     });
   });
 
-  it("refreshes saved public and confidential connections through the legacy token URL with resource binding", async () => {
+  it("refreshes migrated public and confidential grants through the canonical token URL with resource binding", async () => {
     await withLegacyDatabase({
       databaseUrl,
       run: async ({ db, auth }) => {
@@ -435,7 +435,7 @@ function migrationTests(databaseUrl?: string) {
             };
             const wrongResource = await app.inject({
               method: "POST",
-              url: "/api/auth/mcp/token",
+              url: "/api/auth/oauth2/token",
               headers,
               payload: new URLSearchParams({
                 ...form,
@@ -448,7 +448,7 @@ function migrationTests(databaseUrl?: string) {
             });
             const response = await app.inject({
               method: "POST",
-              url: "/api/auth/mcp/token",
+              url: "/api/auth/oauth2/token",
               headers,
               payload: new URLSearchParams({
                 ...form,
@@ -500,19 +500,6 @@ function migrationTests(databaseUrl?: string) {
               });
               expect(canonical.statusCode).toBe(400);
               expect(canonical.json().error).toBe("invalid_client");
-              const legacyPost = await app.inject({
-                method: "POST",
-                url: "/api/auth/mcp/token",
-                headers: {
-                  "content-type": "application/x-www-form-urlencoded",
-                },
-                payload: postSecret,
-              });
-              expect(legacyPost.statusCode, legacyPost.body).toBe(200);
-              expect(legacyPost.json()).toMatchObject({
-                access_token: expect.any(String),
-                refresh_token: expect.any(String),
-              });
             }
           }
         } finally {
