@@ -92,10 +92,15 @@ interface SizeFrame {
 async function observeResize(tab: boolean, action: () => Promise<void>) {
   await focusWindow(app);
   await app.waitFor("document.hasFocus()", { label: "chat window owns input" });
+  await app.eval(
+    "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))",
+  );
   await app.waitFor(
-    `${dock}.parentElement.getAnimations({subtree:true}).every(a=>
-      a.playState!=='running' || a.effect?.getTiming().iterations===Infinity)`,
-    { label: "chat is at rest before resizing" },
+    `!('contentSettling' in document.documentElement.dataset) &&
+      !document.documentElement.matches(':active-view-transition') &&
+      document.getAnimations().every(a=>!a.pending && (a.playState!=='running'
+        || a.effect?.getTiming().iterations===Infinity))`,
+    { label: "the whole window is at rest before resizing" },
   );
   await app.eval(`(() => {
     window.__chatSizeFrames=[];
@@ -104,44 +109,70 @@ async function observeResize(tab: boolean, action: () => Promise<void>) {
       if(s&&i){const r=s.getBoundingClientRect();const c=i.getBoundingClientRect();
         window.__chatSizeFrames.push({time,width:r.width,inputWidth:c.width,inputHeight:c.height});}
     };
-    window.__sampleChatSize(-1);return true;
+    window.__sampleChatSize(-1);
+    const chat=${dock};
+    if ((chat.dataset.chatTab==='true')===${tab})throw new Error('Chat already has the requested pose');
+    window.__chatResizeProbe={done:false,error:null,duration:null};
+    const observer=new MutationObserver(()=>{
+      if((chat.dataset.chatTab==='true')!==${tab})return;
+      observer.disconnect();
+      const saved=[];
+      try {
+        const moving=chat.parentElement.getAnimations({subtree:true})
+          .filter(a=>a instanceof CSSTransition);
+        const width=moving.find(a=>a.effect?.target===chat && a.transitionProperty==='max-width');
+        const duration=width?.effect?.getComputedTiming().duration;
+        if(typeof duration!=='number'||!Number.isFinite(duration)||duration<=0)
+          throw new Error('Chat did not start a width transition');
+        window.__chatResizeProbe.duration=duration;
+        for(const animation of moving)saved.push([animation,animation.currentTime]);
+        // Scope time control to these actual transitions in one task. A
+        // global frozen clock can also freeze a view transition over input.
+        for(const fraction of [0,0.004,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.9995]) {
+          const time=duration*fraction;
+          for(const animation of moving)animation.currentTime=time;
+          window.__sampleChatSize(time);
+        }
+      } catch(error) {
+        window.__chatResizeProbe.error=String(error);
+      } finally {
+        for(const [animation,time] of saved) {
+          try { animation.currentTime=time; }
+          catch(error) { window.__chatResizeProbe.error??=String(error); }
+        }
+        window.__chatResizeProbe.done=true;
+      }
+    });
+    observer.observe(chat,{attributes:true,attributeFilter:['data-chat-tab']});
+    window.__stopChatResizeCapture=()=>observer.disconnect();
+    return true;
   })()`);
   // Sample the actual CSS transitions at explicit times. A busy renderer can
   // skip every intermediate real-time RAF during the 250 ms resize.
-  await app.cdp("Animation.enable");
-  await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
   try {
     await action();
     await app.waitFor(`(${dock}.dataset.chatTab==='true')===${tab}`, {
       label: `chat enters its ${tab ? "tab" : "floating"} pose`,
     });
-    await app.waitFor(
-      `(() => {
-      const chat=${dock};
-      return chat.getAnimations().some(a=>a instanceof CSSTransition
-          && a.transitionProperty==='max-width');
-    })()`,
-      { label: `chat ${tab ? "tab" : "floating"} pose has a width transition` },
+    await app.waitFor("window.__chatResizeProbe.done", {
+      label: "the real width transition was sampled",
+    });
+    const probe = await app.eval<{ error: string | null }>(
+      "window.__chatResizeProbe",
     );
-    await app.eval(`(async () => {
-      const nextFrame=()=>new Promise(requestAnimationFrame);
-      const moving=${dock}.parentElement.getAnimations({subtree:true})
-        .filter(a=>a.effect?.getTiming().iterations!==Infinity);
-      // Include the parent padding transition as well as the card and
-      // composer, keeping their timelines aligned. Preserve the pre-action
-      // sample and t=0 so an instantaneous layout jump still fails.
-      for(const time of [0,1,25,50,75,100,125,150,175,200,225,250,300]) {
-        for(const animation of moving)animation.currentTime=time;
-        await nextFrame();window.__sampleChatSize(time);
-      }
-      for(const animation of moving)animation.finish();
-      await nextFrame();await nextFrame();window.__sampleChatSize(320);
-      return true;
-    })()`);
+    expect(probe.error, JSON.stringify(probe)).toBeNull();
+    await app.waitFor(
+      `${dock}.parentElement.getAnimations({subtree:true}).every(a=>
+        a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
+      { label: "chat resize naturally settles" },
+    );
+    await app.eval(
+      "window.__sampleChatSize(window.__chatResizeProbe.duration+1);true",
+    );
   } finally {
-    await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
-    await app.cdp("Animation.disable");
-    await app.eval("delete window.__sampleChatSize;true");
+    await app.eval(
+      "window.__stopChatResizeCapture();delete window.__stopChatResizeCapture;delete window.__sampleChatSize;true",
+    );
   }
   const frames = await app.eval<SizeFrame[]>("window.__chatSizeFrames");
   const detail = JSON.stringify(frames);
