@@ -1,7 +1,38 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
+
+export interface NativeDisplayBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Quartz's actual click surface, rather than a possibly off-screen viewport. */
+export async function readNativeMacDisplays(): Promise<NativeDisplayBounds[]> {
+  assertIsolatedDesktopTestHost();
+  if (process.platform !== "darwin")
+    throw new Error("Quartz displays require a dedicated macOS test runner");
+  const { stdout } = await promisify(execFile)(
+    "python3",
+    [path.join(import.meta.dirname, "native-pointer-macos.py"), "--displays"],
+    { timeout: 10_000 },
+  );
+  return z
+    .array(
+      z.object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        width: z.number().finite().positive(),
+        height: z.number().finite().positive(),
+      }),
+    )
+    .nonempty()
+    .parse(JSON.parse(stdout));
+}
 
 /**
  * Move through several points in one gesture, as a hand crossing an edge

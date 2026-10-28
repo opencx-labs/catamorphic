@@ -1,5 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type NativeDisplayBounds,
+  readNativeMacDisplays,
+} from "./native-pointer.js";
 
 let app: AppHandle;
 const dock = "document.querySelector('[data-chat-local-id]:not([inert])')";
@@ -225,17 +231,71 @@ it("inserts a line break with Shift+keypad Enter without sending", async () => {
   await app.insertText(draftText);
 });
 
+const resizeInputs: unknown[] = [];
+async function openForResize(width: number) {
+  const state = await app.eval<{
+    point: { x: number; y: number };
+    viewport: { width: number; height: number; dpr: number };
+    available: NativeDisplayBounds;
+    native: { contentBounds: NativeDisplayBounds };
+  }>(`(async () => {
+    const button=${dock}.querySelector('button[aria-label="Open as tab"]');
+    const r=button.getBoundingClientRect();
+    return {point:{x:r.x+r.width/2,y:r.y+r.height/2},
+      viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},
+      available:{x:screen.availLeft,y:screen.availTop,width:screen.availWidth,height:screen.availHeight},
+      native:await window.catamorphicDesktop.devWindow('get')};
+  })()`);
+  const displays =
+    process.platform === "darwin"
+      ? await readNativeMacDisplays()
+      : [state.available];
+  const point = {
+    x: Math.round(state.native.contentBounds.x + state.point.x),
+    y: Math.round(state.native.contentBounds.y + state.point.y),
+  };
+  const reachable = displays.some(
+    (r) =>
+      point.x >= r.x &&
+      point.x < r.x + r.width &&
+      point.y >= r.y &&
+      point.y < r.y + r.height,
+  );
+  const detail = {
+    width,
+    ...state,
+    point,
+    displays,
+    action: reachable ? "native header click" : "keyboard shortcut",
+  };
+  resizeInputs.push(detail);
+  const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  if (artifacts)
+    fs.writeFileSync(
+      path.join(artifacts, "chat-resize-inputs.json"),
+      JSON.stringify(resizeInputs, null, 2),
+    );
+  // A large viewport can extend past a hosted Mac's physical display. Keep
+  // that geometry case and use its real shortcut; the narrower case must
+  // still exercise the actual native header click on the display.
+  if (width === 1024) expect(reachable, JSON.stringify(detail)).toBe(true);
+  if (reachable) {
+    await click(
+      '[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]',
+    );
+  } else {
+    expect(width, JSON.stringify(detail)).toBe(1280);
+    await app.press("m", (process.platform === "darwin" ? 4 : 2) | 8);
+  }
+}
+
 it("keeps the composer from narrowing and wrapping during maximize and float", async () => {
   for (const width of [1280, 1024]) {
     await app.eval(
       `window.catamorphicDesktop.devWindow('setSize',${width},730)`,
     );
     await app.waitFor(`innerWidth===${width}`);
-    await observeResize(true, () =>
-      click(
-        '[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]',
-      ),
-    );
+    await observeResize(true, () => openForResize(width));
     await observeResize(false, () => app.press("Escape"));
   }
 });
