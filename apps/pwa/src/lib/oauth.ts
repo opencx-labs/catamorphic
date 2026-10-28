@@ -156,6 +156,7 @@ async function beginAuthorization(options: {
   authorization.searchParams.set("redirect_uri", options.redirectUri);
   authorization.searchParams.set("response_type", "code");
   authorization.searchParams.set("scope", OAUTH_SCOPE);
+  authorization.searchParams.set("resource", serverUrl.replace(/\/+$/, ""));
   authorization.searchParams.set("state", state);
   authorization.searchParams.set(
     "code_challenge",

@@ -77,8 +77,20 @@ providers with `"audience": "guests"` sign customers in to shares only
 ```
 
 Register the provider's redirect URI as
-`<WORK_PUBLIC_URL>/api/auth/oauth2/callback/<id>`. `scopes` defaults to
+`<WORK_PUBLIC_URL>/api/auth/callback/<id>`. `scopes` defaults to
 `openid email profile`. Keep client secrets out of the repository.
+
+When upgrading a server from Better Auth 1.6 to 1.7, update existing provider
+registrations from `/api/auth/oauth2/callback/<id>` to the callback above.
+Back up the server's databases before starting the upgraded server: startup
+converts OAuth clients, tokens and approved consent in one transaction, while
+preserving users, browser sessions and existing Work refresh families. Saved
+token URLs continue to work. Restart any authorization flow that was in progress
+during the upgrade. The schema conversion is forward-only; rolling back the
+server version also requires restoring its database backup.
+Remote OAuth sign-in also requires the PWA's own callback origin to use HTTPS
+or exact loopback HTTP. Serve the PWA over HTTPS for phone or LAN sign-in;
+plain HTTP hostnames and LAN addresses cannot be OAuth callback URLs.
 
 ### Sign-in limits
 

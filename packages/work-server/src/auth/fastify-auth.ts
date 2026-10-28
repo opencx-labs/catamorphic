@@ -95,9 +95,16 @@ export function registerWorkAuthRoutes(
     method: ["GET", "POST", "OPTIONS"],
     url: "/api/auth/*",
     handler: async (request, reply) => {
+      // WHATWG URL construction below resolves dot segments. Do not let a
+      // wildcard URL become a token route after Fastify chose the handler:
+      // that would skip the token route's Work lifecycle gate.
+      const rawPath = request.url.split("?")[0];
+      if (new URL(request.url, options.baseURL).pathname !== rawPath) {
+        return reply.status(404).send();
+      }
       if (
         request.method === "GET" &&
-        request.url.startsWith("/api/auth/oauth2/callback/")
+        request.url.startsWith("/api/auth/callback/")
       ) {
         // A refused upstream account (wrong Workspace, suspended, not in a
         // required group) ends on the sign-in page, never on a raw error.
@@ -117,9 +124,8 @@ export function registerWorkAuthRoutes(
       return forward(request, reply);
     },
   });
-  app.post("/api/auth/mcp/token", async (request, reply) => {
+  const token = async (request: FastifyRequest, reply: FastifyReply) => {
     const gate = options.tokenGate;
-    if (!gate) return forward(request, reply);
     const form = tokenRequestFields(request);
     // OAuth parameters must not repeat (RFC 6749 3.1). Better Auth reads the
     // body again and would take a different occurrence than this gate.
@@ -145,14 +151,37 @@ export function registerWorkAuthRoutes(
           description: "refresh_token is required",
         });
       }
-      const decision = await gate.beforeRefresh({
+      const decision = await gate?.beforeRefresh({
         refreshToken,
         clientId: form.get("client_id") ?? undefined,
       });
-      if (!decision.allow) return sendTokenError(reply, decision);
+      if (decision && !decision.allow) return sendTokenError(reply, decision);
     }
-    const response = await callBetterAuth(routed, request, {});
-    if (!response.ok) return sendResponse(response, reply);
+    // The old endpoint accepted confidential client secrets in either Basic
+    // auth or the form body without persisting that choice. Normalize that
+    // existing public contract to the migrated client's Basic registration.
+    const legacySecret =
+      request.url.split("?")[0] === "/api/auth/mcp/token" &&
+      !request.headers.authorization
+        ? form.get("client_secret")
+        : null;
+    const legacyClient = form.get("client_id");
+    const legacyAuthorization =
+      legacySecret && legacyClient
+        ? `Basic ${Buffer.from(`${encodeURIComponent(legacyClient)}:${encodeURIComponent(legacySecret)}`).toString("base64")}`
+        : undefined;
+    if (legacyAuthorization) form.delete("client_secret");
+    const response = await callBetterAuth(routed, request, {
+      pathname: "/api/auth/oauth2/token",
+      ...(legacyAuthorization
+        ? {
+            authorization: legacyAuthorization,
+            body: form.toString(),
+            contentType: "application/x-www-form-urlencoded",
+          }
+        : {}),
+    });
+    if (!response.ok || !gate) return sendResponse(response, reply);
     const body: unknown = await response
       .clone()
       .json()
@@ -167,12 +196,25 @@ export function registerWorkAuthRoutes(
     });
     if (!decision.allow) return sendTokenError(reply, decision);
     return sendResponse(response, reply);
-  });
+  };
+  app.post("/api/auth/oauth2/token", token);
+  // Saved server connections still hold this URL. Both paths run the same
+  // lifecycle gate and the same Better Auth token implementation.
+  app.post("/api/auth/mcp/token", token);
   app.get("/.well-known/oauth-authorization-server", (request, reply) =>
     forward(request, reply, "/api/auth/.well-known/oauth-authorization-server"),
   );
+  // RFC 8414 inserts the issuer's path after the well-known name. The
+  // provider now advertises /api/auth as its issuer, including to MCP clients.
+  app.get(
+    "/.well-known/oauth-authorization-server/api/auth",
+    (request, reply) => forward(request, reply),
+  );
   app.get("/.well-known/oauth-protected-resource", (request, reply) =>
-    forward(request, reply, "/api/auth/.well-known/oauth-protected-resource"),
+    forward(request, reply),
+  );
+  app.get("/.well-known/oauth-protected-resource/api", (request, reply) =>
+    forward(request, reply),
   );
   app.get("/login", (request, reply) => {
     const error = new URLSearchParams(request.url.split("?")[1] ?? "").get(
@@ -193,16 +235,19 @@ export function registerWorkAuthRoutes(
   });
   app.post("/login/local", async (request, reply) => {
     const form = formBody(request.body);
+    const query = continuationQuery(request);
     const response = await callBetterAuth(routed, request, {
       pathname: "/api/auth/sign-in/username",
       body: JSON.stringify({
         username: form.get("username") ?? "",
         password: form.get("password") ?? "",
+        ...(new URLSearchParams(query).has("sig")
+          ? { oauth_query: query }
+          : {}),
       }),
       contentType: "application/json",
     });
     copyCookies(response, reply);
-    const query = continuationQuery(request);
     if (response.status === 429) {
       return reply.redirect(`/login?${query}&error=limited`);
     }
@@ -212,8 +257,12 @@ export function registerWorkAuthRoutes(
     }
     const next = shareNext(request);
     if (response.ok && next) return reply.redirect(next);
+    const redirect = response.ok
+      ? await authorizationRedirect(response)
+      : undefined;
+    if (redirect) return reply.redirect(redirect);
     return response.ok
-      ? reply.redirect(`/api/auth/mcp/authorize?${query}`)
+      ? reply.redirect(`/api/auth/oauth2/authorize?${query}`)
       : reply.redirect(`/login?${query}&error=1`);
   });
   app.post<{ Params: { providerId: string } }>(
@@ -230,14 +279,17 @@ export function registerWorkAuthRoutes(
       // A share link returns to the share; everything else resumes the
       // OAuth authorization that sent the person here.
       const callbackURL = new URL(
-        shareNext(request) ?? `/api/auth/mcp/authorize?${query}`,
+        shareNext(request) ?? `/api/auth/oauth2/authorize?${query}`,
         options.baseURL,
       ).toString();
       const response = await callBetterAuth(routed, request, {
-        pathname: "/api/auth/sign-in/oauth2",
+        pathname: "/api/auth/sign-in/social",
         body: JSON.stringify({
-          providerId: request.params.providerId,
+          provider: request.params.providerId,
           callbackURL,
+          ...(!shareNext(request) && new URLSearchParams(query).has("sig")
+            ? { oauth_query: query }
+            : {}),
         }),
         contentType: "application/json",
       });
@@ -252,35 +304,58 @@ export function registerWorkAuthRoutes(
           );
     },
   );
-  app.get("/oauth/consent", (request, reply) =>
-    sendAuthPage(reply, (nonce) =>
-      consentPage(request.query as Record<string, string | undefined>, nonce),
-    ),
-  );
+  app.get("/oauth/consent", async (request, reply) => {
+    // Verify exactly the query Better Auth signed before showing any of it.
+    // Parsing only selected fields would lose resource indicators and permit
+    // the page to describe access other than the grant being authorized.
+    const query = new URL(request.raw.url ?? "/", options.baseURL).search.slice(
+      1,
+    );
+    if (!(await options.auth.verifyAuthorizationQuery({ query }))) {
+      return authorizationFailed(reply);
+    }
+    return sendAuthPage(reply, (nonce) => consentPage(query, nonce));
+  });
   app.post("/oauth/consent", async (request, reply) => {
     const form = formBody(request.body);
     const response = await callBetterAuth(routed, request, {
       pathname: "/api/auth/oauth2/consent",
       body: JSON.stringify({
         accept: form.get("accept") === "true",
-        consent_code: form.get("consent_code") ?? "",
+        oauth_query: form.get("oauth_query") ?? "",
       }),
       contentType: "application/json",
     });
     copyCookies(response, reply);
-    const result = (await response.json().catch(() => ({}))) as {
-      redirectURI?: unknown;
-    };
-    return response.ok && typeof result.redirectURI === "string"
-      ? reply.redirect(result.redirectURI)
-      : sendAuthPage(reply.status(400), (nonce) =>
-          messagePage(
-            "Authorization could not be completed",
-            "Return to Work and try connecting again.",
-            nonce,
-          ),
-        );
+    const redirect = response.ok
+      ? await authorizationRedirect(response)
+      : undefined;
+    return redirect ? reply.redirect(redirect) : authorizationFailed(reply);
   });
+}
+
+async function authorizationRedirect(
+  response: Response,
+): Promise<string | undefined> {
+  const result: unknown = await response.json().catch(() => null);
+  return typeof result === "object" &&
+    result !== null &&
+    "redirect" in result &&
+    result.redirect === true &&
+    "url" in result &&
+    typeof result.url === "string"
+    ? result.url
+    : undefined;
+}
+
+function authorizationFailed(reply: FastifyReply): FastifyReply {
+  return sendAuthPage(reply.status(400), (nonce) =>
+    messagePage(
+      "Authorization could not be completed",
+      "Return to Work and try connecting again.",
+      nonce,
+    ),
+  );
 }
 
 async function forwardToBetterAuth(
@@ -350,6 +425,7 @@ async function callBetterAuth(
     pathname?: string;
     body?: string;
     contentType?: string;
+    authorization?: string;
   },
 ): Promise<Response> {
   const incoming = new URL(request.raw.url ?? "/", options.baseURL);
@@ -370,6 +446,8 @@ async function callBetterAuth(
   if (overrides.contentType) {
     headers.set("content-type", overrides.contentType);
   }
+  if (overrides.authorization)
+    headers.set("authorization", overrides.authorization);
   if (overrides.body !== undefined) {
     headers.delete("content-length");
     headers.delete("content-encoding");
@@ -479,13 +557,10 @@ function loginPage(
   });
 }
 
-function consentPage(
-  query: Record<string, string | undefined>,
-  nonce: string,
-): string {
-  const code = escapeHtml(query.consent_code ?? "");
-  const client = escapeHtml(query.client_id ?? "this client");
-  const scopes = (query.scope ?? "basic identity")
+function consentPage(signedQuery: string, nonce: string): string {
+  const query = new URLSearchParams(signedQuery);
+  const client = escapeHtml(query.get("client_id") ?? "this client");
+  const scopes = (query.get("scope") ?? "basic identity")
     .split(/\s+/)
     .filter(Boolean)
     .map((scope) => `<li>${escapeHtml(scope.replaceAll("_", " "))}</li>`)
@@ -506,7 +581,7 @@ function consentPage(
         <ul class="scope-list">${scopes}</ul>
       </div>
       <form class="consent-actions" action="/oauth/consent" method="post">
-        <input type="hidden" name="consent_code" value="${code}">
+        <input type="hidden" name="oauth_query" value="${escapeHtml(signedQuery)}">
         <button class="button button-secondary" name="accept" value="false">Deny</button>
         <button class="button button-primary" name="accept" value="true">Allow access</button>
       </form>

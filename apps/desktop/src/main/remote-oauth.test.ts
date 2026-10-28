@@ -104,6 +104,9 @@ describe("remote server OAuth", () => {
     );
     const openUrl = vi.fn(async (url: string) => {
       authorizeURL = new URL(url);
+      expect(authorizeURL.searchParams.get("resource")).toBe(
+        "https://team.example/api",
+      );
       expect(authorizeURL.searchParams.get("code_challenge_method")).toBe(
         "S256",
       );

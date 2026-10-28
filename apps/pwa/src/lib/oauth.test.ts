@@ -121,6 +121,9 @@ describe("PWA remote OAuth", () => {
       "https://brain.acme.dev/api/auth/mcp/authorize",
     );
     expect(authorization.searchParams.get("client_id")).toBe("pwa-client");
+    expect(authorization.searchParams.get("resource")).toBe(
+      "https://brain.acme.dev/api",
+    );
     expect(authorization.searchParams.get("code_challenge_method")).toBe(
       "S256",
     );

@@ -65,8 +65,10 @@ describe("pageMenu", () => {
       "Open link to the side",
       "Open link floating",
       "—",
-      "Copy link address",
       "Download linked file",
+      "—",
+      "Copy (off)",
+      "Copy link",
       "—",
       "Inspect",
     ]);
@@ -75,13 +77,50 @@ describe("pageMenu", () => {
   it("writes to an email address and calls a phone number", () => {
     expect(
       read(pageMenu(target({ linkURL: "mailto:ada@example.test" }), state())),
-    ).toEqual(["Send email", "Copy email address", "—", "Inspect"]);
+    ).toEqual([
+      "Send email",
+      "Copy email address",
+      "—",
+      "Copy (off)",
+      "Copy link",
+      "—",
+      "Inspect",
+    ]);
     expect(
       read(pageMenu(target({ linkURL: "tel:+15550100" }), state())),
-    ).toEqual(["Call", "Copy phone number", "—", "Inspect"]);
+    ).toEqual([
+      "Call",
+      "Copy phone number",
+      "—",
+      "Copy (off)",
+      "Copy link",
+      "—",
+      "Inspect",
+    ]);
     expect(
       read(pageMenu(target({ linkURL: "slack://open" }), state())),
-    ).toEqual(["Copy link address", "—", "Inspect"]);
+    ).toEqual(["Copy (off)", "Copy link", "—", "Inspect"]);
+  });
+
+  it("keeps Copy link immediately under Copy with selected text and in editable links", () => {
+    for (const isEditable of [false, true]) {
+      const items = pageMenu(
+        target({
+          linkURL: "https://example.test/next?from=menu#here",
+          selectionText: "A link",
+          isEditable,
+        }),
+        state(),
+      );
+      const labels = read(items);
+      const copy = labels.findIndex(
+        (label) => label === "Copy" || label === "Copy (off)",
+      );
+      expect(labels[copy + 1]).toBe("Copy link");
+      expect(
+        menuActions(items).filter((action) => action === "copy-link"),
+      ).toHaveLength(1);
+    }
   });
 
   it("names the address without its scheme or query", () => {
@@ -108,13 +147,15 @@ describe("pageMenu", () => {
       "Open link to the side",
       "Open link floating",
       "—",
-      "Copy link address",
       "Download linked file",
       "—",
       "Open image in new tab",
       "Download image",
       "Copy image",
       "Copy image address",
+      "—",
+      "Copy (off)",
+      "Copy link",
       "—",
       "Inspect",
     ]);

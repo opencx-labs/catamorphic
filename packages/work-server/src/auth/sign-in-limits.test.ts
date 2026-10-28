@@ -209,7 +209,7 @@ describe("sign-in limits on one server", () => {
       for (let request = 0; request < 101; request += 1) {
         const callback = await server.app.inject({
           method: "GET",
-          url: "/api/auth/oauth2/callback/company?code=x&state=y",
+          url: "/api/auth/callback/company?code=x&state=y",
           remoteAddress: "203.0.113.51",
         });
         returns.push(String(callback.headers.location));

@@ -166,8 +166,8 @@ describe("Work server Better Auth host", () => {
     );
     expect(discovery.status).toBe(200);
     expect(await discovery.json()).toMatchObject({
-      authorization_endpoint: expect.stringContaining("/mcp/authorize"),
-      token_endpoint: expect.stringContaining("/mcp/token"),
+      authorization_endpoint: expect.stringContaining("/oauth2/authorize"),
+      token_endpoint: expect.stringContaining("/oauth2/token"),
       code_challenge_methods_supported: ["S256"],
     });
     expect(

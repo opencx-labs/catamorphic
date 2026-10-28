@@ -137,7 +137,6 @@ function linkGroup(url: string): MenuItem[] {
         action: `open-link:${mode}`,
       })),
       MENU_SEPARATOR,
-      { label: "Copy link address", action: "copy-link" },
       { label: "Download linked file", action: "download-link" },
     ];
   if (protocol === "mailto:")
@@ -150,7 +149,7 @@ function linkGroup(url: string): MenuItem[] {
       { label: "Call", action: "open-external" },
       { label: "Copy phone number", action: "copy-address" },
     ];
-  return [{ label: "Copy link address", action: "copy-link" }];
+  return [];
 }
 
 function mediaGroup(target: PageMenuTarget): MenuItem[] {
@@ -199,11 +198,29 @@ function spellingGroup(target: PageMenuTarget): MenuItem[] {
 
 function selectionGroup(target: PageMenuTarget, mac: boolean): MenuItem[] {
   const text = target.selectionText.trim();
-  if (!text) return [];
+  if (!text && !target.linkURL) return [];
   return [
-    ...(target.isEditable ? [] : [{ label: "Copy", action: "copy" }]),
-    { label: `Search Google for ${quoteSelection(text)}`, action: "search" },
-    ...(mac
+    ...(target.isEditable
+      ? []
+      : [
+          {
+            label: "Copy",
+            action: "copy",
+            ...(!text ? { disabledReason: "Select text to copy" } : {}),
+          },
+          ...(target.linkURL
+            ? [{ label: "Copy link", action: "copy-link" }]
+            : []),
+        ]),
+    ...(text
+      ? [
+          {
+            label: `Search Google for ${quoteSelection(text)}`,
+            action: "search",
+          },
+        ]
+      : []),
+    ...(text && mac
       ? [{ label: `Look up ${quoteSelection(text)}`, action: "look-up" }]
       : []),
   ];
@@ -229,6 +246,7 @@ function editGroups(
     [
       entry("Cut", "cut", flags.canCut, "Select text to cut"),
       entry("Copy", "copy", flags.canCopy, "Select text to copy"),
+      ...(target.linkURL ? [{ label: "Copy link", action: "copy-link" }] : []),
       entry("Paste", "paste", flags.canPaste, "Nothing to paste"),
       entry(
         "Paste and match style",

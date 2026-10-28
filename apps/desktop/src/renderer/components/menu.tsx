@@ -2,6 +2,7 @@ import * as icons from "lucide-react";
 import { ChevronRight } from "lucide-react";
 import {
   type CSSProperties,
+  type ReactNode,
   type RefObject,
   useEffect,
   useLayoutEffect,
@@ -507,7 +508,9 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
         className={panelClass(open)}
       >
         <div ref={listRef} className={listClass}>
-          <div ref={sizerRef}>{items(visibleEntries, false)}</div>
+          <MenuRows sizer={sizerRef} rows={rowsKey(visibleEntries)} open={open}>
+            {items(visibleEntries, false)}
+          </MenuRows>
         </div>
       </div>
       {subEntry?.submenu && (
@@ -533,12 +536,98 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
           className={`${panelClass(open)} origin-top-left`}
         >
           <div ref={subListRef} className={listClass}>
-            <div ref={subSizerRef}>{items(subEntry.submenu, true)}</div>
+            <MenuRows
+              sizer={subSizerRef}
+              rows={rowsKey(subEntry.submenu)}
+              open={open}
+            >
+              {items(subEntry.submenu, true)}
+            </MenuRows>
           </div>
         </div>
       )}
     </>,
     document.body,
+  );
+}
+
+/** One keyboard ring per menu, following the focused row as sidebar rings do. */
+function MenuRows({
+  sizer,
+  rows,
+  open,
+  children,
+}: {
+  sizer: RefObject<HTMLDivElement | null>;
+  rows: string;
+  open: boolean;
+  children: ReactNode;
+}) {
+  const [box, setBox] = useState<CSSProperties | null>(null);
+  const previous = useRef<Element | null>(null);
+  const [glide, setGlide] = useState(false);
+  // Offsets are in the list's own coordinates: scrolling or the panel's
+  // entrance scale must not move the ring away from its row.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: changed rows need measuring before paint
+  useLayoutEffect(() => {
+    const list = sizer.current;
+    if (!list || !open) {
+      previous.current = null;
+      setBox(null);
+      return;
+    }
+    const measure = () => {
+      const row = document.activeElement;
+      if (!(row instanceof HTMLButtonElement) || row.parentElement !== list) {
+        previous.current = null;
+        setBox(null);
+        return;
+      }
+      setGlide(previous.current !== null && previous.current !== row);
+      previous.current = row;
+      setBox({
+        top: row.offsetTop,
+        left: row.offsetLeft,
+        width: row.offsetWidth,
+        height: row.offsetHeight,
+      });
+    };
+    const blur = (event: FocusEvent) => {
+      if (
+        event.relatedTarget instanceof HTMLButtonElement &&
+        event.relatedTarget.parentElement === list
+      )
+        return;
+      previous.current = null;
+      setBox(null);
+    };
+    measure();
+    list.addEventListener("focusin", measure);
+    list.addEventListener("focusout", blur);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(list);
+    return () => {
+      list.removeEventListener("focusin", measure);
+      list.removeEventListener("focusout", blur);
+      observer?.disconnect();
+    };
+  }, [sizer, rows, open]);
+  return (
+    <div ref={sizer} className="relative">
+      {children}
+      {box && (
+        <div
+          aria-hidden="true"
+          data-menu-focus
+          data-glide={glide || undefined}
+          className="pointer-events-none absolute z-10"
+          style={box}
+        />
+      )}
+    </div>
   );
 }
 

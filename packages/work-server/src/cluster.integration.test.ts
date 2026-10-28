@@ -15,6 +15,7 @@ import {
   type WorkServer,
 } from "./server.js";
 import {
+  acceptOAuthConsent,
   createTestDatabase,
   enqueue,
   testServerOptions,
@@ -302,7 +303,7 @@ async function crossInstanceToken(
   const redirectUri = "http://127.0.0.1:49152/callback";
   const registered = await a.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/register",
+    url: "/api/auth/oauth2/register",
     payload: {
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
@@ -318,6 +319,7 @@ async function crossInstanceToken(
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
+    resource: "https://cluster.example.test/api",
     scope: "openid profile email offline_access",
     state: "cluster-state",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
@@ -325,16 +327,19 @@ async function crossInstanceToken(
   });
   const authorized = await b.app.inject({
     method: "GET",
-    url: `/api/auth/mcp/authorize?${params}`,
+    url: `/api/auth/oauth2/authorize?${params}`,
     headers: { cookie: Array.isArray(cookie) ? cookie[0] : cookie },
   });
   expect(authorized.statusCode).toBe(302);
-  const code = new URL(authorized.headers.location ?? "").searchParams.get(
-    "code",
-  );
+  const callback = await acceptOAuthConsent({
+    app: a.app,
+    location: String(authorized.headers.location ?? ""),
+    cookie: String(Array.isArray(cookie) ? cookie[0] : cookie),
+  });
+  const code = new URL(callback).searchParams.get("code");
   const token = await a.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/token",
+    url: "/api/auth/oauth2/token",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({
       grant_type: "authorization_code",
@@ -347,7 +352,7 @@ async function crossInstanceToken(
   expect(token.statusCode).toBe(200);
   const refreshed = await b.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/token",
+    url: "/api/auth/oauth2/token",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({
       grant_type: "refresh_token",

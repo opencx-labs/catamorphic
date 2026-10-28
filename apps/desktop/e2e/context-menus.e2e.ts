@@ -1,4 +1,5 @@
 import http from "node:http";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
@@ -117,15 +118,19 @@ const expectAtPointer = async (point: { x: number; y: number }) => {
   ).toBe(true);
 };
 /**
- * A link's menu: its own group first and Inspect last. On macOS a
- * right-click also selects the word under it, as it does in Chrome, so the
- * selection's group (Copy, Search, Look up) may come between.
+ * A link's menu: its own group first, Copy link immediately under Copy,
+ * and Inspect last. macOS may also select the word under the pointer.
  */
 const expectLinkMenu = async (group: string[]) => {
   const shown = await entries();
   expect(shown.slice(0, group.length + 1)).toEqual([...group, "—"]);
   expect(shown.at(-1)).toBe("Inspect");
-  if (!mac) expect(shown).toHaveLength(group.length + 2);
+  const copy = shown.findIndex(
+    (label) => label === "Copy" || label === "Copy (off)",
+  );
+  expect(copy).toBeGreaterThan(-1);
+  expect(shown[copy + 1]).toBe("Copy link");
+  expect(shown.filter((label) => label === "Copy link")).toHaveLength(1);
 };
 /**
  * Starts a record of what can close a menu: the window's blur, focus
@@ -155,7 +160,7 @@ const recordDismissals = () =>
  */
 const settled = async () => {
   const state = await app.waitFor<string>(
-    `!${menu} ? 'dismissed' : ${menu}.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished') && 'settled'`,
+    `!${menu} ? 'dismissed' : [...document.querySelectorAll('[data-sidebar-menu]')].every(panel => panel.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished')) && 'settled'`,
     { label: "menu settled" },
   );
   if (state === "dismissed") {
@@ -291,6 +296,89 @@ const sidebarMotion = () =>
   );
 
 describe("sidebar menus", () => {
+  it("glide one keyboard ring between rows and honor reduced motion", async () => {
+    await rowMenu("Docs");
+    const ring = `${menu}.querySelector('[data-menu-focus]')`;
+    const readRing = () =>
+      app.eval<{
+        top: number;
+        target: number;
+        rowOutline: string;
+        duration: string;
+      }>(`(() => {
+      const ring = ${ring};
+      const row = document.activeElement;
+      return { top: ring.getBoundingClientRect().top, target: row.getBoundingClientRect().top,
+        rowOutline: getComputedStyle(row).outlineStyle, duration: getComputedStyle(ring).transitionDuration };
+    })()`);
+    const before = await readRing();
+    // Record in the renderer before sending the key: a slow CDP round trip
+    // must not miss a correct 150 ms glide on a busy CI runner.
+    await app.eval(`(() => {
+      const first = document.activeElement;
+      window.__menuRingFrames = [];
+      window.__menuRingDone = false;
+      let start;
+      const sample = now => {
+        const row = document.activeElement;
+        if (row !== first || start !== undefined) {
+          start ??= now;
+          window.__menuRingFrames.push({ top: ${ring}.getBoundingClientRect().top, target: row.getBoundingClientRect().top });
+        }
+        if (start === undefined || now - start < 250) requestAnimationFrame(sample);
+        else window.__menuRingDone = true;
+      };
+      requestAnimationFrame(sample);
+      return true;
+    })()`);
+    await app.press("ArrowDown");
+    await app.waitFor("window.__menuRingDone");
+    const frames = await app.eval<{ top: number; target: number }[]>(
+      "window.__menuRingFrames",
+    );
+    const during = await readRing();
+    expect(during.target).toBeGreaterThan(before.target);
+    expect(
+      frames.some(
+        (frame) => frame.top > before.top + 1 && frame.top < frame.target - 1,
+      ),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(during.rowOutline).toBe("none");
+    expect(during.duration).toBe("0.15s, 0.15s");
+    await app.press("ArrowUp");
+    await settled();
+    const back = await readRing();
+    expect(Math.abs(back.top - before.target)).toBeLessThan(1);
+    if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+          "context-menu-focus.png",
+        ),
+      );
+    await app.cdp("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    try {
+      await app.press("ArrowDown");
+      await app.eval(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+      const reduced = await readRing();
+      expect(Math.abs(reduced.top - reduced.target)).toBeLessThan(1);
+      expect(
+        reduced.duration
+          .split(", ")
+          .every((value) => parseFloat(value) < 0.001),
+      ).toBe(true);
+    } finally {
+      await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+    }
+    await app.press("Escape");
+    await closed();
+  });
+
   it("open at the pointer and offer each action once", async () => {
     const point = await rowMenu("Docs");
     await expectAtPointer(point);
@@ -352,6 +440,79 @@ describe("sidebar menus", () => {
       `${view}.executeJavaScript('window.__presses', true).then(count => count === ${before + 1})`,
       { label: "page pressed" },
     );
+  });
+});
+
+describe("submenu focus", () => {
+  it("keep a submenu's keyboard ring on its row while devices arrive above it", async () => {
+    await app.eval(`(() => {
+      window.__menuEnumerateDevices = navigator.mediaDevices.enumerateDevices;
+      window.__menuDevices = [{ kind: 'audioinput', deviceId: 'headset', groupId: 'headset', label: 'Headset' }];
+      navigator.mediaDevices.enumerateDevices = async () => window.__menuDevices;
+      navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+      return true;
+    })()`);
+    const submenu = `document.querySelector('[data-sidebar-menu][aria-label="Microphone"]')`;
+    try {
+      await focusWindow(app);
+      const point = await app.waitFor<{ x: number; y: number }>(`(() => {
+        const button = document.querySelector('[data-testid="voice-button"]');
+        if (!button) return false;
+        const rect = button.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      })()`);
+      await mouse(point, "right");
+      await app.waitFor(`!!${menu}`);
+      await settled();
+      await app.eval(
+        `[...${menu}.querySelectorAll('button')].find(row => row.textContent === 'Microphone').focus(); true`,
+      );
+      await app.press("ArrowRight");
+      await app.waitFor(`!!${submenu}?.textContent.includes('Headset')`);
+      await app.waitFor(`${submenu}?.contains(document.activeElement)`);
+      await app.press("ArrowDown");
+      await app.waitFor(`document.activeElement?.textContent === 'Headset'`);
+      await settled();
+      const frames = await app.eval<
+        { gap: number; top: number }[]
+      >(`new Promise(resolve => {
+        const frames = [];
+        const start = performance.now();
+        const sample = () => {
+          const row = document.activeElement;
+          const ring = ${submenu}.querySelector('[data-menu-focus]');
+          frames.push({ gap: Math.abs(row.getBoundingClientRect().top - ring.getBoundingClientRect().top), top: row.getBoundingClientRect().top });
+          if (performance.now() - start < 400) requestAnimationFrame(sample);
+          else resolve(frames);
+        };
+        window.__menuDevices = [{ kind: 'audioinput', deviceId: 'laptop', groupId: 'laptop', label: 'Laptop' }, ...window.__menuDevices];
+        navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+        requestAnimationFrame(sample);
+      })`);
+      expect(
+        Math.max(...frames.map((frame) => frame.gap)),
+        JSON.stringify(frames),
+      ).toBeLessThan(2);
+      expect(
+        Math.max(...frames.map((frame) => frame.top)) -
+          Math.min(...frames.map((frame) => frame.top)),
+      ).toBeGreaterThan(10);
+      await app.press("ArrowLeft");
+      await app.waitFor(`!${submenu}`);
+      expect(await app.eval("document.activeElement.textContent")).toBe(
+        "Microphone",
+      );
+    } finally {
+      await app.press("Escape");
+      await closed();
+      await app.eval(`(() => {
+        navigator.mediaDevices.enumerateDevices = window.__menuEnumerateDevices;
+        delete window.__menuEnumerateDevices;
+        delete window.__menuDevices;
+        navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+        return true;
+      })()`);
+    }
   });
 });
 
@@ -460,10 +621,9 @@ describe("page menus", () => {
       "Open link to the side",
       "Open link floating",
       "—",
-      "Copy link address",
       "Download linked file",
     ]);
-    await pick("Copy link address");
+    await pick("Copy link");
     await pasteIntoField();
     await fieldHolds(`${origin}/next`);
   });

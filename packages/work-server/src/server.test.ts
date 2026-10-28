@@ -45,7 +45,7 @@ beforeAll(async () => {
   server = await createWorkServer(
     testServerOptions({
       dataDir,
-      publicBases: ["http://work.local:4700"],
+      publicBases: ["https://work.local:4700"],
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_PWA_DIST: pwaDist,
@@ -114,28 +114,31 @@ const MANAGER_ROLE = {
 };
 
 describe("Work server", () => {
-  it("refuses token requests with repeated or unsupported parameters", async () => {
-    const token = (body: string) =>
-      server.app.inject({
-        method: "POST",
-        url: "/api/auth/mcp/token",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        payload: body,
-      });
-    const repeated = await token(
-      "grant_type=authorization_code&grant_type=refresh_token&refresh_token=x",
-    );
-    expect(repeated.statusCode).toBe(400);
-    expect(repeated.json().error).toBe("invalid_request");
-    const empty = await token(
-      "grant_type=refresh_token&refresh_token=&refresh_token=x",
-    );
-    expect(empty.json().error).toBe("invalid_request");
-    const missing = await token("grant_type=refresh_token");
-    expect(missing.json().error).toBe("invalid_request");
-    const other = await token("grant_type=client_credentials");
-    expect(other.json().error).toBe("unsupported_grant_type");
-  });
+  it.each(["/api/auth/oauth2/token", "/api/auth/mcp/token"])(
+    "refuses repeated or unsupported token parameters at %s",
+    async (tokenEndpoint) => {
+      const token = (body: string) =>
+        server.app.inject({
+          method: "POST",
+          url: tokenEndpoint,
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          payload: body,
+        });
+      const repeated = await token(
+        "grant_type=authorization_code&grant_type=refresh_token&refresh_token=x",
+      );
+      expect(repeated.statusCode).toBe(400);
+      expect(repeated.json().error).toBe("invalid_request");
+      const empty = await token(
+        "grant_type=refresh_token&refresh_token=&refresh_token=x",
+      );
+      expect(empty.json().error).toBe("invalid_request");
+      const missing = await token("grant_type=refresh_token");
+      expect(missing.json().error).toBe("invalid_request");
+      const other = await token("grant_type=client_credentials");
+      expect(other.json().error).toBe("unsupported_grant_type");
+    },
+  );
 
   it("publishes OAuth authorization and protected-resource discovery", async () => {
     const authorization = await server.app.inject({
@@ -145,9 +148,9 @@ describe("Work server", () => {
     expect(authorization.statusCode).toBe(200);
     expect(authorization.json()).toMatchObject({
       authorization_endpoint: expect.stringContaining(
-        "/api/auth/mcp/authorize",
+        "/api/auth/oauth2/authorize",
       ),
-      token_endpoint: expect.stringContaining("/api/auth/mcp/token"),
+      token_endpoint: expect.stringContaining("/api/auth/oauth2/token"),
     });
     const resource = await server.app.inject({
       method: "GET",
@@ -155,7 +158,7 @@ describe("Work server", () => {
     });
     expect(resource.statusCode).toBe(200);
     expect(resource.json()).toMatchObject({
-      resource: "http://work.local:4700/api",
+      resource: "https://work.local:4700/api",
       authorization_servers: expect.any(Array),
     });
   });
@@ -194,7 +197,7 @@ describe("Work server", () => {
     const missing = await inject("GET", "/api/me");
     expect(missing.statusCode).toBe(401);
     expect(missing.headers["www-authenticate"]).toContain(
-      'resource_metadata="http://work.local:4700/.well-known/oauth-protected-resource"',
+      'resource_metadata="https://work.local:4700/.well-known/oauth-protected-resource"',
     );
     const invalid = await inject("GET", "/api/me", "nope");
     expect(invalid.statusCode).toBe(401);
@@ -327,12 +330,14 @@ describe("Work server", () => {
     const invite = response.json();
     memberInvitationId = invite.id;
     expect(invite.connectLinks[0]).toContain(
-      "work://connect?server=http%3A%2F%2Fwork.local%3A4700%2Fapi",
+      "work://connect?server=https%3A%2F%2Fwork.local%3A4700%2Fapi",
     );
     expect(invite.connectLinks[0]).toContain(`project=${projectId}`);
     expect(invite.connectLinks[0]).toContain(`invitation=${invite.id}`);
     expect(invite.connectLinks[0]).not.toContain("token=");
-    expect(invite.webLinks[0]).toMatch(/^http:\/\/work\.local:4700\/\?server=/);
+    expect(invite.webLinks[0]).toMatch(
+      /^https:\/\/work\.local:4700\/\?server=/,
+    );
 
     const member = await server.workAuth.createLocalUser({
       username: "memberuser",
