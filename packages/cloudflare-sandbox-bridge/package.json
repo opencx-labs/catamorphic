@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/cloudflare-sandbox-bridge",
-  "version": "0.1.0-alpha.31",
+  "version": "0.1.0-alpha.32",
   "private": true,
   "type": "module",
   "description": "Cloudflare Worker that exposes Cloudflare Sandbox as an HTTP API consumed by the Fastify server.",
