@@ -8,11 +8,45 @@ const draftText =
   "Review the example document and keep this composer steady while changing chat size.";
 
 async function click(selector: string) {
+  await focusWindow(app);
+  await app.waitFor("document.hasFocus()", { label: "chat window owns input" });
   const point = await app.waitFor<{ x: number; y: number }>(`(() => {
     const e=document.querySelector(${JSON.stringify(selector)}); if(!e)return false;
-    const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:false;
+    const r=e.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;
+    return r.width&&r.height&&e.checkVisibility()&&!e.closest('[inert]')
+      &&e.contains(document.elementFromPoint(x,y))?{x,y}:false;
   })()`);
-  await app.clickPointer(point);
+  await app.eval(`(() => {
+    const button=document.querySelector(${JSON.stringify(selector)});
+    window.__chatClickDelivery=[];
+    const record=event=>window.__chatClickDelivery.push({type:event.type,
+      hit:button.contains(event.target),focused:document.hasFocus()});
+    for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,record,true);
+    window.__stopChatClickCapture=()=>{
+      for(const type of ['pointerdown','pointerup','click'])document.removeEventListener(type,record,true);
+    };return true;
+  })()`);
+  try {
+    await app.clickPointer(point);
+    await app.waitFor(
+      "window.__chatClickDelivery.some(event=>event.type==='click'&&event.hit)",
+      { label: `native click reaches ${selector}` },
+    );
+  } catch (error) {
+    const state = await app.eval(`(async () => ({
+      events:window.__chatClickDelivery,
+      active:document.activeElement?.tagName,
+      focused:document.hasFocus(),
+      nativeFocused:(await window.catamorphicDesktop.devWindow('get')).focused,
+    }))()`);
+    throw new Error(`Chat click delivery: ${JSON.stringify(state)}`, {
+      cause: error,
+    });
+  } finally {
+    await app.eval(
+      "window.__stopChatClickCapture();delete window.__stopChatClickCapture;true",
+    );
+  }
 }
 
 /** Select the fixture text without depending on platform menu shortcuts. */
@@ -56,6 +90,8 @@ interface SizeFrame {
   inputHeight: number;
 }
 async function observeResize(tab: boolean, action: () => Promise<void>) {
+  await focusWindow(app);
+  await app.waitFor("document.hasFocus()", { label: "chat window owns input" });
   await app.waitFor(
     `${dock}.parentElement.getAnimations({subtree:true}).every(a=>
       a.playState!=='running' || a.effect?.getTiming().iterations===Infinity)`,
@@ -76,11 +112,13 @@ async function observeResize(tab: boolean, action: () => Promise<void>) {
   await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
   try {
     await action();
+    await app.waitFor(`(${dock}.dataset.chatTab==='true')===${tab}`, {
+      label: `chat enters its ${tab ? "tab" : "floating"} pose`,
+    });
     await app.waitFor(
       `(() => {
       const chat=${dock};
-      return (chat.dataset.chatTab==='true')===${tab}
-        && chat.getAnimations().some(a=>a instanceof CSSTransition
+      return chat.getAnimations().some(a=>a instanceof CSSTransition
           && a.transitionProperty==='max-width');
     })()`,
       { label: `chat ${tab ? "tab" : "floating"} pose has a width transition` },
