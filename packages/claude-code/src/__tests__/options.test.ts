@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AttemptStart } from "@catamorphic/agent-protocol/runner";
+import {
+  type AttemptStart,
+  RUNNER_PROTOCOL_VERSION,
+} from "@catamorphic/agent-protocol/runner";
+import { MODEL_GRANT_READER } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import { classifyClaudeError } from "../errors.js";
 import { buildQueryOptions, readAttemptOptions } from "../options.js";
@@ -10,7 +14,7 @@ import { hostSessionStore } from "../session-store.js";
 
 function attempt(overrides: Partial<AttemptStart> = {}): AttemptStart {
   return {
-    protocol: 1,
+    protocol: RUNNER_PROTOCOL_VERSION,
     sessionId: "session",
     projectId: "project",
     turnId: "turn",
@@ -66,7 +70,7 @@ describe("model access", () => {
             kind: "gateway",
             api: "anthropic",
             baseUrl: "https://gateway.test/anthropic",
-            keyFile: "/state/grant",
+            grantDirectory: "/state/grant",
           },
           env: { EXTRA: "1" },
         }),
@@ -74,12 +78,12 @@ describe("model access", () => {
       expect(built.env?.ANTHROPIC_BASE_URL).toBe(
         "https://gateway.test/anthropic",
       );
-      expect(built.env?.WORK_MODEL_KEY_FILE).toBe("/state/grant");
+      expect(built.env?.WORK_MODEL_GRANT_DIRECTORY).toBe("/state/grant");
       expect(built.env?.EXTRA).toBe("1");
       expect(built.env?.WORK_TEST_HOST_SECRET).toBeUndefined();
       expect(built.env?.PATH).toBe(process.env.PATH);
       expect(built.settings).toEqual({
-        apiKeyHelper: 'cat "$WORK_MODEL_KEY_FILE"',
+        apiKeyHelper: MODEL_GRANT_READER,
       });
       expect(built.pathToClaudeCodeExecutable).toBe("claude");
     } finally {
@@ -94,7 +98,7 @@ describe("model access", () => {
           kind: "gateway",
           api: "anthropic",
           baseUrl: "https://gateway.test/anthropic",
-          keyFile: "/state/grant",
+          grantDirectory: "/state/grant",
         },
         envFiles: [
           "/workspace/.work-session/env/gateway.sh",
@@ -123,7 +127,7 @@ describe("model access", () => {
             kind: "gateway",
             api: "openai",
             baseUrl: "x",
-            keyFile: "y",
+            grantDirectory: "y",
           },
         }),
       ),
@@ -215,7 +219,7 @@ describe("model access", () => {
               kind: "gateway",
               api: "anthropic",
               baseUrl: "https://gateway.test/anthropic",
-              keyFile: "/state/grant",
+              grantDirectory: "/state/grant",
             },
           }),
         ),

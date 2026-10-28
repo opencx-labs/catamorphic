@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
@@ -8,6 +7,7 @@ import {
 } from "node:http";
 import { Readable } from "node:stream";
 import type { ModelAccess } from "@catamorphic/agent-protocol/runner";
+import { readConnectionGrant } from "@catamorphic/sandbox";
 
 /** Largest request body the endpoint takes, as the gateway does. */
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
@@ -75,7 +75,7 @@ export async function serveLoopbackModel(input: {
   const running = new Set<AbortController>();
   const grant = async () => {
     try {
-      return (await readFile(access.keyFile, "utf8")).trim();
+      return await readConnectionGrant({ directory: access.grantDirectory });
     } catch (error) {
       throw new UnreadableGrantError(error);
     }

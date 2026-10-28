@@ -46,13 +46,13 @@
         "env": {
           "ANTHROPIC_BASE_URL": "{{model}}",
           "CLAUDE_CONFIG_DIR": "{{home}}",
-          "WORK_MODEL_KEY_FILE": "{{state}}/model-key",
+          "WORK_MODEL_GRANT_DIRECTORY": "{{state}}/model-key",
           "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "300000",
           "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
           "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
           "DISABLE_AUTOUPDATER": "1"
         },
-        "apiKeyHelper": "cat \"$WORK_MODEL_KEY_FILE\"",
+        "apiKeyHelper": "set -- \"$WORK_MODEL_GRANT_DIRECTORY\"; revision=$(for file in \"$1\"/*; do [ -f \"$file\" ] && printf '%s\\n' \"${file##*/}\"; done | sed -n \"/^[1-9][0-9]*$/p\" | LC_ALL=C sort -n | tail -n 1); [ -n \"$revision\" ] || exit 1; cat \"$1/$revision\"",
         "includePartialMessages": true,
         "sessionStore": true,
         "hooks": ["PostToolUse", "UserPromptSubmit"]

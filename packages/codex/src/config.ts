@@ -6,7 +6,10 @@ import type {
   McpServerSpec,
   PolicyLayer,
 } from "@catamorphic/agent-protocol/runner";
-import { resolveToolPermissionAcross } from "@catamorphic/sandbox";
+import {
+  MODEL_GRANT_READER,
+  resolveToolPermissionAcross,
+} from "@catamorphic/sandbox";
 import { codexConfigArgs, isObject } from "./app-server.js";
 import type { CodexSpawn } from "./transport.js";
 
@@ -69,7 +72,7 @@ export function gatewayProviderConfig(gateway: {
         wire_api: "responses",
         auth: {
           command: "sh",
-          args: ["-c", 'cat "$WORK_MODEL_KEY_FILE"'],
+          args: ["-c", MODEL_GRANT_READER],
           refresh_interval_ms: KEY_REFRESH_MS,
         },
       },
@@ -181,7 +184,7 @@ export function codexLaunch(attempt: AttemptStart): CodexLaunch | string {
     if (access.api !== "openai")
       return `Codex speaks the OpenAI API; this chat's model connection is an ${access.api} API.`;
     config = gatewayProviderConfig({ baseUrl: access.baseUrl });
-    env.WORK_MODEL_KEY_FILE = access.keyFile;
+    env.WORK_MODEL_GRANT_DIRECTORY = access.grantDirectory;
   }
   if (access.kind === "sign_in") env.CODEX_HOME = access.home;
   else if (access.kind === "gateway")

@@ -24,13 +24,22 @@ Git, HTTP and MCP keep their existing grant lifetime, including on aliases
 that also serve models. They remain usable by authorized background work.
 Usage belongs to the grant's turn, even when its answer ends after that turn.
 Issuance checks the fence under a turn lock; stale renewal cleanup cannot
-revoke a later generation's grants. Model key files are attempt-specific, so
-a late upload cannot replace the next attempt's model bearer. A surviving
-runner receives grants for its new claim and restarts renewal before takeover
-continues. Grant rows carry a monotonic publication revision. Uploads stage
-immutable files, then the sandbox serializes revision checking and atomic file
-replacement, including the shared Git and HTTP aliases. Delayed older
-publication is skipped; cleanup revokes only older revisions.
+revoke a later generation's grants. A surviving runner receives grants for its
+new claim and restarts renewal before takeover continues.
+
+Grant rows carry a monotonic publication revision. Each bearer is an immutable
+file named by that revision in an alias's grant directory. Uploads stage files,
+then atomically add the finished revision; readers select the greatest numeric
+revision on every use. Delayed old uploads cannot displace newer model, Git or
+HTTP authority. Model directories are attempt-specific; a takeover adds the new
+lease's revision to the surviving attempt's directory. Cleanup revokes only
+older grant revisions. The runner's model contract is `grantDirectory`, and
+HTTP exposes `_GRANT_DIRECTORY` with a reader helper. There is no mutable
+current-token file, pointer, filesystem mutex or legacy file fallback. This
+incompatible `AttemptStart` change bumps the runner protocol to version 2.
+Metadata templates and rendered outputs stay in each invocation's staging
+until a completed file is atomically renamed. Installing the shared Git include
+retries Git's own config lock; it adds no filesystem mutex.
 
 Authorization is checked again after body processing and guards, immediately
 before forwarding. Calls already admitted may finish streaming after a turn

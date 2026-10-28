@@ -218,7 +218,7 @@ import {
   removeSandboxGateway,
   removeSessionCredentials,
   SESSION_DIRECTORY,
-  sandboxGrantFile,
+  sandboxGrantDirectory,
   seedSandboxBase,
   seedSandboxRepository,
 } from "./sandbox-git.js";
@@ -5237,7 +5237,7 @@ export class AgentSessionsService {
           kind: "gateway",
           api: gateway.api,
           baseUrl: gateway.baseUrl,
-          keyFile: gateway.keyFile,
+          grantDirectory: gateway.grantDirectory,
         };
       }
       const delivery = await this.prepareSandboxSecrets({
@@ -6573,7 +6573,7 @@ export class AgentSessionsService {
               alias: binding.alias,
               api: binding.api,
               baseUrl: `${url}/model/${binding.alias}`,
-              keyFile: sandboxGrantFile({
+              grantDirectory: sandboxGrantDirectory({
                 provider: input.provider,
                 alias: binding.alias,
                 ...(input.modelTurn
