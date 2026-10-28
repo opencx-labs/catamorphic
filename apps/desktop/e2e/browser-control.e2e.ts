@@ -477,6 +477,87 @@ it("shows the veil where a held page is pressed, and keeps the press from the pa
   });
   expect(await clicks()).toBe(before);
 });
+it("leaves the shown page the person's while the agent works in one out of sight", async () => {
+  // The person's own tab, opened as they would.
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',altKey:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
+  );
+  await app.waitFor(
+    `document.activeElement?.getAttribute('aria-label') === 'Address and search bar'`,
+    { label: "new tab address bar focused" },
+  );
+  await app.eval(
+    `(()=>{${setReactValueJs};setReactValue(document.activeElement,${JSON.stringify(`${base}/?mine`)})})()`,
+  );
+  await app.press("Enter");
+  const page = await app.connectToFrame("?mine");
+  try {
+    await page.waitFor("document.readyState === 'complete'");
+    const mine = await app.waitFor<string>(
+      `[...document.querySelectorAll('[data-surface-key^="browser:"][data-workspace-slot]')].find((pane) => pane.querySelector('webview')?.getURL?.().includes('?mine'))?.getAttribute('data-surface-key') ?? false`,
+      { label: "the person's tab shown" },
+    );
+    // A page the agent opens after it lies over the person's while the
+    // agent works there: laid out, transparent, under its veil, which
+    // took every press and wheel meant for the page in sight.
+    const theirs = (
+      (await tool("open_browser", { url: `${base}/?theirs` })) as {
+        key: string;
+      }
+    ).key;
+    await tool("open_surface", { target: mine });
+    const chip = `document.querySelector(${JSON.stringify(`[data-testid="chip"][data-point-key="chip:${theirs}"]`)})`;
+    counter++;
+    const prompt = `E2E workspace tool ${JSON.stringify({
+      name: "browser_act",
+      input: {
+        key: theirs,
+        action: "wait_for",
+        text: "Never here",
+        timeoutMs: 4000,
+      },
+      serial: counter,
+    })}`;
+    await app.eval(
+      `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
+    );
+    await app.waitFor(
+      `(()=>{const el=${chip};return !!el && el.getAttribute('data-signal') === 'working';})()`,
+      { label: "held" },
+    );
+    // A point on the shown page, clear of the floating chat.
+    const point = await app.eval<{ x: number; y: number } | null>(`(() => {
+      const box = document.querySelector(${JSON.stringify(`[data-surface-key="${mine}"]`)}).querySelector('webview').getBoundingClientRect();
+      for (const fx of [0.03, 0.97, 0.5])
+        for (const fy of [0.3, 0.5, 0.7]) {
+          const x = box.left + box.width * fx;
+          const y = box.top + box.height * fy;
+          if (!document.elementFromPoint(x, y)?.closest('section[aria-label]'))
+            return { x, y };
+        }
+      return null;
+    })()`);
+    if (!point) throw new Error("No point on the shown page");
+    expect(
+      await app.eval(
+        `document.elementFromPoint(${point.x}, ${point.y})?.closest('[data-surface-key]')?.getAttribute('data-surface-key')`,
+      ),
+    ).toBe(mine);
+    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    for (const type of ["mousePressed", "mouseReleased"])
+      await app.cdp("Input.dispatchMouseEvent", {
+        type,
+        ...point,
+        button: "left",
+        clickCount: 1,
+      });
+    await page.waitFor("events.some((event) => event.type === 'click')", {
+      label: "the shown page took the press",
+    });
+  } finally {
+    page.close();
+  }
+});
 it("drives a page in a window behind the person's without bringing it forward", async () => {
   const elsewhere = await app.eval<{ id: string }>(
     `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Elsewhere", rootPath: path.join(app.userDataDir, "elsewhere") })})`,
