@@ -508,7 +508,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       ],
       gitAliases: [],
     });
-    // A late old renewal writes only its own model key file.
+    // A late old publication retries its own immutable model revision.
     await configureSandboxGateway({
       provider,
       sandboxId: "s",
@@ -516,7 +516,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       grants: [
         {
           alias: "model",
-          grant: "grant-old-renewed",
+          grant: "grant-three",
           publicationRevision: "3",
           modelAttemptId: "attempt-one",
         },
@@ -542,6 +542,78 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
       { cwd: project(), env },
     );
     expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
+  });
+
+  it("retries identical immutable revisions concurrently without replacing them", async () => {
+    const config = {
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "mixed",
+          grant: "persisted-bearer",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+      renewOnly: true,
+    };
+    await configureSandboxGateway(config);
+    await Promise.all([
+      configureSandboxGateway(config),
+      configureSandboxGateway(config),
+    ]);
+    const session = path.join(root, "workspace", ".work-session");
+    for (const directory of [
+      path.join(session, "grants", "mixed"),
+      path.join(session, "model-grants", "attempt-one", "mixed"),
+    ]) {
+      expect(await fs.readdir(directory)).toEqual(["3"]);
+      expect(await readConnectionGrant({ directory })).toBe("persisted-bearer");
+    }
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+
+    // A revision belongs to one persisted bearer, even if a caller misuses it.
+    await expect(
+      configureSandboxGateway({
+        ...config,
+        grants: config.grants.map((grant) => ({
+          ...grant,
+          grant: "conflicting-bearer",
+        })),
+      }),
+    ).rejects.toThrow("Could not publish immutable grant grants/mixed/3");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "grants", "mixed"),
+      }),
+    ).toBe("persisted-bearer");
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
+  it("reports a failed immutable publication when the destination is absent", async () => {
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "ln"), "#!/bin/sh\nexit 13\n", {
+      mode: 0o700,
+    });
+    await expect(
+      configureSandboxGateway({
+        provider: directorySandbox(root, {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        }),
+        sandboxId: "s",
+        gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+        grants: [{ alias: "mixed", grant: "bearer", publicationRevision: "3" }],
+        gitAliases: [],
+        renewOnly: true,
+      }),
+    ).rejects.toThrow("Could not publish immutable grant grants/mixed/3");
+    const session = path.join(root, "workspace", ".work-session");
+    expect(await fs.readdir(path.join(session, "grants", "mixed"))).toEqual([]);
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
   });
 
   it("does not publish an older upload after a newer model, Git and HTTP grant", async () => {
