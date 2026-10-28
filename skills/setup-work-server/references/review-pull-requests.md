@@ -198,9 +198,11 @@ Work never loads privileged code automatically from a project's mutable files.
 Apply the SQL to the application Postgres database. Its schema is independent
 of Work's tables and is shared by all replicas that publish these reviews.
 
-The deployment installs `pg` at runtime and `@types/pg` when typechecking. Create
-distinct dedicated `lockPool` and `ledgerPool` instances pointing to the same
-database. This keeps lock waiters from starving intent and receipt commits.
+Use the pack skill's complete deployment manifest: pinned
+`@catamorphic/work-server` and `@catamorphic/server-sdk` releases plus `pg`, with
+`@types/pg` for typechecking. Keep the telemetry peers too when copying the
+reference entry points. Create distinct dedicated `lockPool` and `ledgerPool`
+instances pointing to the same database. This keeps lock waiters from starving intent and receipt commits.
 Each needs at least one connection; transaction poolers are supported because
 coordination uses transaction row locks. Close both pools during deployment
 shutdown.
