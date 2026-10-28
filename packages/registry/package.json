@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/registry",
-  "version": "0.1.0-alpha.31",
+  "version": "0.1.0-alpha.32",
   "type": "module",
   "scripts": {
     "build": "bun run scripts/build.ts",
