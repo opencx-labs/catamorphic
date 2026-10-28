@@ -68,7 +68,7 @@ export interface paths {
                                 /** @enum {number} */
                                 session: 2;
                                 /** @enum {number} */
-                                runner: 1;
+                                runner: 2;
                             };
                         };
                     };
