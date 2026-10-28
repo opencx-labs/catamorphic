@@ -57,7 +57,8 @@ export async function runScenario(input: {
     for (const [name, content] of Object.entries(input.scenario.files ?? {}))
       await writeFile(path.join(place.cwd, name), content);
     // The gateway grant a host writes for the attempt (ADR 0180).
-    await writeFile(path.join(place.state, "model-key"), "fixture-key");
+    await mkdir(path.join(place.state, "model-key"), { recursive: true });
+    await writeFile(path.join(place.state, "model-key", "1"), "fixture-key");
   }
   for (const [index, step] of input.scenario.attempts.entries()) {
     const place = step.elsewhere

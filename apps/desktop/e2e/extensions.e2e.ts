@@ -10,6 +10,7 @@ import { buildCrx } from "../src/main/extensions/crx-builder.js";
 import {
   type AppHandle,
   type FrameHandle,
+  focusWindow,
   launchApp,
   pointerOnPage,
 } from "./harness.js";
@@ -714,6 +715,8 @@ describe("an unpacked extension", () => {
   });
 
   it("adds its items to the page's menu, after Work's own", async () => {
+    // As in the page-menu suite, a window must be key before right-clicking.
+    await focusWindow(app);
     await inPage(
       "(() => { const range = document.createRange(); range.selectNodeContents(document.querySelector('p')); getSelection().removeAllRanges(); getSelection().addRange(range); return true; })()",
     );
@@ -726,31 +729,93 @@ describe("an unpacked extension", () => {
     // The window routes input to the page a frame or more after showing
     // it: a press sent before the page has the pointer lands nowhere.
     await pointerOnPage(app, { view: pageView, selector: "p", point });
-    for (const type of ["mousePressed", "mouseReleased"])
-      await app.cdp("Input.dispatchMouseEvent", {
-        type,
-        ...point,
-        button: "right",
-        clickCount: 1,
-      });
     const menu = `document.querySelector('[data-sidebar-menu][aria-label="Page"]')`;
-    await app.waitFor(
-      `[...(${menu}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Work Test: one')`,
-      { label: "extension item in the page menu" },
-    );
-    const labels = await app.eval<string[]>(
-      `[...${menu}.querySelectorAll('button')].map((b) => b.textContent.trim())`,
-    );
-    expect(labels.indexOf("Work Test: one")).toBeGreaterThan(
-      labels.indexOf("Copy"),
-    );
-    expect(labels.at(-1)).toBe("Inspect");
-    await app.waitFor(
-      `${menu}.getAnimations({ subtree: true }).every((animation) => animation.playState === 'finished')`,
-    );
-    await app.eval(
-      `[...${menu}.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Work Test: one').click(); true`,
-    );
+    let cleanups: PromiseSettledResult<unknown>[] = [];
+    try {
+      await app.eval(`(() => {
+        window.__extensionMenuEvents=[];
+        const note=event=>window.__extensionMenuEvents.push({type:event.type,
+          target:event.target===window?'window':event.target?.tagName,
+          focused:document.hasFocus()});
+        const types=['blur','focusin','pointerdown','keydown','scroll'];
+        for(const type of types)addEventListener(type,note,true);
+        window.__stopExtensionMenuTrace=()=>{
+          for(const type of types)removeEventListener(type,note,true);
+        };return true;
+      })()`);
+      await inPage(`(() => {
+        window.__extensionContextEvents=[];
+        const note=event=>window.__extensionContextEvents.push({type:event.type,
+          selection:String(getSelection()),focused:document.hasFocus()});
+        const types=['mousedown','mouseup','contextmenu'];
+        for(const type of types)addEventListener(type,note,true);
+        window.__stopExtensionContextTrace=()=>{
+          for(const type of types)removeEventListener(type,note,true);
+        };return true;
+      })()`);
+      for (const type of ["mousePressed", "mouseReleased"])
+        await app.cdp("Input.dispatchMouseEvent", {
+          type,
+          ...point,
+          button: "right",
+          clickCount: 1,
+        });
+      await app.waitFor(`!!${menu}`, { label: "Page menu opened" });
+      const settled = await app.waitFor<string>(
+        `!${menu} ? 'dismissed' : ${menu}.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished') && 'settled'`,
+        { label: "Page menu settled" },
+      );
+      expect(settled).toBe("settled");
+      await app.waitFor(
+        `[...(${menu}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Work Test: one')`,
+        { label: "extension item in the page menu" },
+      );
+      const labels = await app.eval<string[]>(
+        `[...${menu}.querySelectorAll('button')].map((b) => b.textContent.trim())`,
+      );
+      expect(labels.indexOf("Work Test: one")).toBeGreaterThan(
+        labels.indexOf("Copy"),
+      );
+      expect(labels.at(-1)).toBe("Inspect");
+      await app.eval(
+        `[...${menu}.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Work Test: one').click(); true`,
+      );
+    } catch (cause) {
+      const [host, guest] = await Promise.allSettled([
+        app.eval(`(async () => ({
+          events:window.__extensionMenuEvents,
+          focused:document.hasFocus(),
+          native:await window.catamorphicDesktop.devWindow('get'),
+          items:[...(document.querySelector('[data-sidebar-menu][aria-label="Page"]')?.querySelectorAll('button')??[])].map(e=>e.textContent.trim()),
+        }))()`),
+        inPage(
+          "({events:window.__extensionContextEvents,focused:document.hasFocus(),selection:String(getSelection())})",
+        ),
+      ]);
+      const describe = (result: PromiseSettledResult<unknown>) =>
+        result.status === "fulfilled"
+          ? result.value
+          : { diagnosticError: String(result.reason) };
+      throw new Error(
+        `Extension page-menu input: ${JSON.stringify({ host: describe(host), guest: describe(guest) })}`,
+        { cause },
+      );
+    } finally {
+      cleanups = await Promise.allSettled([
+        inPage(
+          "window.__stopExtensionContextTrace?.();delete window.__stopExtensionContextTrace;true",
+        ),
+        app.eval(
+          "window.__stopExtensionMenuTrace?.();delete window.__stopExtensionMenuTrace;true",
+        ),
+      ]);
+    }
+    for (const cleanup of cleanups) {
+      if (cleanup.status === "rejected")
+        throw new Error("Extension menu trace cleanup failed", {
+          cause: cleanup.reason,
+        });
+    }
     const worker = await app.connectToFrame(`${extensionId}/sw.js`);
     await worker.waitFor(
       `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'menu' && entry.item === 'work-test' && entry.text === 'one' && typeof entry.tabId === 'number'))`,

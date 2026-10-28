@@ -1,16 +1,13 @@
 # Work server
 
-The Work server is the prebuilt, self-hostable Catamorphic host (ADRs 0059,
-0159). Product-facing names say Work: the `work-server` image, `WORK_*`
-configuration, `work-<id>.local`, and the sign-in pages. Framework contracts
-(`@catamorphic/*`, `.work/`, the database schemas, key-derivation
-labels) keep the Catamorphic name. The release workflow
-`.github/workflows/work-server-image.yml` builds, smoke-tests, and publishes
-the image for every `desktop-v*` release tag.
+The Work server is a composable, single-tenant host. Deployments own their
+entry point and image, pin `@catamorphic/work-server`, and add hooks (ADR 0294).
+There is no stock Dockerfile or server-image publication workflow. Product
+names say Work; framework package names and storage contracts stay Catamorphic.
 
 The server itself lives in `packages/work-server` (`@catamorphic/work-server`,
 ADR 0160): `createWorkServer({ config, hooks })` plus
-`workServerConfigFromEnv`. This app is only the image's process: env parsing,
+`workServerConfigFromEnv`. This app supplies reference process source: env parsing,
 mDNS, listening, signals. Add server behavior to the package, configuration to
 `WorkServerConfig`, and extension points to `WorkServerHooks`. Host tables use
 the `work_` prefix.
@@ -62,11 +59,12 @@ alone never free capacity.
 ## Run
 
 - From the repository root, `bun run dev` starts the combined desktop and
-  stock-server manual environment. `bun run dev:server` is the stock-server
+  reference-server manual environment. `bun run dev:server` is the server
   focused variant of the same development orchestrator. The orchestrator
   assigns worktree-local data directories and loopback ports; do not set
   `WORK_DATA_DIR` manually for development.
-- Docker: see `Dockerfile` header. `--network host` for mDNS on Linux.
+- Deployment images: see `packages/work-server/README.md#your-own-image`.
+  Build and verify your own; use host networking for mDNS on Linux.
 - Chat needs one of `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
   `OPENAI_API_KEY` (`WORK_MODEL` overrides; anthropic defaults to
   claude-opus-5). `WORK_FAKE_AGENT=1` = deterministic echo agent (the

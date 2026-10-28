@@ -9,9 +9,18 @@ import {
 } from "kysely";
 import {
   type Identity,
+  identityCovers,
   isProjectPrincipal,
+  mayUseProject,
   projectPrincipalIdentity,
 } from "../identity.js";
+import type { ConnectionAdmissionService } from "./connection-admission.js";
+import {
+  AuthenticationRequiredError,
+  ConnectionNotFoundError,
+  ConnectionPermissionDeniedError,
+  ConnectionUnavailableError,
+} from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import {
   admissionPolicy,
@@ -23,6 +32,10 @@ import {
   type ExecutionEnvironmentsService,
   placementOwner,
 } from "./execution-environments-service.js";
+import type {
+  PlacementWaitsService,
+  PlacementWaitTarget,
+} from "./placement-waits.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 
@@ -62,7 +75,8 @@ type RunOutcome =
   | "stuck";
 
 /**
- * Recovers the work of disposable nodes that are gone for good (ADR 0190):
+ * Reconciles workflow placement across durable waits (ADR 0289), and
+ * recovers the work of disposable nodes that are gone for good (ADR 0190):
  * a control-plane replica that stopped, or whose lease lapsed past the
  * grace period, never registers again. Any host may run a pass; row locks
  * on each Allocation and node keep two passes from acting twice.
@@ -85,6 +99,8 @@ export class NodeRecoveryService {
       environments: ExecutionEnvironmentsService;
       allocations: ExecutionAllocationsService;
       coordinator: RunCoordinator;
+      connections?: ConnectionAdmissionService;
+      waits: PlacementWaitsService;
       /**
        * A member's identity as the host resolves it now, or null when they
        * may no longer act (ADR 0053): the same resolver unattended work uses.
@@ -96,6 +112,326 @@ export class NodeRecoveryService {
       }) => Promise<Identity | null>;
     },
   ) {}
+
+  /**
+   * Reconcile physical placement with durable work (ADR 0289). Called after
+   * jobs settle and on the worker's maintenance pass, so a crashed worker
+   * cannot leave an idle reservation or a resumed root stranded.
+   */
+  async reconcileWorkflowWaits(
+    args: { runId?: string; limit?: number } = {},
+  ): Promise<void> {
+    await withSpan(
+      { tracer, name: "workflow.reconcile_wait_capacity", attributes: {} },
+      async () => {
+        const selected = args.runId
+          ? await this.deps.db
+              .selectFrom("workflow_runs")
+              .select("allocation_id")
+              .where("id", "=", args.runId)
+              .executeTakeFirst()
+          : undefined;
+        if (args.runId && !selected?.allocation_id) return;
+        const rows = await this.deps.db
+          .selectFrom("execution_allocations as allocation")
+          .innerJoin(
+            "workflow_runs as root",
+            "root.id",
+            "allocation.root_workload_id",
+          )
+          .leftJoin(
+            "placement_waits as wait",
+            "wait.root_workload_id",
+            "root.id",
+          )
+          .selectAll("allocation")
+          .whereRef("root.allocation_id", "=", "allocation.id")
+          .where("root.status", "in", [
+            "pending",
+            "running",
+            "waiting",
+            "paused",
+          ])
+          .where("allocation.workload_kind", "=", "workflow")
+          .$if(selected?.allocation_id !== undefined, (query) =>
+            query.where("allocation.id", "=", selected?.allocation_id ?? ""),
+          )
+          .where(
+            sql<boolean>`NOT EXISTS (${allocationJobs(this.deps.db, "allocation.id").where("job.status", "=", "running")})`,
+          )
+          .where(
+            sql<boolean>`NOT EXISTS (${this.deps.db
+              .selectFrom("active_run_invocations as invocation")
+              .innerJoin(
+                "workflow_runs as run",
+                "run.id",
+                "invocation.workflow_run_id",
+              )
+              .select("invocation.invocation_id")
+              .where("run.allocation_id", "=", sql<string>`allocation.id`)})`,
+          )
+          .where(sql<boolean>`(
+            (allocation.status = 'active' AND allocation.worker_node_id IS NOT NULL AND NOT EXISTS (${runnableAllocationJobs(this.deps.db, "allocation.id")})) OR
+            (allocation.status = 'released' AND allocation.release_reason = 'idle'
+              AND (allocation.worker_node_id IS NULL OR allocation.capacity_released_at IS NOT NULL)
+              AND EXISTS (${runnableAllocationJobs(this.deps.db, "allocation.id")}))
+          )`)
+          .where((eb) =>
+            eb.or([
+              eb("wait.retry_at", "is", null),
+              eb("wait.retry_at", "<=", sql<Date>`now()`),
+            ]),
+          )
+          .orderBy("wait.last_tried_at", (order) => order.asc().nullsFirst())
+          .orderBy("allocation.created_at")
+          .limit(args.limit ?? 100)
+          .execute();
+        const failures: unknown[] = [];
+        for (const allocation of rows) {
+          try {
+            if (allocation.status === "active")
+              await this.parkRun({ allocation });
+            else await this.readmitRun({ allocation });
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length)
+          throw new AggregateError(
+            failures,
+            "Workflow capacity reconciliation failed",
+          );
+      },
+    );
+  }
+
+  private async parkRun(args: { allocation: AllocationRow }): Promise<void> {
+    const { allocation } = args;
+    await this.deps.db.transaction().execute(async (trx) => {
+      if (!(await lockWorkflowAllocation({ trx, allocation }))) return;
+      // Job claimers take a share lock on this Allocation. With its exclusive
+      // lock held, no new compute can pass the fence after this check.
+      const work = await workflowAllocationWork({
+        trx,
+        allocationId: allocation.id,
+      });
+      if (work.running || work.runnable || work.invocations) return;
+      await trx
+        .updateTable("execution_allocations")
+        .set({
+          status: "released",
+          release_reason: "idle",
+          released_at: sql`now()`,
+        })
+        .where("id", "=", allocation.id)
+        .where("status", "=", "active")
+        .execute();
+      await trx
+        .updateTable("connection_capability_grants")
+        .set({ revoked_at: sql`now()` })
+        .where("allocation_id", "=", allocation.id)
+        .where("revoked_at", "is", null)
+        .execute();
+    });
+  }
+
+  private async readmitRun(args: { allocation: AllocationRow }): Promise<void> {
+    const { allocation } = args;
+    if (allocation.worker_node_id && !allocation.capacity_released_at) return;
+    const root = await this.deps.db
+      .selectFrom("workflow_runs")
+      .selectAll()
+      .where("id", "=", allocation.root_workload_id)
+      .executeTakeFirst();
+    if (!root?.external_user_id || root.allocation_id !== allocation.id) return;
+    const work = await workflowAllocationWork({
+      trx: this.deps.db,
+      allocationId: allocation.id,
+    });
+    if (!work.runnable || work.running || work.invocations) return;
+    const fail = async (error: string) => {
+      await this.deps.db.transaction().execute(async (trx) => {
+        if (!(await lockWorkflowAllocation({ trx, allocation }))) return;
+        await this.deps.coordinator.failRunTree({
+          runId: root.id,
+          error: `The workflow cannot resume: ${error}`,
+          trx,
+        });
+      });
+    };
+    const mechanics: Identity = {
+      tenantId: allocation.tenant_id,
+      externalUserId: root.external_user_id,
+    };
+    const previous = await this.deps.allocations.get({
+      identity: mechanics,
+      allocationId: allocation.id,
+    });
+    if (!previous) return;
+    // A host-issued root is deliberately outside membership resolution. A
+    // project automation keeps its original consent, never its enabler's grants.
+    const identity = isProjectPrincipal(root.external_user_id)
+      ? projectPrincipalIdentity({
+          tenantId: allocation.tenant_id,
+          projectId: allocation.project_id,
+          environment: allocation.environment_name,
+          workflowName: root.workflow_name,
+          connections: previous.policy.connections,
+          permissions: Array.isArray(root.caller_project_permissions)
+            ? root.caller_project_permissions.flatMap((value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value) &&
+                typeof value.permission === "string"
+                  ? [value.permission]
+                  : [],
+              )
+            : [],
+        })
+      : root.caller_scope === null
+        ? mechanics
+        : await this.deps.resolveOwner({
+            ...mechanics,
+            projectId: allocation.project_id,
+          });
+    if (
+      !identity ||
+      identity.tenantId !== mechanics.tenantId ||
+      identity.externalUserId !== mechanics.externalUserId ||
+      !mayUseProject(identity, allocation.project_id) ||
+      !identityCovers(identity, {
+        kind: "workflow",
+        projectId: allocation.project_id,
+        name: root.workflow_name,
+      })
+    ) {
+      await fail("its owner may no longer run this workflow");
+      return;
+    }
+    try {
+      const snapshot = previous.policy.connections ?? [];
+      const connectionAdmission = this.deps.connections;
+      if (snapshot.length && !connectionAdmission)
+        throw new Error("Connection providers are not configured");
+      const connections =
+        snapshot.length && connectionAdmission
+          ? await connectionAdmission.admitSnapshot({
+              identity,
+              projectId: allocation.project_id,
+              environment: allocation.environment_name,
+              snapshot,
+            })
+          : [];
+      // Losing a selected capability cannot turn a continuation into a weaker
+      // or differently credentialed operation without the author knowing.
+      if (
+        snapshot.some((binding) =>
+          binding.capabilities.some(
+            (capability) =>
+              !connections
+                .find((current) => current.alias === binding.alias)
+                ?.capabilities.includes(capability),
+          ),
+        )
+      )
+        throw new ConnectionPermissionDeniedError();
+      const placement = await this.deps.environments.admitOrWait({
+        identity,
+        projectId: allocation.project_id,
+        owner: placementOwner(root.external_user_id),
+        environment: allocation.environment_name,
+        requirements: { workload: "workflow" },
+        always: true,
+      });
+      if ("wait" in placement) {
+        await this.recordWorkflowWait({ allocation, target: placement.wait });
+        return;
+      }
+      const { admission } = placement;
+      try {
+        await this.deps.db.transaction().execute(async (trx) => {
+          if (!(await lockWorkflowAllocation({ trx, allocation }))) return;
+          const current = await workflowAllocationWork({
+            trx,
+            allocationId: allocation.id,
+          });
+          if (!current.runnable || current.running || current.invocations)
+            return;
+          const next = await this.deps.allocations.create({
+            identity,
+            projectId: allocation.project_id,
+            environmentName: admission.environmentName,
+            workloadKind: "workflow",
+            rootWorkloadId: root.id,
+            workerNodeId: admission.runtime.workerNodeId,
+            policy: admissionPolicy({
+              admission,
+              connections,
+              workflowEnablementId: previous.policy.workflowEnablementId,
+            }),
+            transaction: trx,
+          });
+          await trx
+            .updateTable("workflow_runs")
+            .set({ allocation_id: next.id, updated_at: sql`now()` })
+            .where("allocation_id", "=", allocation.id)
+            .execute();
+        });
+      } catch (error) {
+        if (!(error instanceof EnvironmentCapacityError)) throw error;
+        await this.recordWorkflowWait({
+          allocation,
+          target: { ...admission.wait, reason: "capacity" },
+        });
+      }
+    } catch (error) {
+      if (
+        error instanceof EnvironmentCapacityError ||
+        error instanceof EnvironmentBindingUnavailableError
+      )
+        return;
+      // Policy and connection refusals are definitive. Unexpected failures
+      // (database/transport) must be retried by maintenance, not fail the run.
+      if (
+        error instanceof EnvironmentNotFoundError ||
+        error instanceof EnvironmentAccessDeniedError ||
+        error instanceof EnvironmentIncompatibleError ||
+        error instanceof EnvironmentPolicyInvalidError ||
+        error instanceof AuthenticationRequiredError ||
+        error instanceof ConnectionPermissionDeniedError ||
+        error instanceof ConnectionUnavailableError ||
+        error instanceof ConnectionNotFoundError
+      ) {
+        await fail(error.message);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async recordWorkflowWait(args: {
+    allocation: AllocationRow;
+    target: PlacementWaitTarget;
+  }): Promise<void> {
+    await this.deps.db.transaction().execute(async (trx) => {
+      if (!(await lockWorkflowAllocation({ trx, allocation: args.allocation })))
+        return;
+      const current = await workflowAllocationWork({
+        trx,
+        allocationId: args.allocation.id,
+      });
+      if (!current.runnable || current.running || current.invocations) return;
+      await this.deps.waits.record({
+        tenantId: args.allocation.tenant_id,
+        projectId: args.allocation.project_id,
+        workloadKind: "workflow",
+        rootWorkloadId: args.allocation.root_workload_id,
+        target: args.target,
+        limitMinutes: null,
+        transaction: trx,
+      });
+    });
+  }
 
   async recoverLostNodes(args: {
     /** Only nodes of this authority: the host's own deployment. */
@@ -527,4 +863,105 @@ async function retireAllocation(args: {
     .deleteFrom("deployment_runtimes")
     .where("binding_id", "=", args.allocationId)
     .execute();
+}
+
+/** Root, sharing children, then Allocation: the coordinator's lock order. */
+async function lockWorkflowAllocation(args: {
+  trx: Transaction<DB>;
+  allocation: AllocationRow;
+}): Promise<boolean> {
+  const root = await args.trx
+    .selectFrom("workflow_runs")
+    .select(["id", "allocation_id", "status"])
+    .where("id", "=", args.allocation.root_workload_id)
+    .forUpdate()
+    .skipLocked()
+    .executeTakeFirst();
+  if (
+    !root ||
+    root.allocation_id !== args.allocation.id ||
+    !["pending", "running", "waiting", "paused"].includes(root.status)
+  )
+    return false;
+  const children = await args.trx
+    .selectFrom("workflow_runs")
+    .select("id")
+    .where("allocation_id", "=", args.allocation.id)
+    .where("id", "!=", root.id)
+    .orderBy("id")
+    .execute();
+  for (const child of children) {
+    const locked = await args.trx
+      .selectFrom("workflow_runs")
+      .select("id")
+      .where("id", "=", child.id)
+      .forUpdate()
+      .skipLocked()
+      .executeTakeFirst();
+    if (!locked) return false;
+  }
+  const allocation = await args.trx
+    .selectFrom("execution_allocations")
+    .select("id")
+    .where("id", "=", args.allocation.id)
+    .where("status", "=", args.allocation.status)
+    .forUpdate()
+    .skipLocked()
+    .executeTakeFirst();
+  return Boolean(allocation);
+}
+
+async function workflowAllocationWork(args: {
+  trx: Kysely<DB>;
+  allocationId: string;
+}) {
+  const runs = args.trx
+    .selectFrom("workflow_runs")
+    .select("id")
+    .where("allocation_id", "=", args.allocationId);
+  const running = await args.trx
+    .selectFrom("execution_jobs")
+    .select("id")
+    .where("workflow_run_id", "in", runs)
+    .where("status", "=", "running")
+    .limit(1)
+    .executeTakeFirst();
+  const invocations = await args.trx
+    .selectFrom("active_run_invocations")
+    .select("invocation_id")
+    .where("workflow_run_id", "in", runs)
+    .limit(1)
+    .executeTakeFirst();
+  const runnable = await args.trx
+    .selectFrom("execution_jobs as job")
+    .innerJoin("workflow_runs as run", "run.id", "job.workflow_run_id")
+    .select("job.id")
+    .where("run.allocation_id", "=", args.allocationId)
+    .where("run.status", "in", ["pending", "running", "waiting"])
+    .where("job.status", "=", "pending")
+    .where("job.kind", "!=", "durable_pause_timeout")
+    .where("job.available_at", "<=", sql<Date>`clock_timestamp()`)
+    .limit(1)
+    .executeTakeFirst();
+  return {
+    running: Boolean(running),
+    runnable: Boolean(runnable),
+    invocations: Boolean(invocations),
+  };
+}
+
+function allocationJobs(db: Kysely<DB>, allocationId: string) {
+  return db
+    .selectFrom("execution_jobs as job")
+    .innerJoin("workflow_runs as run", "run.id", "job.workflow_run_id")
+    .select("job.id")
+    .where("run.allocation_id", "=", sql<string>`${sql.ref(allocationId)}`);
+}
+
+function runnableAllocationJobs(db: Kysely<DB>, allocationId: string) {
+  return allocationJobs(db, allocationId)
+    .where("run.status", "in", ["pending", "running", "waiting"])
+    .where("job.status", "=", "pending")
+    .where("job.kind", "!=", "durable_pause_timeout")
+    .where("job.available_at", "<=", sql<Date>`clock_timestamp()`);
 }

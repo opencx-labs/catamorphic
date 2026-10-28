@@ -1,7 +1,7 @@
 ---
 name: pull-request-reviews
 title: Pull request reviews
-description: How this project reviews its pull requests: a review chat per pull request on the review pool, its Environments, reviewer and doctrine, and the workflow that posts the review, check run and summary to GitHub. Use when adapting, debugging, or explaining the reviews.
+description: How this project reviews its pull requests: a review chat per pull request on the review pool, its Environments, reviewer and doctrine, and the workflow that posts the review, check run and replies to GitHub. Use when adapting, debugging, or explaining the reviews.
 ---
 
 # Pull request reviews
@@ -19,13 +19,12 @@ every non-draft pull request gets a project chat keyed
   at `refs/pull/<number>/head`. The agent verifies the change and ends its
   turn with a `work-review` report.
 - **The turn ends:** `postReviews` reads the report, checks it, and posts
-  the review with inline comments, a "Work review" check run, and a summary
-  in the pull request's description, from the control plane. The review is
-  advice: the pull request's code ran beside it.
+  the review with inline comments, a "Work review" check run, and replies,
+  from the control plane. The review is advice: the pull request's code ran beside it.
 - **A new push:** the same chat moves to the new head (`update: "reset"`) and
   is told what changed, so it reviews the difference; the next report
-  resolves the threads it fixed and, once nothing blocks, the poster
-  dismisses its earlier change requests.
+  explains which findings the new head fixes. People retain control of
+  earlier change requests and threads.
 - **A comment mentioning `@work`:** delivered to the same chat; the report's
   `reply` is posted as the answer.
 - **Closed or merged:** `close({ key })` ends the chat: its workspace,
@@ -42,8 +41,7 @@ plane, and Git in the sandbox fetches with the session's grant.
 
 The review is advice, not a merge gate. The pull request's code runs where
 the review is written, so it can sway the verdict, the "Work review" check,
-and the dismissal of earlier change requests (by reporting that nothing
-blocks on its next commit). Protect the base branch with a person's
+and replies. Protect the base branch with a person's
 approval, and if you require the check, require it from the App so a run
 another workflow names alike does not count.
 
@@ -86,8 +84,10 @@ fetches), `prod` (a read-only role on a production replica: `query`,
 `conversations.replies`). Leave out what the organization does not have; the
 agent treats `prod` and `slack` as optional. `github-poster` runs no
 agent and binds the same `github` connection with the typed actions the
-poster writes with; none of them is a raw REST write verb, and each one that
-changes an existing review, thread, or comment touches only the App's own.
+poster writes with; none of them is a raw REST write verb. Publication creates
+commit-bound
+reviews and checks, and stamped replies. It does not mutate descriptions,
+dismiss earlier reviews, or resolve threads.
 
 Fix branches are left out on purpose. Adding `git:write` to `review`
 would let the pull request's code push with the chat's grant: a fork's
@@ -138,7 +138,8 @@ rewrite in its own image (the Work server guide's "Harnesses on the server").
 ## .work/workflows/src/reviews.ts
 
 Every trigger's `where` names the repository this project is attached to,
-and so does `REVIEWED_REPOSITORY`. The App's webhook delivers events from every
+and so does the deployment publisher's `repository` setting. The App's webhook
+delivers events from every
 repository the App is installed on, while a review chat's workspace fetches
 from the project's own remote, so a filter naming another repository (or
 none) reviews the wrong code.
@@ -158,61 +159,117 @@ webhook adds nothing. `postReviews` is the one workflow holding a
 connection; enable it in `github-poster` so its runs use that
 Environment's binding.
 
+## .work/server/review-report.ts
+
+The pure validation and diff helpers used by the publisher. Copy it into the
+same deployment-owned directory as `review-publisher.ts`. The block has one
+full commit, a COMMENT or REQUEST_CHANGES verdict, a score from 1 to 5,
+summaries up to 4,000 characters, at most 30 bounded inline comments, and an
+optional reply. Unknown fields, including the old `resolve`, are rejected.
+Mentions and HTML comment delimiters are removed before publication.
+
+## .work/server/review-publisher.sql
+
+Apply this once to the application's external Postgres, on its own deployment
+migration path. It creates only the `work_review_publication` schema: pull
+locks, strongest verdicts, and effect intents/receipts. It is not a framework
+migration. Both injected pools must connect to this same database. All
+replicas publishing these reviews must share it and use this publisher.
+
+## .work/server/review-publisher.ts
+
+Copy this module and its two siblings into the source of the company's owned
+server. Files under `.work/server/` are installation templates: workflows do
+not execute them and the server never loads them from a review checkout.
+Register `reviewPublicationCapability` in `createWorkServer`'s
+`hooks.capabilityProviders` (or `createCatamorphic`'s `capabilityProviders`).
+Pass `core: () => server.catamorphic.core`, the repository, and two distinct
+`pg.Pool` objects. Use a lazy callback so the provider can be registered before
+server construction finishes; reject calls until the server is ready.
+
+The server's own manifest needs these direct dependencies, independently of
+the workflow workspace (use the same pinned framework release as its server):
+
+```json
+{
+  "dependencies": {
+    "@catamorphic/server-sdk": "0.1.0-alpha.31",
+    "@catamorphic/work-server": "0.1.0-alpha.31",
+    "pg": "8.23.1"
+  },
+  "devDependencies": { "@types/pg": "8.23.1" }
+}
+```
+
+Construct `lockPool` and `ledgerPool` with the same application Postgres
+connection string, finite `connectionTimeoutMillis`, and separate connection
+budgets (for example max 8 and 2).
+Reserve connections for both pools on every replica. A single shared pool can
+deadlock when lock waiters occupy its last connection and the owner needs one
+to commit intent. Separate pools avoid that. Close both when the server stops.
+Transaction-pooling endpoints work: locks belong to an explicit transaction
+on one pinned client, with no session advisory lock or search_path reliance.
+The hook forwards the attempt signal and absolute deadline to every broker
+call. Its local waits, pool acquisition, lock/statement waits and rollback are
+bounded by that same budget; cancellation destroys checked-out clients and a
+late pool acquisition is released. Keep the connection provider's own request
+timeout finite too. Timeout or cancellation never proves a remote write failed.
+
 ## How reviews reach GitHub
 
-`postReviews` reacts to each settled turn of a review chat (its `where`
-selects the `pr-<repository>-` keys). Each step returns one
-call and carries the turn to the next with `{ state }`
-(`durable-workflows`), and in order it:
+`postReviews` returns one durable host call with only the session and turn
+ids. The hook verifies the actual live `postReviews` run, its `github-poster`
+Environment, its trigger input, caller identity, and current Allocation.
+Every GitHub call goes through `core.connectionBroker.invoke`, retaining the
+Environment's binding, authorization and audit. It reads the actual persisted
+session and assistant output, verifies the project review chat and latest
+settled turn, selects the latest top-level reviewer message from that turn's
+latest completed attempt, and compares its commit with GitHub's current open
+head before each write. Caller-supplied reports or result-message ids are never trusted.
 
-1. Reads the turn's reply (`history` through `resultMessageId`) and checks
-   its one `work-review` block field by field, with size caps. The
-   repository and number come from the chat's key, matched exactly
-   (`pr-<repository>-<digits>`), never from the block. Report text is posted
-   as the App, so mentions are taken apart (`@name` notifies no one) and
-   HTML comments are removed (no fake stamps or summary markers).
-2. Checks the chat itself (`inspect`): a project chat, running the
-   `reviewer` agent, placed in `review`, started by `reviewPullRequests`.
-   Any other chat posts nothing. It compares the block's `reviewedCommit`
-   with the commit the chat stands on (`workspace.commit`): a stale report
-   posts nothing at all, since the chat has moved and its next turn
-   reviews the new head.
-3. Keeps inline comments on lines the diff has (`pull_request_files`); a
-   comment elsewhere moves into the review's body, since one bad line fails
-   the whole review.
-4. Posts the review (`COMMENT` or `REQUEST_CHANGES`, never an approval) on
-   the chat's commit. A turn that only answers a question adds no review
-   when one of the App's already stands for the commit with that verdict or
-   requested changes, and leaves the description alone.
-5. Reports the "Work review" check run: `failure` for requested changes,
-   `success` when nothing blocks, `action_required` when no usable review
-   came (a failed turn, an unusable report), with the reason. A commit's
-   verdict only holds or tightens: a failure stands until the next push, a
-   success gives way only to a failure, and a turn without a review marks a
-   commit only while none of the App's runs has.
-6. Once the commit passes, dismisses the App's change requests on earlier
-   commits.
-7. Resolves the threads the report names that the App opened, with their
-   replies, and posts the answer to an `@work` question in its thread or
-   the conversation.
-8. Keeps the summary between `<!-- work-review:start -->` and
-   `<!-- work-review:end -->` in the description, leaving the rest as the
-   author wrote it.
+A transaction row lock serializes the complete publication for a project,
+repository and pull request. Separate commits preserve each effect's intent,
+input digest and destination receipt across a process crash. The effect id
+includes the tenant/project/pull, review session/turn/attempt generation,
+commit and action. Before any new write, the hook reconciles **all** uncertain effects
+for that pull, including older heads and turns, by exact App-owned stamp.
+An item absent from a list remains uncertain: the old request may still
+arrive. The run fails with the effect id and stops all later writes until a
+receipt is found or an operator investigates. It never blindly creates again.
 
-Every step retries a failed call (`retry`, written out on each step:
-the parser reads only an object literal there), and a GitHub read that
-fails with a server error throws so its step retries. Each write carries
-the hidden stamp `<!-- work-review turn=<turnId> -->` (a check run's
-external id `turn=<turnId>`) and passes it as the action's `stamp`: the
-action returns what it already posted for that stamp, so neither a retried
-step nor a rerun of the turn posts twice.
+The strongest verdict persists per commit before dispatch: action_required,
+success, then failure. Existing checks from this App are imported when the
+ledger is first installed; another App's check does not count. Once a failure
+stands, a passing report on that commit cannot emit success or a weaker
+review. Check intent survives a crash before dispatch. Inline comments
+outside the diff move into the review body. Replies go to a verified thread
+on this pull request or to its conversation. No approval is ever emitted.
+
+This recipe deliberately breaks the older unattended policy: it removes
+PR-description replacement, review dismissal and thread resolution. GitHub
+provides no compare-and-swap for those changes, and database ownership cannot
+fence a request GitHub already accepted. People own those decisions. The
+review is advice and must not be the sole merge gate.
+
+A stamp is retry lookup, not global exactly-once delivery. Use only this
+publisher for the recipe's writes. On upgrade, disable the old poster and
+ensure its outstanding GitHub requests have finished before enabling this
+one. Back up the ledger and keep it across deployments. Replacing it loses
+uncertain effects and defeats the coordination guarantee.
+
+Operator recovery: inspect the effect's stored input, digest, destination and
+stamp, then query the destination and record a proven receipt. Never delete
+an uncertain row just because a list is empty. If a request's outcome cannot
+be proved, leave the pull blocked. A trusted operator may repair the ledger
+only after establishing that the old request is terminal and cannot arrive;
+this policy intentionally favors visible intervention over duplicate writes.
 
 ## Turn it on and check it
 
-1. Check the workspace with the host's check (the project MCP
-   `program_check` tool), then deploy. `bun run --cwd .work check` does
-   the same where `bun install --cwd .work` can reach the `@catamorphic/*`
-   packages, which are not yet on a public registry.
+1. Install the deployment publisher and SQL above, then check the workspace
+   with the host's check (the project MCP `program_check` tool), then deploy. `bun run --cwd .work check` does
+   the same after `bun install --cwd .work`; use matching published versions of
+   the `@catamorphic/*` packages.
 2. Store `GITHUB_WEBHOOK_SECRET` as a project secret (the server does this
    when it registered the App for this project) and turn on
    `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats`
@@ -226,8 +283,7 @@ step nor a rerun of the turn posts twice.
 3. Open a small pull request. Within a minute a chat `pr-<repository>-<number>`
    appears; inspect it: Environment `review`, a review-pool machine, and a
    workspace at the head commit. When its turn ends, a `postReviews` run
-   posts the review, the "Work review" check run, and the description's
-   summary.
+   posts the review and the "Work review" check run.
 4. Push again (same chat, new head), comment `@work why?` (an answer on the
    pull request), then close it (the chat closes; its workspace is gone).
 
@@ -238,3 +294,9 @@ the project). When the chat reviewed but nothing reached GitHub, open the
 `postReviews` run, and the "Work review" check: an `action_required`
 run's summary says why a report was unusable, and a stale report (the chat
 had moved to a newer push) posts nothing.
+
+Before using a real GitHub connection, exercise two simultaneous publishers,
+a new head and newer turn, an accepted create whose receipt is lost, a
+missing receipt that blocks later writes, loss of the lock connection, and
+a retry. Test with a fake destination and disposable Postgres. Confirm the
+author's description, earlier reviews and thread resolution remain unchanged.

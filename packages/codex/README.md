@@ -30,7 +30,7 @@ The adapter takes no per-agent settings. Everything arrives with each
   `modelAccess: host` and to `danger-full-access` elsewhere, where the Work
   sandbox is the boundary. Approvals default to `on-request`.
 - `modelAccess`: `gateway` is the `work` model provider (Responses API, a
-  key command reading `keyFile`) with `CODEX_HOME` in the state directory;
+  key command reading the newest revision in `grantDirectory`) with `CODEX_HOME` in the state directory;
   `sign_in` runs with `CODEX_HOME` at the member's own home (ADR 0199);
   `host` runs Codex as the host configured it (`env`, including an optional
   `CODEX_API_KEY`).

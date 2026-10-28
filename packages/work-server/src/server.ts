@@ -34,6 +34,7 @@ import {
   aiToolKind,
   builtinModelConnectionProviders,
   type Catamorphic,
+  type CreateCatamorphicConfig,
   connectionAuthorizationPage,
   createCatamorphic,
   DIRECTORY_TRIGGER_KINDS,
@@ -138,7 +139,7 @@ import { WorkWorkerRegistry } from "./workers/worker-registry.js";
 import { registerWorkerRoutes } from "./workers/worker-routes.js";
 
 /**
- * The Work server, the prebuilt Catamorphic host (ADR 0059, 0159): everything on disk under one
+ * The Work server, a composable Catamorphic host (ADR 0059, 0159): everything on disk under one
  * data dir, zero external services. PGlite for the database, bare git
  * repos for project origins, local-process execution (the container is
  * the sandbox, single-tenant only per ADR 0047), Work server OAuth, and ordinary
@@ -156,6 +157,8 @@ const SETUP_AGENT_USER = "work-setup-agent";
  */
 export interface WorkServerHooks {
   agentCapabilities?: AgentCapabilityOptions;
+  /** Workflow host calls and run capabilities, using the existing SDK contract. */
+  capabilityProviders?: CreateCatamorphicConfig["capabilityProviders"];
   /** Added to the connections declared in `config.gateway`. */
   connectionProviders?: readonly ConnectionProvider[];
   /**
@@ -575,6 +578,9 @@ async function createWorkServerInner(
   );
   const catamorphic = createCatamorphic({
     hostId,
+    ...(hooks.capabilityProviders
+      ? { capabilityProviders: hooks.capabilityProviders }
+      : {}),
     agentCapabilities: workAgentCapabilities({
       core: () => catamorphic.core,
       auth: () => workAuth,

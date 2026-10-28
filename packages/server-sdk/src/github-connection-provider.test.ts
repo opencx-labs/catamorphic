@@ -263,6 +263,57 @@ describe("GitHub connections: App installation (service)", () => {
     ).rejects.toThrow();
   });
 
+  it("passes workflow cancellation to both REST and typed GitHub transports", async () => {
+    for (const action of ["get", "pull_request_files"] as const) {
+      const abort = new AbortController();
+      let started = () => {};
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const provider = defineGithubConnectionProvider({
+        fetch: async (_url, init) => {
+          started();
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(init.signal?.reason),
+              { once: true },
+            );
+          });
+        },
+      });
+      const material = new TextEncoder().encode(
+        JSON.stringify({
+          kind: "user",
+          login: "fixture",
+          userId: 1,
+          tokens: {
+            accessToken: "fixture-only",
+            expiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
+          },
+        }),
+      );
+      const request = provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action,
+        input:
+          action === "get"
+            ? { path: "/repos/octo/hello/pulls" }
+            : { repository: "octo/hello", number: 7 },
+        capabilities: [action],
+        repositories: REPOS,
+        signal: abort.signal,
+      });
+      const rejected = expect(request).rejects.toThrow("attempt canceled");
+      await ready;
+      abort.abort(new Error("attempt canceled"));
+      await rejected;
+    }
+  });
+
   it("mints a token narrowed to the repository a REST path addresses", async () => {
     const { github, provider } = appProvider();
     const material = await appMaterial(provider);
@@ -972,6 +1023,54 @@ describe("GitHub connections: the actions a review poster needs", () => {
     return { github, call };
   }
 
+  it("lists conversation comments with connection ownership for read-only reconciliation", async () => {
+    const { github, call } = await setupWith({
+      "GET /repos/octo/hello/issues/7": () =>
+        Response.json({ number: 7, pull_request: { url: `${PULLS}/7` } }),
+      "GET /repos/octo/hello/issues/7/comments": () =>
+        Response.json([
+          {
+            id: 301,
+            user: BOT,
+            body: "<!-- effect=one -->",
+            html_url: "https://github.com/octo/hello/pull/7#issuecomment-301",
+          },
+          {
+            id: 302,
+            user: ADA,
+            body: "<!-- effect=one -->",
+            html_url: "https://github.com/octo/hello/pull/7#issuecomment-302",
+          },
+        ]),
+    });
+    await expect(
+      call("issue_comments", { repository: "octo/hello", number: 7 }),
+    ).resolves.toEqual({
+      comments: [
+        {
+          id: 301,
+          body: "<!-- effect=one -->",
+          own: true,
+          url: "https://github.com/octo/hello/pull/7#issuecomment-301",
+        },
+        {
+          id: 302,
+          body: "<!-- effect=one -->",
+          own: false,
+          url: "https://github.com/octo/hello/pull/7#issuecomment-302",
+        },
+      ],
+    });
+    expect(
+      github.calls
+        .filter((entry) => entry.url.endsWith("/access_tokens"))
+        .at(-1)?.body,
+    ).toMatchObject({ permissions: { pull_requests: "read" } });
+    await expect(
+      call("issue_comments", { repository: "octo/other", number: 7 }),
+    ).rejects.toThrow();
+  });
+
   it("lists every review thread with every comment, marking the App's own", async () => {
     const { github, call, mints } = await setup();
     const result = await call("review_threads", {
@@ -1212,7 +1311,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
     ).rejects.toThrow(/outside this connection's repositories/);
   });
 
-  it("posts a stamped review, check run, comment or reply once, however often the call is redelivered", async () => {
+  it("finds a stamped review, check run, comment or reply on sequential redelivery", async () => {
     const STAMP_MARK = "<!-- work-review turn=t1 -->";
     const posted = {
       reviews: [] as unknown[],
@@ -1481,6 +1580,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
       "review_threads",
       "check_runs",
       "list_reviews",
+      "issue_comments",
     ]);
   });
 });

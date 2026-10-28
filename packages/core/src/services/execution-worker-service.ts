@@ -111,6 +111,8 @@ export class ExecutionWorkerService {
   private readonly workers = new Map<string, WorkerGroup>();
   // Shared across loops so N concurrent loops still sweep once per interval.
   private lastRetentionSweepAt = 0;
+  private allocationMaintenance?: (args: { runId?: string }) => Promise<void>;
+
   private exhaustedHandler?: (args: {
     job: ExecutionJob;
     error: string;
@@ -133,6 +135,12 @@ export class ExecutionWorkerService {
     handler: ExecutionJobHandler;
   }): void {
     this.handlers.set(args.kind, args.handler);
+  }
+
+  registerAllocationMaintenance(args: {
+    handler: (args: { runId?: string }) => Promise<void>;
+  }): void {
+    this.allocationMaintenance = args.handler;
   }
 
   registerExhaustedHandler(
@@ -273,6 +281,7 @@ export class ExecutionWorkerService {
       args.swept.at = now;
       await this.jobs.requeueExpired({ limit: 100 });
       await this.drainExhausted();
+      await this.allocationMaintenance?.({});
     }
     await this.sweepRetention(now);
   }
@@ -411,6 +420,17 @@ export class ExecutionWorkerService {
     return withTelemetryContext({ attributes, reset: true }, () =>
       withSpan({ tracer, name: "queue.process", attributes }, async (span) => {
         const disposition = await this.runClaimedJobInner(args);
+        // The handler and its lease have settled before idle capacity may go.
+        // A failed reconciliation is retried by maintenance and cannot turn a
+        // committed job outcome into a second execution.
+        await this.allocationMaintenance?.({
+          runId: args.job.workflowRunId,
+        }).catch((error: unknown) =>
+          console.warn(
+            "[catamorphic] Workflow capacity reconciliation failed",
+            error,
+          ),
+        );
         span.setAttribute("catamorphic.queue.job.outcome", disposition.outcome);
         if (disposition.outcome === "failed") {
           markSpanError({ span, errorType: "job_failed" });
@@ -456,6 +476,7 @@ export class ExecutionWorkerService {
     }
     const jobController = new AbortController();
     const abortJob = () => jobController.abort();
+    if (args.signal.aborted) abortJob();
     args.signal.addEventListener("abort", abortJob, { once: true });
     // Stop the step before its lease could have lapsed, measured from when
     // the last renewal that landed was sent. A process frozen past its lease
@@ -498,6 +519,7 @@ export class ExecutionWorkerService {
       Math.max(1_000, Math.floor(leaseMs / 3)),
     );
     try {
+      jobController.signal.throwIfAborted();
       await handler({ job: args.job, signal: jobController.signal });
       if (jobController.signal.aborted) {
         await this.jobs.release({

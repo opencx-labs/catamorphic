@@ -271,7 +271,26 @@ describe("browser passwords", () => {
       )})`,
       { label: "both fields filled" },
     );
-    // Filling leaves focus in the password field; Enter sends the form.
+    // Filled values can arrive before the overlay's native focus handoff.
+    // Observe that handoff without focusing the field on the test's behalf.
+    try {
+      await app.waitFor(
+        `!document.querySelector('[data-testid="password-suggestions"]') &&
+          ${guest}.executeJavaScript("document.hasFocus() && document.activeElement === document.querySelector('#pw')")`,
+        { label: "generated password returns keyboard focus to the page" },
+      );
+    } catch (error) {
+      const focus = await app.eval(`(async () => ({
+        hostFocused:document.hasFocus(),
+        hostActive:document.activeElement?.tagName,
+        suggestions:document.querySelector('[data-testid="password-suggestions"]')?.dataset.open,
+        guest:await ${guest}.executeJavaScript("({focused:document.hasFocus(),active:document.activeElement?.id})"),
+      }))()`);
+      throw new Error(`Generated password focus: ${JSON.stringify(focus)}`, {
+        cause: error,
+      });
+    }
+    // Once the page owns its keys, Enter sends the form.
     await pressUntil(
       "Enter",
       `${prompt}?.dataset.kind === 'saved'`,

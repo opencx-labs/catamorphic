@@ -154,6 +154,10 @@ own tab instead of replacing the page in front.
 
 ## Sidebar defaults
 
+Cmd+L opens a sidebar-hosted browser address field and selects its full URL once
+the field is available. A request waiting for sidebar motion yields if the person
+moves focus elsewhere, and is canceled when its browser leaves the foreground.
+
 New profiles use top tabs and no framed content. A single sidebar tab hides its
 strip. Every list section is a source (ADR 0234); the default left sidebar lists
 pinned pages, the library, bookmarks, workflows, apps, the window's tabs (only

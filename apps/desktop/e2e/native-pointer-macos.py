@@ -1,6 +1,6 @@
 """Native pointer input on a dedicated GitHub macOS desktop; no extra packages.
 
-Usage: native-pointer-macos.py X Y [X Y ...] [click]
+Usage: native-pointer-macos.py X Y [X Y ...] [click], or --displays
 
 The pointer moves the way a hand moves it: mouse-moved events posted where
 the hardware's arrive, each point reached from a pixel beside it, so the app
@@ -11,6 +11,7 @@ an app hovering what the pointer had already left.
 """
 
 import ctypes
+import json
 import os
 import sys
 import time
@@ -25,6 +26,14 @@ if not (
 
 class Point(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class Size(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class Rect(ctypes.Structure):
+    _fields_ = [("origin", Point), ("size", Size)]
 
 
 cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
@@ -43,17 +52,58 @@ cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
 cg.CGEventPost.restype = None
 cf.CFRelease.argtypes = [ctypes.c_void_p]
 cf.CFRelease.restype = None
+cg.CGGetActiveDisplayList.argtypes = [
+    ctypes.c_uint32,
+    ctypes.POINTER(ctypes.c_uint32),
+    ctypes.POINTER(ctypes.c_uint32),
+]
+cg.CGGetActiveDisplayList.restype = ctypes.c_int32
+cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+cg.CGDisplayBounds.restype = Rect
+
+
+def active_displays():
+    displays = (ctypes.c_uint32 * 32)()
+    count = ctypes.c_uint32()
+    error = cg.CGGetActiveDisplayList(32, displays, ctypes.byref(count))
+    if error or not count.value:
+        sys.exit(f"Could not read active Quartz displays: {error}")
+    result = []
+    for display in displays[: count.value]:
+        rect = cg.CGDisplayBounds(display)
+        result.append(
+            {
+                "x": rect.origin.x,
+                "y": rect.origin.y,
+                "width": rect.size.width,
+                "height": rect.size.height,
+            }
+        )
+    return result
 
 # kCGEventLeftMouseDown = 1, kCGEventLeftMouseUp = 2, kCGEventMouseMoved = 5.
 DOWN, UP, MOVED = 1, 2, 5
 
 args = sys.argv[1:]
+if args == ["--displays"]:
+    print(json.dumps(active_displays()))
+    sys.exit(0)
 click = args[-1:] == ["click"]
 if click:
     args = args[:-1]
 if not args or len(args) % 2:
     sys.exit("Usage: native-pointer-macos.py X Y [X Y ...] [click]")
 points = [Point(float(args[i]), float(args[i + 1])) for i in range(0, len(args), 2)]
+if click:
+    end = points[-1]
+    displays = active_displays()
+    if not any(
+        rect["x"] <= end.x < rect["x"] + rect["width"]
+        and rect["y"] <= end.y < rect["y"] + rect["height"]
+        for rect in displays
+    ):
+        detail = {"point": {"x": end.x, "y": end.y}, "displays": displays}
+        sys.exit(f"Native click is outside active displays: {json.dumps(detail)}")
 
 
 def post(kind, point):

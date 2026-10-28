@@ -841,11 +841,33 @@ export const RunsQuerySchema = PaginationQuerySchema.extend({
 });
 
 export const SignalRunSchema = z.object({
+  runId: z.string().uuid(),
   correlationKey: CorrelationKeySchema,
   signal: z.string().min(1).max(255),
   idempotencyKey: z.string().min(1).max(255),
   value: JsonValueSchema,
 });
+
+export const RunSignalReceiptSchema = z.discriminatedUnion("status", [
+  z.object({
+    id: z.string().uuid(),
+    runId: z.string().uuid(),
+    status: z.literal("buffered"),
+    pauseId: z.null(),
+  }),
+  z.object({
+    id: z.string().uuid(),
+    runId: z.string().uuid(),
+    status: z.literal("resumed"),
+    pauseId: z.string().uuid(),
+  }),
+  z.object({
+    id: z.string().uuid(),
+    runId: z.string().uuid(),
+    status: z.literal("discarded"),
+    pauseId: z.null(),
+  }),
+]);
 
 export const CancelRunByKeySchema = z.object({
   correlationKey: CorrelationKeySchema,

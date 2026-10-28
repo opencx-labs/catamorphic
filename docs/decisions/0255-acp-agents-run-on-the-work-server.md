@@ -1,6 +1,6 @@
 # 0255 — ACP agents run on the Work server, their model through the gateway
 
-- **Status:** Accepted (builds on 0180, 0198, 0241; amends 0212: a renewed grant replaces the old one once the sandbox holds it)
+- **Status:** Accepted (builds on 0180, 0198, 0241; amends 0212: a renewed grant replaces the old one once the sandbox holds it; model grant lifetime amended by [0293](0293-model-grants-end-with-their-turn-attempt.md))
 - **Date:** 2026-10-18
 
 ## Context
@@ -61,8 +61,12 @@ of them used:
 Processes the agent starts inherit the variables, so an agent that runs
 more agents (a review harness fanning out reviewers) reaches the same
 endpoint while its attempt runs. The endpoint closes with the attempt, so
-anything still running from an interrupted or superseded turn loses its
-model at once, even a process outside the agent's process group.
+anything still running from an interrupted or superseded turn loses that
+endpoint, even a process outside the agent's process group. Independently, the
+control-plane gateway checks the grant's exact turn, attempt and live lease on
+each new request (ADR 0293), including requests that bypass this loopback
+endpoint. Already admitted upstream calls may finish; immediate cancellation
+of them across replicas is not promised.
 
 Considered: a key helper per agent, as Claude Code's `apiKeyHelper` and
 Codex's provider command are (most ACP agents have none); handing the

@@ -1,10 +1,10 @@
 # Work server
 
-The Work server is the prebuilt server: `apps/server`, published as the
-`work-server` image with every release, built on `@catamorphic/work-server`.
-Use this only when the deployment actually runs `apps/server` or its image.
-Read `apps/server/AGENTS.md`, `apps/server/README.md`, the `Dockerfile`
-header, and the mounted data directory before proposing commands. For a first
+A Work server is a deployment built on `@catamorphic/work-server`; there is
+no prebuilt Work server image (ADR 0294). `apps/server` supplies reference
+process source. Read `apps/server/AGENTS.md`, `apps/server/README.md`, the
+[deployment guide](../../../packages/work-server/README.md#your-own-image),
+and the deployment's actual entry point before proposing commands. For a first
 install from nothing, follow [A first brain on one machine](first-brain.md).
 For more than one machine, read [Machines: control plane, replicas, and workers](cluster-deployment.md).
 
@@ -39,8 +39,8 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, and a public URL are required, and the server is a disposable replica (see [replicas](cluster-deployment.md#add-a-control-plane-replica)). |
 | `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
 | `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
-| `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). The image ships no guards. |
-| `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
+| `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). Guards are host hooks. |
+| `WORK_SANDBOX` and budget variables | `auto` (default), `microsandbox`, `container`, or trusted `local-process`; see the machines reference. |
 | `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
 | `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
 | `WORK_PERSONAL_CREDENTIALS` | Local-process: `accept` lets members' own files reach their chats although this machine runs other people's work as processes, and makes a single server a person's own machine for one member's Codex sign-in, made from the Work app (a single person's server, development); see [members' own sign-ins](harnesses.md#members-own-sign-ins). |
@@ -49,7 +49,7 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
 | `WORK_MACHINES_CONFIG` | Path to the machine classes file that machine rules name: Hetzner Cloud servers, pools of enrolled machines; see [a machine for every person or team](cluster-deployment.md#a-machine-for-every-person-or-team). |
 | `WORK_HETZNER_TOKEN` | Hetzner Cloud API token (read and write) for `hetzner-cloud` classes. Never in the classes file. |
-| `WORK_WORKER_IMAGE` | The worker image machines install (default: the published image itself, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, both set by its build). |
+| `WORK_WORKER_IMAGE` | Your pinned worker image, required explicitly when using machine installation or provisioning. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
 ### Sign-in methods
@@ -118,8 +118,8 @@ lets those clients pick theirs.
 ## A custom server
 
 Company code (guards, directories, connection providers, routes) goes in a
-custom server: a short file built on `@catamorphic/work-server` in an image
-extended from the published one, never a fork (ADR 0160; see
+deployment-owned entry point and image built on the pinned
+`@catamorphic/work-server` library (ADRs 0160, 0294; see
 [its README](../../../packages/work-server/README.md)). Its `config` is typed
 data and its `hooks` are code (ADR 0183):
 
@@ -143,7 +143,7 @@ data and its `hooks` are code (ADR 0183):
 
 The server exposes machine-local operations on a separate listener bound to
 `127.0.0.1` (port 4701). The public listener never registers them, and the
-image does not publish that port. They are building blocks for a setup agent,
+deployment must not expose that port. They are building blocks for a setup agent,
 not a human CLI.
 
 1. Settle with the person: sign-in method, explicit role definitions,
@@ -169,7 +169,7 @@ Schemas live in `packages/work-server/src/setup/`. With company sign-in and
 no local passwords, map an administrators directory group to the managing role
 in `admission.directoryRoles`, or grant a signed-in person by email with
 `POST /_work/operator/memberships` (`{ email, projectId, roles }`). Inside a container, run the request
-from inside it (`docker exec ... bun -e` with `fetch`; the image has no curl).
+from inside it (`docker exec ... bun -e` with `fetch`; use the tools your image supplies).
 Never echo credentials into history, open PGlite from a second process, hash
 a password, or write Better Auth rows.
 
@@ -219,7 +219,7 @@ never force-push one over the other.
 
 ## Webhooks and project automations
 
-The stock server receives webhooks and runs project automations while nobody
+The Work server library receives webhooks and runs project automations while nobody
 is signed in (ADR 0156). Set `WORK_PUBLIC_URL` to an origin senders can
 reach; webhook URLs are `/api/hooks/<projectId>/<name>/<token>` under it.
 Someone with `automations:write` plus every permission the workflow declares

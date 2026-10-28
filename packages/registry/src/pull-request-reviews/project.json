@@ -1,16 +1,24 @@
 {
   "environments": {
-    "default": { "workloads": ["agent", "workflow"] },
+    "default": {
+      "workloads": ["agent", "workflow"]
+    },
     "review": {
       "description": "Pull request reviews, on machines enrolled with the review pool label",
       "workloads": ["agent"],
-      "pool": { "pool": "review" },
+      "pool": {
+        "pool": "review"
+      },
       "image": ".work/images/review.Dockerfile",
       "requirements": {
         "containers": true,
-        "resources": { "commandTimeoutSeconds": 1800 }
+        "resources": {
+          "commandTimeoutSeconds": 1800
+        }
       },
-      "network": { "egress": "gateway" },
+      "network": {
+        "egress": "gateway"
+      },
       "setup": {
         "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
         "timeoutMinutes": 20,
@@ -27,7 +35,9 @@
       },
       "waitMinutes": 30,
       "idleReleaseMinutes": 20,
-      "approvals": { "waitMinutes": 60 },
+      "approvals": {
+        "waitMinutes": 60
+      },
       "connections": {
         "github": {
           "provider": "github",
@@ -70,11 +80,9 @@
             "list_reviews",
             "create_review",
             "create_check_run",
-            "dismiss_review",
-            "resolve_review_thread",
             "reply_to_review_comment",
             "issue_comment",
-            "update_pull_request"
+            "issue_comments"
           ]
         }
       }

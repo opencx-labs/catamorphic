@@ -168,6 +168,7 @@ describeIf("catamorphic.secrets host calls (ADR 0210)", () => {
   let projectId: string;
   /** Bob runs onboarding; he holds secrets:read and secrets:write. */
   let bob: Identity;
+  let memberPreparation: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-secret-"));
@@ -194,7 +195,10 @@ describeIf("catamorphic.secrets host calls (ADR 0210)", () => {
               scope: [{ kind: "agent", projectId, name: "*" }],
             }
           : null,
-      memberIdForEmail: async ({ email }) => members.get(email) ?? null,
+      memberIdForEmail: async ({ email }) => {
+        await memberPreparation?.();
+        return members.get(email) ?? null;
+      },
     });
     const project = await core.projects.create(root, { name: "onboarding" });
     projectId = project.id;
@@ -328,4 +332,71 @@ describeIf("catamorphic.secrets host calls (ADR 0210)", () => {
     });
     expect(forAda?.variables).toEqual({ CLICKHOUSE_API_KEY: KEY });
   });
+  it.each(["set", "delete"])(
+    "does not %s a secret after cancellation during member preparation",
+    async (operation) => {
+      const secrets = core.secrets;
+      if (!secrets) throw new Error("Fixture needs secrets");
+      await secrets.setMember({
+        identity: root,
+        projectId,
+        name: "CLICKHOUSE_API_KEY",
+        member: "ada",
+        value: KEY,
+      });
+      const before = await db
+        .selectFrom("project_secrets")
+        .select(["credential_ref", "updated_at"])
+        .where("project_id", "=", projectId)
+        .where("member_external_user_id", "=", "ada")
+        .executeTakeFirstOrThrow();
+      let prepared = () => {};
+      const ready = new Promise<void>((resolve) => {
+        prepared = resolve;
+      });
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      memberPreparation = async () => {
+        prepared();
+        await gate;
+      };
+      const abort = new AbortController();
+      const pending = core.capabilities.call(
+        SECRETS_CAPABILITY,
+        operation,
+        {
+          caller: bob,
+          projectId,
+          runId: crypto.randomUUID(),
+          workflowName: "issueKey",
+          signal: abort.signal,
+          deadlineAt: new Date(Date.now() + 300_000).toISOString(),
+        },
+        {
+          name: "CLICKHOUSE_API_KEY",
+          member: "ada@example.test",
+          ...(operation === "set" ? { value: "must-not-persist" } : {}),
+        },
+      );
+      const rejected = expect(pending).rejects.toThrow("preparation canceled");
+      try {
+        await ready;
+        abort.abort(new Error("preparation canceled"));
+        release();
+        await rejected;
+        const after = await db
+          .selectFrom("project_secrets")
+          .select(["credential_ref", "updated_at"])
+          .where("project_id", "=", projectId)
+          .where("member_external_user_id", "=", "ada")
+          .executeTakeFirstOrThrow();
+        expect(after).toEqual(before);
+      } finally {
+        memberPreparation = undefined;
+        release();
+      }
+    },
+  );
 });

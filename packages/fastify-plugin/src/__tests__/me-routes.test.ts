@@ -1,3 +1,5 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
+import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import type { Identity } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
@@ -102,7 +104,10 @@ describe("GET /me (ADR 0055 introspection)", () => {
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
       },
-      agentProtocol: { session: 2, runner: 1 },
+      agentProtocol: {
+        session: SESSION_PROTOCOL_VERSION,
+        runner: RUNNER_PROTOCOL_VERSION,
+      },
     });
   });
 
@@ -176,7 +181,10 @@ describe("GET /me (ADR 0055 introspection)", () => {
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
       },
-      agentProtocol: { session: 2 as const, runner: 1 as const },
+      agentProtocol: {
+        session: SESSION_PROTOCOL_VERSION,
+        runner: RUNNER_PROTOCOL_VERSION,
+      },
     };
     expect(MeSchema.safeParse(response).success).toBe(false);
     expect(

@@ -1,8 +1,8 @@
 # @catamorphic/work-server
 
-The Work server as a library (ADR 0160). The published `work-server` image is
-a thin process around this package; a company that needs custom code runs the
-same server with its own hooks instead of forking it.
+The Work server as a library (ADR 0160). Deploy it from your own TypeScript
+entry point and image, pinned to the release you run (ADR 0294). Work
+publishes libraries; your server supplies its hooks.
 
 ```ts
 import {
@@ -26,7 +26,7 @@ await server.app.listen({ port: 4700, host: "0.0.0.0" });
 ## Config is data, hooks are code
 
 `config` is a typed, serializable `WorkServerConfig`, validated at boot by the
-same schemas as the image's files. `hooks` are code. Only
+same schemas as the environment parser. `hooks` are code. Only
 `workServerConfigFromEnv` knows the `WORK_*` variables and file paths
 documented in [`apps/server`](../../apps/server/README.md): it reads
 `WORK_AUTH_CONFIG` (default `<WORK_DATA_DIR>/auth-config.json`) into
@@ -84,6 +84,7 @@ its supervisor starts a fresh process.
 | Hook | Adds |
 | --- | --- |
 | `agentCapabilities` | Host capabilities, profiles, and approvals for agents |
+| `capabilityProviders` | Existing SDK capability providers and `context.host` workflow calls; authorize each call using its host-stamped caller |
 | `connectionProviders` | Connection providers beside the configured MCP endpoints |
 | `github` | Options of the built-in `github` connection provider: Enterprise Server URLs, the App's OAuth client for members' own connections (ADR 0177) |
 | `connectionGuards` | Guards that review each gateway action (ADR 0162). Work ships none; a guard is host code (ADR 0183) |
@@ -111,37 +112,86 @@ it judges. Examples:
 
 ## Your own image
 
-The stock server is one file,
-[`apps/server/src/index.ts`](../../apps/server/src/index.ts). Anything it
-does not do is code in your own image built from that file (ADR 0261):
-guards, model request rewrites (pinning the providers an aggregator routes
-to), your own connection providers, a machine provisioner for your cloud,
-seeds, routes. The stock configuration does not grow to cover them, so this
-is the path a setup agent takes whenever the stock server is not enough:
+Install an exact `@catamorphic/work-server` release in your own Bun project.
+Commit `package.json` and `bun.lock`, keep Catamorphic packages on that same
+release, and add any SDKs your hooks use. Start from the boot/listen/shutdown
+example in [`apps/server/src/index.ts`](../../apps/server/src/index.ts), or
+compose `createWorkServer` directly. Keep the operator listener on loopback,
+stop on `server.lost`, and handle SIGTERM with a bounded shutdown.
 
-1. Copy `apps/server/src/index.ts` from the release you run to `server.ts`
-   and fill in its `hooks: {}`. It imports only `@catamorphic/work-server`,
-   which also exports the guard and rewrite types, the connection provider
-   definers, and `ConnectionActionRefusedError`.
-2. Build it on the published image, so security fixes arrive with each
-   release:
+When copying the reference server or worker entry point, copy the complete
+`dependencies` from that release's [`apps/server/package.json`](../../apps/server/package.json)
+into your own manifest, replacing each `workspace:*` with that exact Work
+version. This manifest includes the OpenTelemetry SDK, resources and exporters
+required by the entry points' static `@catamorphic/otel/node` import. They are
+needed even with telemetry disabled. Installing only `@catamorphic/work-server`
+and `@catamorphic/otel` is insufficient for those copied entry points. A host
+that supplies its own entry point without `@catamorphic/otel/node` can use a
+smaller dependency set.
 
-   ```dockerfile
-   FROM ghcr.io/<owner>/work-server:<version>
-   COPY server.ts /app/apps/server/custom/server.ts
-   # More packages, when the hooks need them:
-   # RUN cd /app/apps/server && bun add @anthropic-ai/sdk zod
-   CMD ["bun", "apps/server/custom/server.ts"]
-   ```
+Create a `.dockerignore` before building:
 
-   The image's workspace uses isolated installs, so place the file under
-   `apps/server/`: from there it resolves `@catamorphic/work-server`.
-3. Push the image to your registry and run it in place of the published one,
-   with the same volume and variables.
+```text
+node_modules
+**/node_modules
+.git
+.env
+.env.*
+.work/app-data
+server-data
+```
 
-Workers keep the published image: hooks run on the control plane, and the
-machines the server creates are given the image it was built from. Pin an
-exact version and rebuild on every release, copying that release's
-`index.ts` again when it changed. Examples:
-[guards](../../skills/setup-work-server/references/secrets-and-gateway.md#guards-are-host-code),
-[pinned model routing](../../skills/setup-work-server/references/harnesses.md#pin-what-requests-carry-your-own-server-image).
+This keeps local dependencies from overwriting the image's Linux install and
+keeps credentials and mutable state out of the build context.
+
+A minimal company-owned image for a project with `server.ts`:
+
+```dockerfile
+FROM oven/bun:1.4.4
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
+COPY . .
+RUN mkdir -p /data && chown bun:bun /data
+USER bun
+ENV WORK_DATA_DIR=/data
+EXPOSE 4700
+CMD ["bun", "server.ts"]
+```
+
+Exclude secrets and local state from the build context. Add the toolchain,
+health check and assets your deployment uses; this minimal example does not
+supply them. If serving the PWA, build that release's `apps/pwa` and supply
+its output through `config.pwaDist` or `WORK_PWA_DIST`. Verify `/readyz`, OAuth,
+SIGTERM, restart recovery, and your actual workloads in your own image.
+
+For enrolled workers, build a worker image with the same pinned library.
+The installer currently starts `bun apps/server/src/worker.ts`, so include
+that release's `worker.ts`, `worker-cli.ts` and `work.ts` at those paths,
+plus the complete reference manifest dependencies described above. Install a `work` command forwarding to `work.ts` for
+machine-local sign-in commands. Set `config.workerImage` or
+`WORK_WORKER_IMAGE` to that exact image. Control-plane hooks and credentials
+stay off workers. A workflow launching its own external runner does not need
+this enrollment or image contract.
+
+## Compose the use case
+
+A missing native service integration is ordinary application work when the
+existing primitives suffice. Use project workflows for orchestration and
+reconciliation, npm SDKs for IO, and an application-owned Postgres schema or
+database for job state, receipts, inboxes and publication effects. Use
+`hooks.connectionProviders` for brokered service actions,
+`hooks.capabilityProviders` for workflow host calls, and `hooks.routes` for
+authenticated callbacks. `agentCapabilities` serves agent tools and is a
+different contract. Check caller identity and project authority inside each
+host function; registering a function is not an authorization policy.
+
+Do not expose allocator, database or GitHub write credentials to untrusted
+review code. Launching an external runner through an AWS SDK does not
+require a Work machine provisioner. Use `machineProvisioner` when Work's own
+machine rules should provision enrolled execution capacity. See
+[workflow composition](../../skills/setup-work-server/references/workflow-composition.md)
+for the guarantees, recovery design and acceptance tests.

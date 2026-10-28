@@ -1,5 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, focusWindow, launchApp } from "./harness.js";
+import {
+  type NativeDisplayBounds,
+  readNativeMacDisplays,
+} from "./native-pointer.js";
 
 let app: AppHandle;
 const dock = "document.querySelector('[data-chat-local-id]:not([inert])')";
@@ -8,11 +14,45 @@ const draftText =
   "Review the example document and keep this composer steady while changing chat size.";
 
 async function click(selector: string) {
+  await focusWindow(app);
+  await app.waitFor("document.hasFocus()", { label: "chat window owns input" });
   const point = await app.waitFor<{ x: number; y: number }>(`(() => {
     const e=document.querySelector(${JSON.stringify(selector)}); if(!e)return false;
-    const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.x+r.width/2,y:r.y+r.height/2}:false;
+    const r=e.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;
+    return r.width&&r.height&&e.checkVisibility()&&!e.closest('[inert]')
+      &&e.contains(document.elementFromPoint(x,y))?{x,y}:false;
   })()`);
-  await app.clickPointer(point);
+  await app.eval(`(() => {
+    const button=document.querySelector(${JSON.stringify(selector)});
+    window.__chatClickDelivery=[];
+    const record=event=>window.__chatClickDelivery.push({type:event.type,
+      hit:button.contains(event.target),focused:document.hasFocus()});
+    for(const type of ['pointerdown','pointerup','click'])document.addEventListener(type,record,true);
+    window.__stopChatClickCapture=()=>{
+      for(const type of ['pointerdown','pointerup','click'])document.removeEventListener(type,record,true);
+    };return true;
+  })()`);
+  try {
+    await app.clickPointer(point);
+    await app.waitFor(
+      "window.__chatClickDelivery.some(event=>event.type==='click'&&event.hit)",
+      { label: `native click reaches ${selector}` },
+    );
+  } catch (error) {
+    const state = await app.eval(`(async () => ({
+      events:window.__chatClickDelivery,
+      active:document.activeElement?.tagName,
+      focused:document.hasFocus(),
+      nativeFocused:(await window.catamorphicDesktop.devWindow('get')).focused,
+    }))()`);
+    throw new Error(`Chat click delivery: ${JSON.stringify(state)}`, {
+      cause: error,
+    });
+  } finally {
+    await app.eval(
+      "window.__stopChatClickCapture();delete window.__stopChatClickCapture;true",
+    );
+  }
 }
 
 /** Select the fixture text without depending on platform menu shortcuts. */
@@ -50,56 +90,112 @@ afterAll(async () => {
 });
 
 interface SizeFrame {
+  time: number;
   width: number;
   inputWidth: number;
   inputHeight: number;
 }
-async function observeResize(action: () => Promise<void>) {
+async function observeResize(tab: boolean, action: () => Promise<void>) {
+  await focusWindow(app);
+  await app.waitFor("document.hasFocus()", { label: "chat window owns input" });
+  await app.eval(
+    "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))",
+  );
+  await app.waitFor(
+    `!('contentSettling' in document.documentElement.dataset) &&
+      !document.documentElement.matches(':active-view-transition') &&
+      document.getAnimations().every(a=>!a.pending && (a.playState!=='running'
+        || a.effect?.getTiming().iterations===Infinity))`,
+    { label: "the whole window is at rest before resizing" },
+  );
   await app.eval(`(() => {
     window.__chatSizeFrames=[];
-    function sample() {
+    window.__sampleChatSize=(time)=>{
       const s=${dock};const i=${input};
       if(s&&i){const r=s.getBoundingClientRect();const c=i.getBoundingClientRect();
-        window.__chatSizeFrames.push({width:r.width,inputWidth:c.width,inputHeight:c.height});}
-    }
-    sample();
-    let nextFrame=requestAnimationFrame(function frame() {
-      sample();nextFrame=requestAnimationFrame(frame);
+        window.__chatSizeFrames.push({time,width:r.width,inputWidth:c.width,inputHeight:c.height});}
+    };
+    window.__sampleChatSize(-1);
+    const chat=${dock};
+    if ((chat.dataset.chatTab==='true')===${tab})throw new Error('Chat already has the requested pose');
+    window.__chatResizeProbe={done:false,error:null,duration:null};
+    const observer=new MutationObserver(()=>{
+      if((chat.dataset.chatTab==='true')!==${tab})return;
+      observer.disconnect();
+      const saved=[];
+      try {
+        const moving=chat.parentElement.getAnimations({subtree:true})
+          .filter(a=>a instanceof CSSTransition);
+        const width=moving.find(a=>a.effect?.target===chat && a.transitionProperty==='max-width');
+        const duration=width?.effect?.getComputedTiming().duration;
+        if(typeof duration!=='number'||!Number.isFinite(duration)||duration<=0)
+          throw new Error('Chat did not start a width transition');
+        window.__chatResizeProbe.duration=duration;
+        for(const animation of moving)saved.push([animation,animation.currentTime]);
+        // Scope time control to these actual transitions in one task. A
+        // global frozen clock can also freeze a view transition over input.
+        for(const fraction of [0,0.004,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.9995]) {
+          const time=duration*fraction;
+          for(const animation of moving)animation.currentTime=time;
+          window.__sampleChatSize(time);
+        }
+      } catch(error) {
+        window.__chatResizeProbe.error=String(error);
+      } finally {
+        for(const [animation,time] of saved) {
+          try { animation.currentTime=time; }
+          catch(error) { window.__chatResizeProbe.error??=String(error); }
+        }
+        window.__chatResizeProbe.done=true;
+      }
     });
-    window.__stopChatSizeCapture=()=>{cancelAnimationFrame(nextFrame);sample();};return true;
+    observer.observe(chat,{attributes:true,attributeFilter:['data-chat-tab']});
+    window.__stopChatResizeCapture=()=>observer.disconnect();
+    return true;
   })()`);
+  // Sample the actual CSS transitions at explicit times. A busy renderer can
+  // skip every intermediate real-time RAF during the 250 ms resize.
   try {
     await action();
-    // Native input can take longer than the resize itself to arrive on a
-    // loaded host. Keep sampling through its actual transition, including
-    // the starting geometry, instead of spending a fixed recording window
-    // waiting for the pointer helper to launch.
+    await app.waitFor(`(${dock}.dataset.chatTab==='true')===${tab}`, {
+      label: `chat enters its ${tab ? "tab" : "floating"} pose`,
+    });
+    await app.waitFor("window.__chatResizeProbe.done", {
+      label: "the real width transition was sampled",
+    });
+    const probe = await app.eval<{ error: string | null }>(
+      "window.__chatResizeProbe",
+    );
+    expect(probe.error, JSON.stringify(probe)).toBeNull();
     await app.waitFor(
-      `(() => {
-      const frames=window.__chatSizeFrames;
-      return frames.some(f=>Math.abs(f.width-frames[0].width)>1)
-        && !${dock}.getAnimations({subtree:true}).some(a=>
-          a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);
-    })()`,
-      { label: "chat resize changed size and settled" },
+      `${dock}.parentElement.getAnimations({subtree:true}).every(a=>
+        a.playState!=='running'||a.effect?.getTiming().iterations===Infinity)`,
+      { label: "chat resize naturally settles" },
+    );
+    await app.eval(
+      "window.__sampleChatSize(window.__chatResizeProbe.duration+1);true",
     );
   } finally {
-    await app.eval("window.__stopChatSizeCapture();true");
+    await app.eval(
+      "window.__stopChatResizeCapture();delete window.__stopChatResizeCapture;delete window.__sampleChatSize;true",
+    );
   }
   const frames = await app.eval<SizeFrame[]>("window.__chatSizeFrames");
-  expect(frames.length).toBeGreaterThan(2);
-  expect(new Set(frames.map((f) => Math.round(f.width))).size).toBeGreaterThan(
-    2,
-  );
+  const detail = JSON.stringify(frames);
+  expect(frames.length, detail).toBeGreaterThan(2);
+  expect(
+    new Set(frames.map((f) => Math.round(f.width))).size,
+    detail,
+  ).toBeGreaterThan(2);
   for (const field of ["inputWidth", "inputHeight"] as const) {
     const ends = [frames[0]?.[field] ?? 0, frames.at(-1)?.[field] ?? 0];
     expect(
       Math.min(...frames.map((f) => f[field])),
-      `${field} never undershoots its endpoints`,
+      `${field} never undershoots its endpoints: ${detail}`,
     ).toBeGreaterThanOrEqual(Math.min(...ends) - 1);
     expect(
       Math.max(...frames.map((f) => f[field])),
-      `${field} never overshoots its endpoints`,
+      `${field} never overshoots its endpoints: ${detail}`,
     ).toBeLessThanOrEqual(Math.max(...ends) + 1);
   }
 }
@@ -135,11 +231,73 @@ it("inserts a line break with Shift+keypad Enter without sending", async () => {
   await app.insertText(draftText);
 });
 
-it("keeps the composer from narrowing and wrapping during maximize and float", async () => {
-  await observeResize(() =>
-    click('[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]'),
+const resizeInputs: unknown[] = [];
+async function openForResize(width: number) {
+  const state = await app.eval<{
+    point: { x: number; y: number };
+    viewport: { width: number; height: number; dpr: number };
+    available: NativeDisplayBounds;
+    native: { contentBounds: NativeDisplayBounds };
+  }>(`(async () => {
+    const button=${dock}.querySelector('button[aria-label="Open as tab"]');
+    const r=button.getBoundingClientRect();
+    return {point:{x:r.x+r.width/2,y:r.y+r.height/2},
+      viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},
+      available:{x:screen.availLeft,y:screen.availTop,width:screen.availWidth,height:screen.availHeight},
+      native:await window.catamorphicDesktop.devWindow('get')};
+  })()`);
+  const displays =
+    process.platform === "darwin"
+      ? await readNativeMacDisplays()
+      : [state.available];
+  const point = {
+    x: Math.round(state.native.contentBounds.x + state.point.x),
+    y: Math.round(state.native.contentBounds.y + state.point.y),
+  };
+  const reachable = displays.some(
+    (r) =>
+      point.x >= r.x &&
+      point.x < r.x + r.width &&
+      point.y >= r.y &&
+      point.y < r.y + r.height,
   );
-  await observeResize(() => app.press("Escape"));
+  const detail = {
+    width,
+    ...state,
+    point,
+    displays,
+    action: reachable ? "native header click" : "keyboard shortcut",
+  };
+  resizeInputs.push(detail);
+  const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  if (artifacts)
+    fs.writeFileSync(
+      path.join(artifacts, "chat-resize-inputs.json"),
+      JSON.stringify(resizeInputs, null, 2),
+    );
+  // A large viewport can extend past a hosted Mac's physical display. Keep
+  // that geometry case and use its real shortcut; the narrower case must
+  // still exercise the actual native header click on the display.
+  if (width === 1024) expect(reachable, JSON.stringify(detail)).toBe(true);
+  if (reachable) {
+    await click(
+      '[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]',
+    );
+  } else {
+    expect(width, JSON.stringify(detail)).toBe(1280);
+    await app.press("m", (process.platform === "darwin" ? 4 : 2) | 8);
+  }
+}
+
+it("keeps the composer from narrowing and wrapping during maximize and float", async () => {
+  for (const width of [1280, 1024]) {
+    await app.eval(
+      `window.catamorphicDesktop.devWindow('setSize',${width},730)`,
+    );
+    await app.waitFor(`innerWidth===${width}`);
+    await observeResize(true, () => openForResize(width));
+    await observeResize(false, () => app.press("Escape"));
+  }
 });
 
 it("focuses the composer from the empty sides without taking text selection", async () => {
@@ -227,8 +385,8 @@ it("focuses the composer from the empty sides without taking text selection", as
 it("keeps resize bounded in a narrow window and respects reduced motion", async () => {
   await app.eval("window.catamorphicDesktop.devWindow('setSize',760,850)");
   await app.waitFor("innerWidth<=760");
-  await observeResize(() => app.press("Escape"));
-  await observeResize(() =>
+  await observeResize(false, () => app.press("Escape"));
+  await observeResize(true, () =>
     click('[data-floating-chat]:not([inert]) button[aria-label="Open as tab"]'),
   );
   await app.cdp("Emulation.setEmulatedMedia", {

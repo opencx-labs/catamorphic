@@ -107,6 +107,7 @@ import {
   RetentionService,
 } from "./services/retention-service.js";
 import { RolesService } from "./services/roles-service.js";
+import { requireAttemptTime } from "./services/run-abortable.js";
 import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
@@ -578,10 +579,12 @@ export class CatamorphicCore {
               if (!(operation in SESSION_ACTION_SCHEMAS))
                 throw new Error("Unknown session action");
               const origin = await this.workflowSessionOrigin(context);
+              requireAttemptTime(context);
               return this.sessionActions.execute({
                 identity: context.caller,
                 projectId: context.projectId,
                 operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
+                signal: context.signal,
                 args,
                 ...origin,
               });
@@ -590,6 +593,7 @@ export class CatamorphicCore {
         ),
         stop: async (context, args) => {
           const origin = await this.workflowSessionOrigin(context);
+          requireAttemptTime(context);
           const watcher =
             origin.author.kind === "workflow"
               ? origin.author.watcher
@@ -602,6 +606,7 @@ export class CatamorphicCore {
             identity: context.caller,
             projectId: context.projectId,
             operation: "stopWatcher",
+            signal: context.signal,
             ...origin,
             args: {
               ...(args && typeof args === "object" ? args : {}),
@@ -616,6 +621,7 @@ export class CatamorphicCore {
           }
           const input = parseChatDelivery(args);
           const origin = await this.workflowSessionOrigin(context);
+          requireAttemptTime(context);
           const idempotencyKey =
             input.idempotencyKey ??
             defaultDeliveryKey({
@@ -625,6 +631,7 @@ export class CatamorphicCore {
             });
           const message = {
             content: input.content,
+            signal: context.signal,
             author: origin.author,
             mode: input.mode,
             ...(input.attention ? { attention: input.attention } : {}),
@@ -649,15 +656,18 @@ export class CatamorphicCore {
                 throw new Error(
                   `Approver ${member} is not a member of this project`,
                 );
+            requireAttemptTime(context);
             await this.agentSessions.setApprovers({
               identity: owner,
               projectId: context.projectId,
               sessionId,
               approvers,
+              signal: context.signal,
             });
           };
           if ("sessionId" in input) {
             await nameApprovers(context.caller, input.sessionId);
+            requireAttemptTime(context);
             const receipt = await this.agentSessions.deliver(
               context.caller,
               context.projectId,
@@ -698,11 +708,13 @@ export class CatamorphicCore {
           // Placed by its own Environment, never the run's: the one this
           // delivery names, else the agent's preferred, else the project
           // default.
+          requireAttemptTime(context);
           const chat = await this.agentSessions.chatForKey(
             owner,
             context.projectId,
             {
               key: input.key,
+              signal: context.signal,
               workflowName: context.workflowName,
               ...(input.agentSlug ? { agentSlug: input.agentSlug } : {}),
               ...(input.environment ? { environment: input.environment } : {}),
@@ -711,7 +723,9 @@ export class CatamorphicCore {
               origin,
             },
           );
+          requireAttemptTime(context);
           await nameApprovers(owner, chat.sessionId);
+          requireAttemptTime(context);
           const receipt = await this.agentSessions.deliver(
             owner,
             context.projectId,
@@ -1054,8 +1068,13 @@ export class CatamorphicCore {
       environments: this.executionEnvironments,
       allocations: this.executionAllocations,
       coordinator,
+      connections: this.connectionAdmission,
+      waits: this.placementWaits,
       // Read at call time: memberships are constructed further down.
       resolveOwner: (args) => this.resolveMember(args),
+    });
+    executionWorker.registerAllocationMaintenance({
+      handler: (args) => this.nodeRecovery.reconcileWorkflowWaits(args),
     });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),
@@ -1098,6 +1117,8 @@ export class CatamorphicCore {
       ...(this.connectionBroker
         ? {
             callConnection: (args: {
+              signal: AbortSignal;
+              deadlineAt: string;
               caller: Identity;
               allocationId: string;
               alias: string;
@@ -1111,6 +1132,8 @@ export class CatamorphicCore {
                 action: args.action,
                 input: args.input,
                 caller: "workflow",
+                signal: args.signal,
+                deadlineAt: args.deadlineAt,
               }),
             parkConnectionCall: (args: {
               caller: Identity;

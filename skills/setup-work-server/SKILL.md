@@ -1,13 +1,14 @@
 ---
 name: setup-work-server
-description: Use when installing or operating a Work server (the prebuilt server image), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, giving every engineer a machine on Hetzner Cloud or from a pool of servers, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
+description: Use when installing or operating a Work server (a deployment built on the server library), provisioning its first project and user, company sign-in and deprovisioning, credentials and the connection gateway, connecting Slack, reviewing pull requests on a review pool, enrolling workers or replicas, giving every engineer a machine on Hetzner Cloud or from a pool of servers, sharing with customers, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
 ---
 
 # Setting up a Work server or a Catamorphic host
 
-Catamorphic ships as libraries a host mounts. The Work server (`apps/server`,
-published as the `work-server` image with every release) is one such host; a
-custom application is another. Adapt
+Catamorphic ships as libraries a host mounts. A Work server composes
+`@catamorphic/work-server` in a deployment-owned entry point and image
+(ADR 0294); `apps/server` is reference source. An existing application can
+mount the lower-level SDK instead. Adapt
 to what is already there: existing auth, users, organizations, databases,
 deployment, and code hosts are inputs, not things to replace.
 
@@ -18,11 +19,11 @@ Look at the repository and running deployment for:
 - the application and HTTP framework, if any;
 - auth middleware, session verification, users, organizations, roles;
 - database clients, migrations, storage, deployment manifests;
-- whether this is `apps/server`, the `work-server` image, or a custom host;
+- whether this uses `@catamorphic/work-server` or embeds the lower-level SDK;
 - how trusted the executed code is, and which clients people will use.
 
 Summarize what is already decided, then ask only what the evidence does not
-answer. If auth exists, offer to keep and map it. On the stock server, ask
+answer. If auth exists, offer to keep and map it. For a Work server, ask
 whether the operator wants an OIDC provider before offering local
 username/password.
 
@@ -54,7 +55,7 @@ Start small and add only what the situation needs:
 | Situation | Read |
 | --- | --- |
 | Nothing installed; "a brain on this machine" an MCP client can reach | [A first brain on one machine](references/first-brain.md) |
-| Work server image or `apps/server` | [Work server](references/stock-server.md) |
+| A Work server deployment or `apps/server` | [Work server](references/stock-server.md) |
 | Company sign-in through Google Workspace, deprovisioning, groups as roles, onboarding and offboarding automations | [Company identity](references/company-identity.md) |
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
 | GitHub: a GitHub App, company repositories, pull requests, webhooks | [Connect GitHub](references/connect-github.md) |
@@ -64,7 +65,8 @@ Start small and add only what the situation needs:
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
 | Project agents that are Claude Code, Codex or an ACP agent (OpenCode, Hermes), running on the server with a model key the gateway holds (and providers it pins), or Codex on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
-| Anything the stock server does not do: company code such as a guard or classifier, model request rewrites (pinning an aggregator's providers), a directory, a connection provider, a machine provisioner, seeds, or a route | [Your own image](../../packages/work-server/README.md#your-own-image): copy the one-file stock server, fill in its hooks, build on the published image; never fork the server |
+| Compose a use case, such as AWS runners, external Postgres state, callbacks, or a custom review pipeline | [Workflow composition](references/workflow-composition.md): choose workflows, SDK IO, application storage, connection providers and host hooks before proposing a native integration |
+| Build the server process and image; guards, model rewrites, directories, providers, seeds or routes | [Your own image](../../packages/work-server/README.md#your-own-image): install the pinned library, own the entry point and build; use the existing hooks |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |
 | PGlite, Postgres, migrations, backup | [Database and migrations](references/database-and-migrations.md) |
@@ -76,7 +78,7 @@ disagree with the installed source, the source wins.
 ## Rules that always hold
 
 - **Identity comes from the host.** Libraries receive verified identity per
-  request and have no default user, organization, or auth provider. The stock
+  request and have no default user, organization, or auth provider. The Work
   server's auth choices are not framework contracts.
 - **Sign-in identifies; project roles authorize.** Roles are committed files
   in `.work/roles/*.json` granting agents, workflows, apps,
@@ -89,12 +91,12 @@ disagree with the installed source, the source wins.
   server's own operations. Organization administrators manage the named
   service connections (ADR 0172) and the workers and machine rules
   (ADR 0205); they gain nothing inside projects.
-- **Beyond the stock server, write code, not configuration.** The stock
-  server is one file and its configuration does not grow (ADR 0261). When a
-  company needs more than it does, copy `apps/server/src/index.ts` into the
-  company's own image and fill in its hooks
-  ([your own image](../../packages/work-server/README.md#your-own-image));
-  do not look for a variable or file field that does the same.
+- **Glue code is normal.** Compose ordinary TypeScript workflows, SDKs and
+  application storage; put privileged calls and callbacks in the host's hooks.
+  A missing native integration is not a blocker when these primitives express
+  the behavior. Work publishes libraries, not a stock server image. Build and
+  test your own entry point and image with pinned dependencies. See
+  [workflow composition](references/workflow-composition.md).
 - **After setup, configuration is project code.** Roles, agents,
   `.work/workspace.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.

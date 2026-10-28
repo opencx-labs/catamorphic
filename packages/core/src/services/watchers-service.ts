@@ -416,6 +416,7 @@ export class WatchersService {
   }
 
   async stop(input: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     sessionId: string;
@@ -434,20 +435,28 @@ export class WatchersService {
       .where("session_id", "=", input.sessionId)
       .executeTakeFirst();
     if (!watcher) return false;
+    input.signal?.throwIfAborted();
     if (watcher.workflow_enablement_id) {
       await this.deps.workflowEnablements.disable({
         identity: input.identity,
+        signal: input.signal,
         enablementId: watcher.workflow_enablement_id,
       });
     }
-    const result = await this.db
-      .updateTable("watchers")
-      .set({ status: "stopped", updated_at: new Date() })
-      .where("id", "=", input.watcherId)
-      .where("project_id", "=", input.projectId)
-      .where("session_id", "=", input.sessionId)
-      .where("status", "in", ["active", "paused"])
-      .executeTakeFirst();
+    const result = await this.db.transaction().execute(async (trx) => {
+      // Disabling the enablement already accepted this stop; finish cleanup.
+      if (!watcher.workflow_enablement_id) input.signal?.throwIfAborted();
+      const result = await trx
+        .updateTable("watchers")
+        .set({ status: "stopped", updated_at: new Date() })
+        .where("id", "=", input.watcherId)
+        .where("project_id", "=", input.projectId)
+        .where("session_id", "=", input.sessionId)
+        .where("status", "in", ["active", "paused"])
+        .executeTakeFirst();
+      if (!watcher.workflow_enablement_id) input.signal?.throwIfAborted();
+      return result;
+    });
     if (result.numUpdatedRows > 0n) this.deps.wakeups?.notify("chats");
     await this.cleanupRetired();
     return result.numUpdatedRows === 1n;

@@ -80,6 +80,7 @@ describe("checking installed copies", () => {
     files: Record<string, string>,
     dependencies: string[] = [],
     types: Record<string, string> = {},
+    targets: Record<string, string> = {},
   ) => {
     write(
       `packages/registry/src/${name}/registry-item.json`,
@@ -89,6 +90,7 @@ describe("checking installed copies", () => {
         files: Object.keys(files).map((file) => ({
           path: `components/catamorphic/${file}`,
           type: types[file] ?? "registry:component",
+          ...(targets[file] ? { target: targets[file] } : {}),
         })),
       }),
     );
@@ -175,6 +177,28 @@ describe("checking installed copies", () => {
       "manifest registry/rows-of.ts",
       "import registry/rows.tsx",
     ]);
+  });
+
+  it("allows platform imports in server templates while requiring their npm dependencies", () => {
+    setup();
+    item(
+      "publisher",
+      {
+        "publisher.ts": `import { createHash } from "node:crypto";\nimport type { Pool } from "pg";\nexport const digest = createHash;\n`,
+      },
+      ["pg@8.23.1"],
+      { "publisher.ts": "registry:file" },
+      { "publisher.ts": ".work/server/publisher.ts" },
+    );
+    expect(check()).toEqual([]);
+    item(
+      "publisher",
+      { "publisher.ts": `import { pool } from "unlisted";\n` },
+      [],
+      { "publisher.ts": "registry:file" },
+      { "publisher.ts": ".work/server/publisher.ts" },
+    );
+    expect(check()).toEqual(["import registry/publisher.ts"]);
   });
 
   it("fails an item installed in part", () => {

@@ -782,7 +782,7 @@ A capability provider may also expose **calls** — host functions a workflow
 reaches as `context.host.<capability>.<fn>(args)`. Runs are stamped with the
 identity that triggered them (`workflow_runs.caller_scope`); a boundary that
 returns a host call ends there, core executes the function **as that
-caller** (`{ caller, projectId, runId, workflowName }` is the first
+caller** (`{ caller, projectId, runId, workflowName, signal, deadlineAt }` is the first
 argument — a workflow cannot claim to be anyone), and the result is the next
 step's input, exactly like `callWorkflow`. A throw fails the step; the
 step's retry policy re-runs the call (at-least-once, like any step IO).
@@ -791,14 +791,25 @@ step's retry policy re-runs the call (at-least-once, like any step IO).
 defineCapability({
   name: "acme.crm",
   calls: {
-    lookupAccount: async ({ caller }, args: { id: string }) =>
-      crm.accounts.get(args.id, { asUser: caller.externalUserId }),
+    lookupAccount: async ({ caller, signal }, args: { id: string }) =>
+      crm.accounts.get(args.id, { asUser: caller.externalUserId, signal }),
   },
 });
 // in a workflow:
 defineBoundary({ run: ({ input, host }: BoundaryContext<{ id: string }>) => host.acme.crm.lookupAccount({ id: input.id }) }),
 defineBoundary({ run: ({ input }: BoundaryContext<{ name: string }>) => ... }),
 ```
+
+A boundary attempt's sandbox callback and returned host, documents, or connection
+operation share one five-minute deadline from its persisted start (ADR 0295).
+Job recovery preserves that deadline; a boundary-policy retry gets a new one.
+Host calls receive the combined `signal` and ISO `deadlineAt`; connection providers
+receive them in `invoke`. Pass `signal` to SDK or HTTP transports and check it
+before side effects. Shutdown aborts directly; cancellation on another replica
+arrives through the execution job heartbeat. Core stops awaiting even an async
+provider that ignores abort, and fences late receipts, but cannot preempt blocking
+JavaScript or undo accepted external effects. Keep cloud jobs asynchronous with
+resource ids and durable waits, and reconcile uncertain writes independently.
 
 `context.documents` is the first built-in such capability: `list`, `read`,
 `write`, `delete`, `history`, `search` over the project's one path
@@ -1191,9 +1202,11 @@ provider, action = the lowercase method, input = `{ path, query }`; each
 request is audited as `connection.http`. At each sandbox turn core issues a
 `sandbox` grant per HTTP alias and writes `.work-session/env/gateway.sh`
 exporting `WORK_HTTP_<ALIAS>` (`<gatewayUrl>/http/<alias>`) and
-`WORK_HTTP_<ALIAS>_GRANT_FILE`; the runner (`AttemptStart.envFiles`),
+`WORK_HTTP_<ALIAS>_GRANT_DIRECTORY`; the runner (`AttemptStart.envFiles`),
 host harnesses' commands, setup and terminals load it beside `secrets.sh`.
-Grants rotate on renewal, so code reads the file per request.
+Grants are immutable revision files; `WORK_GATEWAY_READ_GRANT` selects the
+greatest numeric revision in that directory for each request. Delayed older
+uploads cannot displace a newer bearer.
 
 Personal credentials (ADRs 0184, 0199): a member's listed files may reach
 sandboxes that run only that member's work. The member's client calls
@@ -1326,9 +1339,9 @@ Project capabilities live in an independent `.work/` Bun workspace; code
 builds its paths and Git names from `@catamorphic/workflow/project-layout`.
 Hosts check it the way publishing does (the project MCP `program_check`
 tool). `bun install --cwd .work` and `bun run --cwd .work check` do the same
-locally, but the `@catamorphic/*` packages are not yet on a public registry,
-so the install needs a registry that serves them (the repository's dev-only
-`infra/local-registry`).
+locally, using the pinned public `@catamorphic/*` release that matches the
+host. Framework development can instead use the repository's dev-only
+`infra/local-registry` to exercise an unpublished checkout.
 Imports and ordinary agent work leave existing repository files untouched.
 The workspace is created when workflows, apps, or other capabilities need it.
 

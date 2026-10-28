@@ -549,8 +549,79 @@ try {
         });
       }
     }
+    // A copied reference process imports host telemetry too. Check the exact
+    // production manifest the deployment guide names, without workspace/dev
+    // dependencies hiding optional peer imports.
+    rmSync(path.join(consumer, "node_modules"), {
+      recursive: true,
+      force: true,
+    });
+    const reference = readManifest(
+      path.join(input.rootPath, "apps/server/package.json"),
+    );
+    writeFileSync(
+      path.join(consumer, "package.json"),
+      JSON.stringify({
+        private: true,
+        type: "module",
+        dependencies: Object.fromEntries(
+          Object.entries(reference.dependencies ?? {}).map(
+            ([name, version]) => [
+              name,
+              version === "workspace:*" ? tarballs[name] : version,
+            ],
+          ),
+        ),
+        overrides: tarballs,
+      }),
+    );
+    install();
+    const source = path.join(consumer, "apps/server/src");
+    mkdirSync(source, { recursive: true });
+    for (const file of ["index.ts", "worker.ts", "worker-cli.ts", "work.ts"])
+      copyFileSync(
+        path.join(input.rootPath, "apps/server/src", file),
+        path.join(source, file),
+      );
+    execFileSync("bun", ["apps/server/src/work.ts", "worker", "help"], {
+      cwd: consumer,
+      env: runtime.env,
+      stdio: "inherit",
+    });
+    writeFileSync(
+      path.join(consumer, "reference-smoke.ts"),
+      `
+import net from "node:net";
+import path from "node:path";
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith("WORK_") || key.startsWith("OTEL_") || ["DATABASE_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"].includes(key)) delete process.env[key];
+}
+async function unusedPort() {
+  const server = net.createServer();
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No test port");
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return address.port;
+}
+const [port, operatorPort] = await Promise.all([unusedPort(), unusedPort()]);
+Object.assign(process.env, { PORT: String(port), WORK_OPERATOR_PORT: String(operatorPort), WORK_DATA_DIR: path.resolve("reference-data"), WORK_FAKE_AGENT: "1", WORK_MDNS: "off", WORK_SANDBOX: "local-process" });
+await import("./apps/server/src/index.ts");
+try {
+  const response = await fetch("http://127.0.0.1:" + port + "/healthz");
+  if (!response.ok || (await response.json()).ok !== true) throw new Error("Reference server failed health check");
+} catch (error) { console.error(error); process.exit(1); }
+process.emit("SIGTERM");
+`,
+    );
+    execFileSync("bun", ["reference-smoke.ts"], {
+      cwd: consumer,
+      env: runtime.env,
+      stdio: "inherit",
+      timeout: 60_000,
+    });
     console.log(
-      `Verified ${inventory.packages.length} npm tarballs with Node, Bun, and TypeScript, plus standalone SDK and server installs`,
+      `Verified ${inventory.packages.length} npm tarballs with Node, Bun, and TypeScript, standalone SDK/server installs and copied reference entry points`,
     );
   } finally {
     rmSync(consumer, { recursive: true, force: true });
