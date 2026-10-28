@@ -6,19 +6,21 @@ to and run work on, last verified end to end on 2026-09-25. Use it when the pers
 (read [Work server](stock-server.md) first). Never print the operator
 secret or a password.
 
-## 1. Run the Work server image
+## 1. Build your Work server
 
-Every Work release publishes a multi-architecture `work-server` image to the
-GitHub Container Registry of the repository owner that publishes the Work
-releases and Homebrew tap (see the repository README). Pull an exact version
-for anything durable; `alpha` follows every release and `latest` follows
-Stable releases. Without registry access, build the same image from a
-checkout:
+Create a small Bun project with an exact `@catamorphic/work-server` release.
+Follow [Your own image](../../../packages/work-server/README.md#your-own-image):
+copy/adapt the reference entry point, add the hooks this use case needs, and
+build a company-owned image on Bun. There is no stock image to pull or extend.
+Commit the manifest and lockfile; exclude secrets from the build context.
+Build the PWA assets and configure their path if members will use the web UI.
+
+For example, after building your own `company-work` image with the documented
+entry point and `/data` directory:
 
 ```bash
-docker build -f apps/server/Dockerfile -t work-server .
 docker run -d --name work-brain -v work-brain-data:/data -p 4700:4700 \
-  -e ANTHROPIC_API_KEY=... work-server
+  --env-file /path/to/private/work.env company-work
 curl -s http://127.0.0.1:4700/healthz
 ```
 
@@ -34,7 +36,7 @@ machine.
 ## 2. Provision the project and the first person
 
 The setup listener is bound to loopback inside the container (port 4701),
-so run these from inside it. The image has bun and git, not curl; `bun -e`
+so run these from inside it. Use the tools your image supplies; `bun -e`
 with `fetch` is the request tool. The operator secret is
 `/data/operator-secret` (owner-only) unless the deployment sets
 `WORK_OPERATOR_SECRET`. Read it into a variable; do not echo it.

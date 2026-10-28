@@ -455,6 +455,8 @@ export interface LiveModelGrant {
   tenantId: string;
   allocationId: string;
   agentSessionId: string | null;
+  /** The exact turn authorized by this grant, also used for accounting. */
+  turnId: string;
   alias: string;
   /** The grant's session: its owner and whether it is open. */
   session?: { ownerId: string; active: boolean };
@@ -477,8 +479,6 @@ export const MAX_OPEN_CALL_MINUTES = 30;
 export interface ModelGatewayStore {
   /** The live grant a bearer names, or undefined. */
   liveGrant(args: { token: string }): Promise<LiveModelGrant | undefined>;
-  /** The turn a session is running now, if any. */
-  runningTurn(args: { sessionId: string }): Promise<string | undefined>;
   /**
    * Open a session's call before its answer ends (ADR 0193): its usage
    * row, settled by `recordUsage`, so totals read on any replica wait for
@@ -521,10 +521,32 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
             .onRef("connection.id", "=", "grant.connection_id")
             .onRef("connection.tenant_id", "=", "grant.tenant_id"),
         )
-        .leftJoin(
+        .innerJoin(
           "agent_sessions as session",
           "session.id",
           "grant.agent_session_id",
+        )
+        .innerJoin("agent_turns as turn", (join) =>
+          join
+            .onRef("turn.id", "=", "grant.model_turn_id")
+            .onRef("turn.session_id", "=", "grant.agent_session_id")
+            .onRef("turn.active_attempt_id", "=", "grant.model_attempt_id")
+            .onRef("turn.lease_token", "=", "grant.model_lease_token"),
+        )
+        .innerJoin("agent_turn_attempts as attempt", (join) =>
+          join
+            .onRef("attempt.id", "=", "grant.model_attempt_id")
+            .onRef("attempt.turn_id", "=", "turn.id")
+            .onRef("attempt.session_id", "=", "session.id"),
+        )
+        .whereRef("session.allocation_id", "=", "allocation.id")
+        .where("session.status", "=", "active")
+        .where("turn.status", "in", ["preparing", "running", "waiting"])
+        .where("turn.cancellation_requested_at", "is", null)
+        .where("turn.lease_expires_at", ">", sql<Date>`clock_timestamp()`)
+        .where("attempt.status", "in", ["preparing", "running"])
+        .where((eb) =>
+          eb("grant.capabilities", "@>", eb.val([MODEL_CAPABILITY])),
         )
         .where("grant.token_hash", "=", hashBearer(token))
         .where("grant.revoked_at", "is", null)
@@ -535,6 +557,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
           "grant.tenant_id as tenantId",
           "grant.allocation_id as allocationId",
           "grant.agent_session_id as agentSessionId",
+          "turn.id as turnId",
           "grant.alias as alias",
           "connection.id as connectionId",
           "connection.revision as revision",
@@ -550,6 +573,7 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         tenantId: row.tenantId,
         allocationId: row.allocationId,
         agentSessionId: row.agentSessionId,
+        turnId: row.turnId,
         alias: row.alias,
         ...(row.sessionOwnerId
           ? {
@@ -567,15 +591,6 @@ export function dbModelGatewayStore(db: Kysely<DB>): ModelGatewayStore {
         },
       };
     },
-    runningTurn: async ({ sessionId }) =>
-      (
-        await db
-          .selectFrom("agent_turns")
-          .select("id")
-          .where("session_id", "=", sessionId)
-          .where("status", "in", ["running", "waiting", "finalizing"])
-          .executeTakeFirst()
-      )?.id,
     openUsage: async ({ record }) =>
       (
         await db
@@ -688,6 +703,7 @@ interface ModelAccess {
   projectId: string;
   allocationId: string;
   sessionId: string | null;
+  turnId: string;
   alias: string;
   connectionId: string;
   api: ModelApi;
@@ -866,14 +882,7 @@ export class ModelGatewayService {
         "permission_error",
         "Connection authorization changed; retry the request",
       );
-    // The turn a call belongs to is the one running when it starts; read
-    // beside the call, never before it.
-    const turn =
-      post && access.sessionId
-        ? this.deps.store
-            .runningTurn({ sessionId: access.sessionId })
-            .catch(() => undefined)
-        : undefined;
+    // Authority and usage refer to the grant's attempt, never a newer turn.
     const outgoing = upstreamRequestHeaders(request.headers, access.headers);
     if (rewritten) outgoing.set("content-type", "application/json");
     let upstream: Response;
@@ -922,7 +931,7 @@ export class ModelGatewayService {
     // A session's call is open in the database before its answer ends, so
     // the turn's totals, read on any replica, wait for it.
     const opened = access.sessionId
-      ? this.openUsage({ access, path, fields, turn })
+      ? this.openUsage({ access, path, fields })
       : undefined;
     return {
       status: upstream.status,
@@ -935,7 +944,7 @@ export class ModelGatewayService {
         onEnd: (finished) =>
           setImmediate(() => {
             const usage = tap?.finish() ?? emptyUsage();
-            this.recordUsage({ access, path, fields, usage, turn, opened });
+            this.recordUsage({ access, path, fields, usage, opened });
             audit("allowed", {
               status: upstream.status,
               usage: { ...usage },
@@ -1084,7 +1093,6 @@ export class ModelGatewayService {
     access: ModelAccess;
     path: string;
     fields: RequestFields;
-    turn: Promise<string | undefined> | undefined;
   }): Promise<string | undefined> {
     return (async () =>
       this.deps.store.openUsage({
@@ -1103,7 +1111,6 @@ export class ModelGatewayService {
     path: string;
     fields: RequestFields;
     usage: ModelCallUsage;
-    turn: Promise<string | undefined> | undefined;
     opened?: Promise<string | undefined>;
   }): void {
     void (async () => {
@@ -1160,6 +1167,7 @@ export class ModelGatewayService {
       projectId: resolved.projectId,
       allocationId: grant.allocationId,
       sessionId: grant.agentSessionId,
+      turnId: grant.turnId,
       alias: grant.alias,
       connectionId: resolved.binding.connectionId,
       api: resolved.endpoint.api,
@@ -1283,14 +1291,13 @@ async function usageRecord(args: {
   access: ModelAccess;
   path: string;
   fields: RequestFields;
-  turn: Promise<string | undefined> | undefined;
 }): Promise<ModelUsageRecord> {
   const { access } = args;
   return {
     tenantId: access.identity.tenantId,
     projectId: access.projectId,
     sessionId: access.sessionId,
-    turnId: (await args.turn) ?? null,
+    turnId: access.turnId,
     allocationId: access.allocationId,
     connectionId: access.connectionId,
     alias: access.alias,

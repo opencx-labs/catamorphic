@@ -4,14 +4,13 @@ import type { FastifyInstance } from "fastify";
 export interface InstallTarget {
   /** The control plane's public origin the worker dials. */
   controlPlaneUrl: string;
-  /** The worker image, normally this server's own release. */
+  /** The deployment's explicitly selected worker image. */
   image: string;
 }
 
 /**
  * The install target, or why machines cannot install from this server: a
- * worker image is needed (the published image's own, or
- * `WORK_WORKER_IMAGE`), and a public origin other machines reach.
+ * deployment-owned worker image is needed (`WORK_WORKER_IMAGE`), and a public origin other machines reach.
  */
 export function installTarget(args: {
   publicBase: string;
@@ -20,7 +19,7 @@ export function installTarget(args: {
   if (!args.workerImage)
     return {
       unavailable:
-        "This server does not know which worker image machines should run. Set WORK_WORKER_IMAGE to the Work server image of this release (for example ghcr.io/<owner>/work-server:<version>).",
+        "This server does not know which worker image machines should run. Set WORK_WORKER_IMAGE to your deployment's pinned worker image (see @catamorphic/work-server deployment guidance).",
     };
   if (isLoopback(args.publicBase))
     return {
@@ -91,7 +90,7 @@ usage() {
 Usage: install.sh --code <code> [--image <image>] [--data-dir <dir>] [--name <name>] [--sandbox <backend>]
 
   --code <code>      the one-time enrollment code from the Work server (required)
-  --image <image>    the worker image (default: this server's release)
+  --image <image>    the worker image (default: the deployment's configured worker image)
   --data-dir <dir>   where the worker keeps its credential, sandboxes and
                      members' sign-ins (default: ${DEFAULT_WORKER_DATA_DIR}): a new
                      directory, or one under /var/lib, /srv, /opt, /data or

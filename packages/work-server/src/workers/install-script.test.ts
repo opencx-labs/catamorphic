@@ -17,7 +17,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const target = {
   controlPlaneUrl: "https://brain.example.com",
-  image: "ghcr.io/opencx-labs/work-server:0.1.0-alpha.18",
+  image: "ghcr.io/example/work-worker:0.1.0-alpha.18",
 };
 
 /** A POSIX shell to run the script with: dash where present, else sh. */

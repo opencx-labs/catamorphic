@@ -6,7 +6,7 @@ import type {
   WorkflowExecutionUnitDescriptor,
 } from "@catamorphic/parser";
 import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import {
   type Identity,
   intersectProjectPermissions,
@@ -18,6 +18,15 @@ import type {
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
 import { ExecutionJobDeferredError } from "./execution-worker-service.js";
+import {
+  RUN_SIGNAL_MAX_PENDING,
+  RUN_SIGNAL_MAX_RECEIPTS,
+  RunSignalLimitError,
+  RunSignalNotFoundError,
+  type RunSignalReceipt,
+  type SignalRunInput,
+  signalPayload,
+} from "./run-signals.js";
 
 const ACTIVE_RUN_STATUSES = ["pending", "running", "waiting"] as const;
 const TERMINAL_RUN_STATUSES = ["completed", "failed", "canceled"] as const;
@@ -132,6 +141,27 @@ export class RunCoordinator {
     const owned = await this.unregisterInvocation(args);
     if (!owned) throw new RuntimeInvocationFencedError(args.invocationId);
     return result;
+  }
+
+  /** The original attempt clock survives execution-job redelivery (ADR 0295). */
+  async boundaryDeadline(args: { job: ExecutionJob }): Promise<string | null> {
+    const workflowStepAttemptId = args.job.workflowStepAttemptId;
+    if (!workflowStepAttemptId) return null;
+    return this.db.transaction().execute(async (trx) => {
+      const context = await this.lockActiveAttempt({
+        trx,
+        workflowStepAttemptId,
+      });
+      if (
+        context?.attempt.status !== "running" ||
+        !context.attempt.started_at ||
+        !(await ownsJob({ trx, job: args.job }))
+      )
+        return null;
+      return new Date(
+        context.attempt.started_at.getTime() + 300_000,
+      ).toISOString();
+    });
   }
 
   /**
@@ -315,20 +345,25 @@ export class RunCoordinator {
         typeof args.transition.timeout === "string"
           ? parseDuration(args.transition.timeout)
           : undefined;
-      const timeoutAt = timeout ? new Date(now.getTime() + timeout) : null;
+      const timeoutAt =
+        timeout !== undefined ? new Date(now.getTime() + timeout) : null;
       const pauseId = crypto.randomUUID();
-      await trx
+      const pause = await trx
         .insertInto("workflow_pauses")
         .values({
           id: pauseId,
           run_id: context.attempt.run_id,
           workflow_step_attempt_id: context.attempt.id,
           state_present: args.transition.statePresent === true,
-          state: jsonColumn(toJson(args.transition.state)),
+          state:
+            args.transition.statePresent === true
+              ? jsonColumn(toJson(args.transition.state))
+              : null,
           timeout_at: timeoutAt,
           signal_name: stringValue(args.transition.signal) ?? null,
         })
-        .execute();
+        .returningAll()
+        .executeTakeFirstOrThrow();
       await trx
         .updateTable("workflow_step_attempts")
         .set({ status: "waiting", updated_at: now })
@@ -340,6 +375,7 @@ export class RunCoordinator {
         .where("id", "=", context.attempt.run_id)
         .where("status", "in", [...ACTIVE_RUN_STATUSES])
         .execute();
+      if (await this.resolveNamedPause({ trx, pause, now })) return;
       if (timeoutAt) {
         await this.jobs.enqueue({
           trx,
@@ -354,6 +390,154 @@ export class RunCoordinator {
         });
       }
     });
+  }
+
+  /** The run row orders sends against pause creation, timeout and termination. */
+  async signalByKey(args: SignalRunInput): Promise<RunSignalReceipt> {
+    const payload = signalPayload(args);
+    return this.db.transaction().execute(async (trx) => {
+      const run = await trx
+        .selectFrom("workflow_runs")
+        .innerJoin("projects", "projects.id", "workflow_runs.project_id")
+        .where("workflow_runs.id", "=", args.runId)
+        .where("projects.tenant_id", "=", args.identity.tenantId)
+        .where("workflow_runs.project_id", "=", args.projectId)
+        .where("workflow_runs.workflow_name", "=", args.workflowName)
+        .where("workflow_runs.correlation_key", "=", args.correlationKey)
+        .selectAll("workflow_runs")
+        .forUpdate("workflow_runs")
+        .executeTakeFirst();
+      if (!run) {
+        throw new RunSignalNotFoundError(
+          args.workflowName,
+          args.correlationKey,
+          args.signal,
+        );
+      }
+      const existing = await trx
+        .selectFrom("workflow_signals")
+        .where("run_id", "=", run.id)
+        .where("idempotency_key", "=", args.idempotencyKey)
+        .selectAll()
+        .executeTakeFirst();
+      if (existing) {
+        if (
+          existing.signal_name !== payload.name ||
+          existing.payload_hash !== payload.payloadHash
+        )
+          throw new RunResumeConflictError(
+            "Signal idempotency key was used with different content",
+          );
+        return signalReceipt(existing);
+      }
+      if (!isActiveRunStatus(run.status))
+        throw new RunResumeConflictError("Run generation is not active");
+      const counts = await trx
+        .selectFrom("workflow_signals")
+        .where("run_id", "=", run.id)
+        .select((eb) => [
+          eb.fn.countAll().as("total"),
+          eb.fn.countAll().filterWhere("status", "=", "buffered").as("pending"),
+        ])
+        .executeTakeFirstOrThrow();
+      if (Number(counts.total) >= RUN_SIGNAL_MAX_RECEIPTS)
+        throw new RunSignalLimitError(
+          "Run has reached its 1024 signal receipt limit",
+        );
+      if (Number(counts.pending) >= RUN_SIGNAL_MAX_PENDING)
+        throw new RunSignalLimitError(
+          "Run has reached its 256 pending signal limit",
+        );
+      const signal = await trx
+        .insertInto("workflow_signals")
+        .values({
+          run_id: run.id,
+          signal_name: payload.name,
+          idempotency_key: args.idempotencyKey,
+          payload_hash: payload.payloadHash,
+          value: jsonColumn(args.value),
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      const pause = await trx
+        .selectFrom("workflow_pauses")
+        .where("run_id", "=", run.id)
+        .where("signal_name", "=", payload.name)
+        .where("status", "=", "open")
+        .selectAll()
+        .forUpdate()
+        .executeTakeFirst();
+      if (pause)
+        await this.resolveNamedPause({
+          trx,
+          pause,
+          now: await databaseNow(trx),
+        });
+      return signalReceipt(
+        await trx
+          .selectFrom("workflow_signals")
+          .where("id", "=", signal.id)
+          .selectAll()
+          .executeTakeFirstOrThrow(),
+      );
+    });
+  }
+
+  /** Called with the run locked; continuation and consumption commit together. */
+  private async resolveNamedPause(args: {
+    trx: Transaction<DB>;
+    pause: Selectable<DB["workflow_pauses"]>;
+    now: Date;
+  }): Promise<boolean> {
+    if (args.pause.timeout_at && args.pause.timeout_at <= args.now) {
+      await args.trx
+        .updateTable("workflow_pauses")
+        .set({ status: "timed_out", resolved_at: args.now })
+        .where("id", "=", args.pause.id)
+        .execute();
+      await this.resolvePause({ ...args, reason: "timed_out" });
+      return true;
+    }
+    if (!args.pause.signal_name) return false;
+    const signal = await args.trx
+      .selectFrom("workflow_signals")
+      .where("run_id", "=", args.pause.run_id)
+      .where("signal_name", "=", args.pause.signal_name)
+      .where("status", "=", "buffered")
+      .orderBy("sequence")
+      .selectAll()
+      .forUpdate()
+      .executeTakeFirst();
+    if (!signal) return false;
+    await args.trx
+      .updateTable("workflow_signals")
+      .set({
+        status: "resumed",
+        pause_id: args.pause.id,
+        value: null,
+        resolved_at: args.now,
+      })
+      .where("id", "=", signal.id)
+      .execute();
+    await args.trx
+      .updateTable("workflow_pauses")
+      .set({
+        status: "resumed",
+        resume_value: jsonColumn(signal.value),
+        resume_idempotency_key: signal.idempotency_key,
+        resume_payload_hash: createHash("sha256")
+          .update(JSON.stringify(signal.value))
+          .digest("hex"),
+        resolved_at: args.now,
+      })
+      .where("id", "=", args.pause.id)
+      .execute();
+    await this.resolvePause({
+      trx: args.trx,
+      pause: { ...args.pause, resume_value: signal.value },
+      reason: "resumed",
+    });
+    return true;
   }
 
   async resumePause(args: {
@@ -720,8 +904,10 @@ export class RunCoordinator {
     identity: Identity;
     runId: string;
     reason?: string;
+    /** Reuse the caller transaction for atomic enrollment replacement. */
+    trx?: Transaction<DB>;
   }): Promise<Array<{ artifactId: string; invocationId: string }>> {
-    const outcome = await this.db.transaction().execute(async (trx) => {
+    const cancelInTransaction = async (trx: Transaction<DB>) => {
       await requireOwnedRun({
         trx,
         identity: args.identity,
@@ -837,14 +1023,18 @@ export class RunCoordinator {
             ? root.id
             : null,
       };
-    });
+    };
+    const outcome = args.trx
+      ? await cancelInTransaction(args.trx)
+      : await this.db.transaction().execute(cancelInTransaction);
     if (outcome.reconcileChildRunId) {
-      await this.db.transaction().execute((trx) =>
+      const reconcile = (trx: Transaction<DB>) =>
         this.reconcileParentFromTerminalChild({
           trx,
           childRunId: outcome.reconcileChildRunId ?? "",
-        }),
-      );
+        });
+      if (args.trx) await reconcile(args.trx);
+      else await this.db.transaction().execute(reconcile);
     }
     return outcome.invocations;
   }
@@ -1776,6 +1966,17 @@ async function releaseAllocation(args: {
   now: Date;
 }): Promise<void> {
   await args.trx
+    .deleteFrom("placement_waits")
+    .where(
+      "root_workload_id",
+      "in",
+      args.trx
+        .selectFrom("execution_allocations")
+        .select("root_workload_id")
+        .where("id", "=", args.allocationId),
+    )
+    .execute();
+  await args.trx
     .updateTable("connection_capability_grants")
     .set({ revoked_at: args.now })
     .where("allocation_id", "=", args.allocationId)
@@ -1851,4 +2052,15 @@ function childPermissions(input: {
     })),
     { tenantId: "", externalUserId: "", scope: [], projectPermissions: held },
   );
+}
+
+function signalReceipt(
+  signal: Selectable<DB["workflow_signals"]>,
+): RunSignalReceipt {
+  const base = { id: signal.id, runId: signal.run_id };
+  if (signal.status === "resumed" && signal.pause_id)
+    return { ...base, status: "resumed", pauseId: signal.pause_id };
+  if (signal.status === "buffered" || signal.status === "discarded")
+    return { ...base, status: signal.status, pauseId: null };
+  throw new Error("Invalid workflow signal receipt");
 }

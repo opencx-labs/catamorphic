@@ -662,7 +662,14 @@ describe("members' own sign-ins on the machine (ADRs 0199, 0213)", () => {
     await server.catamorphic.core.capabilities.call(
       "catamorphic.sessions",
       "deliver",
-      { caller: alice, projectId, runId, workflowName: "nudge" },
+      {
+        caller: alice,
+        projectId,
+        runId,
+        workflowName: "nudge",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
+      },
       {
         sessionId,
         content: "report",

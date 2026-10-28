@@ -109,7 +109,7 @@ brain become replicas. Never add a replica just for capacity.
    (`curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`;
    the enrollment response's `install` is that command). It installs Docker,
    and gVisor on a machine without KVM, and starts the worker. Or run the
-   same image version with the worker command yourself. With the container
+   your pinned worker image with its worker command yourself. With the container
    backend the worker drives the machine's Docker daemon, so it gets the
    daemon's socket (and its group, since the image runs as an unprivileged
    user) and its data directory from the machine at the same path:
@@ -122,7 +122,7 @@ brain become replicas. Never add a replica just for capacity.
      -e WORK_CONTROL_PLANE_URL=https://brain.example.com \
      -e WORK_WORKER_ENROLLMENT=<code> \
      -e WORK_MAX_WORKSPACES=4 \
-     <work-server image> bun apps/server/src/worker.ts
+     <your worker image> bun apps/server/src/worker.ts
    ```
 
    `WORK_SANDBOX` defaults to `auto` ([sandbox backends](#sandbox-backends)):
@@ -333,12 +333,10 @@ rule that names a class it does not know.
 ### Hetzner Cloud
 
 1. Set `WORK_PUBLIC_URL` (the HTTPS origin machines dial),
-   `WORK_HETZNER_TOKEN`, and `WORK_MACHINES_CONFIG`. The published image
-   knows where it was published and which release it is
-   (`WORK_IMAGE_REPOSITORY` and `WORK_VERSION`, set by its build) and gives
-   machines that same image; `WORK_WORKER_IMAGE` overrides it (a server
-   built from source must set it). Until one of them is known, no machine is
-   created and the rule's status says why.
+   `WORK_HETZNER_TOKEN`, `WORK_MACHINES_CONFIG`, and `WORK_WORKER_IMAGE`
+   (your pinned worker image). The image must provide the worker entry point
+   described in [Your own image](../../../packages/work-server/README.md#your-own-image).
+   Without an explicit image, no machine is created and the rule says why.
 2. Write a rule: `PUT /_work/operator/machine-rules/desks` with
    `{ "group": "eng@example.com", "machines": "each-member", "class": "desk" }`.
    `{ "machines": { "shared": 3 } }` gives the group three shared machines
@@ -637,14 +635,21 @@ sandboxes. A replica that dies is lost once its lease has lapsed
 for 30 seconds (about a minute and a quarter after its last renewal). Every
 replica checks for lost replicas every ten seconds and recovers their work:
 
-- each workflow run, paused durable runs included, gets a workspace on a
-  live replica in its own Environment. Its sandbox is rebuilt from the
+- runnable workflow runs get a workspace on a live replica in their own
+  Environment. Durable waits park their root's Allocation once no sharing
+  child or batch compute is runnable and every invocation has ended. Cleanup
+  must destroy the old sandbox before its physical capacity returns. Paused
+  roots stay parked when their former machine is lost; a continuation gets
+  fresh admission with current owner and connection authority. Its sandbox is rebuilt from the
   deployed commit and its step journal carries on; a step whose outcome was
   uncertain retries as after a restart. The run is placed for its owner
   with their current access, as a chat's next turn is. A run that no replica
   can take waits for one; a run whose Environment the project removed, or
   whose owner may no longer act, fails with the reason.
-  Tenant run capacity is freed when the run ends, as always;
+  Logical tenant run capacity is freed when the run ends. A parked run keeps
+  its deployed artifact and journal, not its workspace files or processes.
+  A runnable continuation with no available machine records ordinary placement
+  demand, including for on-demand machine rules;
 - each chat's workspace on that replica is released; its next turn is
   admitted on a live machine and restores the workspace from its
   `sessions/<id>` branch. Chats on workers and on members' machines keep

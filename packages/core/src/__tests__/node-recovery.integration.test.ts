@@ -7,13 +7,17 @@ import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
 import type {
   EnvironmentBinding,
   EnvironmentProvider,
+  SandboxProvider,
 } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import pg from "pg";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
+import { cleanupWorkerAllocations } from "../services/allocation-sandbox-provider.js";
+import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
+import { toJson } from "../services/run-coordinator.js";
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 /**
@@ -87,6 +91,23 @@ beforeAll(async () => {
   const repo = await projectManager.create(identity.tenantId, projectId, {
     name: "recovery",
     externalUserId: identity.externalUserId,
+    initialFiles: {
+      ".work/project.json": JSON.stringify({
+        environments: {
+          default: {
+            workloads: ["agent", "workflow"],
+            connections: {
+              directory: {
+                provider: "fixture",
+                principal: "service",
+                service: "directory",
+                capabilities: ["read"],
+              },
+            },
+          },
+        },
+      }),
+    },
   });
   await repo.dispose();
   nodes = new WorkerNodesService(db);
@@ -94,6 +115,23 @@ beforeAll(async () => {
     db,
     projectManager,
     environmentProvider: nodeProvider(nodes),
+    credentialVault: new MemoryCredentialVault(),
+    connectionProviders: [
+      {
+        kind: "fixture",
+        displayName: "Fixture",
+        beginAuthorization: async () => ({
+          challenge: { kind: "url", url: "https://fixture.invalid" },
+        }),
+        completeAuthorization: async () => ({
+          material: new Uint8Array(),
+          account: {},
+          scopes: [],
+          capabilities: ["read"],
+        }),
+        invoke: async () => null,
+      },
+    ],
     // The host's member resolver: someone who left may run nothing.
     resolveMemberIdentity: async ({ tenantId, externalUserId }) =>
       externalUserId === DEPARTED ? null : { tenantId, externalUserId },
@@ -115,6 +153,7 @@ async function register(
     tenantId: identity.tenantId,
     authorityId: authority,
     descriptor: descriptor(id),
+    defaults: { cpuMillis: 1000, memoryMb: 1024 },
     disposable: true,
   });
 }
@@ -543,4 +582,399 @@ it.skipIf(!db)(
     expect(seen).toEqual([stuck.id, newer.id]);
   },
   30_000,
+);
+
+/** No remote IO: cleanup failure is injected at the physical teardown seam. */
+function cleanupProvider(): SandboxProvider {
+  return {
+    workspaceRoot: "/workspace",
+    createSandbox: async () => ({
+      id: "workspace",
+      providerId: "workspace",
+      status: "started",
+      sandboxType: "execution",
+    }),
+    startSandbox: async () => {},
+    stopSandbox: async () => {},
+    destroySandbox: vi.fn(async () => {}),
+    getSandboxStatus: async () => "started",
+    executeCommand: async () => ({ exitCode: 0, result: "" }),
+    uploadFiles: async () => {},
+    downloadFile: async () => "",
+    gitClone: async () => {},
+    gitCheckout: async () => {},
+  };
+}
+
+it.skipIf(!db)(
+  "parks sharing workflows only after jobs and registered invocations have ended",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lease = await register();
+    const work = await placeWork({ nodeId: lease.id });
+    const jobs = new ExecutionJobsService(db, lease);
+    const job = await jobs.enqueue({
+      tenantId: identity.tenantId,
+      workflowRunId: work.childId,
+      kind: "batch_item",
+      payload: {},
+    });
+    // A waiting parent does not retire its child's runnable batch allocation.
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    expect(
+      (
+        await core.executionAllocations.get({
+          identity,
+          allocationId: work.allocationId,
+        })
+      )?.status,
+    ).toBe("active");
+    const claimed = await jobs.claimById({
+      jobId: job.id,
+      workerId: "sharing",
+    });
+    if (!claimed?.leaseToken) throw Error("No lease");
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    expect(
+      (
+        await core.executionAllocations.get({
+          identity,
+          allocationId: work.allocationId,
+        })
+      )?.status,
+    ).toBe("active");
+    await jobs.complete({
+      jobId: job.id,
+      workerId: "sharing",
+      leaseToken: claimed.leaseToken,
+      leaseGeneration: claimed.leaseGeneration,
+    });
+    // An uncertain runtime remains a blocker independently of job status.
+    await db
+      .insertInto("active_run_invocations")
+      .values({
+        invocation_id: randomUUID(),
+        execution_job_id: job.id,
+        workflow_run_id: work.childId,
+        lease_token: claimed.leaseToken,
+        lease_generation: claimed.leaseGeneration,
+      })
+      .execute();
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.childId });
+    expect(
+      (
+        await core.executionAllocations.get({
+          identity,
+          allocationId: work.allocationId,
+        })
+      )?.status,
+    ).toBe("active");
+    await db
+      .deleteFrom("active_run_invocations")
+      .where("execution_job_id", "=", job.id)
+      .execute();
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.childId });
+    expect(
+      (
+        await core.executionAllocations.get({
+          identity,
+          allocationId: work.allocationId,
+        })
+      )?.releaseReason,
+    ).toBe("idle");
+  },
+);
+
+it.skipIf(!db)(
+  "retains the physical budget on teardown failure, then atomically readmits sharing runs once",
+  async () => {
+    if (!core || !db || !nodes) return;
+    await quietOthers();
+    const lease = await register();
+    const work = await placeWork({ nodeId: lease.id });
+    await db
+      .updateTable("execution_allocations")
+      .set({
+        sandbox_creation_started: true,
+        sandbox_provider_id: "physical-workspace",
+      })
+      .where("id", "=", work.allocationId)
+      .execute();
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    const jobs = new ExecutionJobsService(db, lease);
+    const pending = await jobs.enqueue({
+      tenantId: identity.tenantId,
+      workflowRunId: work.childId,
+      kind: "durable_boundary",
+      payload: {},
+    });
+    const provider = cleanupProvider();
+    vi.mocked(provider.destroySandbox).mockRejectedValueOnce(
+      Error("Teardown failed"),
+    );
+    await expect(
+      cleanupWorkerAllocations({ db, workerNode: lease, provider }),
+    ).rejects.toThrow("Teardown failed");
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.childId });
+    expect(
+      await jobs.claimById({ jobId: pending.id, workerId: "stale" }),
+    ).toBeNull();
+    expect(
+      (
+        await db
+          .selectFrom("execution_allocations")
+          .select("capacity_released_at")
+          .where("id", "=", work.allocationId)
+          .executeTakeFirstOrThrow()
+      ).capacity_released_at,
+    ).toBeNull();
+    expect(
+      (await nodes.list({ tenantId: identity.tenantId, authorityId })).find(
+        (node) => node.id === lease.id,
+      )?.usage,
+    ).toEqual({ workspaces: 2, cpuMillis: 2000, memoryMb: 2048 });
+    await cleanupWorkerAllocations({ db, workerNode: lease, provider });
+    const recovery = core.nodeRecovery;
+    await Promise.all(
+      Array.from({ length: 6 }, () =>
+        recovery.reconcileWorkflowWaits({ runId: work.childId }),
+      ),
+    );
+    const rows = await db
+      .selectFrom("workflow_runs")
+      .select(["id", "allocation_id"])
+      .where("id", "in", [work.runId, work.childId])
+      .execute();
+    const ids = new Set(rows.map((run) => run.allocation_id));
+    expect(ids.size).toBe(1);
+    expect(ids.has(work.allocationId)).toBe(false);
+    const fresh = await db
+      .selectFrom("execution_allocations")
+      .select("id")
+      .where("root_workload_id", "=", work.runId)
+      .where("status", "=", "active")
+      .execute();
+    expect(fresh).toHaveLength(1);
+    expect(
+      await jobs.claimById({ jobId: pending.id, workerId: "fresh" }),
+    ).not.toBeNull();
+  },
+);
+
+it.skipIf(!db)(
+  "fails a parked scoped owner's tree after their authority is revoked",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lease = await register();
+    const work = await placeWork({ nodeId: lease.id, owner: DEPARTED });
+    await db
+      .updateTable("workflow_runs")
+      .set({ caller_scope: [{ kind: "workflow", projectId, name: "approve" }] })
+      .where("id", "in", [work.runId, work.childId])
+      .execute();
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    await cleanupWorkerAllocations({
+      db,
+      workerNode: lease,
+      provider: cleanupProvider(),
+    });
+    await new ExecutionJobsService(db, lease).enqueue({
+      tenantId: identity.tenantId,
+      workflowRunId: work.childId,
+      kind: "durable_boundary",
+      payload: {},
+    });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    const rows = await db
+      .selectFrom("workflow_runs")
+      .select(["status", "error"])
+      .where("id", "in", [work.runId, work.childId])
+      .execute();
+    expect(rows.every((run) => run.status === "failed")).toBe(true);
+    expect(rows[0]?.error).toContain("owner may no longer");
+  },
+);
+
+it.skipIf(!db)(
+  "keeps parked roots parked when their node dies and admits only a runnable continuation",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lost = await register();
+    const work = await placeWork({ nodeId: lost.id });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    await lapse(lost.id, 300);
+    const live = await register();
+    const recovery = await core.nodeRecovery.recoverLostNodes({
+      authorityId,
+      nodeIds: [lost.id],
+    });
+    expect(recovery).toMatchObject({ movedRuns: 0, deletedNodes: 1 });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    expect(
+      (
+        await db
+          .selectFrom("workflow_runs")
+          .select("allocation_id")
+          .where("id", "=", work.runId)
+          .executeTakeFirstOrThrow()
+      ).allocation_id,
+    ).toBe(work.allocationId);
+    await new ExecutionJobsService(db, live).enqueue({
+      tenantId: identity.tenantId,
+      workflowRunId: work.childId,
+      kind: "durable_boundary",
+      payload: {},
+    });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.childId });
+    const allocation = await db
+      .selectFrom("execution_allocations")
+      .select(["id", "worker_node_id"])
+      .where("root_workload_id", "=", work.runId)
+      .where("status", "=", "active")
+      .executeTakeFirstOrThrow();
+    expect(allocation.worker_node_id).toBe(live.id);
+  },
+);
+
+it.skipIf(!db)(
+  "revokes parked grants and refuses a revoked selected connection on resume",
+  async () => {
+    if (!core?.connectionGrants || !db) return;
+    await quietOthers();
+    const lease = await register();
+    const work = await placeWork({ nodeId: lease.id });
+    const connectionId = randomUUID();
+    await db
+      .insertInto("connections")
+      .values({
+        id: connectionId,
+        tenant_id: identity.tenantId,
+        project_id: projectId,
+        name: "directory",
+        label: "Directory",
+        provider_kind: "fixture",
+        principal_kind: "project_service",
+        status: "ready",
+        credential_ref: "fixture",
+      })
+      .execute();
+    const allocation = await core.executionAllocations.get({
+      identity,
+      allocationId: work.allocationId,
+    });
+    if (!allocation) throw Error("No Allocation");
+    await db
+      .updateTable("execution_allocations")
+      .set({
+        policy_snapshot: toJson({
+          ...allocation.policy,
+          connections: [
+            {
+              connectionId,
+              alias: "directory",
+              providerKind: "fixture",
+              principalKind: "project_service",
+              capabilities: ["read"],
+            },
+          ],
+        }),
+      })
+      .where("id", "=", allocation.id)
+      .execute();
+    const grant = await core.connectionGrants.issue({
+      identity,
+      allocationId: allocation.id,
+      alias: "directory",
+      channel: "sandbox",
+    });
+    expect(
+      await core.connectionGrants.validate({ token: grant.token }),
+    ).not.toBeNull();
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    expect(
+      await core.connectionGrants.validate({ token: grant.token }),
+    ).toBeNull();
+    await cleanupWorkerAllocations({
+      db,
+      workerNode: lease,
+      provider: cleanupProvider(),
+    });
+    await db
+      .updateTable("connections")
+      .set({ status: "revoked" })
+      .where("id", "=", connectionId)
+      .execute();
+    await new ExecutionJobsService(db, lease).enqueue({
+      tenantId: identity.tenantId,
+      workflowRunId: work.childId,
+      kind: "durable_boundary",
+      payload: {},
+    });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    expect(
+      (
+        await db
+          .selectFrom("workflow_runs")
+          .select("status")
+          .where("id", "=", work.runId)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe("failed");
+    expect(
+      await db
+        .selectFrom("execution_allocations")
+        .select("id")
+        .where("root_workload_id", "=", work.runId)
+        .where("status", "=", "active")
+        .execute(),
+    ).toEqual([]);
+  },
+);
+
+it.skipIf(!db)(
+  "records capacity demand for a continuation and clears it when the root is canceled",
+  async () => {
+    if (!core || !db) return;
+    await quietOthers();
+    const lease = await register();
+    const work = await placeWork({ nodeId: lease.id });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+    await cleanupWorkerAllocations({
+      db,
+      workerNode: lease,
+      provider: cleanupProvider(),
+    });
+    // The fixture's independent chat still holds the one workspace.
+    await db
+      .updateTable("worker_nodes")
+      .set({ capacity: { workspaces: 1 } })
+      .where("id", "=", lease.id)
+      .execute();
+    const job = await new ExecutionJobsService(db, lease).enqueue({
+      tenantId: identity.tenantId,
+      workflowRunId: work.childId,
+      kind: "durable_boundary",
+      payload: {},
+    });
+    await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.childId });
+    expect(
+      await core.placementWaits.get({ rootWorkloadId: work.runId }),
+    ).toMatchObject({ reason: "capacity", limitMinutes: null });
+    await core.runs.cancel({ identity, runId: work.runId });
+    expect(
+      await core.placementWaits.get({ rootWorkloadId: work.runId }),
+    ).toBeUndefined();
+    expect(
+      (
+        await db
+          .selectFrom("execution_jobs")
+          .select("status")
+          .where("id", "=", job.id)
+          .executeTakeFirstOrThrow()
+      ).status,
+    ).toBe("canceled");
+  },
 );

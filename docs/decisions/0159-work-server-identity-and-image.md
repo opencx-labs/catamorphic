@@ -4,6 +4,8 @@
 - **Date:** 2026-09-25
 - **Refines:** 0059, 0146
 
+Image distribution is superseded by [0294](0294-work-server-deployments-compose-libraries-and-workflows.md): deployments build their own images from the libraries.
+
 ## Context
 
 ADR 0146 renamed the desktop and mobile apps to Work but left the prebuilt

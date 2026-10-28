@@ -408,10 +408,21 @@ Workflows and apps live in a bun workspace: an independent \`.work/package.json\
 Then:
 
 1. Set \`.work/package.json\` "name" to the project's name. Leave the imported project's root manifest, dependencies, and instruction files unchanged. Create \`.work/.gitignore\` with \`/app-data/\`, \`node_modules/\`, and \`dist/\` entries if it does not exist; preserve the user's existing ignore choices.
-2. Check the workspace with the host's check when it offers one (the project MCP \`program_check\` tool). Otherwise run \`bun install --cwd .work\` and \`bun run --cwd .work check\`; they need \`@catamorphic/workflow\` and \`@catamorphic/parser\`, which are not yet on a public registry.
+2. Check the workspace with the host's check when it offers one (the project MCP \`program_check\` tool). Otherwise run \`bun install --cwd .work\` and \`bun run --cwd .work check\`; they need \`@catamorphic/workflow\` and \`@catamorphic/parser\`, which publish with Work; keep their versions aligned with the host.
 3. Read \`writing-workflows\` before writing workflow code and \`building-apps\` before creating an app under \`.work/apps/<name>/\`. Use the host's skill listing and reader: imported projects may receive these skills from the host without copies in \`.work/skills/\`.
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
+
+## Build from primitives
+
+A missing native integration is not itself a blocker. Workflows are ordinary
+TypeScript programs with npm dependencies, IO and durable boundaries. Glue code
+in workflows and Work server hooks is expected. Compose SDK calls, webhooks,
+schedules, agents and application-owned Postgres state to build the required
+behavior; consult \`workflow-lifecycle\` and \`durable-workflows\` before
+choosing deployment or recovery. Privileged calls and credentials belong in the
+host's authorized hooks or connection providers. Do not require a shipped AWS,
+database or other service adapter when these primitives already express the task.
 
 ## Ready-made packs
 

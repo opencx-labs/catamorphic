@@ -7,7 +7,7 @@ import {
 import { workerCommand } from "./worker-cli.js";
 
 /**
- * A Work worker (ADR 0164): the same image, started with
+ * A Work worker (ADR 0164), built into a deployment-owned image, started with
  * `bun apps/server/src/worker.ts` (`work worker` in the image). It executes
  * agent sandboxes for a control plane and holds no database URL, deployment
  * secret, or vault key.

@@ -96,6 +96,7 @@ export class SessionMailboxesService {
     projectId: string,
     sessionId: string,
     input: {
+      signal?: AbortSignal;
       destination: SessionAuthority;
       delivery: SessionMailboxDelivery;
       idempotencyKey?: string;
@@ -139,36 +140,41 @@ export class SessionMailboxesService {
         }
 
         const itemId = randomUUID();
-        const inserted = await this.db
-          .insertInto("session_mailbox_items")
-          .values({
-            project_id: projectId,
-            session_id: sessionId,
-            source_host_id: this.hostId,
-            destination_host_id: input.destination.hostId,
-            authority_revision: input.destination.revision,
-            item_id: itemId,
-            kind: delivery.kind,
-            idempotency_key: input.idempotencyKey ?? null,
-            causation: jsonColumn(input.causation ?? []),
-            ...(delivery.kind === "input"
-              ? {
-                  input: jsonColumn(toJson(delivery.input)),
-                  delivery_mode: delivery.mode,
-                  attention: delivery.attention,
-                  delivered_by: delivery.deliveredBy,
-                  owner_authored: delivery.ownerAuthored,
-                }
-              : { action: jsonColumn(toJson(delivery.action)) }),
-          })
-          .onConflict((conflict) =>
-            conflict
-              .columns(["session_id", "idempotency_key"])
-              .where("idempotency_key", "is not", null)
-              .doNothing(),
-          )
-          .returning(["item_id"])
-          .executeTakeFirst();
+        const inserted = await this.db.transaction().execute(async (trx) => {
+          input.signal?.throwIfAborted();
+          const result = await trx
+            .insertInto("session_mailbox_items")
+            .values({
+              project_id: projectId,
+              session_id: sessionId,
+              source_host_id: this.hostId,
+              destination_host_id: input.destination.hostId,
+              authority_revision: input.destination.revision,
+              item_id: itemId,
+              kind: delivery.kind,
+              idempotency_key: input.idempotencyKey ?? null,
+              causation: jsonColumn(input.causation ?? []),
+              ...(delivery.kind === "input"
+                ? {
+                    input: jsonColumn(toJson(delivery.input)),
+                    delivery_mode: delivery.mode,
+                    attention: delivery.attention,
+                    delivered_by: delivery.deliveredBy,
+                    owner_authored: delivery.ownerAuthored,
+                  }
+                : { action: jsonColumn(toJson(delivery.action)) }),
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns(["session_id", "idempotency_key"])
+                .where("idempotency_key", "is not", null)
+                .doNothing(),
+            )
+            .returning(["item_id"])
+            .executeTakeFirst();
+          input.signal?.throwIfAborted();
+          return result;
+        });
         if (inserted) {
           return {
             messageId: inserted.item_id,

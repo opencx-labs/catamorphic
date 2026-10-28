@@ -11,6 +11,35 @@ its ownership or publishing it. Use \`writing-workflows\` for TypeScript mechani
 and \`session-workflows\` for reminders, monitoring, and session actions. Discover
 the host's actual capabilities and schemas; a skill does not enable a missing tool.
 
+## Compose existing primitives
+
+A missing native integration or ready-made pack is not a blocker by itself.
+Workflows run ordinary TypeScript with real npm packages and IO. Writing glue
+code is normal: compose events/webhooks, retry boundaries, durable waits,
+child workflows, external storage, and the host's authorized operations.
+Inspect the installed APIs before claiming a missing product feature.
+
+For example, a review service can use workflows to launch and stop AWS EC2
+machines, a Postgres ledger for jobs and external receipts, and a custom Work
+server for credentialed SDK calls and authenticated callbacks. An external
+runner need not enroll as a Work worker. Use enrolled workers when it needs
+Work's sandbox dispatch and agent-session lifecycle. A shipped cloud adapter
+or review recipe is a convenience, not the limit of what can be built.
+
+Keep business orchestration in project workflows. Put privileged operations,
+authorization, credentials, and incoming routes in the host's code. With
+\`@catamorphic/work-server\`, use \`hooks.connectionProviders\` for brokered
+services, \`hooks.capabilityProviders\` for workflow host calls, and
+\`hooks.routes\` for callbacks; read the setup-work-server skill in its
+repository for the installed contracts. An existing application can mount the
+lower-level SDK directly. External Postgres may hold application-owned state
+in its own schema or database; do not write Work's internal tables.
+
+Before calling something a blocker, name the missing guarantee, show a failing
+case, and check whether existing code-level extension points supply it. Distinguish
+a core defect from ordinary application work or a deployment acceptance test.
+Use \`durable-workflows\` for retry, cancellation and external-effect limits.
+
 ## Choose the intended result
 
 | User intent | Source | Activation |

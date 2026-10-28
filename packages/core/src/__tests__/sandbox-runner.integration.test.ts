@@ -9,6 +9,7 @@ import {
   type RunnerFrame,
 } from "@catamorphic/agent-protocol/runner";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
+import { readConnectionGrant } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   configureSandboxGateway,
@@ -360,7 +361,7 @@ describe("sandbox runner", () => {
             kind: "start",
             attempt: {
               ...attempt(
-                "[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]] [[env WORK_HTTP_LOGS]] [[env WORK_HTTP_LOGS_GRANT_FILE]] [[env DATA_PATH]]",
+                "[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]] [[env WORK_HTTP_LOGS]] [[env WORK_HTTP_LOGS_GRANT_DIRECTORY]] [[env DATA_PATH]]",
               ),
               envFiles,
             },
@@ -390,7 +391,7 @@ describe("sandbox runner", () => {
       provider,
       sandboxId: sandbox.id,
       gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
-      grants: [{ alias: "logs", grant: "grant-one" }],
+      grants: [{ alias: "logs", grant: "grant-one", publicationRevision: "1" }],
       gitAliases: [],
       httpAliases: [
         { alias: "logs", url: "http://127.0.0.1:9/api/gateway/http/logs" },
@@ -408,10 +409,13 @@ describe("sandbox runner", () => {
       "WORK_HTTP_LOGS=http://127.0.0.1:9/api/gateway/http/logs",
     );
     // The grant file where code in this sandbox really finds it.
-    const grantFile = /WORK_HTTP_LOGS_GRANT_FILE=(\S+)/.exec(first)?.[1] ?? "";
+    const grantFile =
+      /WORK_HTTP_LOGS_GRANT_DIRECTORY=(\S+)/.exec(first)?.[1] ?? "";
     expect(grantFile).toMatch(/\/\.work-session\/grants\/logs$/);
     expect(grantFile.startsWith(provider.workspaceRoot)).toBe(false);
-    expect(fs.readFileSync(grantFile, "utf8")).toBe("grant-one");
+    expect(await readConnectionGrant({ directory: grantFile })).toBe(
+      "grant-one",
+    );
     // Read again for the next attempt: gone once removed.
     await removeSandboxSecrets(target);
     const second = await run();

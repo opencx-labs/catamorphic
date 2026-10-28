@@ -119,31 +119,18 @@ it("reads machine classes, the Hetzner token and the worker image (ADR 0205)", (
     workServerConfigFromEnv({ ...env, WORK_MACHINES_CONFIG: file }),
   ).toThrow("not readable JSON");
 
-  // The worker image: the published image's own (where its build says it
-  // was published, and which release), or the operator's.
-  const published = {
-    ...env,
-    WORK_IMAGE_REPOSITORY: "ghcr.io/acme/work-server",
-    WORK_VERSION: "0.1.0-alpha.18",
-  };
+  // Worker images are deployment-owned and explicit, never inferred.
   expect(workServerConfigFromEnv(env).workerImage).toBeUndefined();
-  expect(workServerConfigFromEnv(published).workerImage).toBe(
-    "ghcr.io/acme/work-server:0.1.0-alpha.18",
-  );
-  // Neither half alone names an image.
-  expect(
-    workServerConfigFromEnv({ ...env, WORK_VERSION: "0.1.0-alpha.18" })
-      .workerImage,
-  ).toBeUndefined();
   expect(
     workServerConfigFromEnv({
       ...env,
       WORK_IMAGE_REPOSITORY: "ghcr.io/acme/work-server",
+      WORK_VERSION: "0.1.0-alpha.18",
     }).workerImage,
   ).toBeUndefined();
   expect(
     workServerConfigFromEnv({
-      ...published,
+      ...env,
       WORK_WORKER_IMAGE: "registry.example.com/work:pinned",
     }).workerImage,
   ).toBe("registry.example.com/work:pinned");

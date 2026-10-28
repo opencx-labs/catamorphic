@@ -9,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { isBuiltin } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { rewriteCrossItemImports } from "../packages/registry/scripts/imports.js";
@@ -247,7 +248,7 @@ export function checkRegistryCopies({
       const sourcePath = path.join(root, REGISTRY_SOURCE, item.name, file);
       if (!existsSync(sourcePath)) continue;
       for (const specifier of importsOf(readFileSync(sourcePath, "utf8"))) {
-        if (specifier.startsWith(".")) continue;
+        if (specifier.startsWith(".") || isBuiltin(specifier)) continue;
         const name = packageName(specifier);
         if (PEERS.has(name) || item.dependencies.includes(name)) continue;
         problems.push({

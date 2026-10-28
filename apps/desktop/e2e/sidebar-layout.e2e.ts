@@ -606,14 +606,123 @@ describe("configurable browser workspace", () => {
     );
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'true'",
+      "document.querySelector('aside').getAttribute('aria-hidden') === 'true' && document.querySelector('aside').dataset.motion === 'closed' && document.querySelector('aside').dataset.settled === 'true'",
     );
+    // Hold the address unavailable across frames, as while its sidebar
+    // arrives. One scheduled focus attempt cannot complete this handoff.
     await run(
-      "window.dispatchEvent(new KeyboardEvent('keydown', {key:'l',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}))",
+      "const style = document.createElement('style'); style.id = 'address-not-ready'; style.textContent = 'aside input[aria-label=\"Address and search bar\"] { visibility: hidden !important; }'; document.head.append(style)",
+    );
+    try {
+      await app.press("l", process.platform === "darwin" ? 4 : 2);
+      await app.waitFor(
+        "document.querySelector('aside').getAttribute('aria-hidden') === 'false'",
+      );
+      await app.eval(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+      expect(
+        await run(
+          "return document.activeElement === $('aside input[aria-label=\"Address and search bar\"]')",
+        ),
+      ).toBe(false);
+    } finally {
+      await run("$('#address-not-ready')?.remove()");
+    }
+    await app.waitFor(
+      "(() => { const input = document.querySelector('aside input[aria-label=\"Address and search bar\"]'); return document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length; })()",
+      { label: "the available address bar takes focus and selects its URL" },
+    );
+    expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
+    await app.insertText("typed.example");
+    expect(
+      await run(
+        "return $('aside input[aria-label=\"Address and search bar\"]').value",
+      ),
+    ).toBe("typed.example");
+    await app.press("Escape");
+    // A pending request yields when the person tabs somewhere else. Making
+    // the field available later must not take that focus back.
+    await run(
+      "const style = document.createElement('style'); style.id = 'address-not-ready'; style.textContent = 'aside input[aria-label=\"Address and search bar\"] { visibility: hidden !important; }'; document.head.append(style)",
+    );
+    try {
+      await app.press("l", process.platform === "darwin" ? 4 : 2);
+      await run("$('button[aria-label=\"Collapse sidebar\"]').focus()");
+      await app.press("Tab");
+      await run("document.activeElement.dataset.e2eFocusOwner = 'kept'");
+    } finally {
+      await run("$('#address-not-ready')?.remove()");
+    }
+    await app.eval(
+      "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+    );
+    expect(
+      await run(
+        "return document.activeElement === $('[data-e2e-focus-owner=kept]') && document.activeElement !== document.body",
+      ),
+    ).toBe(true);
+    await run(
+      "$('[data-e2e-focus-owner=kept]').removeAttribute('data-e2e-focus-owner')",
+    );
+    // A programmatic foreground change is not another key or pointer
+    // action. Cancel before paint rather than relying on that input guard.
+    await run(
+      "const style = document.createElement('style'); style.id = 'address-not-ready'; style.textContent = 'aside input[aria-label=\"Address and search bar\"] { visibility: hidden !important; }'; document.head.append(style)",
+    );
+    try {
+      await app.press("l", process.platform === "darwin" ? 4 : 2);
+      await run("button('Settings').click()");
+      await app.waitFor(
+        "!!document.querySelector('select[name=tabPlacement]')",
+      );
+      await run(
+        "$('select[name=tabPlacement]').focus(); document.activeElement.dataset.e2eFocusOwner = 'settings'",
+      );
+    } finally {
+      await run("$('#address-not-ready')?.remove()");
+    }
+    await app.eval(
+      "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+    );
+    expect(
+      await run(
+        "return document.activeElement === $('[data-e2e-focus-owner=settings]')",
+      ),
+    ).toBe(true);
+    await run(
+      "$('[data-e2e-focus-owner=settings]').removeAttribute('data-e2e-focus-owner'); [...document.querySelectorAll('aside button')].find(button => button.textContent.includes('Header check')).click()",
     );
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
+      "!!document.querySelector('aside [data-browser-toolbar]')",
     );
+    // Cmd+L also reverses a collapse; the guest keeps its identity.
+    await app.waitFor(
+      "!document.documentElement.hasAttribute('data-content-settling') && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity)",
+      { label: "the returned browser is at rest before reversing its sidebar" },
+    );
+    const collapsePoint = await app.waitFor<{ x: number; y: number }>(
+      "(() => { const aside = document.querySelector('aside'); if (aside.dataset.settled !== 'true') return false; const button = aside.querySelector('button[aria-label=\"Collapse sidebar\"]'); const r = button.getBoundingClientRect(); const x = r.x+r.width/2; const y = r.y+r.height/2; return button.contains(document.elementFromPoint(x,y)) && {x,y}; })()",
+    );
+    await app.cdp("Animation.enable");
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    try {
+      await app.clickPointer(collapsePoint);
+      await app.waitFor(
+        "document.querySelector('aside').dataset.motion === 'closing'",
+      );
+      await app.press("l", process.platform === "darwin" ? 4 : 2);
+    } finally {
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+      await app.cdp("Animation.disable");
+    }
+    await app.waitFor(
+      "document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
+      {
+        label: "Cmd+L focuses the address while reversing the closing sidebar",
+      },
+    );
+    expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await app.eval(
       "window.catamorphicDesktop.setPrefs({headerPlacement:'top'})",
     );

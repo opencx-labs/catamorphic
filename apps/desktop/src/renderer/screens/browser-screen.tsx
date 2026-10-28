@@ -9,7 +9,14 @@ import {
   Star,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type { BookmarkScope } from "../../shared/bookmark-target.js";
 import {
@@ -154,6 +161,8 @@ interface Suggestion {
 const TAB_OPEN_ANIMATION_MS = 200;
 /** A page that neither closes nor asks within this is stuck: it closes. */
 const CLOSE_ASK_MS = 2_000;
+/** An opening toolbar may arrive over several frames, never indefinitely. */
+const ADDRESS_FOCUS_WAIT_MS = 1500;
 
 /**
  * Tell main what is about to leave the page, before it does: a page whose
@@ -304,6 +313,11 @@ export function BrowserScreen({
       );
   }, [previewLinksWithAlt]);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const cancelAddressFocus = useRef<(() => void) | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!active) cancelAddressFocus.current?.();
+  }, [active]);
+  useLayoutEffect(() => () => cancelAddressFocus.current?.(), []);
   const [partition, setPartition] = useState<string>();
   const [preloadPath, setPreloadPath] = useState<string>();
   // Empty initialUrl = a fresh "New Tab": no webview until the first
@@ -1217,26 +1231,47 @@ export function BrowserScreen({
   // (forwarded by main via before-input-event on the guest).
   const focusAddress = useCallback(
     ({ greetingSince }: { greetingSince?: number | null } = {}) => {
-      const input = inputRef.current;
-      if (!input) return;
+      cancelAddressFocus.current?.();
       const greeting = greetingSince !== undefined;
+      const inputs = greeting ? greetingSince : personInputCount();
+      const started = performance.now();
+      let frame = 0;
+      let cancelled = false;
+      cancelAddressFocus.current = () => {
+        cancelled = true;
+        cancelAnimationFrame(frame);
+      };
       const focus = () => {
         // A greeting answers what brought the tab forward: not once the
         // person has acted since, even a frame later. It is the app's own
         // move, so a chat about to focus its composer keeps doing so.
-        if (greeting && personMovedOn(greetingSince ?? null)) return;
-        setEditing(true);
-        const move = () => {
-          input.focus();
-          input.select();
-        };
-        if (greeting) moveFocusAsApp(move);
-        else move();
+        if (
+          cancelled ||
+          performance.now() - started > ADDRESS_FOCUS_WAIT_MS ||
+          personMovedOn(inputs ?? null)
+        )
+          return;
+        // Opening the sidebar needs a React commit and motion state. Read
+        // the current field each time: a portal may have moved meanwhile.
+        const input = inputRef.current;
+        if (
+          input?.isConnected &&
+          !input.closest("[inert], [hidden]") &&
+          input.checkVisibility({ visibilityProperty: true })
+        ) {
+          const move = () => {
+            setEditing(true);
+            input.focus();
+            input.select();
+          };
+          if (greeting) moveFocusAsApp(move);
+          else move();
+          if (document.activeElement === input) return;
+        }
+        frame = requestAnimationFrame(focus);
       };
-      if (sidebarToolbar) {
-        revealToolbarRef.current?.();
-        requestAnimationFrame(focus);
-      } else focus();
+      if (sidebarToolbar) revealToolbarRef.current?.();
+      focus();
     },
     [sidebarToolbar],
   );

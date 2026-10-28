@@ -1,7 +1,9 @@
 # 0027 — Correlation keys and named external signals
 
-- **Status:** Accepted
+- **Status:** Accepted (signal delivery amended by [0291](0291-named-signals-buffer-within-a-run-generation.md))
 - **Date:** 2026-07-25
+
+Atomic replacement is specified by [0290](0290-restarts-commit-cancellation-and-replacement-together.md).
 
 ## Context
 

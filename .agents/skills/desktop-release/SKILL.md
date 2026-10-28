@@ -1,11 +1,11 @@
 ---
 name: desktop-release
-description: "Use when preparing, dry-running, publishing, repairing, or verifying a synchronized Work Stable or Preview release: the macOS desktop, Homebrew casks and update feeds, matching work-server image, and public Catamorphic npm libraries. Not for ordinary desktop development."
+description: "Use when preparing, dry-running, publishing, repairing, or verifying a synchronized Work Stable or Preview release: the macOS desktop, Homebrew casks and update feeds, public Catamorphic npm libraries. Not for ordinary desktop development."
 ---
 
 # Desktop release
 
-Publish the signed, notarized macOS app, server image and npm libraries from one
+Publish the signed, notarized macOS app and npm libraries from one
 immutable tag and version, keeping GitHub Releases, npm and the Homebrew Stable
 and Preview channels in step.
 
@@ -19,9 +19,6 @@ Read these completely before changing or publishing anything:
   (workflow name "Desktop release"): tag pushes publish; default manual dispatch
   only builds and verifies. The explicit main-only bootstrap channel repair
   changes only already-published npm metadata, as described in RELEASING.md.
-- [.github/workflows/work-server-image.yml](../../../.github/workflows/work-server-image.yml)
-  (workflow name "Work server image"): the same tag publishes the multi-arch
-  `work-server` image to GHCR; manual dispatch builds and smoke-tests only.
 - [scripts/desktop-release.ts](../../../scripts/desktop-release.ts): tag, version,
   cask and feed rules.
 - [scripts/release-packages.ts](../../../scripts/release-packages.ts): workspace
@@ -94,7 +91,6 @@ If `main` already carries the intended version, skip the PR.
 
 ```sh
 gh workflow run desktop-prerelease.yml --ref main
-gh workflow run work-server-image.yml --ref main
 gh run list --workflow desktop-prerelease.yml --limit 1 --json databaseId,headSha,status
 ```
 
@@ -103,8 +99,8 @@ Confirm the run's `headSha` is the recorded SHA and watch it to completion
 waits for a person. A dispatch signs, notarizes, verifies and uploads the DMG,
 ZIP, blockmaps, feed and `SHA256SUMS.txt` as workflow artifacts. It never creates
 a release or touches the tap. It also packs and tests every npm library without
-publishing. The server image dispatch builds and smoke-tests
-both architectures but never pushes.
+publishing. Work server deployments build their own images from the pinned
+libraries (ADR 0294).
 
 For a signing-credential change or a material packaging change, pause for the
 clean-account install checks in RELEASING.md. Never claim Gatekeeper, URL-handler,
@@ -150,9 +146,6 @@ Use a temporary directory for downloads and a tap clone. Confirm:
 - the tap files for the channel (above) all advanced in one commit made after the
   release was published, each cask names the version and DMG checksum, and each
   feed points only at this release's assets;
-- the `work-server` image has the version and `alpha` tags (plus `latest` for
-  Stable), `linux/amd64` and `linux/arm64` manifests, and a provenance
-  attestation that `gh attestation verify` accepts;
 - every public library has the same npm version and its published integrity
   matches the retained tarball; Preview advances `alpha` without changing
   `latest`, and Stable advances `latest`;

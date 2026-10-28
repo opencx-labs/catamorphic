@@ -336,6 +336,11 @@ it. Its rows touch, so that ring sits wholly inside the row, offset by its
 full width rather than the 1px inset (ADR 0238). Text fields keep their
 border-and-glow focus instead.
 
+Browser address focus follows availability, not a fixed animation frame. Cmd+L
+waits for a field outside inert or hidden content, verifies that focus landed,
+and yields to a later action by the person. The wait is bounded and canceled
+when the browser leaves the foreground.
+
 - **The keyboard leads.** `lib/focus-modality.ts` marks the root `pointer`
   after a pointer press and `keyboard` after Tab, arrows, Home/End,
   PageUp/PageDown, F6 or the context-menu key. While the pointer leads, rings

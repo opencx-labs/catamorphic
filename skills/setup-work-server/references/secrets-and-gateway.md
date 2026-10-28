@@ -123,7 +123,12 @@ not declare it here.
 - `postgres`: each service connection keeps up to `poolSize` sessions (at most
   16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
   credential rotates or is revoked. Every call still gets its own read-only
-  transaction, timeouts, cost ceiling, and cursor budget.
+  transaction, timeouts, cost ceiling, and cursor budget. Workflow calls also
+  propagate the attempt's signal and absolute deadline. Cancellation requests
+  `pg_cancel_backend` through a bounded connection of the same database role,
+  then destroys the borrowed socket; no broader role is required. If the
+  database cannot be reached for cancellation, its statement timeout remains
+  the backstop.
 - `mcp`: `oauth.client` names a client registered in advance with the MCP
   server's authorization server, for servers that do not register clients
   dynamically (Slack's). Register the redirect URI
@@ -295,7 +300,7 @@ A guard reviews each action on the connection kinds it names, from agents and
 workflows alike, and answers `allow`, `deny`, or `escalate`. What a company
 allows is its own policy, so Work ships no guards and the gateway file
 declares none (ADR 0183): a guard is a few lines of code in a custom server.
-The stock image runs without guards; the connection's limits, bindings,
+The library supplies no company guards; the connection's limits, bindings,
 capabilities, and Git push rules still apply.
 
 The server keeps the mechanics. A deny refuses. An escalation asks the person
@@ -305,12 +310,10 @@ that does not answer within `connectionGuardTimeoutMs` (default 30 seconds)
 escalates. Every verdict is in the connection audit. Give each guard `kinds`
 so it reviews only the connections it judges.
 
-Your own server (ADRs 0160, 0261) passes guards as `hooks.connectionGuards`:
-copy `apps/server/src/index.ts` into an image built from the published one
-([your own image](../../../packages/work-server/README.md#your-own-image)),
-add the model client for the classifier there
-(`RUN cd /app/apps/server && bun add @anthropic-ai/sdk zod`), and fill in
-the file's `hooks` with these:
+Your server passes guards as `hooks.connectionGuards` (ADRs 0160, 0294).
+Install the model client in your own Bun project, build your own image
+([deployment guide](../../../packages/work-server/README.md#your-own-image)),
+and add the guard to your entry point's `hooks`:
 
 ```ts
 // apps/server/custom/server.ts
@@ -469,29 +472,32 @@ never the key.
   only reads (GET and HEAD).
 - Each turn writes `.work-session/env/gateway.sh` beside the project folder:
   `WORK_HTTP_<ALIAS>` (the alias in capitals, `-` as `_`) is the alias's
-  gateway URL, and `WORK_HTTP_<ALIAS>_GRANT_FILE` the file holding the
-  session's grant. The agent's commands, terminals and workspace setup load
-  it; a shell started some other way runs
+  gateway URL, and `WORK_HTTP_<ALIAS>_GRANT_DIRECTORY` the directory holding the
+  session's published grant revisions. `WORK_GATEWAY_READ_GRANT` names the
+  helper that reads the greatest numeric revision. The agent's commands,
+  terminals and workspace setup load it; a shell started some other way runs
   `. ../.work-session/env/gateway.sh` from the project folder.
 - Send the API's own requests to `$WORK_HTTP_<ALIAS>` with the grant as a
   bearer, as the HTTP Basic password (any user name), or in `x-work-grant`.
   The gateway replaces whatever authorization was sent with the stored key.
   The grant renews every 20 minutes and with each turn, with a new value, so
-  read the file for each request (or again after a 401); never copy it into
+  invoke the helper for each request (or again after a 401); never copy it into
   a config file.
 
 ```sh
 # A query from a terminal or a test script.
-curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" \
+curl -sS -u "work:$("$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_GRANT_DIRECTORY")" \
   "$WORK_HTTP_LOGS/?query=SELECT%20count()%20FROM%20events"
 ```
 
 ```ts
 // A dev server's query helper: the grant read for each request.
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 export async function queryLogs(sql: string): Promise<string> {
-  const grant = readFileSync(process.env.WORK_HTTP_LOGS_GRANT_FILE ?? "", "utf8");
+  const grant = execFileSync(process.env.WORK_GATEWAY_READ_GRANT ?? "", [
+    process.env.WORK_HTTP_LOGS_GRANT_DIRECTORY ?? "",
+  ], { encoding: "utf8" }).trim();
   const response = await fetch(
     `${process.env.WORK_HTTP_LOGS}/?query=${encodeURIComponent(sql)}`,
     { headers: { authorization: `Bearer ${grant}` } },

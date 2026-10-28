@@ -130,9 +130,8 @@ export interface WorkServerConfig {
    */
   hetznerToken?: string;
   /**
-   * The worker image machines run (ADR 0205): `WORK_WORKER_IMAGE`, else
-   * the published image's own, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, which
-   * its build bakes in.
+   * The deployment's own worker image (ADRs 0205, 0294), explicitly
+   * supplied here or through `WORK_WORKER_IMAGE`.
    */
   workerImage?: string;
 }
@@ -227,13 +226,7 @@ function machineSettingsFromEnv(
     });
     if (problem) throw new Error(problem);
   }
-  // The published image knows where it was published and which release it
-  // is (both baked in at build time); machines run that same image.
-  const repository = env.WORK_IMAGE_REPOSITORY?.trim();
-  const version = env.WORK_VERSION?.trim();
-  const workerImage =
-    env.WORK_WORKER_IMAGE?.trim() ||
-    (repository && version ? `${repository}:${version}` : undefined);
+  const workerImage = env.WORK_WORKER_IMAGE?.trim();
   return {
     ...(machines ? { machines } : {}),
     ...(hetznerToken ? { hetznerToken } : {}),
