@@ -28,6 +28,8 @@ export type WorkSignInGate = (args: {
 
 export interface WorkAuth {
   migrate(): Promise<void>;
+  /** Validate the signed authorization query before showing its consent page. */
+  verifyAuthorizationQuery(args: { query: string }): Promise<boolean>;
   createLocalUser(args: {
     username: string;
     name: string;

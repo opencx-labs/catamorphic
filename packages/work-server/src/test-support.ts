@@ -124,6 +124,40 @@ interface InjectableApp {
   }>;
 }
 
+/** Accept the signed authorization prompt before exchanging the code. */
+export async function acceptOAuthConsent(args: {
+  app: InjectableApp;
+  location: string;
+  cookie: string;
+}): Promise<string> {
+  const consent = new URL(args.location);
+  if (consent.pathname !== "/oauth/consent") return args.location;
+  const page = await args.app.inject({
+    method: "GET",
+    url: `${consent.pathname}${consent.search}`,
+    headers: { cookie: args.cookie },
+  });
+  if (page.statusCode !== 200) {
+    throw new Error(`consent page answered ${page.statusCode}, expected 200`);
+  }
+  const accepted = await args.app.inject({
+    method: "POST",
+    url: "/oauth/consent",
+    headers: {
+      cookie: args.cookie,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    payload: new URLSearchParams({
+      accept: "true",
+      oauth_query: consent.search.slice(1),
+    }).toString(),
+  });
+  if (accepted.statusCode !== 302) {
+    throw new Error(`consent answered ${accepted.statusCode}, expected 302`);
+  }
+  return String(accepted.headers.location ?? "");
+}
+
 /**
  * The OAuth flow an MCP client runs, in process: local sign-in, dynamic
  * client registration, PKCE authorization, and the code exchange.
@@ -134,6 +168,13 @@ export async function oauthAccessToken(args: {
   password: string;
 }): Promise<string> {
   const { app } = args;
+  const resourceMetadata = await app.inject({
+    method: "GET",
+    url: "/.well-known/oauth-protected-resource",
+  });
+  const resource = resourceMetadata.json().resource;
+  if (typeof resource !== "string")
+    throw new Error("Missing Work resource metadata");
   const expectStatus = (step: string, actual: number, expected: number) => {
     if (actual !== expected)
       throw new Error(`${step} answered ${actual}, expected ${expected}`);
@@ -150,7 +191,7 @@ export async function oauthAccessToken(args: {
   const redirectUri = "http://127.0.0.1:49152/callback";
   const registered = await app.inject({
     method: "POST",
-    url: "/api/auth/mcp/register",
+    url: "/api/auth/oauth2/register",
     payload: {
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
@@ -167,6 +208,7 @@ export async function oauthAccessToken(args: {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
+    resource,
     scope: "openid profile email offline_access",
     state: "work-server-state",
     code_challenge: challenge,
@@ -174,18 +216,20 @@ export async function oauthAccessToken(args: {
   });
   const authorized = await app.inject({
     method: "GET",
-    url: `/api/auth/mcp/authorize?${authorize}`,
+    url: `/api/auth/oauth2/authorize?${authorize}`,
     headers: { cookie },
   });
   expectStatus("authorization", authorized.statusCode, 302);
-  const code =
-    new URL(String(authorized.headers.location ?? "")).searchParams.get(
-      "code",
-    ) ?? "";
+  const callback = await acceptOAuthConsent({
+    app,
+    location: String(authorized.headers.location ?? ""),
+    cookie,
+  });
+  const code = new URL(callback).searchParams.get("code") ?? "";
 
   const token = await app.inject({
     method: "POST",
-    url: "/api/auth/mcp/token",
+    url: "/api/auth/oauth2/token",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({
       grant_type: "authorization_code",

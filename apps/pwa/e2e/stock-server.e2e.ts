@@ -49,6 +49,8 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
   beforeAll(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwa-stock-"));
     app = await launchPwa({
+      // The real OAuth provider permits HTTP callbacks only on loopback.
+      secureContext: true,
       backend: (apiPort, operatorPort) => ({
         command: "bun",
         args: ["src/index.ts"],
@@ -183,16 +185,30 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
       "!document.querySelector('[data-testid=connect-submit]').disabled",
     );
     await app.eval(CLICK("[data-testid=connect-submit]"));
-    await app.waitFor("!!document.querySelector('input[name=username]')", {
-      timeoutMs: 30_000,
-      label: "stock server login page",
-    });
+    try {
+      await app.waitFor("!!document.querySelector('input[name=username]')", {
+        timeoutMs: 30_000,
+        label: "stock server login page",
+      });
+    } catch (error) {
+      const diagnostic = await app.eval(
+        "({url: location.href, text: document.body.innerText})",
+      );
+      throw new Error(`${String(error)}\n${JSON.stringify(diagnostic)}`);
+    }
     await app.eval(TYPE_INPUT("input[name=username]", "sam"));
     await app.eval(
       TYPE_INPUT("input[name=password]", "member password for browser test"),
     );
     await app.eval(CLICK('form#local button[type="submit"]'));
     try {
+      await app.waitFor(
+        "!!document.querySelector('form[action=\"/oauth/consent\"] button[name=accept][value=true]')",
+        { timeoutMs: 30_000, label: "stock server access consent" },
+      );
+      await app.eval(
+        CLICK('form[action="/oauth/consent"] button[name=accept][value=true]'),
+      );
       await app.waitFor("!!document.querySelector('[data-testid=new-chat]')", {
         timeoutMs: 30_000,
         label: "sessions screen",
@@ -248,38 +264,68 @@ async function oauthAccessToken(options: {
     .map((value) => value.split(";", 1)[0])
     .join("; ");
   const redirectUri = "http://127.0.0.1:49152/callback";
-  const registration = await fetch(`${options.origin}/api/auth/mcp/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      redirect_uris: [redirectUri],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      client_name: "Stock PWA test setup",
-    }),
-  });
+  const registration = await fetch(
+    `${options.origin}/api/auth/oauth2/register`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        client_name: "Stock PWA test setup",
+      }),
+    },
+  );
   const clientId = ((await registration.json()) as { client_id: string })
     .client_id;
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const authorize = new URL(`${options.origin}/api/auth/mcp/authorize`);
+  const authorize = new URL(`${options.origin}/api/auth/oauth2/authorize`);
   authorize.searchParams.set("client_id", clientId);
   authorize.searchParams.set("redirect_uri", redirectUri);
   authorize.searchParams.set("response_type", "code");
   authorize.searchParams.set("scope", "openid profile email offline_access");
+  authorize.searchParams.set("resource", `${options.origin}/api`);
   authorize.searchParams.set("state", "setup-state");
   authorize.searchParams.set("code_challenge", challenge);
   authorize.searchParams.set("code_challenge_method", "S256");
   const authorized = await fetch(authorize, {
+    headers: { cookie, accept: "application/json" },
+    redirect: "manual",
+  });
+  const authorization: unknown = await authorized.json();
+  if (
+    !authorized.ok ||
+    typeof authorization !== "object" ||
+    authorization === null ||
+    !("url" in authorization) ||
+    typeof authorization.url !== "string"
+  )
+    throw new Error(`Manager authorization failed (${authorized.status})`);
+  const consent = new URL(authorization.url);
+  const consentPage = await fetch(consent, {
     headers: { cookie },
     redirect: "manual",
   });
-  const code = new URL(
-    authorized.headers.get("location") ?? "",
-  ).searchParams.get("code");
+  if (!consentPage.ok) {
+    throw new Error(`Manager consent page failed (${consentPage.status})`);
+  }
+  const accepted = await fetch(`${options.origin}/oauth/consent`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      accept: "true",
+      oauth_query: consent.search.slice(1),
+    }),
+    redirect: "manual",
+  });
+  const code = new URL(accepted.headers.get("location") ?? "").searchParams.get(
+    "code",
+  );
   if (!code) throw new Error("Manager authorization returned no code");
-  const token = await fetch(`${options.origin}/api/auth/mcp/token`, {
+  const token = await fetch(`${options.origin}/api/auth/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({

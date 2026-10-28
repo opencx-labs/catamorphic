@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWorkServer, type WorkServer } from "../server.js";
-import { FakeDirectory, testServerOptions } from "../test-support.js";
+import {
+  acceptOAuthConsent,
+  FakeDirectory,
+  testServerOptions,
+} from "../test-support.js";
 
 /**
  * Company identity end to end (ADR 0161). A fake directory governs Better
@@ -108,7 +112,7 @@ async function signIn(username: string) {
   const redirectUri = "http://127.0.0.1:49152/callback";
   const registered = await server.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/register",
+    url: "/api/auth/oauth2/register",
     payload: {
       redirect_uris: [redirectUri],
       token_endpoint_auth_method: "none",
@@ -123,6 +127,7 @@ async function signIn(username: string) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
+    resource: "http://127.0.0.1:4700/api",
     scope: "openid profile email offline_access",
     state: "identity",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
@@ -130,14 +135,18 @@ async function signIn(username: string) {
   });
   const authorized = await server.app.inject({
     method: "GET",
-    url: `/api/auth/mcp/authorize?${authorize}`,
+    url: `/api/auth/oauth2/authorize?${authorize}`,
     headers: { cookie: Array.isArray(cookie) ? cookie[0] : cookie },
   });
-  const code =
-    new URL(authorized.headers.location ?? "").searchParams.get("code") ?? "";
+  const callback = await acceptOAuthConsent({
+    app: server.app,
+    location: String(authorized.headers.location ?? ""),
+    cookie: String(Array.isArray(cookie) ? cookie[0] : cookie),
+  });
+  const code = new URL(callback).searchParams.get("code") ?? "";
   const token = await server.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/token",
+    url: "/api/auth/oauth2/token",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({
       grant_type: "authorization_code",
@@ -160,10 +169,14 @@ async function signedIn(username: string) {
   };
 }
 
-function refresh(clientId: string, refreshToken: string) {
+function refresh(
+  clientId: string,
+  refreshToken: string,
+  tokenEndpoint = "/api/auth/oauth2/token",
+) {
   return server.app.inject({
     method: "POST",
-    url: "/api/auth/mcp/token",
+    url: tokenEndpoint,
     headers: { "content-type": "application/x-www-form-urlencoded" },
     payload: new URLSearchParams({
       grant_type: "refresh_token",
@@ -211,6 +224,25 @@ describe("company identity", () => {
     expect((await me(second.access_token)).statusCode).toBe(200);
 
     const replay = await refresh(first.clientId, first.refreshToken);
+    expect(replay.statusCode).toBe(400);
+    expect(replay.json().error_description).toMatch(/reuse/);
+    expect((await me(second.access_token)).statusCode).toBe(401);
+    expect(
+      (await refresh(first.clientId, second.refresh_token)).statusCode,
+    ).toBe(400);
+  });
+
+  it("refreshes saved token URLs through the same lifecycle gate", async () => {
+    await createUser("savedurl");
+    const first = await signedIn("savedurl");
+    const alias = "/api/auth/mcp/token";
+    const rotated = await refresh(first.clientId, first.refreshToken, alias);
+    expect(rotated.statusCode).toBe(200);
+    const second = rotated.json();
+    expect((await me(first.accessToken)).statusCode).toBe(401);
+    expect((await me(second.access_token)).statusCode).toBe(200);
+
+    const replay = await refresh(first.clientId, first.refreshToken, alias);
     expect(replay.statusCode).toBe(400);
     expect(replay.json().error_description).toMatch(/reuse/);
     expect((await me(second.access_token)).statusCode).toBe(401);

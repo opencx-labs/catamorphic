@@ -246,7 +246,7 @@ beforeAll(async () => {
   server = await createWorkServer(
     testServerOptions({
       dataDir: path.join(root, "server"),
-      publicBases: ["http://work.local:4700"],
+      publicBases: ["https://work.local:4700"],
       env: {
         WORK_FAKE_AGENT: "1",
         WORK_GATEWAY_CONFIG: gatewayFile,

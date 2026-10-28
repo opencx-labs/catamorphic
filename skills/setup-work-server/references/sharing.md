@@ -23,7 +23,7 @@ offered only on share links:
 
 Use the company's own product accounts if they speak OpenID Connect, or a
 general provider such as Google or Microsoft (register the redirect URI
-`<WORK_PUBLIC_URL>/api/auth/oauth2/callback/<id>`). The provider must return a
+`<WORK_PUBLIC_URL>/api/auth/callback/<id>`). The provider must return a
 verified email; shares match on it. Guests never become members, never receive
 API tokens, and never see agents or project files beyond their shares.
 

@@ -32,7 +32,7 @@ In the company's Google Cloud project:
 1. Configure the OAuth consent screen with user type **Internal**. Google then
    refuses accounts outside the organization before the Work server sees them.
 2. Create an OAuth client ID of type **Web application** with the authorized
-   redirect URI `<WORK_PUBLIC_URL>/api/auth/oauth2/callback/google` (use the
+   redirect URI `<WORK_PUBLIC_URL>/api/auth/callback/google` (use the
    provider `id` in place of `google` if you change it). `WORK_PUBLIC_URL` must
    be the HTTPS origin people reach.
 
