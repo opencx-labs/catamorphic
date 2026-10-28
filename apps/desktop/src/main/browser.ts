@@ -787,8 +787,8 @@ export function registerBrowserSupport(
       void restoreGuestHistory({ guest, history });
     };
     // A tab's page runs its preload in every frame, so an embedded frame
-    // asks through Work's dialogs too (ADR 0227); the preload keeps the
-    // rest of its work to the top frame. Extension views keep theirs.
+    // asks through Work's dialogs too (ADR 0227) and reports its logins.
+    // Suggestions and filling stay in the top frame. Extension views keep theirs.
     const framesPreload = (
       _attach: Electron.Event,
       preferences: Electron.WebPreferences,
@@ -853,6 +853,27 @@ export function registerBrowserSupport(
     const origin = httpOrigin(guest.getURL());
     if (!host || host.isDestroyed() || !origin) return null;
     return { host, profileId: windows.profileFor(host), origin };
+  };
+
+  // The IPC sender is authoritative. A child frame cannot claim the top
+  // site's origin, and an opaque or detached document cannot submit a login.
+  const loginContext = (event: Electron.IpcMainEvent) => {
+    const context = guestContext(event.sender);
+    const frame = event.senderFrame;
+    if (!context || !frame || frame.detached || frame.isDestroyed())
+      return null;
+    if (
+      !event.sender.mainFrame.framesInSubtree.some(
+        (candidate) =>
+          candidate.frameToken === frame.frameToken &&
+          candidate.processId === frame.processId,
+      )
+    )
+      return null;
+    const origin = httpOrigin(frame.origin);
+    return origin
+      ? { ...context, origin, frameId: frame.frameTreeNodeId }
+      : null;
   };
 
   const rendererOwnsGuest = (
@@ -920,11 +941,29 @@ export function registerBrowserSupport(
     });
   };
 
+  // A sign-in may replace its embedding page or remove its iframe. Do
+  // not count a sibling's empty page as a landing while its frame remains.
+  const reconcileLoginFrames = (guest: WebContents) => {
+    const context = guestContext(guest);
+    if (!context || guest.isLoading()) return;
+    const frames = guest.mainFrame.framesInSubtree.flatMap((frame) => {
+      if (frame.detached || frame.isDestroyed()) return [];
+      const origin = httpOrigin(frame.url) && httpOrigin(frame.origin);
+      return origin ? [{ frameId: frame.frameTreeNodeId, origin }] : [];
+    });
+    const succeeded = loginCapture.framesChanged(guest.id, frames);
+    if (succeeded)
+      void offerToSave(guest, context.host, context.profileId, succeeded).catch(
+        (error: unknown) =>
+          console.warn("[browser] Password offer failed:", error),
+      );
+  };
+
   const onLoginForms = (
     event: Electron.IpcMainEvent,
     payload: { origin?: unknown; passwordForms?: unknown; load?: unknown },
   ) => {
-    const context = guestContext(event.sender);
+    const context = loginContext(event);
     if (
       !context ||
       payload.origin !== context.origin ||
@@ -933,9 +972,11 @@ export function registerBrowserSupport(
       return;
     const succeeded = loginCapture.formsReported(event.sender.id, {
       origin: context.origin,
+      frameId: context.frameId,
       passwordForms: payload.passwordForms,
       load: payload.load === true,
     });
+    reconcileLoginFrames(event.sender);
     if (succeeded)
       void offerToSave(
         event.sender,
@@ -955,7 +996,7 @@ export function registerBrowserSupport(
       password?: unknown;
     },
   ) => {
-    const context = guestContext(event.sender);
+    const context = loginContext(event);
     if (
       !context ||
       payload.origin !== context.origin ||
@@ -967,6 +1008,7 @@ export function registerBrowserSupport(
     }
     const submission = loginCapture.submit(event.sender.id, {
       origin: context.origin,
+      frameId: context.frameId,
       username: payload.username,
       password: payload.password,
     });
@@ -985,7 +1027,7 @@ export function registerBrowserSupport(
     event: Electron.IpcMainEvent,
     payload: { origin?: unknown; username?: unknown },
   ) => {
-    const context = guestContext(event.sender);
+    const context = loginContext(event);
     if (
       !context ||
       payload.origin !== context.origin ||
@@ -996,6 +1038,7 @@ export function registerBrowserSupport(
       event.sender.id,
       context.origin,
       payload.username,
+      context.frameId,
     );
   };
 
@@ -1006,7 +1049,12 @@ export function registerBrowserSupport(
     password: string,
     fieldId?: string,
   ) => {
-    loginCapture.markGenerated(guest.id, origin, password);
+    loginCapture.markGenerated(
+      guest.id,
+      origin,
+      password,
+      guest.mainFrame.frameTreeNodeId,
+    );
     guest.send("catamorphic:fill-generated", { fieldId, password });
   };
 
@@ -1537,6 +1585,19 @@ export function registerBrowserSupport(
         console.error("[browser] Page menu failed:", error),
       );
     });
+    contents.on(
+      "did-frame-navigate",
+      (_event, _url, _code, _status, _main, processId, routingId) => {
+        const frame = contents.mainFrame.framesInSubtree.find(
+          (candidate) =>
+            candidate.processId === processId &&
+            candidate.routingId === routingId,
+        );
+        if (frame)
+          loginCapture.frameNavigated(contents.id, frame.frameTreeNodeId);
+      },
+    );
+    contents.on("did-stop-loading", () => reconcileLoginFrames(contents));
     // A request to open another app belongs to the page that made it: once
     // the tab commits another page, answering must not launch anything.
     // Only a committed navigation counts (as in Chrome): downloads, 204s and

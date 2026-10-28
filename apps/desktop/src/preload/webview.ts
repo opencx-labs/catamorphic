@@ -17,7 +17,7 @@ import { installPageDialogs } from "./page-dialogs.js";
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
  * context isolation, in every frame of the page (main/browser.ts turns on
  * subframes for tabs) so that each frame asks through Work's dialogs
- * (page-dialogs.ts, ADR 0227); everything else is the top frame's.
+ * (page-dialogs.ts, ADR 0227). Login capture runs in every frame too.
  * Credential secrets travel directly between this guest and the trusted
  * main process; the embedding renderer receives metadata and status only.
  * (Chrome's client-hint brands and passkeys come from the browsing
@@ -95,6 +95,8 @@ window.addEventListener(
   { capture: true, passive: true },
 );
 if (topFrame) installTopFrame();
+installLoginFields();
+if (topFrame) installTopFrameNavigation();
 
 function installTopFrame(): void {
   /**
@@ -364,10 +366,13 @@ function installTopFrame(): void {
     },
     { capture: true, passive: true },
   );
+}
 
+function installLoginFields(): void {
   /**
-   * Passwords. The page tells the host where a login field is when the
-   * user clicks it (or tabs into a new-password field), so the host can
+   * Passwords. Each frame reports submissions and forms. Suggestions and
+   * filling remain in the top frame. The page tells the host where a login
+   * field is when the user clicks it (or tabs into a new-password field), so the host can
    * draw suggestions under it; keys the suggestions own while open come
    * back to the host. Submitted logins go to the trusted main process, and
    * so does every report of the page's password forms, which is how main
@@ -520,6 +525,7 @@ function installTopFrame(): void {
   }
 
   function showSuggestions(input: HTMLInputElement): void {
+    if (!topFrame) return;
     const webauthn = wantsPasskeys(input) && editable(input);
     const kind = kindOf(input) ?? (webauthn ? "username" : null);
     if (!kind) return;
@@ -618,7 +624,12 @@ function installTopFrame(): void {
           return;
         }
       }
-      if (event.key === "ArrowDown" && !event.altKey && !event.metaKey) {
+      if (
+        topFrame &&
+        event.key === "ArrowDown" &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
         if (kindOf(input) || wantsPasskeys(input)) {
           event.preventDefault();
           showSuggestions(input);
@@ -636,9 +647,10 @@ function installTopFrame(): void {
 
   // --- form reports: main decides from these whether a sign-in worked ---
   let reportedPasswordForms = -1;
-  function reportForms(load: boolean): void {
+  function reportForms(load: boolean, framesChanged = false): void {
     const passwordForms = loginGroups().length;
-    if (!load && passwordForms === reportedPasswordForms) return;
+    if (!load && !framesChanged && passwordForms === reportedPasswordForms)
+      return;
     reportedPasswordForms = passwordForms;
     ipcRenderer.send("catamorphic:browser-login-forms", {
       origin: location.origin,
@@ -650,21 +662,31 @@ function installTopFrame(): void {
   // Ignore unrelated SPA churn. A ticking clock, chat stream, or video UI
   // should not keep scanning the whole document and sending duplicate IPC.
   let observeDebounce: ReturnType<typeof setTimeout> | undefined;
+  let changedFrames = false;
   const observer = new MutationObserver((mutations) => {
+    changedFrames ||= mutations.some((mutation) =>
+      [...mutation.addedNodes, ...mutation.removedNodes].some(
+        (node) =>
+          node instanceof Element &&
+          (node.matches("iframe") || node.querySelector("iframe")),
+      ),
+    );
     const touchesForm = mutations.some(
       (mutation) =>
         mutation.type === "attributes" ||
         [...mutation.addedNodes, ...mutation.removedNodes].some(
           (node) =>
             node instanceof Element &&
-            (node.matches("input, form") || node.querySelector("input, form")),
+            (node.matches("input, form, iframe") ||
+              node.querySelector("input, form, iframe")),
         ),
     );
     if (!touchesForm || observeDebounce !== undefined) return;
     observeDebounce = setTimeout(() => {
       observeDebounce = undefined;
       if (shownField && !editable(shownField)) hideSuggestions();
-      reportForms(false);
+      reportForms(false, changedFrames);
+      changedFrames = false;
     }, 300);
   });
   const observeForms = () =>
@@ -684,6 +706,7 @@ function installTopFrame(): void {
     observer.disconnect();
     clearTimeout(observeDebounce);
     observeDebounce = undefined;
+    changedFrames = false;
   });
   window.addEventListener("pageshow", (event) => {
     if (!event.persisted) return;
@@ -727,6 +750,9 @@ function installTopFrame(): void {
         group.passwords.find((input) => input.value)?.value ??
         "";
       if (!password) return;
+      // An email-first SPA may add and remove its password step within
+      // the observer's debounce. Record it now so its removal is reported.
+      reportForms(false);
       ipcRenderer.send("catamorphic:browser-credentials-submitted", {
         origin: location.origin,
         username: group.username?.value.trim() ?? "",
@@ -771,6 +797,9 @@ function installTopFrame(): void {
     },
     { capture: true },
   );
+
+  // Secrets are still delivered only to the top frame.
+  if (!topFrame) return;
 
   // --- filling ---
 
@@ -852,7 +881,9 @@ function installTopFrame(): void {
       (field ?? targets[0])?.focus();
     },
   );
+}
 
+function installTopFrameNavigation(): void {
   // Option-click previews are intercepted in the isolated guest preload. Only
   // web navigations are relayed; page code never receives desktop IPC access.
   let previewLinksEnabled = true;
