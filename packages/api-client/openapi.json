@@ -6906,7 +6906,7 @@
                         },
                         "runner": {
                           "type": "number",
-                          "enum": [1]
+                          "enum": [2]
                         }
                       },
                       "required": ["session", "runner"],
