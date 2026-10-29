@@ -69,9 +69,28 @@ abandons).
 - Detection is heuristic, like Chrome's. A site that keeps a password
   form on the page it lands on after a successful sign-in gets no offer.
   Such logins can still be added from the Passwords page.
-- Only the top frame is covered. Sign-in forms inside iframes neither
-  report nor fill.
+- Saving covers HTTP(S) embedded frames after the 2026-10-28 capture
+  correction below. Suggestions and filling remain in the top frame.
 - Unpackaged development builds driven over CDP set
   `CATAMORPHIC_DEV_NO_SYSTEM_PROMPTS=1`. They then use Chromium's mock
   keychain and skip Touch ID, because nobody can answer those system
   sheets in an unattended session. Packaged builds ignore it.
+
+## 2026-10-28: Capture embedded sign-ins
+
+The existing per-frame tab preload (ADR 0227) reports login submissions,
+email-first usernames and password-form changes from HTTP(S) frames too.
+Main validates the live IPC sender's origin and frame identity, as page
+dialogs already do. The saved login belongs to that origin, which may
+differ from the address bar. Opaque and detached frames are refused.
+
+The existing capture state associates each candidate, remembered username
+and generated password with its frame. Only that frame's form reports can
+resolve its candidate. If the frame leaves, wait until loading settles and
+every remaining HTTP(S) frame reports no password forms; a replacement
+password form on the authentication origin means rejection. Committing a
+new document discards that frame's previous form report, even when its
+origin stays the same. Parent and sibling loads cannot confirm a
+sign-in while its frame remains. The existing vault and save card are
+unchanged. Regression coverage lives in `login-capture.test.ts` and
+`e2e/passwords.e2e.ts`.
