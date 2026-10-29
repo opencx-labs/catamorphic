@@ -1,6 +1,6 @@
 # 0268 — Voice lowers other apps' audio while it listens, and reads any reply aloud
 
-- **Status:** Accepted
+- **Status:** Accepted; physical capture lifetime amended by [0296](0296-voice-capture-follows-listening-intent.md)
 - **Date:** 2026-10-20
 - **Amends:** 0216 (voice), 0236 (hearing the person)
 

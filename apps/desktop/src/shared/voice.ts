@@ -286,7 +286,7 @@ export type VoiceWorkerCommand =
    * The keys or a microphone went down, or came up; `discard` drops what a
    * tap caught.
    */
-  | { type: "hold"; held: boolean; discard?: boolean }
+  | { type: "hold"; held: boolean; discard?: boolean; release?: number }
   /** Hear nothing more; speech already asked for is still said. */
   | { type: "stop-listening" }
   /**
@@ -340,7 +340,9 @@ export type VoiceWorkerEvent =
   /** Someone else spoke: not the voice print's person, so not heard. */
   | { type: "ignored" }
   /** The keys or the microphone were held, and let go with no words said. */
-  | { type: "unheard" }
+  | { type: "unheard"; release?: number }
+  /** All pieces, including the tail, of this released hold have been recognized. */
+  | { type: "hold-recognized"; release: number }
   /** Everything heard before `finish` is recognized and said. */
   | { type: "finished" }
   | ({ type: "levels" } & VoiceLevels)
@@ -397,6 +399,9 @@ export type VoiceAudioDown =
   | { type: "resume" }
   /** Stop capturing for good: the microphone goes off, playback goes on. */
   | { type: "close-microphone" };
+
+/** Update physical capture without replacing the playback port. */
+export const VOICE_CAPTURE_MESSAGE = "catamorphic:voice-capture";
 
 /** The IPC message that carries the audio port into the audio page. */
 export const VOICE_PORT_MESSAGE = "catamorphic:voice-port";

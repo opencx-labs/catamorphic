@@ -1267,7 +1267,7 @@ describe("inputs grow by gliding", () => {
   const glide = async (input: string): Promise<Glide> => {
     await run(`
       const input = ${input};
-      const frame = input.parentElement;
+      const frame = input.parentElement.closest('.overflow-clip');
       input.focus();
       if (input instanceof HTMLTextAreaElement) {
         input.setSelectionRange(input.value.length, input.value.length);

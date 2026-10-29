@@ -205,7 +205,7 @@ export function ArchiveSessionDialog({
                   <div className="font-medium text-fg">{watcher.name}</div>
                   <div>
                     {watcher.nextRunAt
-                      ? `Next: ${new Date(watcher.nextRunAt).toLocaleString()}`
+                      ? `Next · ${new Date(watcher.nextRunAt).toLocaleString()}`
                       : "Event monitor or paused schedule"}
                   </div>
                   <div>{watcher.environment}</div>

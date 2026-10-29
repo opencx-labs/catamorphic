@@ -94,6 +94,12 @@ Files that cannot be passed as model media still reach the agent as paths. The
 host persists pathless clipboard bytes under the current project. Preserve text,
 caret insertion, selection pills, undo and draft contents while preparation runs.
 Resource links use the [workspace opening contract](workspace-interactions.md).
+
+The palette's Ask agent mode uses the same `ComposerInput`, clipboard classifier,
+and serialized `useComposerFiles` preparation as chat and question answers. It
+prepares attachments for the resolved profile or project agent, keeps inline
+markers and previews, and waits for file preparation before sending. Other palette
+modes retain their search textarea.
 Shift+Enter inserts a new line with either the main Return key or keypad Enter.
 Keypad line breaks use the same undo-aware contenteditable editing path.
 

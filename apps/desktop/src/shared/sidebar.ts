@@ -188,7 +188,7 @@ export type SidebarSignal = "working" | "attention" | "unread";
 
 /**
  * What a row is doing, on its icon's lower corner: working (a spinner), or
- * waiting on what it left running: a watch (an eye), subagents (a bot), a
+ * waiting on what it left running: a watch (an hourglass), subagents (a bot), a
  * background command (a terminal). A notification keeps the upper corner,
  * so a chat can say both.
  */

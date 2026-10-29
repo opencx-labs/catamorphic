@@ -1,4 +1,5 @@
 import {
+  VOICE_CAPTURE_MESSAGE,
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
   type VoiceAudioDown,
@@ -20,10 +21,23 @@ import { Speaker } from "./speaker.js";
  * microphone, so the person's first words are heard.
  */
 /** The voice this page serves now; null while it rests. */
-let current: { close(): void } | null = null;
+let current: { close(): void; setListening(listening: boolean): void } | null =
+  null;
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (event.source !== window) return;
+  const data = event.data;
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    "type" in data &&
+    data.type === VOICE_CAPTURE_MESSAGE &&
+    "listening" in data &&
+    typeof data.listening === "boolean"
+  ) {
+    current?.setListening(data.listening);
+    return;
+  }
   if (isRestMessage(event.data)) {
     current?.close();
     current = null;
@@ -35,20 +49,33 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   current?.close();
   const speaker = new Speaker(port);
   // A reply read aloud only plays: the microphone stays closed.
-  const microphone = event.data.listen
-    ? listen(port, event.data.microphone)
-    : () => {};
+  const device = event.data.microphone;
+  let microphone: (() => void) | null = null;
+  let ended = false;
+  const setListening = (listening: boolean) => {
+    if (ended) return;
+    if (listening) microphone ??= listen(port, device);
+    else {
+      microphone?.();
+      microphone = null;
+    }
+  };
+  setListening(event.data.listen);
   port.onmessage = (message: MessageEvent<VoiceAudioDown>) => {
-    if (message.data.type === "close-microphone") microphone();
-    else speaker.receive(message.data);
+    if (message.data.type === "close-microphone") {
+      setListening(false);
+      ended = true;
+    } else speaker.receive(message.data);
   };
   current = {
+    setListening,
     close: () => {
       port.onmessage = null;
       // The bars hear that what it scheduled will not play.
       speaker.close();
       port.close();
-      microphone();
+      setListening(false);
+      ended = true;
     },
   };
 });

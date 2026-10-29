@@ -252,7 +252,7 @@ const RECORDER = (captureClosing: boolean) => `(() => {
       stall: box(stall), stallOnLine: !!stall?.closest('[data-testid="chat-turn-steps"]'),
       firstRow: box(firstButton),
       rowToLine: firstButton && toggle ? round(firstButton.getBoundingClientRect().y - toggle.getBoundingClientRect().y) : null,
-      firstChevron: box(first?.querySelector('button > svg:last-child')),
+      firstChevron: box(first?.querySelector('button > svg.lucide-chevron-right')),
       held: box(log?.querySelector('[data-e2e-held]')),
       reveal: box(row?.closest('.cat-reveal')),
       revealMoving: !!row?.closest('.cat-reveal')?.matches('[data-moving], [data-entering], [data-closed]'),

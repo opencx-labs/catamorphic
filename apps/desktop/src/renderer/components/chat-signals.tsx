@@ -1,6 +1,6 @@
 import {
   Bot,
-  Eye,
+  Hourglass,
   LoaderCircle,
   type LucideIcon,
   Pencil,
@@ -23,7 +23,7 @@ export type { ChatWaiting };
  * - working:       a small spinner (the agent is busy); the icon stays,
  *                  so the surface keeps its identity
  * - waiting:       what it waits on, whether its turn does nothing but wait
- *                  or it rests with something left running: an eye for a
+ *                  or it rests with something left running: an hourglass for a
  *                  watch, a bot for subagents, a terminal for a background
  *                  command
  *
@@ -56,7 +56,7 @@ export interface ChatSignals {
 const WAITING_ORDER: readonly ChatWaiting[] = ["watch", "subagent", "command"];
 
 const WAITING_ICONS: Record<ChatWaiting, LucideIcon> = {
-  watch: Eye,
+  watch: Hourglass,
   subagent: Bot,
   command: SquareTerminal,
 };

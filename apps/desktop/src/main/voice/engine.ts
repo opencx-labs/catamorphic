@@ -512,7 +512,10 @@ export class VoiceEngine {
    * while they are held. A tap is not talk: `discard` drops what the press
    * caught, and speech still going on is heard from the preroll, as any.
    */
-  hold(held: boolean, { discard = false }: { discard?: boolean } = {}): void {
+  hold(
+    held: boolean,
+    { discard = false, release }: { discard?: boolean; release?: number } = {},
+  ): void {
     if (!this.listening || held === this.held) return;
     this.held = held;
     if (held) {
@@ -550,7 +553,7 @@ export class VoiceEngine {
     }
     // What the hold heard is heard: speech after it starts afresh.
     this.preroll.length = 0;
-    this.hear(samples, { pressed: true, speech });
+    this.hear(samples, { pressed: true, speech, release });
   }
 
   cue(): void {
@@ -847,7 +850,12 @@ export class VoiceEngine {
    */
   private hear(
     samples: Float32Array,
-    how: { pressed: boolean; piece?: boolean; speech: number },
+    how: {
+      pressed: boolean;
+      piece?: boolean;
+      speech: number;
+      release?: number;
+    },
   ): void {
     const segment = this.segment;
     const epoch = this.epoch;
@@ -879,7 +887,9 @@ export class VoiceEngine {
       speech,
       segment,
       epoch,
+      release,
     }: {
+      release?: number;
       pressed: boolean;
       /** A piece of a hold still going on: its words wait for the rest. */
       piece?: boolean;
@@ -936,7 +946,10 @@ export class VoiceEngine {
       // hold whose pieces dictated words said something.
       if (piece && words) this.heldDictated = true;
       if (pressed && !piece && !words && !this.heldDictated)
-        this.emit({ type: "unheard" });
+        this.emit({
+          type: "unheard",
+          ...(release !== undefined ? { release } : {}),
+        });
       return;
     }
     // A hold too long for one recognition is one message: its pieces wait
@@ -959,7 +972,11 @@ export class VoiceEngine {
     const goOn = talking && !pressed && isAcknowledgement(text);
     if (!said || goOn || (talking && isEcho(said, this.recent))) {
       carryOn();
-      if (pressed) this.emit({ type: "unheard" });
+      if (pressed)
+        this.emit({
+          type: "unheard",
+          ...(release !== undefined ? { release } : {}),
+        });
       return;
     }
     if (words) this.heardFrom(heard, { pressed });

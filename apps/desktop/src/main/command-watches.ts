@@ -365,7 +365,7 @@ export class CommandWatches {
       await this.wake(watch, {
         key: "expired",
         status: "stopped",
-        summary: `Stopped watching: ${watch.description}`,
+        summary: `Stopped watching · ${watch.description}`,
         detail: [
           `It expired after ${watch.checks} check${watch.checks === 1 ? "" : "s"} without ${watch.until === "success" ? "succeeding" : "a change"}.`,
           `Command: ${watch.command}`,
@@ -397,7 +397,7 @@ export class CommandWatches {
       await this.wake(watch, {
         key: "success",
         status: "completed",
-        summary: `${watch.description}: done`,
+        summary: `${watch.description} · done`,
         detail: [
           `It succeeded on check ${watch.checks} and has stopped.`,
           `Command: ${watch.command}`,
@@ -417,7 +417,7 @@ export class CommandWatches {
         await this.wake(watch, {
           key: `change:${next}:${watch.checks}`,
           status: "update",
-          summary: `${watch.description}: changed`,
+          summary: `${watch.description} · changed`,
           detail: [
             `Its output changed on check ${watch.checks}. It keeps watching; stop it with stop_background_command when you no longer need it.`,
             `Command: ${watch.command}`,

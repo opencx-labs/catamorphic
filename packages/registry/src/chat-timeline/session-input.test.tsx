@@ -222,3 +222,17 @@ it("reads a line with nothing to open as a line, not a control", async () => {
   expect(container.querySelector("button")).toBeNull();
   expect(container.textContent).toContain("Deploy is live: done");
 });
+
+it("shows saved watcher status with a centered dot and leading disclosure", async () => {
+  const item = notification("watch", "Deploy is live: done", "completed");
+  item.task.type = "command_watch";
+  await act(async () => root.render(<TaskNotificationRows items={[item]} />));
+  const button = container.querySelector("button");
+  expect(button?.textContent).toContain("Deploy is live · done");
+  expect(
+    button?.firstElementChild?.classList.contains("lucide-chevron-right"),
+  ).toBe(true);
+  expect(button?.querySelector(".lucide-hourglass")).not.toBeNull();
+  await act(async () => button?.click());
+  expect(button?.getAttribute("aria-expanded")).toBe("true");
+});

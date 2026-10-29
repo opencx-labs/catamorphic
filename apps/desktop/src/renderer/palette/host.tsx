@@ -7,6 +7,7 @@ import {
   useRef,
 } from "react";
 import type { ActionId } from "../../shared/actions.js";
+import type { PendingChatMessage } from "../../shared/chat.js";
 import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
@@ -45,7 +46,7 @@ export interface PaletteHost {
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
   onSendToAgent: (
-    message: string,
+    message: string | PendingChatMessage,
     mode: "float" | "tab",
     agentId?: string,
   ) => void;

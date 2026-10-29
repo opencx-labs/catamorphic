@@ -13,8 +13,8 @@ import {
   Bell,
   Bot,
   ChevronRight,
-  Eye,
   History,
+  Hourglass,
   type LucideIcon,
   MessagesSquare,
   Sparkles,
@@ -186,7 +186,7 @@ function SenderIcon({
 
 const TASK_ICONS: Record<string, LucideIcon> = {
   background_command: SquareTerminal,
-  command_watch: Eye,
+  command_watch: Hourglass,
   subsession: Bot,
   followed_session: MessagesSquare,
 };
@@ -299,7 +299,13 @@ function TaskNotificationRow({
       icon={
         <Icon className={`size-3.5 shrink-0 ${taskTone(latest.task.status)}`} />
       }
-      label={latest.summary}
+      label={
+        latest.task.type === "command_watch"
+          ? latest.summary
+              .replace(/: (done|changed|stopped|failed)$/, " · $1")
+              .replace(/^Stopped watching: /, "Stopped watching · ")
+          : latest.summary
+      }
       meta={items.length > 1 ? `${items.length} times` : undefined}
       attention={items.some((item) => item.attention === "required")}
       unread={
@@ -508,6 +514,11 @@ function InputRow({
   }, [focused]);
   const header = (
     <>
+      {expandable && (
+        <ChevronRight
+          className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
+      )}
       {icon}
       <span
         className={`truncate font-medium text-fg-muted ${preview ? "max-w-[45%] shrink-0" : "min-w-0 flex-1"}`}
@@ -527,11 +538,6 @@ function InputRow({
       )}
       {meta && (
         <span className="shrink-0 text-[11px] text-fg-faint">{meta}</span>
-      )}
-      {expandable && (
-        <ChevronRight
-          className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-        />
       )}
     </>
   );

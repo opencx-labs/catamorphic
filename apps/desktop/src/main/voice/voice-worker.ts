@@ -78,9 +78,19 @@ function forEngine(command: VoiceWorkerCommand): void {
     case "dictation":
       engine.setDictation(command.enabled);
       return;
-    case "hold":
-      engine.hold(command.held, { discard: command.discard === true });
+    case "hold": {
+      const held = engine;
+      held.hold(command.held, {
+        discard: command.discard === true,
+        release: command.release,
+      });
+      const release = command.release;
+      if (!command.held && release !== undefined)
+        void held.recognized().then(() => {
+          if (engine === held) emit({ type: "hold-recognized", release });
+        });
       return;
+    }
     case "stop-listening":
       engine.stopListening();
       return;
