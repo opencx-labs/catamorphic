@@ -35,7 +35,7 @@ function oauthFetch(requests: Request[]): typeof fetch {
     if (url.pathname === "/.well-known/oauth-authorization-server") {
       return Response.json({
         authorization_endpoint: "https://brain.acme.dev/api/auth/mcp/authorize",
-        token_endpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        token_endpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         registration_endpoint: "https://brain.acme.dev/api/auth/mcp/register",
         code_challenge_methods_supported: ["S256"],
       });
@@ -43,7 +43,7 @@ function oauthFetch(requests: Request[]): typeof fetch {
     if (url.pathname === "/api/auth/mcp/register") {
       return Response.json({ client_id: "pwa-client" }, { status: 201 });
     }
-    if (url.pathname === "/api/auth/mcp/token") {
+    if (url.pathname === "/api/auth/oauth2/token") {
       return Response.json({
         access_token: "access-token",
         refresh_token: "refresh-token",
@@ -186,11 +186,11 @@ describe("PWA remote OAuth", () => {
       accessToken: "access-token",
       refreshToken: "refresh-token",
       accessTokenExpiresAt: "2026-08-26T13:00:00.000Z",
-      tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+      tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
       scope: "openid profile email offline_access",
     });
     const tokenRequest = requests.find(
-      (request) => new URL(request.url).pathname === "/api/auth/mcp/token",
+      (request) => new URL(request.url).pathname === "/api/auth/oauth2/token",
     );
     const tokenBody = new URLSearchParams(await tokenRequest?.text());
     expect(tokenBody.get("code")).toBe("code-1");
@@ -225,7 +225,7 @@ describe("PWA remote OAuth", () => {
     ).rejects.toThrow("invalid state");
     expect(
       requests.some(
-        (request) => new URL(request.url).pathname === "/api/auth/mcp/token",
+        (request) => new URL(request.url).pathname === "/api/auth/oauth2/token",
       ),
     ).toBe(false);
   });

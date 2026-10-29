@@ -72,7 +72,7 @@ describe("remote server OAuth", () => {
           return Response.json({
             authorization_endpoint:
               "https://team.example/api/auth/mcp/authorize",
-            token_endpoint: "https://team.example/api/auth/mcp/token",
+            token_endpoint: "https://team.example/api/auth/oauth2/token",
             registration_endpoint: "https://team.example/api/auth/mcp/register",
             code_challenge_methods_supported: ["S256"],
           });
@@ -87,7 +87,7 @@ describe("remote server OAuth", () => {
             { status: 201 },
           );
         }
-        if (url.pathname === "/api/auth/mcp/token") {
+        if (url.pathname === "/api/auth/oauth2/token") {
           const body = new URLSearchParams(String(init?.body));
           expect(body.get("client_id")).toBe("desktop-client");
           expect(body.get("code_verifier")?.length).toBeGreaterThan(40);
@@ -130,7 +130,7 @@ describe("remote server OAuth", () => {
       clientId: "desktop-client",
       accessToken: "access-1",
       refreshToken: "refresh-1",
-      tokenEndpoint: "https://team.example/api/auth/mcp/token",
+      tokenEndpoint: "https://team.example/api/auth/oauth2/token",
     });
     expect(authorizeURL?.searchParams.get("scope")).toContain("offline_access");
     expect(onCallbackServed).toHaveBeenCalledTimes(1);

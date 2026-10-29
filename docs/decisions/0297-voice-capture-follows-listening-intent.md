@@ -1,4 +1,4 @@
-# 0296: Voice capture follows listening intent
+# 0297: Voice capture follows listening intent
 
 - **Status:** Accepted (amends 0236, 0268)
 - **Date:** 2026-10-29

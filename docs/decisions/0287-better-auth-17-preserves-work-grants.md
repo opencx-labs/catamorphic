@@ -1,6 +1,6 @@
 # 0287: Better Auth 1.7 preserves Work's OAuth grants
 
-- **Status:** Accepted (implements 0055 and 0161)
+- **Status:** Accepted (implements 0055 and 0161; runtime compatibility superseded by 0296)
 - **Date:** 2026-10-27
 
 ## Context
@@ -11,6 +11,10 @@ access/refresh tables and hashed token storage. A manifest-only update breaks
 sign-in and loses the meaning of Work's existing refresh-family ledger.
 
 ## Decision
+
+The old token URL and client-secret translation below are superseded by
+[0296](0296-one-oauth-token-endpoint.md). The forward database migration and
+current opaque-grant design remain in force.
 
 Keep `WorkAuth` as the private vendor boundary and retain ADR 0161's opaque,
 immediately revocable grants. Use the new MCP provider with JWT disabled,

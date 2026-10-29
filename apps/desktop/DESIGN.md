@@ -13,7 +13,7 @@ expandable task rows place their disclosure before the icon and label.
 
 Voice capture ends when push-to-talk is released or listening is turned off,
 including the macOS audio-lowering input. Buffered transcription and playback
-finish separately, and long held dictation retains its last words (ADR 0296).
+finish separately, and long held dictation retains its last words (ADR 0297).
 The palette's Ask agent input shares the chat composer's pills, previews and
 file preparation, including image paste and agent capability checks.
 

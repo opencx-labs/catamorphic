@@ -44,7 +44,7 @@ describe("RemoteProjectsStore", () => {
         accessToken: "access-1",
         refreshToken: "refresh-1",
         accessTokenExpiresAt: "2026-08-27T00:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid",
       },
     });
@@ -138,7 +138,7 @@ function remoteLink() {
       accessToken: "access-1",
       refreshToken: "refresh-1",
       accessTokenExpiresAt: "2026-08-27T00:00:00.000Z",
-      tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+      tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
       scope: "openid",
     },
   };
