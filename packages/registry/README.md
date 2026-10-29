@@ -38,9 +38,12 @@ bunx shadcn@latest add /absolute/path/to/packages/registry/dist/r/code-review.js
 bunx shadcn@latest add ./node_modules/@catamorphic/registry/dist/r/code-review.json
 ```
 
-The package is currently workspace-local; do not assume a published npm package or
-public registry URL. Hosts can serve `dist/r/` through their own static-asset
-pipeline. No registry server is part of the framework. `dist/r/index.json` lists
+The package publishes to npm with the same release version as the framework.
+Use the registry version matching the host; its built manifests pin all
+`@catamorphic/*` dependencies to that exact release. An installed project keeps
+those pins and its lockfile until it deliberately upgrades. Hosts can serve
+`dist/r/` through their own static-asset pipeline. No registry server is part of
+the framework. `dist/r/index.json` lists
 items, and `dist/catalog.json` contains those same items with source for host tools.
 
 In projects without shadcn configuration, agents can fetch a manifest through the
@@ -148,6 +151,11 @@ declare their actual dependencies and theme requirements individually.
    `docs` explaining composition, theme requirements, configuration and adaptation.
 4. Keep files together with local imports. Declare explicit targets for files that
    must be installed elsewhere. Do not bake in tenant, credential or server data.
+   Declare `@catamorphic/*` npm dependencies without versions; the build pins them
+   from this package's `version`. In installed files and `docs`, use
+   `{{CATAMORPHIC_VERSION}}` for a framework version in a command or manifest.
+   Both the shadcn payload and host catalog substitute the exact release at
+   build time. Third-party dependency ranges remain explicit and independent.
 5. Run `bun run --cwd packages/registry build`, install the generated manifest in
    a clean consumer, and verify rendering and interactions in the host.
 
