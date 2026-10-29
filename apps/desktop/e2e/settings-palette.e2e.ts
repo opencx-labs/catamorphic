@@ -7,7 +7,7 @@ let projectId: string;
 let personalFile: string;
 const helpers = `
 ${setReactValueJs}
-const input=()=>[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
+const input=()=>[...document.querySelectorAll('[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 `;
@@ -95,7 +95,7 @@ it("settings Space scopes search and reuses Settings for advanced colors", async
     ),
   ).toBe(1);
   await wait(
-    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('textarea[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
+    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
   );
   expect(
     await app.eval(
@@ -136,7 +136,7 @@ it("offers the actual desktop host skill and lets a project agent edit its scope
   await open();
   await type("agent");
   await run(`key(' ')`);
-  await wait(`return input().placeholder==='Message the agent…'`);
+  await wait(`return input().dataset.placeholder==='Message the agent…'`);
   await type("E2E enable personal framed content");
   await wait(
     `return rows()[0]?.textContent.includes('Ask agent') && !rows()[0]?.textContent.includes('E2E enable personal framed content')`,

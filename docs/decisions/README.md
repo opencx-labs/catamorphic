@@ -302,3 +302,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0294](0294-work-server-deployments-compose-libraries-and-workflows.md) | Work server deployments compose libraries and workflows; no stock image | Accepted (supersedes 0261; amends 0059, 0159, 0160, 0285) |
 | [0295](0295-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |
 | [0296](0296-one-oauth-token-endpoint.md) | One OAuth token endpoint | Accepted (supersedes 0287's runtime compatibility provisions) |
+| [0297](0297-voice-capture-follows-listening-intent.md) | Voice capture follows listening intent | Accepted (amends 0236, 0268) |

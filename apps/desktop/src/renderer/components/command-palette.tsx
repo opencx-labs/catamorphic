@@ -1,5 +1,6 @@
 import { Bot, Check, Globe, type LucideIcon, Search, Star } from "lucide-react";
 import {
+  type ClipboardEvent,
   Fragment,
   type KeyboardEvent,
   useCallback,
@@ -25,11 +26,13 @@ import { rosterAgentId } from "../../shared/voice.js";
 import { moveFocusAsApp } from "../lib/app-focus.js";
 import { caretCanMove } from "../lib/caret-line.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
+import { readComposerPaste } from "../lib/composer-paste.js";
 import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
 import { useProjectSkillCatalog } from "../lib/skills.js";
+import { useComposerFiles } from "../lib/use-composer-files.js";
 import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height.js";
 import { usePaletteHost } from "../palette/host.js";
 import {
@@ -65,6 +68,7 @@ import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
 import { bareUrl, rememberedOrigins } from "../palette/urls.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { fadeEdges } from "./catamorphic/edge-fade.js";
+import { ComposerInput, type ComposerInputHandle } from "./composer-input.js";
 import { PILL_SURFACE } from "./context-pill.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 
@@ -213,7 +217,15 @@ export function CommandPalette({
     label: string;
   } | null>(null);
   const picker = modeId && isChoiceMode(modeId) ? modeId : null;
-  const hasInput = query !== "" || modeId !== null;
+  const [skillsRefresh, setSkillsRefresh] = useState(0);
+  // Project agents refresh with skills and on every picker entry.
+  const projectAgents = useProjectAgents({
+    projectId,
+    refresh: `${skillsRefresh}:${picker ?? ""}`,
+  });
+  const [inputEpoch, setInputEpoch] = useState(0);
+  const [pillCount, setPillCount] = useState(0);
+  const hasInput = query !== "" || modeId !== null || pillCount > 0;
   const onTypedChangeRef = useRef(onTypedChange);
   onTypedChangeRef.current = onTypedChange;
   useEffect(() => {
@@ -221,7 +233,45 @@ export function CommandPalette({
   }, [variant, hasInput]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputFrameRef = useRef<HTMLDivElement>(null);
-  useGlidingHeight({ content: inputRef, frame: inputFrameRef });
+  const inputContentRef = useRef<HTMLDivElement>(null);
+  useGlidingHeight({ content: inputContentRef, frame: inputFrameRef });
+  const agentInputRef = useRef<ComposerInputHandle>(null);
+  const targetAgent = [
+    ...agents,
+    ...projectAgents.map(projectAgentAsInfo),
+  ].find((agent) => agent.id === defaultAgentId);
+  const {
+    addFilesTo,
+    pendingTransfers,
+    pendingTransfersRef,
+    transferError,
+    setTransferError,
+  } = useComposerFiles({
+    projectId: projectId ?? "",
+    accepts: targetAgent?.accepts ?? ["image", "document"],
+    owner: agentInputRef,
+  });
+  const focusInput = useCallback(() => {
+    if (agentInputRef.current) agentInputRef.current.focusToType();
+    else inputRef.current?.focus();
+  }, []);
+  const previousMode = useRef(modeId);
+  useLayoutEffect(() => {
+    const changed = previousMode.current !== modeId;
+    previousMode.current = modeId;
+    if (changed && open) focusInput();
+  }, [modeId, open, focusInput]);
+  const onAgentPaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    const input = agentInputRef.current;
+    if (!input || !projectId) return;
+    const paste = readComposerPaste(event.clipboardData);
+    if (paste.kind === "nothing") return;
+    event.preventDefault();
+    if (paste.kind === "files") addFilesTo(input, paste.files);
+    else if (paste.kind === "pill")
+      input.insertPills([{ ...paste.pill, id: crypto.randomUUID() }]);
+    else input.insertText(paste.text);
+  };
   const listRef = useRef<HTMLDivElement>(null);
   // Results past either edge fade there instead of being cut.
   useEffect(() => {
@@ -230,13 +280,16 @@ export function CommandPalette({
   }, []);
   const sizerRef = useRef<HTMLDivElement>(null);
 
-  const enterMode = useCallback((next: string) => {
-    setModeId(next);
-    setExitingChip(null);
-    setQuery("");
-    setSelection(TOP_ROW);
-    inputRef.current?.focus();
-  }, []);
+  const enterMode = useCallback(
+    (next: string) => {
+      setModeId(next);
+      setExitingChip(null);
+      setQuery("");
+      setSelection(TOP_ROW);
+      focusInput();
+    },
+    [focusInput],
+  );
 
   // Keep the exiting list intact, but always start a fresh opening even if
   // the user reopens before its exit animation has finished. This precedes
@@ -244,6 +297,10 @@ export function CommandPalette({
   useLayoutEffect(() => {
     const reset = () => {
       setQuery("");
+      agentInputRef.current?.clear();
+      setPillCount(0);
+      setInputEpoch((epoch) => epoch + 1);
+      setTransferError(undefined);
       setSelection(TOP_ROW);
       setModeId(null);
       setExitingChip(null);
@@ -255,11 +312,11 @@ export function CommandPalette({
     }
     const timer = setTimeout(reset, 250);
     return () => clearTimeout(timer);
-  }, [open]);
+  }, [open, setTransferError]);
 
   useLayoutEffect(() => {
     if (!open) return;
-    const focus = () => inputRef.current?.focus();
+    const focus = () => focusInput();
     // A New Tab greeting its user is the app's own move (lib/app-focus): a
     // chat opened in the same frame still lands its composer autofocus.
     const frame = requestAnimationFrame(() =>
@@ -280,7 +337,7 @@ export function CommandPalette({
       window.removeEventListener("keydown", cancel, true);
       window.removeEventListener("pointerdown", cancel, true);
     };
-  }, [open, variant]);
+  }, [open, variant, focusInput]);
 
   // Commands run from anywhere open the overlay already inside their mode.
   useEffect(() => {
@@ -293,7 +350,7 @@ export function CommandPalette({
   // Fresh on every open, like history below: skills are files an agent or
   // collaborator may have just written. The tab variant is always "open",
   // so a new query session (empty → typing) is its refresh moment.
-  const [skillsRefresh, setSkillsRefresh] = useState(0);
+
   const hasQuery = query.trim() !== "";
   useEffect(() => {
     if (open) setSkillsRefresh((count) => count + 1);
@@ -342,19 +399,13 @@ export function CommandPalette({
     const onWindowFocus = () => {
       requestAnimationFrame(() => {
         const active = document.activeElement;
-        if (!active || active === document.body)
-          moveFocusAsApp(() => inputRef.current?.focus());
+        if (!active || active === document.body) moveFocusAsApp(focusInput);
       });
     };
     window.addEventListener("focus", onWindowFocus);
     return () => window.removeEventListener("focus", onWindowFocus);
-  }, [variant]);
+  }, [variant, focusInput]);
 
-  // Project agents refresh with skills and on every picker entry.
-  const projectAgents = useProjectAgents({
-    projectId,
-    refresh: `${skillsRefresh}:${picker ?? ""}`,
-  });
   // Skills follow the target agent's allowlist: the focused chat's agent,
   // else the default, profile or project.
   // One identity per agent: rows built from it keep theirs across renders.
@@ -834,6 +885,21 @@ export function CommandPalette({
   ) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
+    if (item.id === "mode:agent") {
+      const composed = agentInputRef.current?.read({ trim: true });
+      if (
+        !composed ||
+        pendingTransfersRef.current > 0 ||
+        (!composed.message && composed.attachments.length === 0)
+      )
+        return;
+      onSendToAgent(
+        { text: composed.message, attachments: composed.attachments },
+        commitModeFor(withCmd, withShift, floating) === "tab" ? "tab" : "float",
+      );
+      onClose();
+      return;
+    }
     // Entering a mode, retrying a load: palette state changes in place.
     if (item.commit === "stay") {
       item.run("replace");
@@ -906,7 +972,9 @@ export function CommandPalette({
     );
   };
 
-  const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onInputKeyDown = (
+    event: KeyboardEvent<HTMLTextAreaElement | HTMLDivElement>,
+  ) => {
     if (event.nativeEvent.isComposing) return;
     // Tab or Space commits a typed mode trigger into a chip ("@agent" →
     // [Ask agent]). Both keys, deliberately — Chrome removed Space once
@@ -959,7 +1027,12 @@ export function CommandPalette({
       }
     }
     // Backspace on empty input pops the chip (cmdk convention).
-    if (activeMode && event.key === "Backspace" && query === "") {
+    if (
+      activeMode &&
+      event.key === "Backspace" &&
+      query === "" &&
+      pillCount === 0
+    ) {
       event.preventDefault();
       exitMode();
       return;
@@ -971,6 +1044,7 @@ export function CommandPalette({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       if (event.shiftKey || event.altKey || event.metaKey) return;
       const down = event.key === "ArrowDown";
+      if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
       if (caretCanMove(event.currentTarget, down ? "down" : "up")) return;
       event.preventDefault();
       moveSelection(down ? 1 : -1);
@@ -1042,24 +1116,60 @@ export function CommandPalette({
         {/* Grows like the chat composer: Shift+Enter or a wrapping line
           glides the input taller instead of snapping. */}
         <div ref={inputFrameRef} className={`${GLIDING_FRAME} min-w-0 flex-1`}>
-          <textarea
-            ref={inputRef}
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setSelection(TOP_ROW);
-              if (listRef.current) listRef.current.scrollTop = 0;
-            }}
-            onKeyDown={onInputKeyDown}
-            rows={1}
-            spellCheck={false}
-            placeholder={activeMode?.placeholder ?? "Search or ask anything…"}
-            aria-label="Search commands, pages, and more"
-            className="field-sizing-content block max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
-            style={{ outline: "none" }}
-          />
+          <div ref={inputContentRef}>
+            {modeId === "agent" && projectId ? (
+              <ComposerInput
+                key={`${projectId}:${inputEpoch}`}
+                ref={agentInputRef}
+                chatComposer={false}
+                testId="palette-agent-input"
+                ariaLabel="Search commands, pages, and more"
+                placeholder="Message the agent…"
+                className="block max-h-40 min-h-11 w-full overflow-y-auto px-1 py-3 text-sm"
+                onChange={({ text, pillCount }) => {
+                  setQuery(text);
+                  setPillCount(pillCount);
+                  setSelection(TOP_ROW);
+                }}
+                onPaste={onAgentPaste}
+                onKeyDown={onInputKeyDown}
+              />
+            ) : (
+              <textarea
+                ref={inputRef}
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSelection(TOP_ROW);
+                  if (listRef.current) listRef.current.scrollTop = 0;
+                }}
+                onKeyDown={onInputKeyDown}
+                rows={1}
+                spellCheck={false}
+                placeholder={
+                  activeMode?.placeholder ?? "Search or ask anything…"
+                }
+                aria-label="Search commands, pages, and more"
+                className="field-sizing-content block max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
+                style={{ outline: "none" }}
+              />
+            )}
+          </div>
         </div>
       </div>
+      {modeId === "agent" && pendingTransfers > 0 && (
+        <p role="status" className="px-4 py-2 text-xs text-fg-muted">
+          Preparing attachments…
+        </p>
+      )}
+      {modeId === "agent" && transferError && (
+        <p
+          role="alert"
+          className="whitespace-pre-wrap px-4 py-2 text-xs text-danger"
+        >
+          {transferError}
+        </p>
+      )}
       <div
         ref={listRef}
         className="cat-edge-fade h-(--palette-list-height) max-h-[350px] overflow-y-auto overscroll-contain transition-[height] duration-250 ease-standard"
@@ -1215,7 +1325,7 @@ export function CommandPalette({
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) {
             event.preventDefault();
-            inputRef.current?.focus();
+            focusInput();
           }
         }}
       >

@@ -76,6 +76,7 @@ import type {
 } from "../shared/sidebar-source.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 import {
+  VOICE_CAPTURE_MESSAGE,
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
   type VoiceBubbleState,
@@ -1787,4 +1788,10 @@ ipcRenderer.on(VOICE_REST_MESSAGE, () => {
     { type: VOICE_REST_MESSAGE } satisfies VoiceRestMessage,
     "*",
   );
+});
+
+// Main owns capture intent independently of recognition and playback.
+ipcRenderer.on(VOICE_CAPTURE_MESSAGE, (_event, listening: unknown) => {
+  if (typeof listening === "boolean")
+    window.postMessage({ type: VOICE_CAPTURE_MESSAGE, listening }, "*");
 });

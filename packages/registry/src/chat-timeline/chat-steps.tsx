@@ -13,6 +13,7 @@ import {
   Bot,
   Brain,
   ChevronRight,
+  Hourglass,
   ListChecks,
   type LucideIcon,
   MessageCircleQuestionMark,
@@ -1470,7 +1471,10 @@ const StepRow = memo(function StepRow({
     : undefined;
   const pulsing = background?.status === "running" || step.running === true;
   const note = step.kind === "note";
-  const Icon = step.icon?.Icon ?? STEP_ICONS[step.kind];
+  const Icon =
+    step.background?.kind === "watch"
+      ? Hourglass
+      : (step.icon?.Icon ?? STEP_ICONS[step.kind]);
   const agentIcon =
     step.kind === "agent" ? renderAgentIcon?.(step.agentId ?? null) : null;
   const iconUrl = step.toolName ? resolveToolIcon?.(step.toolName) : undefined;
@@ -1521,6 +1525,11 @@ const StepRow = memo(function StepRow({
           }`}
           aria-expanded={expandable ? open : undefined}
         >
+          {expandable && (
+            <ChevronRight
+              className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+            />
+          )}
           {agentIcon ||
             (iconUrl ? (
               <img
@@ -1565,11 +1574,6 @@ const StepRow = memo(function StepRow({
           {/* A background step's call returns as its work starts: its own
               time is not the work's, which runs on after it. */}
           {!step.background && <StepDuration step={step} />}
-          {expandable && (
-            <ChevronRight
-              className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-            />
-          )}
         </button>
         {/* Same grid-rows tween as the step list: payloads animate open and
           closed instead of popping in and out. */}

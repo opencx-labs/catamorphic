@@ -7,6 +7,16 @@ deferred presentation capability (ADR 0133).
 Unspecified or unknown types retain the grid icon. Icon changes do not rebuild
 or publish an app; temporary app titles come from their retained metadata.
 
+Waiting watches use an hourglass across task rows and chat activity signals,
+including tabs, chips and bubbles. Status summaries use a centered dot, and
+expandable task rows place their disclosure before the icon and label.
+
+Voice capture ends when push-to-talk is released or listening is turned off,
+including the macOS audio-lowering input. Buffered transcription and playback
+finish separately, and long held dictation retains its last words (ADR 0297).
+The palette's Ask agent input shares the chat composer's pills, previews and
+file preparation, including image paste and agent capability checks.
+
 The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, system-first,
 terminal-editor calm. Everything visual flows from the tokens in
 [`src/renderer/styles.css`](src/renderer/styles.css).
@@ -873,9 +883,9 @@ needs the person: the "?" of a question, the pulsing dot of attention,
 the dot of an unread reply, the pencil of a draft. It stays while the
 agent works again, so a reply that landed meanwhile is not lost. The lower
 one says what the chat is doing: the spinner while it works, and while it
-rests, what it left running: an eye for a watch, a bot for subagents at
+rests, what it left running: an hourglass for a watch, a bot for subagents at
 work, a terminal for a background command, quiet in the muted ink. One
-mark per corner; the eye before the bot before the terminal, and a
+mark per corner; the hourglass before the bot before the terminal, and a
 question holds the spinner back while it waits. Tabs, bubbles, the
 folded bubble and the sidebar's Tabs rows draw it, and any row or chip
 that sets `activity`; the gap the mark cuts from the icon moved with it
@@ -1683,7 +1693,7 @@ workflow), its name, and the message's first line, with a chevron that opens
 the whole message, when it was scheduled, and links to where it came from
 (the sending chat, the run, the workflow). Work's news about a task the
 agent started reads the same way: the task's icon (a terminal for a
-background command, an eye for a watch, the agent for a subsession), colored
+background command, an hourglass for a watch, the agent for a subsession), colored
 by how it stands (green done, red failed, amber waiting on the person,
 accent for news while it runs), one line in plain words, the output or
 result one click away, and "Open terminal" or "Open chat" at its end. News

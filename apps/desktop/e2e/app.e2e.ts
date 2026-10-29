@@ -863,13 +863,13 @@ describe("chat flows", () => {
     // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
     // that state instead of turning the searchable palette off.
     await run(`
-      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      const input = $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
       if (!input) pressKey('p', { metaKey: true });
       return true;
     `);
     await runWait(
-      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      `const input = $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
        if (!input) return false;
        setReactValue(input, 'Session menu');
@@ -1021,13 +1021,13 @@ describe("chat flows", () => {
       label: "current chat minimized before palette rename",
     });
     await run(`
-      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      const input = $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
       if (!input) pressKey('p', { metaKey: true });
       return true;
     `);
     await runWait(
-      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      `const input = $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
        if (!input) return false;
        setReactValue(input, '>rename current chat');
@@ -1080,9 +1080,9 @@ describe("palette intent", () => {
   // back to any non-inert one. Blind Cmd+P would TOGGLE an already-open
   // overlay closed, so ensurePalette checks before pressing.
   const paletteInput = `(
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => document.activeElement === el) ??
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => !el.closest('[inert]'))
   )`;
   const ensurePalette = async () => {
@@ -1130,7 +1130,7 @@ describe("palette intent", () => {
     await runWait(
       `const chip = ${inDialog('[data-testid="palette-mode-chip"]')}[0];
        return !!chip && chip.textContent.includes('Ask agent') &&
-              (${paletteInput}).value === '';`,
+              ((${paletteInput}).value ?? (${paletteInput}).textContent) === '';`,
       { label: "agent chip committed, input cleared" },
     );
   });

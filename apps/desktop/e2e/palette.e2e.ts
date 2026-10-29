@@ -9,7 +9,7 @@ let app: AppHandle;
 let projectRoot: string;
 const helpers = `
 ${setReactValueJs}
-const input=()=>[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
+const input=()=>[...document.querySelectorAll('[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 const labels=()=>rows().map(row=>row.textContent);
@@ -778,4 +778,55 @@ it("shows the new chat's harness, model name and effort in chat mode", async () 
     `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(defaultId)})`,
   );
   expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("pastes a clipboard image into Ask agent and sends the same attachment", async () => {
+  await open();
+  await type("agent");
+  await run(`key(' ')`);
+  await wait(
+    `return input()?.isContentEditable && document.activeElement===input()`,
+    "Ask agent composer focused",
+  );
+  await app.eval(`(async () => {
+    const canvas=document.createElement('canvas'); canvas.width=8; canvas.height=8;
+    canvas.getContext('2d').fillRect(0,0,8,8);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+  })()`);
+  for (const type of ["keyDown", "keyUp"])
+    await app.cdp("Input.dispatchKeyEvent", {
+      type,
+      modifiers: process.platform === "darwin" ? 4 : 2,
+      key: "v",
+      code: "KeyV",
+      windowsVirtualKeyCode: 86,
+      ...(type === "keyDown" ? { commands: ["paste"] } : {}),
+    });
+  await wait(
+    `return !!input().querySelector('[data-testid="composer-pill"][data-pill-kind="image"] img')`,
+    "image pill from native paste",
+  );
+  // A pill-only message sends too; this used to be a textarea with no paste handler.
+  await shot("palette-pasted-image.png");
+  await run(`key('Enter')`);
+  await app.waitFor(
+    `document.body.innerText.includes('Received 1 attachment:')`,
+    { label: "agent received pasted image" },
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("restores typing focus when Backspace leaves an empty Ask agent mode", async () => {
+  await open();
+  await type("agent");
+  await run(`key(' ')`);
+  await wait(`return input()?.isContentEditable`);
+  await run(`key('Backspace')`);
+  await wait(
+    `return input() instanceof HTMLTextAreaElement && document.activeElement===input()`,
+  );
+  await app.insertText("focus restored");
+  expect(await run(`return input().value`)).toBe("focus restored");
+  await close();
 });

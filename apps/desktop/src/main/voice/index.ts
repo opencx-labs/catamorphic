@@ -23,6 +23,7 @@ import {
   parseAssistantAgentId,
   sameVoiceTarget,
   VOICE_ACTIONS,
+  VOICE_CAPTURE_MESSAGE,
   VOICE_OFF,
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
@@ -173,6 +174,8 @@ interface ActiveVoice {
   /** This voice's listeners on the worker, taken off when it rests. */
   detach: () => void;
   audioWindow: BrowserWindow | null;
+  /** Physical capture intent last sent to this voice's connected audio page. */
+  capturing: boolean | null;
   /** Talking with a chat: its conversation. Null while dictating. */
   conversation: VoiceConversation | null;
   /** Dictating into text fields instead of talking with a chat. */
@@ -212,7 +215,7 @@ interface ActiveVoice {
    * A hold came up and its words are still being recognized: voice stays
    * on for them however long that takes, rather than going idle first.
    */
-  awaitingWords: boolean;
+  awaitingWords: number | null;
   /** Dictation turned off, writing what it still heard: then it stops. */
   finishing: ReturnType<typeof setTimeout> | undefined;
   live: LiveStatus;
@@ -318,9 +321,31 @@ export function registerVoiceSupport(deps: {
               ),
         })
       : null;
+  const wantsMicrophone = (voice: ActiveVoice) =>
+    active === voice &&
+    !voice.ending &&
+    (voice.handsFree || press?.profileId === voice.profileId);
+  const settleCapture = () => {
+    const voice = active;
+    const page = voice?.audioWindow;
+    if (!voice || voice.capturing === null || !page || page.isDestroyed())
+      return;
+    const wanted = wantsMicrophone(voice);
+    if (voice.capturing === wanted) return;
+    voice.capturing = wanted;
+    page.webContents.send(VOICE_CAPTURE_MESSAGE, wanted);
+  };
+  const connectVoiceAudio = (
+    voice: ActiveVoice,
+    page: BrowserWindow,
+    microphone: string | null,
+  ) => {
+    voice.capturing = wantsMicrophone(voice);
+    connectAudio(page, voice.worker, { microphone, listen: voice.capturing });
+  };
   const settleQuiet = () => {
     const voice = active;
-    if (!voice) {
+    if (!voice || !wantsMicrophone(voice)) {
       quiet?.stop();
       return;
     }
@@ -343,6 +368,8 @@ export function registerVoiceSupport(deps: {
   let press: Press | null = null;
   /** Dictation's stretches so far, every voice's: the last one's number. */
   let stretches = 0;
+  /** Unique releases prevent an earlier hold from settling a later one. */
+  let releases = 0;
   const bubble = createVoiceBubble({
     attach: (contents, profileId) => windows.attach(contents, profileId),
     spotOf: (profileId) => prefs(profileId).load().voiceBubbleSpot,
@@ -446,6 +473,7 @@ export function registerVoiceSupport(deps: {
   };
 
   const publish = () => {
+    settleCapture();
     settleQuiet();
     // The bubble first: it may read another profile's status from now.
     refreshBubble();
@@ -981,7 +1009,7 @@ export function registerVoiceSupport(deps: {
       .then(() => {
         const page = voice.audioWindow;
         if (active !== voice || !page || page.isDestroyed()) return;
-        connectAudio(page, voice.worker, { microphone, listen: true });
+        connectVoiceAudio(voice, page, microphone);
       })
       .catch((cause: unknown) => {
         if (active === voice)
@@ -1015,18 +1043,10 @@ export function registerVoiceSupport(deps: {
 
   const onWorkerEvent = (voice: ActiveVoice, event: VoiceWorkerEvent) => {
     if (active !== voice) return;
-    // What a hold said is in: voice may go idle again.
-    if (
-      voice.awaitingWords &&
-      (event.type === "utterance" ||
-        event.type === "unheard" ||
-        event.type === "ignored" ||
-        (event.type === "dictation" && event.final))
-    ) {
-      voice.awaitingWords = false;
-      settleIdle(voice);
-    }
     switch (event.type) {
+      case "hold-recognized":
+        if (voice.awaitingWords === event.release) voice.awaitingWords = null;
+        break;
       case "speech-start":
         voice.hearing = true;
         see(voice, event.segment);
@@ -1096,10 +1116,12 @@ export function registerVoiceSupport(deps: {
         if (voice.finishing !== undefined) void stop();
         return;
       case "unheard":
+        if (event.release === voice.awaitingWords) voice.awaitingWords = null;
         // A voice started by holding, held again and let go with nothing
         // said, has nothing left to do: it goes now rather than idling.
         if (
           !voice.handsFree &&
+          voice.awaitingWords === null &&
           !voice.busy &&
           !voice.ending &&
           voice.speaking.size === 0 &&
@@ -1363,6 +1385,7 @@ export function registerVoiceSupport(deps: {
       // A warm audio page is this voice's from the start: however the
       // start ends, it rests again with the worker.
       audioWindow: warm.audio,
+      capturing: null,
       conversation: null,
       dictating: null,
       voiceOf: null,
@@ -1377,7 +1400,7 @@ export function registerVoiceSupport(deps: {
       window: options.window ?? windowFor(profileId)?.id ?? null,
       windowPicked: options.window !== undefined,
       idle: undefined,
-      awaitingWords: false,
+      awaitingWords: null,
       finishing: undefined,
       live: {
         phase: "preparing",
@@ -1449,10 +1472,7 @@ export function registerVoiceSupport(deps: {
           return;
         }
         voice.audioWindow = window;
-        connectAudio(window, worker, {
-          microphone: stored.voiceMicrophone,
-          listen: true,
-        });
+        connectVoiceAudio(voice, window, stored.voiceMicrophone);
       })();
       const [resolved] = await Promise.all([
         resolve(profileId, request),
@@ -1525,13 +1545,14 @@ export function registerVoiceSupport(deps: {
     if (voice) clearTimeout(voice.idle);
     if (voice && same) {
       send(voice, { type: "hold", held: true });
+      update(voice);
       return;
     }
     if (voice && connected(voice)) {
       // What was said for where voice was goes no further.
       send(voice, { type: "forget" });
       // What it was still recognizing is dropped, so nothing is awaited.
-      voice.awaitingWords = false;
+      voice.awaitingWords = null;
       voice.handsFree = false;
       send(voice, { type: "hands-free", enabled: false });
       send(voice, { type: "hold", held: true });
@@ -1564,8 +1585,8 @@ export function registerVoiceSupport(deps: {
       send(voice, { type: "hands-free", enabled: true });
       watchSend();
     } else {
-      voice.awaitingWords = true;
-      send(voice, { type: "hold", held: false });
+      voice.awaitingWords = ++releases;
+      send(voice, { type: "hold", held: false, release: voice.awaitingWords });
     }
     update(voice);
   };

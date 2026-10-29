@@ -103,7 +103,7 @@ describe("CommandWatches", () => {
     expect(h.woken).toHaveLength(1);
     expect(h.woken[0]?.content).toContain("succeeded on check 3");
     expect(h.woken[0]?.content).toContain("healthy");
-    expect(h.woken[0]?.notice).toBe("Deploy is live: done");
+    expect(h.woken[0]?.notice).toBe("Deploy is live · done");
     expect(h.woken[0]?.task).toMatchObject({
       type: "command_watch",
       status: "completed",
@@ -247,7 +247,7 @@ describe("CommandWatches", () => {
     await vi.advanceTimersByTimeAsync(25_000);
     expect(h.woken).toHaveLength(1);
     expect(h.woken[0]?.content).toContain("expired after 3 checks");
-    expect(h.woken[0]?.notice).toBe("Stopped watching: Deploy is live");
+    expect(h.woken[0]?.notice).toBe("Stopped watching · Deploy is live");
     expect(h.woken[0]?.task.status).toBe("stopped");
     expect(h.saved()).toEqual([]);
   });

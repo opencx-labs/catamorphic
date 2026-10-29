@@ -1,4 +1,4 @@
-import type { AgentTextAttachment } from "@catamorphic/react";
+import type { AgentChatAttachment } from "@catamorphic/react";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
 import type { SidebarActivity } from "./sidebar.js";
 import type { SidebarSourceItem } from "./sidebar-source.js";
@@ -10,7 +10,7 @@ import type { SidebarSourceItem } from "./sidebar-source.js";
  */
 export interface PendingChatMessage {
   text: string;
-  attachments?: AgentTextAttachment[];
+  attachments?: AgentChatAttachment[];
 }
 
 /** What a chat left running and waits on: a watch, subagents, a command. */

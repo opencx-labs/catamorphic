@@ -42,9 +42,9 @@ const helpers = `
     window.dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const paletteInput = () => (
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => document.activeElement === el) ??
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => !el.closest('[inert]'))
   );
   const wizardVisible = () => {
@@ -392,7 +392,7 @@ describe("agents and profiles", () => {
   it("clicking beside the picker panel closes the OVERLAY palette (click-away)", async () => {
     // The overlay specifically (Cmd+P) — the New Tab palette is a page and
     // exempt from click-away. Its input takes focus on open.
-    const overlayInput = `$$('textarea[aria-label="Search commands, pages, and more"]')
+    const overlayInput = `$$('[aria-label="Search commands, pages, and more"]')
       .find((el) => el.closest('.fixed') && !el.closest('[inert]'))`;
     await run(
       `if (!(${overlayInput})) pressKey('p', { metaKey: true }); return true;`,
@@ -504,7 +504,7 @@ describe("agents and profiles", () => {
     await runWait(
       `const chip = $('[data-testid="palette-mode-chip"]');
        return !!chip && chip.textContent.includes('Ask agent') &&
-              paletteInput().value === '';`,
+              (paletteInput().value ?? paletteInput().textContent) === '';`,
       { label: "agent chip committed from 'chat'" },
     );
     await resetPalette();
@@ -591,7 +591,7 @@ describe("agents and profiles", () => {
     // thus its highlight) after Escape, so the clear-on-close behavior
     // belongs to the overlay only.
     const overlayInput = `(
-      $$('textarea[aria-label="Search commands, pages, and more"]')
+      $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => el.closest('.fixed') && !el.closest('[inert]'))
     )`;
     const ensureOverlay = async () => {

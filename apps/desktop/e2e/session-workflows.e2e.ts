@@ -119,12 +119,12 @@ it("keeps quiet results inspectable and exposes failed runs with a working stop 
   await send("quiet");
   await wait("return !!button('sessionquiet');");
   await wait(
-    "return button('sessionquiet').parentElement.textContent.includes('Last run: completed');",
+    "return button('sessionquiet').parentElement.textContent.includes('Last run · completed');",
   );
   await send("failure");
   await wait("return !!button('sessionfailure');");
   await wait(
-    "return button('sessionfailure').parentElement.textContent.includes('Last run: failed');",
+    "return button('sessionfailure').parentElement.textContent.includes('Last run · failed');",
   );
   await run(
     "[...button('sessionfailure').parentElement.querySelectorAll('button')].find(b=>b.textContent.includes('Last run')).click();",
@@ -188,7 +188,7 @@ it("delivers an attention reminder without a model turn and shows late schedule 
 it("lists a seven-day reminder before archive, preserves it on cancel, and cancels it on confirmation", async () => {
   await send("longreminder");
   await wait(
-    "return !!button('sessionlongreminder') && button('sessionlongreminder').parentElement.textContent.includes('Next:');",
+    "return !!button('sessionlongreminder') && button('sessionlongreminder').parentElement.textContent.includes('Next ·');",
   );
   // The live bubble of this session's chat, never an exiting snapshot.
   const bubble = `[...document.querySelectorAll('[data-chat-bubble][data-session-id]')].find(el => !el.className.includes('animate-bubble-out'))?.querySelector('button')`;
@@ -221,7 +221,7 @@ it("lists a seven-day reminder before archive, preserves it on cancel, and cance
     await run(
       "return document.querySelector('[data-testid=archive-session-confirm]').closest('[role=dialog]').textContent;",
     ),
-  ).toContain("Next:");
+  ).toContain("Next ·");
   await run("button('Cancel').click();");
   await wait(
     "return !document.querySelector('[role=dialog]:not([aria-hidden=true]) [data-testid=archive-session-confirm]');",

@@ -854,13 +854,16 @@ describe("voice", () => {
     const audio = await app.connectToFrame("voice.html");
     await audio.eval(`(() => {
       window.__heldAudioSeconds=0;
+      window.__heldStreams=[];
       const post=MessagePort.prototype.postMessage;
       const devices=navigator.mediaDevices;
       const getMicrophone=devices.getUserMedia;
       // A slow microphone must not turn a fixed wall-clock hold into silence.
       devices.getUserMedia=async function(...args) {
         await new Promise(resolve=>setTimeout(resolve,3000));
-        return Reflect.apply(getMicrophone,this,args);
+        const stream=await Reflect.apply(getMicrophone,this,args);
+        window.__heldStreams.push(stream);
+        return stream;
       };
       MessagePort.prototype.postMessage=function(message,...args) {
         const result=Reflect.apply(post,this,[message,...args]);
@@ -892,6 +895,13 @@ describe("voice", () => {
       expect(await heard()).toBe(before);
       await holdTalkKeys("keyUp");
       held = false;
+      await audio.waitFor(
+        "window.__heldStreams.length>0 && window.__heldStreams.every(stream=>stream.getTracks().every(track=>track.readyState==='ended'))",
+        {
+          timeoutMs: 1500,
+          label: "microphone released while recognition and reply continue",
+        },
+      );
       await runWait(
         `const detail = await session(${JSON.stringify(assistant)});
          return detail.messages.filter((m) => m.role === 'user').length === ${before + 1};`,
