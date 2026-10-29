@@ -232,23 +232,19 @@ describe("company identity", () => {
     ).toBe(400);
   });
 
-  it("refreshes saved token URLs through the same lifecycle gate", async () => {
+  it("rejects the removed token URL without changing the active grant", async () => {
     await createUser("savedurl");
     const first = await signedIn("savedurl");
-    const alias = "/api/auth/mcp/token";
-    const rotated = await refresh(first.clientId, first.refreshToken, alias);
+    const removed = await refresh(
+      first.clientId,
+      first.refreshToken,
+      "/api/auth/mcp/token",
+    );
+    expect(removed.statusCode).toBe(404);
+    expect((await me(first.accessToken)).statusCode).toBe(200);
+    const rotated = await refresh(first.clientId, first.refreshToken);
     expect(rotated.statusCode).toBe(200);
-    const second = rotated.json();
-    expect((await me(first.accessToken)).statusCode).toBe(401);
-    expect((await me(second.access_token)).statusCode).toBe(200);
-
-    const replay = await refresh(first.clientId, first.refreshToken, alias);
-    expect(replay.statusCode).toBe(400);
-    expect(replay.json().error_description).toMatch(/reuse/);
-    expect((await me(second.access_token)).statusCode).toBe(401);
-    expect(
-      (await refresh(first.clientId, second.refresh_token)).statusCode,
-    ).toBe(400);
+    expect((await me(rotated.json().access_token)).statusCode).toBe(200);
   });
 
   it("ends a session family at its maximum age", async () => {

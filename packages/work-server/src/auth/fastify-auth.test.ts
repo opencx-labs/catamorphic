@@ -332,16 +332,12 @@ describe("Work server Fastify OAuth bridge", () => {
         );
       });
     try {
+      const response = await post("/api/auth/oauth2/token");
+      expect(response.status).toBe(400);
+      expect(response.body).toContain("Work gate refused refresh");
+      expect(calls).toHaveLength(1);
       for (const endpoint of [
-        "/api/auth/oauth2/token",
         "/api/auth/mcp/token",
-      ]) {
-        const response = await post(endpoint);
-        expect(response.status).toBe(400);
-        expect(response.body).toContain("Work gate refused refresh");
-      }
-      expect(calls).toHaveLength(2);
-      for (const endpoint of [
         "/api/auth/unused/../oauth2/token",
         "/api/auth/%2e/oauth2/token",
         "/api/auth/unused/%2e%2e/oauth2/token",
@@ -349,7 +345,7 @@ describe("Work server Fastify OAuth bridge", () => {
       ]) {
         expect((await post(endpoint)).status).toBe(404);
       }
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(1);
     } finally {
       await app.close();
       await auth.close();

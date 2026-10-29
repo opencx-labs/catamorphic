@@ -157,29 +157,8 @@ export function registerWorkAuthRoutes(
       });
       if (decision && !decision.allow) return sendTokenError(reply, decision);
     }
-    // The old endpoint accepted confidential client secrets in either Basic
-    // auth or the form body without persisting that choice. Normalize that
-    // existing public contract to the migrated client's Basic registration.
-    const legacySecret =
-      request.url.split("?")[0] === "/api/auth/mcp/token" &&
-      !request.headers.authorization
-        ? form.get("client_secret")
-        : null;
-    const legacyClient = form.get("client_id");
-    const legacyAuthorization =
-      legacySecret && legacyClient
-        ? `Basic ${Buffer.from(`${encodeURIComponent(legacyClient)}:${encodeURIComponent(legacySecret)}`).toString("base64")}`
-        : undefined;
-    if (legacyAuthorization) form.delete("client_secret");
     const response = await callBetterAuth(routed, request, {
       pathname: "/api/auth/oauth2/token",
-      ...(legacyAuthorization
-        ? {
-            authorization: legacyAuthorization,
-            body: form.toString(),
-            contentType: "application/x-www-form-urlencoded",
-          }
-        : {}),
     });
     if (!response.ok || !gate) return sendResponse(response, reply);
     const body: unknown = await response
@@ -198,9 +177,6 @@ export function registerWorkAuthRoutes(
     return sendResponse(response, reply);
   };
   app.post("/api/auth/oauth2/token", token);
-  // Saved server connections still hold this URL. Both paths run the same
-  // lifecycle gate and the same Better Auth token implementation.
-  app.post("/api/auth/mcp/token", token);
   app.get("/.well-known/oauth-authorization-server", (request, reply) =>
     forward(request, reply, "/api/auth/.well-known/oauth-authorization-server"),
   );
@@ -425,7 +401,6 @@ async function callBetterAuth(
     pathname?: string;
     body?: string;
     contentType?: string;
-    authorization?: string;
   },
 ): Promise<Response> {
   const incoming = new URL(request.raw.url ?? "/", options.baseURL);
@@ -446,8 +421,6 @@ async function callBetterAuth(
   if (overrides.contentType) {
     headers.set("content-type", overrides.contentType);
   }
-  if (overrides.authorization)
-    headers.set("authorization", overrides.authorization);
   if (overrides.body !== undefined) {
     headers.delete("content-length");
     headers.delete("content-encoding");

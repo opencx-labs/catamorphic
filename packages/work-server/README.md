@@ -79,6 +79,16 @@ resolves when that machine's lease is lost (`/healthz` then answers 503;
 `/readyz` answers 503 whenever renewals fail); the host should then shut down so
 its supervisor starts a fresh process.
 
+## OAuth token endpoint
+
+Token requests use `/api/auth/oauth2/token`, as advertised by OAuth discovery.
+The former `/api/auth/mcp/token` URL is not supported. Reconnect saved clients
+that still use it, and use the client authentication method registered with the
+provider. Work does not translate form-body secrets to Basic authentication.
+
+The one-time forward migration still converts older auth databases into the
+current schema. See [ADR 0296](../../docs/decisions/0296-one-oauth-token-endpoint.md).
+
 ## Hooks
 
 | Hook | Adds |

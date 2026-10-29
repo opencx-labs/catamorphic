@@ -28,7 +28,7 @@ describe("PWA authenticated fetch", () => {
         accessToken: "expired-access",
         refreshToken: "refresh-1",
         accessTokenExpiresAt: "2026-08-26T11:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid offline_access",
       },
     });
@@ -83,7 +83,7 @@ describe("PWA authenticated fetch", () => {
         accessToken: "stale-access",
         refreshToken: "refresh-1",
         accessTokenExpiresAt: "2026-08-26T13:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid offline_access",
       },
     });
@@ -122,7 +122,7 @@ describe("PWA authenticated fetch", () => {
       accessToken: "expired-access",
       refreshToken: "refresh-1",
       accessTokenExpiresAt: "2026-08-26T11:00:00.000Z",
-      tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+      tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
       scope: "openid offline_access",
     };
     const first = store.addRemoteConnection({

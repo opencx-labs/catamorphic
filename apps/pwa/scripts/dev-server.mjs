@@ -954,7 +954,7 @@ const server = http.createServer(async (req, res) => {
   if (path === "/.well-known/oauth-authorization-server") {
     return json(res, 200, {
       authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
-      token_endpoint: `${origin}/api/auth/mcp/token`,
+      token_endpoint: `${origin}/api/auth/oauth2/token`,
       registration_endpoint: `${origin}/api/auth/mcp/register`,
       code_challenge_methods_supported: ["S256"],
     });
@@ -969,7 +969,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(302, { location: callback.toString() });
     return res.end();
   }
-  if (path === "/api/auth/mcp/token" && req.method === "POST") {
+  if (path === "/api/auth/oauth2/token" && req.method === "POST") {
     return json(res, 200, {
       access_token: "fake-access-token",
       refresh_token: "fake-refresh-token",
