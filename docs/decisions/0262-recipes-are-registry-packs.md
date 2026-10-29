@@ -38,6 +38,13 @@ its files through its manifest; the server-sdk test typechecks the packs'
 workflows in a project layout, and the Work server's end-to-end tests deploy
 the built catalog's files.
 
+The registry build pins framework dependencies and renders framework version
+examples from its package version, shared with every library in the release.
+Source manifests declare framework dependencies without independent pins;
+installed files and usage notes use `{{CATAMORPHIC_VERSION}}`. The host catalog
+and shadcn payload contain matching exact versions. Installed projects retain
+their own pins and lockfiles until deliberately upgraded.
+
 Considered: fetching packs from the repository on GitHub (sandboxed agents
 reach only the gateway, and a pack must match the release that runs it),
 and serving them as skill files (skills carry one `SKILL.md`, and packs

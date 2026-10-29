@@ -193,8 +193,8 @@ the workflow workspace (use the same pinned framework release as its server):
 ```json
 {
   "dependencies": {
-    "@catamorphic/server-sdk": "0.1.0-alpha.31",
-    "@catamorphic/work-server": "0.1.0-alpha.31",
+    "@catamorphic/server-sdk": "{{CATAMORPHIC_VERSION}}",
+    "@catamorphic/work-server": "{{CATAMORPHIC_VERSION}}",
     "pg": "8.23.1"
   },
   "devDependencies": { "@types/pg": "8.23.1" }
