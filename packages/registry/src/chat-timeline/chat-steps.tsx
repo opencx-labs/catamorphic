@@ -1115,27 +1115,20 @@ interface StepHandlers {
 }
 
 /**
- * The running turn's clock, as `TurnClock` reads it: when the turn started,
- * and when it last reported progress (absent while it waits on someone).
+ * The running turn's start, as `TurnClock` reads it.
  */
 export interface TurnClockTimes {
   startedAt?: string | null;
-  updatedAt?: string | null;
 }
 
 /** The running turn's times, for its clock wherever that sits. */
 export const TurnClockContext = createContext<TurnClockTimes>({});
 
-/** Silence long enough to say so beside the turn's clock. */
-export const STALL_AFTER_MS = 30_000;
-
-/** How long the clock and the silence take to fade out. */
+/** How long the clock takes to fade out. */
 const CLOCK_FADE_MS = 200;
 
 /**
- * How long the running turn has taken, and a plain word when it has gone
- * quiet: a spinner that looks the same at two seconds and at nine minutes
- * says nothing. It sits on the turn's latest steps line, never beside the
+ * How long the running turn has taken. It sits on the turn's latest steps line, never beside the
  * activity line, and is the only thing that re-renders as it counts. The
  * time keeps the width of its longest reading, so the words after it hold
  * still; leaving, it keeps the time it last showed while it fades.
@@ -1147,18 +1140,7 @@ export function TurnClock({ leaving = false }: { leaving?: boolean }) {
   const started = kept.current.startedAt
     ? Date.parse(kept.current.startedAt)
     : Number.NaN;
-  const updated = kept.current.updatedAt
-    ? Date.parse(kept.current.updatedAt)
-    : Number.NaN;
-  const now = useNow(
-    !leaving && (Number.isFinite(started) || Number.isFinite(updated)),
-  );
-  const quiet = Number.isFinite(updated) ? now - updated : 0;
-  const stalled = !leaving && quiet >= STALL_AFTER_MS;
-  // The silence keeps the length it last said while it fades.
-  const silent = useRef(quiet);
-  if (stalled) silent.current = quiet;
-  const silence = useLinger(stalled ? true : undefined, CLOCK_FADE_MS);
+  const now = useNow(!leaving && Number.isFinite(started));
   return (
     <span
       className={`flex items-center gap-2 whitespace-nowrap text-[11px] transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
@@ -1194,20 +1176,6 @@ export function TurnClock({ leaving = false }: { leaving?: boolean }) {
           </span>
         </span>
       )}
-      {silence.value && (
-        <span
-          className={`tabular-nums text-fg-muted transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-            silence.leaving ? "opacity-0" : "cat-fade-in"
-          }`}
-          data-testid="chat-activity-stalled"
-        >
-          {/* Plain words, not an alarm: a long test run is quiet too. The
-              log announces them once as they appear; the seconds that
-              follow count silently, never read out again each second. */}
-          No updates for{" "}
-          <span aria-live="off">{formatElapsed(silent.current)}</span>
-        </span>
-      )}
     </span>
   );
 }
@@ -1220,9 +1188,8 @@ export function TurnClock({ leaving = false }: { leaving?: boolean }) {
 const STEPS_LINE = "flex h-4 items-center gap-2";
 
 /**
- * The running turn's line before it has a steps line: its clock, and the
- * silence after 30 seconds, above the activity line from the moment that
- * line opens. It keeps the first steps line's place, the column's gap
+ * The running turn's line before it has a steps line: its clock above
+ * the activity line from the moment that line opens. It keeps the first steps line's place, the column's gap
  * above that line included (`pb-3`, the timeline's `gap-3`), so the steps
  * line takes it in the same frame and nothing below moves. Before the turn
  * has started (a message still sending) it holds the place empty.
@@ -1384,7 +1351,7 @@ export function TurnSteps({
                   <StepCount count={steps.length} />
                 </button>
                 {clockShown.value && (
-                  // No width of its own: the clock and the silence never widen
+                  // No width of its own: the clock never widens
                   // the reply, so the rows below keep their places.
                   <span className="flex w-0 min-w-0 items-center">
                     <TurnClock leaving={clockShown.leaving} />

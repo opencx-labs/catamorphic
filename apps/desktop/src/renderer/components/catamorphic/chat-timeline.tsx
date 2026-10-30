@@ -149,16 +149,14 @@ export interface ChatTimelineProps {
    * Defaults to the active turn's start.
    */
   activityStartedAt?: string | null;
-  /**
-   * When the running turn last reported progress (ISO): a long silence is
-   * said on the activity line. Defaults to the active turn's last activity
-   * while it runs, not while it waits on someone.
-   */
-  activityUpdatedAt?: string | null;
   /** Older history exists before the loaded turns. */
   hasOlder?: boolean;
   isLoadingOlder?: boolean;
   onLoadOlder?: () => void | Promise<void>;
+  /** The initial session history is loading; replaces the empty prompt. */
+  isLoading?: boolean;
+  /** The session stream lost its connection and is reconnecting. */
+  isReconnecting?: boolean;
   error?: string | null;
   /** An item to scroll to and outline (a notification's message). */
   focusMessageId?: string;
@@ -555,12 +553,13 @@ export function ChatTimeline(props: ChatTimelineProps) {
     queue,
     requests = NO_REQUESTS,
     activeTurnId,
-    activity,
+    activity: reportedActivity,
     activityStartedAt,
-    activityUpdatedAt,
     hasOlder = false,
     isLoadingOlder = false,
     onLoadOlder,
+    isLoading = false,
+    isReconnecting = false,
     error,
     focusMessageId,
     workDisplay = DEFAULT_WORK_DISPLAY,
@@ -596,6 +595,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     presentUserMessage,
     registerMessageNavigation,
   } = props;
+  const activity = isReconnecting ? undefined : reportedActivity;
   const latest = useRef(props);
   latest.current = props;
   // Messages the agent stops to read: the one the person interrupted for
@@ -679,12 +679,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
     activeTurnId === undefined ? (activeTurn?.id ?? null) : activeTurnId;
   const startedAt =
     activityStartedAt === undefined ? activeTurn?.startedAt : activityStartedAt;
-  const updatedAt =
-    activityUpdatedAt !== undefined
-      ? activityUpdatedAt
-      : activeTurn?.status === "running" && !activeTurn.cancellationRequested
-        ? (activeTurn.activityAt ?? activeTurn.startedAt)
-        : undefined;
   const viewCache = useRef(new WeakMap<TimelineTurn, TurnView>());
   const views: TurnView[] = timeline.map((group) => {
     const live = Boolean(group.turn && group.turn.id === activeId);
@@ -739,31 +733,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       pairedBackground.current = next;
     return pairedBackground.current;
   }, [timeline, backgroundCommands]);
-  // Waiting on work it started in the background (a test run, a watch),
-  // the turn is quiet by design, as while it waits on the person: its
-  // silence says nothing, so the clock does not count it.
-  const waitsOnBackground = useMemo(
-    () =>
-      timeline.some(
-        (group) =>
-          group.turn?.id === activeId &&
-          group.entries.some(
-            (entry) =>
-              (entry.kind === "reply" || entry.kind === "steps") &&
-              entry.steps.some(
-                (item) => backgroundStates.get(item.id)?.status === "running",
-              ),
-          ),
-      ),
-    [timeline, activeId, backgroundStates],
-  );
-  const clockTimes = useMemo(
-    () => ({
-      startedAt,
-      updatedAt: waitsOnBackground ? undefined : updatedAt,
-    }),
-    [startedAt, updatedAt, waitsOnBackground],
-  );
+  const clockTimes = useMemo(() => ({ startedAt }), [startedAt]);
   // Links re-render with their message, unless the host's handlers change.
   const links = useMemo(
     () => ({ onLinkClick, renderLink, renderImage }),
@@ -937,9 +907,21 @@ export function ChatTimeline(props: ChatTimelineProps) {
                           onLoad={onLoadOlder}
                         />
                       )}
-                      {empty && (
+                      {empty && !error && !isReconnecting && (
                         <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
-                          {emptyState}
+                          {isLoading ? (
+                            <div
+                              role="status"
+                              aria-label="Loading conversation"
+                            >
+                              <LoaderCircle
+                                aria-hidden="true"
+                                className="size-5 animate-spin motion-reduce:animate-none"
+                              />
+                            </div>
+                          ) : (
+                            emptyState
+                          )}
                         </div>
                       )}
                       <TodayContext.Provider value={today}>
@@ -974,8 +956,23 @@ export function ChatTimeline(props: ChatTimelineProps) {
                           )}
                         />
                       )}
+                      {isReconnecting && (
+                        <div
+                          role="status"
+                          className="flex items-center gap-2 text-xs text-fg-muted"
+                        >
+                          <LoaderCircle
+                            aria-hidden="true"
+                            className="size-3 animate-spin motion-reduce:animate-none"
+                          />
+                          Waiting for connection. Reconnecting…
+                        </div>
+                      )}
                       {error && (
-                        <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
+                        <div
+                          role="alert"
+                          className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger"
+                        >
                           {error}
                         </div>
                       )}

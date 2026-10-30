@@ -187,6 +187,8 @@ export function AgentChat({
               : "h-[calc(100%-48px)]"
           }
           timeline={chat.timeline}
+          isLoading={chat.isLoading}
+          isReconnecting={chat.connectionLost}
           pending={chat.pending}
           queue={chat.queue}
           activity={chat.activity}
@@ -212,11 +214,7 @@ export function AgentChat({
           onLoadOlder={() => void chat.loadOlder()}
           requests={chat.state?.requests}
           resolveAgentName={resolveAgentName}
-          error={
-            chat.connectionLost
-              ? "Connection lost. Reconnecting; the agent may still be working."
-              : (chat.error?.message ?? null)
-          }
+          error={chat.error?.message ?? null}
         />
         {cards.length > 0 && (
           <div className="absolute inset-x-3 bottom-3 flex flex-col gap-2">

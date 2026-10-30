@@ -331,6 +331,14 @@ file with their job, registry copies included.
   bordered boxes, square rings inside rounded ones, and a ring beside a border
   are defects; check every new surface with keyboard focus before shipping.
 
+## Chat activity and connectivity
+
+Thinking keeps its normal activity and elapsed turn clock. Time since the last
+update never creates a warning or implies a network failure. A session stream
+that is reconnecting shows a quiet status: "Waiting for connection. Reconnecting…".
+Loaded history and drafts stay available. This supersedes the earlier design-log
+entries that displayed "No updates for" after 30 seconds.
+
 ## Focus rings
 
 One ring everywhere (ADR 0168): 2px of the accent, drawn as

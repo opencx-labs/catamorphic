@@ -3150,6 +3150,8 @@ function ChatDockContent({
                   : "mx-auto w-full max-w-3xl"
               }`}
               timeline={chat.timeline}
+              isLoading={chat.isLoading}
+              isReconnecting={chat.connectionLost}
               requests={chat.state?.requests}
               pending={chat.pending}
               activeTurnId={activeTurnId}
@@ -3179,11 +3181,7 @@ function ChatDockContent({
               renderAttachment={sentPill}
               presentUserMessage={presentSkillMessage}
               Hint={ShortcutHint}
-              error={
-                chat.connectionLost
-                  ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
-                  : (chat.error?.message ?? null)
-              }
+              error={chat.error?.message ?? null}
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
               renderLink={renderLink}

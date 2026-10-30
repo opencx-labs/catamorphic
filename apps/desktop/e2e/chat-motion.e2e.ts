@@ -22,7 +22,7 @@ import {
  *   the turn opens and lets the first step land before the opening plays;
  * - a folded steps line changes its count on a beat, and "steps" (with
  *   the turn's clock after it) slides when the count gains a digit;
- * - the turn's clock and a long silence sit on that steps line;
+ * - the turn's clock sits on that steps line, without silence warnings;
  * - an open list's rows keep their places as wider steps join it;
  * - the activity line closes its height when the turn ends;
  * - text pressed and selected while an answer streams holds still under
@@ -109,7 +109,7 @@ interface Frame {
   textO: number | null;
   /** What sits in the activity line besides the spinner. */
   rowParts: string[];
-  /** A timer or a silence anywhere in the activity line. */
+  /** A timer or an unexpected status beside the activity words. */
   rowExtras: number;
   toggle: Box;
   toggleS: string | null;
@@ -651,8 +651,8 @@ describe("chat motion", () => {
       "notes",
       "pace the work quickly",
       async () => {
-        // A long silence, as the person would see it: the renderer's clock
-        // runs half a minute ahead while the steps keep coming.
+        // Long thinking must not create a silence warning: advance the
+        // renderer's clock while work keeps its existing activity state.
         await runWait(
           `return /^[4-9] steps$/.test(frontDock()?.querySelector('[data-live-work] [data-testid="chat-turn-steps-toggle"]')?.textContent ?? '');`,
           { label: "four steps", timeoutMs: 30_000 },
@@ -664,8 +664,11 @@ describe("chat motion", () => {
         return true;
       })()`);
         await runWait(
-          `return !!frontDock()?.querySelector('[data-testid="chat-activity-stalled"]');`,
-          { label: "the silence shows", timeoutMs: 5_000 },
+          `return /^(?:[3-9][0-9]s|[1-9][0-9]*m)/.test(frontDock()?.querySelector('[data-testid="chat-activity-elapsed"]')?.textContent ?? '');`,
+          {
+            label: "the elapsed clock advances without a warning",
+            timeoutMs: 5_000,
+          },
         );
         await new Promise((resolve) => setTimeout(resolve, 600));
         await app.eval(
@@ -719,7 +722,7 @@ describe("chat motion", () => {
       "frames between its two places",
     ).toBeGreaterThan(0);
 
-    // The clock and the silence sit on the steps line, after the word.
+    // The clock sits on the steps line, after the word.
     const clocked = live.filter((frame) => frame.clock);
     expect(clocked.length).toBeGreaterThan(10);
     for (const frame of clocked) {
@@ -729,8 +732,7 @@ describe("chat motion", () => {
       );
     }
     const silent = frames.filter((frame) => frame.stall);
-    expect(silent.length, "the silence showed").toBeGreaterThan(0);
-    for (const frame of silent) expect(frame.stallOnLine).toBe(true);
+    expect(silent, "thinking never produces a silence warning").toEqual([]);
 
     expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
     // Probe the real close at explicit times, separately from natural RAF

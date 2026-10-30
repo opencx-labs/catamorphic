@@ -25,6 +25,16 @@ align with the main conversation column, without a nested border or indentation.
 
 ## Three independent facts
 
+Opening a local chat reads the embedded server even when Chromium reports no
+internet. The desktop's local query and mutation cache uses `networkMode: "always"`;
+remote authority caches retain `online` mode. While the initial history loads,
+`ChatTimeline.isLoading` replaces the empty prompt with a centered, accessible
+spinner. A failed load shows its error without the empty prompt; a background
+refresh keeps the loaded conversation visible. A reconnecting stream shows
+"Waiting for connection. Reconnecting…" independently of agent activity. Thinking
+keeps its normal activity and elapsed clock; time since the last update never
+creates a warning or implies a network problem.
+
 - Delivery: local session creation and command receipts. `isSending` ends when
   those operations settle; mutation-observer pending flags are not authority.
 - Execution: the session's turns determine `isWorking` (a turn preparing,
