@@ -38,6 +38,7 @@ const server = http.createServer((request, response) => {
         addEventListener('message', ({data, source}) => {
           if (source !== document.querySelector('#auth')?.contentWindow) return;
           if (data.focused) document.body.dataset.focused = data.focused;
+          if (data.typed) document.body.dataset.typed = data.typed;
           if (data.phase) document.body.dataset.phase = data.phase;
           if (data.done) {
             document.title = 'Frame finished';
@@ -64,14 +65,26 @@ const server = http.createServer((request, response) => {
         <button>Continue</button></form>
       <script>
         const form = document.querySelector('form');
+        let expectedInput;
+        form.addEventListener('input', (event) => {
+          if (event.isTrusted && event.target === expectedInput?.element && event.target.value === expectedInput.text)
+            parent.postMessage({typed:event.target.id}, '*');
+        });
         const passwordStep = () => {
           form.innerHTML = '<label for=pw>Password</label><input id=pw type=password autocomplete=current-password><button>Sign in</button>';
           parent.postMessage({phase:'password'}, '*');
         };
         addEventListener('message', ({data}) => {
           if (data.focus) {
-            document.querySelector('#' + data.focus).focus();
-            parent.postMessage({focused:data.focus}, '*');
+            const element = document.querySelector('#' + data.focus);
+            element.value = '';
+            expectedInput = {element, text:data.text};
+            element.focus();
+            const ready = () => {
+              if (document.activeElement === element && document.hasFocus()) parent.postMessage({focused:data.focus}, '*');
+              else requestAnimationFrame(ready);
+            };
+            ready();
           }
         });
         form.addEventListener('submit', (event) => {
@@ -204,6 +217,7 @@ async function pressUntil(
   // A guest between documents throws instead of answering; that is "not yet".
   const settled = `Promise.resolve().then(() => ${effect}).catch(() => false)`;
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0 && (await app.eval(settled))) return;
     await app.press(key);
     try {
       await app.waitFor(settled, { timeoutMs: 3_000, label });
@@ -232,18 +246,32 @@ const prompt = `document.querySelector('[data-testid="password-prompt"]')`;
 
 /** Cross-origin fields focus themselves; typing and Enter still use real input. */
 async function typeInFrame(field: string, text: string) {
-  await app.eval(`${guest}.focus(); true`);
-  await inGuest(`(() => {
-    document.body.dataset.focused = '';
-    const frame = document.querySelector('#auth');
-    frame.focus();
-    frame.contentWindow.postMessage({focus:${JSON.stringify(field)}}, '*');
-  })()`);
-  await app.waitFor(
-    `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.focused === ${JSON.stringify(field)}`)})`,
-    { label: `${field} focused in authentication frame` },
-  );
-  await app.insertText(text);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await app.eval(`${guest}.focus(); true`);
+    await inGuest(`(() => {
+      document.body.dataset.focused = '';
+      document.body.dataset.typed = '';
+      const frame = document.querySelector('#auth');
+      frame.focus();
+      frame.contentWindow.postMessage({focus:${JSON.stringify(field)},text:${JSON.stringify(text)}}, '*');
+    })()`);
+    await app.waitFor(
+      `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.focused === ${JSON.stringify(field)}`)})`,
+      { label: `${field} focused in authentication frame` },
+    );
+    await app.insertText(text);
+    try {
+      await app.waitFor(
+        `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.typed === ${JSON.stringify(field)}`)})`,
+        { timeoutMs: 3_000, label: `${field} received trusted input` },
+      );
+      return;
+    } catch (error) {
+      // Native macOS can drop the first input after switching frames.
+      // The fixture clears the field before retrying, so text never doubles.
+      if (attempt === 2) throw error;
+    }
+  }
 }
 
 const framePhase = (phase: string) =>
@@ -256,8 +284,11 @@ async function framedLogin(mode: string, username: string, password: string) {
   await navigate(`/framed?mode=${mode}`, "Framed sign in");
   await framePhase("email");
   await typeInFrame("email", username);
-  await app.press("Enter");
-  await framePhase("password");
+  await pressUntil(
+    "Enter",
+    `${guest}.executeJavaScript("document.body.dataset.phase === 'password'")`,
+    "password step in authentication frame",
+  );
   await typeInFrame("pw", password);
   await app.press("Enter");
 }
