@@ -344,8 +344,8 @@ describe("shared browser import and personal history", () => {
     await palette();
     await app.insertText(`${origin}/session-check`);
     await app.press("Enter");
-    const deadline = Date.now() + 15000;
-    while (!receivedCookie && Date.now() < deadline)
+    const deadline = performance.now() + 15000;
+    while (!receivedCookie && performance.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 100));
     expect(receivedCookie).toContain("fixture_session=signed-in-fixture");
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });

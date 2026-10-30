@@ -407,7 +407,7 @@ describe("an unpacked extension", () => {
     // (macOS CI: every call then failed "No SW"), so it reaches the worker
     // again until the check holds.
     let worker = await app.connectToFrame(`${extensionId}/sw.js`);
-    const installedBy = Date.now() + 30_000;
+    const installedBy = performance.now() + 30_000;
     for (;;) {
       try {
         await worker.waitFor(
@@ -416,7 +416,7 @@ describe("an unpacked extension", () => {
         );
         break;
       } catch (cause) {
-        if (Date.now() > installedBy) throw cause;
+        if (performance.now() > installedBy) throw cause;
         worker.close();
         worker = await app.connectToFrame(`${extensionId}/sw.js`);
       }

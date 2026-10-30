@@ -421,12 +421,12 @@ describe("dock modes", () => {
     // still moves into its workspace's chat region and to its chat's size.
     const settled = async () => {
       let last = await bounds();
-      const deadline = Date.now() + 10_000;
+      const deadline = performance.now() + 10_000;
       for (;;) {
         await new Promise((resolve) => setTimeout(resolve, 300));
         const next = await bounds();
         if (JSON.stringify(next) === JSON.stringify(last)) return next;
-        if (Date.now() > deadline)
+        if (performance.now() > deadline)
           throw new Error(
             `The dock window never settled: ${JSON.stringify(next)}`,
           );

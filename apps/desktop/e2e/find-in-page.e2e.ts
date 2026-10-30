@@ -148,7 +148,10 @@ const painted = async (
   label: string,
 ) => {
   let actual: number[] = [];
-  for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
+  for (
+    const deadline = performance.now() + 5000;
+    performance.now() < deadline;
+  ) {
     actual = await pixel(point);
     if (
       actual.every(

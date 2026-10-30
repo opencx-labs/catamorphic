@@ -44,8 +44,8 @@ async function restartForUpdate(handle: AppHandle, beforeQuit = "") {
       () => null,
       (error: unknown) => error,
     );
-  const deadline = Date.now() + 60_000;
-  while (alive(pid) && Date.now() < deadline)
+  const deadline = performance.now() + 60_000;
+  while (alive(pid) && performance.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 250));
   expect(alive(pid)).toBe(false);
   const failed = await request;

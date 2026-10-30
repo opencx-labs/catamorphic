@@ -283,11 +283,11 @@ describe("passkeys", () => {
 
   it("keeps the site's deadline instead of waiting forever", async () => {
     // Chrome holds a timeout to at least ten seconds.
-    const started = Date.now();
+    const started = performance.now();
     await startInGuest("signIn({ timeout: 1000 }); true");
     await sheetShown("sheet for the timed request");
     await titleIs("get:NotAllowedError", 20_000);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(9_000);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(9_000);
     await sheetGone("sheet closed at the deadline");
   });
 
