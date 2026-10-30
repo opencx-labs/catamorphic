@@ -101,6 +101,7 @@ export function SettingsScreen({
 }) {
   const [selected, setSelected] = useState("agents");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const navigationFrame = useRef(0);
   const navigationMotion = useRef<Animation | null>(null);
   const navigationScrollTop = useRef<number | null>(null);
@@ -157,13 +158,6 @@ export function SettingsScreen({
         navigationScrollTop.current = root.scrollTop;
         setSelected(entry.category);
         target.dataset.settingsTarget = "true";
-        target.classList.add(
-          "outline",
-          "outline-1",
-          "outline-accent",
-          "outline-offset-4",
-          "rounded-lg",
-        );
         highlighted = target;
         keepInView(target);
         const control =
@@ -196,13 +190,6 @@ export function SettingsScreen({
       clearTimeout(anchorTimeout);
       if (highlighted) {
         delete highlighted.dataset.settingsTarget;
-        highlighted.classList.remove(
-          "outline",
-          "outline-1",
-          "outline-accent",
-          "outline-offset-4",
-          "rounded-lg",
-        );
       }
     };
   }, [destination]);
@@ -329,8 +316,9 @@ export function SettingsScreen({
     setSelected(id);
     navigationFrame.current = requestAnimationFrame(() => {
       const root = scrollRef.current;
+      const content = contentRef.current;
       const target = root?.querySelector(`#settings-${id}`);
-      if (!root || !target) return;
+      if (!root || !content || !target) return;
       const distance =
         target.getBoundingClientRect().top - root.getBoundingClientRect().top;
       root.scrollTo({
@@ -351,7 +339,7 @@ export function SettingsScreen({
         return;
       // Like workspace tab cycling: signal a new location on a persistent
       // surface, without scrolling through every intervening settings row.
-      navigationMotion.current = root.animate(
+      navigationMotion.current = content.animate(
         [
           {
             opacity: 0.3,
@@ -459,7 +447,11 @@ export function SettingsScreen({
               </button>
             ))}
           </nav>
-          <div className="min-w-0 flex-1 px-6 pb-10">
+          <div
+            ref={contentRef}
+            data-settings-content
+            className="min-w-0 flex-1 px-6 pb-10"
+          >
             {sections.map((section) => (
               <div
                 key={section.id}

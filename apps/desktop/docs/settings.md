@@ -138,6 +138,11 @@ controls, scrolls, highlights and focuses the target. A floating chat minimizes 
 the control. Rows identify the inspected scope even when navigation passes its
 section header. Navigation never changes a preference itself.
 
+Category navigation animates the content column while its navigation stays in
+place. Search destinations use an inset highlight that fits wholly inside the
+target row or card, including clipped shortcut and color lists. Existing corner
+radii remain intact when the highlight clears.
+
 Project themes use the same profile, shared-project and personal-project priority
 as workspace settings. Missing selections, colors and fonts inherit. Choosing a
 selection replaces inherited color overrides; individual token and font edits

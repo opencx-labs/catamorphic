@@ -242,6 +242,7 @@ kbd {
   .field input,
   .field select,
   .field [contenteditable],
+  [data-settings-target="true"],
   [role="dialog"]
 ) {
   outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
@@ -1738,6 +1739,13 @@ div:has(> button:focus-visible) > [data-menu-focus] {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--color-bg-raised) 30%, transparent);
+}
+
+/* A search destination may fill a clipped list or already have a border.
+   Keep its highlight wholly inside its box, on every Settings category. */
+[data-settings-target="true"] {
+  outline: var(--focus-ring-width) solid var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
 /* One button vocabulary. A rectangular action picks a role instead of a

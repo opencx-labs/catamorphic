@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -33,6 +34,13 @@ const destination = async (id: string) => {
     `(()=>{const row=document.querySelector('[data-setting-id="${id}"]');const root=document.querySelector('[data-settings-scroll]');if(!row||!root)return false;const a=row.getBoundingClientRect(),b=root.getBoundingClientRect();return a.top>=b.top && a.top<b.bottom})()`,
     { label: `${id} row in view` },
   );
+  const ring = await app.eval<{ width: number; offset: number }>(`(() => {
+    const row = document.querySelector('[data-setting-id="${id}"]');
+    const style = getComputedStyle(row);
+    return {width:parseFloat(style.outlineWidth),offset:parseFloat(style.outlineOffset)};
+  })()`);
+  expect(ring.width).toBeGreaterThan(0);
+  expect(ring.offset).toBeLessThanOrEqual(-ring.width);
 };
 beforeAll(async () => {
   app = await launchApp();
@@ -120,6 +128,42 @@ it("supports repeated destinations and leaving the mode", async () => {
   await wait(`return rows()[0]?.textContent.includes('Framed content')`);
   await run(`key('Enter')`);
   await destination("contentFrame");
+});
+it("keeps the first shortcut highlight inside its clipped list and clears it without changing row corners", async () => {
+  await open();
+  await type("configure agent shortcut");
+  await wait(`return rows()[0]?.textContent.includes('Configure agent')`);
+  await run(`key('Enter')`);
+  await destination("shortcut.configure-agent");
+  const before = await app.eval<string>(`(() => {
+    const row = document.querySelector('[data-setting-id="shortcut.configure-agent"]');
+    row.tabIndex = -1;
+    row.focus({preventScroll:true});
+    document.documentElement.dataset.focusModality = 'keyboard';
+    return getComputedStyle(row).borderRadius;
+  })()`);
+  // The destination remains fully inset even if the row itself receives focus.
+  await destination("shortcut.configure-agent");
+  await wait(
+    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
+  );
+  await app.screenshot(
+    path.join(
+      process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp",
+      "settings-shortcut-highlight.png",
+    ),
+  );
+  await open();
+  await type("framed content");
+  await wait(`return rows()[0]?.textContent.includes('Framed content')`);
+  await run(`key('Enter')`);
+  await destination("contentFrame");
+  expect(
+    await app.eval(`(() => {
+    const row = document.querySelector('[data-setting-id="shortcut.configure-agent"]');
+    return !row.hasAttribute('data-settings-target') && getComputedStyle(row).borderRadius === ${JSON.stringify(before)};
+  })()`),
+  ).toBe(true);
 });
 it("offers the actual desktop host skill and lets a project agent edit its scoped JSON file", async () => {
   await open();

@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { type NetworkMode, QueryClient } from "@tanstack/react-query";
 
 /**
  * A query cache for Work's windows. Work's data follows this computer's
@@ -9,13 +9,20 @@ import { QueryClient } from "@tanstack/react-query";
  * while stutter. A query that does want it asks with
  * `refetchOnWindowFocus`: a pull request's state, and a file the window
  * shows from disk, which can change outside Work with no hint.
+ * Local requests use IPC or loopback and must run even when Chromium
+ * reports no internet. Remote authorities opt into online mode.
  */
 export function workQueryClient(
-  queries: { staleTime?: number; retry?: number } = {},
+  queries: {
+    staleTime?: number;
+    retry?: number;
+    networkMode?: NetworkMode;
+  } = {},
 ): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
+        networkMode: queries.networkMode ?? "always",
         staleTime: queries.staleTime ?? 30_000,
         retry:
           queries.retry ??
@@ -30,7 +37,11 @@ export function workQueryClient(
             return failureCount < 2;
           }),
         refetchOnWindowFocus: false,
+        // Some local routes consult remote services. Refresh their stale
+        // results when internet returns, as online mode did by default.
+        refetchOnReconnect: true,
       },
+      mutations: { networkMode: queries.networkMode ?? "always" },
     },
   });
 }

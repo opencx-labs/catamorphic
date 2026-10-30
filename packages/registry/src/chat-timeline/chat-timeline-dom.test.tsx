@@ -41,6 +41,11 @@ describe("ChatTimeline DOM contract", () => {
     vi.stubGlobal("cancelAnimationFrame", (handle: number) =>
       window.clearTimeout(handle),
     );
+    vi.stubGlobal("CSS", { escape: (value: string) => value });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: vi.fn(),
+    });
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -57,6 +62,7 @@ describe("ChatTimeline DOM contract", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
@@ -69,6 +75,58 @@ describe("ChatTimeline DOM contract", () => {
   const $$ = (selector: string) => [...container.querySelectorAll(selector)];
   const now = Date.now();
   const iso = (offset: number) => new Date(now + offset).toISOString();
+
+  it("replaces the empty prompt with initial loading, then an empty conversation or load error", async () => {
+    const props = { timeline: [], emptyState: "Start a conversation" };
+    await render({ ...props, isLoading: true });
+    expect(
+      $('[role="status"][aria-label="Loading conversation"]'),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain(props.emptyState);
+
+    await render(props);
+    expect($('[aria-label="Loading conversation"]')).toBeNull();
+    expect(container.textContent).toContain(props.emptyState);
+
+    await render({ ...props, error: "Could not load conversation" });
+    expect($('[role="alert"]')?.textContent).toBe(
+      "Could not load conversation",
+    );
+    expect(container.textContent).not.toContain(props.emptyState);
+    expect($('[aria-label="Loading conversation"]')).toBeNull();
+  });
+
+  it("keeps loaded history visible during a refresh", async () => {
+    await render({
+      timeline: timelineOf({
+        turns: [turn("t1", 1)],
+        items: [input("t1", "Already loaded")],
+      }),
+      isLoading: true,
+    });
+    expect(container.textContent).toContain("Already loaded");
+    expect($('[aria-label="Loading conversation"]')).toBeNull();
+  });
+
+  it("shows explicit connection status while reconnecting and resumes activity afterward", async () => {
+    const props = {
+      timeline: timelineOf({
+        turns: [turn("t1", 1, { status: "running" })],
+        items: [input("t1", "Keep this message")],
+      }),
+      activity: "Thinking",
+    };
+    await render({ ...props, isReconnecting: true });
+    expect(container.textContent).toContain("Keep this message");
+    expect($('[role="status"]')?.textContent).toBe(
+      "Waiting for connection. Reconnecting…",
+    );
+    expect($('[role="alert"]')).toBeNull();
+    expect($('[data-testid="chat-activity"]')).toBeNull();
+    await render(props);
+    expect($('[role="status"]')).toBeNull();
+    expect($('[data-testid="chat-activity"]')?.textContent).toBe("Thinking");
+  });
 
   const settledItems: Item[] = [
     input("t1", `Fix it with ${ATTACHMENT_MARKER}`, {
