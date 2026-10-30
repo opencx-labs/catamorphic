@@ -5,7 +5,6 @@ import {
   useCatamorphic,
   useCreateAgentSession,
   useForkAgentSession,
-  useProjects,
   useRenameAgentSession,
   useUnarchiveAgentSession,
   useUpdateAgentSession,
@@ -230,6 +229,7 @@ import {
   visitSurface,
 } from "./lib/surface-history.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
+import { useDesktopProjects } from "./lib/use-desktop-projects.js";
 import { useWorktreesAvailable } from "./lib/use-session-checkout.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
@@ -671,7 +671,7 @@ export function App({
       }),
     [queryClient],
   );
-  const projectsQuery = useProjects();
+  const projectsQuery = useDesktopProjects();
   // Subscribe to loading/error changes even while the workspace branch is
   // rendered. Query observers track property reads; recovery cannot depend
   // on whether the empty-state branch happened to read them last render.
@@ -984,21 +984,21 @@ export function App({
     : allProjects;
   // A window may suggest its profile's last/default project, but it cannot
   // mount that project's resources or saver until WorkspaceRoot owns its claim.
+  const projectCatalogPending =
+    projectsLoading || (projectsFetching && projects.length === 0);
   const fallbackSelectionReady = Boolean(
-    activeProfileId && profilesData && profilePrefs && !projectsLoading,
+    activeProfileId && profilesData && profilePrefs && !projectCatalogPending,
   );
+  const preferredProject =
+    projects.find((project) => project.id === activeProjectId) ??
+    projects.find((project) => project.id === profilePrefs?.lastProjectId) ??
+    projects.find(
+      (project) => project.id === activeProfile?.defaultProjectId,
+    ) ??
+    projects[0];
   const fallbackProjectId =
     !runtimeProjectId && fallbackSelectionReady
-      ? (
-          projects.find((project) => project.id === activeProjectId) ??
-          projects.find(
-            (project) => project.id === profilePrefs?.lastProjectId,
-          ) ??
-          projects.find(
-            (project) => project.id === activeProfile?.defaultProjectId,
-          ) ??
-          projects[0]
-        )?.id
+      ? preferredProject?.id
       : undefined;
   // A request token identifies this candidate's UI decision only. An earlier
   // candidate's answer cannot let links drain while a newer claim is pending.
@@ -1149,12 +1149,14 @@ export function App({
           setFallbackDecision({ request: fallbackRequest, accepted });
       })
       .catch((error: unknown) => {
-        if (current)
+        if (current) {
+          setFallbackDecision({ request: fallbackRequest, accepted: false });
           setLinkError(
             error instanceof Error
               ? error.message
               : "Could not open the project",
           );
+        }
       });
     return () => {
       current = false;
@@ -7164,6 +7166,9 @@ export function App({
       <ProjectSwitcher
         projects={projects}
         activeProjectId={projectId}
+        loading={projectCatalogPending || !activeProfileId || !profilesData}
+        loadError={projectsLoadError}
+        onRetry={() => void projectsQuery.refetch()}
         onSelect={selectProject}
         onOpenWindow={(id) => {
           void desktopApi.workspaceNavigate({
@@ -8485,7 +8490,13 @@ export function App({
               ) : (
                 <EmptyState
                   key={activeProfile?.id}
-                  loading={projectsLoading}
+                  loading={
+                    !fallbackSelectionReady ||
+                    (fallbackRequest !== null &&
+                      fallbackDecision?.request !== fallbackRequest)
+                  }
+                  openingProject={preferredProject}
+                  onOpenProject={selectProject}
                   loadError={projectsLoadError}
                   retrying={projectsFetching}
                   onRetry={() => void projectsQuery.refetch()}
@@ -8748,6 +8759,8 @@ function EmptyState({
   profiles,
   importCompleted,
   loading,
+  openingProject,
+  onOpenProject,
   loadError,
   retrying,
   onRetry,
@@ -8761,6 +8774,8 @@ function EmptyState({
   profiles?: ProfilesData | null;
   importCompleted: boolean;
   loading: boolean;
+  openingProject?: ProjectSummary;
+  onOpenProject: (projectId: string) => void;
   loadError: boolean;
   retrying: boolean;
   onRetry: () => void;
@@ -8813,6 +8828,20 @@ function EmptyState({
           </div>
         ) : loading ? (
           <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
+        ) : openingProject ? (
+          <div data-testid="project-open-recovery">
+            <h1 className="text-sm font-medium text-fg">Open your project</h1>
+            <p className="mt-2 text-sm text-fg-muted">
+              Continue in {openingProject.name}.
+            </p>
+            <button
+              type="button"
+              onClick={() => onOpenProject(openingProject.id)}
+              className="button-primary mt-4"
+            >
+              Open project
+            </button>
+          </div>
         ) : (
           <>
             <h1 className="text-xl font-semibold text-fg">

@@ -5,6 +5,7 @@ import {
   type AttemptStart,
   formatEnvFile,
   type HarnessEvent,
+  NO_CAPABILITIES,
   parseEnvFile,
   RUNNER_PROTOCOL_VERSION,
   type RunnerFrame,
@@ -490,6 +491,54 @@ describe("attempt runner", () => {
     expect(events().some((event) => event.type === "turn.completed")).toBe(
       false,
     );
+  });
+
+  it("a kill releases unanswered calls and waits for the harness to let go", async () => {
+    let release = () => {};
+    const cleanup = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const failures: string[] = [];
+    let cleaning = false;
+    const runner = new InProcessRunner({
+      version: "test",
+      adapters: {
+        echo: {
+          id: "echo",
+          capabilities: () => NO_CAPABILITIES,
+          start: (_attempt, host) => ({
+            steer: async () => false,
+            interrupt: () => {},
+            finished: (async () => {
+              for (let i = 0; i < 2; i += 1) {
+                await host.nativeState
+                  .append({ entries: [i] })
+                  .catch((error: Error) => failures.push(error.message));
+              }
+              cleaning = true;
+              await cleanup;
+            })(),
+          }),
+        },
+      },
+    });
+    runner.send({
+      id: "start",
+      command: { kind: "start", attempt: attempt("hello") },
+    });
+    const frames = await runner.read({ afterSeq: 0, waitMs: 0 });
+    expect(frames.some((frame) => frame.type === "call")).toBe(true);
+    let ended = false;
+    const killed = runner.kill().then(() => {
+      ended = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(failures).toEqual(["The runner stopped", "The runner stopped"]);
+    expect(cleaning).toBe(true);
+    expect(ended).toBe(false);
+    release();
+    await killed;
+    expect(ended).toBe(true);
   });
 });
 

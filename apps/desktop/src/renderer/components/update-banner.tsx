@@ -1,5 +1,6 @@
 import { Download, RefreshCw, RotateCw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { updateMessageKey } from "../../shared/update.js";
 import { type DesktopUpdateState, desktopApi } from "../lib/desktop-api.js";
 import { Collapsible } from "./collapsible.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -34,9 +35,7 @@ export function UpdateBanner({
     };
   }, []);
 
-  const stateKey = state
-    ? `${state.phase}:${state.version ?? state.currentVersion}:${state.manualCheckId ?? 0}`
-    : "loading";
+  const stateKey = state ? updateMessageKey(state) : "loading";
 
   const visible =
     state !== null &&
@@ -49,7 +48,8 @@ export function UpdateBanner({
     () => updateContent(state, hasActiveWork),
     [state, hasActiveWork],
   );
-  const open = visible && !!content && dismissed !== stateKey;
+  const open =
+    visible && !!content && !state?.dismissed && dismissed !== stateKey;
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     if (open) {
@@ -190,7 +190,10 @@ export function UpdateBanner({
         <ShortcutHint label="Dismiss update message">
           <button
             type="button"
-            onClick={() => setDismissed(stateKey)}
+            onClick={() => {
+              setDismissed(stateKey);
+              void desktopApi.updateDismiss(stateKey);
+            }}
             className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-fg-faint transition-colors duration-150 hover:bg-bg-inset hover:text-fg"
             aria-label="Dismiss update message"
           >

@@ -1254,6 +1254,7 @@ export interface CatamorphicDesktopApi {
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
   updateState: () => Promise<DesktopUpdateState>;
   updateCheck: () => Promise<void>;
+  updateDismiss: (messageKey: string) => Promise<void>;
   updateDownload: () => Promise<void>;
   updateInstall: () => Promise<void>;
   updateMove: () => Promise<void>;
