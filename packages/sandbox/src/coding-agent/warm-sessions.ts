@@ -29,6 +29,8 @@ export class WarmSessions<S extends WarmSession> {
     string,
     { session: S; timer: ReturnType<typeof setTimeout> }
   >();
+  /** A process still releasing its thread after eviction or expiry. */
+  private readonly closing = new Map<string, Promise<void>>();
   private disposed = false;
 
   constructor(private readonly options: WarmSessionsOptions) {}
@@ -42,31 +44,37 @@ export class WarmSessions<S extends WarmSession> {
     thread: string,
     accept: (session: S) => boolean,
   ): Promise<S | undefined> {
+    // Do not yield between observing no close and claiming the idle
+    // entry: another release could evict it and start closing its writer.
+    for (let closing = this.closing.get(thread); closing; ) {
+      await closing;
+      closing = this.closing.get(thread);
+    }
     const entry = this.idle.get(thread);
     if (!entry) return undefined;
     this.idle.delete(thread);
     clearTimeout(entry.timer);
     if (entry.session.alive && accept(entry.session)) return entry.session;
-    await entry.session.close();
+    await this.close(thread, entry.session);
     return undefined;
   }
 
   /** Keep a session whose attempt settled, for the thread's next one. */
   release(thread: string, session: S): void {
     if (this.disposed || !session.alive) {
-      void session.close();
+      void this.close(thread, session);
       return;
     }
     const previous = this.idle.get(thread);
     if (previous && previous.session !== session) {
       clearTimeout(previous.timer);
-      void previous.session.close();
+      void this.close(thread, previous.session);
     }
     this.idle.delete(thread);
     const timer = setTimeout(() => {
       if (this.idle.get(thread)?.session !== session) return;
       this.idle.delete(thread);
-      void session.close();
+      void this.close(thread, session);
     }, this.options.idleMs);
     timer.unref?.();
     // Insertion order is recency: the first entry is the least recently used.
@@ -76,7 +84,7 @@ export class WarmSessions<S extends WarmSession> {
       if (oldest === undefined || !entry) break;
       this.idle.delete(oldest);
       clearTimeout(entry.timer);
-      void entry.session.close();
+      void this.close(oldest, entry.session);
     }
   }
 
@@ -93,12 +101,32 @@ export class WarmSessions<S extends WarmSession> {
     return this.idle.size;
   }
 
+  private close(thread: string, session: S): Promise<void> {
+    const closing = Promise.all([
+      this.closing.get(thread),
+      session.close(),
+    ]).then(() => {});
+    this.closing.set(thread, closing);
+    void closing.then(
+      () => {
+        if (this.closing.get(thread) === closing) this.closing.delete(thread);
+      },
+      // Retain a failed close: a new process must not take this thread
+      // while the old writer may still own it.
+      () => {},
+    );
+    return closing;
+  }
+
   /** End every idle session; later releases close at once. */
   async dispose(): Promise<void> {
     this.disposed = true;
-    const entries = [...this.idle.values()];
+    const entries = [...this.idle.entries()];
     this.idle.clear();
-    for (const entry of entries) clearTimeout(entry.timer);
-    await Promise.all(entries.map((entry) => entry.session.close()));
+    for (const [, entry] of entries) clearTimeout(entry.timer);
+    const closing = entries.map(([thread, entry]) =>
+      this.close(thread, entry.session),
+    );
+    await Promise.all([...closing, ...this.closing.values()]);
   }
 }

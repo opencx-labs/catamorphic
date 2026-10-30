@@ -376,3 +376,22 @@ The palette's Ask agent mode shows the default agent's harness mark and its name
 model name and reasoning effort, separated by middle dots. Unpinned models resolve
 from the harness for the current project; focused-chat overrides do not change the
 identity of a new chat. Unsupported reasoning controls are omitted.
+
+### Profile recovery and shared update messages
+
+Profile selection uses the complete project catalog, including projects beyond
+its first API page. A later-page failure keeps the previous complete catalog;
+it never removes retained workspaces based on a partial result. A change between
+pages retries the read. Main validates saved project claims and removes deleted
+projects through its confirmed forget event; a catalog refresh never disposes
+retained resources. Profile changes restart that catalog read in every window. While profile settings or the project
+claim resolve, the shell shows loading. Onboarding appears only for a confirmed
+empty profile; a refused claim offers opening the existing project.
+
+Update messages share dismissal across windows. Closing one hides that same
+message everywhere, including newly opened windows. Download progress keeps it
+closed; a new phase or explicit check can show the next message.
+
+The sidebar panel's overlay thumb passes wheel input to the native scroller
+beneath it, preserving the screen edge's scrolling. A press on the thumb still
+captures its drag; section thumbs continue to address their own nested lists.

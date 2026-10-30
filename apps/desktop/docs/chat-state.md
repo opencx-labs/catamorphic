@@ -270,6 +270,14 @@ manual retry. Do not automatically fork history, steal a writer lock, or present
 this as an authentication failure. Local-auth Codex sessions can also be opened
 by the Codex desktop app, which then owns the native writer lock.
 
+After machine loss, a local runner releases its outstanding calls and ends its
+harness process before the native thread is resumed. A surviving remote runner
+keeps its attempt and cursor while its machine is disconnected, then reattaches
+when it returns. A lost continuation can continue again after a later machine
+stop; each lost turn queues at most one continuation, and Stop or newer input
+still takes precedence. Codex's temporary workspace routing discovery failure
+uses the existing durable retry backoff when no work began.
+
 ## Switching agents
 
 Choosing an agent updates the same session even when its harness differs

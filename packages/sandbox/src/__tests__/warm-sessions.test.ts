@@ -76,3 +76,43 @@ it("forgets a session whose process ended, and disposes the rest", async () => {
   sessions.release("late", late);
   expect(late.closed).toBe(1);
 });
+
+it("claims an idle writer before another release can evict it", async () => {
+  const sessions = new WarmSessions<Session>({ idleMs: 1_000, max: 1 });
+  const original = new Session("original");
+  sessions.release("thread", original);
+  const taking = sessions.take("thread", () => true);
+  sessions.release("other", new Session("other"));
+  expect(await taking).toBe(original);
+  expect(original.closed).toBe(0);
+  await sessions.dispose();
+});
+
+it.each(["expiry", "capacity"] as const)(
+  "waits for a writer evicted by %s to exit before resuming its thread",
+  async (reason) => {
+    const sessions = new WarmSessions<Session>({ idleMs: 1_000, max: 1 });
+    const old = new Session("old");
+    let release = () => {};
+    old.close = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    sessions.release("thread", old);
+    if (reason === "expiry") vi.advanceTimersByTime(1_000);
+    else sessions.release("other", new Session("other"));
+    let resumed = false;
+    const taking = sessions
+      .take("thread", () => true)
+      .then((session) => {
+        resumed = true;
+        return session;
+      });
+    await Promise.resolve();
+    expect(resumed).toBe(false);
+    release();
+    expect(await taking).toBeUndefined();
+    expect(resumed).toBe(true);
+    await sessions.dispose();
+  },
+);

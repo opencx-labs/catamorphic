@@ -198,6 +198,7 @@ class CodexAttempt {
   private finishing = false;
   private completed = false;
   private interruptRequested = false;
+  private hostStopped = false;
   private interruptTimer?: ReturnType<typeof setTimeout>;
   private mirror?: RolloutMirror;
   private readonly usage: AgentTurnUsage[] = [];
@@ -258,8 +259,17 @@ class CodexAttempt {
   }
 
   control(): AttemptControl {
-    const onAbort = () => this.interrupt();
+    // A dead host cannot answer tools or store native state. Close its
+    // process before a continuation tries to open the same thread.
+    const onAbort = () => {
+      if (this.completed) return;
+      this.hostStopped = true;
+      this.interruptRequested = true;
+      this.complete({ status: "interrupted" });
+      void this.client?.close();
+    };
     this.host.signal.addEventListener("abort", onAbort, { once: true });
+    if (this.host.signal.aborted) onAbort();
     const finished = this.run().finally(() =>
       this.host.signal.removeEventListener("abort", onAbort),
     );
@@ -285,7 +295,13 @@ class CodexAttempt {
       const thread = session?.thread;
       // Only a turn Codex itself finished leaves its thread ready for the
       // next one; anything else ends this Codex.
-      if (this.sessions && session?.alive && thread && this.turnFinished) {
+      if (
+        this.sessions &&
+        session?.alive &&
+        thread &&
+        this.turnFinished &&
+        !this.hostStopped
+      ) {
         session.release(this);
         this.sessions.release(thread.id, session);
         await this.removeInputs();
@@ -1435,7 +1451,8 @@ export function classifyTurnError(
     name === "responseStreamConnectionFailed" ||
     name === "responseStreamDisconnected" ||
     name === "responseTooManyFailedAttempts" ||
-    (status !== undefined && status >= 500)
+    (status !== undefined && status >= 500) ||
+    /\bworkspace routing discovery failed\b/i.test(message)
   )
     kind = "unavailable";
   else if (name === "badRequest" && /reasoning|encrypted/i.test(message))

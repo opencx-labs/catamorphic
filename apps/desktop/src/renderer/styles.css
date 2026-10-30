@@ -2013,10 +2013,14 @@ div:has(> button:focus-visible) > [data-menu-focus] {
   background: color-mix(in srgb, var(--color-fg) 22%, transparent);
   transition: background-color 150ms var(--ease-standard);
 }
-.overlay-scrollbar[data-shown="true"] .overlay-scrollbar-thumb {
+/* Panel wheels reach the native scroller beneath the visual thumb. Its
+   drag starts from the sidebar's capture listener without intercepting wheels. */
+.overlay-scrollbar[data-lane="section"][data-shown="true"]
+.overlay-scrollbar-thumb {
   pointer-events: auto;
 }
 .overlay-scrollbar-thumb:hover,
+.overlay-scrollbar[data-hovered] .overlay-scrollbar-thumb,
 .overlay-scrollbar[data-dragging] .overlay-scrollbar-thumb {
   background: color-mix(in srgb, var(--color-fg) 38%, transparent);
 }

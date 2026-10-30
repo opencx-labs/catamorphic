@@ -58,6 +58,8 @@ export interface HostScript {
     act: {
       steer: (text: string) => void;
       interrupt: () => void;
+      /** Its host went away, rather than a person stopping its turn. */
+      kill: () => void;
       /** End the wait on a request without an answer (ADR 0195). */
       release: (requestKey: string, reason: string) => void;
     },
@@ -120,6 +122,9 @@ export async function driveAttempt(input: {
       });
     },
     interrupt: () => send({ kind: "interrupt" }),
+    kill: () => {
+      void runner.kill();
+    },
     release: (requestKey: string, reason: string) =>
       send({ kind: "release", requestKey, reason }),
   };

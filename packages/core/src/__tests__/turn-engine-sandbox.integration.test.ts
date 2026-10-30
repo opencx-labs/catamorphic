@@ -2,18 +2,26 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
+import { EchoAdapter } from "@catamorphic/agent-runner";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
+import {
+  RemoteOperationQueue,
+  registerExecutorKey,
+} from "../services/remote-operations.js";
 import { modelInputText } from "../services/sessions/input-text.js";
 import {
   type RunnerLocation,
   sandboxChannel,
+  startInProcessRunner,
   startSandboxRunner,
 } from "../services/sessions/runner-channels.js";
 import { itemFromRow } from "../services/sessions/session-rows.js";
@@ -109,13 +117,16 @@ const host: TurnEngineHost = {
   settled: async () => {},
 };
 
-function replica(name: string): TurnEngine {
+function replica(
+  name: string,
+  overrides: Partial<TurnEngineHost> = {},
+): TurnEngine {
   const engine = new TurnEngine({
     db,
     log: fixture.log,
     queue: fixture.queue,
     workerId: name,
-    host,
+    host: { ...host, ...overrides },
     inputText: modelInputText,
   });
   engines.push(engine);
@@ -274,6 +285,156 @@ describe("the turn engine over sandbox runners", () => {
     ]);
     const [attempt] = await attemptsOf(sessionId);
     await exits(runnerLocation(attempt?.runner));
+  }, 60_000);
+
+  it("reattaches the same attempt after its machine disconnects", async () => {
+    const { sessionId } = await chat("remember this [[wait 300]]");
+    const lease = {
+      executor: `node:${randomUUID()}`,
+      leaseToken: randomUUID(),
+    };
+    const keys = generateExecutorKeyPair();
+    await registerExecutorKey({ db, ...lease, publicKey: keys.publicKey });
+    let connected = true;
+    const remote = new RemoteOperationQueue(db).provider({
+      executor: lease.executor,
+      leaseToken: async () => (connected ? lease.leaseToken : undefined),
+      leaseHeld: async () => connected,
+      label: "This machine",
+      workspaceRoot: "/workspace",
+      processes: true,
+    });
+    let started = false;
+    const a = replica("disconnecting", {
+      prepare: async (input) => {
+        const prepared = await host.prepare(input);
+        return {
+          ...prepared,
+          launch: async () => {
+            const channel = await prepared.launch();
+            return {
+              ...channel,
+              read: async (readInput) => {
+                if (started && channel.location.kind === "sandbox_process") {
+                  const pending = remote.processes!.readProcessOutput({
+                    sandboxId: channel.location.sandboxId,
+                    processId: channel.location.processId,
+                    cursor: readInput.cursor,
+                  });
+                  await vi.waitFor(async () => {
+                    const queued = await db
+                      .selectFrom("remote_operations")
+                      .select("id")
+                      .where("executor", "=", lease.executor)
+                      .execute();
+                    expect(queued).toHaveLength(1);
+                  });
+                  connected = false;
+                  await pending;
+                }
+                const read = await channel.read(readInput);
+                started = read.frames.some(
+                  (frame) =>
+                    frame.type === "event" &&
+                    frame.event.type === "turn.started",
+                );
+                return read;
+              },
+            };
+          },
+        };
+      },
+    });
+    await a.runNext({ sessionId });
+    expect(started).toBe(true);
+    const disconnected = await turnOf(sessionId);
+    expect(disconnected.status).toBe("running");
+    expect(disconnected.error).toBeNull();
+    expect(disconnected.lease_owner).toBeNull();
+    await replica("still-disconnected", {
+      reattach: async ({ location }) => {
+        await remote.processes!.listProcesses({
+          sandboxId: location.sandboxId,
+        });
+        return undefined;
+      },
+    }).runNext({ sessionId });
+    expect((await turnOf(sessionId)).status).toBe("running");
+    await replica("reconnected").runNext({ sessionId });
+    expect((await turnOf(sessionId)).status).toBe("completed");
+    expect(await attemptsOf(sessionId)).toHaveLength(1);
+    expect(await stored(sessionId)).toEqual([
+      { turn: 1, text: "remember this [[wait 300]]" },
+    ]);
+  }, 60_000);
+
+  it("continues again after a second machine stop without resending the person's input", async () => {
+    const { sessionId } = await chat("do this once");
+    const echo = new EchoAdapter();
+    let starts = 0;
+    const adapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => echo.capabilities(),
+      start: (attempt, attemptHost) => {
+        starts += 1;
+        return echo.start(
+          {
+            ...attempt,
+            ...(starts < 3 && attempt.input
+              ? {
+                  input: {
+                    ...attempt.input,
+                    text: `${attempt.input.text} [[hang]]`,
+                  },
+                }
+              : {}),
+          },
+          attemptHost,
+        );
+      },
+    };
+    const overrides: Partial<TurnEngineHost> = {
+      prepare: async (input) => ({
+        ...(await host.prepare(input)),
+        launch: async () => startInProcessRunner({ adapter }),
+      }),
+    };
+    const turns = () =>
+      db
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", sessionId)
+        .orderBy("ordinal")
+        .execute();
+    for (let stop = 0; stop < 2; stop += 1) {
+      const engine = replica(`stopped-${stop}`, overrides);
+      if (stop > 0) await engine.runNext({ sessionId }); // Recover the lost runner.
+      const running = engine.runNext({ sessionId });
+      await until(
+        async () => (await turns()).at(-1)?.status === "running",
+        "the continuation to start",
+      );
+      await engine.stop({ timeoutMs: 2_000, handBack: () => true });
+      await running;
+    }
+    const returned = replica("returned", overrides);
+    await returned.runNext({ sessionId }); // Recover the second lost runner.
+    await returned.runNext({ sessionId });
+    const completed = await turns();
+    expect(completed.map((turn) => turn.status)).toEqual([
+      "interrupted",
+      "interrupted",
+      "completed",
+    ]);
+    expect(completed[1]?.continuation_of).toBe(completed[0]?.id);
+    expect(completed[2]?.continuation_of).toBe(completed[1]?.id);
+    const inputs = await db
+      .selectFrom("agent_items")
+      .select("id")
+      .where("session_id", "=", sessionId)
+      .where("kind", "=", "user_message")
+      .execute();
+    expect(inputs).toHaveLength(1);
   }, 60_000);
 
   it("settles a finalizing turn on a replica that stops, never handing it back", async () => {

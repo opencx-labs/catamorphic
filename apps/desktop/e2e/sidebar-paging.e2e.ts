@@ -367,6 +367,83 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
   expect(sidebarShown.top).toBeGreaterThanOrEqual(sidebarShown.panelTop);
   expect(sidebarShown.bottom).toBeLessThanOrEqual(sidebarShown.panelBottom);
   expect(sidebarShown.section).toBe("false");
+  // The visible panel thumb must leave wheel input on the native scroller,
+  // just like the one-pixel strip at the screen edge. Dragging still works.
+  const panelSelector = `${side} .sidebar-tab-panel:not([hidden])`;
+  await app.eval(`document.querySelector('${panelSelector}').scrollTop = 40`);
+  await app.waitFor(
+    `document.querySelector('${panelThumb}').dataset.shown === 'true'`,
+  );
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const thumb = document.querySelector('${panelThumb} .overlay-scrollbar-thumb').getBoundingClientRect();
+    return { x: thumb.left + thumb.width / 2, y: thumb.top + thumb.height / 2 };
+  })()`);
+  await app.movePointer(point);
+  expect(
+    await app.eval(
+      `document.elementFromPoint(${point.x}, ${point.y})?.closest('.sidebar-tab-panel') === document.querySelector('${panelSelector}')`,
+    ),
+  ).toBe(true);
+  await app.eval(`(() => {
+    window.__panelWheel = null;
+    window.__panelWheelEnded = false;
+    document.querySelector('${panelSelector}').addEventListener('scrollend', () => { window.__panelWheelEnded = true; }, { once: true });
+    document.addEventListener('wheel', (event) => {
+      queueMicrotask(() => { window.__panelWheel = { prevented: event.defaultPrevented }; });
+    }, { once: true, capture: true });
+  })()`);
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    ...point,
+    deltaX: 0,
+    deltaY: 80,
+  });
+  await app.waitFor(
+    `document.querySelector('${panelSelector}').scrollTop > 40 && window.__panelWheel !== null`,
+  );
+  expect(await app.eval("window.__panelWheel.prevented")).toBe(false);
+  // Reset after the wheel has settled so its animation cannot mask a drag.
+  await app.waitFor("window.__panelWheelEnded === true");
+  const drag = await app.eval<{ x: number; y: number; top: number }>(`(() => {
+    const thumb = document.querySelector('${panelThumb} .overlay-scrollbar-thumb').getBoundingClientRect();
+    return { x: thumb.left + thumb.width / 2, y: thumb.top + thumb.height / 2, top: document.querySelector('${panelSelector}').scrollTop };
+  })()`);
+  await app.movePointer(drag);
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: drag.x,
+    y: drag.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await app.waitFor(
+    `document.querySelector('${panelThumb}').hasAttribute('data-dragging')`,
+  );
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: drag.x,
+    y: drag.y + 25,
+    button: "left",
+    buttons: 1,
+  });
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: drag.x,
+    y: drag.y + 25,
+    button: "left",
+    clickCount: 1,
+  });
+  await app.waitFor(
+    `!document.querySelector('${panelThumb}').hasAttribute('data-dragging') && document.querySelector('${panelSelector}').scrollTop > ${drag.top}`,
+  );
+  await app.movePointer({ x: 900, y: 400 });
+  if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+        "sidebar-native-wheel.png",
+      ),
+    );
   await app.waitFor(
     `document.querySelector('${panelThumb}').dataset.shown === 'false' && getComputedStyle(document.querySelector('${panelThumb}')).opacity === '0'`,
     { label: "the sidebar's thumb faded once it was still" },

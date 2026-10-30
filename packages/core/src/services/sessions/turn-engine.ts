@@ -42,6 +42,7 @@ import {
   type RenewedTurnLease,
   startTurnLeaseRenewal,
 } from "../agent-turn-leases.js";
+import { ExecutorNotConnectedError } from "../remote-operations.js";
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
 import {
@@ -539,6 +540,15 @@ export class TurnEngine {
     } catch (error) {
       // Losing the lease mid-step is losing the turn, not a failure of it.
       if (error instanceof TurnLeaseLostError) local.abort.abort();
+      // A disconnected machine is not a failed turn. Leave its attempt
+      // and cursor intact for the next holder to reattach when it is back.
+      if (error instanceof ExecutorNotConnectedError) {
+        local.abort.abort();
+        await this.deps.queue.handBack({
+          turnId: claim.turn.id,
+          leaseToken: claim.leaseToken,
+        });
+      }
       if (!local.abort.signal.aborted)
         console.warn("[catamorphic] A turn failed unexpectedly", error);
       if (!local.abort.signal.aborted)
@@ -1603,7 +1613,7 @@ export class TurnEngine {
     if (!channel) {
       channel =
         runner.location.kind === "in_process"
-          ? reattachInProcessRunner(runner.location)
+          ? await reattachInProcessRunner(runner.location)
           : await this.deps.host.reattach({
               identity: ctx.identity,
               session: ctx.session,
@@ -3329,9 +3339,6 @@ export class TurnEngine {
         !newer &&
         requeued.length === 0 &&
         !alreadyContinued &&
-        // A continuation that is lost too is not continued again: a machine
-        // that keeps dying would chain them without end.
-        turn.continuationOf === null &&
         !turn.cancellationRequested &&
         ctx.session.status === "active"
       ) {

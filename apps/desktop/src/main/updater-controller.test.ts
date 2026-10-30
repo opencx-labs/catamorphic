@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopUpdateState } from "../shared/update.js";
+import { type DesktopUpdateState, updateMessageKey } from "../shared/update.js";
 import {
   DesktopUpdaterController,
   type ProgressInfoLike,
@@ -473,4 +473,25 @@ it("distinguishes an explicit status request from background progress", async ()
   expect(controller.current().manualCheckId).toBe(first);
   await controller.check(true);
   expect(controller.current().manualCheckId).toBe((first ?? 0) + 1);
+});
+
+it("shares dismissal with every window and new snapshots, keeping progress quiet", async () => {
+  const { controller, updater, states } = setup();
+  updater.available("0.1.0-alpha.2");
+  await controller.download();
+  const key = updateMessageKey(controller.current());
+  controller.dismiss(key);
+  expect(states.at(-1)?.dismissed).toBe(true);
+  expect(controller.current().dismissed).toBe(true);
+  updater.progress(40);
+  expect(states.at(-1)).toMatchObject({ percent: 40, dismissed: true });
+  updater.downloaded("0.1.0-alpha.2");
+  expect(controller.current().dismissed).not.toBe(true);
+  // A click from the old phase cannot hide the readiness notification.
+  controller.dismiss(key);
+  expect(controller.current().dismissed).not.toBe(true);
+  controller.dismiss(updateMessageKey(controller.current()));
+  expect(controller.current().dismissed).toBe(true);
+  await controller.check(true);
+  expect(controller.current().dismissed).not.toBe(true);
 });

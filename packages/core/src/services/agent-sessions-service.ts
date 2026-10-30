@@ -207,6 +207,7 @@ import {
 } from "./program-reader.js";
 import { DEFAULT_SETUP_TIMEOUT_MINUTES } from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
+import { ExecutorNotConnectedError } from "./remote-operations.js";
 import {
   ReplicaClaimBusyError,
   takeReplicaClaim,
@@ -5009,7 +5010,10 @@ export class AgentSessionsService {
           list.some(
             (process) => process.processId === input.location.processId,
           ),
-        () => false,
+        (error: unknown) => {
+          if (error instanceof ExecutorNotConnectedError) throw error;
+          return false;
+        },
       );
     if (!present) return undefined;
     if (
