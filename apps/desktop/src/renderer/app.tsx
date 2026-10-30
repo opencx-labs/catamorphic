@@ -6862,6 +6862,11 @@ export function App({
             ),
         )
       : undefined);
+  // Pages are not among presentedTabs (the screens): the page in front is
+  // found among every tab.
+  const sidebarPage = allTabs.find(
+    (tab) => tab.kind === "browser" && tabKey(tab) === sidebarSurfaceKey,
+  );
   const sidebarSurface: SidebarSurface = {
     tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
     kind: sidebarChat
@@ -6874,6 +6879,7 @@ export function App({
     projectId,
     sessionId: sidebarSessionChat?.sessionId ?? undefined,
     path: sidebarEditor?.filePath ?? undefined,
+    url: sidebarChat ? undefined : sidebarPage?.bookmarkUrl,
     selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
   const openProjectFile = (filePath: string, mode?: CommitMode) => {

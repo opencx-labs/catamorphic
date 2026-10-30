@@ -28,11 +28,16 @@ export function targetKey(url: string | undefined): string | undefined {
   }
 }
 
-/** The keys of what is in front: its chat, its file, its tab, its resource. */
+/**
+ * The keys of what is in front: its chat, its file, its page, its tab, its
+ * resource.
+ */
 export function frontKeys(surface: SidebarSurface): ReadonlySet<string> {
   const keys = new Set<string>();
   if (surface.sessionId) keys.add(`chat:${surface.sessionId}`);
   if (surface.path) keys.add(`file:${surface.path}`);
+  const page = targetKey(surface.url);
+  if (page) keys.add(page);
   if (surface.key) {
     keys.add(`tab:${surface.key}`);
     const key = targetKey(surface.key);

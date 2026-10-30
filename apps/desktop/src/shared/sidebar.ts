@@ -141,6 +141,8 @@ export interface SidebarSurface {
   projectId?: string;
   sessionId?: string;
   path?: string;
+  /** The page in front's address: its bookmark is the row that names it. */
+  url?: string;
   selection?: boolean;
 }
 
