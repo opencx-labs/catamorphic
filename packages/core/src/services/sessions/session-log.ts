@@ -611,6 +611,7 @@ async function project(
         priority: turn.priority,
         activity: turn.activity,
         activity_at: turn.activityAt ? new Date(turn.activityAt) : null,
+        provider_retry: turn.providerRetry ? json(turn.providerRetry) : null,
         attempt_count: turn.attemptCount,
         active_attempt_id: turn.activeAttemptId,
         provider_thread_id: turn.providerThreadId,

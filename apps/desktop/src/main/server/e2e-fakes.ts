@@ -18,6 +18,7 @@ import {
   type AttemptStart,
   type HarnessAdapter,
   type HarnessCapabilities,
+  type HarnessEvent,
   type HostToolResult,
   RequestClosedError,
 } from "@catamorphic/agent-protocol/runner";
@@ -259,6 +260,13 @@ type FakeStep =
   | { type: "text_delta"; content: string }
   /** Ends the turn failed, with the provider's own words. */
   | { type: "error"; content: string; retrySafe?: boolean }
+  | {
+      type: "provider";
+      event: Extract<
+        HarnessEvent,
+        { type: "provider.retrying" | "provider.resumed" }
+      >;
+    }
   | {
       type: "tool_call";
       toolName?: string;
@@ -645,6 +653,10 @@ class FakeTranscript {
   constructor(private readonly host: AttemptHost) {}
 
   apply(step: FakeStep): void {
+    if (step.type === "provider") {
+      this.host.emit(step.event);
+      return;
+    }
     if (step.type === "text_delta" && this.openText) {
       this.host.emit({
         type: "item.delta",
@@ -876,6 +888,96 @@ export function parse(input = ""): Token[] {
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
   const prompt = message.toLowerCase();
+
+  if (prompt.includes("provider retry lifecycle")) {
+    if (oneShotFailures.has(prompt)) {
+      yield { type: "text", content: "Manual retry completed." };
+      return;
+    }
+    oneShotFailures.add(prompt);
+    const gate = process.env.CATAMORPHIC_E2E_RETRY_GATE;
+    if (!gate) throw new Error("Provider retry fixture needs a phase gate");
+    const wait = async (phase: string) => {
+      const deadline = Date.now() + 60_000;
+      while (!turn.interrupted() && fs.readFileSync(gate, "utf8") !== phase) {
+        if (Date.now() > deadline)
+          throw new Error(`Provider retry fixture timed out at ${phase}`);
+        await turn.pause(40);
+      }
+    };
+    yield { type: "text", content: "Checking the request." };
+    await wait("retry");
+    if (turn.interrupted()) return;
+    yield {
+      type: "provider",
+      event: {
+        type: "provider.retrying",
+        error: {
+          message: "HTTP 503: the model service is temporarily unavailable.",
+          kind: "unavailable",
+        },
+        attempt: 1,
+        maxAttempts: 3,
+        retryAt: new Date(Date.now() + 2000).toISOString(),
+      },
+    };
+    await wait("detail");
+    if (turn.interrupted()) return;
+    yield {
+      type: "provider",
+      event: {
+        type: "provider.retrying",
+        error: {
+          message:
+            "Provider E42: the upstream request was rejected. This provider supplied additional details that must remain visible, even when the cause cannot be classified.\n\nRequest id: fixture-request-42.\nPlease include this id when contacting support.",
+        },
+        attempt: null,
+        maxAttempts: null,
+        retryAt: null,
+      },
+    };
+    await wait("recover");
+    if (turn.interrupted()) return;
+    yield { type: "provider", event: { type: "provider.resumed" } };
+    yield {
+      type: "text",
+      content: "Connection recovered. Continuing the work.",
+    };
+    await wait("fail");
+    if (!turn.interrupted())
+      yield {
+        type: "error",
+        content: "Provider E99: the request could not be completed.",
+      };
+    return;
+  }
+
+  if (prompt.includes("large retained transcript")) {
+    for (let index = 0; index < 65; index++) {
+      yield {
+        type: "text",
+        content: `### Review ${index + 1}\n\nThe retained history includes a table, code and prose so switching exercises the real Markdown renderer.\n\n| Resource | Result |\n| --- | --- |\n| Fixture ${index + 1} | Checked and retained |\n\n`,
+      };
+      yield {
+        type: "command",
+        content: `inspect fixture-${index}`,
+        description: `Review fixture ${index + 1}`,
+        status: "ended",
+        toolResult: "Completed.",
+      };
+    }
+    yield {
+      type: "text",
+      content:
+        "Retained review complete.\n\n" +
+        Array.from(
+          { length: 60 },
+          (_, index) =>
+            `Paragraph ${index + 1}: this long final response stays rendered when visiting a browser tab. It should return at its existing position without rebuilding the transcript.`,
+        ).join("\n\n"),
+    };
+    return;
+  }
 
   if (prompt.includes("context reports main")) {
     yield {

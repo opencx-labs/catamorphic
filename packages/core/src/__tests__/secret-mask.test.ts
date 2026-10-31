@@ -164,6 +164,7 @@ const turn: Turn = {
   priority: 0,
   activity: null,
   activityAt: null,
+  providerRetry: null,
   attemptCount: 1,
   activeAttemptId: attemptId,
   providerThreadId: null,

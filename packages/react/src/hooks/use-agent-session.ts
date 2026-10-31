@@ -365,12 +365,9 @@ function useSessionEventStream({
     return () => {
       controller.abort();
       if (timer) clearTimeout(timer);
-      const held = slot?.held === true;
       slot?.release();
-      if (held)
-        // Events may have landed since the last one applied: whoever
-        // reads next (a poll, another stream) starts from a fresh snapshot.
-        void queryClient.invalidateQueries({ queryKey: key, exact: true });
+      // The next reader resumes from the last applied event sequence. A
+      // tab departure needs no full snapshot; an actual gap resyncs above.
       setStreaming(false);
     };
   }, [

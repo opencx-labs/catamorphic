@@ -367,6 +367,20 @@ export async function ingestHarnessEvents(input: {
         out.push({ type: "request.changed", request: closed });
         break;
       }
+      case "provider.retrying":
+        emitTurn({
+          ...turn,
+          providerRetry: {
+            error: mask ? mask.value(event.error) : event.error,
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            retryAt: event.retryAt,
+          },
+        });
+        break;
+      case "provider.resumed":
+        if (turn.providerRetry) emitTurn({ ...turn, providerRetry: null });
+        break;
       case "status":
         line = activityLine(mask ? mask.text(event.text) : event.text) ?? line;
         break;
@@ -384,6 +398,7 @@ export async function ingestHarnessEvents(input: {
       case "diagnostic":
         break;
       case "turn.completed":
+        if (turn.providerRetry) emitTurn({ ...turn, providerRetry: null });
         // Whatever a mask still held is the end of its stream.
         for (const key of mask?.holding() ?? []) release(key);
         result.completed = {

@@ -1,3 +1,4 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
 import { describe, expect, it } from "vitest";
 import { CatamorphicError } from "./errors.js";
 import {
@@ -84,11 +85,17 @@ describe("session streams", () => {
   });
 
   it("refuses a server on another session protocol", () => {
-    expect(speaksSessionProtocol({ agentProtocol: { session: 2 } })).toBe(true);
-    // A server from before session metadata (ADR 0226).
-    expect(speaksSessionProtocol({ agentProtocol: { session: 1 } })).toBe(
-      false,
-    );
+    expect(
+      speaksSessionProtocol({
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION },
+      }),
+    ).toBe(true);
+    // A server from before provider retry state (ADR 0298).
+    expect(
+      speaksSessionProtocol({
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION - 1 },
+      }),
+    ).toBe(false);
     expect(speaksSessionProtocol({})).toBe(false);
   });
 });

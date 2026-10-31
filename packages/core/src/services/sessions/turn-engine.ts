@@ -775,6 +775,7 @@ export class TurnEngine {
       status: "preparing",
       activity: retry.activity,
       activityAt: now,
+      providerRetry: null,
       updatedAt: now,
     };
     let stopped = false;
@@ -975,6 +976,7 @@ export class TurnEngine {
       turn = {
         ...turn,
         activeAttemptId: attempt.id,
+        providerRetry: null,
         attemptCount: turn.attemptCount + 1,
         updatedAt: now(),
       };
@@ -1122,6 +1124,7 @@ export class TurnEngine {
       status: "running",
       activity: "Working",
       activityAt: now(),
+      providerRetry: null,
       updatedAt: now(),
     };
     attempt = { ...attempt, status: "running" };
@@ -3007,6 +3010,7 @@ export class TurnEngine {
         status: "finalizing",
         activity: "Saving changes",
         activityAt: new Date().toISOString(),
+        providerRetry: null,
         updatedAt: new Date().toISOString(),
       };
       await db.transaction().execute(async (trx) => {
@@ -3091,6 +3095,7 @@ export class TurnEngine {
       status: transient ? "queued" : input.status,
       activity: null,
       activityAt: null,
+      providerRetry: null,
       cancellationRequested: false,
       error: input.status === "completed" ? null : (input.error ?? null),
       outcome: input.outcome,
@@ -3290,6 +3295,7 @@ export class TurnEngine {
             status: "interrupted",
             activity: null,
             activityAt: null,
+            providerRetry: null,
             cancellationRequested: false,
             error: { message: ctx.reason },
             completedAt: now,
@@ -3379,6 +3385,7 @@ export class TurnEngine {
               priority: 0,
               activity: null,
               activityAt: null,
+              providerRetry: null,
               attemptCount: 0,
               activeAttemptId: null,
               providerThreadId: ctx.attempt.providerThreadId,
@@ -3572,6 +3579,7 @@ export class TurnEngine {
         priority: 0,
         activity: null,
         activityAt: null,
+        providerRetry: null,
         attemptCount: 0,
         activeAttemptId: null,
         providerThreadId: turn.providerThreadId,

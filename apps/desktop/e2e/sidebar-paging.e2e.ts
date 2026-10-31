@@ -374,16 +374,38 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
   await app.waitFor(
     `document.querySelector('${panelThumb}').dataset.shown === 'true'`,
   );
-  const point = await app.eval<{ x: number; y: number }>(`(() => {
-    const thumb = document.querySelector('${panelThumb} .overlay-scrollbar-thumb').getBoundingClientRect();
-    return { x: thumb.left + thumb.width / 2, y: thumb.top + thumb.height / 2 };
-  })()`);
+  const targetState = (point?: { x: number; y: number }) => `(() => {
+    const panel = document.querySelector('${panelSelector}');
+    const thumb = document.querySelector('${panelThumb} .overlay-scrollbar-thumb');
+    const rect = thumb.getBoundingClientRect();
+    const point = ${point ? JSON.stringify(point) : "{ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }"};
+    const hit = document.elementFromPoint(point.x, point.y);
+    const box = element => {
+      const r = element.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    };
+    return { ready: hit?.closest('.sidebar-tab-panel') === panel, point,
+      hit: hit && { tag: hit.tagName, className: hit.className },
+      panel: box(panel), thumb: box(thumb), top: panel.scrollTop,
+      motion: [...panel.parentElement.getAnimations({ subtree: true })]
+        .filter(animation => animation.playState === 'running').length };
+  })()`;
+  const targetReady = async (point?: { x: number; y: number }) =>
+    app
+      .waitFor<{ x: number; y: number }>(
+        `(() => { const state = ${targetState(point)}; return state.ready && state.point; })()`,
+        { label: "the panel thumb's wheel target ready" },
+      )
+      .catch(async (error: unknown) => {
+        throw new Error(
+          `${String(error)}; target: ${JSON.stringify(await app.eval(targetState(point)))}`,
+        );
+      });
+  // Scrolling places the thumb asynchronously, and native movement crosses
+  // a process boundary. Confirm the wheel's actual target on both sides.
+  const point = await targetReady();
   await app.movePointer(point);
-  expect(
-    await app.eval(
-      `document.elementFromPoint(${point.x}, ${point.y})?.closest('.sidebar-tab-panel') === document.querySelector('${panelSelector}')`,
-    ),
-  ).toBe(true);
+  await targetReady(point);
   await app.eval(`(() => {
     window.__panelWheel = null;
     window.__panelWheelEnded = false;

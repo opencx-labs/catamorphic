@@ -124,7 +124,7 @@ describe("ChatTimeline DOM contract", () => {
     expect($('[role="alert"]')).toBeNull();
     expect($('[data-testid="chat-activity"]')).toBeNull();
     await render(props);
-    expect($('[role="status"]')).toBeNull();
+    expect($('[role="status"]')?.closest("[inert]")).not.toBeNull();
     expect($('[data-testid="chat-activity"]')?.textContent).toBe("Thinking");
   });
 
@@ -484,7 +484,8 @@ describe("ChatTimeline DOM contract", () => {
     const at = (id: string): TimelineTurn[] => [
       { key: "t1", turn: turn("t1", 1), entries: [answer(id)] },
     ];
-    // Sent: it shows where its question stood, rising in.
+    // Sent into an already visible chat: it rises where the question stood.
+    await render({ timeline: [] });
     await render({ timeline: at("request-item") });
     const sentCard = $('[data-testid="question-answer"]');
     expect(sentCard?.dataset.messageId).toBe("request-item");
@@ -499,6 +500,29 @@ describe("ChatTimeline DOM contract", () => {
     expect(recorded?.dataset.messageId).toBe("answer-message");
     expect(recorded?.className).toContain("motion-safe:opacity-100");
     expect(recorded?.className).not.toContain("motion-safe:opacity-0");
+  });
+
+  it("settles a message received while a retained tab is hidden", async () => {
+    const initial = timelineOf({
+      turns: [turn("hidden", 1)],
+      items: [input("hidden", "Existing history")],
+    });
+    await render({ timeline: initial, visible: true });
+    await render({ timeline: initial, visible: false });
+    const updated = timelineOf({
+      turns: [turn("hidden", 1)],
+      items: [
+        input("hidden", "Existing history"),
+        reply("hidden-reply", "hidden", "Arrived while away"),
+      ],
+    });
+    await render({ timeline: updated, visible: false });
+    const message = $('[data-message-id="hidden-reply"]');
+    expect(message?.className).toContain("motion-safe:opacity-100");
+    expect(message?.className).not.toContain("motion-safe:opacity-0");
+    await render({ timeline: updated, visible: true });
+    expect($('[data-message-id="hidden-reply"]')).toBe(message);
+    expect(message?.className).toContain("motion-safe:translate-y-0");
   });
 
   it("shows an answer sent from this window where its question stood, without rising in", async () => {
