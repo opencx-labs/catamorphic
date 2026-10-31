@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
 
@@ -177,7 +178,7 @@ function startFakeServer(): Promise<void> {
           agentSessions: true,
           storeUploadMaxBytes: 1024 * 1024,
         },
-        agentProtocol: { session: 2, runner: 1 },
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION, runner: 3 },
       });
     }
     if (

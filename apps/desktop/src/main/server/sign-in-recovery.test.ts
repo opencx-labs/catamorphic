@@ -304,6 +304,7 @@ describe("mayRunAgain (ADR 0228)", () => {
     priority: 0,
     activity: null,
     activityAt: null,
+    providerRetry: null,
     attemptCount: 2,
     activeAttemptId: null,
     providerThreadId: null,

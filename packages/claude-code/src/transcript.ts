@@ -55,10 +55,8 @@ function stringField(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** The activity line while the CLI waits to retry a failed API request. */
-export function apiRetryLine(retry: {
-  attempt: number;
-  max_retries: number;
+/** The error metadata Claude reports while retrying a model request. */
+export function apiRetryMessage(retry: {
   error_status: number | null;
   error: SDKAssistantMessageError;
 }): string {
@@ -70,7 +68,7 @@ export function apiRetryLine(retry: {
         : retry.error === "overloaded"
           ? "The Claude API is overloaded"
           : `The Claude API returned an error (${retry.error_status})`;
-  return `${problem}. Trying again, attempt ${retry.attempt} of ${retry.max_retries}`;
+  return problem;
 }
 
 /** A tool_result's text (a string or text blocks), bounded to its tail. */
@@ -241,12 +239,11 @@ export class ClaudeTranscript {
     switch (message.type) {
       case "stream_event":
         if (message.parent_tool_use_id === null) {
-          if (message.event.type === "message_start") this.answered();
+          // Starting a stream alone does not prove that the provider recovered.
           this.stream(message.event);
         }
         return;
       case "assistant":
-        if (message.parent_tool_use_id === null) this.answered();
         this.assistant(message);
         return;
       case "user":
@@ -359,6 +356,7 @@ export class ClaudeTranscript {
               ? delta.thinking
               : undefined;
         if (!text) return;
+        this.answered();
         block.text += text;
         this.emit({ type: "item.delta", key: block.key, field: "text", text });
         if (block.type === "thinking") {
@@ -373,13 +371,13 @@ export class ClaudeTranscript {
   }
 
   /**
-   * The API answered after a retry: the retry's line comes down, whatever
-   * the response turns out to be (a tool call's items arrive only with its
-   * message).
+   * Main-model output after a retry proves recovery. Empty stream starts
+   * and background tool activity cannot clear the provider wait.
    */
   private answered(): void {
     if (!this.retrying) return;
     this.retrying = false;
+    this.emit({ type: "provider.resumed" });
     this.emit({ type: "status", text: "Working" });
   }
 
@@ -437,6 +435,16 @@ export class ClaudeTranscript {
           .trim();
         return;
       }
+      if (
+        api.model !== "<synthetic>" &&
+        api.content.some(
+          (block) =>
+            block.type === "tool_use" ||
+            (block.type === "text" && block.text.length > 0) ||
+            (block.type === "thinking" && block.thinking.length > 0),
+        )
+      )
+        this.answered();
       this.lastAssistantUuid = message.uuid;
       this.lastMainUsage = api.usage;
       this.respond(api.id);
@@ -672,11 +680,26 @@ export class ClaudeTranscript {
           level: "warn",
           message: `Claude API retry ${message.attempt}/${message.max_retries}: ${String(message.error)}`,
         });
-        // The CLI backs off for minutes before it gives up; the activity
-        // line says so instead of sitting on "Working".
+        // Retries remain inside this attempt, with only reported metadata.
         this.line = undefined;
         this.retrying = true;
-        this.emit({ type: "status", text: apiRetryLine(message) });
+        this.emit({
+          type: "provider.retrying",
+          error: {
+            message: apiRetryMessage(message),
+            ...(message.error_status === null ||
+            (message.error_status !== null && message.error_status >= 500)
+              ? { kind: "unavailable" }
+              : message.error === "rate_limit" || message.error_status === 429
+                ? { kind: "rate_limit" }
+                : {}),
+          },
+          attempt: Math.max(1, Math.trunc(message.attempt)),
+          maxAttempts: Math.max(1, Math.trunc(message.max_retries)),
+          retryAt: new Date(
+            Date.now() + Math.max(0, Math.trunc(message.retry_delay_ms)),
+          ).toISOString(),
+        });
         return;
       case "task_notification": {
         const record = message.tool_use_id

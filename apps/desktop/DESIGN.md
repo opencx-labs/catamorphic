@@ -17,6 +17,17 @@ finish separately, and long held dictation retains its last words (ADR 0297).
 The palette's Ask agent input shares the chat composer's pills, previews and
 file preparation, including image paste and agent capability checks.
 
+Provider waits are reported by the harness, not inferred from silence (ADR 0298).
+A retry shows the provider's full message, with a brief factual summary only for
+known causes. Reported attempts and deadlines stay honest; recovery requires new
+model output. Retry and failure cards open and close their height and surrounding
+space, retaining the last message and disabling actions through the exit.
+
+Returning to a retained chat tab preserves its layout, draft and scroll position.
+Messages received while it is hidden are already settled when it returns. New
+messages on screen keep their short rise and fade; switching tabs does not reopen
+the conversation.
+
 The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, system-first,
 terminal-editor calm. Everything visual flows from the tokens in
 [`src/renderer/styles.css`](src/renderer/styles.css).

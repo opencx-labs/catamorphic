@@ -19,13 +19,14 @@ import type {
   JsonObject,
   JsonValue,
   NativeRef,
+  ProviderRetry,
   RefStrength,
   RuntimeRequestResponse,
   TurnError,
 } from "./model.js";
 
 /** Bumped on any incompatible change to frames, commands or {@link AttemptStart}. */
-export const RUNNER_PROTOCOL_VERSION = 2;
+export const RUNNER_PROTOCOL_VERSION = 3;
 
 /**
  * The session an attempt's harness process works for, and its project, in
@@ -350,6 +351,9 @@ export type HarnessEvent =
   | { type: "input.consumed"; itemIds: string[] }
   /** The agent's live line ("Reviewing migrations"), never transcript. */
   | { type: "status"; text: string }
+  /** A provider request is retrying, without restarting this attempt. */
+  | ({ type: "provider.retrying" } & ProviderRetry)
+  | { type: "provider.resumed" }
   | { type: "title"; text: string }
   | { type: "usage"; usage: AgentTurnUsage }
   | { type: "diagnostic"; level: "info" | "warn" | "error"; message: string }
