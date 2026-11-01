@@ -36,6 +36,25 @@ vi.mock("@catamorphic/claude-code", () => ({
     },
   }),
 }));
+vi.mock("@catamorphic/codex", async (original) => ({
+  ...(await original<typeof import("@catamorphic/codex")>()),
+  readCodexConfig: vi.fn(async () => ({
+    shell_environment_policy: { set: { ZDOTDIR: "/configured dotfiles" } },
+  })),
+  createCodexAdapter: () => ({
+    id: "codex",
+    capabilities: () => ({ steer: true }),
+    start: (attempt: AttemptStart, host: AttemptHost) => {
+      starts.push(attempt);
+      host.emit({ type: "turn.completed", status: "completed" });
+      return {
+        steer: async () => false,
+        interrupt: () => {},
+        finished: Promise.resolve(),
+      };
+    },
+  }),
+}));
 vi.mock("electron", () => ({ safeStorage: {} }));
 
 import {
@@ -327,6 +346,38 @@ it("starts the downloaded executable with its toolchain and friendly errors", as
   expect(
     completed?.type === "turn.completed" && completed.error?.message,
   ).toContain('Claude Code rejected the credentials of the "Claude" agent');
+});
+
+it("gives Codex's process and native commands the same private shell startup files", async () => {
+  const registry = registryWith({
+    ...claudeAgent,
+    id: "codex",
+    harness: "codex",
+  });
+  const { harness } = hostOf(registry, "codex");
+  const control = harness.adapter.start(
+    {
+      options: { config: { "analytics.enabled": false } },
+      env: { CODEX_HOME: "/codex-home", ZDOTDIR: "/my dotfiles" },
+    } as unknown as AttemptStart,
+    { emit: () => {} } as unknown as AttemptHost,
+  );
+  await control.finished;
+  const attempt = starts.at(-1);
+  expect(attempt?.env).toEqual({
+    PATH: "/toolchain",
+    CODEX_HOME: "/codex-home",
+    ZDOTDIR: expect.stringMatching(/codex-zsh$/),
+    USER_ZDOTDIR: "/configured dotfiles",
+  });
+  expect(attempt?.options).toEqual({
+    command: "/bin/claude",
+    config: {
+      "analytics.enabled": false,
+      "shell_environment_policy.set.ZDOTDIR": attempt?.env.ZDOTDIR,
+      "shell_environment_policy.set.USER_ZDOTDIR": "/configured dotfiles",
+    },
+  });
 });
 
 it("does not expose settings-specific tools to agents", () => {
