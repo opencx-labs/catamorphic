@@ -505,6 +505,9 @@ export function Tree<T extends TreeItem>({
     position: TreeDropPosition;
   } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // A row's drag runs until its dragend; a drop within the tree clears
+  // `draggingId` before that.
+  const [rowDragOpen, setRowDragOpen] = useState(false);
   // The row just dropped within this tree: dimmed like the drag source until
   // the host's reorder lands, then placed straight into its new slot (where
   // the insertion line was) while its neighbours slide around it.
@@ -916,6 +919,30 @@ export function Tree<T extends TreeItem>({
     setDrop(null);
     setDraggingId(null);
   };
+  const endRowDrag = () => {
+    setRowDragOpen(false);
+    clearDrop();
+    dragAndDrop?.onDragEnd?.();
+  };
+  // A row gone from the tree mid-drag (closed, moved, scrolled away) hears
+  // its dragend detached, out of React's reach. A pointer pressed, or moved
+  // with no button held, comes only after the drag is over, so either one
+  // ends it.
+  const endRowDragRef = useRef(endRowDrag);
+  endRowDragRef.current = endRowDrag;
+  useEffect(() => {
+    if (!rowDragOpen) return;
+    const over = (event: PointerEvent) => {
+      if (event.type === "pointermove" && event.buttons !== 0) return;
+      endRowDragRef.current();
+    };
+    window.addEventListener("pointerdown", over, true);
+    window.addEventListener("pointermove", over, true);
+    return () => {
+      window.removeEventListener("pointerdown", over, true);
+      window.removeEventListener("pointermove", over, true);
+    };
+  }, [rowDragOpen]);
   const settleDropped = () => {
     const index = draggingId ? layout.indexById.get(draggingId) : undefined;
     if (draggingId && index !== undefined)
@@ -1030,12 +1057,10 @@ export function Tree<T extends TreeItem>({
           event.dataTransfer.setData(type, value);
         event.dataTransfer.effectAllowed = spec.effectAllowed ?? "copyMove";
         setDraggingId(item.id);
+        setRowDragOpen(true);
         dragAndDrop?.onDragStart?.(item);
       },
-      onDragEnd: () => {
-        clearDrop();
-        dragAndDrop?.onDragEnd?.();
-      },
+      onDragEnd: endRowDrag,
     };
   };
   const dropLineIndex =

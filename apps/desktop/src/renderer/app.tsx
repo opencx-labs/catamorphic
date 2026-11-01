@@ -192,6 +192,7 @@ import {
   type SidebarSectionConfig,
   type WorkspaceConfig,
 } from "./lib/desktop-api.js";
+import { useEndOfDrag } from "./lib/drag-end.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
 import {
   OPEN_EXTENSION_POPUP_EVENT,
@@ -4218,6 +4219,12 @@ export function App({
   const [dropSideHover, setDropSideHover] = useState<"left" | "right" | null>(
     null,
   );
+  // The targets cover the pages: a drag whose end never came must not
+  // leave them there.
+  useEndOfDrag(Boolean(tabDragKey), () => {
+    setTabDragKey(null);
+    setDropSideHover(null);
+  });
 
   // Divider drag: ratio updates live; the overlay keeps webviews from
   // swallowing the mousemoves.
@@ -8128,6 +8135,7 @@ export function App({
                 (it becomes a tab pill there). */}
                   {tabDragKey && (
                     <div
+                      data-tab-drop-sides
                       className={`absolute inset-x-0 top-0 z-50 flex ${
                         workspace.chats.some(
                           (entry) =>
