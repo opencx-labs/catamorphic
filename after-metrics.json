@@ -1,0 +1,31 @@
+{
+  "benchmark": [
+    {
+      "ms": 22.19999998807907,
+      "rows": 102,
+      "nodes": 1377,
+      "longTasks": []
+    },
+    {
+      "ms": 17.80000001192093,
+      "rows": 102,
+      "nodes": 1377,
+      "longTasks": []
+    },
+    {
+      "ms": 25.100000023841858,
+      "rows": 102,
+      "nodes": 1377,
+      "longTasks": []
+    }
+  ],
+  "bound": {
+    "rows": 195,
+    "nodes": 2496,
+    "scroll": 35068
+  },
+  "errors": [],
+  "transportErrors": [
+    {}
+  ]
+}
