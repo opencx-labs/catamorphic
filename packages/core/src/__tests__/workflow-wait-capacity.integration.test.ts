@@ -9,11 +9,17 @@ import type {
   EnvironmentBinding,
   EnvironmentProvider,
 } from "@catamorphic/sandbox";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
 import { sql } from "kysely";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import { cleanupWorkerAllocations } from "../services/allocation-sandbox-provider.js";
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 const schema = `wait_capacity_${randomUUID().replaceAll("-", "")}`;
 const db = createDatabase({
@@ -75,9 +81,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
     beforeAll(async () => {
       await migrateToLatest({ db, schema });
       root = await fs.mkdtemp(path.join(os.tmpdir(), "workflow-capacity-"));
-      provider = new LocalProcessSandboxProvider({
-        root: path.join(root, "sandboxes"),
-      });
+      provider = ownedSandboxes.track(
+        new LocalProcessSandboxProvider({
+          root: path.join(root, "sandboxes"),
+        }),
+      );
       nodes = new WorkerNodesService(db);
       lease = await nodes.register({
         tenantId: identity.tenantId,
@@ -139,24 +147,26 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
     });
     afterEach(async () => {
-      await core.runs.stopWorkers();
-      await cleanupWorkerAllocations({ db, workerNode: lease, provider });
+      await cleanupTestResources([
+        () => core.runs.stopWorkers(),
+        () => cleanupWorkerAllocations({ db, workerNode: lease, provider }),
+        () => ownedSandboxes.cleanup(),
+      ]);
     });
     afterAll(async () => {
       clearInterval(heartbeat);
-      await renewing;
-      if (core) await core.runs.stopWorkers();
-      // Confirmed teardown also closes the real subprocess runtimes on assertion failure.
-      const sandboxes = await db
-        .selectFrom("execution_allocations")
-        .select("sandbox_provider_id")
-        .execute();
-      for (const row of sandboxes)
-        if (row.sandbox_provider_id)
-          await provider.destroySandbox(row.sandbox_provider_id);
-      await db.schema.dropSchema(schema).cascade().execute();
-      await db.destroy();
-      if (root) await fs.rm(root, { recursive: true, force: true });
+      await cleanupTestResources(
+        [
+          () => renewing,
+          () => core?.runs.stopWorkers(),
+          () => ownedSandboxes.cleanup(),
+          () => db.schema.dropSchema(schema).cascade().execute(),
+          () => db.destroy(),
+        ],
+        async () => {
+          if (root) await fs.rm(root, { recursive: true, force: true });
+        },
+      );
     });
 
     it("parks more waiting roots than slots and admits independent cleanup using real subprocess runtimes", async () => {

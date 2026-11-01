@@ -94,6 +94,70 @@ afterAll(async () => {
   await app?.stop();
 });
 
+it("keeps a scrolled wait chip's exit visible outside the shrinking viewport", async () => {
+  const chips = Array.from({ length: 24 }, (_, index) => ({
+    id: `wait-${index}`,
+    label: `Waiting for fixture ${index}`,
+    icon: "Hourglass",
+    wide: true,
+  }));
+  await tool("set_session_metadata", { key: "chips", value: chips });
+  await wait(
+    `return !!chip('wait-15') && !!rail().querySelector('[data-testid="chip-fold"]');`,
+  );
+  await run(
+    `rail().querySelector('[data-testid="chip-fold"]').click();return true;`,
+  );
+  await wait(
+    `return rail().dataset.unfolded === 'pointer' && !rail().getAnimations({subtree:true}).some(animation=>animation.playState==='running' && animation.effect?.getTiming().iterations!==Infinity);`,
+  );
+  await run(
+    `const viewport=rail().querySelector('[data-testid="chip-viewport"]');viewport.scrollTop=chip('wait-15').offsetTop-viewport.clientHeight/2;return true;`,
+  );
+  await wait(
+    `return rail().querySelector('[data-testid="chip-viewport"]').scrollTop>100;`,
+  );
+  await app.eval(
+    `new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`,
+  );
+  await run(`
+    const before=chip('wait-15').getBoundingClientRect().top-rail().getBoundingClientRect().top;
+    window.__waitChipExit=null;
+    const observer=new MutationObserver(()=>{
+      const ghost=[...rail().querySelectorAll('[data-testid="chip-exit"]')].find(node=>node.textContent.includes('Waiting for fixture 15'));
+      if(!ghost)return;
+      const animation=ghost.getAnimations()[0];if(!animation)return;
+      const saved=animation.currentTime,duration=animation.effect.getComputedTiming().duration;
+      animation.currentTime=0;
+      const top=ghost.getBoundingClientRect().top-rail().getBoundingClientRect().top;
+      animation.currentTime=duration/2;
+      const opacity=Number(getComputedStyle(ghost).opacity);
+      animation.currentTime=saved;
+      window.__waitChipExit={top,before,opacity,outside:!ghost.closest('[data-testid="chip-viewport"]'),inert:ghost.inert};
+      observer.disconnect();
+    });observer.observe(rail(),{childList:true,subtree:true});return true;
+  `);
+  await run(
+    `chip('wait-15').querySelector('[data-chip-button="remove"]').focus();return true;`,
+  );
+  await app.press("Enter");
+  const exit = await app.waitFor<{
+    top: number;
+    before: number;
+    opacity: number;
+    outside: boolean;
+    inert: boolean;
+  }>("window.__waitChipExit", { label: "scrolled wait chip exit" });
+  expect(exit.outside).toBe(true);
+  expect(exit.inert).toBe(true);
+  expect(Math.abs(exit.top - exit.before)).toBeLessThan(2);
+  expect(exit.opacity).toBeGreaterThan(0);
+  expect(exit.opacity).toBeLessThan(1);
+  await wait(`return !rail().querySelector('[data-testid="chip-exit"]');`);
+  await tool("set_session_metadata", { key: "chips", value: [] });
+  await wait(`return !chip('wait-0');`);
+});
+
 it("draws a recorded pull request as a wide chip that says where it stands", async () => {
   await tool("set_session_metadata", {
     key: "pull_requests",
@@ -210,6 +274,9 @@ it("draws a recorded pull request as a wide chip that says where it stands", asy
 });
 
 it("takes the theme's surfaces, never a fixed black", async () => {
+  // Inspect the resting surface, independently of earlier pointer/focus input.
+  await app.movePointer({ x: 20, y: 20 });
+  await run("composer().focus();return true;");
   // The chip's color once its transition settles on the theme's raised one.
   const settled = (theme: string) =>
     wait<string>(

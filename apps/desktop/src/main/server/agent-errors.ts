@@ -113,15 +113,14 @@ export function friendlyTurnError({
   providerLabel: string;
 }): TurnError {
   const message = error.message;
-  // A different native client owns this history. Retrying automatically or
-  // silently re-anchoring it would bypass that client's ownership.
+  // The writer may be Work's previous process or another native client.
+  // Preserve the provider's evidence and never bypass its ownership.
   if (
     providerLabel === "Codex" &&
     /^thread [0-9a-f-]+ already has an active writer$/i.test(message.trim())
   )
     return {
-      message:
-        "This chat is open in another Codex window or process. Close it there, then retry here. Your conversation is saved.",
+      message: `Codex has not released this conversation yet. Wait for the previous process to stop, then retry. Your conversation is saved.\n\n${message}`,
     };
   if (
     providerLabel === "Codex" &&

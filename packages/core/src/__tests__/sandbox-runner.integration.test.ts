@@ -10,7 +10,8 @@ import {
 } from "@catamorphic/agent-protocol/runner";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import { readConnectionGrant } from "@catamorphic/sandbox";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TestSandboxes } from "@catamorphic/sandbox/testing";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   configureSandboxGateway,
   removeSandboxGateway,
@@ -26,6 +27,8 @@ import {
   sandboxChannel,
   startSandboxRunner,
 } from "../services/sessions/runner-channels.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /*
  * The runner bundle in a sandbox (ADR 0198): uploaded by hash, run as a
@@ -121,10 +124,15 @@ describe("sandbox runner", () => {
     root = fs.mkdtempSync(
       path.join(os.tmpdir(), "catamorphic-sandbox-runner-"),
     );
-    provider = new LocalProcessSandboxProvider({ root });
+    provider = ownedSandboxes.track(new LocalProcessSandboxProvider({ root }));
   });
 
-  afterAll(() => {
+  afterEach(async () => {
+    await ownedSandboxes.cleanup();
+  });
+
+  afterAll(async () => {
+    await ownedSandboxes.cleanup();
     fs.rmSync(root, { recursive: true, force: true });
   });
 

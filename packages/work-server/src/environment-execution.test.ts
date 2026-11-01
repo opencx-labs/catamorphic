@@ -18,6 +18,10 @@ import {
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
+import {
   createCatamorphic,
   defineStaticEnvironments,
   FsBackend,
@@ -28,8 +32,10 @@ import {
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { replyOf } from "./test-support.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /**
  * A host harness that answers with where it runs: `pwd` in the session's
@@ -148,12 +154,16 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     }),
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
   });
-  const a = new LocalProcessSandboxProvider({
-    root: path.join(directory, "machine-a"),
-  });
-  const b = new LocalProcessSandboxProvider({
-    root: path.join(directory, "machine-b"),
-  });
+  const a = ownedSandboxes.track(
+    new LocalProcessSandboxProvider({
+      root: path.join(directory, "machine-a"),
+    }),
+  );
+  const b = ownedSandboxes.track(
+    new LocalProcessSandboxProvider({
+      root: path.join(directory, "machine-b"),
+    }),
+  );
   const agent = new WorkspaceAgent();
   const runtimes: EnvironmentRuntimeBinding[] = [a, b].map(
     (sandboxProvider, index) => ({
@@ -264,9 +274,10 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     expect(rebound.turn.status).toBe("failed");
     expect(rebound.content).toContain("No machine for Environment 'b'");
   } finally {
-    await cat.close();
-    await db.destroy();
-    await fs.rm(directory, { recursive: true, force: true });
+    await cleanupTestResources(
+      [() => cat.close(), () => ownedSandboxes.cleanup(), () => db.destroy()],
+      () => fs.rm(directory, { recursive: true, force: true }),
+    );
   }
 }, 60_000);
 
@@ -280,9 +291,11 @@ it("an authenticated member executes on this machine and loses execution immedia
     }),
     plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
   });
-  const provider = new LocalProcessSandboxProvider({
-    root: path.join(directory, "employee-machine"),
-  });
+  const provider = ownedSandboxes.track(
+    new LocalProcessSandboxProvider({
+      root: path.join(directory, "employee-machine"),
+    }),
+  );
   const agent = new WorkspaceAgent();
   const cat = createCatamorphic({
     hostId: "client-test",
@@ -550,9 +563,15 @@ it("an authenticated member executes on this machine and loses execution immedia
     ]);
     expect((await pendingTurns(db, session.id)).length).toBe(0);
   } finally {
-    await runner?.stop();
-    await cat.close();
-    await db.destroy();
-    await fs.rm(directory, { recursive: true, force: true });
+    await cleanupTestResources(
+      [
+        () => runner?.stop(),
+        () => cat.close(),
+        () => ownedSandboxes.cleanup(),
+        () => db.destroy(),
+      ],
+      () => fs.rm(directory, { recursive: true, force: true }),
+    );
   }
 }, 60000);
+afterAll(() => ownedSandboxes.cleanup());

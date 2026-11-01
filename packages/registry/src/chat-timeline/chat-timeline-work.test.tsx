@@ -93,6 +93,14 @@ describe("ChatTimeline work display", () => {
     await render({ timeline: settled() });
     expect(container.querySelectorAll("article")).toHaveLength(2);
     expect(articles().at(-1)).toBe("All fixed.");
+    expect(stepKinds()).toEqual([]);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-turn-steps-toggle"]',
+        )
+        ?.click(),
+    );
     expect(stepKinds()).toEqual([
       "command",
       "note",
@@ -104,7 +112,7 @@ describe("ChatTimeline work display", () => {
       container.querySelector('[data-testid="chat-turn-steps-toggle"]')
         ?.textContent,
     ).toBe("5 steps");
-    // Folded notes stay addressable by item id (focus, deep links).
+    // Expanded notes retain item ids for focus and deep links.
     expect(
       container.querySelector('[data-step-kind="note"][data-message-id="a2"]'),
     ).not.toBeNull();

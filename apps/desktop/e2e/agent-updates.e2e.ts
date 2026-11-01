@@ -236,7 +236,7 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
 
     await app.reload();
     await app.waitFor(
-      `!!document.querySelector(${JSON.stringify(`${scope} [data-composer-input]`)}) && !!document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent]`)})`,
+      `!!document.querySelector(${JSON.stringify(`${scope} [data-composer-input]`)}) && !!document.querySelector(${JSON.stringify(`${scope} [data-testid=chat-turn-steps-toggle]`)})`,
       { timeoutMs: 30_000, label: "working chat restored with peer activity" },
     );
     const restored = await snapshot();
@@ -273,24 +273,38 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
       `Rows: ${JSON.stringify(rows)}; ${positions(restored)}`,
     ).toMatchObject({
       workBlocks: 2,
-      agentBlocks: 1,
-      agentRows: 1,
+      agentBlocks: 0,
+      agentRows: 0,
       inbound: 0,
       userRows: 1,
       working: true,
     });
-    await click(
-      `${scope} article[data-live-work]:has([data-step-kind=agent]) [data-testid=chat-turn-steps-toggle]`,
-    );
+    await app.eval(`(() => {
+      // The main block keeps gaining tool rows. Leave it folded while
+      // inspecting the separate one-step peer block, so native input
+      // does not chase a target below continuously growing history.
+      const peer=[...document.querySelectorAll(${JSON.stringify(`${scope} article[data-live-work]`)})]
+        .find(block=>block.querySelector('[data-testid=chat-turn-steps-count]')?.textContent==='1');
+      const toggle=peer?.querySelector('[data-testid=chat-turn-steps-toggle]');
+      if(!toggle)throw new Error('Missing one-step peer activity block');
+      if(toggle.getAttribute('aria-expanded') === 'false')toggle.click();
+    })()`);
     await app.waitFor(
       `(() => {
         const button=document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent] button`)});
         if(!button)return false;
         const r=button.getBoundingClientRect();
-        return !!r.width && !!r.height && button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+        const list=button.closest('[data-testid=chat-step-list]');
+        const moving=list.getAnimations().some(a=>a instanceof CSSTransition&&(a.pending||a.playState==='running'));
+        return !moving && !!r.width && !!r.height && button.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
       })()`,
-      { label: "expanded peer activity row accepting pointer input" },
+      { label: "settled peer activity row accepting pointer input" },
     );
+    expect(
+      await app.eval(
+        `document.querySelectorAll(${JSON.stringify(`${scope} [data-step-kind=agent]`)}).length`,
+      ),
+    ).toBe(1);
     await click(`${scope} [data-step-kind=agent] button`);
     await app.waitFor(
       `(() => {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import type { SandboxProvider } from "@catamorphic/sandbox";
+import { TestSandboxes } from "@catamorphic/sandbox/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import {
@@ -19,6 +20,8 @@ import {
   workspaceSetupScript,
   workspaceSetupUnavailableNote,
 } from "../services/workspace-setup.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /*
  * Workspace setup (ADRs 0208, 0257): what runs when, the script that runs
@@ -331,10 +334,11 @@ describe("running a workspace's setup", () => {
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-setup-"));
-    provider = new LocalProcessSandboxProvider({ root });
+    provider = ownedSandboxes.track(new LocalProcessSandboxProvider({ root }));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await ownedSandboxes.cleanup();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -473,7 +477,7 @@ describe("running a workspace's setup", () => {
     const environment = "sleep 1; echo once >> ../count";
     const first = new AbortController();
     // The first preparation goes away without stopping its setup.
-    void runWorkspaceSetup({
+    const preparing = runWorkspaceSetup({
       provider,
       sandboxId: id,
       projectDir,
@@ -481,27 +485,34 @@ describe("running a workspace's setup", () => {
       personalAllowed: false,
       timeoutMinutes: 1,
       signal: first.signal,
-    }).catch(() => {});
-    const deadline = Date.now() + 10_000;
-    while (
-      !(await provider.processes.listProcesses({ sandboxId: id })).some(
-        (process) => process.name === SETUP_PROCESS_NAME,
-      )
-    ) {
-      if (Date.now() > deadline) throw new Error("The setup never started");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    // Attach immediately; the finally below still surfaces any failure.
+    void preparing.catch(() => {});
+    try {
+      const deadline = Date.now() + 10_000;
+      while (
+        !(await provider.processes.listProcesses({ sandboxId: id })).some(
+          (process) => process.name === SETUP_PROCESS_NAME,
+        )
+      ) {
+        if (Date.now() > deadline) throw new Error("The setup never started");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(
+        await runWorkspaceSetup({
+          provider,
+          sandboxId: id,
+          projectDir,
+          environment,
+          personalAllowed: false,
+          timeoutMinutes: 1,
+        }),
+      ).toEqual({ status: "current" });
+      expect(await read(id, "../count")).toBe("once\n");
+    } finally {
+      first.abort();
+      await preparing;
     }
-    expect(
-      await runWorkspaceSetup({
-        provider,
-        sandboxId: id,
-        projectDir,
-        environment,
-        personalAllowed: false,
-        timeoutMinutes: 1,
-      }),
-    ).toEqual({ status: "current" });
-    expect(await read(id, "../count")).toBe("once\n");
   }, 30_000);
 });
 
@@ -514,13 +525,16 @@ describe("a setup on its own network (ADR 0257)", () => {
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-setup-net-"));
-    machine = new LocalProcessSandboxProvider({
-      root,
-      acceptUnenforcedEgress: true,
-    });
+    machine = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root,
+        acceptUnenforcedEgress: true,
+      }),
+    );
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await ownedSandboxes.cleanup();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -708,7 +722,7 @@ describe("a setup on its own network (ADR 0257)", () => {
   it("never widens a sandbox in which a setup is already running", async () => {
     const { id } = await machine.createSandbox({});
     const earlier = new AbortController();
-    void runWorkspaceSetup({
+    const preparing = runWorkspaceSetup({
       provider: machine,
       sandboxId: id,
       projectDir,
@@ -716,28 +730,35 @@ describe("a setup on its own network (ADR 0257)", () => {
       personalAllowed: false,
       timeoutMinutes: 1,
       signal: earlier.signal,
-    }).catch(() => {});
-    const deadline = Date.now() + 10_000;
-    while (
-      !(await machine.processes.listProcesses({ sandboxId: id })).some(
-        (process) => process.name === SETUP_PROCESS_NAME,
-      )
-    ) {
-      if (Date.now() > deadline) throw new Error("The setup never started");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    // Attach immediately; the finally below still surfaces any failure.
+    void preparing.catch(() => {});
+    try {
+      const deadline = Date.now() + 10_000;
+      while (
+        !(await machine.processes.listProcesses({ sandboxId: id })).some(
+          (process) => process.name === SETUP_PROCESS_NAME,
+        )
+      ) {
+        if (Date.now() > deadline) throw new Error("The setup never started");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const { provider, widenings } = switching();
+      await expect(
+        runWorkspaceSetup({
+          provider,
+          sandboxId: id,
+          projectDir,
+          environment: "echo later >> ../order",
+          personalAllowed: false,
+          timeoutMinutes: 1,
+          network,
+        }),
+      ).rejects.toThrow("already running");
+      expect(widenings).toEqual([]);
+    } finally {
+      earlier.abort();
+      await preparing;
     }
-    const { provider, widenings } = switching();
-    await expect(
-      runWorkspaceSetup({
-        provider,
-        sandboxId: id,
-        projectDir,
-        environment: "echo later >> ../order",
-        personalAllowed: false,
-        timeoutMinutes: 1,
-        network,
-      }),
-    ).rejects.toThrow("already running");
-    expect(widenings).toEqual([]);
   }, 30_000);
 });

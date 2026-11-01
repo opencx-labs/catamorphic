@@ -1,8 +1,19 @@
-import { execFileSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import {
+  access,
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createTestRunResources,
   runLoggedProcess,
@@ -15,6 +26,11 @@ import {
   type TestPostgresDriver,
   withDisposablePostgres,
 } from "./test-postgres.js";
+import {
+  removeTestDirectory,
+  settleTestProcesses,
+  withTestProcessCleanup,
+} from "./test-processes.js";
 import { repositoryNodePath } from "./tool-runtime.js";
 
 class RecordingPostgresDriver implements TestPostgresDriver {
@@ -456,48 +472,90 @@ describe("test process orchestration", () => {
     }
   });
 
-  it("settles a process group that refuses signals while its members exit", async () => {
-    // A macOS answer; elsewhere EPERM stays a real error.
-    if (process.platform !== "darwin") return;
-    const directory = await temporaryDirectory();
-    const signals = new TestSignalController();
-    // macOS answers EPERM, not ESRCH, when a group's remaining members are
-    // exiting zombies: the group is still found, but cannot take a signal.
-    // Script that answer for the finished group: found, refuses, then gone.
-    const groupAnswers: Array<"found" | "EPERM" | "ESRCH"> = [
-      "found",
-      "EPERM",
-      "ESRCH",
-    ];
-    const groupCalls: Array<string | number | undefined> = [];
-    const kill = process.kill.bind(process);
-    const spy = vi
-      .spyOn(process, "kill")
-      .mockImplementation((pid: number, signal?: string | number) => {
-        if (pid >= 0) return kill(pid, signal);
-        groupCalls.push(signal);
-        const answer = groupAnswers.shift() ?? "ESRCH";
-        if (answer === "found") return true;
-        throw Object.assign(new Error(`kill ${answer}`), { code: answer });
-      });
+  it("refuses to signal the controller's own process group", async () => {
+    if (process.platform === "win32") return;
+    const group = Number(
+      execFileSync("ps", ["-p", String(process.pid), "-o", "pgid="], {
+        encoding: "utf8",
+      }).trim(),
+    );
+    await expect(
+      settleTestProcesses({ processGroupId: group, signal: "SIGTERM" }),
+    ).rejects.toThrow("Refusing unsafe test cleanup group");
+  });
+
+  it.each(["/", tmpdir(), process.cwd()])(
+    "refuses a shared cleanup root %s",
+    async (temporaryRoot) => {
+      await expect(
+        settleTestProcesses({
+          temporaryRoot: await realpath(temporaryRoot),
+          signal: "SIGTERM",
+        }),
+      ).rejects.toThrow("Refusing unsafe test temporary root");
+    },
+  );
+
+  it("removes read-only fixture directories without changing symlink targets", async () => {
+    if (process.platform === "win32") return;
+    const root = await temporaryDirectory();
+    const outside = await temporaryDirectory();
+    const snapshot = path.join(root, "snapshot", "nested");
+    await mkdir(snapshot, { recursive: true });
+    await writeFile(path.join(snapshot, "source.ts"), "fixture");
+    await writeFile(path.join(outside, "preserved"), "outside the invocation");
+    await symlink(outside, path.join(root, "external"), "dir");
+    await chmod(outside, 0o500);
+    await chmod(snapshot, 0o500);
+    await chmod(path.dirname(snapshot), 0o500);
     try {
       await expect(
-        runLoggedProcess({
-          command: "/bin/sh",
-          args: ["-c", "exit 0"],
-          cwd: directory,
-          env: process.env,
-          logPath: path.join(directory, "refusing.log"),
-          signals,
-        }),
-      ).resolves.toEqual({ code: 0, signal: null });
-      // Probed, signalled once (refused while exiting), then only probed
-      // until gone: no escalation to SIGKILL.
-      expect(groupCalls.slice(0, 2)).toEqual([0, "SIGTERM"]);
-      expect(groupCalls.slice(2).every((signal) => signal === 0)).toBe(true);
+        removeTestDirectory(path.join(root, "external")),
+      ).rejects.toThrow("Refusing a symlink");
+      await removeTestDirectory(root);
+      await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await lstat(outside)).mode & 0o777).toBe(0o500);
+      expect(await readFile(path.join(outside, "preserved"), "utf8")).toBe(
+        "outside the invocation",
+      );
     } finally {
-      spy.mockRestore();
-      signals.close();
+      await chmod(outside, 0o700);
+      // A failed assertion still leaves the fixture removable by afterEach.
+      await chmod(path.dirname(snapshot), 0o700).catch(() => {});
+      await chmod(snapshot, 0o700).catch(() => {});
+    }
+  });
+
+  it("finds an orphan whose fixture deleted its working directory", async () => {
+    if (process.platform === "win32") return;
+    const root = await temporaryDirectory();
+    const cwd = path.join(root, "removed");
+    await mkdir(cwd);
+    const marker = path.join(root, "ready");
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(marker)},process.pid+"\\n");setInterval(()=>{},1000)`,
+      ],
+      { cwd, detached: true, stdio: "ignore" },
+    );
+    const exited = new Promise<void>((resolve) =>
+      child.once("exit", () => resolve()),
+    );
+    try {
+      await waitForProcessIds(marker, 1);
+      await rm(cwd, { recursive: true });
+      await settleTestProcesses({
+        temporaryRoot: await realpath(root),
+        signal: "SIGTERM",
+      });
+      await exited;
+      expect(child.pid && processIsLive(child.pid)).toBe(false);
+    } finally {
+      if (child.pid && processIsLive(child.pid))
+        process.kill(-child.pid, "SIGKILL");
+      await exited;
     }
   });
 
@@ -535,6 +593,90 @@ describe("test process orchestration", () => {
       if (processIsLive(escapedPid)) process.kill(escapedPid, "SIGTERM");
     }
   });
+
+  it.each(["success", "failure", "crash", "cancel"] as const)(
+    "reaps file-backed detached test groups after %s, leaving other invocations alive",
+    async (mode) => {
+      if (process.platform === "win32") return;
+      const directory = await temporaryDirectory();
+      const unrelated = await temporaryDirectory();
+      const sentinel = spawn(
+        process.execPath,
+        ["-e", "setInterval(()=>{},1000)"],
+        { cwd: unrelated, detached: true, stdio: "ignore" },
+      );
+      const source = new RecordingSignalSource();
+      const signals = new TestSignalController({ source });
+      const marker = path.join(directory, "children");
+      const leader = path.join(directory, "leader");
+      const refusing = mode === "cancel" ? 'process.on("SIGTERM",()=>{});' : "";
+      const grandchild = `${refusing}process.chdir("/");setInterval(()=>{},1000)`;
+      const child = `${refusing}const grand=require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],{stdio:"ignore"});require("node:fs").writeFileSync(${JSON.stringify(marker)},process.pid+" "+grand.pid+"\\n");setInterval(()=>{},1000)`;
+      const phase = `${refusing}const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(leader)},process.pid+"\\n");const log=fs.openSync(${JSON.stringify(path.join(directory, "background.log"))},"a");const child=require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(child)}],{cwd:${JSON.stringify(directory)},detached:true,stdio:["ignore",log,log]});child.unref();setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})&&${JSON.stringify(mode)}!=="crash"&&${JSON.stringify(mode)}!=="cancel")process.exit(${mode === "failure" ? 17 : 0})},10)`;
+      let children: number[] = [];
+      let phasePid: number | undefined;
+      const driver = new RecordingPostgresDriver(() => {
+        for (const pid of children) expect(processIsLive(pid)).toBe(false);
+      });
+      const started = performance.now();
+      const operation = withDisposablePostgres({
+        driver,
+        pid: process.pid,
+        nonce: mode,
+        task: () =>
+          withTestProcessCleanup(directory, () =>
+            runLoggedProcess({
+              command: process.execPath,
+              args: ["-e", phase],
+              cwd: directory,
+              env: process.env,
+              logPath: path.join(directory, "phase.log"),
+              signals,
+              temporaryRoot: directory,
+            }),
+          ),
+      });
+      const outcome = operation.then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      try {
+        [phasePid] = await waitForProcessIds(leader, 1);
+        children = await waitForProcessIds(marker, 2);
+        if (mode === "crash" && phasePid) process.kill(phasePid, "SIGKILL");
+        if (mode === "cancel") source.emit("SIGTERM");
+        const result = await outcome;
+        if ("error" in result) throw result.error;
+        expect(result.value).toEqual(
+          mode === "crash"
+            ? { code: 137, signal: "SIGKILL" }
+            : mode === "cancel"
+              ? { code: 143, signal: "SIGTERM" }
+              : { code: mode === "failure" ? 17 : 0, signal: null },
+        );
+        expect(performance.now() - started).toBeLessThan(20_000);
+        expect(sentinel.pid && processIsLive(sentinel.pid)).toBe(true);
+        expect(driver.events.at(-1)).toBe("postgres:stop");
+      } finally {
+        signals.close();
+        for (const pid of [phasePid, ...children, sentinel.pid]) {
+          if (!pid || !processIsLive(pid)) continue;
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {}
+          }
+        }
+        await new Promise<void>((resolve) => {
+          if (sentinel.exitCode !== null || sentinel.signalCode) resolve();
+          else sentinel.once("exit", () => resolve());
+        });
+      }
+    },
+    30_000,
+  );
 
   it("cleans Postgres and preserves diagnostics when the executable is missing", async () => {
     const directory = await temporaryDirectory();

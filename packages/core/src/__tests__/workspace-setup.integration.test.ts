@@ -12,6 +12,10 @@ import {
   SANDBOX_CAPABILITIES,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -25,6 +29,8 @@ import { PersonalEnvironmentService } from "../services/personal-environment-ser
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { RecordingAdapter } from "./recording-adapter.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /**
  * Workspace setup in chats (ADR 0208): an Environment's `setup` runs once
@@ -137,9 +143,11 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
     await writeManifest({
       setup: { command: `echo "environment v1" >> '${runs}'` },
     });
-    machine = new LocalProcessSandboxProvider({
-      root: path.join(tmpDir, "machine"),
-    });
+    machine = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(tmpDir, "machine"),
+      }),
+    );
     // The machine keeps volumes; mounting them is the provider's own work,
     // so this one records them and boots a plain sandbox.
     const keeping = new Proxy(machine, {
@@ -205,13 +213,23 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await sessions?.stopLocalTurns();
-    if (db) {
-      await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
-      await db.destroy();
-    }
-    if (tmpDir)
-      await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
+    await cleanupTestResources(
+      [
+        () => sessions?.stopLocalTurns(),
+        () => ownedSandboxes.cleanup(),
+        async () => {
+          if (db)
+            await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(
+              db,
+            );
+        },
+        () => db?.destroy(),
+      ],
+      async () => {
+        if (tmpDir)
+          await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
+      },
+    );
   });
 
   it("runs once per workspace, again when it changes or the workspace is rebuilt, and shows it in the chat", async () => {

@@ -4,6 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   DOCKER_OWNER_LABEL,
@@ -14,6 +18,8 @@ import {
   withLabel,
 } from "../docker-proxy.js";
 import { LocalProcessSandboxProvider } from "../sandbox-provider.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 type Labels = Record<string, string>;
 interface FakeResource {
@@ -204,9 +210,10 @@ describe("Docker proxy (ADR 0176)", () => {
     });
   });
   afterAll(async () => {
-    await proxy.close();
-    await docker.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    await cleanupTestResources(
+      [() => proxy?.close(), () => docker.close()],
+      () => fs.rmSync(dir, { recursive: true, force: true }),
+    );
   });
 
   it("labels what the sandbox creates and lists only its own", async () => {
@@ -359,9 +366,10 @@ describe("Docker proxy allowlist (ADR 0176)", () => {
     });
   });
   afterAll(async () => {
-    await proxy.close();
-    await docker.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    await cleanupTestResources(
+      [() => proxy?.close(), () => docker.close()],
+      () => fs.rmSync(dir, { recursive: true, force: true }),
+    );
   });
 
   const message = (body: unknown) =>
@@ -717,15 +725,18 @@ describe.skipIf(!hostSocket)("local-process containers on real Docker", () => {
     const socket = hostSocket ?? "";
     expect(await dockerAvailable(socket)).toBe(true);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "wlp-"));
-    const provider = new LocalProcessSandboxProvider({
-      root,
-      docker: {
-        socketPath: socket,
-        cliPlugins: path.join(os.homedir(), ".docker", "cli-plugins"),
-      },
-    });
-    const sandbox = await provider.createSandbox({ containers: true });
+    const provider = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root,
+        docker: {
+          socketPath: socket,
+          cliPlugins: path.join(os.homedir(), ".docker", "cli-plugins"),
+        },
+      }),
+    );
+    let sandbox: { id: string } | undefined;
     try {
+      sandbox = await provider.createSandbox({ containers: true });
       await provider.uploadFiles(
         sandbox.id,
         {
@@ -759,9 +770,11 @@ describe.skipIf(!hostSocket)("local-process containers on real Docker", () => {
       expect(privileged.exitCode).not.toBe(0);
       expect(privileged.result).toContain("Privileged");
     } finally {
-      await provider.destroySandbox(sandbox.id);
-      fs.rmSync(root, { recursive: true, force: true });
+      await cleanupTestResources([() => ownedSandboxes.cleanup()], () =>
+        fs.rmSync(root, { recursive: true, force: true }),
+      );
     }
+    if (!sandbox) throw new Error("Missing test sandbox");
     const label = `label=${DOCKER_OWNER_LABEL}=${sandbox.id}`;
     const env = { ...process.env, DOCKER_HOST: `unix://${socket}` };
     for (const args of [

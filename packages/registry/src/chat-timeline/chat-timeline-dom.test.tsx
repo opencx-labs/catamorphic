@@ -317,6 +317,13 @@ describe("ChatTimeline DOM contract", () => {
     expect($('[data-testid="chat-turn-steps"]')).not.toBeNull();
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.closest("[inert]")).toBeNull();
+    expect($$('[data-testid="chat-step"]')).toHaveLength(0);
+    await act(async () => (toggle as HTMLButtonElement).click());
+    expect($$('[data-testid="chat-step-detail"]')).toHaveLength(0);
+    await act(async () => {
+      for (const kind of ["command", "note", "notification"])
+        $<HTMLButtonElement>(`[data-step-kind="${kind}"] button`)?.click();
+    });
     expect(
       $$('[data-testid="chat-step"]').map((step) =>
         step.getAttribute("data-step-kind"),

@@ -42,8 +42,9 @@ it("explains native writer ownership without classifying it for automatic retry"
     agentName: "Codex",
     providerLabel: "Codex",
   });
-  expect(owned.message).toContain("Close it there, then retry here");
-  expect(owned.message).not.toContain("01a090c8");
+  expect(owned.message).toContain("Wait for the previous process to stop");
+  expect(owned.message).toContain(original);
+  expect(owned.message).not.toContain("another Codex window");
   expect(owned.kind).toBeUndefined();
   const tool = friendlyTurnError({
     error: { message: `Tool read failed: ${original}` },

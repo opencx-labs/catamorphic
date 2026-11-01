@@ -4,6 +4,7 @@ import path from "node:path";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import type { ConnectedMcpServer } from "@catamorphic/mcp";
+import { TestSandboxes } from "@catamorphic/sandbox/testing";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { type AiSdkLocal, createAiSdkAdapter } from "../adapter.js";
 import {
@@ -18,11 +19,18 @@ import {
 } from "../testing/index.js";
 import { attemptStart, FakeHost, type ThreadStore } from "./fake-host.js";
 
+const ownedSandboxes = new TestSandboxes();
+
 const root = fs.realpathSync(
   fs.mkdtempSync(path.join(os.tmpdir(), "ai-sdk-adapter-")),
 );
-const sandboxes = new LocalProcessSandboxProvider({ root });
-afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+const sandboxes = ownedSandboxes.track(
+  new LocalProcessSandboxProvider({ root }),
+);
+afterAll(async () => {
+  await ownedSandboxes.cleanup();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 async function sandboxLocal(): Promise<AiSdkLocal> {
   const handle = await sandboxes.createSandbox({});

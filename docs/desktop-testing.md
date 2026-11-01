@@ -28,6 +28,26 @@ Logs, JUnit results, and Electron screenshots are retained under
 Delete old diagnostics when no longer needed. Missing Docker is an error;
 the runner never falls back to Electron on the developer's desktop.
 
+## Test process ownership
+
+The root test and check commands give each invocation private temporary storage.
+After every phase, and again before its disposable database stops, the controller
+terminates the phase's process group and any detached groups with a working
+directory beneath that invocation's canonical temporary root. Cancellation starts
+the same bounded cleanup immediately, escalating to SIGKILL when necessary.
+Native desktop CI also receives a private temporary root. Cleanup failures fail
+the command and retain its files for diagnosis.
+
+Fixtures retain each original sandbox provider through `TestSandboxes` from
+`@catamorphic/sandbox/testing`, stop producers, and destroy every recorded sandbox
+before deleting their directories. Teardown attempts every resource and reports
+failures. The controller sweep covers worker crashes that bypass fixture hooks;
+it does not change production runner reattachment or detached-command lifetime.
+
+The sweep depends on the surviving controller and at least one group member
+remaining beneath the owned root. It cannot recover ownership after every member
+changes directory elsewhere, or run after the controller itself receives SIGKILL.
+
 ## Synchronizing fixtures
 
 Wait for the state a check measures rather than a fixed startup delay. Tests of

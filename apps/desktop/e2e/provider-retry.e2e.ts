@@ -219,6 +219,13 @@ it("returns a large retained chat from a browser tab without a history load or e
     "Large retained review",
     "Large retained transcript",
   );
+  // Computed names persist after completion: this catches an incorrectly
+  // assigned dock entrance even when this runner outlasts its 250ms tween.
+  expect(
+    await app.eval<string[]>(
+      `getComputedStyle(document.querySelector(${JSON.stringify(front)})).animationName.split(',').map(name=>name.trim())`,
+    ),
+  ).not.toContain("dock-in");
   await app.waitFor(
     `(async()=>{const d=await fetch(${JSON.stringify(`${base}/${id}`)}).then(r=>r.json());return d.snapshot.turns[0]?.status==='completed'})()`,
   );
@@ -299,6 +306,10 @@ it("returns a large retained chat from a browser tab without a history load or e
     }>
   >(
     `window.__returnFrames?.length>3 && window.__returnFrames.filter(f=>f.shown).length>2 && window.__returnFrames`,
+  );
+  fs.writeFileSync(
+    path.join(artifacts, "retained-chat-return-frames.json"),
+    JSON.stringify(frames, null, 2),
   );
   const shown = frames.filter((frame) => frame.shown);
   expect(shown.every((frame) => frame.opacity === 1)).toBe(true);
