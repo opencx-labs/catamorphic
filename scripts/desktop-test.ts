@@ -93,8 +93,9 @@ async function main(): Promise<void> {
   if (!native) await chmod(artifacts, 0o777);
   const signals = new TestSignalController();
   const container = `catamorphic-desktop-test-${randomUUID()}`;
-  // Chromium's singleton socket is also beneath TMPDIR on native macOS.
-  const context = await mkdtemp(path.join(tmpdir(), "ct-"));
+  // macOS allows only 103 path bytes plus the terminator for a Unix socket.
+  // Chromium adds its own temporary directory and SingletonSocket suffix.
+  const context = await mkdtemp(path.join(tmpdir(), "d"));
   let succeeded = false;
   let step = 0;
   const run = async (
