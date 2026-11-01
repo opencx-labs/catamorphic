@@ -77,6 +77,14 @@ describe("ChatTimeline queue editing", () => {
         />,
       ),
     );
+    expect(container.querySelector('[data-step-kind="agent"]')).toBeNull();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-turn-steps-toggle"]',
+        )
+        ?.click(),
+    );
     const reports = container.querySelectorAll('[data-step-kind="agent"]');
     expect(reports).toHaveLength(1);
     const report = reports[0];
@@ -525,6 +533,16 @@ describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
     expect(
       container.querySelector("[data-testid=chat-task-notification]"),
     ).toBeNull();
+    expect(
+      container.querySelector('[data-step-kind="notification"]'),
+    ).toBeNull();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="chat-turn-steps-toggle"]',
+        )
+        ?.click(),
+    );
     const step = container.querySelector('[data-step-kind="notification"]');
     expect(step?.textContent).toContain(
       "Start the worker printed what you were waiting for",

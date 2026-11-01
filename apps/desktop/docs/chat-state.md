@@ -22,6 +22,20 @@ Layout that carries the view past its saved endpoint also counts as arrival.
 
 Running background commands remain visible outside the folded steps list and
 align with the main conversation column, without a nested border or indentation.
+When background work finishes, its row becomes inert and collapses before joining
+folded history. It never appears in both places during that handoff.
+
+Folded step lists release their rows after the closing transition. Closed step
+payloads release their Markdown and other detail DOM the same way. Expanded
+detail choices belong to the step list and survive folding and reopening it;
+manual reopening does not replay every historical row's entrance.
+
+The chat's watcher strip retains each stopped watch through its actual height
+transition, with a bounded fallback for hidden or stalled renderers. Surviving
+watchers move into their new positions, including across wrapped lines. Exiting
+chips fade outside the rail's shrinking viewport, clipped to the viewport that
+was visible when they left. Scrolling updates that exit position. Leaving
+controls are inert immediately, and script-driven motion honors reduced motion.
 
 ## Three independent facts
 

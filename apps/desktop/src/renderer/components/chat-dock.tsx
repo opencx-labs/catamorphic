@@ -87,7 +87,7 @@ import {
   isAttachedChipId,
   workChips,
 } from "../lib/chips.js";
-import { useClosingItems } from "../lib/closing-items.js";
+import { CLOSING_MS, useClosingItems } from "../lib/closing-items.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
 import {
   type ChatCommand,
@@ -123,6 +123,7 @@ import {
   matchesBinding,
   useKeybindings,
 } from "../lib/keybindings.js";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { usePullRequestStatuses } from "../lib/pr-status.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
@@ -143,7 +144,10 @@ import type { ChatMode } from "../lib/workspace-types.js";
 import { isOpenAction } from "../sources/run.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
-import { ActivityText } from "./catamorphic/activity-text.js";
+import {
+  ActivityText,
+  transitionPlaying,
+} from "./catamorphic/activity-text.js";
 import { ApprovalCard } from "./catamorphic/approval-card.js";
 import { stepToolName } from "./catamorphic/chat-steps.js";
 import {
@@ -623,6 +627,69 @@ function ChatDockContent({
     },
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
+  const watchersBody = useRef<HTMLDivElement>(null);
+  const shownWatchers = useClosingItems(visibleWatchers, CLOSING_MS, (id) => {
+    const box = watchersBody.current
+      ?.querySelector(`[data-watcher-id="${CSS.escape(id)}"]`)
+      ?.closest("[data-collapsible]");
+    return (
+      box?.getAttribute("data-collapsible") === "open" ||
+      transitionPlaying(box, "height")
+    );
+  });
+  const watcherPositions = useRef(
+    new Map<string, { left: number; top: number }>(),
+  );
+  const watcherOrder = shownWatchers
+    .map(({ item, present }) => `${item.id}:${present}`)
+    .join("|");
+  // Match the chip rail's layout motion when a removed token releases its
+  // width: surviving watches slide into place, including across wrapped rows.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: presence changes release layout; text updates do not
+  useLayoutEffect(() => {
+    const body = watchersBody.current;
+    if (!body) return;
+    const measure = (animate: boolean) => {
+      const origin = body.getBoundingClientRect();
+      const next = new Map<string, { left: number; top: number }>();
+      for (const token of body.querySelectorAll<HTMLElement>(
+        "[data-watcher-id]",
+      )) {
+        const id = token.dataset.watcherId;
+        const node = token.closest<HTMLElement>("[data-collapsible]");
+        if (!id || !node) continue;
+        const transform = new DOMMatrixReadOnly(
+          getComputedStyle(node).transform,
+        );
+        const rect = node.getBoundingClientRect();
+        const position = {
+          left: rect.left - origin.left - transform.m41,
+          top: rect.top - origin.top - transform.m42,
+        };
+        next.set(id, position);
+        const before = watcherPositions.current.get(id);
+        const duration = motionMs(200);
+        if (!animate || !before || !duration) continue;
+        const dx = before.left - position.left + transform.m41;
+        const dy = before.top - position.top + transform.m42;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+        for (const animation of node.getAnimations())
+          if (animation.id === "watcher-move") animation.cancel();
+        node.animate(
+          [
+            { transform: `translate(${dx}px, ${dy}px)` },
+            { transform: "translate(0,0)" },
+          ],
+          { duration, easing: EASE_STANDARD, id: "watcher-move" },
+        );
+      }
+      watcherPositions.current = next;
+    };
+    measure(true);
+    const observer = new ResizeObserver(() => measure(false));
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, [watcherOrder]);
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
   const activeEnvironmentItem = environmentQuery.data?.items.find(
     (item) => item.name === activeEnvironment,
@@ -3049,86 +3116,89 @@ function ChatDockContent({
           a centered, readable column. */}
         <div className="relative isolate flex min-h-0 w-full flex-1 flex-col">
           <ThemeBackdrop surface="chat" />
-          {visibleWatchers.length > 0 && (
+          <ClosingCollapsible open={visibleWatchers.length > 0}>
             <div
+              ref={watchersBody}
               className={`mx-auto flex w-full shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
                 isTab ? "max-w-4xl" : "max-w-3xl"
               }`}
               data-testid="chat-watchers"
             >
-              {visibleWatchers.map((watcher) => (
-                <span
-                  key={watcher.id}
-                  className="inline-flex min-w-0 items-center gap-1.5 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted"
-                  title={`${watcher.triggerKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
-                >
-                  <Hourglass
-                    className={`size-3 shrink-0 ${
-                      watcher.status === "active"
-                        ? "text-accent"
-                        : "text-fg-faint"
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    className="max-w-48 truncate rounded hover:underline"
-                    onClick={() =>
-                      onLinkClick?.(`artifact:${watcher.id}`, "tab")
-                    }
-                  >
-                    {watcher.workflowName}
-                  </button>
+              {shownWatchers.map(({ item: watcher, present }) => (
+                <ClosingCollapsible key={watcher.id} open={present}>
                   <span
-                    className="text-fg-faint"
-                    title={
-                      watcher.expiresAt
-                        ? `Expires ${new Date(watcher.expiresAt).toLocaleString()}`
-                        : undefined
-                    }
+                    data-watcher-id={watcher.id}
+                    className="inline-flex min-w-0 items-center gap-1.5 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted"
+                    title={`${watcher.triggerKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
                   >
-                    {watcher.status}
-                  </span>
-                  {watcher.nextRunAt && (
-                    <span>
-                      Next · {new Date(watcher.nextRunAt).toLocaleString()}
-                    </span>
-                  )}
-                  {watcher.lastRun && (
+                    <Hourglass
+                      className={`size-3 shrink-0 ${
+                        watcher.status === "active"
+                          ? "text-accent"
+                          : "text-fg-faint"
+                      }`}
+                    />
                     <button
                       type="button"
-                      className={`rounded hover:underline ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                      className="max-w-48 truncate rounded hover:underline"
                       onClick={() =>
-                        onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
+                        onLinkClick?.(`artifact:${watcher.id}`, "tab")
                       }
                     >
-                      Last run · {watcher.lastRun.status}
+                      {watcher.workflowName}
                     </button>
-                  )}
-                  {watcher.lastError && (
                     <span
-                      className="max-w-64 truncate text-danger"
-                      title={watcher.lastError}
+                      className="text-fg-faint"
+                      title={
+                        watcher.expiresAt
+                          ? `Expires ${new Date(watcher.expiresAt).toLocaleString()}`
+                          : undefined
+                      }
                     >
-                      {watcher.lastError}
+                      {watcher.status}
                     </span>
-                  )}
-                  {(watcher.status === "active" ||
-                    watcher.status === "paused") && (
-                    <button
-                      type="button"
-                      className="ml-0.5 grid size-4 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-muted hover:text-fg"
-                      aria-label={`Stop watcher ${watcher.workflowName}`}
-                      disabled={watcherQuery.stop.isPending}
-                      data-disabled-reason="Stopping this watcher"
-                      onClick={() => watcherQuery.stop.mutate(watcher.id)}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  )}
-                </span>
+                    {watcher.nextRunAt && (
+                      <span>
+                        Next · {new Date(watcher.nextRunAt).toLocaleString()}
+                      </span>
+                    )}
+                    {watcher.lastRun && (
+                      <button
+                        type="button"
+                        className={`rounded hover:underline ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                        onClick={() =>
+                          onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
+                        }
+                      >
+                        Last run · {watcher.lastRun.status}
+                      </button>
+                    )}
+                    {watcher.lastError && (
+                      <span
+                        className="max-w-64 truncate text-danger"
+                        title={watcher.lastError}
+                      >
+                        {watcher.lastError}
+                      </span>
+                    )}
+                    {(watcher.status === "active" ||
+                      watcher.status === "paused") && (
+                      <button
+                        type="button"
+                        className="ml-0.5 grid size-4 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-muted hover:text-fg"
+                        aria-label={`Stop watcher ${watcher.workflowName}`}
+                        disabled={watcherQuery.stop.isPending}
+                        data-disabled-reason="Stopping this watcher"
+                        onClick={() => watcherQuery.stop.mutate(watcher.id)}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
+                  </span>
+                </ClosingCollapsible>
               ))}
             </div>
-          )}
+          </ClosingCollapsible>
           {watcherQuery.stop.error && (
             <p
               role="alert"

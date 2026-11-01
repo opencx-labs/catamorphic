@@ -612,6 +612,38 @@ frame samples stayed below 24 ms in both quiet typing runs; the comparison does
 not establish a quiet-typing speedup. Captures used software compositing while
 other checks ran, and neither app reported a renderer error.
 
+## Folded history retains data, not rendered payloads, 2026-11-01
+
+The installed alpha.32 windows held roughly 81,000 and 93,000 DOM elements,
+including thousands of hidden tool payloads and SVGs. One retained Reviewer chat
+accounted for about 54,000 elements in each window. Native process footprints
+were around 2 GiB per renderer. These observations establish a large retained
+rendering workload; they do not establish an overnight leak or explain every
+reported stall. Main and GPU samples were mostly waiting, and the available
+recordings did not isolate a single blocking JavaScript function.
+
+`TurnSteps` now mounts folded rows and expanded payloads only while visible or
+closing. Disclosure choices remain in React state; transcript data remains in the
+session cache. Closed Markdown is not parsed. `chat-retention.e2e.ts` exercises a
+500-command transcript, verifies that resting history contains no step or detail
+DOM, and measures the real grid-height close before releasing it. Shared DOM
+tests cover 1,000 folded rows, late transitions and preserved detail choices.
+A matched isolated Electron fixture retained 6,646 elements before and 149 after
+folding the same 500-command history (500 step/payload nodes before, none after).
+This is a DOM-count comparison, not an interaction-latency or memory benchmark.
+
+This bounds the cost of folded history without changing retained chat identity,
+scroll state or the event stream. An expanded log still renders its headers;
+this change does not virtualize visible history.
+
+The separate installed runner interruption investigation found a shutdown race
+already fixed in main by `1486c717`: the old in-process runner could disappear
+before its Codex child released the native conversation writer. Current shutdown
+waits for that child before the same thread resumes. The original lease loss
+remains unexplained by these samples. The writer-conflict message now describes
+the busy conversation without asserting another Codex window is open and keeps
+the provider's original error visible.
+
 ## Module confinement overhead
 
 `apps/desktop/scripts/module-sandbox-bench.ts` compares a fresh Bun worker with

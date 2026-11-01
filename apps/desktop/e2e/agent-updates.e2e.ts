@@ -236,7 +236,7 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
 
     await app.reload();
     await app.waitFor(
-      `!!document.querySelector(${JSON.stringify(`${scope} [data-composer-input]`)}) && !!document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent]`)})`,
+      `!!document.querySelector(${JSON.stringify(`${scope} [data-composer-input]`)}) && !!document.querySelector(${JSON.stringify(`${scope} [data-testid=chat-turn-steps-toggle]`)})`,
       { timeoutMs: 30_000, label: "working chat restored with peer activity" },
     );
     const restored = await snapshot();
@@ -273,15 +273,16 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
       `Rows: ${JSON.stringify(rows)}; ${positions(restored)}`,
     ).toMatchObject({
       workBlocks: 2,
-      agentBlocks: 1,
-      agentRows: 1,
+      agentBlocks: 0,
+      agentRows: 0,
       inbound: 0,
       userRows: 1,
       working: true,
     });
-    await click(
-      `${scope} article[data-live-work]:has([data-step-kind=agent]) [data-testid=chat-turn-steps-toggle]`,
-    );
+    await app.eval(`(() => {
+      for (const toggle of document.querySelectorAll(${JSON.stringify(`${scope} [data-testid=chat-turn-steps-toggle]`)}))
+        if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+    })()`);
     await app.waitFor(
       `(() => {
         const button=document.querySelector(${JSON.stringify(`${scope} [data-step-kind=agent] button`)});
@@ -291,6 +292,11 @@ it("reloads interleaved context-only peer reports as one loose activity block", 
       })()`,
       { label: "expanded peer activity row accepting pointer input" },
     );
+    expect(
+      await app.eval(
+        `document.querySelectorAll(${JSON.stringify(`${scope} [data-step-kind=agent]`)}).length`,
+      ),
+    ).toBe(1);
     await click(`${scope} [data-step-kind=agent] button`);
     await app.waitFor(
       `(() => {
