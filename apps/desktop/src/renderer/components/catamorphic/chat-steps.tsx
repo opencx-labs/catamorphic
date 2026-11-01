@@ -31,6 +31,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -47,6 +48,7 @@ import {
   taskIcon,
   taskTone,
 } from "./session-input.js";
+import { StepWindow } from "./step-window.js";
 import type { StepSource } from "./turn-rows.js";
 
 /**
@@ -1293,6 +1295,7 @@ export function TurnSteps({
   const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
   const onScreen = useContext(OnScreen);
+  const visible = useOnScreen();
   useEffect(() => {
     if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
@@ -1307,6 +1310,7 @@ export function TurnSteps({
     shown.current = true;
   }, []);
   const rowsEnter = shown.current && onScreen.current;
+  const rowSizes = useRef(new Map<string, number>());
   // The clock fades out where it was before it goes, when the turn ends
   // or a later line takes it.
   const clockShown = useLinger(clock ? true : undefined, CLOCK_FADE_MS);
@@ -1339,6 +1343,10 @@ export function TurnSteps({
     });
   }, []);
   const folded = steps.filter((step) => !backgroundKeys.has(step.key));
+  const knownSteps = useRef(new Set(folded.map((step) => step.key)));
+  useLayoutEffect(() => {
+    knownSteps.current = new Set(folded.map((step) => step.key));
+  });
   // No line when it would open onto nothing: a lone step, or only
   // commands still running in view, unless it carries the clock.
   const bare = !clock && (lone || folded.length === 0);
@@ -1440,20 +1448,27 @@ export function TurnSteps({
           >
             <div className="overflow-hidden">
               {shownList.value && (
-                <div
+                <StepWindow
+                  rows={folded}
+                  opened={details}
+                  sizes={rowSizes}
+                  active={open && visible}
                   className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
-                >
-                  {folded.map((step) => (
+                  render={(step) => (
                     <StepRow
                       key={step.key}
                       step={step}
-                      enter={rowsEnter && listMounted.current}
+                      enter={
+                        rowsEnter &&
+                        listMounted.current &&
+                        !knownSteps.current.has(step.key)
+                      }
                       open={details.has(step.key)}
                       onOpen={changeDetail}
                       {...handlers}
                     />
-                  ))}
-                </div>
+                  )}
+                />
               )}
             </div>
           </div>
@@ -1550,6 +1565,7 @@ const StepRow = memo(function StepRow({
   return (
     <div
       data-testid="chat-step"
+      data-step-key={step.key}
       data-step-kind={step.kind}
       data-step-status={step.status}
       data-running={pulsing || undefined}

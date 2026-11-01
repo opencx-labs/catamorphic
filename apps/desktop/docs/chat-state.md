@@ -28,7 +28,13 @@ folded history. It never appears in both places during that handoff.
 Folded step lists release their rows after the closing transition. Closed step
 payloads release their Markdown and other detail DOM the same way. Expanded
 detail choices belong to the step list and survive folding and reopening it;
-manual reopening does not replay every historical row's entrance.
+manual reopening does not replay every historical row's entrance. Long expanded
+lists mount nearby headers in the conversation's existing scroller, with measured
+space for distant headers. Opened details, focused controls, selection and an
+active pointer press remain mounted. Tab and Shift+Tab materialize the next
+logical row across skipped ranges; this remains a document log, not a tree with
+roving focus. Notification targets mount before message navigation looks them up.
+Scrolling an existing row back into view never replays its arrival animation.
 
 The dock entrance belongs to initial or restored floating chats. Tab chats use a
 settled pose even if the first opening was interrupted by a fast tab switch.
