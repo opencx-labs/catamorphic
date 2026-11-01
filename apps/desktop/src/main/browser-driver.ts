@@ -93,6 +93,29 @@ const NETWORK_KEPT = 300;
 const EVALUATE_RESULT_LIMIT = 20_000;
 const EVALUATE_MS = 30_000;
 const FILE_CHOOSER_MS = 6000;
+const CAPTURE_MS = 10_000;
+/** Captures in different guests share their window's short rendering hold. */
+const captureFrames = new WeakMap<
+  WebContents,
+  { count: number; throttled: boolean }
+>();
+
+function holdCaptureFrames(guest: WebContents): () => void {
+  const host = guest.hostWebContents ?? guest;
+  const held = captureFrames.get(host);
+  const entry = held ?? { count: 0, throttled: host.getBackgroundThrottling() };
+  if (!held) {
+    host.setBackgroundThrottling(false);
+    captureFrames.set(host, entry);
+  }
+  entry.count++;
+  return () => {
+    entry.count--;
+    if (entry.count > 0) return;
+    captureFrames.delete(host);
+    if (!host.isDestroyed()) host.setBackgroundThrottling(entry.throttled);
+  };
+}
 /**
  * The longest a wait_for or downloads call waits, as browser_act's
  * timeoutMs declares. A message reaching the agent ends it sooner.
@@ -426,10 +449,22 @@ export class BrowserDriver {
     this.watch();
     if (format === "dom") return this.evaluate("snapshot");
     const viewport = viewportSchema.parse(await this.evaluate("viewport"));
-    const image = await this.guest.capturePage(undefined, {
-      stayHidden: true,
-      stayAwake: true,
-    });
+    // Only the capture needs frames. Let the guest render while its native
+    // window stays minimized, then restore its ordinary idle throttling.
+    const release = holdCaptureFrames(this.guest);
+    const captured = await settledWithin({
+      promise: Promise.resolve().then(() =>
+        this.guest.capturePage(undefined, {
+          stayHidden: true,
+          stayAwake: true,
+        }),
+      ),
+      ms: CAPTURE_MS,
+      signal: new AbortController().signal,
+    }).finally(release);
+    if (!captured.settled)
+      throw new Error("Page image did not finish rendering. Try again.");
+    const image = captured.value;
     if (image.isEmpty())
       throw new Error("Page image is not ready. Wait for the page to render.");
     const width = Math.min(Math.round(viewport.width), 1600);

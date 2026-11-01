@@ -33,7 +33,15 @@ vi.mock("electron", async () => {
 /** A tab's page whose scripts answer only when the test says. */
 class Guest extends EventEmitter {
   id = 9;
-  hostWebContents = { isDestroyed: () => false, focus: vi.fn() };
+  hostWebContents = {
+    isDestroyed: () => false,
+    focus: vi.fn(),
+    getBackgroundThrottling: vi.fn(() => true),
+    setBackgroundThrottling: vi.fn(),
+  };
+  capturePage = vi.fn<() => Promise<unknown>>(() =>
+    Promise.reject(new Error("No image")),
+  );
   debugger = {
     isAttached: () => true,
     attach: vi.fn(),
@@ -465,6 +473,81 @@ describe("browser driver and page dialogs", () => {
       driver.act({ type: "fill", uid: "dialog", text: "x" }, waiting),
     ).resolves.toMatchObject({ dialog: { kind: "alert" } });
     expect(pageDialogs()?.has(guest.id)).toBe(true);
+  });
+});
+
+describe("browser image rendering", () => {
+  it.each([true, false])(
+    "releases rendering and the operation queue when a capture never answers (throttled=%s)",
+    async (throttled) => {
+      vi.useFakeTimers();
+      try {
+        const guest = new Guest();
+        guest.hostWebContents.getBackgroundThrottling.mockReturnValue(
+          throttled,
+        );
+        guest.executeJavaScriptInIsolatedWorld.mockResolvedValue({
+          value: { width: 640, height: 480 },
+        });
+        guest.capturePage.mockImplementation(() => new Promise(() => {}));
+        const driver = new BrowserDriver(
+          asWebContents(guest),
+          () => {},
+          async () => {},
+        );
+        const failed = expect(driver.snapshot("image")).rejects.toThrow(
+          "Page image did not finish rendering",
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          guest.hostWebContents.setBackgroundThrottling.mock.calls,
+        ).toEqual([[false]]);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await failed;
+        expect(
+          guest.hostWebContents.setBackgroundThrottling.mock.calls,
+        ).toEqual([[false], [throttled]]);
+        await expect(driver.clear()).resolves.toBeDefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps a shared renderer awake until its last capture ends", async () => {
+    const first = new Guest();
+    const second = new Guest();
+    second.hostWebContents = first.hostWebContents;
+    const failures: Array<(error: Error) => void> = [];
+    const failed = [first, second].map((guest) => {
+      guest.executeJavaScriptInIsolatedWorld.mockResolvedValue({
+        value: { width: 640, height: 480 },
+      });
+      guest.capturePage.mockImplementation(
+        () => new Promise((_, reject) => failures.push(reject)),
+      );
+      const driver = new BrowserDriver(
+        asWebContents(guest),
+        () => {},
+        async () => {},
+      );
+      return expect(driver.snapshot("image")).rejects.toThrow(
+        "Page image did not finish rendering",
+      );
+    });
+    await flush();
+    expect(failures).toHaveLength(2);
+    failures[0]?.(new Error("Capture failed"));
+    await failed[0];
+    expect(first.hostWebContents.setBackgroundThrottling.mock.calls).toEqual([
+      [false],
+    ]);
+    failures[1]?.(new Error("Capture failed"));
+    await failed[1];
+    expect(first.hostWebContents.setBackgroundThrottling.mock.calls).toEqual([
+      [false],
+      [true],
+    ]);
   });
 });
 
