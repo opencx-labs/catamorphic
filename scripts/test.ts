@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { constants, tmpdir } from "node:os";
 import path from "node:path";
 import { writeCliError } from "./cli-error.js";
@@ -11,6 +11,7 @@ import {
   withDisposablePostgres,
 } from "./test-postgres.js";
 import {
+  removeTestDirectory,
   settleTestProcesses,
   withTestProcessCleanup,
 } from "./test-processes.js";
@@ -431,7 +432,7 @@ async function main(): Promise<void> {
   } finally {
     signals.close();
     if (succeeded) {
-      await rm(resources.rootPath, { recursive: true, force: true });
+      await removeTestDirectory(resources.rootPath);
     } else {
       console.error(`Test diagnostics preserved at ${resources.rootPath}`);
     }

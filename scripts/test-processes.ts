@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { readdir, readlink, realpath } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -112,6 +119,24 @@ async function assertPrivateRoot(root: string): Promise<void> {
     beneath(controllerCwd, root)
   )
     throw new Error(`Refusing unsafe test temporary root ${root}`);
+}
+
+/** Reclaim fixture-owned read-only snapshots, never a symlink's target. */
+export async function removeTestDirectory(root: string): Promise<void> {
+  if ((await lstat(root)).isSymbolicLink())
+    throw new Error("Refusing a symlink as the test temporary root");
+  const canonical = await realpath(root);
+  await assertPrivateRoot(canonical);
+  const writable = async (directory: string): Promise<void> => {
+    const stat = await lstat(directory);
+    if (!stat.isDirectory()) return;
+    await chmod(directory, stat.mode | 0o700);
+    for (const entry of await readdir(directory))
+      await writable(path.join(directory, entry));
+  };
+  // Process cleanup must finish before reclaiming directories or removing them.
+  await writable(canonical);
+  await rm(canonical, { recursive: true, force: true, maxRetries: 5 });
 }
 
 function signal(group: number, value: NodeJS.Signals): void {

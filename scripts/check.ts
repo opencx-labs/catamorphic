@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, rm } from "node:fs/promises";
+import { copyFile } from "node:fs/promises";
 import path from "node:path";
 import { checkCommands, checkOptions } from "./check-plan.js";
 import { writeCliError } from "./cli-error.js";
@@ -15,7 +15,10 @@ import {
   dockerTestPostgresDriver,
   withDisposablePostgres,
 } from "./test-postgres.js";
-import { withTestProcessCleanup } from "./test-processes.js";
+import {
+  removeTestDirectory,
+  withTestProcessCleanup,
+} from "./test-processes.js";
 import { toolRuntime } from "./tool-runtime.js";
 
 function logFileName(input: { index: number; label: string }): string {
@@ -95,7 +98,7 @@ async function main(): Promise<void> {
   } finally {
     signals.close();
     if (succeeded) {
-      await rm(resources.rootPath, { recursive: true, force: true });
+      await removeTestDirectory(resources.rootPath);
     } else {
       console.error(`Check diagnostics preserved at ${resources.rootPath}`);
     }

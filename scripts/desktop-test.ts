@@ -1,20 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmod,
-  cp,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-} from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeCliError } from "./cli-error.js";
 import { assertIsolatedDesktopTestHost } from "./desktop-test-environment.js";
 import { runLoggedProcess, TestSignalController } from "./test.js";
-import { withTestProcessCleanup } from "./test-processes.js";
+import {
+  removeTestDirectory,
+  withTestProcessCleanup,
+} from "./test-processes.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -233,9 +228,9 @@ async function main(): Promise<void> {
     if (!native)
       spawnSync("docker", ["rm", "--force", container], { stdio: "ignore" });
     signals.close();
-    if (succeeded) await rm(context, { recursive: true, force: true });
-    else console.error(`Desktop test temporary files preserved at ${context}`);
     console.log(`Desktop test diagnostics: ${artifacts}`);
+    if (succeeded) await removeTestDirectory(context);
+    else console.error(`Desktop test temporary files preserved at ${context}`);
   }
 }
 

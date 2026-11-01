@@ -1,11 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
 import {
   access,
+  chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -24,6 +27,7 @@ import {
   withDisposablePostgres,
 } from "./test-postgres.js";
 import {
+  removeTestDirectory,
   settleTestProcesses,
   withTestProcessCleanup,
 } from "./test-processes.js";
@@ -491,6 +495,36 @@ describe("test process orchestration", () => {
       ).rejects.toThrow("Refusing unsafe test temporary root");
     },
   );
+
+  it("removes read-only fixture directories without changing symlink targets", async () => {
+    if (process.platform === "win32") return;
+    const root = await temporaryDirectory();
+    const outside = await temporaryDirectory();
+    const snapshot = path.join(root, "snapshot", "nested");
+    await mkdir(snapshot, { recursive: true });
+    await writeFile(path.join(snapshot, "source.ts"), "fixture");
+    await writeFile(path.join(outside, "preserved"), "outside the invocation");
+    await symlink(outside, path.join(root, "external"), "dir");
+    await chmod(outside, 0o500);
+    await chmod(snapshot, 0o500);
+    await chmod(path.dirname(snapshot), 0o500);
+    try {
+      await expect(
+        removeTestDirectory(path.join(root, "external")),
+      ).rejects.toThrow("Refusing a symlink");
+      await removeTestDirectory(root);
+      await expect(access(root)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await lstat(outside)).mode & 0o777).toBe(0o500);
+      expect(await readFile(path.join(outside, "preserved"), "utf8")).toBe(
+        "outside the invocation",
+      );
+    } finally {
+      await chmod(outside, 0o700);
+      // A failed assertion still leaves the fixture removable by afterEach.
+      await chmod(path.dirname(snapshot), 0o700).catch(() => {});
+      await chmod(snapshot, 0o700).catch(() => {});
+    }
+  });
 
   it("finds an orphan whose fixture deleted its working directory", async () => {
     if (process.platform === "win32") return;
