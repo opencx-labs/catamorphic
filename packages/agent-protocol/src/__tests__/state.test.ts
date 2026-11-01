@@ -46,6 +46,7 @@ function turn(id: string, ordinal: number, status: Turn["status"]): Turn {
     priority: 0,
     activity: null,
     activityAt: null,
+    providerRetry: null,
     attemptCount: 0,
     activeAttemptId: null,
     providerThreadId: null,

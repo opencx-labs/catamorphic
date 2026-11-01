@@ -40,6 +40,7 @@ const turn: Turn = {
   priority: 0,
   activity: null,
   activityAt: null,
+  providerRetry: null,
   attemptCount: 1,
   activeAttemptId: attemptId,
   providerThreadId: null,
@@ -215,5 +216,107 @@ describe("the turn's live line", () => {
     );
     batch.commit();
     expect(result.turn.activity).toBe("Calling the API with [secret API_KEY]");
+  });
+});
+
+describe("provider retry lifecycle", () => {
+  const retry: HarnessEvent = {
+    type: "provider.retrying",
+    error: { message: "API unavailable", kind: "unavailable" },
+    attempt: 2,
+    maxAttempts: 5,
+    retryAt: "2026-10-31T10:00:01.000Z",
+  };
+  const resume: HarnessEvent = { type: "provider.resumed" };
+  it.each([
+    { events: [resume, retry], waiting: true },
+    { events: [retry, resume], waiting: false },
+    {
+      events: [
+        retry,
+        {
+          type: "turn.completed",
+          status: "failed",
+          error: { message: "Exhausted" },
+        } satisfies HarnessEvent,
+      ],
+      waiting: false,
+    },
+    {
+      events: [
+        retry,
+        {
+          type: "status",
+          text: "Background command finished",
+        } satisfies HarnessEvent,
+      ],
+      waiting: true,
+    },
+  ])(
+    "applies runner order independently from deferred activity updates ($waiting)",
+    async ({ events, waiting }) => {
+      const db = emptyDatabase();
+      const now = new Date("2026-10-31T10:00:00Z");
+      const result = await db.transaction().execute((trx) =>
+        ingestHarnessEvents({
+          trx,
+          state: {
+            sessionId: turn.sessionId,
+            agentId: null,
+            turn,
+            attempt,
+            thread,
+          },
+          events,
+          now,
+        }),
+      );
+      expect(Boolean(result.turn.providerRetry)).toBe(waiting);
+      if (waiting)
+        expect(result.turn.providerRetry).toEqual({
+          error: { message: "API unavailable", kind: "unavailable" },
+          attempt: 2,
+          maxAttempts: 5,
+          retryAt: "2026-10-31T10:00:01.000Z",
+        });
+      expect(result.turn.status).toBe("running");
+      expect(result.turn.retryAt).toBeNull();
+      expect(result.turn.error).toBeNull();
+      await db.destroy();
+    },
+  );
+  it("masks provider messages and leaves unsupported timing unknown", async () => {
+    const db = emptyDatabase();
+    const mask = new SecretMask({ API_KEY: "fixture-secret" });
+    const result = await db.transaction().execute((trx) =>
+      ingestHarnessEvents({
+        trx,
+        state: {
+          sessionId: turn.sessionId,
+          agentId: null,
+          turn,
+          attempt,
+          thread,
+        },
+        events: [
+          {
+            type: "provider.retrying",
+            error: { message: "Can't reach fixture-secret" },
+            attempt: null,
+            maxAttempts: null,
+            retryAt: null,
+          },
+        ],
+        now: new Date(at),
+        mask: mask.begin(),
+      }),
+    );
+    expect(result.turn.providerRetry).toEqual({
+      error: { message: expect.not.stringContaining("fixture-secret") },
+      attempt: null,
+      maxAttempts: null,
+      retryAt: null,
+    });
+    await db.destroy();
   });
 });

@@ -604,6 +604,59 @@ describe("session log", () => {
     expect(detail.snapshot.sequence).toBe(events.length);
   });
 
+  it("persists provider retry state in the log and projection without changing turn retry authority", async () => {
+    const { projectId, sessionId } = await chat("Provider wait");
+    const { turn } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "fixture",
+    );
+    const providerRetry = {
+      error: { message: "Provider says E_OPAQUE" },
+      attempt: null,
+      maxAttempts: null,
+      retryAt: null,
+    };
+    const log = new SessionLog(db);
+    await db.transaction().execute((trx) =>
+      log.append(trx, {
+        sessionId,
+        events: [
+          {
+            type: "turn.changed",
+            turn: {
+              ...turn,
+              providerRetry,
+            },
+          },
+        ],
+      }),
+    );
+    const snapshot = await readFullSnapshot({ db, sessionId });
+    expect(snapshot.turns[0]?.providerRetry).toEqual(providerRetry);
+    expect(snapshot.turns[0]?.retryAt).toBeNull();
+    expect(snapshot.turns[0]?.error).toBeNull();
+    const raw = await db
+      .selectFrom("agent_turns")
+      .select("provider_retry")
+      .where("id", "=", turn.id)
+      .executeTakeFirstOrThrow();
+    expect(raw.provider_retry).toEqual(providerRetry);
+    await db.transaction().execute((trx) =>
+      log.append(trx, {
+        sessionId,
+        events: [
+          { type: "turn.changed", turn: { ...turn, providerRetry: null } },
+        ],
+      }),
+    );
+    expect(
+      (await sessions.get(identity, projectId, sessionId)).snapshot.turns[0]
+        ?.providerRetry,
+    ).toBeNull();
+  });
+
   it("runs a command once however often it is sent", async () => {
     const { projectId, sessionId } = await chat("Idempotent");
     const command = {

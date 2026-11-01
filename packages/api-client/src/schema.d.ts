@@ -66,9 +66,9 @@ export interface paths {
                             };
                             agentProtocol: {
                                 /** @enum {number} */
-                                session: 2;
+                                session: 3;
                                 /** @enum {number} */
-                                runner: 2;
+                                runner: 3;
                             };
                         };
                     };
@@ -17585,6 +17585,16 @@ export interface components {
             priority: number;
             activity: string | null;
             activityAt: string | null;
+            providerRetry: {
+                error: {
+                    message: string;
+                    /** @enum {string} */
+                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                };
+                attempt: number | null;
+                maxAttempts: number | null;
+                retryAt: string | null;
+            } | null;
             attemptCount: number;
             activeAttemptId: string | null;
             providerThreadId: string | null;
@@ -18460,6 +18470,16 @@ export interface components {
             priority: number;
             activity: string | null;
             activityAt: string | null;
+            providerRetry: {
+                error: {
+                    message: string;
+                    /** @enum {string} */
+                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                };
+                attempt: number | null;
+                maxAttempts: number | null;
+                retryAt: string | null;
+            } | null;
             attemptCount: number;
             activeAttemptId: string | null;
             providerThreadId: string | null;

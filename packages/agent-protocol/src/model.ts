@@ -15,7 +15,7 @@ import type { ImportedSession } from "./imported.js";
  * {@link SessionFields} that a client or mirror of the previous version
  * cannot read or would be refused (2: `metadata`, ADR 0226).
  */
-export const SESSION_PROTOCOL_VERSION = 2;
+export const SESSION_PROTOCOL_VERSION = 3;
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -382,6 +382,17 @@ export interface TurnError {
   retrySafe?: boolean;
 }
 
+/** A model request the harness is retrying inside the current attempt. */
+export interface ProviderRetry {
+  /** Original provider wording stays available; no authority to replay a turn. */
+  error: Omit<TurnError, "retrySafe">;
+  /** Reported by the harness, never inferred from text or silence. */
+  attempt: number | null;
+  maxAttempts: number | null;
+  /** Null when the harness reports no delay. */
+  retryAt: string | null;
+}
+
 /** One file a turn changed, as the workspace sync saw it. */
 export interface TurnFileChange {
   path: string;
@@ -414,6 +425,7 @@ export interface Turn {
   /** The agent's live line while it works. */
   activity: string | null;
   activityAt: string | null;
+  providerRetry: ProviderRetry | null;
   attemptCount: number;
   activeAttemptId: string | null;
   providerThreadId: string | null;

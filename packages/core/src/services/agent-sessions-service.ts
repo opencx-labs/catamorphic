@@ -2590,6 +2590,7 @@ export class AgentSessionsService {
         priority: dispatch === "interrupt" ? 100 : 0,
         activity: null,
         activityAt: null,
+        providerRetry: null,
         attemptCount: 0,
         activeAttemptId: null,
         providerThreadId: null,

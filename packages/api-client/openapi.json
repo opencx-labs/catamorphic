@@ -709,6 +709,49 @@
             "nullable": true,
             "type": "string"
           },
+          "providerRetry": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "error": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "auth",
+                      "rate_limit",
+                      "unavailable",
+                      "model_incompat"
+                    ]
+                  }
+                },
+                "required": ["message"]
+              },
+              "attempt": {
+                "nullable": true,
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "maxAttempts": {
+                "nullable": true,
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "retryAt": {
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": ["error", "attempt", "maxAttempts", "retryAt"]
+          },
           "attemptCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -870,6 +913,7 @@
           "priority",
           "activity",
           "activityAt",
+          "providerRetry",
           "attemptCount",
           "activeAttemptId",
           "providerThreadId",
@@ -4042,6 +4086,51 @@
             "nullable": true,
             "type": "string"
           },
+          "providerRetry": {
+            "nullable": true,
+            "type": "object",
+            "properties": {
+              "error": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "auth",
+                      "rate_limit",
+                      "unavailable",
+                      "model_incompat"
+                    ]
+                  }
+                },
+                "required": ["message"],
+                "additionalProperties": false
+              },
+              "attempt": {
+                "nullable": true,
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "maxAttempts": {
+                "nullable": true,
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991
+              },
+              "retryAt": {
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": ["error", "attempt", "maxAttempts", "retryAt"],
+            "additionalProperties": false
+          },
           "attemptCount": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -4210,6 +4299,7 @@
           "priority",
           "activity",
           "activityAt",
+          "providerRetry",
           "attemptCount",
           "activeAttemptId",
           "providerThreadId",
@@ -6902,11 +6992,11 @@
                       "properties": {
                         "session": {
                           "type": "number",
-                          "enum": [2]
+                          "enum": [3]
                         },
                         "runner": {
                           "type": "number",
-                          "enum": [2]
+                          "enum": [3]
                         }
                       },
                       "required": ["session", "runner"],

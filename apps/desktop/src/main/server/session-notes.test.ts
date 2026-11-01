@@ -37,6 +37,7 @@ function turn(id: string, ordinal: number, overrides: Partial<Turn>): Turn {
     priority: 0,
     activity: null,
     activityAt: null,
+    providerRetry: null,
     attemptCount: 1,
     activeAttemptId: null,
     providerThreadId: null,

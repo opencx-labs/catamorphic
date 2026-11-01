@@ -1,3 +1,4 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { beginRemoteAuthorization, beginServerAuthorization } from "./oauth.js";
 
@@ -61,7 +62,7 @@ function fetchForCallback(options: {
       expect(request.headers.get("authorization")).toBe("Bearer access-token");
       return Response.json({
         identity: { externalUserId: "user-1", root: false },
-        agentProtocol: { session: 2, runner: 1 },
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION, runner: 3 },
         projects: admitted
           ? [{ projectId: "project-1", agents: ["assistant"] }]
           : [],

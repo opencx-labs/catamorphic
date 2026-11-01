@@ -1,3 +1,4 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const realCrypto = globalThis.crypto;
@@ -231,7 +232,9 @@ describe("session protocol check", () => {
       expect(new Headers(init?.headers).get("authorization")).toBe(
         "Bearer device-token",
       );
-      return Response.json({ agentProtocol: { session: 2, runner: 1 } });
+      return Response.json({
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION, runner: 3 },
+      });
     });
     await expect(
       verifySessionProtocol({

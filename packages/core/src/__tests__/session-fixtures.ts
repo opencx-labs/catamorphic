@@ -39,6 +39,7 @@ export function sessionLogFixture(db: Kysely<DB>) {
           priority: 0,
           activity: null,
           activityAt: null,
+          providerRetry: null,
           attemptCount: 0,
           activeAttemptId: null,
           providerThreadId: null,

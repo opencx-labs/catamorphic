@@ -149,6 +149,7 @@ export class TurnQueue {
         status: "preparing",
         activity: "Preparing agent",
         activityAt: now,
+        providerRetry: null,
         cancellationRequested: false,
         retryAt: null,
         startedAt: head.started_at?.toISOString() ?? now,

@@ -303,3 +303,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0295](0295-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |
 | [0296](0296-one-oauth-token-endpoint.md) | One OAuth token endpoint | Accepted (supersedes 0287's runtime compatibility provisions) |
 | [0297](0297-voice-capture-follows-listening-intent.md) | Voice capture follows listening intent | Accepted (amends 0236, 0268) |
+| [0298](0298-provider-retries-are-turn-state.md) | Provider retries are turn state | Accepted (extends 0197, 0198) |

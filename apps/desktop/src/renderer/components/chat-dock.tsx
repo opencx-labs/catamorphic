@@ -2699,8 +2699,9 @@ function ChatDockContent({
                 ? // Behind another tab: hidden at once, as a page is, in its
                   // own pose. Nothing about its box changes and its dock-in
                   // stays played, so bringing it forward shows it in the
-                  // same frame, without re-laying out its transcript.
-                  `${EXPANDED_POSE} invisible pointer-events-none [content-visibility:hidden]`
+                  // same frame. Preserve its laid-out transcript too: resuming
+                  // a skipped long Markdown tree can stall the return frame.
+                  `${EXPANDED_POSE} invisible pointer-events-none`
                 : // Minimized: kept (drafts, scroll,
                   // queued sends) but skipped by style, layout and paint,
                   // which a long transcript otherwise pays on every frame
@@ -3141,6 +3142,7 @@ function ChatDockContent({
             onOpen={(url, mode) => onLinkClick?.(url, mode)}
           >
             <ChatTimeline
+              visible={expanded && !lurking}
               focusMessageId={entry.focusMessageId}
               backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}

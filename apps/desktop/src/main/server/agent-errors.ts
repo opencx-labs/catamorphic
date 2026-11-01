@@ -69,7 +69,7 @@ export function rewriteAgentError(
   providerLabel: string,
   original: string,
 ): string {
-  const said = `(the provider said: "${truncate(original.trim(), 300)}")`;
+  const said = `(the provider said: "${original.trim()}")`;
   switch (kind) {
     case "auth":
       return (
@@ -95,10 +95,6 @@ export function rewriteAgentError(
         `Retry repairs the history and continues.`
       );
   }
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 /**

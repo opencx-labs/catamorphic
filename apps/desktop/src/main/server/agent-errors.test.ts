@@ -77,3 +77,19 @@ it("rewrites a provider's raw auth failure into the reconnect path", () => {
     'rejected the credentials of the "Fake Agent"',
   );
 });
+
+it("preserves the complete provider message, including ambiguous and long errors", () => {
+  const original = `Provider failure: ${"request detail ".repeat(100)}request-id-at-the-end`;
+  const unknown = friendlyTurnError({
+    error: { message: original },
+    agentName: "Agent",
+    providerLabel: "Provider",
+  });
+  expect(unknown.message).toBe(original);
+  const known = friendlyTurnError({
+    error: { message: original, kind: "unavailable" },
+    agentName: "Agent",
+    providerLabel: "Provider",
+  });
+  expect(known.message).toContain(original);
+});

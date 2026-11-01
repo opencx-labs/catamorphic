@@ -9,12 +9,14 @@ import {
   isUnreadSteer,
   type NoticeItem,
   type PendingAgentMessage,
+  type ProviderRetry,
   type QueuedMessage,
   type RuntimeRequest,
   splitAttachmentMarkers,
   type TimelineEntry,
   type TimelineTurn,
   type Turn,
+  type TurnError,
   type UserMessageItem,
   waitsToRun,
 } from "@catamorphic/react";
@@ -87,6 +89,7 @@ import {
   TurnLine,
   TurnSteps,
   turnStepsOf,
+  useNow,
 } from "./chat-steps.js";
 import {
   endsOwnChat,
@@ -128,6 +131,8 @@ export interface ChatMessageNavigation {
 export interface ChatTimelineProps {
   /** The conversation as turns, oldest first: `useAgentChat().timeline`. */
   timeline: TimelineTurn[];
+  /** Host visibility, when hidden tabs keep their layout. Defaults to automatic detection. */
+  visible?: boolean;
   /** Messages this client sent that the session does not show yet. */
   pending?: PendingAgentMessage[];
   /** Turns waiting to run, editable until they start. */
@@ -549,6 +554,7 @@ interface TurnView {
 export function ChatTimeline(props: ChatTimelineProps) {
   const {
     timeline,
+    visible,
     pending = [],
     queue,
     requests = NO_REQUESTS,
@@ -595,7 +601,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
     presentUserMessage,
     registerMessageNavigation,
   } = props;
-  const activity = isReconnecting ? undefined : reportedActivity;
   const latest = useRef(props);
   latest.current = props;
   // Messages the agent stops to read: the one the person interrupted for
@@ -675,6 +680,9 @@ export function ChatTimeline(props: ChatTimelineProps) {
         )?.turn
       : timeline.find((group) => group.turn && group.turn.id === activeTurnId)
           ?.turn;
+  const providerRetry = activeTurn?.providerRetry;
+  const activity =
+    isReconnecting || providerRetry ? undefined : reportedActivity;
   const activeId =
     activeTurnId === undefined ? (activeTurn?.id ?? null) : activeTurnId;
   const startedAt =
@@ -956,26 +964,35 @@ export function ChatTimeline(props: ChatTimelineProps) {
                           )}
                         />
                       )}
-                      {isReconnecting && (
-                        <div
-                          role="status"
-                          className="flex items-center gap-2 text-xs text-fg-muted"
-                        >
-                          <LoaderCircle
-                            aria-hidden="true"
-                            className="size-3 animate-spin motion-reduce:animate-none"
-                          />
-                          Waiting for connection. Reconnecting…
-                        </div>
-                      )}
-                      {error && (
-                        <div
-                          role="alert"
-                          className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger"
-                        >
-                          {error}
-                        </div>
-                      )}
+                      <StatusPresence>
+                        {!isReconnecting && providerRetry && (
+                          <ProviderRetryCard retry={providerRetry} />
+                        )}
+                      </StatusPresence>
+                      <StatusPresence>
+                        {isReconnecting && (
+                          <div
+                            role="status"
+                            className="flex items-center gap-2 text-xs text-fg-muted"
+                          >
+                            <LoaderCircle
+                              aria-hidden="true"
+                              className="size-3 animate-spin motion-reduce:animate-none"
+                            />
+                            Waiting for connection. Reconnecting…
+                          </div>
+                        )}
+                      </StatusPresence>
+                      <StatusPresence>
+                        {error && (
+                          <div
+                            role="alert"
+                            className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger"
+                          >
+                            {error}
+                          </div>
+                        )}
+                      </StatusPresence>
                       <div aria-hidden className="cat-scroll-anchor" />
                     </StickToBottom.Content>
                     <ChatNavigation
@@ -1002,7 +1019,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                     <FollowScrollerResize />
                     <PinToBottom />
                     <FadeEdges />
-                    <TrackOnScreen state={onScreen} />
+                    <TrackOnScreen state={onScreen} visible={visible} />
                   </StickToBottom>
                 </OnScreen.Provider>
               </TurnClockContext.Provider>
@@ -1072,7 +1089,12 @@ function LoadOlder({
       className="mx-auto flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-bg-inset px-3 py-1 text-[11px] text-fg-muted transition-colors duration-150 hover:text-fg disabled:cursor-default"
       data-testid="chat-load-older"
     >
-      {loading && <LoaderCircle className="size-3 animate-spin" />}
+      {loading && (
+        <LoaderCircle
+          aria-hidden="true"
+          className="size-3 animate-spin motion-reduce:animate-none"
+        />
+      )}
       {loading ? "Loading earlier messages" : "Load earlier messages"}
     </button>
   );
@@ -1569,11 +1591,14 @@ function ChatNavigation({
  * it is, so nothing in it moves.
  */
 function useEntered(already = false, { rise = true } = {}): string {
-  const [entered, setEntered] = useState(already);
+  const onScreen = useContext(OnScreen);
+  const [animate] = useState(() => !already && onScreen.current);
+  const [entered, setEntered] = useState(!animate);
   // Double rAF: the first frame aligns with the commit, the second
   // guarantees the browser resolved the hidden pose before it flips; a
   // single rAF can fire before the mount frame ever paints.
   useEffect(() => {
+    if (!animate) return;
     let second: number | undefined;
     const first = requestAnimationFrame(() => {
       second = requestAnimationFrame(() => setEntered(true));
@@ -1582,7 +1607,7 @@ function useEntered(already = false, { rise = true } = {}): string {
       cancelAnimationFrame(first);
       if (second !== undefined) cancelAnimationFrame(second);
     };
-  }, []);
+  }, [animate]);
   // transition-[opacity,translate], not transform: Tailwind v4's
   // translate-y-* sets the individual `translate` property.
   if (!rise)
@@ -1859,38 +1884,40 @@ const UserMessage = memo(function UserMessage({
           item && steerable ? () => actions.steerNow(item) : undefined
         }
       />
-      {pending && failed && (
-        <div
-          className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-danger/20 pt-1.5 text-[11px]"
-          data-failed-delivery={pending.commandId}
-          aria-live="polite"
-        >
-          <span className="min-w-0 flex-1 text-danger">
-            {pending.error?.message
-              ? `Not sent: ${pending.error.message}`
-              : "Not sent"}
-          </span>
-          {resendable && (
-            <button
-              type="button"
-              onClick={() => actions.resend(pending.commandId)}
-              className="cursor-pointer text-accent hover:underline"
-              data-testid="chat-resend"
-            >
-              Send again
-            </button>
-          )}
-          {dismissable && (
-            <button
-              type="button"
-              onClick={() => actions.dismiss(pending.commandId)}
-              className="cursor-pointer text-fg-muted hover:text-fg"
-            >
-              Dismiss
-            </button>
-          )}
-        </div>
-      )}
+      <StatusPresence gap={false}>
+        {pending && failed && (
+          <div
+            className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-danger/20 pt-1.5 text-[11px]"
+            data-failed-delivery={pending.commandId}
+            aria-live="polite"
+          >
+            <span className="min-w-0 flex-1 text-danger">
+              {pending.error?.message
+                ? `Not sent: ${pending.error.message}`
+                : "Not sent"}
+            </span>
+            {resendable && (
+              <button
+                type="button"
+                onClick={() => actions.resend(pending.commandId)}
+                className="cursor-pointer text-accent hover:underline"
+                data-testid="chat-resend"
+              >
+                Send again
+              </button>
+            )}
+            {dismissable && (
+              <button
+                type="button"
+                onClick={() => actions.dismiss(pending.commandId)}
+                className="cursor-pointer text-fg-muted hover:text-fg"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
+      </StatusPresence>
       {/* A send the session does not hold yet has no time of its own. */}
       <MessageSide
         sentAt={item?.createdAt}
@@ -2010,11 +2037,16 @@ function UnreadLine({
               />
             </div>
           )}
-          {failed && (
-            <p role="alert" className="mt-1 text-right text-[11px] text-danger">
-              Could not interrupt. Try again.
-            </p>
-          )}
+          <StatusPresence gap={false}>
+            {failed && (
+              <p
+                role="alert"
+                className="mt-1 text-right text-[11px] text-danger"
+              >
+                Could not interrupt. Try again.
+              </p>
+            )}
+          </StatusPresence>
         </div>
       </Reveal>
     </div>
@@ -2148,7 +2180,12 @@ function RestoreToHere({
             className="flex cursor-pointer items-center gap-1 rounded-md bg-accent px-2 py-1 font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
             data-testid="chat-restore-confirm-button"
           >
-            {busy && <LoaderCircle className="size-3 animate-spin" />}
+            {busy && (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-3 animate-spin motion-reduce:animate-none"
+              />
+            )}
             Restore
           </button>
           <button
@@ -2338,16 +2375,20 @@ const GROW_SETTLE_MS = GROW_MS + 60;
 function Growing({
   active,
   enter,
+  appear = true,
   children,
 }: {
   active: boolean;
   enter: boolean;
+  appear?: boolean;
   children: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const onScreen = useContext(OnScreen);
-  const [fromNothing] = useState(() => (active || enter) && onScreen.current);
+  const [fromNothing] = useState(
+    () => appear && (active || enter) && onScreen.current,
+  );
   const [opening, setOpening] = useState(fromNothing);
   // Its height lets go once the last line it opened has played out,
   // however late the renderer started it: released mid-way, the box would
@@ -2591,7 +2632,11 @@ function turnsEndedOwnChat(timeline: readonly TimelineTurn[]): Set<string> {
  * what gets the person unstuck, a quiet summary for an interruption, and
  * the countdown of a turn waiting to retry.
  */
-function TurnOutcome({
+function TurnOutcome(props: Parameters<typeof renderTurnOutcome>[0]) {
+  return <StatusPresence>{renderTurnOutcome(props)}</StatusPresence>;
+}
+
+function renderTurnOutcome({
   turn,
   group,
   latest,
@@ -2617,6 +2662,7 @@ function TurnOutcome({
   if (turn.status === "failed" || retrying)
     return (
       <ErrorCard
+        kind={turn.error?.kind}
         message={
           turn.error?.message ??
           (retrying ? "The last attempt did not finish." : "The turn failed.")
@@ -2650,15 +2696,11 @@ function TurnOutcome({
   // Nothing interrupted it, so nothing to retry: only what it left changed.
   if (endedByTheirAgent)
     return left ? (
-      <div className="cat-fade-in text-center text-xs text-fg-faint">
-        {left}
-      </div>
+      <div className="text-center text-xs text-fg-faint">{left}</div>
     ) : null;
   return (
     <div
-      // The running steps above become this summary in place; it fades in
-      // rather than snapping over them.
-      className="cat-fade-in flex flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
+      className="flex flex-col items-center gap-0.5 text-center text-xs text-fg-faint"
       data-testid="chat-interrupted"
     >
       <div className="italic">Interrupted</div>
@@ -2706,6 +2748,7 @@ function changedFileNames(paths: string[]): string {
  */
 function ErrorCard({
   message,
+  kind,
   retryAt,
   onRetry,
   onStop,
@@ -2713,6 +2756,7 @@ function ErrorCard({
   reauthLabel,
 }: {
   message: string;
+  kind?: TurnError["kind"];
   /** Waiting to retry: when it runs again ("" when it is due now). */
   retryAt: string | null;
   onRetry?: () => void;
@@ -2725,9 +2769,12 @@ function ErrorCard({
   const counting = nextAtMs !== undefined && Number.isFinite(nextAtMs);
   return (
     <article
-      className="cat-fade-in mr-auto max-w-[85%] rounded-xl border border-danger/40 bg-danger/5 px-3 py-2.5 text-sm"
+      className="mr-auto w-fit max-w-[85%] rounded-xl border border-danger/40 bg-danger/5 px-3 py-2.5 text-sm"
       data-testid="chat-error-card"
     >
+      {errorSummary(kind) && (
+        <div className="mb-1 font-medium">{errorSummary(kind)}</div>
+      )}
       <div className="whitespace-pre-wrap break-words leading-6 text-fg">
         {message}
       </div>
@@ -2772,24 +2819,71 @@ function ErrorCard({
   );
 }
 
+/** Summarize only a known cause; the provider's full message stays visible. */
+function errorSummary(kind: TurnError["kind"]): string | undefined {
+  switch (kind) {
+    case "auth":
+      return "Provider authentication failed";
+    case "rate_limit":
+      return "Provider rate limit reached";
+    case "unavailable":
+      return "Provider temporarily unavailable";
+    default:
+      return undefined;
+  }
+}
+
+/** The harness is retrying this model request, within the same attempt. */
+function ProviderRetryCard({ retry }: { retry: ProviderRetry }) {
+  return (
+    <div
+      role="status"
+      data-testid="chat-provider-retry"
+      className="mr-auto w-[85%] rounded-xl border border-border bg-bg-raised px-3 py-2.5 text-sm"
+    >
+      {errorSummary(retry.error.kind) && (
+        <div className="mb-1 font-medium">{errorSummary(retry.error.kind)}</div>
+      )}
+      <div className="whitespace-pre-wrap break-words leading-6">
+        {retry.error.message}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted">
+        {retry.retryAt ? (
+          <AutoRetryCountdown nextAtMs={Date.parse(retry.retryAt)} />
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-3 animate-spin motion-reduce:animate-none"
+            />
+            Retrying…
+          </span>
+        )}
+        {retry.attempt !== null && (
+          <span className="tabular-nums">
+            {retry.maxAttempts === null
+              ? `Attempt ${retry.attempt}`
+              : `Attempt ${retry.attempt} of ${retry.maxAttempts}`}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** "Retrying in Ns" that live-ticks; flips to a spinner when due. */
 function AutoRetryCountdown({ nextAtMs }: { nextAtMs: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (now >= nextAtMs) return;
-    const timer = window.setTimeout(
-      () => setNow(Date.now()),
-      Math.min(1_000, nextAtMs - now),
-    );
-    return () => window.clearTimeout(timer);
-  }, [nextAtMs, now]);
+  const now = useNow(true);
   const seconds = Math.max(0, Math.ceil((nextAtMs - now) / 1000));
   return (
     <span
-      className="flex items-center gap-1.5 text-xs text-fg-muted"
+      className="flex min-w-24 items-center gap-1.5 text-xs tabular-nums text-fg-muted"
       data-testid="chat-auto-retry"
     >
-      <LoaderCircle className="size-3 animate-spin" />
+      <LoaderCircle
+        aria-hidden="true"
+        className="size-3 animate-spin motion-reduce:animate-none"
+      />
       {seconds > 0 ? `Retrying in ${seconds}s` : "Retrying…"}
     </span>
   );
@@ -2984,6 +3078,41 @@ function Reveal({
     >
       {children}
     </div>
+  );
+}
+
+/**
+ * Statuses retain their last content until the height and surrounding gap
+ * close. An unpadded child allows the reveal to reach zero; the measured
+ * inner box also follows changes to a visible error's details or actions.
+ */
+function StatusPresence({
+  children,
+  gap = true,
+}: {
+  children: ReactNode;
+  gap?: boolean;
+}) {
+  const present = Boolean(children);
+  const snapshot = useRef(children);
+  if (present) snapshot.current = children;
+  const inner = useRef<HTMLDivElement>(null);
+  const shown = useLinger(present ? true : undefined, REVEAL_MS, () =>
+    transitionPlaying(inner.current?.parentElement, "grid-template-rows"),
+  );
+  if (!shown.value) return null;
+  return (
+    <Reveal
+      closed={shown.leaving}
+      inert={shown.leaving}
+      className={gap ? "[--cat-reveal-gap:-0.75rem]" : ""}
+    >
+      <div ref={inner}>
+        <Growing active={present} enter={false} appear={false}>
+          {snapshot.current}
+        </Growing>
+      </div>
+    </Reveal>
   );
 }
 
@@ -3496,22 +3625,35 @@ const ENTRANCES = new Set([
 ]);
 
 /**
- * Keeps the timeline's on-screen state (see `OnScreenState`): laid out (a
- * lurking chat, or one in a tab behind, is not) in a window that shows.
- * The browser drops the animations of what is not laid out and starts them
- * again as it shows: those finish here, before the first frame shown, so
+ * Keeps the timeline's on-screen state (see `OnScreenState`): exposed by
+ * its host and laid out in a window that shows. A retained hidden tab may
+ * keep its layout; the host supplies visibility in that case. Entrances
+ * left pending before hiding finish before its first return frame, so
  * nothing the chat already held, or gained while hidden, enters again.
  */
-function TrackOnScreen({ state }: { state: OnScreenSource }) {
+function TrackOnScreen({
+  state,
+  visible,
+}: {
+  state: OnScreenSource;
+  visible?: boolean;
+}) {
+  const seen = useRef(false);
   const { scrollRef, contentRef } = useStickToBottomContext();
   useLayoutEffect(() => {
+    if (visible === false) {
+      state.set(false);
+      return;
+    }
     const scroller = scrollRef.current;
     if (!scroller) return;
     const laidOut = () =>
       typeof scroller.checkVisibility === "function"
-        ? scroller.checkVisibility()
+        ? scroller.checkVisibility({ visibilityProperty: true })
         : true;
     let shown = laidOut();
+    if (shown && seen.current) finishEntrances(contentRef.current);
+    if (shown) seen.current = true;
     const update = () =>
       state.set(shown && document.visibilityState !== "hidden");
     update();
@@ -3531,7 +3673,7 @@ function TrackOnScreen({ state }: { state: OnScreenSource }) {
       observer?.disconnect();
       document.removeEventListener("visibilitychange", update);
     };
-  }, [scrollRef, contentRef, state]);
+  }, [scrollRef, contentRef, state, visible]);
   return null;
 }
 
@@ -3540,7 +3682,11 @@ function finishEntrances(content: HTMLElement | null) {
   for (const animation of content.getAnimations({ subtree: true })) {
     const name =
       "animationName" in animation ? animation.animationName : undefined;
-    if (typeof name === "string" && ENTRANCES.has(name)) animation.finish();
+    if (
+      (typeof name === "string" && ENTRANCES.has(name)) ||
+      "transitionProperty" in animation
+    )
+      animation.finish();
   }
 }
 

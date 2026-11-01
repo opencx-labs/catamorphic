@@ -136,6 +136,53 @@ describe("useAgentSessionFields (ADR 0226)", () => {
     });
   });
 
+  it("retains a settled chat across tab switches and resumes from its applied sequence", async () => {
+    const served = serve();
+    const { result, rerender } = renderHookWithProviders(
+      ({ live }: { live: boolean }) =>
+        useAgentSession(PROJECT_ID, SESSION_ID, { live }),
+      { initialProps: { live: true } },
+    );
+    await waitFor(() => expect(served.streams).toHaveLength(1));
+    act(() =>
+      served.streams[0]?.send({
+        type: "events",
+        events: [
+          stored(4, {
+            type: "session.changed",
+            session: { title: "Kept while away" },
+          }),
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current.session?.title).toBe("Kept while away"),
+    );
+    const state = result.current.state;
+    rerender({ live: false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(served.snapshots()).toBe(1);
+    expect(result.current.state).toBe(state);
+    rerender({ live: true });
+    await waitFor(() => expect(served.streams).toHaveLength(2));
+    expect(served.snapshots()).toBe(1);
+    expect(result.current.state?.sequence).toBe(4);
+    act(() =>
+      served.streams[1]?.send({
+        type: "events",
+        events: [
+          stored(5, {
+            type: "session.changed",
+            session: { title: "Caught up" },
+          }),
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current.session?.title).toBe("Caught up"),
+    );
+  });
+
   it("reads nothing without a session", () => {
     const served = serve();
     const { result } = renderHookWithProviders(() =>

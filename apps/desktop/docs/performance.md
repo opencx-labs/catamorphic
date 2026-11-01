@@ -316,8 +316,12 @@ the released selector visited 12,013 elements in the test's style pass.
 
 A tab switch shows the new tab in the frame after the press, a chat as a
 page: a chat tab behind another keeps its tab pose and is hidden at once
-(`visibility: hidden` and `content-visibility: hidden`, no transition), so
+(`visibility: hidden`, no transition), so
 bringing it forward changes nothing about its box and replays no dock-in.
+Inactive tab chats preserve descendant layout; only minimized chats skip their
+subtrees with `content-visibility: hidden`. Returning a large retained transcript
+otherwise resumes style, layout and observers before it can paint. The host passes
+visibility explicitly so hidden timers stay paused without relying on a resize.
 It used to take the minimised pose while behind, so every switch to or
 from a chat played the floating chat's open or close (a 250 ms fade and
 scale) and resized its transcript every frame; the scroller's resize

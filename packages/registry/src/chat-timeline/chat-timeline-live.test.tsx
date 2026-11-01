@@ -120,6 +120,71 @@ describe("ChatTimeline live chrome", () => {
       ).toBeNull();
     });
 
+  it("keeps the raw provider error, reports only known retry metadata, and retains an inert exit", async () => {
+    vi.useFakeTimers();
+    const retry = {
+      error: { message: "Upstream refused the request: opaque E42" },
+      attempt: null,
+      maxAttempts: null,
+      retryAt: null,
+    };
+    const props = (providerRetry: Turn["providerRetry"]) => ({
+      timeline: timelineOf({
+        turns: [running({ providerRetry })],
+        items: working,
+      }),
+      activity: "Thinking",
+    });
+    await render(props(retry));
+    const card = $('[data-testid="chat-provider-retry"]');
+    expect(card?.textContent).toContain(retry.error.message);
+    expect(card?.textContent).toContain("Retrying…");
+    expect(card?.textContent).not.toContain("Attempt");
+    expect(card?.textContent).not.toContain("Cannot reach");
+    expect($('[data-testid="chat-activity"]')).toBeNull();
+    await render(props(null));
+    expect(card?.textContent).toContain(retry.error.message);
+    expect(card?.closest("[inert]")?.getAttribute("aria-hidden")).toBe("true");
+    await render(
+      props({
+        ...retry,
+        error: { message: "HTTP 429: provider detail", kind: "rate_limit" },
+        attempt: 2,
+        maxAttempts: 5,
+        retryAt: iso(4000),
+      }),
+    );
+    expect($('[data-testid="chat-provider-retry"]')).toBe(card);
+    expect(card?.closest("[inert]")).toBeNull();
+    expect(card?.textContent).toContain("Provider rate limit reached");
+    expect(card?.textContent).toContain("HTTP 429: provider detail");
+    expect(card?.textContent).toContain("Attempt 2 of 5");
+    await render(props(null));
+    await act(async () => vi.advanceTimersByTimeAsync(300));
+    expect($('[data-testid="chat-provider-retry"]')).toBeNull();
+    expect($('[data-testid="chat-activity"]')?.textContent).toBe("Thinking");
+  });
+
+  it("retains a terminal error during manual retry, without animating loaded history", async () => {
+    vi.useFakeTimers();
+    const failed = running({
+      status: "failed",
+      error: { message: "Provider E99" },
+    });
+    const props = (state: Turn) => ({
+      timeline: timelineOf({ turns: [state], items: working }),
+      onRetry: vi.fn(),
+    });
+    await render(props(failed));
+    const card = $('[data-testid="chat-error-card"]');
+    expect(card?.closest("[data-entering]")).toBeNull();
+    await render(props({ ...failed, status: "preparing", error: null }));
+    expect(card?.textContent).toContain("Provider E99");
+    expect(card?.closest("[inert]")).not.toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(300));
+    expect($('[data-testid="chat-error-card"]')).toBeNull();
+  });
+
   it("stays with the latest note's steps until more work follows it", async () => {
     vi.useFakeTimers();
     const answered = working.slice(0, 4);
