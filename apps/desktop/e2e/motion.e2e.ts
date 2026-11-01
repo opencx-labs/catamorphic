@@ -406,6 +406,11 @@ describe("paired motion (enter/exit mirrors)", () => {
        return false;`,
       { label: "floating dock ready for pose check" },
     );
+    expect(
+      await run<string[]>(
+        "return getComputedStyle(visibleDock()).animationName.split(',').map(name=>name.trim());",
+      ),
+    ).toContain("dock-in");
     const enterFrom = await run<{ translateY: number; scale: number }>(`
       const keyframes = allStyleRules().find(
         (rule) => rule instanceof CSSKeyframesRule && rule.name === 'dock-in');
@@ -1247,6 +1252,61 @@ describe("a floating chat grows into its tab", () => {
     ).toBe(true);
     expect(app.getRendererErrors()).toEqual([]);
   });
+});
+
+it("morphs a tab back to floating without replaying its entrance", async () => {
+  await run(
+    "visibleDock().querySelector('[data-composer-input]').focus();return true;",
+  );
+  await app.press("Escape");
+  await runWait("return visibleDock()?.dataset.floatingChat === 'true';", {
+    label: "tab becomes floating",
+  });
+  expect(
+    await run<string[]>(
+      "return getComputedStyle(visibleDock()).animationName.split(',').map(name=>name.trim());",
+    ),
+  ).not.toContain("dock-in");
+  expect(
+    await run<string>("return getComputedStyle(visibleDock()).opacity;"),
+  ).toBe("1");
+  const localId = await run<string>(
+    "return visibleDock().dataset.chatLocalId;",
+  );
+  await run(
+    "setReactValue(visibleDock().querySelector('[data-composer-input]'),'keep the mode probe');return true;",
+  );
+  await runWait(
+    "return !!visibleDock()?.querySelector('button[aria-label=\"Minimize chat to bubble\"]');",
+    { label: "draft makes the floating chat minimizable" },
+  );
+  await app.press("Escape");
+  await runWait(
+    `const dock=document.querySelector('[data-chat-local-id="${localId}"]');return dock?.inert && !dock.dataset.floatingChat;`,
+    { label: "floating chat minimized" },
+  );
+  await run(
+    `document.querySelector('[data-chat-bubble="${localId}"] button[aria-label^="Open"]').click();return true;`,
+  );
+  await runWait(
+    `return visibleDock()?.dataset.chatLocalId===${JSON.stringify(localId)};`,
+    { label: "floating chat restored from its bubble" },
+  );
+  expect(
+    await run<string[]>(
+      "return getComputedStyle(visibleDock()).animationName.split(',').map(name=>name.trim());",
+    ),
+  ).toContain("dock-in");
+  await run(
+    "setReactValue(visibleDock().querySelector('[data-composer-input]'),'');pressKey('M', {metaKey:true,shiftKey:true});return true;",
+  );
+  await runWait("return visibleDock()?.dataset.chatTab === 'true';", {
+    label: "chat restored to its tab",
+  });
+  await runWait(
+    "return visibleDock().parentElement.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity);",
+    { label: "tab morph settled" },
+  );
 });
 
 describe("inputs grow by gliding", () => {

@@ -30,6 +30,11 @@ payloads release their Markdown and other detail DOM the same way. Expanded
 detail choices belong to the step list and survive folding and reopening it;
 manual reopening does not replay every historical row's entrance.
 
+The dock entrance belongs to initial or restored floating chats. Tab chats use a
+settled pose even if the first opening was interrupted by a fast tab switch.
+Moving an already visible tab back to floating morphs its geometry without a
+fresh entrance fade.
+
 The chat's watcher strip retains each stopped watch through its actual height
 transition, with a bounded fallback for hidden or stalled renderers. Surviving
 watchers move into their new positions, including across wrapped lines. Exiting

@@ -363,7 +363,10 @@ Clicks on empty chat gutters focus the composer. Links, controls, message text,
 code and an active text selection retain their normal behavior.
 
 Maximizing and floating a chat animate the conversation and composer's maximum
-width with their padding. The composer must not briefly narrow and wrap while
+width with their padding. A visible tab becoming floating keeps its opacity;
+only an initial floating opening or a return from its bubble plays the dock
+entrance. Tab pages never carry that floating rise/fade, even on a fast first
+open and switch away. The composer must not briefly narrow and wrap while
 the surrounding card expands or contracts. Folder and unsupported-file previews
 show their summary; retry is offered only after an actual preview read failure.
 

@@ -413,9 +413,9 @@ const emptyChatPromptFor = (localId: string) => {
  * so queued sends and drafts survive; the panel morphs between a floating
  * partial dock and a full workspace tab (the bubble hides while tabbed).
  */
-/** A chat on screen, floating or in its tab: dock-in plays once. */
+/** A chat on screen, floating or in its settled tab pose. */
 const EXPANDED_POSE =
-  "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow] animate-dock-in";
+  "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow]";
 
 export function ChatDock(props: ChatDockProps) {
   return (
@@ -880,9 +880,15 @@ function ChatDockContent({
   // which would re-lay out the transcript every frame.
   const [arriving, setArriving] = useState(false);
   const [wasFront, setWasFront] = useState(frontSurface);
+  // A floating card enters from its bubble. A tab is a settled page, and
+  // returning from it to a floating pose morphs an already visible card.
+  const [dockEntrance, setDockEntrance] = useState(entry.mode === "partial");
   if (wasFront !== frontSurface) {
     setWasFront(frontSurface);
     setArriving(frontSurface);
+    setDockEntrance(frontSurface && !isTab);
+  } else if (isTab && dockEntrance) {
+    setDockEntrance(false);
   }
   useEffect(() => {
     if (!arriving) return;
@@ -2761,12 +2767,12 @@ function ChatDockContent({
           closing || minimizing
             ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow] animate-dock-out"
             : expanded
-              ? EXPANDED_POSE
+              ? `${EXPANDED_POSE} ${dockEntrance ? "animate-dock-in" : ""}`
               : presentsAsTab
                 ? // Behind another tab: hidden at once, as a page is, in its
-                  // own pose. Nothing about its box changes and its dock-in
-                  // stays played, so bringing it forward shows it in the
-                  // same frame. Preserve its laid-out transcript too: resuming
+                  // own settled pose. Nothing about its box changes, so
+                  // bringing it forward shows it in the same frame. Preserve its
+                  // laid-out transcript too: resuming
                   // a skipped long Markdown tree can stall the return frame.
                   `${EXPANDED_POSE} invisible pointer-events-none`
                 : // Minimized: kept (drafts, scroll,

@@ -3929,3 +3929,9 @@ collapse individually and move surviving tokens across wrapped lines; outgoing
 chips fade from their last visible position outside the rail's shrinking viewport.
 All leaving controls become inert immediately. See [chat state](docs/chat-state.md)
 and [resource verification](docs/performance.md).
+
+
+The floating dock entrance belongs to an initial floating opening or a return
+from its bubble. Tab chats render as settled pages; a fast first open and tab
+switch cannot carry an unfinished dock fade into the return frame. An already
+visible tab morphing back to floating retains its opacity and size/color motion.
