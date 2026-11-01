@@ -2,8 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { followProcess } from "@catamorphic/sandbox";
+import { TestSandboxes } from "@catamorphic/sandbox/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LocalProcessSandboxProvider } from "../sandbox-provider.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 function alive(pid: number): boolean {
   try {
@@ -20,10 +23,11 @@ describe("LocalProcessSandboxProvider background processes (ADR 0174)", () => {
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-lp-procs-"));
-    provider = new LocalProcessSandboxProvider({ root });
+    provider = ownedSandboxes.track(new LocalProcessSandboxProvider({ root }));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await ownedSandboxes.cleanup();
     fs.rmSync(root, { recursive: true, force: true });
   });
 

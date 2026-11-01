@@ -14,6 +14,7 @@ import path from "node:path";
 import { writeCliError } from "./cli-error.js";
 import { assertIsolatedDesktopTestHost } from "./desktop-test-environment.js";
 import { runLoggedProcess, TestSignalController } from "./test.js";
+import { withTestProcessCleanup } from "./test-processes.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -92,9 +93,9 @@ async function main(): Promise<void> {
   if (!native) await chmod(artifacts, 0o777);
   const signals = new TestSignalController();
   const container = `catamorphic-desktop-test-${randomUUID()}`;
-  const context = native
-    ? undefined
-    : await mkdtemp(path.join(tmpdir(), "ct-desktop-"));
+  // Chromium's singleton socket is also beneath TMPDIR on native macOS.
+  const context = await mkdtemp(path.join(tmpdir(), "ct-"));
+  let succeeded = false;
   let step = 0;
   const run = async (
     command: string,
@@ -107,118 +108,132 @@ async function main(): Promise<void> {
       cwd: root,
       env,
       signals,
+      temporaryRoot: context,
       logPath: path.join(artifacts, `${++step}-${path.basename(command)}.log`),
     });
     if (result.code !== 0)
       throw new Error(`${command} exited with code ${result.code}`);
   };
   try {
-    if (native) {
-      const vitestArgs = desktopVitestArguments({ args, artifacts });
-      const env = { ...process.env, CATAMORPHIC_E2E_ARTIFACTS_DIR: artifacts };
-      if (process.platform === "linux") {
-        // Own the X server and window manager lifecycle; never use the host DISPLAY.
-        await run(
-          "xvfb-run",
-          [
-            "-a",
-            "--server-args=-screen 0 1440x900x24 -nolisten tcp",
-            "bash",
-            path.join(root, "scripts/desktop-test-display.sh"),
-            "bun",
-            ...vitestArgs,
-          ],
-          env,
-        );
-      } else {
-        await run("bun", vitestArgs, env);
-      }
-    } else if (context) {
-      const files = execFileSync(
-        "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        {
-          cwd: root,
-          encoding: "utf8",
-        },
-      )
-        .split("\0")
-        .filter(Boolean)
-        .filter(includeDesktopTestSource);
-      for (const file of new Set(files)) {
-        const source = path.join(root, file);
-        const stat = await lstat(source).catch(() => undefined);
-        if (!stat?.isFile()) continue;
-        const destination = path.join(context, "source", file);
-        await mkdir(path.dirname(destination), { recursive: true });
-        await cp(source, destination);
-        if (isInstallInput(file)) {
-          const manifest = path.join(context, "manifests", file);
-          await mkdir(path.dirname(manifest), { recursive: true });
-          await cp(source, manifest);
+    await withTestProcessCleanup(context, async () => {
+      if (native) {
+        const vitestArgs = desktopVitestArguments({ args, artifacts });
+        const env = {
+          ...process.env,
+          TMPDIR: context,
+          TMP: context,
+          TEMP: context,
+          CATAMORPHIC_E2E_ARTIFACTS_DIR: artifacts,
+        };
+        if (process.platform === "linux") {
+          // Own the X server and window manager lifecycle; never use the host DISPLAY.
+          await run(
+            "xvfb-run",
+            [
+              "-a",
+              "--server-args=-screen 0 1440x900x24 -nolisten tcp",
+              "bash",
+              path.join(root, "scripts/desktop-test-display.sh"),
+              "bun",
+              ...vitestArgs,
+            ],
+            env,
+          );
+        } else {
+          await run("bun", vitestArgs, env);
         }
+      } else if (context) {
+        const files = execFileSync(
+          "git",
+          ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+          {
+            cwd: root,
+            encoding: "utf8",
+          },
+        )
+          .split("\0")
+          .filter(Boolean)
+          .filter(includeDesktopTestSource);
+        for (const file of new Set(files)) {
+          const source = path.join(root, file);
+          const stat = await lstat(source).catch(() => undefined);
+          if (!stat?.isFile()) continue;
+          const destination = path.join(context, "source", file);
+          await mkdir(path.dirname(destination), { recursive: true });
+          await cp(source, destination);
+          if (isInstallInput(file)) {
+            const manifest = path.join(context, "manifests", file);
+            await mkdir(path.dirname(manifest), { recursive: true });
+            await cp(source, manifest);
+          }
+        }
+        // The image tag is worktree-specific; Docker's content-addressed layers
+        // still share dependencies across worktrees, without sharing mutable data.
+        const key = createHash("sha256")
+          .update(root)
+          .digest("hex")
+          .slice(0, 12);
+        const image = `catamorphic-desktop-tests:${key}`;
+        await cp(
+          path.join(root, "infra/desktop-tests/Dockerfile"),
+          path.join(context, "Dockerfile"),
+        );
+        const imageFile = path.join(context, "image-id");
+        await run("docker", [
+          "build",
+          "--tag",
+          image,
+          "--iidfile",
+          imageFile,
+          context,
+        ]);
+        // Another invocation can replace the cache tag after this build finishes.
+        // Run this invocation's immutable image, never whatever the tag names later.
+        const imageId = (await readFile(imageFile, "utf8")).trim();
+        // Opt-in: installed speech models for the real-model voice suite
+        // (ADR 0216), mounted read-only so the image never carries them.
+        const voiceModels = process.env.CATAMORPHIC_VOICE_MODELS_DIR;
+        // Opt-in: the external-test authority, for the live Google sign-in
+        // check (e2e/google-sign-in.e2e.ts). It never rides in by default.
+        const external = process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
+        await run("docker", [
+          "run",
+          "--rm",
+          "--init",
+          "--name",
+          container,
+          "--shm-size=1g",
+          "--mount",
+          `type=bind,source=${artifacts},target=/artifacts`,
+          ...(voiceModels
+            ? [
+                "--mount",
+                `type=bind,source=${path.resolve(voiceModels)},target=/voice-models,readonly`,
+                "--env",
+                "CATAMORPHIC_VOICE_MODELS_DIR=/voice-models",
+              ]
+            : []),
+          ...(external ? ["--env", "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1"] : []),
+          imageId,
+          ...args,
+        ]);
+        const inspect = execFileSync(
+          "docker",
+          ["image", "inspect", imageId, "--format", "{{.Size}}"],
+          { encoding: "utf8" },
+        );
+        console.log(
+          `Desktop test image: ${(Number(inspect) / 1024 ** 3).toFixed(2)} GiB uncompressed (cached)`,
+        );
       }
-      // The image tag is worktree-specific; Docker's content-addressed layers
-      // still share dependencies across worktrees, without sharing mutable data.
-      const key = createHash("sha256").update(root).digest("hex").slice(0, 12);
-      const image = `catamorphic-desktop-tests:${key}`;
-      await cp(
-        path.join(root, "infra/desktop-tests/Dockerfile"),
-        path.join(context, "Dockerfile"),
-      );
-      const imageFile = path.join(context, "image-id");
-      await run("docker", [
-        "build",
-        "--tag",
-        image,
-        "--iidfile",
-        imageFile,
-        context,
-      ]);
-      // Another invocation can replace the cache tag after this build finishes.
-      // Run this invocation's immutable image, never whatever the tag names later.
-      const imageId = (await readFile(imageFile, "utf8")).trim();
-      // Opt-in: installed speech models for the real-model voice suite
-      // (ADR 0216), mounted read-only so the image never carries them.
-      const voiceModels = process.env.CATAMORPHIC_VOICE_MODELS_DIR;
-      // Opt-in: the external-test authority, for the live Google sign-in
-      // check (e2e/google-sign-in.e2e.ts). It never rides in by default.
-      const external = process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
-      await run("docker", [
-        "run",
-        "--rm",
-        "--init",
-        "--name",
-        container,
-        "--shm-size=1g",
-        "--mount",
-        `type=bind,source=${artifacts},target=/artifacts`,
-        ...(voiceModels
-          ? [
-              "--mount",
-              `type=bind,source=${path.resolve(voiceModels)},target=/voice-models,readonly`,
-              "--env",
-              "CATAMORPHIC_VOICE_MODELS_DIR=/voice-models",
-            ]
-          : []),
-        ...(external ? ["--env", "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1"] : []),
-        imageId,
-        ...args,
-      ]);
-      const inspect = execFileSync(
-        "docker",
-        ["image", "inspect", imageId, "--format", "{{.Size}}"],
-        { encoding: "utf8" },
-      );
-      console.log(
-        `Desktop test image: ${(Number(inspect) / 1024 ** 3).toFixed(2)} GiB uncompressed (cached)`,
-      );
-    }
+    });
+    succeeded = true;
   } finally {
     if (!native)
       spawnSync("docker", ["rm", "--force", container], { stdio: "ignore" });
     signals.close();
-    if (context) await rm(context, { recursive: true, force: true });
+    if (succeeded) await rm(context, { recursive: true, force: true });
+    else console.error(`Desktop test temporary files preserved at ${context}`);
     console.log(`Desktop test diagnostics: ${artifacts}`);
   }
 }

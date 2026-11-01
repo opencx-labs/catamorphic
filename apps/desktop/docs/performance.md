@@ -646,6 +646,56 @@ remains unexplained by these samples. The writer-conflict message now describes
 the busy conversation without asserting another Codex window is open and keeps
 the provider's original error visible.
 
+## Isolated follow-up after process cleanup (2026-11-01)
+
+Two abandoned test runners each consumed about one core, alongside four
+abandoned development groups. After stopping only those verified groups, a
+120-second cumulative CPU recording of the installed app measured 8.7% of one
+core in main, 20.4% in the busy renderer, 5.7% in the other renderer, and 1.9%
+in GPU. Fresh native stacks showed rendering/animation work as well as JSON and
+GC work. They did not establish a single remaining cause or an overnight leak.
+
+A separate Linux Electron copy used a fixed synthetic 3,100-item, 10,973,257-byte
+session. No provider calls or private transcript content were used. Existing
+session-query observers and ordinary app animations were changed temporarily,
+then restored. The payload, sequence and query success state stayed fixed.
+Snapshots came from a loopback HTTP fixture; sending their bodies through CDP
+would distort main-process serialization measurements.
+
+One controlled set of A/B/A windows (20 seconds for polling, 15 seconds for
+retention) measured:
+
+| Variable | A | B | Restored A |
+| --- | ---: | ---: | ---: |
+| Hidden snapshot requests | 13 | 0 | 11 |
+| Hidden renderer CPU, % of one core | 38.5 | 20.5 | 60.6 |
+| Hidden renderer task time, seconds | 3.98 | 2.51 | 6.30 |
+| Expanded / folded DOM elements | 38,342 | 1,165 | 38,342 |
+| Expanded / folded renderer CPU, % of one core | 20.9 | 5.2 | 11.2 |
+
+The retention comparison kept two animations running and made no snapshot
+requests. A separate animation comparison paused those two loops: GPU CPU was
+14.8% / 0.5% / 11.4%. They were normal Working/status spinners, not SVG SMIL.
+This software-rendered Linux cost does not predict the installed macOS GPU cost.
+
+A second run with a successfully loaded HTML browser fixture confirmed zero
+snapshot requests during the polling intervention and restored reads afterward.
+CPU sums the Electron renderer processes; task time is the main page's CDP
+metric. The debugging launch disables backgrounding, and Xvfb uses software
+rendering. CPU and long-task counts varied under concurrent checks, so these measurements
+show mechanisms and ranges, not a precise speedup. In that run, mounting the
+3,098 expanded step rows took 1,068, 389 and 616 ms to the second animation frame,
+with main-thread long tasks of 1,020, 350 and 570 ms. These are synthetic stress
+measurements, not a before/after interaction benchmark or live-window timings.
+
+The next interaction target is bounded mounting of expanded step headers while
+preserving disclosure choices, scroll anchoring and the existing reveal motion.
+The next background target is incremental session-log refresh after the cached
+sequence, instead of parsing and reconstructing an unchanged full snapshot every
+1.5 seconds. Full snapshots remain useful for initial load and resynchronization.
+Neither optimization is implemented by this profiling change. Animation removal
+is not justified by the native evidence.
+
 ## Module confinement overhead
 
 `apps/desktop/scripts/module-sandbox-bench.ts` compares a fresh Bun worker with
