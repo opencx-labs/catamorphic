@@ -3935,3 +3935,11 @@ The floating dock entrance belongs to an initial floating opening or a return
 from its bubble. Tab chats render as settled pages; a fast first open and tab
 switch cannot carry an unfinished dock fade into the return frame. An already
 visible tab morphing back to floating retains its opacity and size/color motion.
+
+### 2026-11-01: Window expanded step headers
+
+Long expanded logs keep nearby headers in the conversation's own scroller and
+leave measured space for distant closed rows (ADR 0299). Open payloads and active
+interaction keep their keyed nodes. Native Tab still visits every logical row.
+Existing disclosure and list-close motion stays in charge; scrolling historical
+rows into view plays no arrival animation.

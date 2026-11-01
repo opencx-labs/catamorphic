@@ -693,8 +693,46 @@ preserving disclosure choices, scroll anchoring and the existing reveal motion.
 The next background target is incremental session-log refresh after the cached
 sequence, instead of parsing and reconstructing an unchanged full snapshot every
 1.5 seconds. Full snapshots remain useful for initial load and resynchronization.
-Neither optimization is implemented by this profiling change. Animation removal
-is not justified by the native evidence.
+The expanded-header follow-up is recorded below. Incremental background refresh
+remains a separate target. Animation removal is not justified by the native evidence.
+
+
+## Bounded expanded step headers (2026-11-01)
+
+Long expanded lists now mount headers near the reading point in the conversation's
+existing scroller, leaving measured space for distant closed ranges (ADR 0299).
+Opened details and rows involved in focus, selection or a pointer press remain
+mounted. Their keyed nodes, inner scroll positions and disclosure motion survive
+scrolling. Native Tab and Shift+Tab materialize the adjacent logical control.
+
+A matched Linux Electron fixture held 3,098 completed command steps fixed. Three
+opening cycles, timed from the toggle to the second animation frame, measured:
+
+| Measurement | Before | Windowed |
+| --- | ---: | ---: |
+| Mounted headers at opening | 3,098 | 102 |
+| Chat DOM elements at opening | 37,326 | 1,377 |
+| Toggle to second animation frame, ms | 692 to 1,123 | 18 to 25 |
+| Observed opening long tasks, ms | 648 to 1,078 | none |
+| Mounted headers after scrolling into the middle | 3,098 | 195 |
+| Chat DOM elements in the middle | 37,326 | 2,496 |
+
+The bound follows viewport size plus overscan and deliberately retained interaction
+or opened details. The fixture uses public synthetic output, a loopback snapshot
+response, a private Xvfb display and software rendering. Other isolated test jobs
+were running on the same host; these three-cycle timings demonstrate the removed
+mount workload, not a precise speedup or installed macOS latency guarantee.
+
+Native Electron checks cover distant scrolling, retained selected output and inner
+scroll positions, both keyboard directions across a skipped range, narrow light
+layouts, reduced motion, list collapse, provider errors and existing chat motion.
+The before/after media retains the existing disclosure timing and appearance.
+Raw native-wheel frames exposed cutoffs when 1,200-pixel input exceeded the first
+800-pixel buffer. Keeping at least 1,600 pixels or two viewports on each side
+removes those cutoffs in the matched capture. Both the unchanged baseline and
+the final window still show occasional fully blank compositor frames under
+software rendering and storage pressure. These captures do not establish a
+macOS fling latency or a guarantee for jumps beyond a finite mounted buffer.
 
 ## Module confinement overhead
 
