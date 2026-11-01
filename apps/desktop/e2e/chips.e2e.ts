@@ -117,29 +117,38 @@ it("keeps a scrolled wait chip's exit visible outside the shrinking viewport", a
   await wait(
     `return rail().querySelector('[data-testid="chip-viewport"]').scrollTop>100;`,
   );
+  await run(
+    `chip('wait-15').querySelector('[data-chip-button="remove"]').focus();return true;`,
+  );
+  await wait(
+    `return document.activeElement===chip('wait-15').querySelector('[data-chip-button="remove"]') && !rail().getAnimations({subtree:true}).some(animation=>animation.playState==='running' && animation.effect?.getTiming().iterations!==Infinity);`,
+  );
   await app.eval(
     `new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`,
   );
   await run(`
-    const before=chip('wait-15').getBoundingClientRect().top-rail().getBoundingClientRect().top;
+    const target=chip('wait-15'),viewport=rail().querySelector('[data-testid="chip-viewport"]');
+    const before=target.getBoundingClientRect().top-rail().getBoundingClientRect().top;
+    const baseline={top:before,scrollTop:viewport.scrollTop,transform:getComputedStyle(target).transform,animations:target.getAnimations().map(animation=>({id:animation.id,state:animation.playState,time:animation.currentTime}))};
     window.__waitChipExit=null;
     const observer=new MutationObserver(()=>{
       const ghost=[...rail().querySelectorAll('[data-testid="chip-exit"]')].find(node=>node.textContent.includes('Waiting for fixture 15'));
       if(!ghost)return;
       const animation=ghost.getAnimations()[0];if(!animation)return;
-      const saved=animation.currentTime,duration=animation.effect.getComputedTiming().duration;
+      const saved=animation.currentTime,state=animation.playState,duration=animation.effect.getComputedTiming().duration;
+      animation.pause();
       animation.currentTime=0;
       const top=ghost.getBoundingClientRect().top-rail().getBoundingClientRect().top;
+      const zero={top,scrollTop:viewport.scrollTop,transform:getComputedStyle(ghost).transform,time:animation.currentTime};
       animation.currentTime=duration/2;
       const opacity=Number(getComputedStyle(ghost).opacity);
       animation.currentTime=saved;
-      window.__waitChipExit={top,before,opacity,outside:!ghost.closest('[data-testid="chip-viewport"]'),inert:ghost.inert};
+      if(state==='running')animation.play();
+      else if(state==='finished')animation.finish();
+      window.__waitChipExit={top,before,opacity,outside:!ghost.closest('[data-testid="chip-viewport"]'),inert:ghost.inert,diagnostics:{baseline,zero,delta:top-before,saved,state}};
       observer.disconnect();
     });observer.observe(rail(),{childList:true,subtree:true});return true;
   `);
-  await run(
-    `chip('wait-15').querySelector('[data-chip-button="remove"]').focus();return true;`,
-  );
   await app.press("Enter");
   const exit = await app.waitFor<{
     top: number;
@@ -150,7 +159,9 @@ it("keeps a scrolled wait chip's exit visible outside the shrinking viewport", a
   }>("window.__waitChipExit", { label: "scrolled wait chip exit" });
   expect(exit.outside).toBe(true);
   expect(exit.inert).toBe(true);
-  expect(Math.abs(exit.top - exit.before)).toBeLessThan(2);
+  expect(Math.abs(exit.top - exit.before), JSON.stringify(exit)).toBeLessThan(
+    2,
+  );
   expect(exit.opacity).toBeGreaterThan(0);
   expect(exit.opacity).toBeLessThan(1);
   await wait(`return !rail().querySelector('[data-testid="chip-exit"]');`);
