@@ -55,6 +55,11 @@ and verifies the app, then retains the DMG, ZIP, blockmaps, update metadata,
 and checksum file as workflow artifacts. It does not create a GitHub release
 or change the Homebrew tap.
 
+The disposable signing runner blocks UDP port 443 so Apple's ticket lookup uses
+HTTPS over TCP. This works around the hosted-runner
+[HTTP/3 connection failure](https://github.com/actions/runner-images/issues/14924);
+notarization, Gatekeeper assessment, and stapled-ticket validation remain required.
+
 A manual dispatch from a feature branch verifies only npm packages. Signing
 remains restricted to `main` and release tags by the desktop environment.
 
