@@ -254,10 +254,10 @@ it("generates an ordinary review app, follows evidence and retains the result", 
     icon: string;
   }>(`(async () => {
     const {url}=await window.catamorphicDesktop.getServerState();
-    const apps=await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/apps').then(response=>response.json());
-    const review=apps.find(app=>app.name.startsWith('session-') && app.icon==='review');
-    if(!review) throw new Error('The review app was not listed');
-    const response = await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/apps/'+encodeURIComponent(review.name)+'/presentation', {
+    const frame=document.querySelector('iframe[src^="work-guest://p-"][title^="app-session-"]');
+    if(!(frame instanceof HTMLIFrameElement)) throw new Error('The retained review app was not mounted');
+    const appName=frame.title.slice('app-'.length);
+    const response = await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/apps/'+encodeURIComponent(appName)+'/presentation', {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Input guard review", icon: "review" }),
     });
