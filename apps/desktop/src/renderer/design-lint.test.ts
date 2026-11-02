@@ -323,6 +323,10 @@ describe("design lint", () => {
         count: 2,
         reason: "counts the person's input for focus the app moves",
       },
+      "lib/drag-end.ts": {
+        count: 1,
+        reason: "ends a tab drag whose dragend never arrived",
+      },
       "lib/focus-modality.ts": {
         count: 2,
         reason: "keyboard or pointer leads, for focus rings",

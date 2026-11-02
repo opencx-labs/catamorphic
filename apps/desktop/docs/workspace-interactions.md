@@ -49,7 +49,10 @@ A chat open as a tab groups the tabs attached to it. Dragging a tab onto a chat
 attaches it, as if the chat had opened it, and opens a folded group; dropped
 among another group's tabs it joins that chat, and dropped among the top tabs it
 leaves its chat (`attach`, `attachBlocker`). A page an agent drives and an
-agent's or remote chat's terminal stay with their chat; chats never nest.
+agent's or remote chat's terminal stay with their chat; chats never nest. A
+drag whose tab closes or whose row leaves before the drop still ends: its
+dragend reaches a detached element React never hears, so the next press, or
+move with no button held, takes its drop targets away (`useEndOfDrag`).
 
 Ctrl+` opens a terminal in the focused chat's working folder, including its
 assigned worktree. The same applies to a floating chat and its Open terminal

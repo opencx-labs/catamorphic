@@ -41,6 +41,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { useEndOfDrag } from "../lib/drag-end.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
@@ -464,6 +465,14 @@ function TabStrip({
     );
     return () => window.clearTimeout(timer);
   }, [exitingKeys]);
+  const endDrag = () => {
+    setDragKey(null);
+    setDropAt(null);
+    onDragStateChange?.(null);
+  };
+  // A tab closed mid-drag never hears its dragend: the close buttons would
+  // stay hidden and the strip's ends would stop moving the window.
+  useEndOfDrag(Boolean(dragKey), endDrag);
 
   if (rendered.length === 0 && !onNew) return null;
   // Groups holding the tab in front or its split companion.
@@ -501,11 +510,6 @@ function TabStrip({
     )
       onAttach(dragged, into, beforeKey);
     else onReorder?.(dragged, beforeKey);
-  };
-  const endDrag = () => {
-    setDragKey(null);
-    setDropAt(null);
-    onDragStateChange?.(null);
   };
   // The strip's spare room drags the window, as Chrome's does: the strip
   // takes presses for its tabs and their drops, so its empty ends hand
