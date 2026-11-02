@@ -75,6 +75,11 @@ async function legacyStorage(
     for (const [key, value] of Object.entries(${JSON.stringify(input.seed ?? {})})) localStorage.setItem(key, value);
     return Object.fromEntries(${JSON.stringify(readKeys)}.map(key => [key, localStorage.getItem(key)]));
   })()`;
+  const legacyHtml = path.join(directory, "legacy.html");
+  fs.writeFileSync(
+    legacyHtml,
+    "<!doctype html><title>Legacy storage fixture</title>",
+  );
   fs.writeFileSync(
     file,
     `
@@ -83,7 +88,7 @@ app.setPath('userData', ${JSON.stringify(userDataDir)});
 app.whenReady().then(async () => {
   const window = new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
   try {
-    await window.loadFile(${JSON.stringify(path.resolve(import.meta.dirname, "../out/renderer/storage-migration.html"))});
+    await window.loadFile(${JSON.stringify(legacyHtml)});
     const values = await window.webContents.executeJavaScript(${JSON.stringify(expression)});
     process.stdout.write(${JSON.stringify(marker)} + JSON.stringify(values) + '\\n');
     window.close();
@@ -308,11 +313,13 @@ it("boots the internal shell with its isolated bridge, no renderer Node, and a w
   });
 });
 
-it("imports file-origin draft and sidebar values before the first normal shell loads", async () => {
-  expect(await storedValues()).toEqual(LEGACY_VALUES);
+it("starts internal-origin storage separately from old file-origin drafts and settings", async () => {
+  expect(await storedValues()).toEqual(
+    Object.fromEntries(Object.keys(LEGACY_VALUES).map((key) => [key, null])),
+  );
   expect(
     await running().eval("localStorage.getItem('__work_origin_migrated_v1')"),
-  ).toBe("1");
+  ).toBeNull();
 });
 
 it("admits only exact guest-document API paths from the native shell", async () => {
@@ -515,7 +522,7 @@ it("keeps shell navigation inside Work and opens requested web pages as browser 
   await handle.eval("window.__stopSecurityNavigation(); true");
 });
 
-it("preserves unsent review drafts and sidebar edits across repeated starts without altering the legacy source", async () => {
+it("preserves unsent review drafts and sidebar edits after restart without altering the legacy source", async () => {
   const handle = running();
   await handle.eval(
     `(() => { for (const [key,value] of Object.entries(${JSON.stringify(UPDATED_VALUES)})) localStorage.setItem(key,value); return true; })()`,
@@ -528,6 +535,9 @@ it("preserves unsent review drafts and sidebar edits across repeated starts with
   });
   app = await launchApp({ userDataDir, sandboxedRenderers: true });
   expect(await storedValues()).toEqual(UPDATED_VALUES);
+});
+
+it("keeps newer internal-origin drafts on a later restart", async () => {
   const second = running();
   await second.stop({ preserveUserData: true });
   app = undefined;

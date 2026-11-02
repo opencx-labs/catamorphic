@@ -58,6 +58,13 @@ or change the Homebrew tap.
 A manual dispatch from a feature branch verifies only npm packages. Signing
 remains restricted to `main` and release tags by the desktop environment.
 
+The signing job also launches the actual packaged app on its isolated macOS
+runner, with fresh and seeded legacy profiles. It requires a visible native
+window, a successful embedded-server boot, and a normal quit. It verifies
+old file-origin values remain separate and untouched, and a second launch keeps
+newer drafts. These checks run with the distributed fuses and without a remote
+debugging port. They do not replace the manual first-use checks below.
+
 Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
 

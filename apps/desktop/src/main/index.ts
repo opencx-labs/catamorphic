@@ -62,7 +62,6 @@ import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
 import {
   isSameShellDocument,
-  migrateShellStorage,
   registerShellScheme,
   serveShellDocuments,
   shellDocumentUrl,
@@ -725,7 +724,6 @@ function applyMenuForFocusedWindow(): void {
 app.whenReady().then(async () => {
   const rendererRoot = path.join(import.meta.dirname, "../renderer");
   serveShellDocuments({ root: rendererRoot });
-  await migrateShellStorage({ root: rendererRoot });
   guestDocuments = new GuestDocuments({
     api: () => state.current ?? undefined,
     views: () => state.current?.mcpAppViews,

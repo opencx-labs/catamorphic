@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { app, protocol, session, WebContentsView } from "electron";
+import { app, protocol, session } from "electron";
 
 export const SHELL_ORIGIN = "work-internal://shell";
 
@@ -161,37 +161,4 @@ export function serveShellDocuments({ root }: { root: string }): void {
       },
     );
   });
-}
-
-/** Preserve drafts and settings when the packaged UI changes its origin. */
-export async function migrateShellStorage({
-  root,
-}: {
-  root: string;
-}): Promise<void> {
-  if (developmentUrl()) return;
-  const view = new WebContentsView({
-    webPreferences: {
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  try {
-    await view.webContents.loadFile(path.join(root, "storage-migration.html"));
-    const data: unknown = await view.webContents.executeJavaScript(
-      "JSON.stringify(Object.fromEntries(Object.entries(localStorage)))",
-    );
-    if (typeof data !== "string")
-      throw new Error("Could not read saved workspace settings");
-    const parsed: unknown = JSON.parse(data);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      throw new Error("Invalid saved workspace settings");
-    await view.webContents.loadURL(`${SHELL_ORIGIN}/storage-migration.html`);
-    await view.webContents.executeJavaScript(
-      `(() => { const saved = ${JSON.stringify(data)}; const marker = '__work_origin_migrated_v1'; if (localStorage.getItem(marker) !== null) return; for (const [key,value] of Object.entries(JSON.parse(saved))) { if (typeof value === 'string' && localStorage.getItem(key) === null) localStorage.setItem(key,value); } localStorage.setItem(marker,'1'); })()`,
-    );
-  } finally {
-    view.webContents.close();
-  }
 }
