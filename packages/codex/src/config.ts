@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
@@ -10,7 +11,7 @@ import {
   MODEL_GRANT_READER,
   resolveToolPermissionAcross,
 } from "@catamorphic/sandbox";
-import { codexConfigArgs, isObject } from "./app-server.js";
+import { CodexAppServer, codexConfigArgs, isObject } from "./app-server.js";
 import type { CodexSpawn } from "./transport.js";
 
 export type CodexSandboxMode =
@@ -241,6 +242,39 @@ export function codexLaunch(attempt: AttemptStart): CodexLaunch | string {
     serverKeys,
     options,
   };
+}
+
+/**
+ * The pinned CLI's effective config for this exact launch and checkout,
+ * before a thread or shell snapshot starts. Hosts use the CLI's own
+ * configuration layers rather than parsing its files themselves.
+ */
+export async function readCodexConfig({
+  attempt,
+  timeoutMs = 15_000,
+}: {
+  attempt: AttemptStart;
+  timeoutMs?: number;
+}): Promise<JsonObject> {
+  const launch = codexLaunch(attempt);
+  if (typeof launch === "string") throw new Error(launch);
+  await mkdir(launch.home, { recursive: true });
+  const server = new CodexAppServer({ spawn: launch.spawn });
+  const timeout = setTimeout(() => void server.close(), timeoutMs);
+  try {
+    await server.initialize();
+    const result = await server.request(
+      "config/read",
+      { cwd: attempt.workingDirectory },
+      { timeoutMs },
+    );
+    if (!isObject(result) || !isObject(result.config))
+      throw new Error("Codex returned an invalid configuration.");
+    return result.config;
+  } finally {
+    clearTimeout(timeout);
+    await server.close();
+  }
 }
 
 function sandboxMode(

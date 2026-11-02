@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { JsonObject } from "@catamorphic/agent-protocol";
 
 /**
  * Shell integration for agent-driven terminals: a shim that sources the
@@ -30,8 +31,9 @@ import path from "node:path";
  * aborted search reads to them as a search that found nothing. The null
  * glob options would drop the pattern instead, so they are off too. Agent
  * terminals run it after the user's .zshrc, Claude Code before each command
- * (`agentShellEnvFile`), Work's own agent and watches with each command
- * (`withAgentShellOptions`). The user's own shells never see it.
+ * (`agentShellEnvFile`), Codex through its private startup files
+ * (`codexShellEnvironment`), Work's own agent and watches with each
+ * command (`withAgentShellOptions`). The user's own shells never see it.
  */
 const ZSH_AGENT_OPTIONS = "setopt no_nomatch no_null_glob no_csh_null_glob";
 const AGENT_SHELL_OPTIONS = `if [ -n "\${ZSH_VERSION:-}" ]; then ${ZSH_AGENT_OPTIONS}; fi
@@ -78,11 +80,11 @@ fi
  */
 function sourcingScript(file: string): string {
   return `
-if [[ -f "\${USER_ZDOTDIR:-$HOME}/${file}" ]]; then
+if [[ -f "\${USER_ZDOTDIR-$HOME}/${file}" ]]; then
   CATAMORPHIC_SHIM_ZDOTDIR="$ZDOTDIR"
-  ZDOTDIR="\${USER_ZDOTDIR:-$HOME}"
+  ZDOTDIR="\${USER_ZDOTDIR-$HOME}"
   . "$ZDOTDIR/${file}"
-  USER_ZDOTDIR="$ZDOTDIR"
+  USER_ZDOTDIR="\${ZDOTDIR-$HOME}"
   ZDOTDIR="$CATAMORPHIC_SHIM_ZDOTDIR"
   unset CATAMORPHIC_SHIM_ZDOTDIR
 fi
@@ -95,7 +97,7 @@ fi
  * the marker hooks — last, so they run after any prompt framework.
  */
 const ZSHRC = `${sourcingScript(".zshrc")}
-ZDOTDIR="\${USER_ZDOTDIR:-$HOME}"
+ZDOTDIR="\${USER_ZDOTDIR-$HOME}"
 [[ "$ZDOTDIR" == "$HOME" ]] && unset ZDOTDIR
 ${AGENT_SHELL_OPTIONS}${ZSHRC_HOOKS}`;
 
@@ -206,6 +208,82 @@ export async function agentShellEnvFile(): Promise<string | null> {
       content: `${own ? `if [ -f ${shellQuote(own)} ]; then . ${shellQuote(own)}; fi\n` : ""}${AGENT_SHELL_OPTIONS}`,
       mode: 0o400,
     });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Codex has no per-command init file. Its supported shell environment
+ * overrides point zsh at private startup files instead. The process gets
+ * them too because Codex's shell snapshot reads its ambient environment.
+ * Each file reads the person's counterpart, then applies our options,
+ * including after the .zshrc that Codex sources when taking a snapshot.
+ * Leave the shim in place for native commands and their nested shells;
+ * only this Codex process inherits it. No prompt markers are installed.
+ */
+export async function codexShellEnvironment(input: {
+  env: NodeJS.ProcessEnv;
+  config: JsonObject;
+}): Promise<Record<string, string> | null> {
+  if (process.platform === "win32") return null;
+  try {
+    const rawPolicy = input.config.shell_environment_policy;
+    const policy =
+      rawPolicy && typeof rawPolicy === "object" && !Array.isArray(rawPolicy)
+        ? rawPolicy
+        : {};
+    // Codex owns the filter engine. An allowlist can even remove explicit
+    // set values; do not replace these policies or guess their result.
+    if (
+      policy.experimental_use_profile === true ||
+      [policy.exclude, policy.include_only, policy.filters].some(
+        (value) =>
+          value && typeof value === "object" && Object.keys(value).length > 0,
+      )
+    )
+      return null;
+    const configured = policy.set;
+    const environment =
+      configured && typeof configured === "object" && !Array.isArray(configured)
+        ? configured
+        : {};
+    const inheritedDotfiles =
+      policy.inherit !== "none" && policy.inherit !== "core"
+        ? input.env.ZDOTDIR
+        : undefined;
+    const home =
+      typeof environment.HOME === "string"
+        ? environment.HOME
+        : policy.inherit === "none"
+          ? os.userInfo().homedir
+          : (input.env.HOME ?? os.homedir());
+    const dotfiles =
+      typeof environment.ZDOTDIR === "string"
+        ? environment.ZDOTDIR
+        : (inheritedDotfiles ?? home);
+    // An explicitly empty root retains Codex's native startup behavior.
+    if (!dotfiles) return null;
+    const dir = path.join(await shimRoot(), "codex-zsh");
+    await Promise.all(
+      [".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout"].map((name) =>
+        writeShim({
+          dir,
+          name,
+          content: `${name === ".zshenv" ? 'if (( $+CATAMORPHIC_CODEX_SHELL_HOME )); then export HOME="$CATAMORPHIC_CODEX_SHELL_HOME"; fi\n' : ""}${sourcingScript(name)}${name === ".zlogout" ? "" : AGENT_SHELL_OPTIONS}`,
+          mode: 0o400,
+        }),
+      ),
+    );
+    return {
+      ZDOTDIR: dir,
+      USER_ZDOTDIR: dotfiles,
+      // Snapshot startup must see the command's configured HOME without
+      // moving the app-server's own config and sign-in directory.
+      ...(typeof environment.HOME === "string"
+        ? { CATAMORPHIC_CODEX_SHELL_HOME: home }
+        : {}),
+    };
   } catch {
     return null;
   }
