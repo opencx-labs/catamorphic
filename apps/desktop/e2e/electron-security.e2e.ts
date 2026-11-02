@@ -164,8 +164,11 @@ const storedValues = () =>
 
 const fixtureCode = `
 document.getElementById('root').innerHTML = '<main style="font:16px system-ui;padding:32px"><h1>Security probe</h1><p>This project app runs in its own document.</p><button id="probe-button">Check app interaction</button><output id="probe-result" style="display:block;margin-top:16px">Ready</output></main>';
-document.getElementById('probe-button').addEventListener('click', () => {
-  document.getElementById('probe-result').textContent = 'The isolated app is interactive';
+document.getElementById('probe-button').addEventListener('click', (event) => {
+  const output = document.getElementById('probe-result');
+  output.dataset.clicks = String(Number(output.dataset.clicks ?? '0') + 1);
+  output.dataset.trusted = String(event.isTrusted);
+  output.textContent = 'The isolated app is interactive';
 });
 `;
 
@@ -393,30 +396,25 @@ it("renders an interactive project app without exposing the shell bridge or broa
     parentBridge: false,
     apiStatus: "blocked",
   });
-  // The app remains useful inside that boundary, driven by Chromium input.
+  // The app remains useful inside that boundary, driven by the OS pointer.
   const point = await guest.eval<{ x: number; y: number }>(
     `(() => { const r=document.querySelector('#probe-button').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
   );
   const offset = await handle.eval<{ x: number; y: number }>(
     `(() => { const r=document.querySelector('iframe[src^="work-guest:"]').getBoundingClientRect(); return {x:r.x,y:r.y}; })()`,
   );
-  await handle.cdp("Input.dispatchMouseEvent", {
-    type: "mousePressed",
+  await handle.clickPointer({
     x: point.x + offset.x,
     y: point.y + offset.y,
-    button: "left",
-    clickCount: 1,
-  });
-  await handle.cdp("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x: point.x + offset.x,
-    y: point.y + offset.y,
-    button: "left",
-    clickCount: 1,
   });
   await guest.waitFor(
     "document.querySelector('#probe-result')?.textContent === 'The isolated app is interactive'",
   );
+  expect(
+    await guest.eval(
+      "(() => {const {clicks,trusted}=document.querySelector('#probe-result').dataset;return {clicks,trusted};})()",
+    ),
+  ).toEqual({ clicks: "1", trusted: "true" });
   const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? directory;
   await handle.screenshot(path.join(artifacts, "electron-security-app.png"));
 });
