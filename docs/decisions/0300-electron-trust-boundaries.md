@@ -1,6 +1,6 @@
 # 0300 - Electron trust belongs to native-created documents
 
-- **Status:** Accepted
+- **Status:** Accepted; legacy local-storage import superseded by [0301](0301-internal-origin-storage-starts-clean.md)
 - **Date:** 2026-11-01
 - **Refines:** 0079, 0211, 0220, 0277
 
@@ -34,8 +34,8 @@ rejected in distributed builds. Development and isolated test tools remain usabl
 
 ## Consequences
 
-The internal-origin transition preserves legacy local storage without deleting
-the source or overwriting newer target data. Existing browser, app, terminal,
+The internal-origin transition starts with separate local UI storage (0301);
+legacy values remain on disk without automatic import. Existing browser, app, terminal,
 voice and passkey interactions require native regression coverage. Each mount's
 authority ends on close, owner document replacement or profile change. These
 desktop policies remain outside the embeddable framework's default identity.

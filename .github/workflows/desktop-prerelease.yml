@@ -175,6 +175,7 @@ jobs:
           bun scripts/desktop-signature.ts "${app}"
           spctl --assess --type execute --verbose=2 "${app}"
           xcrun stapler validate "${app}"
+          bun scripts/desktop-startup-smoke.ts "${app}"
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist")"
           scheme="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "${app}/Contents/Info.plist")"
           icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${app}/Contents/Info.plist")"

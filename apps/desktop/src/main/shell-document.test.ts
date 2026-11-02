@@ -10,33 +10,16 @@ const native = vi.hoisted(() => ({
       (scheme: string, handler: (request: Request) => Promise<Response>) => void
     >(),
   registerSchemesAsPrivileged: vi.fn(),
-  createView: vi.fn(),
-  loadFile: vi.fn<(file: string) => Promise<void>>(),
-  loadURL: vi.fn<(url: string) => Promise<void>>(),
-  executeJavaScript: vi.fn<(script: string) => Promise<unknown>>(),
-  close: vi.fn(),
 }));
 vi.mock("electron", () => ({
   app: native.app,
   protocol: { registerSchemesAsPrivileged: native.registerSchemesAsPrivileged },
   session: { defaultSession: { protocol: { handle: native.handle } } },
-  WebContentsView: class {
-    constructor(options: unknown) {
-      native.createView(options);
-    }
-    webContents = {
-      loadFile: native.loadFile,
-      loadURL: native.loadURL,
-      executeJavaScript: native.executeJavaScript,
-      close: native.close,
-    };
-  },
 }));
 
 import {
   isSameShellDocument,
   isShellDocument,
-  migrateShellStorage,
   registerShellScheme,
   serveShellDocuments,
   shellAssetPath,
@@ -49,9 +32,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubEnv("ELECTRON_RENDERER_URL", "");
   native.app.isPackaged = true;
-  native.loadFile.mockResolvedValue();
-  native.loadURL.mockResolvedValue();
-  native.executeJavaScript.mockReset();
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "work-shell-documents-"));
   root = path.join(directory, "renderer");
   await fs.mkdir(path.join(root, "assets"), { recursive: true });
@@ -273,68 +253,4 @@ describe("shell asset protocol fence", () => {
       );
     },
   );
-});
-
-describe("legacy shell storage migration lifecycle", () => {
-  it("reads the legacy file origin in a sandbox and closes its view after import", async () => {
-    native.executeJavaScript.mockResolvedValueOnce(
-      JSON.stringify({ "review-comment:new": "Unsent draft" }),
-    );
-    native.executeJavaScript.mockResolvedValueOnce(undefined);
-    await migrateShellStorage({ root });
-    expect(native.createView).toHaveBeenCalledWith({
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    expect(native.loadFile).toHaveBeenCalledWith(
-      path.join(root, "storage-migration.html"),
-    );
-    expect(native.loadURL).toHaveBeenCalledWith(
-      "work-internal://shell/storage-migration.html",
-    );
-    expect(native.executeJavaScript.mock.calls[1]?.[0]).toContain(
-      "__work_origin_migrated_v1",
-    );
-    expect(native.executeJavaScript.mock.calls[1]?.[0]).toContain(
-      "localStorage.getItem(key) === null",
-    );
-    expect(native.close).toHaveBeenCalledOnce();
-  });
-
-  it.each([null, "[]", "null", "not json"])(
-    "closes the migration view and fails without importing invalid data: %s",
-    async (data) => {
-      native.executeJavaScript.mockResolvedValueOnce(data);
-      await expect(migrateShellStorage({ root })).rejects.toThrow();
-      expect(native.loadURL).not.toHaveBeenCalled();
-      expect(native.close).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("closes its view when reading the old document fails", async () => {
-    native.loadFile.mockRejectedValueOnce(new Error("Legacy document failed"));
-    await expect(migrateShellStorage({ root })).rejects.toThrow(
-      "Legacy document failed",
-    );
-    expect(native.close).toHaveBeenCalledOnce();
-  });
-
-  it("closes its view when the target origin fails to load", async () => {
-    native.executeJavaScript.mockResolvedValueOnce("{}");
-    native.loadURL.mockRejectedValueOnce(new Error("Internal document failed"));
-    await expect(migrateShellStorage({ root })).rejects.toThrow(
-      "Internal document failed",
-    );
-    expect(native.close).toHaveBeenCalledOnce();
-  });
-
-  it("leaves development-server storage alone", async () => {
-    native.app.isPackaged = false;
-    vi.stubEnv("ELECTRON_RENDERER_URL", "http://127.0.0.1:4321/");
-    await migrateShellStorage({ root });
-    expect(native.createView).not.toHaveBeenCalled();
-  });
 });

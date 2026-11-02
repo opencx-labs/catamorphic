@@ -11,7 +11,6 @@ for (const entry of [
   "preload/session.cjs",
   "renderer/index.html",
   "renderer/voice.html",
-  "renderer/storage-migration.html",
 ]) {
   const file = path.join(import.meta.dirname, "../out", entry);
   if (!fs.readFileSync(file, "utf8").trim())

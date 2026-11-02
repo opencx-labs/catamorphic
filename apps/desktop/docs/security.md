@@ -52,6 +52,7 @@ debugging switches are rejected separately. The release verifier checks actual
 binary fuse values before distribution; signing and notarization remain required.
 See [release verification](../RELEASING.md).
 
-On first internal-origin launch, legacy local storage is copied into missing
-target keys and the source is preserved. Later launches never overwrite new
-drafts or settings with legacy values. This migration needs native coverage.
+The internal origin starts with separate local UI storage. Old file-origin
+drafts and interface preferences remain on disk without automatic import.
+Projects, chat history and the application database are unaffected. See
+[the alpha storage decision](../../../docs/decisions/0301-internal-origin-storage-starts-clean.md).
