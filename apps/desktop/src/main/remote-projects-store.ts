@@ -3,7 +3,10 @@ import path from "node:path";
 import { projectDataDirectory } from "@catamorphic/core";
 import { PROJECT_APP_DATA_DIR } from "@catamorphic/workflow/project-layout";
 import { safeStorage } from "electron";
-import { credentialEncryptionAvailable } from "./credential-encryption.js";
+import {
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 import type { RemoteOAuthCredentials } from "./remote-oauth.js";
 
 /**
@@ -103,6 +106,17 @@ export class RemoteProjectsStore {
     return { ...inspected.link, credentials: inspected.credentials };
   }
 
+  /** Whether a sign-in is saved, without unlocking it during link discovery. */
+  hasCredentials(localProjectId: string): boolean {
+    const link = this.data.links[localProjectId];
+    return (
+      link !== undefined &&
+      (this.sessionCredentials.has(link.connectionId) ||
+        this.data.credentials[link.connectionId]?.credentialsEncrypted !==
+          undefined)
+    );
+  }
+
   inspect(localProjectId: string): RemoteProjectInspection | null {
     const link = this.data.links[localProjectId];
     if (!link) return null;
@@ -116,8 +130,8 @@ export class RemoteProjectsStore {
 
   set(localProjectId: string, link: RemoteProjectLinkWithCredentials): void {
     const { credentials, ...rest } = link;
-    this.data.links[localProjectId] = rest;
     this.storeCredentials(link.connectionId, credentials);
+    this.data.links[localProjectId] = rest;
     this.save();
   }
 
@@ -235,44 +249,31 @@ export class RemoteProjectsStore {
     connectionId: string,
     credentials: RemoteOAuthCredentials,
   ): void {
-    this.sessionCredentials.set(connectionId, credentials);
     const encrypted = this.encrypt(credentials);
-    if (encrypted) this.data.credentials[connectionId] = encrypted;
-    else delete this.data.credentials[connectionId];
+    this.data.credentials[connectionId] = encrypted;
+    this.sessionCredentials.set(connectionId, credentials);
   }
 
-  private encrypt(
-    credentials: RemoteOAuthCredentials,
-  ): StoredCredentials | null {
+  private encrypt(credentials: RemoteOAuthCredentials): StoredCredentials {
+    requireCredentialEncryption();
     const serialized = JSON.stringify(credentials);
-    if (credentialEncryptionAvailable()) {
-      return {
-        credentialsEncrypted: safeStorage
-          .encryptString(serialized)
-          .toString("base64"),
-      };
-    }
-    console.warn(
-      "[desktop] OS keychain encryption unavailable; remote credentials will last only for this session.",
-    );
-    return null;
+    return {
+      credentialsEncrypted: safeStorage
+        .encryptString(serialized)
+        .toString("base64"),
+    };
   }
 
   private decrypt(
     stored: StoredCredentials | undefined,
   ): RemoteOAuthCredentials | null {
     if (!stored) return null;
-    if (!credentialEncryptionAvailable()) return null;
     if (!stored.credentialsEncrypted) return null;
-    let serialized: string;
+    requireCredentialEncryption();
     try {
-      serialized = safeStorage.decryptString(
+      const serialized = safeStorage.decryptString(
         Buffer.from(stored.credentialsEncrypted, "base64"),
       );
-    } catch {
-      return null;
-    }
-    try {
       const parsed = JSON.parse(serialized) as Partial<RemoteOAuthCredentials>;
       if (
         typeof parsed.clientId !== "string" ||
@@ -282,7 +283,7 @@ export class RemoteProjectsStore {
         typeof parsed.tokenEndpoint !== "string" ||
         typeof parsed.scope !== "string"
       ) {
-        return null;
+        throw new Error("Invalid saved OAuth credentials");
       }
       return {
         clientId: parsed.clientId,
@@ -292,8 +293,8 @@ export class RemoteProjectsStore {
         tokenEndpoint: parsed.tokenEndpoint,
         scope: parsed.scope,
       };
-    } catch {
-      return null;
+    } catch (cause) {
+      throw credentialUnlockError({ cause });
     }
   }
 }

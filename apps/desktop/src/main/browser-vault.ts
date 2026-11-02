@@ -4,7 +4,11 @@ import path from "node:path";
 import { app, safeStorage, systemPreferences } from "electron";
 import * as kdbx from "kdbxweb";
 import "./kdbx-argon2.js";
-import { credentialEncryptionAvailable } from "./credential-encryption.js";
+import {
+  CredentialStorageError,
+  credentialEncryptionAvailableAsync,
+  credentialUnlockError,
+} from "./credential-encryption.js";
 import { fromBase64Url, toBase64Url } from "./webauthn.js";
 
 /**
@@ -184,25 +188,41 @@ export class PasswordVault {
   }
 
   private async openVault(profileId: string): Promise<OpenVault> {
-    if (!credentialEncryptionAvailable())
-      throw new Error("OS keychain encryption unavailable");
+    if (!(await credentialEncryptionAvailableAsync()))
+      throw new CredentialStorageError(
+        "OS credential encryption is unavailable. Unlock your operating system's keychain or enable a secure credential store, then try again.",
+      );
     const dir = path.join(this.profilesDir, profileId);
     fs.mkdirSync(dir, { recursive: true });
     const keyFile = this.keyFile(profileId);
     const vaultFile = this.vaultFile(profileId);
 
     let keyHex: string;
-    if (fs.existsSync(keyFile)) {
-      const decrypted = await safeStorage.decryptStringAsync(
-        fs.readFileSync(keyFile),
-      );
-      keyHex = decrypted.result;
-      if (decrypted.shouldReEncrypt) {
-        fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(keyHex));
+    try {
+      if (fs.existsSync(keyFile)) {
+        const decrypted = await safeStorage.decryptStringAsync(
+          fs.readFileSync(keyFile),
+        );
+        keyHex = decrypted.result;
+        if (!/^[a-f0-9]{64}$/.test(keyHex))
+          throw new Error("Invalid password vault key");
+        if (decrypted.shouldReEncrypt) {
+          fs.writeFileSync(
+            keyFile,
+            await safeStorage.encryptStringAsync(keyHex),
+            { mode: 0o600 },
+          );
+        }
+      } else {
+        keyHex = randomBytes(32).toString("hex");
+        fs.writeFileSync(
+          keyFile,
+          await safeStorage.encryptStringAsync(keyHex),
+          { mode: 0o600 },
+        );
       }
-    } else {
-      keyHex = randomBytes(32).toString("hex");
-      fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(keyHex));
+    } catch (cause) {
+      throw credentialUnlockError({ cause });
     }
 
     const credentials = new kdbx.Credentials(

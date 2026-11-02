@@ -112,6 +112,8 @@ export interface McpResourceContent {
 
 export interface ConnectedMcpServer {
   tools: McpToolInfo[];
+  /** Refresh the connector's current tool roster before host authorization. */
+  refreshTools?(): Promise<McpToolInfo[]>;
   /** Negotiated protocol revision (e.g. "2026-07-28"), when known. */
   protocolVersion?: string;
   /** Call a tool; the result is flattened to model-readable text. */
@@ -314,25 +316,35 @@ export async function connectMcpServer(
 ): Promise<ConnectedMcpServer> {
   const client = await connectTransport(config, opts);
   try {
-    const listed = await client.listTools(undefined, { signal: opts?.signal });
-    const tools: McpToolInfo[] = listed.tools.map((tool) => ({
-      name: tool.name,
-      ...(tool.title ? { title: tool.title } : {}),
-      description: tool.description ?? "",
-      inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
-        string,
-        unknown
-      >,
-      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
-      ...((tool as { _meta?: Record<string, unknown> })._meta
-        ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
-        : {}),
-      ...(tool.annotations
-        ? { annotations: pickAnnotations(tool.annotations) }
-        : {}),
-    }));
+    const listTools = async (): Promise<McpToolInfo[]> => {
+      const listed = await client.listTools(undefined, {
+        signal: opts?.signal,
+      });
+      return listed.tools.map((tool) => ({
+        name: tool.name,
+        ...(tool.title ? { title: tool.title } : {}),
+        description: tool.description ?? "",
+        inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
+          string,
+          unknown
+        >,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+        ...((tool as { _meta?: Record<string, unknown> })._meta
+          ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
+          : {}),
+        ...(tool.annotations
+          ? { annotations: pickAnnotations(tool.annotations) }
+          : {}),
+      }));
+    };
+    const tools = await listTools();
     return {
       tools,
+      async refreshTools() {
+        const current = await listTools();
+        tools.splice(0, tools.length, ...current);
+        return current;
+      },
       protocolVersion: client.getDiscoverResult() ? "2026-07-28" : undefined,
       async callTool(name, args) {
         const result = await client.callTool(

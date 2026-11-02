@@ -6,7 +6,7 @@ import {
   PROJECT_ID_ENV,
   SESSION_ID_ENV,
 } from "@catamorphic/agent-protocol/runner";
-import { app, ipcMain, type WebContents, webContents } from "electron";
+import { app, type WebContents, webContents } from "electron";
 import {
   type RegisteredOwner,
   type ResourceGroup,
@@ -16,6 +16,7 @@ import {
   resourceGroupId,
 } from "../shared/resources.js";
 import { registeredProcessOwners } from "./process-owners.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
 /** The sampler's own `ps` and `getconf`, never listed as Work's. */
 const samplerPids = new Set<number>();

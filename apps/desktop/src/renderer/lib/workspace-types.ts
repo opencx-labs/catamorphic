@@ -1,5 +1,6 @@
 export type { ChatDockEntry, ChatMode } from "../../shared/chat.js";
 
+import type { McpAppContext } from "../../shared/chat.js";
 import type { GitDiffMode } from "../../shared/git.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
 import type { SidebarActivity } from "../../shared/sidebar.js";
@@ -130,6 +131,8 @@ export type WorkspaceTab = (
       name: string;
       label?: string;
       toolKey: string;
+      /** Absent on old saved tabs, which must be reopened from their chat. */
+      context?: McpAppContext;
       toolInput?: unknown;
       toolResult?: unknown;
     }

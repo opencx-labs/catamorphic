@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, shell } from "electron";
 import type { DefaultBrowserState } from "../shared/default-browser.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
 const schemes = ["http", "https"];
 

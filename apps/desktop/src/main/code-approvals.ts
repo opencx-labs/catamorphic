@@ -1,13 +1,13 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ipcMain } from "electron";
 import { z } from "zod";
 import {
   accessText,
   type CodeAccess,
   parseCodeAccess,
 } from "../shared/code-access.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
 /** Seals the approvals key with the OS keychain (Electron's safeStorage). */
 export interface Keyring {
@@ -61,14 +61,39 @@ export class CodeApprovals {
 
   private secret(): Promise<Buffer> {
     this.key ??= (async () => {
-      try {
-        const sealed = fs.readFileSync(this.keyFile);
-        return Buffer.from(await this.deps.keyring.decrypt(sealed), "hex");
-      } catch (cause) {
-        if (fs.existsSync(this.keyFile)) throw cause;
-      }
       if (!(await this.deps.keyring.available()))
-        throw new Error("The keychain is not available to keep approvals.");
+        throw new Error(
+          "The keychain is not available to keep approvals. Unlock your operating system's keychain or enable a secure credential store, then try again.",
+        );
+      const sealed = (() => {
+        try {
+          return fs.readFileSync(this.keyFile);
+        } catch (cause) {
+          if (
+            cause instanceof Error &&
+            "code" in cause &&
+            cause.code === "ENOENT"
+          )
+            return undefined;
+          throw new Error(
+            "Work could not read saved approvals. Restore access to the saved settings and try again. The saved approvals have been preserved.",
+            { cause },
+          );
+        }
+      })();
+      if (sealed !== undefined) {
+        try {
+          const secret = await this.deps.keyring.decrypt(sealed);
+          if (!/^[a-f0-9]{64}$/.test(secret))
+            throw new Error("Invalid approval signing key");
+          return Buffer.from(secret, "hex");
+        } catch (cause) {
+          throw new Error(
+            "Work could not unlock saved approvals. Unlock your operating system's keychain and try again. The saved approvals have been preserved.",
+            { cause },
+          );
+        }
+      }
       const key = randomBytes(32);
       fs.mkdirSync(this.deps.dir, { recursive: true });
       fs.writeFileSync(

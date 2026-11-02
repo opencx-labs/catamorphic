@@ -104,10 +104,173 @@ describe("agent API key storage", () => {
     expect(() =>
       store.update(agent.id, { name: "Changed", apiKey: "replacement-secret" }),
     ).toThrow("OS credential encryption is unavailable");
+    expect(() => store.get(agent.id)).toThrow(
+      "Unlock your operating system's keychain",
+    );
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
     expect(store.list()).toHaveLength(1);
     expect(store.get(agent.id)?.name).toBe(agent.name);
     expect(fs.readFileSync(file, "utf8")).toBe(before);
   });
+  it("preserves an unreadable saved key and refuses to fall back to another account", () => {
+    const file = storeFile();
+    const store = new AgentsStore(file);
+    const agent = store.create({
+      harness: "claude-code",
+      auth: "api-key",
+      apiKey: "saved-key",
+    });
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    raw.agents[0].apiKeyEncrypted =
+      Buffer.from("not encrypted").toString("base64");
+    const before = JSON.stringify(raw);
+    fs.writeFileSync(file, before);
+    const reread = new AgentsStore(file);
+    expect(() => reread.get(agent.id)).toThrow(
+      "Work could not unlock the saved credential",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it.each(["locked", "corrupt"])(
+    "keeps metadata and key replacement available for a %s credential",
+    (condition) => {
+      const file = storeFile();
+      const original = new AgentsStore(file);
+      const blocked = original.create({
+        harness: "claude-code",
+        auth: "api-key",
+        apiKey: "saved-secret",
+      });
+      const local = original.create({ harness: "codex", auth: "local" });
+      if (condition === "corrupt") {
+        const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+        raw.agents[0].apiKeyEncrypted =
+          Buffer.from("invalid ciphertext").toString("base64");
+        fs.writeFileSync(file, JSON.stringify(raw));
+      } else
+        vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+      const store = new AgentsStore(file);
+      const decrypt = vi.spyOn(safeStorage, "decryptString");
+      expect(store.listMetadata().map((agent) => agent.id)).toEqual([
+        blocked.id,
+        local.id,
+      ]);
+      expect(store.getMetadata(blocked.id)).toMatchObject({
+        id: blocked.id,
+        hasApiKey: true,
+      });
+      expect(store.getMetadata(blocked.id)).not.toHaveProperty("apiKey");
+      expect(store.getMetadata(blocked.id)).not.toHaveProperty(
+        "apiKeyEncrypted",
+      );
+      expect(decrypt).not.toHaveBeenCalled();
+      expect(() => store.get(blocked.id)).toThrow();
+      expect(store.get(local.id)?.auth).toBe("local");
+      const snapshot = store.listPublic();
+      expect(snapshot.map((agent) => agent.id)).toEqual([blocked.id, local.id]);
+      expect(snapshot[0]).toMatchObject({
+        name: blocked.name,
+        hasApiKey: true,
+        credentialError: expect.stringContaining("keychain"),
+      });
+      expect(snapshot[1]).not.toHaveProperty("credentialError");
+      expect(JSON.stringify(snapshot)).not.toContain("saved-secret");
+      expect(store.update(blocked.id, { name: "Recoverable" })?.name).toBe(
+        "Recoverable",
+      );
+      expect(() => store.get(blocked.id)).toThrow();
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+      expect(
+        store.update(blocked.id, { apiKey: "replacement-secret" })?.hasApiKey,
+      ).toBe(true);
+      expect(store.get(blocked.id)?.apiKey).toBe("replacement-secret");
+      expect(store.listPublic()[0]).not.toHaveProperty("credentialError");
+      decrypt.mockRestore();
+    },
+  );
+
+  it("can remove a locked key without unlocking it", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({
+      harness: "claude-code",
+      auth: "api-key",
+      apiKey: "saved-secret",
+    });
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    expect(
+      store.update(agent.id, { auth: "local", apiKey: null }),
+    ).toMatchObject({ auth: "local", hasApiKey: false });
+    expect(store.get(agent.id)).toMatchObject({ auth: "local", apiKey: null });
+  });
+
+  it.each(["local", "account"] as const)(
+    "does not unlock an unused saved key for native %s authentication",
+    (auth) => {
+      const file = storeFile();
+      const agent = new AgentsStore(file).create({
+        harness: "claude-code",
+        auth: "api-key",
+        apiKey: "saved-secret",
+      });
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      raw.agents[0].auth = auth;
+      raw.agents[0].apiKeyEncrypted = "invalid ciphertext";
+      fs.writeFileSync(file, JSON.stringify(raw));
+      const store = new AgentsStore(file);
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+      expect(store.get(agent.id)).toMatchObject({ auth, apiKey: null });
+      expect(store.listPublic()[0]).toMatchObject({ auth, hasApiKey: true });
+      expect(store.listPublic()[0]).not.toHaveProperty("credentialError");
+      store.update(agent.id, { auth: "api-key" });
+      expect(() => store.get(agent.id)).toThrow(
+        "OS credential encryption is unavailable",
+      );
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+      expect(() => store.get(agent.id)).toThrow(
+        "Work could not unlock the saved credential",
+      );
+    },
+  );
+
+  it("still requires the saved key for the built-in harness's account mode", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({
+      harness: "ai-sdk",
+      provider: "openrouter",
+      auth: "account",
+      apiKey: "saved-secret",
+    });
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    expect(() => store.get(agent.id)).toThrow(
+      "OS credential encryption is unavailable",
+    );
+    expect(store.listPublic()[0]).toMatchObject({
+      id: agent.id,
+      hasApiKey: true,
+      credentialError: expect.stringContaining("keychain"),
+    });
+  });
+
+  it.each(["", Buffer.from("enc:").toString("base64")])(
+    "refuses an empty saved credential instead of returning a missing key (%s)",
+    (ciphertext) => {
+      const file = storeFile();
+      const agent = new AgentsStore(file).create({
+        harness: "claude-code",
+        auth: "api-key",
+        apiKey: "saved-secret",
+      });
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      raw.agents[0].apiKeyEncrypted = ciphertext;
+      fs.writeFileSync(file, JSON.stringify(raw));
+      const store = new AgentsStore(file);
+      expect(store.getMetadata(agent.id)?.hasApiKey).toBe(true);
+      expect(() => store.get(agent.id)).toThrow(
+        "Work could not unlock the saved credential",
+      );
+    },
+  );
 });
 
 describe("AgentsStore — ADR 0056 fields", () => {

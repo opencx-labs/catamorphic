@@ -1,15 +1,11 @@
 import path from "node:path";
-import {
-  app,
-  ipcMain,
-  autoUpdater as nativeUpdater,
-  powerMonitor,
-} from "electron";
+import { app, autoUpdater as nativeUpdater, powerMonitor } from "electron";
 import electronUpdater from "electron-updater";
 import type {
   DesktopUpdateChannel,
   DesktopUpdateState,
 } from "../shared/update.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 import {
   defaultDesktopUpdateChannel,
   UpdatePreferencesStore,

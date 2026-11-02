@@ -1,3 +1,8 @@
+vi.mock("./shell-ipc.js", async () => ({
+  shellIpcMain: (await import("electron")).ipcMain,
+  isRegisteredShellContents: () => true,
+}));
+
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,7 +24,15 @@ vi.mock("@lydell/node-pty", () => ({
 
 import type { ServerState } from "./ipc.js";
 import type { RemoteTerminalRequest } from "./remote-terminal.js";
-import { registerTerminalSupport } from "./terminal.js";
+import { registerTerminalSupport as registerTerminalSupportWithPolicy } from "./terminal.js";
+
+const registerTerminalSupport = (
+  ...args: Parameters<typeof registerTerminalSupportWithPolicy>
+) =>
+  registerTerminalSupportWithPolicy(args[0], args[1], args[2], {
+    canAccessProject: () => true,
+    profileFor: () => "profile",
+  });
 
 type Call = Parameters<RemoteTerminalRequest>[0];
 
@@ -103,7 +116,7 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
       );
 
       await handlers.get("catamorphic:terminal-write")?.(
-        {},
+        { sender },
         created.sessionId,
         "ls\r",
       );
@@ -203,7 +216,10 @@ describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
           chat: { sessionId: "chat-1", remote: true },
         },
       )) as { sessionId: string };
-      await handlers.get("catamorphic:terminal-kill")?.({}, created.sessionId);
+      await handlers.get("catamorphic:terminal-kill")?.(
+        { sender },
+        created.sessionId,
+      );
       await vi.waitFor(() =>
         expect(calls).toContainEqual({
           method: "DELETE",

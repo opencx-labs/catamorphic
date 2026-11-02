@@ -1,5 +1,7 @@
 import path from "node:path";
 import { BrowserWindow, type WebContents, WebContentsView } from "electron";
+import { shellDocumentUrl } from "./shell-document.js";
+import { registerShellContents } from "./shell-ipc.js";
 
 /** How long the sheet's exit takes before its view leaves the popup. */
 const EXIT_MS = 250;
@@ -74,7 +76,7 @@ export class PopupPasskeySheets {
         preload: path.join(import.meta.dirname, "../preload/index.cjs"),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     });
     view.setBackgroundColor("#00000000");
@@ -84,15 +86,23 @@ export class PopupPasskeySheets {
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     // The app's own page as the sheet surface, as the detached dock is: a
     // page of its own would re-chunk the workspace's bundle.
-    if (process.env.ELECTRON_RENDERER_URL)
-      void view.webContents.loadURL(
-        `${process.env.ELECTRON_RENDERER_URL}?surface=passkey`,
-      );
-    else
-      void view.webContents.loadFile(
-        path.join(import.meta.dirname, "../renderer/index.html"),
-        { query: { surface: "passkey" } },
-      );
+    const documentUrl = shellDocumentUrl({ query: { surface: "passkey" } });
+    registerShellContents({
+      contents: view.webContents,
+      documentUrl,
+      surface: "passkey-sheet",
+      channels: [
+        "catamorphic:theme-get",
+        "catamorphic:window-image",
+        "catamorphic:passkey-requests",
+        "catamorphic:passkey-cancel",
+        "catamorphic:passkey-use",
+        "catamorphic:passkey-save",
+        "catamorphic:authorization-status",
+        "catamorphic:authorization-continue-browser",
+      ],
+    });
+    void view.webContents.loadURL(documentUrl);
     const fit = () => {
       if (window.isDestroyed()) return;
       const { width, height } = window.getContentBounds();

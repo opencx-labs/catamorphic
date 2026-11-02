@@ -1,6 +1,6 @@
 # 0211 — The desktop's loopback API refuses web pages
 
-- **Status:** Accepted
+- **Status:** Accepted; iframe token scope refined by [0300](0300-electron-trust-boundaries.md)
 - **Date:** 2026-10-06
 - **Refines:** 0055, 0060, 0209
 
@@ -58,6 +58,7 @@ given the token by the main process. A preview opens from the app, never
 from another site's link, and cannot receive a cross-site form post, such
 as an identity provider's `form_post` callback.
 
-The token reaches every frame inside the app's windows, since they share
-its session: MCP App views and app frames could reach the API before this
-decision and still can. That remains a known limit.
+The original session-wide injector also authorized app and MCP iframes.
+[ADR 0300](0300-electron-trust-boundaries.md) closes that limit: only admitted
+shell main frames receive the token, and guest documents have separate,
+revocable document capabilities.

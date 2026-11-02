@@ -57,6 +57,7 @@ import {
   ExternalSessionImporter,
   externalSessionHomes,
 } from "../external-sessions.js";
+import { mcpAppViewUrl } from "../guest-documents.js";
 import {
   findImageBuilderCommand,
   imageBuilderEnvironment,
@@ -64,11 +65,8 @@ import {
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { localPerson } from "../local-person.js";
-import {
-  type McpAppsService,
-  mcpAppViewCsp,
-  mcpAppViewDocument,
-} from "../mcp-apps.js";
+import { McpAppViews } from "../mcp-app-view-authorization.js";
+import type { McpAppsService } from "../mcp-apps.js";
 import { desktopPersonalEnvironment } from "../personal-environment-host.js";
 import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
@@ -143,6 +141,8 @@ export interface EmbeddedServer {
    * so the API tells them from web pages; the main process adds it.
    */
   apiToken: string;
+  mcpAppViews?: McpAppViews;
+  mcpAppViewUrl: typeof mcpAppViewUrl;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
   /**
@@ -222,6 +222,7 @@ export async function startEmbeddedServer(
   mcpApps?: McpAppsService,
   incognitoSessions?: IncognitoSessionsStore,
   connectionProviders?: readonly ConnectionProvider[],
+  ownerProfile: (ownerId: number) => string | undefined = () => undefined,
 ): Promise<EmbeddedServer> {
   validateDatabaseFiles(paths.db);
   fs.mkdirSync(paths.db, { recursive: true });
@@ -563,7 +564,7 @@ export async function startEmbeddedServer(
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
-    if (agents.list().length === 0) {
+    if (agents.listMetadata().length === 0) {
       agents.create({ name: "Fake Agent", harness: "ai-sdk" });
       agents.create({ name: "Other Fake", harness: "ai-sdk" });
     }
@@ -765,6 +766,15 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  const mcpAppViews = mcpApps
+    ? new McpAppViews({
+        core: () => catamorphic.core,
+        agents: agentRegistry,
+        identity: desktopIdentity,
+        mcpApps,
+        ownerProfile,
+      })
+    : undefined;
   // A background command or a watch tells its chat's agent how it went
   // (ADR 0155): a task notification (ADR 0217) that reaches the agent's
   // turn while it works, or wakes it, and opens to its terminal.
@@ -1466,7 +1476,7 @@ export async function startEmbeddedServer(
     profiles: () =>
       profiles.list().profiles.map((profile) => {
         const config = profileConfig.forProfile(profile.id);
-        const agents = config.agents.list();
+        const agents = config.agents.listMetadata();
         const remoteLinks = config.remoteProjects.list();
         // The first agent of each tool whose "Sync chats from" switch is on.
         const importer = (harness: "claude-code" | "codex") =>
@@ -1558,7 +1568,12 @@ export async function startEmbeddedServer(
     if (refusal) return reply.status(403).send({ error: refusal });
   });
   await app.register(cors, {
-    origin: true,
+    origin: [
+      "work-internal://shell",
+      ...(!electronApp.isPackaged && process.env.ELECTRON_RENDERER_URL
+        ? [new URL(process.env.ELECTRON_RENDERER_URL).origin]
+        : []),
+    ],
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
   // The desktop is a single-user host: every request is the one local user,
@@ -1576,21 +1591,6 @@ export async function startEmbeddedServer(
   // MCP Apps view documents, served (not srcdoc'd) so each carries its own
   // CSP instead of inheriting the shell's, which would block inline scripts.
   if (mcpApps) {
-    app.get("/desktop/mcp-app-view", async (request, reply) => {
-      const { profileId, toolKey } = request.query as {
-        profileId?: string;
-        toolKey?: string;
-      };
-      if (!profileId || !toolKey) {
-        return reply.status(400).send({ error: "Missing profileId/toolKey" });
-      }
-      const view = await mcpApps.view(profileId, toolKey);
-      return reply
-        .header("content-type", "text/html; charset=utf-8")
-        .header("content-security-policy", mcpAppViewCsp(view))
-        .header("cache-control", "no-store")
-        .send(mcpAppViewDocument(view));
-    });
     registerConnectorMcpRoute(app, {
       core: () => catamorphic.core,
       agents: agentRegistry,
@@ -1753,6 +1753,7 @@ export async function startEmbeddedServer(
 
   const shutdown = () => {
     shutdownDone ??= (async () => {
+      mcpAppViews?.dispose();
       await clientRunners.stop();
       personalEnvironment.stop();
       clearInterval(remoteSyncTimer);
@@ -1799,6 +1800,8 @@ export async function startEmbeddedServer(
   return {
     url,
     apiToken,
+    mcpAppViews,
+    mcpAppViewUrl,
     clientRunners,
     catamorphic,
     github,

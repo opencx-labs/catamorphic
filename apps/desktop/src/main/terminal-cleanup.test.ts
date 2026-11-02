@@ -1,3 +1,8 @@
+vi.mock("./shell-ipc.js", async () => ({
+  shellIpcMain: (await import("electron")).ipcMain,
+  isRegisteredShellContents: () => true,
+}));
+
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
@@ -35,7 +40,15 @@ vi.mock("@lydell/node-pty", () => ({
   },
 }));
 
-import { registerTerminalSupport } from "./terminal.js";
+import { registerTerminalSupport as registerTerminalSupportWithPolicy } from "./terminal.js";
+
+const registerTerminalSupport = (
+  ...args: Parameters<typeof registerTerminalSupportWithPolicy>
+) =>
+  registerTerminalSupportWithPolicy(args[0], args[1], args[2], {
+    canAccessProject: () => true,
+    profileFor: () => "profile",
+  });
 
 describe("terminal sender cleanup", () => {
   it("removes window-destroyed listeners when terminals close", async () => {
@@ -53,7 +66,10 @@ describe("terminal sender cleanup", () => {
           { sender },
           {},
         )) as { sessionId: string };
-        handlers.get("catamorphic:terminal-kill")?.({}, created.sessionId);
+        handlers.get("catamorphic:terminal-kill")?.(
+          { sender },
+          created.sessionId,
+        );
         expect(sender.listenerCount("destroyed")).toBe(0);
       }
       expect(terminals.hasActiveWork()).toBe(false);

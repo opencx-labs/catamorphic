@@ -4,7 +4,10 @@ import path from "node:path";
 import type { CredentialRef, CredentialVault } from "@catamorphic/core";
 import { safeStorage } from "electron";
 import { z } from "zod";
-import { credentialEncryptionAvailable } from "./credential-encryption.js";
+import {
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 
 const VaultFileSchema = z.strictObject({
   version: z.literal(1),
@@ -44,13 +47,16 @@ export class DesktopCredentialVault implements CredentialVault {
     ref: CredentialRef;
     use: (material: Uint8Array) => Promise<T> | T;
   }): Promise<T> {
-    if (!credentialEncryptionAvailable())
-      throw new Error("OS credential encryption is unavailable");
+    requireCredentialEncryption();
     const ciphertext = this.data.records[key(args.tenantId, args.ref)];
     if (!ciphertext) throw new Error("Credential not found");
-    const material = safeStorage.decryptString(
-      Buffer.from(ciphertext, "base64"),
-    );
+    const material = (() => {
+      try {
+        return safeStorage.decryptString(Buffer.from(ciphertext, "base64"));
+      } catch (cause) {
+        throw credentialUnlockError({ cause });
+      }
+    })();
     const bytes = Buffer.from(material, "base64");
     try {
       return await args.use(bytes);
@@ -69,9 +75,7 @@ export class DesktopCredentialVault implements CredentialVault {
     ref: CredentialRef,
     material: Uint8Array,
   ): void {
-    if (!credentialEncryptionAvailable()) {
-      throw new Error("OS credential encryption is unavailable");
-    }
+    requireCredentialEncryption();
     this.data.records[key(tenantId, ref)] = safeStorage
       .encryptString(Buffer.from(material).toString("base64"))
       .toString("base64");

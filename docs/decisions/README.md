@@ -305,3 +305,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0297](0297-voice-capture-follows-listening-intent.md) | Voice capture follows listening intent | Accepted (amends 0236, 0268) |
 | [0298](0298-provider-retries-are-turn-state.md) | Provider retries are turn state | Accepted (extends 0197, 0198) |
 | [0299](0299-expanded-steps-share-the-timeline-window.md) | Expanded steps share the timeline window | Accepted |
+| [0300](0300-electron-trust-boundaries.md) | Electron trust belongs to native-created documents | Accepted (refines 0079, 0211, 0220, 0277) |

@@ -674,6 +674,11 @@ function AgentsSection({
                     </>
                   )}
                 </div>
+                {agent.credentialError && (
+                  <p role="alert" className="mt-2 text-[11px] text-danger">
+                    {agent.credentialError}
+                  </p>
+                )}
                 {agent.auth === "account" && !connected && (
                   <div className="mt-2 flex flex-col gap-1.5">
                     {ui.command ? (

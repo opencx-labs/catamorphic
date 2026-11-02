@@ -1,17 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  app,
-  BrowserWindow,
-  ipcMain,
-  type NativeImage,
-  nativeImage,
-} from "electron";
+import { app, BrowserWindow, type NativeImage, nativeImage } from "electron";
 import {
   type DockIconState,
   MAX_DOCK_ICON_BYTES,
 } from "../shared/dock-icon.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
 const IMAGE_ERROR = "Choose a PNG or JPEG image up to 10 MB.";
 const DIMENSION_ERROR =

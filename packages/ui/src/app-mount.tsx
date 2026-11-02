@@ -66,6 +66,8 @@ export interface AppMountProps {
   viewportHeight?: number | "fill";
   /** Reload only when a newer successful build is available. */
   refreshIntervalMs?: number;
+  /** Hosts may serve untrusted documents on a separate, unprivileged origin. */
+  resolveGuestDocument?: (input: { url: string }) => Promise<string>;
 }
 
 interface ViewStateReady {
@@ -86,7 +88,8 @@ type ViewState =
  * Mounts a published app in a sandboxed iframe and brokers its workflow
  * calls.
  *
- * Isolation model: the iframe navigates to the API's served guest document
+ * Isolation model: the iframe navigates to the served guest document
+ * (or its host-owned resolveGuestDocument capability)
  * (never `srcdoc` — a local-scheme document inherits the host shell's CSP,
  * which can block the bundle's inline script outright) with
  * `sandbox="allow-scripts"` and **no** `allow-same-origin` — an opaque
@@ -106,6 +109,7 @@ export function AppMount({
   renderState,
   channel,
   theme: themeProp,
+  resolveGuestDocument,
   className,
   display: displayProp = { mode: "full", visible: true },
   viewportHeight,
@@ -206,10 +210,14 @@ export function AppMount({
         if (cancelled) return;
         const data = response.data;
         if (data?.state === "ready") {
+          const guestUrl = resolveGuestDocument
+            ? await resolveGuestDocument({ url: data.guestUrl })
+            : data.guestUrl;
+          if (cancelled) return;
           setView((current) =>
             current.state === "ready" && current.versionId === data.versionId
               ? current
-              : data,
+              : { ...data, guestUrl },
           );
         } else {
           setView({
@@ -239,6 +247,7 @@ export function AppMount({
     channel,
     refreshIntervalMs,
     display.visible,
+    resolveGuestDocument,
   ]);
 
   const handleGuestMessage = useCallback(

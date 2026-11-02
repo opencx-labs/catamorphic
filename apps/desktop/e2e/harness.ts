@@ -416,7 +416,13 @@ async function connectCdp(
         (response) => response.json(),
       )) as { type: string; url: string; webSocketDebuggerUrl: string }[];
       // The app window is the only "page" target that isn't a webview guest.
-      const page = targets.find((target) => target.type === "page");
+      const page = targets.find(
+        (target) =>
+          target.type === "page" &&
+          (target.url.startsWith("work-internal://shell/index.html") ||
+            (target.url.startsWith("file:") &&
+              target.url.includes("/index.html"))),
+      );
       if (page) {
         const ws = new WebSocket(page.webSocketDebuggerUrl);
         await new Promise<void>((resolve, reject) => {

@@ -4,7 +4,6 @@ import {
   autoUpdater,
   BrowserWindow,
   dialog,
-  ipcMain,
   screen,
   type WebContents,
 } from "electron";
@@ -20,6 +19,7 @@ import type {
   WorkspaceInitial,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
+import { SHELL_WINDOW_CLOSE_CHANNEL } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
   type DockRegion,
@@ -33,6 +33,7 @@ import { dockClicks } from "./dock-clicks.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { popupNativeMenu } from "./native-menu.js";
 import type { ProfileConfigManager } from "./profile-config.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 import type { WindowStateStore, WorkspaceWindowState } from "./window-state.js";
 
 const dockShapeSchema = z
@@ -152,6 +153,17 @@ export class DesktopWorkspaces {
       onReleased?: (projectId: string, from: WebContents) => void;
     },
   ) {
+    ipcMain.on(SHELL_WINDOW_CLOSE_CHANNEL, (event) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (
+        !window ||
+        window.webContents !== event.sender ||
+        (!this.isWorkspace(window) && !this.isDock(window))
+      )
+        return;
+      // The native close event owns hiding retained work and returning the dock.
+      window.close();
+    });
     app.on("before-quit", (event) => {
       if (this.quitting) return;
       event.preventDefault();
@@ -188,6 +200,7 @@ export class DesktopWorkspaces {
     // included, means it did not.
     let leftApp: ReturnType<typeof setTimeout> | undefined;
     app.on("browser-window-focus", (_event, window) => {
+      if (!this.isWorkspace(window) && !this.isDock(window)) return;
       clearTimeout(leftApp);
       this.focusLeftApp = false;
       const profileId = options.windows.profileFor(window.webContents);
@@ -889,9 +902,10 @@ export class DesktopWorkspaces {
   target(projectId?: string): WebContents | undefined {
     if (projectId) return this.owner(projectId);
     const focused = BrowserWindow.getFocusedWindow();
-    const profileId = focused
-      ? this.options.windows.profileFor(focused.webContents)
-      : [...this.lastWindows.keys()].at(-1);
+    const profileId =
+      focused && (this.isWorkspace(focused) || this.isDock(focused))
+        ? this.options.windows.profileFor(focused.webContents)
+        : [...this.lastWindows.keys()].at(-1);
     const dock = profileId ? this.floating.get(profileId) : undefined;
     if (dock && profileId && this.detached(profileId)) return dock.webContents;
     return (profileId ? this.lastWindows.get(profileId) : undefined)

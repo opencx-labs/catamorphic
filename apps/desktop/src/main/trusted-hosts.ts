@@ -1,4 +1,4 @@
-import { ipcMain, type WebContents } from "electron";
+import type { WebContents } from "electron";
 import { z } from "zod";
 import {
   DEFAULT_TRUSTED_HOSTS,
@@ -7,6 +7,7 @@ import {
 } from "../shared/trusted-hosts.js";
 import type { CodeApprovals } from "./code-approvals.js";
 import { projectTrustedHosts } from "./project-manifest.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
 /** Where the person's own trusted hosts live in their approvals. */
 const SUBJECT = "trusted-hosts";

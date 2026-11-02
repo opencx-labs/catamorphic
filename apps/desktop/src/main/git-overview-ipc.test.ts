@@ -1,3 +1,8 @@
+vi.mock("./shell-ipc.js", async () => ({
+  shellIpcMain: (await import("electron")).ipcMain,
+  isRegisteredShellContents: () => true,
+}));
+
 import { EventEmitter } from "node:events";
 import { app, ipcMain } from "electron";
 import { beforeEach, expect, it, vi } from "vitest";

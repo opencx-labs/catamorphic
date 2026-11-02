@@ -13,8 +13,12 @@ import { httpDocumentsClient } from "./remote-sync.js";
  * 0199).
  */
 export function desktopPersonalEnvironment(deps: {
-  profiles: ProfilesStore;
-  profileConfig: ProfileConfigManager;
+  profiles: Pick<ProfilesStore, "list">;
+  profileConfig: {
+    forProfile(
+      profileId: string,
+    ): Pick<ReturnType<ProfileConfigManager["forProfile"]>, "remoteProjects">;
+  };
   projectRoot: (projectId: string) => Promise<string | null>;
 }): PersonalEnvironmentSync {
   const links = (): PersonalEnvironmentLink[] =>
@@ -24,7 +28,7 @@ export function desktopPersonalEnvironment(deps: {
         profileId: profile.id,
         localProjectId,
         serverUrl: link.serverUrl,
-        client: store.inspect(localProjectId)?.credentials
+        client: store.hasCredentials(localProjectId)
           ? httpDocumentsClient({
               serverUrl: link.serverUrl,
               projectId: link.remoteProjectId,

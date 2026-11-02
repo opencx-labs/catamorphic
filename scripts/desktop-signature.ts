@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 type Execute = (command: string, args: string[]) => string;
@@ -34,13 +35,63 @@ const HELPERS = [
   },
 ] as const;
 
+// Electron's V1 wire schema: https://www.electronjs.org/docs/latest/tutorial/fuses
+const FUSE_SENTINEL = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
+const RELEASE_FUSES = [
+  { name: "runAsNode", index: 0, enabled: false },
+  { name: "enableCookieEncryption", index: 1, enabled: true },
+  { name: "enableNodeOptionsEnvironmentVariable", index: 2, enabled: false },
+  { name: "enableNodeCliInspectArguments", index: 3, enabled: false },
+  { name: "enableEmbeddedAsarIntegrityValidation", index: 4, enabled: true },
+  { name: "onlyLoadAppFromAsar", index: 5, enabled: true },
+  { name: "grantFileProtocolExtraPrivileges", index: 7, enabled: false },
+] as const;
+
+/** Inspect every binary slice; a config file alone does not prove packaged fuses. */
+export function verifyDesktopFuses({
+  binary,
+}: {
+  binary: Buffer;
+}): Record<string, boolean> {
+  let position = binary.indexOf(FUSE_SENTINEL);
+  let slices = 0;
+  if (position < 0) throw new Error("Packaged Electron fuse wire is missing");
+  while (position >= 0) {
+    slices += 1;
+    if (slices > 2)
+      throw new Error("Unexpected number of packaged Electron fuse wires");
+    const start = position + FUSE_SENTINEL.length;
+    const version = binary[start];
+    const length = binary[start + 1];
+    if (
+      version !== 1 ||
+      length === undefined ||
+      length < 8 ||
+      start + 2 + length > binary.length
+    )
+      throw new Error("Invalid packaged Electron V1 fuse wire");
+    for (const fuse of RELEASE_FUSES) {
+      if (binary[start + 2 + fuse.index] !== (fuse.enabled ? 0x31 : 0x30))
+        throw new Error(
+          `Packaged Electron fuse ${fuse.name} must be ${fuse.enabled ? "enabled" : "disabled"}`,
+        );
+    }
+    position = binary.indexOf(FUSE_SENTINEL, start + 2 + length);
+  }
+  return Object.fromEntries(
+    RELEASE_FUSES.map((fuse) => [fuse.name, fuse.enabled]),
+  );
+}
+
 /** Verify the actual release signatures, never the ad-hoc repository prebuild. */
 export function verifyDesktopSignature({
   appPath,
   run = execute,
+  readBinary = readFileSync,
 }: {
   appPath: string;
   run?: Execute;
+  readBinary?: (file: string) => Buffer;
 }) {
   const team = (file: string) => {
     run("codesign", ["--verify", "--deep", "--strict", file]);
@@ -51,6 +102,14 @@ export function verifyDesktopSignature({
     return teamId;
   };
   const teamId = team(appPath);
+  const fuses = verifyDesktopFuses({
+    binary: readBinary(
+      path.join(
+        appPath,
+        "Contents/Frameworks/Electron Framework.framework/Electron Framework",
+      ),
+    ),
+  });
   const protocols: Record<string, string> = {};
   for (const helper of HELPERS) {
     const helperPath = path.join(appPath, "Contents/MacOS", helper.file);
@@ -62,7 +121,7 @@ export function verifyDesktopSignature({
       throw new Error(`${helper.name} has an unsupported protocol`);
     protocols[helper.file] = protocol;
   }
-  return { teamId, protocols, architectures: ["arm64", "x86_64"] };
+  return { teamId, protocols, architectures: ["arm64", "x86_64"], fuses };
 }
 
 if (import.meta.main) {

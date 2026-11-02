@@ -12,6 +12,7 @@ and `agent-sidebar-widget-entry.tsx` supplies its test mount.
 
 `sidebar-contributions.e2e.ts` runs both in the actual Electron host, creates real
 session records, verifies context changes and menus, and executes advertised
-collection actions across the sandbox bridge. The widget is compiled from source;
-only the app view-state lookup is intercepted to serve that built fixture. This
-test covers customization and the host bridge, not the app deployment pipeline.
+collection actions across the sandbox bridge. The widget is compiled from source
+and published through a real project preview build. Its document uses the host's
+normal guest admission and isolated origin. This test covers customization and
+the host bridge; the dedicated app suite covers deployment behavior in depth.

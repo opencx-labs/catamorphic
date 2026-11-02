@@ -6,6 +6,15 @@ directories:
   buildResources: build
   output: release
 afterPack: ./scripts/after-pack.mjs
+# These bits are changed before signing and checked in the actual release binary.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
 files:
   - out/**
   - package.json

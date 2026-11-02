@@ -7659,6 +7659,8 @@ export function App({
                             />
                           ) : tab.kind === "mcpapp" ? (
                             <McpAppScreen
+                              context={tab.context}
+                              toolUseId={tab.name}
                               toolKey={tab.toolKey}
                               toolInput={tab.toolInput}
                               toolResult={tab.toolResult}
@@ -8224,6 +8226,7 @@ export function App({
                       onOpenSurface={openSurface}
                       onRemoveSurface={removeSurface}
                       onOpenMcpApp={(view, mode) => {
+                        if (!entry.sessionId) return;
                         const name = view.toolUseId;
                         openTab(
                           {
@@ -8231,6 +8234,7 @@ export function App({
                             name,
                             label: view.title,
                             toolKey: view.toolKey,
+                            context: { projectId, sessionId: entry.sessionId },
                             toolInput: view.toolInput,
                             toolResult: view.toolResult,
                           },

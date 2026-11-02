@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { SESSION_METADATA_LIMITS } from "@catamorphic/agent-protocol";
-import { app, ipcMain } from "electron";
+import { app } from "electron";
 import { z } from "zod";
 import {
   accessBeyond,
@@ -30,6 +30,7 @@ import { describeModuleAccess, readModuleAccess } from "./module-access.js";
 import { launchConfinedModule } from "./module-sandbox.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
 
 const identity = z.object({
