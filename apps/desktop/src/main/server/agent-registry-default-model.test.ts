@@ -38,7 +38,17 @@ function registryWith(configs: Partial<AgentConfig>[]) {
     profileConfig: {
       forProfile: () => ({
         agents: {
-          list: () => configs,
+          listMetadata: () =>
+            configs.map(({ apiKey, ...config }) => ({
+              ...config,
+              hasApiKey: !!apiKey,
+            })),
+          getMetadata: (id: string) => {
+            const config = configs.find((entry) => entry.id === id);
+            if (!config) return undefined;
+            const { apiKey, ...metadata } = config;
+            return { ...metadata, hasApiKey: !!apiKey };
+          },
           get: (id: string) => configs.find((config) => config.id === id),
         },
         connections: { list: () => [] },

@@ -3,6 +3,7 @@ import {
   type Event as ElectronEvent,
   type Input,
   type WebContents,
+  type WebFrameMain,
   webContents,
 } from "electron";
 import { matchesShortcut, parseBinding } from "../../shared/keybindings.js";
@@ -21,7 +22,7 @@ export function listenForVoiceKeys(deps: {
   keysFor(contents: WebContents): {
     profileId: string;
     shortcuts: Partial<Record<VoiceAction, string>>;
-  };
+  } | null;
   down(profileId: string, action: VoiceAction, contents: WebContents): void;
   up(action: VoiceAction): void;
 }): () => void {
@@ -40,9 +41,9 @@ export function listenForVoiceKeys(deps: {
         return;
       }
       if (input.type !== "keyDown" || input.isAutoRepeat || held) return;
-      const { profileId, shortcuts } = deps.keysFor(
-        contents.hostWebContents ?? contents,
-      );
+      const keys = deps.keysFor(contents);
+      if (!keys) return;
+      const { profileId, shortcuts } = keys;
       for (const action of VOICE_ACTIONS) {
         const binding = shortcuts[action];
         if (
@@ -76,6 +77,73 @@ export function listenForVoiceKeys(deps: {
       if (!contents.isDestroyed()) contents.off("before-input-event", listener);
     listening.clear();
   };
+}
+
+/** Read-only profile lookup never grants a browsing window shell authority. */
+export function profileForVoiceContents({
+  contents,
+  shellProfileFor,
+  browserProfileFor,
+}: {
+  contents: WebContents;
+  shellProfileFor: (contents: WebContents) => string | undefined;
+  browserProfileFor?: (contents: WebContents) => string | undefined;
+}): string | undefined {
+  if (contents.isDestroyed()) return undefined;
+  try {
+    const profileId = shellProfileFor(contents);
+    if (profileId) return profileId;
+  } catch {
+    // The strict shell registry rejects popups and unknown contents.
+  }
+  return browserProfileFor?.(contents);
+}
+
+/** Native guest voice messages belong to a live frame in a known profile. */
+export function voiceFrameContext({
+  event,
+  profileFor,
+}: {
+  event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent;
+  profileFor: (contents: WebContents) => string | undefined;
+}): { frame: WebFrameMain; profileId: string } | null {
+  if (event.sender.isDestroyed()) return null;
+  const frame = event.senderFrame;
+  if (
+    !frame ||
+    frame.detached ||
+    frame.isDestroyed() ||
+    frame.top !== event.sender.mainFrame
+  )
+    return null;
+  const profileId = profileFor(event.sender);
+  return profileId ? { frame, profileId } : null;
+}
+
+export interface VoiceShortcutChat {
+  profileId: string;
+  projectId: string;
+  sessionId: string;
+}
+
+/** Both a window's current chat and its fallback must still belong to this profile. */
+export function chatForVoiceShortcut({
+  profileId,
+  frontChat,
+  lastChat,
+  profileForProject,
+}: {
+  profileId: string;
+  frontChat: VoiceShortcutChat | undefined;
+  lastChat: VoiceShortcutChat | undefined;
+  profileForProject: (projectId: string) => string;
+}): { projectId: string; sessionId: string } | undefined {
+  for (const chat of [frontChat, lastChat]) {
+    if (!chat || chat.profileId !== profileId) continue;
+    if (profileForProject(chat.projectId) === profileId)
+      return { projectId: chat.projectId, sessionId: chat.sessionId };
+  }
+  return undefined;
 }
 
 /** An Electron key event as the keybinding matcher reads it. */

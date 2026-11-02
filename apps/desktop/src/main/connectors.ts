@@ -22,6 +22,7 @@ import type {
   PublicMcpConnection,
 } from "./connections-store.js";
 import { toAgentMcpServer, toPublicConnection } from "./connections-store.js";
+import { CredentialStorageError } from "./credential-encryption.js";
 
 /**
  * Connectors: the user-facing install layer over two open ecosystems —
@@ -570,10 +571,31 @@ export class ConnectorsService {
     const store = this.deps.connectionsFor(profileId);
     const connection = store.get(connectionId);
     if (!connection) return { ok: false, error: "Connection not found" };
+    if (connection.credentialError)
+      return {
+        ok: false,
+        error: connection.credentialError,
+        ...(connection.oauthRecoveryRequired &&
+        connection.transport !== "stdio" &&
+        connection.url
+          ? { needsAuth: true }
+          : {}),
+      };
     // Tokens near expiry get refreshed first, so a probe never fails on a
     // token the refresher would have renewed a minute later.
     await this.refreshConnectionTokens(store, connection).catch(() => {});
-    const config = toAgentMcpServer(store.get(connectionId) ?? connection);
+    const current = store.get(connectionId);
+    if (current?.credentialError)
+      return {
+        ok: false,
+        error: current.credentialError,
+        ...(current.oauthRecoveryRequired &&
+        current.transport !== "stdio" &&
+        current.url
+          ? { needsAuth: true }
+          : {}),
+      };
+    const config = current ? toAgentMcpServer(current) : undefined;
     if (!config) return { ok: false, error: "Connection is incomplete" };
     const probe = await probeMcpServer(config);
     // A successful probe refreshes the cached roster the permission editor
@@ -610,11 +632,15 @@ export class ConnectorsService {
     },
   ): Promise<{ toolCount: number }> {
     const store = this.deps.connectionsFor(profileId);
-    const connection = store.get(connectionId);
+    const connection = store.getForAuthorization(connectionId);
     if (!connection) throw new Error("Connection not found");
+    if (connection.credentialError)
+      throw new CredentialStorageError(connection.credentialError);
     if (connection.transport === "stdio" || !connection.url) {
       throw new Error("Only remote connections can be authorized");
     }
+    const oauthStore = oauthStoreFor(store, connectionId);
+    if (connection.oauthRecoveryRequired) oauthStore.save({});
     const config: AgentMcpServerConfig = {
       transport: connection.transport,
       url: connection.url,
@@ -622,11 +648,12 @@ export class ConnectorsService {
     };
     const client = connection.oauthClient;
     const result = await authorizeMcpServer(config, {
-      store: oauthStoreFor(store, connectionId),
+      store: oauthStore,
       openUrl: opts.openUrl,
       onCallbackServed: opts.onCallbackServed,
       ...(client ? { client } : {}),
     });
+    oauthStore.load();
     return { toolCount: result.toolCount };
   }
 
@@ -635,6 +662,8 @@ export class ConnectorsService {
     store: ConnectionsStore,
     connection: McpConnection,
   ): Promise<void> {
+    if (connection.credentialError)
+      throw new CredentialStorageError(connection.credentialError);
     if (!connection.oauth?.tokens || !connection.url) return;
     if (connection.transport === "stdio") return;
     await refreshMcpTokens(
@@ -643,7 +672,7 @@ export class ConnectorsService {
         url: connection.url,
         ...(connection.headers ? { headers: connection.headers } : {}),
       },
-      oauthStoreFor(store, connection.id),
+      oauthStoreFor(store, connection.id, { refresh: true }),
     );
   }
 
@@ -681,10 +710,39 @@ export type ConnectionProbeResult = McpConnectionProbe & {
 function oauthStoreFor(
   store: ConnectionsStore,
   connectionId: string,
+  options: { refresh?: boolean } = {},
 ): McpOAuthStore {
+  let revision = store.securityRevision(connectionId);
+  const assertCurrent = () => {
+    if (store.securityRevision(connectionId) !== revision)
+      throw new Error(
+        options.refresh
+          ? "The connection authorization changed during token renewal"
+          : "The connection authorization changed during authorization",
+      );
+  };
   return {
-    load: () => store.get(connectionId)?.oauth ?? {},
-    save: (state) => store.setOAuth(connectionId, state),
+    load: () => {
+      assertCurrent();
+      const connection = store.get(connectionId);
+      if (connection?.credentialError)
+        throw new CredentialStorageError(connection.credentialError);
+      return connection?.oauth ?? {};
+    },
+    save: (state) => {
+      assertCurrent();
+      const writtenRevision = store.setOAuth(
+        connectionId,
+        state,
+        options.refresh
+          ? { refresh: true, securityRevision: revision }
+          : { securityRevision: revision },
+      );
+      if (writtenRevision === undefined)
+        throw new Error("Connection not found");
+      revision = writtenRevision;
+      assertCurrent();
+    },
   };
 }
 

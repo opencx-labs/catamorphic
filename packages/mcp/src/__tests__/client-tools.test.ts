@@ -30,6 +30,7 @@ const LOOKUP = {
   annotations: { readOnlyHint: true },
 };
 
+let roster = [LOOKUP];
 let server: http.Server;
 let url = "";
 
@@ -43,7 +44,7 @@ beforeAll(async () => {
       { capabilities: { tools: {} } },
     );
     mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [LOOKUP],
+      tools: roster,
     }));
     mcp.setRequestHandler(CallToolRequestSchema, async () => ({
       content: [{ type: "text", text: '{"name":"Ada","born":1815}' }],
@@ -93,6 +94,35 @@ describe("MCP tools as their server declared them (ADR 0225)", () => {
         structuredContent: { name: "Ada", born: 1815 },
       });
     } finally {
+      await connected.close();
+    }
+  });
+
+  it("refreshes removed tools and changed schemas on the existing connection", async () => {
+    const connected = await connectMcpServer({ transport: "http", url });
+    try {
+      expect(connected.tools).toHaveLength(1);
+      roster = [];
+      expect(await connected.refreshTools?.()).toEqual([]);
+      expect(connected.tools).toEqual([]);
+      roster = [
+        {
+          ...LOOKUP,
+          inputSchema: { ...LOOKUP.inputSchema, required: ["updated"] },
+          annotations: { readOnlyHint: false },
+        },
+      ];
+      expect(await connected.refreshTools?.()).toMatchObject([
+        {
+          inputSchema: { required: ["updated"] },
+          annotations: { readOnlyHint: false },
+        },
+      ]);
+      expect(connected.tools).toMatchObject([
+        { inputSchema: { required: ["updated"] } },
+      ]);
+    } finally {
+      roster = [LOOKUP];
       await connected.close();
     }
   });

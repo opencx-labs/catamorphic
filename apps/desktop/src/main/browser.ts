@@ -114,6 +114,7 @@ import {
 import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
 import { registerCodeApprovals } from "./code-approvals.js";
+import { credentialEncryptionAvailableAsync } from "./credential-encryption.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import { isLoopback } from "./egress-proxy.js";
 import { ExtensionsHost } from "./extensions/host.js";
@@ -135,6 +136,7 @@ import { generateStrongPassword } from "./password-generator.js";
 import { PopupPasskeySheets } from "./popup-passkey-sheets.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
+import { isRegisteredShellContents, shellIpcMain } from "./shell-ipc.js";
 import { registerSidebarSources } from "./sidebar-source-ipc.js";
 import { SiteIcons } from "./site-icons.js";
 import {
@@ -223,6 +225,7 @@ function requestAttention(
 // it, and a failed prepare is retried on the next call instead of being
 // permanently marked done while half-applied.
 const preparedSessions = new Map<string, Promise<void>>();
+const readySessions = new Set<string>();
 
 /**
  * Site permissions (ADR 0150) are decided by the store and prompt broker
@@ -330,7 +333,9 @@ function prepareProfileSession(profileId: string): Promise<void> {
   const partition = partitionFor(profileId);
   const existing = preparedSessions.get(partition);
   if (existing) return existing;
-  const prepare = doPrepareProfileSession(partition, profileId);
+  const prepare = doPrepareProfileSession(partition, profileId).then(() => {
+    readySessions.add(partition);
+  });
   preparedSessions.set(partition, prepare);
   prepare.catch(() => preparedSessions.delete(partition));
   return prepare;
@@ -399,6 +404,8 @@ async function doPrepareProfileSession(
 
 export interface BrowserSupport {
   history: HistoryStore;
+  /** Read-only ownership of a prepared browsing session, without shell authority. */
+  profileOf: (contents: WebContents) => string | undefined;
   /** Every image the window shows from outside it (ADR 0277). */
   images: WindowImages;
   dispose: () => void;
@@ -435,7 +442,7 @@ export function registerBrowserSupport(
     profileFor: (sender) => windows.profileFor(sender),
     keyring: {
       // Never the synchronous check: it blocks main on a keychain prompt.
-      available: () => safeStorage.isAsyncEncryptionAvailable(),
+      available: () => credentialEncryptionAvailableAsync(),
       encrypt: (text) => safeStorage.encryptStringAsync(text),
       decrypt: async (data) =>
         (await safeStorage.decryptStringAsync(data)).result,
@@ -477,6 +484,21 @@ export function registerBrowserSupport(
   // whatever became of the tab that opened it.
   const browsingProfileOf = (contents: WebContents) =>
     extensionsHost?.profileOfSession(contents.session) ?? undefined;
+  const profileOf = (contents: WebContents): string | undefined => {
+    if (contents.isDestroyed()) return undefined;
+    const profileId = browsingProfileOf(contents);
+    if (!profileId || !profiles.get(profileId)) return undefined;
+    const host = contents.hostWebContents;
+    if (host) {
+      if (!isRegisteredShellContents(host)) return undefined;
+      try {
+        if (windows.profileFor(host) !== profileId) return undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return profileId;
+  };
   const popupSheets = new PopupPasskeySheets({
     attach: (sheet, popup) => {
       const profileId = browsingProfileOf(popup);
@@ -519,9 +541,9 @@ export function registerBrowserSupport(
     fetch: (url, init) =>
       imageSession.fetch(url, { ...init, credentials: "omit" }),
   });
-  ipcMain.handle("catamorphic:window-image", (event, raw: unknown) => {
-    // Work's own windows only: a page in a tab has its own network.
-    if (event.sender.getType() !== "window") return null;
+  shellIpcMain.handle("catamorphic:window-image", (event, raw: unknown) => {
+    // Registered Work surfaces, including a passkey sheet's native view.
+    // Browsing pages never receive this channel's shell grant.
     const request = windowImageRequestSchema.safeParse(raw);
     return request.success
       ? images.image(windows.profileFor(event.sender), request.data)
@@ -569,35 +591,57 @@ export function registerBrowserSupport(
     downloads.attach(profileId, item, host);
   };
   const downloadInput = z.object({ id: z.string().min(1) });
-  ipcMain.handle("catamorphic:downloads-list", (event) =>
+  shellIpcMain.handle("catamorphic:downloads-list", (event) =>
     downloads.list(windows.profileFor(event.sender)),
   );
-  ipcMain.handle("catamorphic:downloads-reveal", (event, input: unknown) => {
+  shellIpcMain.handle(
+    "catamorphic:downloads-reveal",
+    (event, input: unknown) => {
+      const { id } = downloadInput.parse(input);
+      const record = downloads.store.get(windows.profileFor(event.sender), id);
+      if (!record) return;
+      if (fs.existsSync(record.savePath))
+        shell.showItemInFolder(record.savePath);
+      else void shell.openPath(path.dirname(record.savePath));
+    },
+  );
+  const ownDownload = (event: Electron.IpcMainInvokeEvent, input: unknown) => {
     const { id } = downloadInput.parse(input);
     const record = downloads.store.get(windows.profileFor(event.sender), id);
-    if (!record) return;
-    if (fs.existsSync(record.savePath)) shell.showItemInFolder(record.savePath);
-    else void shell.openPath(path.dirname(record.savePath));
-  });
-  ipcMain.handle("catamorphic:downloads-pause", (_event, input: unknown) => {
-    downloads.pause(downloadInput.parse(input).id);
-  });
-  ipcMain.handle("catamorphic:downloads-resume", (_event, input: unknown) => {
-    downloads.resume(downloadInput.parse(input).id);
-  });
-  ipcMain.handle("catamorphic:downloads-cancel", (_event, input: unknown) => {
-    downloads.cancel(downloadInput.parse(input).id);
-  });
-  ipcMain.handle("catamorphic:downloads-remove", (event, input: unknown) => {
-    downloads.remove(
-      windows.profileFor(event.sender),
-      downloadInput.parse(input).id,
-    );
-  });
-  ipcMain.handle("catamorphic:downloads-clear", (event) => {
+    if (!record) throw new Error("This download belongs to another profile.");
+    return id;
+  };
+  shellIpcMain.handle(
+    "catamorphic:downloads-pause",
+    (event, input: unknown) => {
+      downloads.pause(ownDownload(event, input));
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:downloads-resume",
+    (event, input: unknown) => {
+      downloads.resume(ownDownload(event, input));
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:downloads-cancel",
+    (event, input: unknown) => {
+      downloads.cancel(ownDownload(event, input));
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:downloads-remove",
+    (event, input: unknown) => {
+      downloads.remove(
+        windows.profileFor(event.sender),
+        downloadInput.parse(input).id,
+      );
+    },
+  );
+  shellIpcMain.handle("catamorphic:downloads-clear", (event) => {
     downloads.clearFinished(windows.profileFor(event.sender));
   });
-  ipcMain.handle("catamorphic:downloads-open-folder", () => {
+  shellIpcMain.handle("catamorphic:downloads-open-folder", () => {
     const dir =
       process.env.CATAMORPHIC_DOWNLOADS_DIR || app.getPath("downloads");
     fs.mkdirSync(dir, { recursive: true });
@@ -611,6 +655,7 @@ export function registerBrowserSupport(
     siteSettings.releaseProfile(profileId);
     extensions.releaseProfile(profileId);
     preparedSessions.delete(partitionFor(profileId));
+    readySessions.delete(partitionFor(profileId));
   });
   const bookmarks = profileConfig.bookmarks;
   // Each profile's keybindings, read once and kept current: pages and
@@ -790,11 +835,43 @@ export function registerBrowserSupport(
     // asks through Work's dialogs too (ADR 0227) and reports its logins.
     // Suggestions and filling stay in the top frame. Extension views keep theirs.
     const framesPreload = (
-      _attach: Electron.Event,
+      attach: Electron.Event,
       preferences: Electron.WebPreferences,
+      params: Record<string, string>,
     ) => {
-      if (path.basename(preferences.preload ?? "") === "webview.cjs")
+      if (!isRegisteredShellContents(window.webContents)) {
+        attach.preventDefault();
+        return;
+      }
+      const partition = partitionFor(windows.profileFor(window.webContents));
+      if (
+        !readySessions.has(partition) ||
+        (preferences.partition ?? params.partition) !== partition
+      ) {
+        attach.preventDefault();
+        return;
+      }
+      preferences.partition = partition;
+      preferences.session = session.fromPartition(partition);
+      preferences.nodeIntegration = false;
+      preferences.nodeIntegrationInWorker = false;
+      preferences.contextIsolation = true;
+      preferences.sandbox = true;
+      preferences.webSecurity = true;
+      preferences.allowRunningInsecureContent = false;
+      preferences.webviewTag = false;
+      // Work owns the only guest preload. Extension pages receive their
+      // protocol bridge through the prepared session instead.
+      if (params.src?.startsWith("chrome-extension://")) {
+        delete preferences.preload;
+        preferences.nodeIntegrationInSubFrames = false;
+      } else {
+        preferences.preload = path.join(
+          import.meta.dirname,
+          "../preload/webview.cjs",
+        );
         preferences.nodeIntegrationInSubFrames = true;
+      }
     };
     window.webContents.on("will-attach-webview", framesPreload);
     window.webContents.on("will-attach-webview", takeHistory);
@@ -1364,7 +1441,7 @@ export function registerBrowserSupport(
       items,
     } satisfies PageContextMenu);
   };
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-context-menu-pick",
     (event, input: unknown) => {
       const { menuId, action } = z
@@ -1878,7 +1955,7 @@ export function registerBrowserSupport(
     return status === "unknown" ? null : "denied";
   };
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:screen-share-sources",
     async (event, input: unknown): Promise<ScreenShareSources> => {
       const { guestId, kinds } = z
@@ -1997,16 +2074,19 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle("catamorphic:screen-share-answer", (event, input: unknown) => {
-    const answer = screenShareAnswerSchema.parse(input);
-    return (
-      screenShareBroker.answer(
-        answer.requestId,
-        answer,
-        windows.profileFor(event.sender),
-      ) !== null
-    );
-  });
+  shellIpcMain.handle(
+    "catamorphic:screen-share-answer",
+    (event, input: unknown) => {
+      const answer = screenShareAnswerSchema.parse(input);
+      return (
+        screenShareBroker.answer(
+          answer.requestId,
+          answer,
+          windows.profileFor(event.sender),
+        ) !== null
+      );
+    },
+  );
 
   const siteCookies = async (profileId: string, host: string) => {
     await prepareProfileSession(profileId);
@@ -2034,7 +2114,7 @@ export function registerBrowserSupport(
 
   const originInput = z.object({ origin: z.string().url() });
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:site-settings-get",
     async (event, input: unknown): Promise<SiteDetails> => {
       const { origin } = originInput.parse(input);
@@ -2062,31 +2142,37 @@ export function registerBrowserSupport(
     }
   };
 
-  ipcMain.handle("catamorphic:site-settings-set", (event, input: unknown) => {
-    const { origin, kind, state } = z
-      .object({
-        origin: z.string().url(),
-        kind: sitePermissionKindSchema,
-        state: sitePermissionStateSchema,
-      })
-      .parse(input);
-    const profileId = windows.profileFor(event.sender);
-    const permissions = siteSettings.set(profileId, origin, kind, state);
-    if (state !== "allow") revokeCapture(profileId, origin, kind);
-    siteSettingsChanged(profileId, origin);
-    return permissions;
-  });
+  shellIpcMain.handle(
+    "catamorphic:site-settings-set",
+    (event, input: unknown) => {
+      const { origin, kind, state } = z
+        .object({
+          origin: z.string().url(),
+          kind: sitePermissionKindSchema,
+          state: sitePermissionStateSchema,
+        })
+        .parse(input);
+      const profileId = windows.profileFor(event.sender);
+      const permissions = siteSettings.set(profileId, origin, kind, state);
+      if (state !== "allow") revokeCapture(profileId, origin, kind);
+      siteSettingsChanged(profileId, origin);
+      return permissions;
+    },
+  );
 
-  ipcMain.handle("catamorphic:site-settings-reset", (event, input: unknown) => {
-    const { origin } = originInput.parse(input);
-    const profileId = windows.profileFor(event.sender);
-    siteSettings.reset(profileId, origin);
-    for (const kind of ["microphone", "camera", "screenShare"])
-      revokeCapture(profileId, origin, kind);
-    siteSettingsChanged(profileId, origin);
-  });
+  shellIpcMain.handle(
+    "catamorphic:site-settings-reset",
+    (event, input: unknown) => {
+      const { origin } = originInput.parse(input);
+      const profileId = windows.profileFor(event.sender);
+      siteSettings.reset(profileId, origin);
+      for (const kind of ["microphone", "camera", "screenShare"])
+        revokeCapture(profileId, origin, kind);
+      siteSettingsChanged(profileId, origin);
+    },
+  );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:site-settings-clear-data",
     async (event, input: unknown) => {
       const { origin } = originInput.parse(input);
@@ -2123,7 +2209,7 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:site-settings-list",
     async (event): Promise<SiteSummary[]> => {
       const profileId = windows.profileFor(event.sender);
@@ -2170,7 +2256,7 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:site-permission-answer",
     (event, input: unknown) => {
       const answer = sitePermissionAnswerSchema.parse(input);
@@ -2185,7 +2271,7 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:site-settings-open-system-privacy",
     async (_event, input: unknown) => {
       const { kind } = z
@@ -2204,24 +2290,24 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-prepare-profile",
-    async (_event, profileId: string) => {
+    async (event, raw: unknown) => {
+      const profileId = windows.profileFor(event.sender);
+      if (z.string().parse(raw) !== profileId)
+        throw new Error("This browser profile belongs to another window.");
       await prepareProfileSession(profileId);
       return partitionFor(profileId);
     },
   );
 
   const historyChanged = (profileId: string) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      if (
-        !window.isDestroyed() &&
-        windows.profileFor(window.webContents) === profileId
-      )
+    for (const window of windows.windowsFor(profileId)) {
+      if (!window.isDestroyed())
         window.webContents.send("catamorphic:history-changed");
     }
   };
-  ipcMain.handle("catamorphic:history-query", (event, input: unknown) => {
+  shellIpcMain.handle("catamorphic:history-query", (event, input: unknown) => {
     const query = z
       .object({
         query: z.string().max(4096).optional(),
@@ -2243,7 +2329,7 @@ export function registerBrowserSupport(
     project && profiles.get(profileId)?.projectIds.includes(project.id)
       ? project
       : undefined;
-  ipcMain.handle("catamorphic:history-record", (event, input: unknown) => {
+  shellIpcMain.handle("catamorphic:history-record", (event, input: unknown) => {
     const { visit, revisit } = z
       .object({ visit: historyVisitSchema, revisit: z.boolean() })
       .parse(input);
@@ -2258,20 +2344,20 @@ export function registerBrowserSupport(
     history.recordVisit({ profileId, visit: { ...visit, project }, revisit });
     historyChanged(profileId);
   });
-  ipcMain.handle("catamorphic:history-remove", (event, id: unknown) => {
+  shellIpcMain.handle("catamorphic:history-remove", (event, id: unknown) => {
     const profileId = windows.profileFor(event.sender);
     const entry = z.string().parse(id);
     history.remove({ profileId, id: entry });
     paletteUsage.forget(profileId, entry);
     historyChanged(profileId);
   });
-  ipcMain.handle("catamorphic:history-clear", (event) => {
+  shellIpcMain.handle("catamorphic:history-clear", (event) => {
     const profileId = windows.profileFor(event.sender);
     history.clear(profileId);
     paletteUsage.clear(profileId);
     historyChanged(profileId);
   });
-  ipcMain.handle("catamorphic:palette-record", (event, input: unknown) => {
+  shellIpcMain.handle("catamorphic:palette-record", (event, input: unknown) => {
     const use = paletteUseSchema.parse(input);
     const profileId = windows.profileFor(event.sender);
     paletteUsage.record({
@@ -2285,7 +2371,7 @@ export function registerBrowserSupport(
       },
     });
   });
-  ipcMain.handle("catamorphic:palette-signals", (event) => {
+  shellIpcMain.handle("catamorphic:palette-signals", (event) => {
     const profileId = windows.profileFor(event.sender);
     return paletteUsage.signals({
       profileId,
@@ -2293,7 +2379,7 @@ export function registerBrowserSupport(
     });
   });
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-history-record",
     (event, input: unknown) => {
       const { url, title, project } = z
@@ -2314,14 +2400,14 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-history-retitle",
     (event, input: { url: string; title: string }) => {
       history.retitle(windows.profileFor(event.sender), input.url, input.title);
       historyChanged(windows.profileFor(event.sender));
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-history-favicon",
     (event, input: { url: string; faviconUrl: string }) => {
       const profileId = windows.profileFor(event.sender);
@@ -2350,7 +2436,7 @@ export function registerBrowserSupport(
     },
   );
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-suggest",
     (event, input: { profileId: string; query: string }) => ({
       matches: history.suggest(windows.profileFor(event.sender), input.query),
@@ -2362,19 +2448,28 @@ export function registerBrowserSupport(
   );
 
   // --- profiles ---
-  ipcMain.handle("catamorphic:profiles-list", () => profiles.list());
-  ipcMain.handle("catamorphic:profiles-create", (_event, name: string) => {
-    const profile = profiles.create(name);
+  const requireProfile = (raw: unknown) => {
+    const id = z.string().min(1).max(256).parse(raw);
+    if (!profiles.get(id)) throw new Error("Choose a profile again.");
+    return id;
+  };
+  shellIpcMain.handle("catamorphic:profiles-list", () => profiles.list());
+  shellIpcMain.handle("catamorphic:profiles-create", (_event, raw: unknown) => {
+    const profile = profiles.create(z.string().min(1).max(1024).parse(raw));
     broadcast("catamorphic:profiles-changed", profiles.list());
     return profile;
   });
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:profiles-update",
-    (
-      _event,
-      id: string,
-      patch: { name?: string; color?: string; defaultProjectId?: string },
-    ) => {
+    (_event, rawId: unknown, rawPatch: unknown) => {
+      const id = requireProfile(rawId);
+      const patch = z
+        .object({
+          name: z.string().min(1).max(1024).optional(),
+          color: z.string().max(128).optional(),
+          defaultProjectId: z.string().max(256).optional(),
+        })
+        .parse(rawPatch);
       const profile = profiles.update(id, patch);
       broadcast("catamorphic:profiles-changed", profiles.list());
       return profile;
@@ -2382,7 +2477,7 @@ export function registerBrowserSupport(
   );
   // Settings shared between profiles (ADR 0272).
   const syncParts = z.array(z.enum(PROFILE_SYNC_PARTS)).min(1);
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:profiles-sync-settings",
     (_event, raw: unknown) => {
       const input = z
@@ -2393,41 +2488,50 @@ export function registerBrowserSupport(
           keepInSync: z.boolean(),
         })
         .parse(raw);
+      requireProfile(input.profileId);
+      requireProfile(input.from);
       profileConfig.syncSettings(input);
       broadcast("catamorphic:profiles-changed", profiles.list());
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:profiles-stop-syncing",
     (_event, raw: unknown) => {
       const input = z
         .object({ profileId: z.string(), parts: syncParts })
         .parse(raw);
+      requireProfile(input.profileId);
       profileConfig.stopSyncing(input);
       broadcast("catamorphic:profiles-changed", profiles.list());
     },
   );
-  ipcMain.handle("catamorphic:profiles-set-default", (_event, id: string) => {
-    profiles.setDefaultProfile(id);
-    broadcast("catamorphic:profiles-changed", profiles.list());
-  });
-  ipcMain.handle("catamorphic:profiles-remove", (_event, id: string) => {
-    const removed = profiles.remove(id);
-    if (removed) broadcast("catamorphic:profiles-changed", profiles.list());
-    return removed;
-  });
-  ipcMain.handle(
-    "catamorphic:profiles-claim-project",
-    (_event, profileId: string, projectId: string) => {
-      profiles.claimProject(profileId, projectId);
+  shellIpcMain.handle(
+    "catamorphic:profiles-set-default",
+    (_event, id: string) => {
+      profiles.setDefaultProfile(requireProfile(id));
       broadcast("catamorphic:profiles-changed", profiles.list());
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle("catamorphic:profiles-remove", (_event, id: string) => {
+    const removed = profiles.remove(requireProfile(id));
+    if (removed) broadcast("catamorphic:profiles-changed", profiles.list());
+    return removed;
+  });
+  shellIpcMain.handle(
+    "catamorphic:profiles-claim-project",
+    (_event, profileId: string, projectId: string) => {
+      profiles.claimProject(
+        requireProfile(profileId),
+        z.string().min(1).max(256).parse(projectId),
+      );
+      broadcast("catamorphic:profiles-changed", profiles.list());
+    },
+  );
+  shellIpcMain.handle(
     "catamorphic:profiles-for-project",
     (_event, projectId: string) => profiles.profileForProject(projectId),
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:profiles-release-project",
     (_event, projectId: string) => {
       profiles.releaseProject(projectId);
@@ -2441,64 +2545,78 @@ export function registerBrowserSupport(
     username: z.string().max(1024),
     note: z.string().max(10_000).optional(),
   });
-  ipcMain.handle(
-    "catamorphic:vault-list",
-    (_event, input: { profileId: string; origin?: string }) =>
-      vault.list(input.profileId, input.origin),
-  );
-  ipcMain.handle(
-    "catamorphic:vault-reveal",
-    (_event, input: { profileId: string; id: string }) =>
-      vault.reveal(input.profileId, input.id),
-  );
-  ipcMain.handle("catamorphic:vault-update", async (_event, raw: unknown) => {
-    const input = credentialInput
-      .extend({
+  const vaultIdInput = z.object({ id: z.string().min(1).max(256) });
+  shellIpcMain.handle("catamorphic:vault-list", (_event, raw: unknown) => {
+    // Profile settings shows a selected profile's saved-login count.
+    // This read never returns passwords; secret operations bind to the caller.
+    const input = z
+      .object({
         profileId: z.string(),
-        id: z.string(),
-        password: z.string().min(1).max(4096).optional(),
+        origin: z.string().max(2048).optional(),
       })
       .parse(raw);
-    const updated = await vault.update(input.profileId, input.id, {
-      origin: input.origin,
-      username: input.username,
-      password: input.password,
-      note: input.note,
-    });
-    if (updated) vaultChanged(input.profileId);
-    return updated;
+    return vault.list(requireProfile(input.profileId), input.origin);
   });
-  ipcMain.handle("catamorphic:vault-save", async (_event, raw: unknown) => {
+  shellIpcMain.handle("catamorphic:vault-reveal", (event, raw: unknown) =>
+    vault.reveal(windows.profileFor(event.sender), vaultIdInput.parse(raw).id),
+  );
+  shellIpcMain.handle(
+    "catamorphic:vault-update",
+    async (event, raw: unknown) => {
+      const input = credentialInput
+        .extend({
+          profileId: z.string(),
+          id: z.string(),
+          password: z.string().min(1).max(4096).optional(),
+        })
+        .parse(raw);
+      const profileId = windows.profileFor(event.sender);
+      const updated = await vault.update(profileId, input.id, {
+        origin: input.origin,
+        username: input.username,
+        password: input.password,
+        note: input.note,
+      });
+      if (updated) vaultChanged(profileId);
+      return updated;
+    },
+  );
+  shellIpcMain.handle("catamorphic:vault-save", async (event, raw: unknown) => {
     const input = credentialInput
       .extend({ profileId: z.string(), password: z.string().min(1).max(4096) })
       .parse(raw);
-    const saved = await vault.save(input.profileId, {
+    const profileId = windows.profileFor(event.sender);
+    const saved = await vault.save(profileId, {
       origin: input.origin,
       username: input.username,
       password: input.password,
       note: input.note,
     });
-    vaultChanged(input.profileId);
+    vaultChanged(profileId);
     return saved;
   });
-  ipcMain.handle("catamorphic:vault-generate-password", () =>
+  shellIpcMain.handle("catamorphic:vault-generate-password", () =>
     generateStrongPassword(),
   );
-  ipcMain.handle(
-    "catamorphic:vault-never-saved",
-    (_event, input: { profileId: string }) => vault.neverSaved(input.profileId),
+  shellIpcMain.handle("catamorphic:vault-never-saved", (event) =>
+    vault.neverSaved(windows.profileFor(event.sender)),
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:vault-allow-saving",
-    async (_event, input: { profileId: string; origin: string }) => {
-      await vault.setNeverSave(input.profileId, input.origin, false);
-      vaultChanged(input.profileId);
+    async (event, raw: unknown) => {
+      const input = z.object({ origin: z.string().max(2048) }).parse(raw);
+      const profileId = windows.profileFor(event.sender);
+      await vault.setNeverSave(profileId, input.origin, false);
+      vaultChanged(profileId);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:vault-copy-password",
-    async (_event, input: { profileId: string; id: string }) => {
-      const credential = await vault.reveal(input.profileId, input.id);
+    async (event, raw: unknown) => {
+      const credential = await vault.reveal(
+        windows.profileFor(event.sender),
+        vaultIdInput.parse(raw).id,
+      );
       if (!credential) return false;
       await clipboard.writeText(credential.password);
       // Electron 44: clipboard reads are asynchronous.
@@ -2528,7 +2646,7 @@ export function registerBrowserSupport(
     pendingCredentials.delete(pendingId);
     return pending;
   };
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-credential-accept",
     async (event, input: { profileId: string; pendingId: string }) => {
       const pending = takePending(
@@ -2549,7 +2667,7 @@ export function registerBrowserSupport(
       return saved;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-credential-never",
     async (event, input: { profileId: string; pendingId: string }) => {
       const pending = takePending(
@@ -2563,7 +2681,7 @@ export function registerBrowserSupport(
       return true;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-credential-dismiss",
     (event, input: { pendingId: string }) => {
       const pending = pendingCredentials.get(input.pendingId);
@@ -2572,7 +2690,7 @@ export function registerBrowserSupport(
       }
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-password-suggest",
     (event, input: { profileId: string; guestId: number }) => {
       const guest = rendererOwnsGuest(
@@ -2593,7 +2711,7 @@ export function registerBrowserSupport(
       return { password };
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-password-use-suggested",
     (
       event,
@@ -2638,7 +2756,7 @@ export function registerBrowserSupport(
     hostedGuest,
     keepsAwake: (guestId) => extensions.keepsAwake(guestId),
   });
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-navigation-history",
     (event, input: { guestId: number }) => {
       const guest = hostedGuest(event.sender, input?.guestId);
@@ -2651,7 +2769,7 @@ export function registerBrowserSupport(
       });
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-credential-fill",
     async (
       event,
@@ -2694,19 +2812,18 @@ export function registerBrowserSupport(
       return "filled" as const;
     },
   );
-  ipcMain.handle(
-    "catamorphic:vault-passkeys",
-    (_event, input: { profileId: string }) =>
-      vault.listPasskeys(input.profileId),
+  shellIpcMain.handle("catamorphic:vault-passkeys", (event) =>
+    vault.listPasskeys(windows.profileFor(event.sender)),
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:vault-remove",
-    async (_event, input: { profileId: string; id: string }) => {
-      await vault.remove(input.profileId, input.id);
-      vaultChanged(input.profileId);
+    async (event, raw: unknown) => {
+      const profileId = windows.profileFor(event.sender);
+      await vault.remove(profileId, vaultIdInput.parse(raw).id);
+      vaultChanged(profileId);
     },
   );
-  ipcMain.handle("catamorphic:device-auth-available", () =>
+  shellIpcMain.handle("catamorphic:device-auth-available", () =>
     process.platform === "darwin"
       ? systemPreferences.canPromptTouchID()
       : false,
@@ -2726,12 +2843,12 @@ export function registerBrowserSupport(
     for (const profileId of profileIds) bookmarksChanged(null, profileId);
   });
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-get",
     (_event, input: { projectId: string; profileId: string }) =>
       bookmarks.trees(input),
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-add",
     (
       _event,
@@ -2749,7 +2866,7 @@ export function registerBrowserSupport(
       return bookmark;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-place",
     (_event, input: BookmarkPlacement) => {
       const bookmark = bookmarks.place(input);
@@ -2757,14 +2874,14 @@ export function registerBrowserSupport(
       return bookmark;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-move",
     (_event, input: BookmarkMove) => {
       bookmarks.move(input);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-add-folder",
     (
       _event,
@@ -2784,35 +2901,35 @@ export function registerBrowserSupport(
       return folder;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-update",
     (_event, input: BookmarkUpdate) => {
       bookmarks.update(input);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-remove",
     (_event, input: BookmarkRemoval) => {
       bookmarks.remove(input);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-pin",
     (_event, input: { projectId: string; profileId: string; id: string }) => {
       bookmarks.pin(input.projectId, input.profileId, input.id);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-unpin",
     (_event, input: { projectId: string; profileId: string; id: string }) => {
       bookmarks.unpin(input.profileId, input.projectId, input.id);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:bookmarks-rename-folder",
     (_event, input: BookmarkFolderRename) => {
       bookmarks.renameFolder(input);
@@ -2829,7 +2946,7 @@ export function registerBrowserSupport(
   // Without a projectId only the profile layer applies (boot, settings).
   // The `-file`/`-source`/`-reset` handlers below stay profile-scoped:
   // they back the Settings "edit workspace.js" surface.
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:workspace-config-get",
     async (event, projectId?: string) => {
       const profileId = windows.profileFor(event.sender);
@@ -2844,14 +2961,14 @@ export function registerBrowserSupport(
         : resolved;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:workspace-config-file",
     (event) => workspaceFor(event).file,
   );
-  ipcMain.handle("catamorphic:workspace-config-source", (event) =>
+  shellIpcMain.handle("catamorphic:workspace-config-source", (event) =>
     workspaceFor(event).read(),
   );
-  ipcMain.handle("catamorphic:workspace-config-reset", (event) => {
+  shellIpcMain.handle("catamorphic:workspace-config-reset", (event) => {
     workspaceFor(event).write(DEFAULT_WORKSPACE_FILE);
   });
   // Change fan-out lives in main/index.ts (profileConfig.onWorkspaceChanged),
@@ -2873,7 +2990,7 @@ export function registerBrowserSupport(
   const nativeImportSupport = () =>
     passwordImportSupport({ helperPath: passwordHelperPath });
   const importingProfiles = new Set<string>();
-  ipcMain.handle("catamorphic:browser-import-list", () => {
+  shellIpcMain.handle("catamorphic:browser-import-list", () => {
     const native = nativeImportSupport().available;
     return listImportableBrowsers().map((browser) => ({
       ...browser,
@@ -2885,7 +3002,7 @@ export function registerBrowserSupport(
       })),
     }));
   });
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-import-run",
     async (event, raw: unknown) => {
       if (
@@ -3116,7 +3233,7 @@ export function registerBrowserSupport(
         ? error.message
         : "Work couldn't save what this file holds. Try again.",
   });
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:password-file-import",
     async (event, input: unknown): Promise<PasswordFileImportResult> => {
       const { profileId } = z.object({ profileId: z.string() }).parse(input);
@@ -3169,7 +3286,7 @@ export function registerBrowserSupport(
       }
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:password-file-unlock",
     async (event, input: unknown): Promise<PasswordFileImportResult> => {
       const { profileId, token, password } = z
@@ -3207,7 +3324,7 @@ export function registerBrowserSupport(
       }
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:password-file-key-file",
     async (event, input: unknown) => {
       const { token, clear } = z
@@ -3236,7 +3353,7 @@ export function registerBrowserSupport(
       return { keyFile: locked.keyFile.name };
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:password-file-forget",
     (event, input: unknown) => {
       const { token } = z.object({ token: z.string() }).parse(input);
@@ -3246,6 +3363,7 @@ export function registerBrowserSupport(
 
   return {
     history,
+    profileOf,
     images,
     dispose: () => {
       ipcMain.removeHandler("catamorphic:window-image");

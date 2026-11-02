@@ -161,9 +161,15 @@ export class PersonalEnvironmentSync {
   start(): void {
     this.stopped = false;
     this.timers.push(
-      setTimeout(() => void this.checkAll(), 5_000),
-      setInterval(() => void this.checkAll(), REMOTE_CHECK_MS),
-      setInterval(() => void this.checkLocal(), LOCAL_CHECK_MS),
+      setTimeout(() => this.background(() => this.checkAll()), 5_000),
+      setInterval(
+        () => this.background(() => this.checkAll()),
+        REMOTE_CHECK_MS,
+      ),
+      setInterval(
+        () => this.background(() => this.checkLocal()),
+        LOCAL_CHECK_MS,
+      ),
     );
   }
 
@@ -187,14 +193,29 @@ export class PersonalEnvironmentSync {
 
   /** Window focus: ask again unless a check just ran. */
   nudge(): void {
-    if (this.now() - this.lastFullCheck > 60_000) void this.checkAll();
+    if (this.now() - this.lastFullCheck > 60_000)
+      this.background(() => this.checkAll());
+  }
+
+  private background(run: () => Promise<void>): void {
+    const report = (cause: unknown) => {
+      console.warn(
+        "[desktop] Personal environment background check failed:",
+        cause instanceof Error ? cause.message : "Unknown failure",
+      );
+    };
+    try {
+      void run().catch(report);
+    } catch (cause) {
+      report(cause);
+    }
   }
 
   async checkAll(): Promise<void> {
     this.lastFullCheck = this.now();
     const links = this.deps.links();
     this.forgetUnlinked(links);
-    await Promise.all(links.map((link) => this.sync(link).catch(() => {})));
+    await Promise.all(links.map((link) => this.sync(link)));
   }
 
   /** A disconnected project stops watching and forgets what it sent. */
@@ -222,10 +243,11 @@ export class PersonalEnvironmentSync {
     const link = this.link(args);
     const known = this.states.get(key);
     if (link && !known?.lastCheckedAt && !known?.running)
-      void this.sync(link).catch(() => {});
+      this.background(() => this.sync(link));
     else if (link && known && !known.running)
-      await this.refreshLocal(link, known).catch(() => {
-        // The next check reports what could not be read.
+      await this.refreshLocal(link, known).catch((cause: unknown) => {
+        this.fail(known, cause);
+        this.emit(link);
       });
     const state = this.states.get(key);
     return this.render(args.projectId, state, Boolean(state?.running));
@@ -245,7 +267,7 @@ export class PersonalEnvironmentSync {
     const file = await readPersonalEnvironmentConfig({ root });
     if (file.fingerprint === state.configFingerprint || state.running) return;
     await this.readLocal(link, state, root);
-    if (state.server === "allowed") void this.sync(link).catch(() => {});
+    if (state.server === "allowed") this.background(() => this.sync(link));
   }
 
   /** Check and send now; resolves with the resulting view. */
@@ -271,18 +293,19 @@ export class PersonalEnvironmentSync {
         linkKey(link.profileId, link.localProjectId),
       );
       if (state?.server !== "allowed" || state.running) continue;
-      const root = await this.deps.projectRoot(link.localProjectId);
-      if (!root) continue;
       try {
+        const root = await this.deps.projectRoot(link.localProjectId);
+        if (!root) continue;
         const local = await this.collect(root);
         // Local changes only; the remote check retries failed sends.
         if (
           local.configFingerprint !== state.configFingerprint ||
           (local.snapshot?.fingerprint ?? null) !== state.localFingerprint
         )
-          void this.sync(link).catch(() => {});
-      } catch {
-        // The next remote check reports the problem.
+          this.background(() => this.sync(link));
+      } catch (cause) {
+        this.fail(state, cause);
+        this.emit(link);
       }
     }
   }
@@ -313,20 +336,26 @@ export class PersonalEnvironmentSync {
           state.again = false;
           try {
             await this.run(link, state);
+          } catch (cause) {
+            this.fail(state, cause);
           } finally {
             // Every outcome reaches agents, including sign-in and
             // unreachable states that end a run early.
-            const root = await this.deps.projectRoot(link.localProjectId);
-            if (root) {
-              await this.writeStatus(root, state);
-              // The first status may have just created the personal
-              // folder, which could not be watched before it existed.
-              if (
-                this.states.get(
-                  linkKey(link.profileId, link.localProjectId),
-                ) === state
-              )
-                this.reconcileWatchers(link, state, root);
+            try {
+              const root = await this.deps.projectRoot(link.localProjectId);
+              if (root) {
+                await this.writeStatus(root, state);
+                // The first status may have just created the personal
+                // folder, which could not be watched before it existed.
+                if (
+                  this.states.get(
+                    linkKey(link.profileId, link.localProjectId),
+                  ) === state
+                )
+                  this.reconcileWatchers(link, state, root);
+              }
+            } catch (cause) {
+              this.fail(state, cause);
             }
           }
         } while (state.again && !this.stopped);
@@ -607,11 +636,13 @@ export class PersonalEnvironmentSync {
             state.debounce = null;
             // The link as it is now: the project may have been reconnected
             // to another server, or disconnected, since this watch began.
-            const current = this.link({
-              profileId: link.profileId,
-              projectId: link.localProjectId,
+            this.background(async () => {
+              const current = this.link({
+                profileId: link.profileId,
+                projectId: link.localProjectId,
+              });
+              if (current) await this.sync(current);
             });
-            if (current) void this.sync(current).catch(() => {});
           }, 750);
         });
         watcher.on("error", () => {

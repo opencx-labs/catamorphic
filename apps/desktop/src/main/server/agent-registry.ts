@@ -357,7 +357,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       .profiles.some((profile) =>
         deps.profileConfig
           .forProfile(profile.id)
-          .agents.list()
+          .agents.listMetadata()
           .some(
             (agent) =>
               agent.harness === "ai-sdk" &&
@@ -747,6 +747,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   get(id: string): RegisteredCodingAgent | undefined {
+    try {
+      return this.resolveRegistered(id);
+    } catch (error) {
+      return this.failFast(
+        id,
+        error instanceof Error
+          ? error.message
+          : "This agent's credentials are unavailable. Unlock your system keychain and try again.",
+      );
+    }
+  }
+
+  private resolveRegistered(id: string): RegisteredCodingAgent | undefined {
     const projectRef = parseProjectAgentId(id);
     if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
@@ -791,7 +804,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const agents: RegisteredCodingAgent[] = [];
     for (const profile of this.deps.profiles.list().profiles) {
       const store = this.deps.profileConfig.forProfile(profile.id).agents;
-      for (const config of store.list()) {
+      for (const config of store.listMetadata()) {
         const agent = this.get(config.id);
         if (agent) agents.push(agent);
       }
@@ -1092,6 +1105,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     /** The assistant (ADR 0216): its tools over the person's chats. */
     assistant?: boolean;
   }): BuiltAgent | undefined {
+    if (
+      config.harness !== "ai-sdk" &&
+      config.auth === "api-key" &&
+      !config.apiKey &&
+      !apiKey
+    )
+      throw new Error(
+        `The API key for "${config.name}" is unavailable. Unlock your system keychain or update the key in agent settings, then try again.`,
+      );
     const errors = this.errorLabels(config);
     const signIn = signInOf(config);
     const retry = signIn ? this.signInRetry(signIn) : undefined;

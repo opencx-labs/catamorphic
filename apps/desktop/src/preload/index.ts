@@ -1,10 +1,19 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
+import { SHELL_WINDOW_CLOSE_CHANNEL } from "../shared/desktop-workspace.js";
 import type { ResourceSnapshot } from "../shared/resources.js";
 import type { TerminalCreateInput } from "../shared/terminal.js";
 import type { TrustedHosts } from "../shared/trusted-hosts.js";
 import type { WindowImageRequest } from "../shared/window-images.js";
+import { installShellWindowClose } from "./shell-window-close.js";
+
+installShellWindowClose({
+  bridge: contextBridge,
+  requestClose: () => ipcRenderer.send(SHELL_WINDOW_CLOSE_CHANNEL),
+  isMainFrame: process.isMainFrame,
+  argv: process.argv,
+});
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -488,16 +497,32 @@ const api = {
   },
 
   // --- MCP Apps (embedded views for connection tools) ---
+  appGuestDocument: (input: {
+    url: string;
+    mountId: string;
+  }): Promise<string> => invoke("catamorphic:app-guest-document", input),
+  appGuestClose: (input: { url: string }): Promise<void> =>
+    invoke("catamorphic:app-guest-close", input),
+  pdfGuestDocument: (input: {
+    projectId: string;
+    filePath: string;
+  }): Promise<string> => invoke("catamorphic:pdf-guest-document", input),
   mcpAppsUiTools: (): Promise<unknown> =>
     invoke("catamorphic:mcp-apps-ui-tools"),
-  mcpAppsView: (toolKey: string): Promise<unknown> =>
-    invoke("catamorphic:mcp-apps-view", toolKey),
+  mcpAppsView: (input: {
+    projectId: string;
+    sessionId: string;
+    toolKey: string;
+    toolUseId: string;
+  }): Promise<unknown> => invoke("catamorphic:mcp-apps-view", input),
+  mcpAppsClose: (mountId: string): Promise<void> =>
+    invoke("catamorphic:mcp-apps-close", mountId),
   mcpAppsCall: (
-    viewToolKey: string,
+    mountId: string,
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<unknown> =>
-    invoke("catamorphic:mcp-apps-call", viewToolKey, toolName, args),
+    invoke("catamorphic:mcp-apps-call", mountId, toolName, args),
 
   // --- OpenRouter catalog (searchable model selector, best-free default) ---
   openrouterModels: (): Promise<unknown> =>

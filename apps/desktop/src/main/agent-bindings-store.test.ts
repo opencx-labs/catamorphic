@@ -5,8 +5,7 @@ import { definitionHash } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The store encrypts via Electron's safeStorage; unit tests run outside
-// Electron, so exercise a reversible stand-in cipher (the plaintext
-// fallback path is covered separately by flipping availability).
+// Electron, so exercise a reversible stand-in cipher.
 let encryptionAvailable = true;
 vi.mock("electron", () => ({
   safeStorage: {
@@ -85,19 +84,119 @@ describe("AgentBindingsStore", () => {
     ).toBeUndefined();
   });
 
-  it("stores plaintext (with the documented fallback) when the keychain is unavailable", () => {
-    encryptionAvailable = false;
+  it("refuses to store plaintext when the keychain is unavailable and preserves the binding", () => {
     const file = storeFile();
     const store = new AgentBindingsStore(file);
     store.bind(PROJECT, "triage", {
       consentHash: "hash-3",
-      auth: { mode: "api-key", apiKey: "sk-plain" },
+      auth: { mode: "api-key", apiKey: "saved-secret" },
     });
-    expect(fs.readFileSync(file, "utf-8")).toContain("apiKeyPlaintext");
-    expect(new AgentBindingsStore(file).get(PROJECT, "triage")?.auth).toEqual({
+    const before = fs.readFileSync(file, "utf8");
+    encryptionAvailable = false;
+    expect(() =>
+      store.bind(PROJECT, "triage", {
+        consentHash: "new-hash",
+        auth: { mode: "api-key", apiKey: "new-secret" },
+      }),
+    ).toThrow("OS credential encryption is unavailable");
+    expect(() => store.get(PROJECT, "triage")).toThrow(
+      "Unlock your operating system's keychain",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    encryptionAvailable = true;
+    expect(store.get(PROJECT, "triage")?.consentHash).toBe("hash-3");
+  });
+
+  it("preserves corrupt binding files and reports unreadable encrypted keys", () => {
+    const file = storeFile();
+    for (const text of [
+      "{broken",
+      '{"bindings":[]}',
+      '{"bindings":{"p/a":{"consentHash":"h","auth":{"mode":"unexpected"}}}}',
+    ]) {
+      fs.writeFileSync(file, text);
+      expect(() => new AgentBindingsStore(file)).toThrow(
+        "Project agent credentials could not be opened",
+      );
+      expect(fs.readFileSync(file, "utf8")).toBe(text);
+    }
+    const text = JSON.stringify({
+      bindings: {
+        [`${PROJECT}/triage`]: {
+          consentHash: "h",
+          auth: {
+            mode: "api-key",
+            apiKeyEncrypted: Buffer.from("bad ciphertext").toString("base64"),
+          },
+        },
+      },
+    });
+    fs.writeFileSync(file, text);
+    expect(() => new AgentBindingsStore(file).get(PROJECT, "triage")).toThrow(
+      "Work could not unlock the saved credential",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(text);
+  });
+
+  it("refuses legacy plaintext credentials and lets a new encrypted binding replace them", () => {
+    const file = storeFile();
+    const text = JSON.stringify({
+      bindings: {
+        [`${PROJECT}/triage`]: {
+          consentHash: "old",
+          auth: { mode: "api-key", apiKeyPlaintext: "insecure-secret" },
+        },
+      },
+    });
+    fs.writeFileSync(file, text);
+    const store = new AgentBindingsStore(file);
+    expect(() => store.get(PROJECT, "triage")).toThrow(
+      "Reconnect the agent in Settings",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(text);
+    store.bind(PROJECT, "triage", {
+      consentHash: "new",
+      auth: { mode: "api-key", apiKey: "secure-secret" },
+    });
+    expect(store.get(PROJECT, "triage")?.auth).toEqual({
       mode: "api-key",
-      apiKey: "sk-plain",
+      apiKey: "secure-secret",
     });
+    expect(fs.readFileSync(file, "utf8")).not.toContain("apiKeyPlaintext");
+    expect(fs.readFileSync(file, "utf8")).not.toContain("insecure-secret");
+  });
+
+  it("keeps consent metadata readable while a binding key is locked or corrupt", () => {
+    const file = storeFile();
+    const stored = new AgentBindingsStore(file);
+    stored.bind(PROJECT, "triage", {
+      consentHash: "approved",
+      auth: { mode: "api-key", apiKey: "saved-secret" },
+    });
+    encryptionAvailable = false;
+    expect(stored.getMetadata(PROJECT, "triage")).toEqual({
+      consentHash: "approved",
+      auth: { mode: "api-key", hasApiKey: true },
+    });
+    expect(() => stored.get(PROJECT, "triage")).toThrow();
+    expect(stored.getMetadata(PROJECT, "missing")).toBeUndefined();
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    raw.bindings[`${PROJECT}/triage`].auth = {
+      mode: "api-key",
+      apiKeyPlaintext: "legacy-secret",
+    };
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const legacy = new AgentBindingsStore(file);
+    expect(legacy.getMetadata(PROJECT, "triage")).toEqual({
+      consentHash: "approved",
+      auth: { mode: "api-key", hasApiKey: true },
+    });
+    expect(JSON.stringify(legacy.getMetadata(PROJECT, "triage"))).not.toContain(
+      "secret",
+    );
+    expect(() => legacy.get(PROJECT, "triage")).toThrow(
+      "Reconnect the agent in Settings",
+    );
   });
 
   it("consent goes stale when the definition's sensitive fields change", () => {

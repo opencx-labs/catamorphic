@@ -1,3 +1,4 @@
+import type { McpToolInfo } from "@catamorphic/mcp";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -60,13 +61,52 @@ function serve(
     session?: "missing" | "read-only";
     /** What the connector's call throws instead of answering. */
     failure?: Error;
+    connectionId?: string;
+    binding?: { endpoint: string; account: string; epoch: number };
+    tools?: McpToolInfo[];
+    onApproval?: () => void;
+    onRawCall?: () => Promise<void>;
+    result?: typeof RESULT;
   } = {},
 ) {
-  const callTool = vi.fn(async () => {
-    if (surface.failure) throw surface.failure;
-    return RESULT;
+  const binding = surface.binding ?? {
+    endpoint: "https://server-a.test/mcp",
+    account: "account-a",
+    epoch: 0,
+  };
+  const connectionIdentity = () => JSON.stringify(binding);
+  const transported = vi.fn();
+  const callTool = vi.fn(
+    async (
+      _profile: string,
+      _key: string,
+      name: string,
+      _args: Record<string, unknown>,
+      authorization?: {
+        connectionId: string;
+        connectionIdentity?: string;
+        beforeCall(tool: McpToolInfo): Promise<void>;
+      },
+    ) => {
+      const tool = (surface.tools ?? [LOOKUP, RENAME, PURGE]).find(
+        (entry) => entry.name === name,
+      );
+      if (!tool) throw new Error("Unknown tool");
+      if (authorization?.connectionIdentity !== connectionIdentity())
+        throw new Error("Connection changed");
+      await authorization?.beforeCall(tool);
+      if (authorization?.connectionId !== (surface.connectionId ?? "probe-id"))
+        throw new Error("Connection changed");
+      transported();
+      await surface.onRawCall?.();
+      if (surface.failure) throw surface.failure;
+      return surface.result ?? RESULT;
+    },
+  );
+  const askApproval = vi.fn(async () => {
+    surface.onApproval?.();
+    return surface.approval ?? "allow";
   });
-  const askApproval = vi.fn(async () => surface.approval ?? "allow");
   const tokens = connectorMcpTokens();
   const app = Fastify();
   registerConnectorMcpRoute(app, {
@@ -93,7 +133,10 @@ function serve(
         readOnly: surface.readOnly ?? false,
         profileId: "profile",
         mcp: {
-          connectionIds: { probe: "probe-id", computer: "computer-id" },
+          connectionIds: {
+            probe: surface.connectionId ?? "probe-id",
+            computer: "computer-id",
+          },
           policies: {
             probe: [{ default: "allow", ...surface.policy }],
           },
@@ -102,7 +145,17 @@ function serve(
       }),
     } as never,
     mcpApps: {
-      tools: async () => [LOOKUP, RENAME, PURGE],
+      connectionIdentity,
+      tools: async (
+        _profile: string,
+        _server: string,
+        _id?: string,
+        expectedIdentity?: string,
+      ) => {
+        if (expectedIdentity && expectedIdentity !== connectionIdentity())
+          throw new Error("Connection changed");
+        return surface.tools ?? [LOOKUP, RENAME, PURGE];
+      },
       callTool,
     } as never,
     identity: { tenantId: "tenant", externalUserId: "person" },
@@ -131,7 +184,7 @@ function serve(
         params,
       },
     });
-  return { app, rpc, callTool, askApproval };
+  return { app, rpc, callTool, askApproval, transported };
 }
 
 describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
@@ -164,9 +217,18 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
       arguments: { name: "Ada" },
     });
     expect(called.json().result).toEqual(RESULT);
-    expect(callTool).toHaveBeenCalledWith("profile", "probe/lookup", "lookup", {
-      name: "Ada",
-    });
+    expect(callTool).toHaveBeenCalledWith(
+      "profile",
+      "probe/lookup",
+      "lookup",
+      {
+        name: "Ada",
+      },
+      expect.objectContaining({
+        connectionId: "probe-id",
+        beforeCall: expect.any(Function),
+      }),
+    );
     expect(askApproval).not.toHaveBeenCalled();
   });
 
@@ -188,6 +250,129 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
     );
     expect(callTool).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["denied", "read-only", "connection", "session", "schema"])(
+    "rechecks %s changes after an approval before forwarding",
+    async (change) => {
+      const state: Parameters<typeof serve>[0] = {
+        policy: { tools: { rename: "ask" } },
+      };
+      state.onApproval = () => {
+        if (change === "denied") state.policy = { tools: { rename: "deny" } };
+        if (change === "read-only") state.readOnly = true;
+        if (change === "connection") state.connectionId = "replacement";
+        if (change === "session") state.session = "missing";
+        if (change === "schema")
+          state.tools = [
+            LOOKUP,
+            { ...RENAME, inputSchema: { type: "object", required: ["other"] } },
+          ];
+      };
+      const { rpc, transported } = serve(state);
+      const called = await rpc("tools/call", { name: "rename", arguments: {} });
+      if (change === "connection") {
+        expect(called.json().error).toMatchObject({ code: -32000 });
+      } else {
+        expect(called.json().result).toMatchObject({ isError: true });
+      }
+      expect(transported).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["denied", "ask", "removed", "schema", "connection", "session"])(
+    "suppresses the raw result when target access is %s while its call is pending",
+    async (change) => {
+      let finish: (() => void) | undefined;
+      const state: Parameters<typeof serve>[0] = {
+        onRawCall: async () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+        result: { ...RESULT, structuredContent: { name: "PRIVATE_RESPONSE" } },
+      };
+      const { rpc, transported, callTool } = serve(state);
+      const pending = rpc("tools/call", {
+        name: "lookup",
+        arguments: { name: "Ada" },
+      });
+      await vi.waitFor(() => expect(transported).toHaveBeenCalledOnce());
+      if (change === "denied")
+        state.policy = { default: "allow", tools: { lookup: "deny" } };
+      if (change === "ask")
+        state.policy = { default: "allow", tools: { lookup: "ask" } };
+      if (change === "removed") state.tools = [RENAME];
+      if (change === "schema")
+        state.tools = [
+          { ...LOOKUP, inputSchema: { type: "object", required: ["other"] } },
+          RENAME,
+        ];
+      if (change === "connection") state.connectionId = "replacement";
+      if (change === "session") state.session = "missing";
+      finish?.();
+      const response = await pending;
+      expect(response.body).not.toContain("PRIVATE_RESPONSE");
+      if (change === "connection")
+        expect(response.json().error).toMatchObject({ code: -32000 });
+      else expect(response.json().result).toMatchObject({ isError: true });
+      expect(callTool).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["endpoint", "account", "aba"])(
+    "does not dispatch against a replacement %s after approval",
+    async (change) => {
+      const binding = {
+        endpoint: "https://server-a.test/mcp",
+        account: "account-a",
+        epoch: 0,
+      };
+      const { rpc, transported } = serve({
+        binding,
+        policy: { tools: { rename: "ask" } },
+        onApproval: () => {
+          if (change === "endpoint")
+            binding.endpoint = "https://server-b.test/mcp";
+          if (change === "account") binding.account = "account-b";
+          if (change === "aba") binding.epoch += 2;
+        },
+      });
+      const response = await rpc("tools/call", {
+        name: "rename",
+        arguments: {},
+      });
+      expect(response.json().result).toMatchObject({ isError: true });
+      expect(transported).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["endpoint", "account", "aba"])(
+    "suppresses raw results after its %s changes under the same id",
+    async (change) => {
+      const binding = {
+        endpoint: "https://server-a.test/mcp",
+        account: "account-a",
+        epoch: 0,
+      };
+      let finish: (() => void) | undefined;
+      const { rpc, transported } = serve({
+        binding,
+        result: { ...RESULT, structuredContent: { name: "PRIVATE_RESPONSE" } },
+        onRawCall: async () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      });
+      const pending = rpc("tools/call", { name: "lookup", arguments: {} });
+      await vi.waitFor(() => expect(transported).toHaveBeenCalledOnce());
+      if (change === "endpoint") binding.endpoint = "https://server-b.test/mcp";
+      if (change === "account") binding.account = "account-b";
+      if (change === "aba") binding.epoch += 2;
+      finish?.();
+      const response = await pending;
+      expect(response.body).not.toContain("PRIVATE_RESPONSE");
+      expect(response.json().result).toMatchObject({ isError: true });
+    },
+  );
 
   it("answers a declined ask as a tool error, never calling the connector", async () => {
     const { rpc, callTool } = serve({

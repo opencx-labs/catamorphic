@@ -1020,8 +1020,10 @@ function ProfileAgentBody({
         >
           Cancel
         </button>
-        {error ? (
-          <p className="min-w-0 flex-1 truncate text-xs text-danger">{error}</p>
+        {error || agent.credentialError ? (
+          <p role="alert" className="min-w-0 flex-1 text-xs text-danger">
+            {error ?? agent.credentialError}
+          </p>
         ) : effectiveAuth === "api-key" && !hasSavedKey && !apiKey.trim() ? (
           // The disable spans tabs; say why from any of them.
           <p className="min-w-0 flex-1 truncate text-[11px] text-fg-faint">

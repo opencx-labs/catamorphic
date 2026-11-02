@@ -1,5 +1,11 @@
 # Catamorphic Desktop — Design System
 
+Native authority belongs to admitted Work documents, with explicit grants for
+auxiliary pages. Browser and app content has separate, revocable boundaries
+(ADR 0300). Sandboxing and the internal-origin migration preserve existing
+interaction, drafts and settings. Secure storage failures retain recovery access
+and explain how to unlock or reconnect the affected credential.
+
 App identity uses canonical semantic icons (ADR 0125). Review, dashboard,
 report, tracker, form, and calculator each have one monochrome glyph across
 tabs, lists, and chat surfaces. Agents choose a type at creation or through a

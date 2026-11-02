@@ -13,6 +13,12 @@ import {
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import {
+  assertConnectorCallUnchanged,
+  assertConnectorTool,
+  connectorCallSnapshot,
+  liveConnectorContext,
+} from "../mcp-app-view-authorization.js";
 import type { McpAppsService } from "../mcp-apps.js";
 import {
   connectorToolPermitted,
@@ -105,42 +111,59 @@ export function registerConnectorMcpRoute(
     if (!deps.tokens.matches(params.sessionId, request.headers.authorization))
       return reply.status(401).send({ error: "Invalid connector token" });
     const core = deps.core();
-    const session = await core.agentSessions
-      ?.toolContextForSession({
-        identity: deps.identity,
+    const server = params.server;
+    const context = () =>
+      liveConnectorContext({
+        ...deps,
+        core,
         projectId: params.projectId,
         sessionId: params.sessionId,
-      })
-      .catch(() => undefined);
-    const agentId =
-      session?.agentId ?? deps.agents.defaultAgentId(params.projectId);
-    const surface =
-      session && agentId ? deps.agents.capabilitySurface(agentId) : undefined;
-    const server = params.server;
-    if (
-      !surface?.connectorsMounted ||
-      !surface.mcp.connectionIds[server] ||
-      surface.mcp.nativeServers?.[server]
-    ) {
+        server,
+      });
+    const initial = await context().catch(() => undefined);
+    if (!initial?.mounted) {
       return reply
         .status(404)
         .send({ error: "This chat has no such connector" });
     }
-    const merged = [
-      ...(surface.mcp.policies[server] ?? []),
-      ...(session?.toolPolicies?.[server] ?? []),
-    ];
-    const layers = merged.length > 0 ? merged : undefined;
+    const connectionIdentity = deps.mcpApps.connectionIdentity(
+      initial.profileId,
+      server,
+      initial.connectionId,
+    );
+    const live = async () => {
+      const current = await context();
+      if (
+        !current.mounted ||
+        current.profileId !== initial.profileId ||
+        current.connectionId !== initial.connectionId ||
+        current.agentId !== initial.agentId ||
+        deps.mcpApps.connectionIdentity(
+          current.profileId,
+          server,
+          current.connectionId,
+        ) !== connectionIdentity
+      )
+        throw new McpRequestError(-32_000, "The chat connector changed");
+      return { ...current, connectionIdentity };
+    };
     const tools = async (): Promise<McpToolInfo[]> => {
       try {
-        return (await deps.mcpApps.tools(surface.profileId, server)).filter(
-          (tool) =>
-            connectorToolPermitted({
-              layers,
-              // A read-only chat only reads, whatever its agent (ADR 0271).
-              readOnly: surface.readOnly || session?.readOnly === true,
-              tool,
-            }),
+        await live();
+        const roster = await deps.mcpApps.tools(
+          initial.profileId,
+          server,
+          initial.connectionId,
+          connectionIdentity,
+        );
+        const current = await live();
+        return roster.filter((tool) =>
+          connectorToolPermitted({
+            layers: current.layers,
+            // A read-only chat only reads, whatever its agent (ADR 0271).
+            readOnly: current.readOnly,
+            tool,
+          }),
         );
       } catch (error) {
         console.warn(`[desktop] Connector ${server} is unavailable`, error);
@@ -172,24 +195,72 @@ export function registerConnectorMcpRoute(
             );
             if (!tool)
               throw new McpRequestError(-32602, `Unknown tool: ${call.name}`);
+            const before = await live();
+            assertConnectorTool({
+              context: before,
+              tool,
+              args: call.arguments,
+            });
+            const snapshot = connectorCallSnapshot(before, tool);
             const verdict = await decideHostToolCall({
               core,
               sessionId: params.sessionId,
               server,
               tool: tool.name,
               input: call.arguments,
-              layers,
+              layers: before.layers,
               annotations: tool.annotations,
               signal: abort.signal,
             });
             if (!verdict.allowed) return toolError(verdict.message);
             try {
-              return await deps.mcpApps.callTool(
-                surface.profileId,
+              const result = await deps.mcpApps.callTool(
+                before.profileId,
                 `${server}/${tool.name}`,
                 tool.name,
                 call.arguments,
+                {
+                  connectionId: before.connectionId,
+                  connectionIdentity,
+                  beforeCall: async (currentTool) => {
+                    abort.signal.throwIfAborted();
+                    const after = await live();
+                    assertConnectorTool({
+                      context: after,
+                      tool: currentTool,
+                      args: call.arguments,
+                    });
+                    assertConnectorCallUnchanged({
+                      before: snapshot,
+                      after,
+                      currentTool,
+                    });
+                  },
+                },
               );
+              abort.signal.throwIfAborted();
+              const roster = await deps.mcpApps.tools(
+                before.profileId,
+                server,
+                before.connectionId,
+                connectionIdentity,
+              );
+              const after = await live();
+              const currentTool = roster.find(
+                (entry) => entry.name === call.name,
+              );
+              if (!currentTool) throw new Error(`Unknown tool: ${call.name}`);
+              assertConnectorTool({
+                context: after,
+                tool: currentTool,
+                args: call.arguments,
+              });
+              assertConnectorCallUnchanged({
+                before: snapshot,
+                after,
+                currentTool,
+              });
+              return result;
             } catch (error) {
               // The server's own error reaches the agent as it sent it, so
               // the agent can correct its arguments; a lost connection reads

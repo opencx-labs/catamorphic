@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
 import { agentToolResult } from "@catamorphic/sandbox";
-import { BrowserWindow, ipcMain, webContents } from "electron";
+import { BrowserWindow, webContents } from "electron";
 import {
   capOutput,
   encodeCommand,
@@ -29,6 +29,7 @@ import {
   isCommandWatch,
   runShellCheck,
 } from "./command-watches.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 import type { AgentTerminals } from "./terminal.js";
 
 /**

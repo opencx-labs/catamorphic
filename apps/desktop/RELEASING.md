@@ -100,7 +100,8 @@ not match the desktop package version. It then:
    Composer app icon (`build/icon.icon`), so packaging elsewhere needs Xcode
    26 too.
 3. Signs the app with Developer ID and submits it to Apple's notary service.
-4. Verifies the signature, Gatekeeper assessment, stapled ticket, bundle id,
+4. Verifies the signature, hardened Electron fuses in the packaged framework,
+   Gatekeeper assessment, stapled ticket, bundle id,
    URL scheme, the icon's asset catalog, DMG, and ZIP.
 5. Rewrites generated update metadata to the tagged GitHub asset URLs.
 6. Creates or updates the GitHub release and uploads the DMG, ZIP, blockmaps,
@@ -152,6 +153,15 @@ adapters but excludes their large platform packages. If either dependency is
 updated, update the matching platform version, tarball URL, and SHA-512 pins in
 `src/main/harness-components.ts` for every supported platform, run its focused
 tests, and repeat the clean-account first-use checks above.
+
+`electron-builder.yml` disables Electron's RunAsNode, Node environment options,
+Node inspector and extra `file:` privileges. It enables cookie encryption,
+embedded ASAR integrity validation and loading application code only from ASAR.
+`scripts/desktop-signature.ts` reads the actual signed Electron framework's fuse
+wire and rejects missing or incorrect settings, including each architecture in
+a universal binary. Packaged startup also rejects Chromium remote debugging
+launch flags. Development builds retain their local debugging tools. Cookie
+encryption is a one-way migration; keep it enabled in later releases.
 
 ## One-time npm setup
 

@@ -1,6 +1,13 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { safeStorage } from "electron";
+import { z } from "zod";
+import {
+  CredentialStorageError,
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 
 /**
  * Per-profile bindings for PROJECT agents:
@@ -30,6 +37,11 @@ export interface AgentBinding {
   auth?: BindingAuth;
 }
 
+export interface AgentBindingMetadata {
+  consentHash: string;
+  auth?: { mode: "local" } | { mode: "api-key"; hasApiKey: boolean };
+}
+
 type StoredAuth =
   | { mode: "local" }
   | { mode: "api-key"; apiKeyEncrypted?: string; apiKeyPlaintext?: string };
@@ -54,26 +66,70 @@ export class AgentBindingsStore {
 
   private load(): BindingsFile {
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file, "utf-8"));
-      if (raw && typeof raw.bindings === "object" && raw.bindings !== null) {
-        return raw as BindingsFile;
-      }
-    } catch {
-      // First run.
+      return z
+        .strictObject({
+          bindings: z.record(
+            z.string(),
+            z.strictObject({
+              consentHash: z.string(),
+              auth: z
+                .discriminatedUnion("mode", [
+                  z.strictObject({ mode: z.literal("local") }),
+                  z.strictObject({
+                    mode: z.literal("api-key"),
+                    apiKeyEncrypted: z.string().min(1).optional(),
+                    apiKeyPlaintext: z.string().optional(),
+                  }),
+                ])
+                .optional(),
+            }),
+          ),
+        })
+        .parse(JSON.parse(fs.readFileSync(this.file, "utf-8")));
+    } catch (cause) {
+      if (cause instanceof Error && "code" in cause && cause.code === "ENOENT")
+        return { bindings: {} };
+      throw new Error(
+        "Project agent credentials could not be opened. Restore the saved settings or reconnect the affected agent in Settings.",
+        { cause },
+      );
     }
-    return { bindings: {} };
   }
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(this.data, null, 2)}\n`, {
+    const temporary = `${this.file}.${randomUUID()}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(this.data, null, 2)}\n`, {
       mode: 0o600,
+      flag: "wx",
     });
+    fs.renameSync(temporary, this.file);
   }
 
   get(projectId: string, slug: string): AgentBinding | undefined {
     const stored = this.data.bindings[bindingKey(projectId, slug)];
     return stored ? this.decrypt(stored) : undefined;
+  }
+
+  /** Consent inspection never needs to unlock the person's credential. */
+  getMetadata(
+    projectId: string,
+    slug: string,
+  ): AgentBindingMetadata | undefined {
+    const stored = this.data.bindings[bindingKey(projectId, slug)];
+    if (!stored) return undefined;
+    if (!stored.auth) return { consentHash: stored.consentHash };
+    if (stored.auth.mode === "local")
+      return { consentHash: stored.consentHash, auth: { mode: "local" } };
+    return {
+      consentHash: stored.consentHash,
+      auth: {
+        mode: "api-key",
+        hasApiKey:
+          stored.auth.apiKeyEncrypted !== undefined ||
+          stored.auth.apiKeyPlaintext !== undefined,
+      },
+    };
   }
 
   /** Record consent for the definition state captured by `consentHash`. */
@@ -98,18 +154,13 @@ export class AgentBindingsStore {
   private encryptAuth(auth: BindingAuth): StoredAuth {
     if (auth.mode === "local") return { mode: "local" };
     if (!auth.apiKey) return { mode: "api-key" };
-    if (safeStorage.isEncryptionAvailable()) {
-      return {
-        mode: "api-key",
-        apiKeyEncrypted: safeStorage
-          .encryptString(auth.apiKey)
-          .toString("base64"),
-      };
-    }
-    console.warn(
-      "[desktop] OS keychain encryption unavailable; storing API key in plaintext.",
-    );
-    return { mode: "api-key", apiKeyPlaintext: auth.apiKey };
+    requireCredentialEncryption();
+    return {
+      mode: "api-key",
+      apiKeyEncrypted: safeStorage
+        .encryptString(auth.apiKey)
+        .toString("base64"),
+    };
   }
 
   private decrypt(stored: StoredBinding): AgentBinding {
@@ -117,17 +168,20 @@ export class AgentBindingsStore {
     if (stored.auth.mode === "local") {
       return { consentHash: stored.consentHash, auth: { mode: "local" } };
     }
+    if (stored.auth.apiKeyPlaintext !== undefined)
+      throw new CredentialStorageError(
+        "This project agent's saved credential is not encrypted. Reconnect the agent in Settings to save it securely. The existing settings have been preserved.",
+      );
     let apiKey: string | null = null;
     if (stored.auth.apiKeyEncrypted) {
+      requireCredentialEncryption();
       try {
         apiKey = safeStorage.decryptString(
           Buffer.from(stored.auth.apiKeyEncrypted, "base64"),
         );
-      } catch {
-        apiKey = null;
+      } catch (cause) {
+        throw credentialUnlockError({ cause });
       }
-    } else {
-      apiKey = stored.auth.apiKeyPlaintext ?? null;
     }
     return {
       consentHash: stored.consentHash,

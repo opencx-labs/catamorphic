@@ -1,3 +1,8 @@
+vi.mock("./shell-ipc.js", async () => ({
+  shellIpcMain: (await import("electron")).ipcMain,
+  isRegisteredShellContents: () => true,
+}));
+
 import os from "node:os";
 import path from "node:path";
 import { ipcMain } from "electron";

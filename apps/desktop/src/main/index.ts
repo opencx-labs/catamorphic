@@ -9,7 +9,6 @@ import {
   app,
   BrowserWindow,
   dialog,
-  ipcMain,
   Menu,
   MenuItem,
   type MenuItemConstructorOptions,
@@ -22,6 +21,7 @@ import {
   type WebContents,
   webContents,
 } from "electron";
+import { SHELL_WINDOW_ARGUMENT } from "../shared/desktop-workspace.js";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { macApplicationMenu } from "./app-menu.js";
@@ -40,6 +40,7 @@ import {
 import { dockClicks } from "./dock-clicks.js";
 import { registerDockIcon } from "./dock-icon.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
+import { GuestDocuments } from "./guest-documents.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -47,6 +48,7 @@ import { adoptLoginShellPath } from "./login-shell-path.js";
 import { McpAppsService } from "./mcp-apps.js";
 import { MobilePairingService } from "./mobile-pairing.js";
 import { prepareVersionBackup } from "./pre-migration-backup.js";
+import { assertProductionLaunchArguments } from "./production-launch.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { registerResourceSupport } from "./resource-monitor.js";
@@ -58,6 +60,19 @@ import {
 } from "./server/boot.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
+import {
+  isSameShellDocument,
+  migrateShellStorage,
+  registerShellScheme,
+  serveShellDocuments,
+  shellDocumentUrl,
+} from "./shell-document.js";
+import {
+  isRegisteredShellContents,
+  registerShellContents,
+  shellIpcMain,
+  shellSurfaceFor,
+} from "./shell-ipc.js";
 import {
   registerDesktopShutdown,
   shutdownDesktopServices,
@@ -86,6 +101,21 @@ import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 // production identity so local testing cannot poison the production item's
 // access control list and cause prompts after an update.
 const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
+try {
+  assertProductionLaunchArguments({
+    isPackaged: app.isPackaged,
+    hasSwitch: (name) => app.commandLine.hasSwitch(name),
+  });
+} catch (error) {
+  dialog.showErrorBox(
+    "Work could not start securely",
+    error instanceof Error
+      ? error.message
+      : "Remove debugging options and open Work again.",
+  );
+  app.exit(1);
+}
+registerShellScheme();
 app.setName(
   desktopApplicationName({
     isPackaged: app.isPackaged,
@@ -193,8 +223,8 @@ const pendingBrowserUrls = process.argv.flatMap((arg) => {
 });
 let pendingBrowserWindow: BrowserWindow | null = null;
 function browserLinkWindow(): BrowserWindow | undefined {
-  const windows = BrowserWindow.getAllWindows().filter(
-    (window) => !desktopWorkspaces?.isDock(window),
+  const windows = BrowserWindow.getAllWindows().filter((window) =>
+    desktopWorkspaces?.isWorkspace(window),
   );
   return windows.find((window) => window.isFocused()) ?? windows[0];
 }
@@ -218,7 +248,7 @@ function notifyBrowserLinks(): void {
   window.focus();
   window.webContents.send("catamorphic:pending-browser-urls");
 }
-ipcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
+shellIpcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (!window || event.senderFrame !== event.sender.mainFrame) return [];
   if (!pendingBrowserWindow || pendingBrowserWindow.isDestroyed())
@@ -245,7 +275,7 @@ function deliverConnectLink(url: string): void {
 }
 
 /** The renderer's side of the hand-off (registered here: no ipc.ts cycle). */
-ipcMain.handle("catamorphic:remote-take-pending-link", () => {
+shellIpcMain.handle("catamorphic:remote-take-pending-link", () => {
   const link = pendingConnectLink;
   pendingConnectLink = null;
   return link;
@@ -315,9 +345,10 @@ export interface WindowProfileRegistry {
 
 const windows: WindowProfileRegistry = {
   profileFor(sender) {
-    return (
-      windowProfiles.get(sender.id) ?? profilesStore.lastActiveProfile().id
-    );
+    const profileId = windowProfiles.get(sender.id);
+    if (!profileId || !profilesStore.get(profileId))
+      throw new Error("This action requires a registered Work profile.");
+    return profileId;
   },
   windowsFor(profileId) {
     return BrowserWindow.getAllWindows().filter(
@@ -338,6 +369,10 @@ const windows: WindowProfileRegistry = {
       return;
     }
     windowProfiles.set(sender.id, profileId);
+    if (previousProfileId !== profileId) {
+      guestDocuments?.closeOwner(sender.id);
+      state.current?.mcpAppViews?.closeOwner(sender.id);
+    }
     if (previousProfileId !== profileId)
       desktopWorkspaces?.reassign(sender, previousProfileId);
     profilesStore.setLastActiveProfile(profileId);
@@ -373,7 +408,7 @@ const windowButtons = new WindowButtons({
 });
 
 /** A collapsed sidebar holding the header hides them until it is revealed. */
-ipcMain.handle(
+shellIpcMain.handle(
   "catamorphic:window-controls-visible",
   (event, visible: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -450,7 +485,8 @@ function createWindow(
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      additionalArguments: [SHELL_WINDOW_ARGUMENT],
       // Browser tabs render as <webview> guests (see main/browser.ts).
       webviewTag: true,
     },
@@ -495,6 +531,15 @@ function createWindow(
   window.on("closed", () => {
     windowProfiles.delete(webContentsId);
   });
+  window.webContents.on(
+    "did-start-navigation",
+    (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame && !inPlace) {
+        guestDocuments?.closeOwner(webContentsId);
+        state.current?.mcpAppViews?.closeOwner(webContentsId);
+      }
+    },
+  );
 
   // Claims are in place before renderer loading, including every retained
   // project of a restored window. Detached docks never enter this store.
@@ -512,16 +557,19 @@ function createWindow(
         window: workspaceState.id,
         ...(initialProjectId ? { project: initialProjectId } : {}),
       };
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void window.loadURL(
-      `${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query)}`,
-    );
-  } else {
-    void window.loadFile(
-      path.join(import.meta.dirname, "../renderer/index.html"),
-      { query },
-    );
-  }
+  const documentUrl = shellDocumentUrl({ query });
+  registerShellContents({
+    contents: window.webContents,
+    documentUrl,
+    surface: "workspace",
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isSameShellDocument(documentUrl, url)) return;
+    event.preventDefault();
+    if (/^https?:/i.test(url))
+      window.webContents.send("catamorphic:browser-open-url", { url });
+  });
+  void window.loadURL(documentUrl);
   return window;
 }
 
@@ -675,6 +723,80 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  const rendererRoot = path.join(import.meta.dirname, "../renderer");
+  serveShellDocuments({ root: rendererRoot });
+  await migrateShellStorage({ root: rendererRoot });
+  guestDocuments = new GuestDocuments({
+    api: () => state.current ?? undefined,
+    views: () => state.current?.mcpAppViews,
+    projectRoot: (projectId) =>
+      state.current?.projectRoots.getSync(projectId) ?? undefined,
+    permits: (ownerId, projectId) => {
+      const contents = webContents.fromId(ownerId);
+      if (!contents || !isRegisteredShellContents(contents)) return false;
+      return (
+        profilesStore.profileForProject(projectId).id ===
+        windows.profileFor(contents)
+      );
+    },
+  });
+  guestDocuments.serve();
+  shellIpcMain.handle(
+    "catamorphic:app-guest-document",
+    (event, input: unknown) => {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("url" in input) ||
+        typeof input.url !== "string" ||
+        !("mountId" in input) ||
+        typeof input.mountId !== "string"
+      )
+        throw new Error("Invalid app document");
+      return guestDocuments?.projectUrl({
+        ownerId: event.sender.id,
+        url: input.url,
+        mountId: input.mountId,
+      });
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:app-guest-close",
+    (event, input: unknown) => {
+      if (
+        input &&
+        typeof input === "object" &&
+        "url" in input &&
+        typeof input.url === "string"
+      )
+        guestDocuments?.close({ ownerId: event.sender.id, url: input.url });
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:pdf-guest-document",
+    (event, input: unknown) => {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("projectId" in input) ||
+        typeof input.projectId !== "string" ||
+        !("filePath" in input) ||
+        typeof input.filePath !== "string"
+      )
+        throw new Error("Invalid PDF document");
+      return guestDocuments?.pdfUrl({
+        ownerId: event.sender.id,
+        projectId: input.projectId,
+        filePath: input.filePath,
+      });
+    },
+  );
+  app.on("web-contents-created", (_event, contents) => {
+    contents.once("destroyed", () => {
+      guestDocuments?.closeOwner(contents.id);
+      state.current?.mcpAppViews?.closeOwner(contents.id);
+    });
+  });
   // An empty native image restores the signed bundle icon on macOS. Keep
   // Icon Composer rendering under OS control when no custom icon is selected.
   registerDockIcon({
@@ -688,6 +810,7 @@ app.whenReady().then(async () => {
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.
   if (
+    !app.isPackaged &&
     shouldUseE2ePlainTextEncryption({
       e2eDataDir,
       platform: process.platform,
@@ -859,6 +982,7 @@ app.whenReady().then(async () => {
       profileConfig.forProfile(profileId).prefs.load().dockDetached,
     isWorkspace: (window) => desktopWorkspaces?.isWorkspace(window) ?? false,
     activeProject: (window) => desktopWorkspaces?.activeProject(window) ?? null,
+    browserProfileFor: (contents) => browserSupport?.profileOf(contents),
   });
   terminalSupport = registerTerminalSupport(
     state,
@@ -868,6 +992,12 @@ app.whenReady().then(async () => {
       ...(agentBridge?.openHookEnv(projectId) ?? {}),
     }),
     (projectId, sender) => desktopWorkspaces?.owner(projectId) === sender,
+    {
+      canAccessProject: (projectId, sender) =>
+        profilesStore.profileForProject(projectId).id ===
+        windows.profileFor(sender),
+      profileFor: (sender) => windows.profileFor(sender),
+    },
   );
   registerResourceSupport();
   desktopWorkspaces = new DesktopWorkspaces({
@@ -906,7 +1036,7 @@ app.whenReady().then(async () => {
         (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     },
   );
-  ipcMain.handle("catamorphic:webview-preload", () =>
+  shellIpcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
   const session = windowState.load();
@@ -976,6 +1106,12 @@ app.whenReady().then(async () => {
       mcpApps,
       incognitoSessions,
       [desktopProfileMcpProvider],
+      (ownerId) => {
+        const contents = webContents.fromId(ownerId);
+        return contents && isRegisteredShellContents(contents)
+          ? windows.profileFor(contents)
+          : undefined;
+      },
     );
     versionBackup.markBootSuccessful();
     // The app's own windows (the default session; browser tabs have their
@@ -1074,6 +1210,7 @@ let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 let voiceSupport: ReturnType<typeof registerVoiceSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
 let desktopUpdater: DesktopUpdaterService | null = null;
+let guestDocuments: GuestDocuments | null = null;
 
 registerDesktopShutdown({
   app,
@@ -1148,17 +1285,32 @@ app.on("window-all-closed", () => {
 function allowDesktopWindowsApi(input: { url: string; token: string }): void {
   const api = new URL(input.url);
   session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: [`${api.protocol}//${api.hostname}/*`] },
+    { urls: ["<all_urls>"] },
     (details, callback) => {
       const target = new URL(details.url);
+      const requestHeaders = Object.fromEntries(
+        Object.entries(details.requestHeaders).filter(
+          ([name]) => name.toLowerCase() !== DESKTOP_API_TOKEN_HEADER,
+        ),
+      );
+      const contents =
+        details.webContentsId === undefined
+          ? undefined
+          : webContents.fromId(details.webContentsId);
+      const trusted =
+        contents &&
+        shellSurfaceFor(contents) === "workspace" &&
+        details.frame &&
+        !details.frame.detached &&
+        details.frame === contents.mainFrame;
       callback({
         requestHeaders:
-          target.host === api.host
+          target.origin === api.origin && trusted
             ? {
-                ...details.requestHeaders,
+                ...requestHeaders,
                 [DESKTOP_API_TOKEN_HEADER]: input.token,
               }
-            : details.requestHeaders,
+            : requestHeaders,
       });
     },
   );

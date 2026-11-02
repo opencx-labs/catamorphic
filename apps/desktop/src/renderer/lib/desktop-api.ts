@@ -243,6 +243,8 @@ export interface AgentInfo {
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** Saved ciphertext is retained; the affected agent cannot run until unlocked. */
+  credentialError?: string;
   /** Media kinds this agent's chat composer accepts. */
   accepts: Array<"image" | "document">;
   /** The agent's own main prompt ("" when none). */
@@ -544,6 +546,8 @@ export interface InstalledConnectorInfo {
 
 /** An MCP Apps view template, ready to mount in a sandboxed iframe. */
 export interface McpAppViewData {
+  mountId: string;
+  documentToken: string;
   toolKey: string;
   html: string;
   csp: { connectDomains: string[]; resourceDomains: string[] };
@@ -1484,10 +1488,25 @@ export interface CatamorphicDesktopApi {
   workspaceStateSet: (projectId: string, snapshot: unknown) => Promise<void>;
 
   /** "server/tool" → ui:// resource uri, for tools declaring app views. */
+  appGuestDocument: (input: {
+    url: string;
+    mountId: string;
+  }) => Promise<string>;
+  appGuestClose: (input: { url: string }) => Promise<void>;
+  pdfGuestDocument: (input: {
+    projectId: string;
+    filePath: string;
+  }) => Promise<string>;
   mcpAppsUiTools: () => Promise<Record<string, string>>;
-  mcpAppsView: (toolKey: string) => Promise<McpAppViewData>;
+  mcpAppsView: (input: {
+    projectId: string;
+    sessionId: string;
+    toolKey: string;
+    toolUseId: string;
+  }) => Promise<McpAppViewData>;
+  mcpAppsClose: (mountId: string) => Promise<void>;
   mcpAppsCall: (
-    viewToolKey: string,
+    mountId: string,
     toolName: string,
     args: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;

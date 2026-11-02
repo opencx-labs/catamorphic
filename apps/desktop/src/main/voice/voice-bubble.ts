@@ -7,7 +7,7 @@ import {
 } from "electron";
 import { z } from "zod";
 import type { DockSpot } from "../../shared/dock-position.js";
-import type { VoiceBubbleState } from "../../shared/voice.js";
+import { VOICES, type VoiceBubbleState } from "../../shared/voice.js";
 import {
   VOICE_BUBBLE_SIZE as SIZE,
   type VoiceBubbleDrag,
@@ -17,9 +17,23 @@ import {
   voiceBubbleRest,
   voiceSpotsLayout,
 } from "../../shared/voice-bubble.js";
+import { shellDocumentUrl } from "../shell-document.js";
+import { registerShellContents } from "../shell-ipc.js";
 
 /** How long the bubble takes to go: its page's exit, then the window. */
 const LEAVE_MS = 200;
+
+const voiceId = z.enum(VOICES.map((voice) => voice.id));
+/** The floating microphone can save exactly the choices its existing menu offers. */
+export const voiceMenuPrefsPatchSchema = z.strictObject({
+  voiceAssistant: z.string().min(1).max(1024).nullable().optional(),
+  voiceId: voiceId.optional(),
+  agentVoices: z.record(z.string().min(1).max(1024), voiceId).optional(),
+  voiceMicrophone: z.string().max(4096).nullable().optional(),
+  voiceprint: z.null().optional(),
+  voiceDictation: z.boolean().optional(),
+  voiceInDock: z.boolean().optional(),
+});
 
 /** The bubble's page moving it, as it arrives over IPC. */
 export const voiceBubbleDragSchema = z.object({
@@ -153,16 +167,36 @@ export function createVoiceBubble(options: {
     if (process.platform === "darwin") next.excludedFromShownWindowsMenu = true;
   };
 
-  const load = (next: BrowserWindow, surface: string) => {
-    const url = process.env.ELECTRON_RENDERER_URL;
-    void (
-      url
-        ? next.loadURL(`${url}/?surface=${surface}`)
-        : next.loadFile(
-            path.join(import.meta.dirname, "../renderer/index.html"),
-            { query: { surface } },
-          )
-    ).catch(() => {});
+  const load = (next: BrowserWindow, surface: "voice" | "bubble-spots") => {
+    const documentUrl = shellDocumentUrl({ query: { surface } });
+    registerShellContents({
+      contents: next.webContents,
+      documentUrl,
+      surface: "voice",
+      channels:
+        surface === "bubble-spots"
+          ? ["catamorphic:theme-get", "catamorphic:voice-bubble-spots-state"]
+          : [
+              "catamorphic:theme-get",
+              "catamorphic:prefs-get",
+              "catamorphic:prefs-set",
+              "catamorphic:agents-list",
+              "catamorphic:keybindings-get",
+              "catamorphic:voice-get-status",
+              "catamorphic:voice-press",
+              "catamorphic:voice-release",
+              "catamorphic:voice-reset",
+              "catamorphic:voice-learn",
+              "catamorphic:voice-bubble-menu",
+              "catamorphic:voice-bubble-state",
+              "catamorphic:voice-bubble-drag",
+              "catamorphic:voice-bubble-windows",
+              "catamorphic:voice-bubble-window",
+            ],
+    });
+    next.webContents.on("will-navigate", (event) => event.preventDefault());
+    next.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    void next.loadURL(documentUrl).catch(() => {});
   };
 
   // A panel on macOS: over full-screen apps and on every Space, and a
@@ -185,7 +219,7 @@ export function createVoiceBubble(options: {
         preload: path.join(import.meta.dirname, "../preload/index.cjs"),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     });
 

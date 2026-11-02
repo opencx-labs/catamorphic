@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { app, ipcMain, type Session, type WebContents } from "electron";
 import type { BrowserSleepBlocker } from "../shared/browser-history.js";
 import { pageDialogs } from "./browser-dialogs.js";
+import { shellIpcMain } from "./shell-ipc.js";
 
 /**
  * Sleeping tabs (ADR 0194), the main-process half. The renderer decides
@@ -151,7 +152,7 @@ export function registerBrowserSleep({
       guest.send("catamorphic:browser-sleep-probe", probe);
     });
 
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-sleep-blocker",
     async (
       event,
@@ -183,8 +184,8 @@ export function registerBrowserSleep({
     Number(process.env.CATAMORPHIC_E2E_TAB_SLEEP_MINUTE_MS) > 0
       ? Number(process.env.CATAMORPHIC_E2E_TAB_SLEEP_MINUTE_MS)
       : 60_000;
-  ipcMain.handle("catamorphic:browser-sleep-minute", () => minuteMs);
-  ipcMain.handle(
+  shellIpcMain.handle("catamorphic:browser-sleep-minute", () => minuteMs);
+  shellIpcMain.handle(
     "catamorphic:browser-sleep",
     (event, input: { guestId?: unknown }) => {
       const guest = hostedGuest(event.sender, input?.guestId);
@@ -192,7 +193,7 @@ export function registerBrowserSleep({
     },
   );
   // A tab closed, or a sleep abandoned, before its snapshot was used.
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-sleep-release",
     (event, input: { snapshotId?: unknown }) => {
       const id = input?.snapshotId;

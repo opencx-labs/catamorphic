@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import http from "node:http";
 import path from "node:path";
-import { buildAppGuestDocument } from "@catamorphic/app";
+import {
+  PROJECT_APPS_DIR,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
 
@@ -11,8 +13,6 @@ let base: string;
 let parentId: string;
 let childId: string;
 let file: string;
-let guestServer: http.Server;
-let guestUrl: string;
 beforeAll(async () => {
   app = await launchApp();
   const bundle = path.join(app.userDataDir, "agent-widget.js");
@@ -31,39 +31,34 @@ beforeAll(async () => {
     { cwd: path.join(import.meta.dirname, "../../..") },
   );
   const code = fs.readFileSync(bundle, "utf8");
-  guestServer = http.createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    response.setHeader("Content-Type", "text/html");
-    response.end(
-      buildAppGuestDocument({
-        code,
-        css: "",
-        theme: JSON.parse(url.searchParams.get("theme") ?? "null") ?? undefined,
-      }),
-    );
-  });
-  await new Promise<void>((resolve) =>
-    guestServer.listen(0, "127.0.0.1", resolve),
-  );
-  const address = guestServer.address();
-  if (!address || typeof address === "string")
-    throw new Error("Guest fixture did not listen");
-  guestUrl = `http://127.0.0.1:${address.port}/agent-monitor`;
-  // Only the built-app lookup is a fixture. The actual sandbox, display bridge,
-  // source adapter, session reads and action execution run in the desktop.
-  await app.cdp("Page.addScriptToEvaluateOnNewDocument", {
-    source: `(() => {
-    const original = window.fetch;
-    window.fetch = (input, init) => {
-      const url = typeof input === 'string' ? input : input.url ?? String(input);
-      if (url.includes('/apps/agent-monitor/view-state')) return Promise.resolve(new Response(JSON.stringify({state:'ready', appId:'a1b2c3d4-e5f6-4890-abcd-ef1234567890', versionId:'b2c3d4e5-f6a7-4890-bcde-a12345678901', guestUrl:${JSON.stringify(guestUrl)}}), {headers:{'Content-Type':'application/json'}}));
-      return original(input, init);
-    };
-  })()`,
-  });
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   const project = await app.eval<{ id: string }>(
     `window.catamorphicDesktop.createProject({name:'Sidebar primitives',rootPath:${JSON.stringify(path.join(app.userDataDir, "sidebar-primitives"))}})`,
+  );
+  const projectRoot = path.join(app.userDataDir, "sidebar-primitives");
+  const appRoot = path.join(projectRoot, PROJECT_APPS_DIR, "agent-monitor");
+  fs.mkdirSync(appRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, PROJECT_WORKSPACE_ROOT, "package.json"),
+    JSON.stringify({
+      name: "sidebar-widget-fixture",
+      private: true,
+      workspaces: ["apps/*"],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(appRoot, "package.json"),
+    JSON.stringify({
+      name: "agent-monitor",
+      private: true,
+      type: "module",
+      scripts: { build: "bun build.mjs" },
+    }),
+  );
+  fs.writeFileSync(path.join(appRoot, "widget.js"), code);
+  fs.writeFileSync(
+    path.join(appRoot, "build.mjs"),
+    "import fs from 'node:fs';fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('widget.js','dist/app.js');",
   );
   file = await app.eval<string>(
     "window.catamorphicDesktop.workspaceConfigFile()",
@@ -75,6 +70,25 @@ beforeAll(async () => {
   const server = await app.eval<{ url: string }>(
     "window.catamorphicDesktop.getServerState()",
   );
+  // Compile the prebundled widget through a real zero-dependency project build.
+  // Its iframe must receive the normal native document grant.
+  const buildResponse = await fetch(
+    `${server.url}/api/projects/${project.id}/apps/agent-monitor/builds`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "preview" }),
+    },
+  );
+  expect(buildResponse.status).toBe(201);
+  const build: unknown = await buildResponse.json();
+  if (
+    !build ||
+    typeof build !== "object" ||
+    !("status" in build) ||
+    build.status !== "ready"
+  )
+    throw new Error(`Sidebar widget build failed: ${JSON.stringify(build)}`);
   base = `${server.url}/api/projects/${project.id}/agent/sessions`;
   const response = await fetch(base, {
     method: "POST",
@@ -107,7 +121,6 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await app?.stop();
-  await new Promise<void>((resolve) => guestServer?.close(() => resolve()));
 });
 
 it("loads the real Codex-authored tree and independent right-click menu", async () => {
@@ -276,7 +289,11 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
       `${String(cause)} ERRORS=${JSON.stringify(app.getRendererErrors())} BODY=${await app.eval("document.body.innerText")}`,
     );
   }
-  const frame = await app.connectToFrame("/agent-monitor");
+  const guestUrl = await app.eval<string>(
+    `document.querySelector('[data-sidebar-widget="agent-monitor"] iframe').src`,
+  );
+  expect(guestUrl).toMatch(/^work-guest:\/\/p-/);
+  const frame = await app.connectToFrame(guestUrl);
   try {
     await frame.waitFor(`document.body.innerText.includes('Research child')`);
     expect(

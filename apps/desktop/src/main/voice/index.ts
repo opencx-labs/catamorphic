@@ -48,6 +48,12 @@ import { popupNativeMenu } from "../native-menu.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "../server/boot.js";
+import { shellDocumentUrl } from "../shell-document.js";
+import {
+  isRegisteredShellContents,
+  registerShellContents,
+  shellIpcMain,
+} from "../shell-ipc.js";
 import {
   unheardReplies,
   VoiceConversation,
@@ -64,7 +70,13 @@ import {
 import { isStopCommand, speakableText } from "./speech-text.js";
 import { SystemKeys } from "./system-keys.js";
 import { createVoiceBubble, voiceBubbleDragSchema } from "./voice-bubble.js";
-import { listenForVoiceKeys } from "./voice-keys.js";
+import {
+  chatForVoiceShortcut,
+  listenForVoiceKeys,
+  profileForVoiceContents,
+  type VoiceShortcutChat,
+  voiceFrameContext,
+} from "./voice-keys.js";
 import { quietForConversation, VoiceQuiet } from "./voice-quiet.js";
 
 /** What voice says when it starts learning the person's voice. */
@@ -274,6 +286,8 @@ export function registerVoiceSupport(deps: {
   profileConfig: ProfileConfigManager;
   profiles: ProfilesStore;
   windows: WindowProfileRegistry;
+  /** Prepared browsing pages and sign-in popups have a profile, without shell authority. */
+  browserProfileFor?: (contents: WebContents) => string | undefined;
   /** Chats kept on this computer (ADR 0062), the assistant's among them. */
   incognito: IncognitoSessionsStore;
   /** Whether a profile's dock floats detached now, as the person left it. */
@@ -284,6 +298,20 @@ export function registerVoiceSupport(deps: {
   activeProject: (window: BrowserWindow) => string | null;
 }): { dispose: () => Promise<void> } {
   const { state, profileConfig, profiles, windows, incognito } = deps;
+  const shellProfileFor = (contents: WebContents) => {
+    if (!isRegisteredShellContents(contents)) return undefined;
+    try {
+      return windows.profileFor(contents);
+    } catch {
+      return undefined;
+    }
+  };
+  const profileForContents = (contents: WebContents) =>
+    profileForVoiceContents({
+      contents,
+      shellProfileFor,
+      browserProfileFor: deps.browserProfileFor,
+    });
   const models = new VoiceModelStore({
     rootDir:
       process.env.CATAMORPHIC_VOICE_MODELS_DIR ??
@@ -379,7 +407,7 @@ export function registerVoiceSupport(deps: {
   /** Voice moving to another window's assistant: the bubble stays up. */
   let switching = false;
   // The bubble is too small for a menu inside it: its menus are native.
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:voice-bubble-menu",
     (event, entries: readonly MenuItem[]) => {
       const window = BrowserWindow.fromWebContents(event.sender);
@@ -398,7 +426,7 @@ export function registerVoiceSupport(deps: {
   const ofProfile = (window: BrowserWindow, profileId: string) =>
     !window.isDestroyed() &&
     deps.isWorkspace(window) &&
-    windows.profileFor(window.webContents) === profileId;
+    shellProfileFor(window.webContents) === profileId;
   /** The last workspace window of a profile the person was in. */
   const windowFor = (profileId: string): BrowserWindow | null =>
     recentWindows.find((window) => ofProfile(window, profileId)) ?? null;
@@ -416,11 +444,13 @@ export function registerVoiceSupport(deps: {
     (window ? deps.activeProject(window) : null) ??
     prefs(profileId).load().lastProjectId ??
     null;
-  /** Work's windows the person works in: not the audio page or bubble. */
+  /** Registered workspace windows, excluding browsing popups and auxiliary surfaces. */
   const workWindows = () =>
     BrowserWindow.getAllWindows().filter(
       (window) =>
-        !window.isDestroyed() && !isAudioWindow(window) && !bubble.owns(window),
+        !window.isDestroyed() &&
+        deps.isWorkspace(window) &&
+        shellProfileFor(window.webContents) !== undefined,
     );
   /** Whether one of Work's own windows is in front. */
   const workInFront = () => {
@@ -479,12 +509,11 @@ export function registerVoiceSupport(deps: {
     refreshBubble();
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed() || isAudioWindow(window)) continue;
+      const profileId = shellProfileFor(window.webContents);
+      if (!profileId) continue;
       // Moving to another window's assistant, the bubble shows no "off".
       if (switching && bubble.owns(window)) continue;
-      window.webContents.send(
-        "catamorphic:voice-status",
-        statusFor(windows.profileFor(window.webContents)),
-      );
+      window.webContents.send("catamorphic:voice-status", statusFor(profileId));
     }
   };
 
@@ -785,7 +814,10 @@ export function registerVoiceSupport(deps: {
     projectId: string,
   ): AssistantAgent | null => {
     const chosen = prefs(profileId).load().voiceAssistant;
-    if (chosen && profileConfig.forProfile(profileId).agents.get(chosen))
+    if (
+      chosen &&
+      profileConfig.forProfile(profileId).agents.getMetadata(chosen)
+    )
       return { agentId: chosen, builtIn: false };
     const projectDefault =
       state.current?.agentRegistry.defaultAgentId(projectId);
@@ -1095,7 +1127,7 @@ export function registerVoiceSupport(deps: {
           if (
             !window.isDestroyed() &&
             !isAudioWindow(window) &&
-            windows.profileFor(window.webContents) === voice.profileId
+            shellProfileFor(window.webContents) === voice.profileId
           )
             window.webContents.send("catamorphic:voice-levels", {
               at: event.at,
@@ -1225,11 +1257,12 @@ export function registerVoiceSupport(deps: {
    */
   const lastFields = new Map<string, WebFrameMain>();
   const onFieldFocus = (event: Electron.IpcMainEvent) => {
-    const frame = event.senderFrame;
-    if (!frame) return;
-    // A page's profile is its window's.
-    const contents = event.sender.hostWebContents ?? event.sender;
-    const profileId = windows.profileFor(contents);
+    const context = voiceFrameContext({
+      event,
+      profileFor: profileForContents,
+    });
+    if (!context) return;
+    const { frame, profileId } = context;
     lastFields.set(profileId, frame);
     const voice = active;
     if (voice?.profileId === profileId && voice.dictating)
@@ -1350,7 +1383,17 @@ export function registerVoiceSupport(deps: {
     const voice = active;
     if (voice?.dictating && voice.handsFree) void stop();
   };
-  ipcMain.on("catamorphic:voice-dictation-sent", dictationSent);
+  const onDictationSent = (event: Electron.IpcMainEvent) => {
+    const context = voiceFrameContext({
+      event,
+      profileFor: profileForContents,
+    });
+    if (!context || active?.profileId !== context.profileId) return;
+    const { frame, profileId } = context;
+    const field = lastFields.get(profileId);
+    if (field && sameFrame(field, frame)) dictationSent();
+  };
+  ipcMain.on("catamorphic:voice-dictation-sent", onDictationSent);
 
   /**
    * Learning the voice print: a spoken prompt, then the next few seconds
@@ -1724,27 +1767,33 @@ export function registerVoiceSupport(deps: {
   app.on("did-become-active", refreshBubble);
   app.on("did-resign-active", refreshBubble);
 
-  ipcMain.handle("catamorphic:voice-get-status", (event) =>
+  shellIpcMain.handle("catamorphic:voice-get-status", (event) =>
     statusFor(windows.profileFor(event.sender)),
   );
   // Resolve at once: the status events say when it plays and ends.
-  ipcMain.handle("catamorphic:voice-read-aloud", (event, input: unknown) => {
-    void readAloud(
-      windows.profileFor(event.sender),
-      readAloudSchema.parse(input),
-    );
-  });
+  shellIpcMain.handle(
+    "catamorphic:voice-read-aloud",
+    (event, input: unknown) => {
+      void readAloud(
+        windows.profileFor(event.sender),
+        readAloudSchema.parse(input),
+      );
+    },
+  );
   // Resolve at once: preparing can take a first download, and the status
   // events carry the rest.
-  ipcMain.handle("catamorphic:voice-press", (event, pressed: VoicePress) => {
-    pressFrom(windows.profileFor(event.sender), pressed);
-  });
+  shellIpcMain.handle(
+    "catamorphic:voice-press",
+    (event, pressed: VoicePress) => {
+      pressFrom(windows.profileFor(event.sender), pressed);
+    },
+  );
   // A microphone measures its own press: the main process may answer late.
-  ipcMain.handle("catamorphic:voice-release", (_event, input: unknown) =>
+  shellIpcMain.handle("catamorphic:voice-release", (_event, input: unknown) =>
     pressUp({ heldMs: heldMsOf(input) }),
   );
   // Learning starts voice when it is off: it needs the microphone.
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:voice-learn",
     async (event, input: { projectId?: string; sessionId?: string }) => {
       const profileId = windows.profileFor(event.sender);
@@ -1772,27 +1821,39 @@ export function registerVoiceSupport(deps: {
   );
 
   /** The chat in front of each window, for "Talk to this chat". */
-  const frontChats = new Map<
-    number,
-    { projectId: string; sessionId: string } | null
-  >();
-  let lastFrontChat: { projectId: string; sessionId: string } | null = null;
-  const onFrontChat = (
-    event: Electron.IpcMainEvent,
-    chat: { projectId: string; sessionId: string } | null,
-  ) => {
+  const frontChats = new Map<number, VoiceShortcutChat>();
+  const lastFrontChats = new Map<string, VoiceShortcutChat>();
+  const onFrontChat = (event: Electron.IpcMainEvent, raw: unknown) => {
+    const parsed = z
+      .object({ projectId: z.string().min(1), sessionId: z.string().min(1) })
+      .nullable()
+      .safeParse(raw);
+    if (!parsed.success) return;
+    const profileId = windows.profileFor(event.sender);
+    const chat = parsed.data ? { ...parsed.data, profileId } : null;
+    if (!chat) {
+      frontChats.delete(event.sender.id);
+      return;
+    }
+    if (profiles.profileForProject(chat.projectId).id !== profileId) return;
     frontChats.set(event.sender.id, chat);
-    if (chat) lastFrontChat = chat;
+    lastFrontChats.set(profileId, chat);
   };
-  ipcMain.on("catamorphic:voice-front-chat", onFrontChat);
+  shellIpcMain.on("catamorphic:voice-front-chat", onFrontChat);
 
   /** What a voice shortcut asks, from a window or from any app. */
   const keyPress = (
+    profileId: string,
     action: VoiceAction,
     contents: WebContents | null,
   ): VoicePress => {
-    const chat =
-      (contents ? frontChats.get(contents.id) : undefined) ?? lastFrontChat;
+    const chat = chatForVoiceShortcut({
+      profileId,
+      frontChat: contents ? frontChats.get(contents.id) : undefined,
+      lastChat: lastFrontChats.get(profileId),
+      profileForProject: (projectId) =>
+        profiles.profileForProject(projectId).id,
+    });
     if (action === "dictate") return { action };
     if (action === "talk-to-chat")
       return chat ? { action, ...chat } : { action };
@@ -1818,11 +1879,15 @@ export function registerVoiceSupport(deps: {
   // Voice's shortcuts in Work's windows and pages.
   const stopVoiceKeys = listenForVoiceKeys({
     keysFor: (contents) => {
-      const profileId = windows.profileFor(contents);
-      return { profileId, shortcuts: shortcutsFor(profileId) };
+      const profileId = profileForContents(contents);
+      return profileId
+        ? { profileId, shortcuts: shortcutsFor(profileId) }
+        : null;
     },
     down: (profileId, action, contents) =>
-      pressFrom(profileId, keyPress(action, contents), { key: true }),
+      pressFrom(profileId, keyPress(profileId, action, contents), {
+        key: true,
+      }),
     up: () => pressUp(),
   });
 
@@ -1832,7 +1897,7 @@ export function registerVoiceSupport(deps: {
    * every app, and whose chat is "this chat".
    */
   const lastWorkWindow = () =>
-    recentWindows.find((window) => !window.isDestroyed()) ?? null;
+    recentWindows.find((window) => workWindows().includes(window)) ?? null;
   const keysProfile = (): string | null => {
     const focused = BrowserWindow.getFocusedWindow();
     if (focused && workWindows().includes(focused))
@@ -1854,7 +1919,8 @@ export function registerVoiceSupport(deps: {
   const windowAssistant = (
     window: BrowserWindow,
   ): { profileId: string; home: string; name: string } | null => {
-    const profileId = windows.profileFor(window.webContents);
+    const profileId = shellProfileFor(window.webContents);
+    if (!profileId) return null;
     let home: string;
     try {
       home = assistantHome(profileId, windowProject(window, profileId) ?? "");
@@ -1865,8 +1931,9 @@ export function registerVoiceSupport(deps: {
     if (!assistant) return null;
     const name = assistant.builtIn
       ? "Work"
-      : (profileConfig.forProfile(profileId).agents.get(assistant.agentId)
-          ?.name ?? "Work");
+      : (profileConfig
+          .forProfile(profileId)
+          .agents.getMetadata(assistant.agentId)?.name ?? "Work");
     return { profileId, home, name };
   };
 
@@ -1885,7 +1952,7 @@ export function registerVoiceSupport(deps: {
     ].filter(
       (window) =>
         !window.isDestroyed() &&
-        deps.isWorkspace(window) &&
+        workWindows().includes(window) &&
         (window.isVisible() || window.isMinimized()),
     );
     const profileIds = new Set(
@@ -1983,7 +2050,7 @@ export function registerVoiceSupport(deps: {
               if (action && profileId)
                 pressFrom(
                   profileId,
-                  keyPress(action, window?.webContents ?? null),
+                  keyPress(profileId, action, window?.webContents ?? null),
                   { helper: true },
                 );
             }
@@ -2040,27 +2107,30 @@ export function registerVoiceSupport(deps: {
   /** Return in the app in front ends dictation listening on its own. */
   const watchSend = () =>
     systemKeys?.watchSend(!!active?.dictating && active.handsFree);
-  ipcMain.handle("catamorphic:voice-keys-status", () => keysState);
+  shellIpcMain.handle("catamorphic:voice-keys-status", () => keysState);
 
   // The bubble's page asks what it shows as it starts, and which windows'
   // assistants it can talk to; it moves the bubble when dragged. Its
   // resting spots' page asks what it shows as it starts.
   const fromBubble = (event: Electron.IpcMainInvokeEvent) =>
     bubble.pageOf(event.sender) === "bubble";
-  ipcMain.handle("catamorphic:voice-bubble-state", (event) =>
+  shellIpcMain.handle("catamorphic:voice-bubble-state", (event) =>
     fromBubble(event) ? bubble.state() : null,
   );
-  ipcMain.handle("catamorphic:voice-bubble-spots-state", (event) =>
+  shellIpcMain.handle("catamorphic:voice-bubble-spots-state", (event) =>
     bubble.pageOf(event.sender) === "spots" ? bubble.spotsState() : null,
   );
-  ipcMain.handle("catamorphic:voice-bubble-drag", (event, input: unknown) => {
-    const drag = voiceBubbleDragSchema.safeParse(input);
-    if (fromBubble(event) && drag.success) bubble.drag(drag.data);
-  });
-  ipcMain.handle("catamorphic:voice-bubble-windows", (event) =>
+  shellIpcMain.handle(
+    "catamorphic:voice-bubble-drag",
+    (event, input: unknown) => {
+      const drag = voiceBubbleDragSchema.safeParse(input);
+      if (fromBubble(event) && drag.success) bubble.drag(drag.data);
+    },
+  );
+  shellIpcMain.handle("catamorphic:voice-bubble-windows", (event) =>
     fromBubble(event) ? windowChoices() : [],
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:voice-bubble-window",
     async (event, windowId: unknown) => {
       if (fromBubble(event) && typeof windowId === "number")
@@ -2070,12 +2140,16 @@ export function registerVoiceSupport(deps: {
   // An embedded frame of a page asks for voice's keys as it starts, to
   // keep them from the page (its tab's host tells the top frame).
   ipcMain.handle("catamorphic:voice-keys-of-page", (event) => {
-    const contents = event.sender.hostWebContents ?? event.sender;
-    return Object.values(shortcutsFor(windows.profileFor(contents)))
+    const context = voiceFrameContext({
+      event,
+      profileFor: profileForContents,
+    });
+    if (!context) return "";
+    return Object.values(shortcutsFor(context.profileId))
       .filter(Boolean)
       .join("\n");
   });
-  ipcMain.handle("catamorphic:voice-keys-allow", async () => {
+  shellIpcMain.handle("catamorphic:voice-keys-allow", async () => {
     systemPreferences.isTrustedAccessibilityClient(true);
     await shell.openExternal(
       "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
@@ -2119,7 +2193,7 @@ export function registerVoiceSupport(deps: {
   });
 
   // A reset closes the assistant's chat; the next start makes another.
-  ipcMain.handle("catamorphic:voice-reset", async (event) => {
+  shellIpcMain.handle("catamorphic:voice-reset", async (event) => {
     const profileId = windows.profileFor(event.sender);
     if (
       active?.profileId === profileId &&
@@ -2158,8 +2232,8 @@ export function registerVoiceSupport(deps: {
       systemKeys?.stop();
       quiet?.stop();
       ipcMain.off("catamorphic:voice-field-focus", onFieldFocus);
-      ipcMain.off("catamorphic:voice-dictation-sent", dictationSent);
-      ipcMain.off("catamorphic:voice-front-chat", onFrontChat);
+      ipcMain.off("catamorphic:voice-dictation-sent", onDictationSent);
+      shellIpcMain.off("catamorphic:voice-front-chat", onFrontChat);
       for (const channel of [
         "catamorphic:voice-get-status",
         "catamorphic:voice-read-aloud",
@@ -2177,7 +2251,7 @@ export function registerVoiceSupport(deps: {
         "catamorphic:voice-bubble-window",
         "catamorphic:voice-keys-of-page",
       ])
-        ipcMain.removeHandler(channel);
+        shellIpcMain.removeHandler(channel);
       clearInterval(newsTimer);
       endReading();
       await stop();
@@ -2243,7 +2317,7 @@ async function openAudioWindow(
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       autoplayPolicy: "no-user-gesture-required",
       backgroundThrottling: false,
     },
@@ -2254,12 +2328,16 @@ async function openAudioWindow(
     if (!window.isDestroyed()) window.destroy();
   });
   try {
-    if (process.env.ELECTRON_RENDERER_URL)
-      await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/voice.html`);
-    else
-      await window.loadFile(
-        path.join(import.meta.dirname, "../renderer/voice.html"),
-      );
+    const documentUrl = shellDocumentUrl({ page: "voice.html" });
+    registerShellContents({
+      contents: window.webContents,
+      documentUrl,
+      surface: "voice",
+      channels: [],
+    });
+    window.webContents.on("will-navigate", (event) => event.preventDefault());
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    await window.loadURL(documentUrl);
   } catch (cause) {
     window.destroy();
     throw cause;

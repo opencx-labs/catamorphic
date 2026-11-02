@@ -27,6 +27,7 @@ describe("MCP app profile cleanup", () => {
     );
     const unsubscribe = vi.fn();
     const store = {
+      securityRevision: () => 0,
       onChanged: () => unsubscribe,
       list: () => [
         {
@@ -55,6 +56,7 @@ describe("MCP app profile cleanup", () => {
 
 describe("MCP connection pool after a failed call", () => {
   const store = {
+    securityRevision: () => 0,
     onChanged: () => () => {},
     list: () => [
       {

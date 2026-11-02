@@ -10,6 +10,7 @@ import {
 } from "../shared/page-dialogs.js";
 import type { ScriptDialogReply } from "../shared/script-dialogs.js";
 import { PageDialogs } from "./page-dialogs.js";
+import { shellIpcMain } from "./shell-ipc.js";
 
 /**
  * Pages in browser tabs ask through Work's dialogs (ADR 0227). Electron
@@ -380,7 +381,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   ipcMain.on("catamorphic:page-dialog", onScriptDialog);
   ipcMain.on("catamorphic:browser-unload-intent", onUnloadIntent);
   ipcMain.on("catamorphic:page-navigating", onPageNavigating);
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:page-dialogs",
     (event, input: { guestId?: unknown }): PageDialog[] => {
       const guest = hostedGuest(event.sender, input?.guestId);
@@ -389,7 +390,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       return dialogs.list(guest.id);
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:page-dialog-answer",
     (event, input: unknown): boolean => {
       const answer = pageDialogAnswerSchema.safeParse(input);
@@ -402,7 +403,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   // Closing a tab that disposes its page asks the page first, as Chrome
   // does: a page the person never touched, or one waiting on its own
   // dialog, just goes.
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:browser-close-ask",
     async (event, input: { guestId?: unknown }): Promise<CloseAsk> => {
       const guest = hostedGuest(event.sender, input?.guestId);

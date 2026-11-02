@@ -3,13 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn as spawnPty } from "@lydell/node-pty";
-import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { BrowserWindow, type WebContents } from "electron";
+import { z } from "zod";
 import type { TerminalCreateInput } from "../shared/terminal.js";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
 import { registerProcessOwner } from "./process-owners.js";
 import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
 import { shellBinShimDir, shellIntegration } from "./shell-integration.js";
+import {
+  shellIpcMain as ipcMain,
+  isRegisteredShellContents,
+} from "./shell-ipc.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { TerminalLifecycle } from "./terminal-lifecycle.js";
 
@@ -39,6 +44,8 @@ interface TerminalSession {
   releaseSender?: () => void;
   /** User sessions stream to their window; agent sessions broadcast. */
   sender: WebContents | null;
+  /** Profile authority captured when a user shell is created. */
+  profileId?: string;
   /**
    * Rolling output, kept as chunks: appending must not copy the whole
    * cap on every PTY data event (a chatty build produces thousands of
@@ -169,6 +176,10 @@ export function registerTerminalSupport(
   ) => Record<string, string> | Promise<Record<string, string>>,
   /** Whether `sender`'s window is the one `projectId` lives in now. */
   ownsProject?: (projectId: string, sender: WebContents) => boolean,
+  ipcPolicy?: {
+    canAccessProject: (projectId: string, sender: WebContents) => boolean;
+    profileFor: (sender: WebContents) => string;
+  },
 ): {
   dispose(): Promise<void>;
   hasActiveWork(): boolean;
@@ -218,11 +229,24 @@ export function registerTerminalSupport(
   // its fresh shell, and a view of an ended agent terminal (a tab that
   // remounts, or mounted late) still shows what it printed.
   // Insertion-ordered; oldest entries fall off past the cap.
-  const morgue = new Map<string, string>();
+  const morgue = new Map<
+    string,
+    {
+      buffer: string;
+      sender: WebContents | null;
+      projectId?: string;
+      profileId?: string;
+    }
+  >();
   const bury = (sessionId: string, session: TerminalSession) => {
     if (session.chunksLength === 0) return;
     morgue.delete(sessionId);
-    morgue.set(sessionId, bufferText(session));
+    morgue.set(sessionId, {
+      buffer: bufferText(session),
+      sender: session.sender,
+      projectId: session.projectId,
+      profileId: session.profileId,
+    });
     while (morgue.size > MORGUE_CAP) {
       const oldest = morgue.keys().next().value;
       if (oldest === undefined) break;
@@ -230,9 +254,19 @@ export function registerTerminalSupport(
     }
   };
 
-  const broadcast = (channel: string, payload: unknown) => {
+  const broadcast = (
+    projectId: string | undefined,
+    channel: string,
+    payload: unknown,
+  ) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) window.webContents.send(channel, payload);
+      if (
+        !window.isDestroyed() &&
+        isRegisteredShellContents(window.webContents) &&
+        projectId &&
+        ipcPolicy?.canAccessProject(projectId, window.webContents)
+      )
+        window.webContents.send(channel, payload);
     }
   };
 
@@ -242,9 +276,13 @@ export function registerTerminalSupport(
     payload: unknown,
   ) => {
     if (session.sender) {
-      if (!session.sender.isDestroyed()) session.sender.send(channel, payload);
+      if (
+        !session.sender.isDestroyed() &&
+        session.profileId === ipcPolicy?.profileFor(session.sender)
+      )
+        session.sender.send(channel, payload);
     } else {
-      broadcast(channel, payload);
+      broadcast(session.projectId, channel, payload);
     }
   };
 
@@ -322,6 +360,7 @@ export function registerTerminalSupport(
     input: TerminalCreateInput & {
       workingDirectory?: string;
       sender: WebContents | null;
+      ownerProfileId?: string;
       agent?: { projectId: string; sessionId: string };
     },
   ): Promise<{ sessionId: string; cwd: string }> => {
@@ -338,7 +377,12 @@ export function registerTerminalSupport(
       // No project: this desktop's terminal triggers are about its own
       // shells, not ones on the server.
       return {
-        sessionId: track({ pty: backend, shellName: "", sender: input.sender }),
+        sessionId: track({
+          pty: backend,
+          shellName: "",
+          sender: input.sender,
+          ownerProfileId: input.ownerProfileId,
+        }),
         cwd: "",
       };
     }
@@ -406,6 +450,7 @@ export function registerTerminalSupport(
         projectId: input.projectId ?? input.agent?.projectId,
         agent: input.agent,
         sender: input.sender,
+        ownerProfileId: input.ownerProfileId,
       }),
       cwd,
     };
@@ -418,6 +463,7 @@ export function registerTerminalSupport(
     projectId?: string;
     agent?: { projectId: string; sessionId: string };
     sender: WebContents | null;
+    ownerProfileId?: string;
   }): string => {
     const { pty } = input;
     lifecycle.track(pty);
@@ -425,6 +471,7 @@ export function registerTerminalSupport(
     const session: TerminalSession = {
       pty,
       sender: input.sender,
+      profileId: input.ownerProfileId,
       chunks: [],
       chunksLength: 0,
       shed: 0,
@@ -519,37 +566,82 @@ export function registerTerminalSupport(
     readGhosttyAppearance(),
   );
 
-  ipcMain.handle(
-    "catamorphic:terminal-create",
-    (event, input: TerminalCreateInput) =>
-      spawnSession({
-        ...(input.projectId ? { projectId: input.projectId } : {}),
-        ...(input.cols ? { cols: input.cols } : {}),
-        ...(input.rows ? { rows: input.rows } : {}),
-        ...(typeof input.chat?.sessionId === "string"
-          ? {
-              chat: {
-                sessionId: input.chat.sessionId,
-                remote: input.chat.remote === true,
-              },
-            }
-          : {}),
-        sender: event.sender,
-      }),
-  );
+  const sessionIdInput = z.string().min(1).max(256);
+  const dimensionInput = z.number().int().min(1).max(1000);
+  const createInput = z.object({
+    projectId: z.string().min(1).max(256).optional(),
+    cols: dimensionInput.optional(),
+    rows: dimensionInput.optional(),
+    chat: z
+      .object({ sessionId: z.string().min(1).max(256), remote: z.boolean() })
+      .optional(),
+  });
+  const allowed = (
+    sender: WebContents,
+    session: {
+      sender: WebContents | null;
+      projectId?: string;
+      profileId?: string;
+    },
+  ) => {
+    if (!ipcPolicy) return false;
+    if (
+      session.profileId !== undefined &&
+      session.profileId !== ipcPolicy.profileFor(sender)
+    )
+      return false;
+    if (session.sender !== null) return session.sender === sender;
+    return (
+      !!session.projectId &&
+      ipcPolicy.canAccessProject(session.projectId, sender)
+    );
+  };
+  const ownedSession = (sender: WebContents, raw: unknown) => {
+    const session = sessions.get(sessionIdInput.parse(raw));
+    if (session && !allowed(sender, session))
+      throw new Error("This terminal belongs to another Work window.");
+    return session;
+  };
+  ipcMain.handle("catamorphic:terminal-create", (event, raw: unknown) => {
+    const input: TerminalCreateInput = createInput.parse(raw);
+    if (
+      !ipcPolicy ||
+      (input.projectId &&
+        !ipcPolicy.canAccessProject(input.projectId, event.sender))
+    )
+      throw new Error("This project belongs to another profile.");
+    return spawnSession({
+      ownerProfileId: ipcPolicy.profileFor(event.sender),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.cols ? { cols: input.cols } : {}),
+      ...(input.rows ? { rows: input.rows } : {}),
+      ...(typeof input.chat?.sessionId === "string"
+        ? {
+            chat: {
+              sessionId: input.chat.sessionId,
+              remote: input.chat.remote === true,
+            },
+          }
+        : {}),
+      sender: event.sender,
+    });
+  });
 
   ipcMain.handle(
     "catamorphic:terminal-write",
-    (_event, sessionId: string, data: string) => {
-      const session = sessions.get(sessionId);
+    (event, sessionId: unknown, raw: unknown) => {
+      const data = z.string().max(1_000_000).parse(raw);
+      const session = ownedSession(event.sender, sessionId);
       if (session?.running) session.pty.write(data);
     },
   );
 
   ipcMain.handle(
     "catamorphic:terminal-resize",
-    (_event, sessionId: string, cols: number, rows: number) => {
-      const session = sessions.get(sessionId);
+    (event, sessionId: unknown, rawCols: unknown, rawRows: unknown) => {
+      const cols = dimensionInput.parse(rawCols);
+      const rows = dimensionInput.parse(rawRows);
+      const session = ownedSession(event.sender, sessionId);
       if (session?.running && cols > 0 && rows > 0) {
         session.pty.resize(cols, rows);
       }
@@ -572,6 +664,8 @@ export function registerTerminalSupport(
         !session?.running ||
         !session.transit ||
         session.projectId !== projectId ||
+        !ipcPolicy?.canAccessProject(projectId, event.sender) ||
+        session.profileId !== ipcPolicy.profileFor(event.sender) ||
         !ownsProject?.(projectId, event.sender)
       )
         return null;
@@ -582,10 +676,11 @@ export function registerTerminalSupport(
     },
   );
 
-  ipcMain.handle("catamorphic:terminal-kill", (_event, sessionId: string) => {
+  ipcMain.handle("catamorphic:terminal-kill", (event, raw: unknown) => {
     // A kill from a live tab (Cmd+D) closes it through the exit event.
     // Unmount-triggered kills unsubscribed already; it is a no-op for them.
-    const session = sessions.get(sessionId);
+    const sessionId = sessionIdInput.parse(raw);
+    const session = ownedSession(event.sender, sessionId);
     if (session) end(sessionId, session);
   });
 
@@ -596,9 +691,11 @@ export function registerTerminalSupport(
    */
   ipcMain.handle(
     "catamorphic:terminal-restore-buffer",
-    (_event, sessionId: string) => {
-      const buffer = morgue.get(sessionId);
-      return buffer !== undefined ? { buffer } : null;
+    (event, raw: unknown) => {
+      const record = morgue.get(sessionIdInput.parse(raw));
+      return record && allowed(event.sender, record)
+        ? { buffer: record.buffer }
+        : null;
     },
   );
 
@@ -606,12 +703,15 @@ export function registerTerminalSupport(
    * Replay history when a renderer attaches to an agent session: a live
    * one, or one that ended (its view keeps the final output).
    */
-  ipcMain.handle("catamorphic:terminal-buffer", (_event, sessionId: string) => {
-    const session = sessions.get(sessionId);
+  ipcMain.handle("catamorphic:terminal-buffer", (event, raw: unknown) => {
+    const sessionId = sessionIdInput.parse(raw);
+    const session = ownedSession(event.sender, sessionId);
     if (session)
       return { buffer: bufferText(session), running: session.running };
-    const buffer = morgue.get(sessionId);
-    return buffer !== undefined ? { buffer, running: false } : null;
+    const record = morgue.get(sessionId);
+    return record && allowed(event.sender, record)
+      ? { buffer: record.buffer, running: false }
+      : null;
   });
 
   /**
@@ -678,7 +778,9 @@ export function registerTerminalSupport(
     read: (sessionId, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
       // An ended terminal's tab still shows its last output: so does this.
-      const text = session ? bufferText(session) : morgue.get(sessionId);
+      const text = session
+        ? bufferText(session)
+        : morgue.get(sessionId)?.buffer;
       return text === undefined ? null : text.slice(-maxChars);
     },
     bufferLength: (sessionId) => {

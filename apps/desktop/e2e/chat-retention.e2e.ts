@@ -343,13 +343,18 @@ it("fills the next main-thread frame after a jump beyond overscan", async () => 
 });
 
 async function withWatchers(count: number, check: () => Promise<void>) {
+  const shellOrigin = await app.eval<string>("window.origin");
   const removed = new Set<string>();
   const failures: unknown[] = [];
   const unsubscribe = app.onCdpEvent("Fetch.requestPaused", (raw) => {
     const event = raw as {
       requestId: string;
-      request: { method: string; url: string };
+      request: { method: string; url: string; headers: Record<string, string> };
     };
+    const preflight = event.request.method === "OPTIONS";
+    const requestedHeaders = Object.entries(event.request.headers).find(
+      ([name]) => name.toLowerCase() === "access-control-request-headers",
+    )?.[1];
     if (event.request.method === "DELETE")
       removed.add(new URL(event.request.url).pathname.split("/").at(-1)!);
     const body =
@@ -370,9 +375,30 @@ async function withWatchers(count: number, check: () => Promise<void>) {
     void app
       .cdp("Fetch.fulfillRequest", {
         requestId: event.requestId,
-        responseCode: 200,
-        responseHeaders: [{ name: "content-type", value: "application/json" }],
-        body: Buffer.from(JSON.stringify(body)).toString("base64"),
+        responseCode: preflight ? 204 : 200,
+        responseHeaders: [
+          { name: "content-type", value: "application/json" },
+          { name: "access-control-allow-origin", value: shellOrigin },
+          ...(preflight
+            ? [
+                {
+                  name: "access-control-allow-methods",
+                  value: "GET, DELETE, OPTIONS",
+                },
+                ...(requestedHeaders
+                  ? [
+                      {
+                        name: "access-control-allow-headers",
+                        value: requestedHeaders,
+                      },
+                    ]
+                  : []),
+              ]
+            : []),
+        ],
+        ...(preflight
+          ? {}
+          : { body: Buffer.from(JSON.stringify(body)).toString("base64") }),
       })
       .catch((error) => failures.push(error));
   });

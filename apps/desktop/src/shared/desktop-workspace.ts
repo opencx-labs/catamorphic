@@ -8,6 +8,10 @@ import type {
 import type { ChatSessionMenuEntry } from "./chat-session-actions.js";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
 
+/** Native designation for workspace/dock preloads, never browsing or auxiliary pages. */
+export const SHELL_WINDOW_ARGUMENT = "--catamorphic-shell-window";
+export const SHELL_WINDOW_CLOSE_CHANNEL = "catamorphic:window-close";
+
 export type DockData = Pick<
   ChatDockProps,
   | "projectId"
