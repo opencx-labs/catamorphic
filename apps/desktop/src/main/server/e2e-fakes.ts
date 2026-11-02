@@ -1913,6 +1913,28 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // A long settled log, without shell or provider IO: used to verify that
+  // folded history releases its rows and details after their exit.
+  if (prompt === "retained history fixture") {
+    yield { type: "title", content: "Retained history" };
+    for (let index = 0; index < 500; index += 1) {
+      yield {
+        type: "command",
+        content: `Read fixture document ${index}`,
+        description: `Read fixture document ${index}`,
+        toolUseId: `retained-${index}`,
+      };
+      yield {
+        type: "command",
+        status: "ended",
+        toolUseId: `retained-${index}`,
+        toolResult: `Document ${index}\n${"Fixture content\n".repeat(60)}`,
+      };
+    }
+    yield { type: "text", content: "Finished reading the fixture documents." };
+    return;
+  }
+
   // Resource measurements: a turn shaped like a real one — many short
   // steps with changing activity, a long quiet step, then a long answer
   // streamed in small chunks, as a model writes it.

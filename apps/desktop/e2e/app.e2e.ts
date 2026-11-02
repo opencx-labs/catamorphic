@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -724,14 +725,25 @@ describe("chat flows", () => {
       // the window a beat after it is saved, so this holds once it has.
       await runWait(
         `const section = ${chat};
-         const running = section?.querySelector('[data-live-work] [data-testid="chat-step"][data-running]');
-         if (!running?.textContent.includes('Run the tests')) return false;
+         if (!section?.querySelector('[data-live-work]')) return false;
+         if (section.querySelector('[data-live-work] [data-testid="chat-step"]')) return false;
          const notes = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
            .filter((prose) => ${thisTurn}(prose) &&
              /read the parser|Fixing it, then testing/.test(prose.textContent));
          const lines = ${toggles};
-         return notes.length === 2 && lines.length >= 2 &&
-           lines.every((toggle) => toggle.getAttribute('aria-expanded') === 'false');`,
+         if (notes.length !== 2 || lines.length < 2 ||
+           !lines.every((toggle) => toggle.getAttribute('aria-expanded') === 'false')) return false;
+         // The folded command has no DOM. Its session item still proves
+         // this assertion runs during the test command, not before it.
+         return (async () => {
+           const api = window.catamorphicDesktop;
+           const dock = await api.dockSnapshot();
+           const chat = dock.chats.find(chat => chat.entry.localId === section.dataset.chatLocalId);
+           const {url} = await api.getServerState();
+           const response = await fetch(url+'/api/projects/'+chat.projectId+'/agent/sessions/'+chat.entry.sessionId);
+           const {snapshot} = await response.json();
+           return snapshot.items.some(item => item.kind === 'command' && item.description === 'Run the tests' && item.status === 'in_progress');
+         })();`,
         {
           timeoutMs: 30_000,
           label: "notes in place, steps folded while running",
@@ -2098,43 +2110,51 @@ describe("subagents and background watchers", () => {
   });
 
   it("a background command pulses until it ends, then wakes the chat and leaves no terminal behind", async () => {
-    await run(`
-      const ta = floatingDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'background: sleep 6 && echo bg-done');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    // The turn ends at once; the command keeps running: its step stays in
-    // view outside the fold, pulsing, and its terminal chip spins.
-    await runWait(
-      `const step = floatingDock()?.querySelector(
-         '[data-testid="chat-step"][data-step-kind="background"][data-running]');
-       return !!step &&
-         step.textContent.includes('Running in background') &&
-         step.textContent.includes('Run it in the background') &&
-         !!step.querySelector('.animate-pulse');`,
-      { timeoutMs: 30_000, label: "running background step pulses" },
-    );
-    const backgroundAlignment = await run<number>(`
-      const row=floatingDock().querySelector('[data-step-kind="background"][data-running]');
-      return Math.abs(row.getBoundingClientRect().left-row.closest('[data-testid="chat-turn-steps"]').getBoundingClientRect().left);
-    `);
-    expect(backgroundAlignment).toBeLessThan(1);
-    await runWait(
-      `return !!floatingDock()?.querySelector(
-         '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,
-      { label: "its terminal chip spins" },
-    );
-    // The chat's own icon (its bubble) says what it left running while it
-    // rests.
+    // Keep the real child running until every running-state assertion has
+    // observed it, including on a loaded native runner.
+    const gate = path.join(app.userDataDir, "background-command-ready");
+    const command = `background: while [ ! -f '${gate.replaceAll("'", "'\\''")}' ]; do sleep 0.05; done; echo bg-done`;
     const ownMark = `(() => {
       const id = floatingDock()?.closest('[data-chat-local-id]')?.dataset.chatLocalId;
       const bubble = id && $('[data-chat-bubble="' + id + '"]');
       return bubble ? (bubble.querySelector('[data-activity]')?.dataset.activity ?? 'none') : null;
     })()`;
-    await runWait(`return ${ownMark} === 'command';`, {
-      label: "the chat's icon shows its running command",
-    });
+    try {
+      await run(`
+      const ta = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(ta, ${JSON.stringify(command)});
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+      // The turn ends at once; the command keeps running: its step stays in
+      // view outside the fold, pulsing, and its terminal chip spins.
+      await runWait(
+        `const step = floatingDock()?.querySelector(
+         '[data-testid="chat-step"][data-step-kind="background"][data-running]');
+       return !!step &&
+         step.textContent.includes('Running in background') &&
+         step.textContent.includes('Run it in the background') &&
+         !!step.querySelector('.animate-pulse');`,
+        { timeoutMs: 30_000, label: "running background step pulses" },
+      );
+      const backgroundAlignment = await run<number>(`
+      const row=floatingDock().querySelector('[data-step-kind="background"][data-running]');
+      return Math.abs(row.getBoundingClientRect().left-row.closest('[data-testid="chat-turn-steps"]').getBoundingClientRect().left);
+    `);
+      expect(backgroundAlignment).toBeLessThan(1);
+      await runWait(
+        `return !!floatingDock()?.querySelector(
+         '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,
+        { label: "its terminal chip spins" },
+      );
+      // The chat's own icon (its bubble) says what it left running while it
+      // rests.
+      await runWait(`return ${ownMark} === 'command';`, {
+        label: "the chat's icon shows its running command",
+      });
+    } finally {
+      fs.writeFileSync(gate, "ready");
+    }
     // When it finishes, the chat gets a task notification row (ADR 0217),
     // never a message bubble, and the agent answers.
     await runWait(
@@ -2238,12 +2258,14 @@ describe("news from a background command (ADR 0217)", () => {
     );
     // Its turn's steps open, and the step opens to the output it carried
     // and a link to its terminal.
-    await run(
-      `const step = floatingDock().querySelector('[data-step-kind="notification"]');
-       const steps = step.closest('[data-testid="chat-turn-steps"]');
-       const toggle = steps.querySelector('[data-testid="chat-turn-steps-toggle"]');
-       if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
-       step.querySelector('button').click();`,
+    await runWait(
+      `for (const toggle of floatingDock().querySelectorAll('[data-testid="chat-turn-steps-toggle"]'))
+         if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+       const step = floatingDock().querySelector('[data-step-kind="notification"]');
+       const button = step?.querySelector('button');
+       if (button?.getAttribute('aria-expanded') === 'false') button.click();
+       return !!button;`,
+      { label: "folded notification mounted and opened" },
     );
     await runWait(
       `const step = floatingDock()?.querySelector('[data-step-kind="notification"]');

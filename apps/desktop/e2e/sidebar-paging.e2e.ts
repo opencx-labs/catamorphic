@@ -438,23 +438,29 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
     button: "left",
     clickCount: 1,
   });
-  await app.waitFor(
-    `document.querySelector('${panelThumb}').hasAttribute('data-dragging')`,
-  );
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x: drag.x,
-    y: drag.y + 25,
-    button: "left",
-    buttons: 1,
-  });
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x: drag.x,
-    y: drag.y + 25,
-    button: "left",
-    clickCount: 1,
-  });
+  try {
+    await app.waitFor(
+      `document.querySelector('${panelThumb}').hasAttribute('data-dragging')`,
+    );
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: drag.x,
+      y: drag.y + 25,
+      button: "left",
+      buttons: 1,
+    });
+    await app.waitFor(
+      `document.querySelector('${panelThumb}').hasAttribute('data-dragging') && document.querySelector('${panelSelector}').scrollTop > ${drag.top}`,
+    );
+  } finally {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: drag.x,
+      y: drag.y + 25,
+      button: "left",
+      clickCount: 1,
+    });
+  }
   await app.waitFor(
     `!document.querySelector('${panelThumb}').hasAttribute('data-dragging') && document.querySelector('${panelSelector}').scrollTop > ${drag.top}`,
   );

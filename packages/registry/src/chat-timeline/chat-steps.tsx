@@ -28,13 +28,16 @@ import {
   createContext,
   memo,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
-import { SwapText, useLinger } from "./activity-text.js";
+import { SwapText, transitionPlaying, useLinger } from "./activity-text.js";
 import {
   hrefOf,
   type InputLinkModifiers,
@@ -45,6 +48,7 @@ import {
   taskIcon,
   taskTone,
 } from "./session-input.js";
+import { StepWindow } from "./step-window.js";
 import type { StepSource } from "./turn-rows.js";
 
 /**
@@ -1271,10 +1275,27 @@ export function TurnSteps({
   defaultExpanded?: boolean;
 } & StepHandlers) {
   const [chosen, setChosen] = useState<boolean>();
+  // Keep the person's choices, not the rendered payloads, while folded.
+  const [details, setDetails] = useState<ReadonlySet<string>>(() => new Set());
+  const changeDetail = useCallback((key: string, open: boolean) => {
+    setDetails((current) => {
+      if (current.has(key) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+  // Focus belongs to the retained list, not rows remounted after a fold.
+  const focusedKey = steps.find((step) => step.focused)?.key;
+  useEffect(() => {
+    if (focusedKey) changeDetail(focusedKey, true);
+  }, [focusedKey, changeDetail]);
   // Read once; dropped after it played, so the block never clips again.
   const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
   const onScreen = useContext(OnScreen);
+  const visible = useOnScreen();
   useEffect(() => {
     if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
@@ -1289,6 +1310,7 @@ export function TurnSteps({
     shown.current = true;
   }, []);
   const rowsEnter = shown.current && onScreen.current;
+  const rowSizes = useRef(new Map<string, number>());
   // The clock fades out where it was before it goes, when the turn ends
   // or a later line takes it.
   const clockShown = useLinger(clock ? true : undefined, CLOCK_FADE_MS);
@@ -1303,11 +1325,40 @@ export function TurnSteps({
       step.background &&
       backgroundStates.get(step.background.ref)?.status === "running",
   );
-  const folded = steps.filter((step) => !running.includes(step));
+  // A finishing background row still owns its place until its exit ends.
+  // Only then does it join history; it is never drawn in both places.
+  const [backgroundKeys, setBackgroundKeys] = useState<ReadonlySet<string>>(
+    () => new Set(running.map((step) => step.key)),
+  );
+  if (running.some((step) => !backgroundKeys.has(step.key)))
+    setBackgroundKeys(
+      new Set([...backgroundKeys, ...running.map((step) => step.key)]),
+    );
+  const backgroundClosed = useCallback((key: string) => {
+    setBackgroundKeys((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }, []);
+  const folded = steps.filter((step) => !backgroundKeys.has(step.key));
+  const knownSteps = useRef(new Set(folded.map((step) => step.key)));
+  useLayoutEffect(() => {
+    knownSteps.current = new Set(folded.map((step) => step.key));
+  });
   // No line when it would open onto nothing: a lone step, or only
   // commands still running in view, unless it carries the clock.
   const bare = !clock && (lone || folded.length === 0);
   const open = folded.length > 0 && (bare || expanded);
+  const list = useRef<HTMLDivElement>(null);
+  const shownList = useLinger(open ? true : undefined, 220, () =>
+    transitionPlaying(list.current, "grid-template-rows"),
+  );
+  const listMounted = useRef(false);
+  useEffect(() => {
+    listMounted.current = shownList.value === true;
+  }, [shownList.value]);
   // Placed with its list open, the list opens its height under the line
   // once (the line itself was already there).
   const [listOpening, setListOpening] = useState(placed && open);
@@ -1360,44 +1411,65 @@ export function TurnSteps({
               </div>
             </div>
           </div>
-          {running.length > 0 && (
+          {steps.some((step) => step.background) && (
             <div
-              className={`flex flex-col ${bare ? "-mt-0.5" : "mt-0.5"}`}
+              className="flex flex-col"
               data-testid="chat-running-background"
             >
-              {running.map((step) => (
-                <StepRow
-                  key={step.background?.ref}
-                  step={step}
-                  enter={rowsEnter}
-                  {...handlers}
-                />
-              ))}
+              {steps
+                .filter((step) => step.background)
+                .map((step) => (
+                  <BackgroundStep
+                    key={step.key}
+                    step={step}
+                    running={running.includes(step)}
+                    onClosed={backgroundClosed}
+                    enter={rowsEnter}
+                    open={details.has(step.key)}
+                    onOpen={changeDetail}
+                    {...handlers}
+                  />
+                ))}
             </div>
           )}
-          {/* Grid-rows tween: the list stays mounted, so the collapse mirrors
-            the expansion exactly. */}
+          {/* Hold the rows through the closing tween, then release their DOM.
+              A long folded transcript keeps only its steps line. */}
           <div
+            ref={list}
+            data-testid="chat-step-list"
             className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
             } ${listOpening ? "cat-step-in" : ""}`}
             onAnimationEnd={(event) => {
               if (event.target === event.currentTarget) setListOpening(false);
             }}
+            inert={!open}
+            aria-hidden={!open}
           >
             <div className="overflow-hidden">
-              <div
-                className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
-              >
-                {folded.map((step) => (
-                  <StepRow
-                    key={step.key}
-                    step={step}
-                    enter={rowsEnter}
-                    {...handlers}
-                  />
-                ))}
-              </div>
+              {shownList.value && (
+                <StepWindow
+                  rows={folded}
+                  opened={details}
+                  sizes={rowSizes}
+                  active={open && visible}
+                  className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
+                  render={(step) => (
+                    <StepRow
+                      key={step.key}
+                      step={step}
+                      enter={
+                        rowsEnter &&
+                        listMounted.current &&
+                        !knownSteps.current.has(step.key)
+                      }
+                      open={details.has(step.key)}
+                      onOpen={changeDetail}
+                      {...handlers}
+                    />
+                  )}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -1410,6 +1482,38 @@ interface StepRowProps extends StepHandlers {
   step: TurnStep;
   /** Joined a list already on screen: plays its entrance once. */
   enter?: boolean;
+  open: boolean;
+  onOpen: (key: string, open: boolean) => void;
+}
+
+/** Background work closes where it ran before its row folds into history. */
+function BackgroundStep({
+  running,
+  onClosed,
+  ...props
+}: StepRowProps & { running: boolean; onClosed: (key: string) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const shown = useLinger(running ? true : undefined, 220, () =>
+    transitionPlaying(box.current, "grid-template-rows"),
+  );
+  useEffect(() => {
+    if (!shown.value) onClosed(props.step.key);
+  }, [shown.value, onClosed, props.step.key]);
+  if (!shown.value) return null;
+  return (
+    <div
+      ref={box}
+      className="cat-reveal"
+      data-closed={shown.leaving || undefined}
+      inert={shown.leaving}
+      aria-hidden={shown.leaving || undefined}
+      data-testid="chat-background-presence"
+    >
+      <div>
+        <StepRow {...props} />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -1420,16 +1524,25 @@ interface StepRowProps extends StepHandlers {
 const StepRow = memo(function StepRow({
   step,
   enter = false,
+  open,
+  onOpen,
   resolveToolIcon,
   renderAgentIcon,
   onFileClick,
   onLinkClick,
   renderMarkdown,
 }: StepRowProps) {
-  const [open, setOpen] = useState(step.focused ?? false);
-  useEffect(() => {
-    if (step.focused) setOpen(true);
-  }, [step.focused]);
+  const payload = useRef<HTMLDivElement>(null);
+  const shownPayload = useLinger(open ? true : undefined, 220, () =>
+    transitionPlaying(payload.current, "grid-template-rows"),
+  );
+  const markdown = useMemo(
+    () =>
+      shownPayload.value && step.markdown && step.detail
+        ? renderMarkdown(step.detail)
+        : null,
+    [shownPayload.value, step.markdown, step.detail, renderMarkdown],
+  );
   // Read once: a row that was already there never gains the entrance.
   const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
@@ -1452,6 +1565,7 @@ const StepRow = memo(function StepRow({
   return (
     <div
       data-testid="chat-step"
+      data-step-key={step.key}
       data-step-kind={step.kind}
       data-step-status={step.status}
       data-running={pulsing || undefined}
@@ -1479,7 +1593,7 @@ const StepRow = memo(function StepRow({
                     altKey: event.altKey,
                   })
               : expandable
-                ? () => setOpen((value) => !value)
+                ? () => onOpen(step.key, !open)
                 : undefined
           }
           className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left ${
@@ -1546,44 +1660,49 @@ const StepRow = memo(function StepRow({
           closed instead of popping in and out. */}
         {expandable && (
           <div
+            ref={payload}
             className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
             }`}
           >
             <div className="overflow-hidden" inert={!open}>
-              {!step.detail ? null : step.markdown ? (
-                <div
-                  className="cat-markdown mb-1 ml-6 mt-0.5 min-w-0 select-text break-words text-xs leading-5 text-fg-muted"
-                  data-testid="chat-step-detail"
-                >
-                  {renderMarkdown(step.detail)}
-                </div>
-              ) : (
-                <pre
-                  className={`mb-1 ml-6 mt-0.5 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
-                  data-testid="chat-step-detail"
-                >
-                  {step.detail}
-                </pre>
-              )}
-              {step.link && (
-                <a
-                  href={step.link.href}
-                  className="mb-1 ml-6 inline-block rounded text-[11px] text-accent underline-offset-2 hover:underline"
-                  data-testid="chat-step-source"
-                  onClick={(event) => {
-                    if (!onLinkClick || !step.link) return;
-                    event.preventDefault();
-                    onLinkClick(step.link.href, {
-                      metaKey: event.metaKey,
-                      ctrlKey: event.ctrlKey,
-                      altKey: event.altKey,
-                      shiftKey: event.shiftKey,
-                    });
-                  }}
-                >
-                  {step.link.label}
-                </a>
+              {shownPayload.value && (
+                <>
+                  {!step.detail ? null : step.markdown ? (
+                    <div
+                      className="cat-markdown mb-1 ml-6 mt-0.5 min-w-0 select-text break-words text-xs leading-5 text-fg-muted"
+                      data-testid="chat-step-detail"
+                    >
+                      {markdown}
+                    </div>
+                  ) : (
+                    <pre
+                      className={`mb-1 ml-6 mt-0.5 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
+                      data-testid="chat-step-detail"
+                    >
+                      {step.detail}
+                    </pre>
+                  )}
+                  {step.link && (
+                    <a
+                      href={step.link.href}
+                      className="mb-1 ml-6 inline-block rounded text-[11px] text-accent underline-offset-2 hover:underline"
+                      data-testid="chat-step-source"
+                      onClick={(event) => {
+                        if (!onLinkClick || !step.link) return;
+                        event.preventDefault();
+                        onLinkClick(step.link.href, {
+                          metaKey: event.metaKey,
+                          ctrlKey: event.ctrlKey,
+                          altKey: event.altKey,
+                          shiftKey: event.shiftKey,
+                        });
+                      }}
+                    >
+                      {step.link.label}
+                    </a>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1634,6 +1753,8 @@ const STEP_COMPARISONS = Object.values(SAME_STEP);
 /** `enter` is read once, as the row mounts: it never renders a row again. */
 function sameStepRow(previous: StepRowProps, next: StepRowProps): boolean {
   return (
+    previous.open === next.open &&
+    previous.onOpen === next.onOpen &&
     (previous.step === next.step ||
       STEP_COMPARISONS.every((same) => same(previous.step, next.step))) &&
     previous.resolveToolIcon === next.resolveToolIcon &&

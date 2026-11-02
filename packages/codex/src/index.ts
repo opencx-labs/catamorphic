@@ -16,6 +16,7 @@ export {
   type CodexSandboxMode,
   codexToolFilter,
   gatewayProviderConfig,
+  readCodexConfig,
   readOptions as readCodexOptions,
 } from "./config.js";
 export { CodexRolloutReader, readCodexRollout } from "./import.js";

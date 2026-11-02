@@ -162,10 +162,20 @@ stays as written:
 - agent terminals, after the person's `.zshrc`;
 - Claude Code, ahead of each command through `CLAUDE_ENV_FILE`, a read-only
   file every chat shares (a file the person set there still runs first);
+- Codex, through private zsh startup files selected by
+  `shell_environment_policy.set`: each reads the person's corresponding
+  startup file first, then applies the options, including when Codex takes
+  a shell snapshot. Its supported `config/read` resolves the original
+  dotfile directory before Work applies the shim;
 - Work's own agent and watch checks, with each command.
 
-Codex runs commands in its own shell and is not covered. The person's own
-terminals and shell config are untouched.
+Codex's process receives the same startup environment for its snapshot.
+Configured shell `HOME` takes effect inside zsh, preserving Codex's own
+configuration and sign-in directory.
+Codex retains its native startup behavior when custom environment filters
+or profile-based environment discovery are configured, or when the selected
+dotfile directory is empty.
+The person's own terminals and shell config are untouched.
 
 ## Seeing Work itself (ADR 0195)
 

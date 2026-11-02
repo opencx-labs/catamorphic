@@ -3917,3 +3917,29 @@ An agent can request `refresh_chips` after changing a PR or another chip's data
 (ADR 0286). The request reaches its own chat in either workspace or detached dock,
 without changing focus or metadata. Existing chip queries and source loads own
 the refresh and retain their normal access and failure behavior.
+
+
+### 2026-11-01: Folded history releases its rendered rows
+
+A retained chat keeps its transcript and disclosure choices, while folded step
+lists and closed payloads release their DOM after their closing motion. Reopening
+history restores the chosen details without replaying every row's entrance.
+Background work finishes in its existing row before joining history. Watchers
+collapse individually and move surviving tokens across wrapped lines; outgoing
+chips fade from their last visible position outside the rail's shrinking viewport.
+All leaving controls become inert immediately. See [chat state](docs/chat-state.md)
+and [resource verification](docs/performance.md).
+
+
+The floating dock entrance belongs to an initial floating opening or a return
+from its bubble. Tab chats render as settled pages; a fast first open and tab
+switch cannot carry an unfinished dock fade into the return frame. An already
+visible tab morphing back to floating retains its opacity and size/color motion.
+
+### 2026-11-01: Window expanded step headers
+
+Long expanded logs keep nearby headers in the conversation's own scroller and
+leave measured space for distant closed rows (ADR 0299). Open payloads and active
+interaction keep their keyed nodes. Native Tab still visits every logical row.
+Existing disclosure and list-close motion stays in charge; scrolling historical
+rows into view plays no arrival animation.

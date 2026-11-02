@@ -8,6 +8,10 @@ import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import { generateExecutorKeyPair } from "@catamorphic/sandbox";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -30,6 +34,8 @@ import {
   type TurnEngineHost,
 } from "../services/sessions/turn-engine.js";
 import { sessionLogFixture } from "./session-fixtures.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /*
  * The turn engine over runners in a sandbox (ADR 0198), as on a worker:
@@ -258,22 +264,26 @@ describe("the turn engine over sandbox runners", () => {
       .values({ id: projectId, tenant_id: tenantId, name: "P" })
       .execute();
     root = await fs.mkdtemp(path.join(os.tmpdir(), "turn-engine-sandbox-"));
-    provider = new LocalProcessSandboxProvider({
-      root: path.join(root, "sandboxes"),
-    });
+    provider = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(root, "sandboxes"),
+      }),
+    );
   }, 30_000);
 
   afterAll(async () => {
-    await Promise.all(
-      engines.map((engine) =>
-        engine.stop({ timeoutMs: 1_000, handBack: () => false }),
-      ),
+    await cleanupTestResources(
+      [
+        ...engines.map(
+          (engine) => () =>
+            engine.stop({ timeoutMs: 1_000, handBack: () => false }),
+        ),
+        () => ownedSandboxes.cleanup(),
+        () => sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db),
+        () => db.destroy(),
+      ],
+      () => fs.rm(root, { recursive: true, force: true, maxRetries: 5 }),
     );
-    for (const sandboxId of sandboxes.values())
-      await provider.destroySandbox(sandboxId).catch(() => {});
-    await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
-    await db.destroy();
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 5 });
   });
 
   it("settles a turn with what its harness stored on the way out", async () => {

@@ -354,9 +354,7 @@ describe("ChatTimeline live chrome", () => {
       await wait(50);
       expect(block?.closest("article")?.className).toContain("opacity-100");
       // Every step in view: the list opens its height under the line.
-      const list = $('[data-live-work] [data-testid="chat-step"]')?.closest(
-        ".grid",
-      );
+      const list = $('[data-live-work] [data-testid="chat-step-list"]');
       if (live === "all") expect(list?.className).toContain("cat-step-in");
       else expect(list?.className).not.toContain("cat-step-in");
     });
@@ -597,6 +595,12 @@ describe("ChatTimeline live chrome", () => {
       workDisplay: { live: "all", settled: "keep" } as const,
     };
     await render({ ...props, timeline: at("The") });
+    expect(resolveToolIcon).not.toHaveBeenCalled();
+    await act(async () => {
+      (
+        $('[data-testid="chat-turn-steps-toggle"]') as HTMLButtonElement
+      ).click();
+    });
     expect(resolveToolIcon.mock.calls.length).toBeGreaterThanOrEqual(20);
     resolveToolIcon.mockClear();
     for (const text of ["The parser", "The parser reads", "The parser reads."])

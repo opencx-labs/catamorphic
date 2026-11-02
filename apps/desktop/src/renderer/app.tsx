@@ -5323,13 +5323,19 @@ export function App({
               return next;
             }),
           );
-          // Let Chromium attach and lay out the guest before native input/capture.
-          if (params.active === true)
-            await new Promise<void>((resolve) =>
-              requestAnimationFrame(() =>
-                requestAnimationFrame(() => resolve()),
-              ),
+          if (params.active === true) {
+            // guestFor already waited for dom-ready. Flush the layout after
+            // keepAwake reveals the guest; a covered or minimized window may
+            // never paint another frame, so painting cannot acknowledge it.
+            const guest = document.querySelector(
+              `[data-surface-key="${CSS.escape(key)}"] webview`,
             );
+            const bounds = guest?.getBoundingClientRect();
+            if (!bounds || bounds.width === 0 || bounds.height === 0)
+              return {
+                error: "Browser page has no layout. Try again when it loads.",
+              };
+          }
           return { ok: true };
         }
         case "browserGuest": {

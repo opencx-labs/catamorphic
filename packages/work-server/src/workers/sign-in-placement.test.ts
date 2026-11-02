@@ -8,8 +8,13 @@ import {
   type Identity,
   projectPrincipalIdentity,
 } from "@catamorphic/core";
+import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import { machineSignInHome } from "@catamorphic/sandbox";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
   createWorkServer,
@@ -24,6 +29,19 @@ import {
 } from "../test-support.js";
 import { signInOnMachine, signInRoot, signOutOnMachine } from "./sign-ins.js";
 import { startWorkWorker } from "./worker-runtime.js";
+
+const ownedSandboxes = new TestSandboxes();
+const createSandbox = LocalProcessSandboxProvider.prototype.createSandbox;
+const sandboxCreation = vi
+  .spyOn(LocalProcessSandboxProvider.prototype, "createSandbox")
+  .mockImplementation(async function (
+    this: LocalProcessSandboxProvider,
+    options,
+  ) {
+    const sandbox = await createSandbox.call(this, options);
+    ownedSandboxes.record(this, sandbox.id);
+    return sandbox;
+  });
 
 /**
  * Members' own sign-ins stay on the machine they were made on (ADRs 0199,
@@ -340,9 +358,18 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  await Promise.all(workers.map((running) => running.stop()));
-  await server?.shutdown();
-  fs.rmSync(root, { recursive: true, force: true });
+  try {
+    await cleanupTestResources(
+      [
+        ...workers.map((running) => () => running.stop()),
+        () => ownedSandboxes.cleanup(),
+        () => server?.shutdown(),
+      ],
+      () => fs.rmSync(root, { recursive: true, force: true }),
+    );
+  } finally {
+    sandboxCreation.mockRestore();
+  }
 }, 120_000);
 
 describe("members' own sign-ins on the machine (ADRs 0199, 0213)", () => {

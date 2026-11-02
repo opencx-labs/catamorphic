@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, rm } from "node:fs/promises";
+import { copyFile } from "node:fs/promises";
 import path from "node:path";
 import { checkCommands, checkOptions } from "./check-plan.js";
 import { writeCliError } from "./cli-error.js";
@@ -15,6 +15,10 @@ import {
   dockerTestPostgresDriver,
   withDisposablePostgres,
 } from "./test-postgres.js";
+import {
+  removeTestDirectory,
+  withTestProcessCleanup,
+} from "./test-processes.js";
 import { toolRuntime } from "./tool-runtime.js";
 
 function logFileName(input: { index: number; label: string }): string {
@@ -52,44 +56,49 @@ async function main(): Promise<void> {
       driver: dockerTestPostgresDriver(),
       pid: process.pid,
       nonce,
-      task: async (databaseUrl) => {
-        const env = testRunEnvironment({
-          source: {
-            ...deterministicTestEnvironment(runtime.env, databaseUrl),
-            CATAMORPHIC_TEST_SHARD: options.shard,
-          },
-          resources,
-        });
-        for (const [index, phase] of phases.entries()) {
-          console.log(`\n[check ${index + 1}/${phases.length}] ${phase.label}`);
-          const result = await runLoggedProcess({
-            command: phase.command,
-            args: phase.args,
-            cwd: repositoryRoot,
-            env,
-            logPath: path.join(
-              resources.logsPath,
-              logFileName({ index, label: phase.label }),
-            ),
-            signals,
+      task: async (databaseUrl) =>
+        withTestProcessCleanup(resources.tempPath, async () => {
+          const env = testRunEnvironment({
+            source: {
+              ...deterministicTestEnvironment(runtime.env, databaseUrl),
+              CATAMORPHIC_TEST_SHARD: options.shard,
+            },
+            resources,
           });
-          exitCode = result.code;
-          if (result.code !== 0) {
-            throw new Error(
-              `Check phase ${JSON.stringify(phase.label)} exited with code ${result.code}`,
+          for (const [index, phase] of phases.entries()) {
+            console.log(
+              `\n[check ${index + 1}/${phases.length}] ${phase.label}`,
             );
+            const result = await runLoggedProcess({
+              command: phase.command,
+              args: phase.args,
+              cwd: repositoryRoot,
+              env,
+              logPath: path.join(
+                resources.logsPath,
+                logFileName({ index, label: phase.label }),
+              ),
+              signals,
+              temporaryRoot: resources.tempPath,
+            });
+            exitCode = result.code;
+            if (result.code !== 0) {
+              throw new Error(
+                `Check phase ${JSON.stringify(phase.label)} exited with code ${result.code}`,
+              );
+            }
           }
-        }
-      },
+        }),
     });
     succeeded = true;
     exitCode = 0;
   } catch (error) {
+    exitCode = exitCode || 1;
     writeCliError(error);
   } finally {
     signals.close();
     if (succeeded) {
-      await rm(resources.rootPath, { recursive: true, force: true });
+      await removeTestDirectory(resources.rootPath);
     } else {
       console.error(`Check diagnostics preserved at ${resources.rootPath}`);
     }
