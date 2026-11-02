@@ -25,7 +25,7 @@ const HTML = `<!doctype html><html><head><title>MCP security fixture</title></he
 <pre id="allowed-result"></pre><pre id="denied-result"></pre><pre id="slow-result"></pre>
 </main><script>
 const documentId=crypto.randomUUID();
-window.probe={documentId,messages:[],initialized:false,input:null,result:null};
+window.probe={documentId,messages:[],clicks:[],initialized:false,input:null,result:null};
 const report=(kind,data)=>parent.postMessage({fixture:${JSON.stringify(FIXTURE)},kind,documentId,data},'*');
 const send=(id,method,params)=>parent.postMessage({jsonrpc:'2.0',id,method,params},'*');
 addEventListener('message',event=>{
@@ -41,6 +41,7 @@ addEventListener('message',event=>{
 document.querySelector('#allowed').onclick=()=>send('allowed','tools/call',{name:'allowed',arguments:{value:'clicked'}});
 document.querySelector('#denied').onclick=()=>send('denied','tools/call',{name:'denied',arguments:{}});
 document.querySelector('#slow').onclick=()=>send('slow','tools/call',{name:'slow',arguments:{}});
+for(const button of document.querySelectorAll('button')) button.addEventListener('click',event=>probe.clicks.push({id:button.id,trusted:event.isTrusted}));
 report('started');
 send('initialize','ui/initialize',{protocolVersion:'2026-01-26',appCapabilities:{},appInfo:{name:'security-fixture',version:'1'}});
 if(new URL(location.href).searchParams.has('replacement')) send('replacement-call','tools/call',{name:'allowed',arguments:{value:'replacement'}});
@@ -180,14 +181,17 @@ async function clickGuest(id: string): Promise<void> {
   const offset = await running().eval<{ x: number; y: number }>(`(() => {
     const rect=document.querySelector('iframe[title^="mcp-app-"]').getBoundingClientRect();return {x:rect.x,y:rect.y};
   })()`);
-  for (const type of ["mousePressed", "mouseReleased"])
-    await running().cdp("Input.dispatchMouseEvent", {
-      type,
-      x: point.x + offset.x,
-      y: point.y + offset.y,
-      button: "left",
-      clickCount: 1,
-    });
+  const before = await mounted().eval<number>("probe.clicks.length");
+  await running().clickPointer({
+    x: point.x + offset.x,
+    y: point.y + offset.y,
+  });
+  await mounted().waitFor(`probe.clicks.length > ${before}`, {
+    label: `${id} MCP app received the native click`,
+  });
+  expect(await mounted().eval(`probe.clicks.slice(${before})`)).toEqual([
+    { id, trusted: true },
+  ]);
 }
 
 beforeAll(async () => {
