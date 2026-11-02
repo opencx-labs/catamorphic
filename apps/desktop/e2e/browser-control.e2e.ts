@@ -602,9 +602,54 @@ it("drives a page in a window behind the person's without bringing it forward", 
     ).toEqual({ found: true });
     expect(await front.eval<number>("window.__blurs")).toBe(0);
     expect(await front.eval<boolean>("document.hasFocus()")).toBe(true);
+
+    // A minimized window stops producing animation frames. Browser readiness
+    // must still lay out its hidden guest without waiting for those frames.
+    await app.eval("window.catamorphicDesktop.devWindow('minimize')");
+    await app.waitFor("document.visibilityState === 'hidden'", {
+      label: "the agent's window minimized",
+    });
+    expect(await snapshot()).toHaveProperty("elements");
+    expect(await tool("browser_act", { key, action: "read" })).toHaveProperty(
+      "text",
+    );
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "fill",
+        uid: await uid("Destination"),
+        text: "Sapporo",
+      }),
+    ).toEqual({ ok: true });
+    await guest.eval("events.length = 0");
+    await tool("browser_act", {
+      key,
+      action: "click",
+      uid: await uid("Save itinerary"),
+    });
+    expect(
+      await guest.eval('document.querySelector("#result").textContent'),
+    ).toBe("Saved Sapporo by car");
+    expect(
+      await guest.eval(
+        "events.some(event => event.type === 'click' && event.id === 'save' && event.trusted)",
+      ),
+    ).toBe(true);
+    expect(
+      await tool("browser_snapshot", { key, format: "image" }),
+    ).toHaveProperty(
+      "content",
+      expect.arrayContaining([
+        expect.objectContaining({ type: "image", mimeType: "image/png" }),
+      ]),
+    );
+    expect(await app.eval("document.visibilityState")).toBe("hidden");
+    expect(await front.eval<number>("window.__blurs")).toBe(0);
+    expect(await front.eval<boolean>("document.hasFocus()")).toBe(true);
   } finally {
     front.close();
     // A test after this one starts in the first window, as the others do.
+    await app.eval("window.catamorphicDesktop.devWindow('restore')");
     await app.eval("window.catamorphicDesktop.devWindow('focus')");
   }
 });
