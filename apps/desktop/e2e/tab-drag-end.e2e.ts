@@ -197,6 +197,17 @@ it.skipIf(process.platform !== "linux")(
     );
     const sides = () =>
       app.eval<boolean>("!!document.querySelector('[data-tab-drop-sides]')");
+    // OS pointer movement completing does not mean Chromium has delivered
+    // its dragover yet. Observe that real event before releasing the button.
+    await app.eval(`(() => {
+      window.__tabDropHover = null;
+      window.__watchTabDropHover = (event) => {
+        if (event.isTrusted && event.target.closest?.('[data-tab-drop-sides]'))
+          window.__tabDropHover = { x: event.clientX, y: event.clientY, accepted: event.defaultPrevented };
+      };
+      window.addEventListener('dragover', window.__watchTabDropHover);
+      return true;
+    })()`);
     await app.movePointer(from);
     execFileSync("xdotool", ["mousedown", "1"]);
     try {
@@ -215,11 +226,20 @@ it.skipIf(process.platform !== "linux")(
           { x, y: page.y },
           { x: x + 3, y: page.y + 2 },
         ]);
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await app.waitFor(
+          `window.__tabDropHover?.accepted && Math.abs(window.__tabDropHover.x - ${x + 3}) <= 1 && Math.abs(window.__tabDropHover.y - ${page.y + 2}) <= 1`,
+          { label: `the native drag accepted at ${across}` },
+        );
         expect(await sides()).toBe(true);
       }
     } finally {
       execFileSync("xdotool", ["mouseup", "1"]);
+      await app.eval(`(() => {
+        window.removeEventListener('dragover', window.__watchTabDropHover);
+        delete window.__watchTabDropHover;
+        delete window.__tabDropHover;
+        return true;
+      })()`);
     }
     await app.waitFor(
       `!!document.querySelector(${JSON.stringify(`[data-workspace-slot="right"][data-surface-key="${tiled}"]`)}) && !document.querySelector('[data-tab-drop-sides]')`,
