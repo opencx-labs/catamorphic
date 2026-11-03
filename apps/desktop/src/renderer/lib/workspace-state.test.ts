@@ -125,6 +125,65 @@ it("closing and reopening a split pane restores its partner and resource identit
   });
 });
 
+it("keeps incognito pages for the running app only", () => {
+  const ws: Workspace = {
+    ...initial(),
+    browsers: [
+      {
+        localId: "open",
+        profileId: "p",
+        initialUrl: "https://example.com/",
+        url: "https://example.com/",
+        title: "Open",
+        faviconUrl: null,
+      },
+      {
+        localId: "secret",
+        profileId: "p",
+        initialUrl: "https://example.com/secret",
+        url: "https://example.com/secret",
+        title: "Secret",
+        faviconUrl: null,
+        incognito: true,
+      },
+    ],
+    activeTabKey: "browser:secret",
+  };
+  const saved = serializeWorkspace(ws);
+  expect(saved.browsers.map((browser) => browser.localId)).toEqual(["open"]);
+  expect(saved.activeTabKey).toBeUndefined();
+  // A project moving to a window of its own takes them along.
+  const moving = serializeWorkspace(ws, { moving: true });
+  expect(
+    moving.browsers.find((browser) => browser.localId === "secret"),
+  ).toMatchObject({ incognito: true });
+  expect(
+    hydrateWorkspace(moving, { moved: true })?.browsers.map(
+      (browser) => browser.localId,
+    ),
+  ).toEqual(["open", "secret"]);
+  expect(
+    hydrateWorkspace(moving)?.browsers.map((browser) => browser.localId),
+  ).toEqual(["open"]);
+  // Closed, it reopens incognito while the app runs, and is not saved.
+  const closed = transitionWorkspace(ws, {
+    type: "close",
+    key: "browser:secret",
+  });
+  expect(closed.closedTabs.at(-1)).toMatchObject({
+    kind: "browser",
+    incognito: true,
+  });
+  expect(serializeWorkspace(closed).closedTabs).toEqual([]);
+  const reopened = transitionWorkspace(closed, {
+    type: "reopen",
+    localId: "again",
+  });
+  expect(
+    reopened.browsers.find((browser) => browser.localId === "again"),
+  ).toMatchObject({ url: "https://example.com/secret", incognito: true });
+});
+
 it("keeps a browser tab's way back through close, reopen and persistence", () => {
   const history = {
     entries: [

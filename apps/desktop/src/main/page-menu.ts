@@ -85,6 +85,8 @@ export interface PageMenuState {
   credentials: readonly { id: string; username: string }[] | null;
   /** Items extensions added (chrome.contextMenus), actions already named. */
   extensions: readonly MenuItem[];
+  /** An incognito tab's page: its links open incognito already. */
+  incognito?: boolean;
 }
 
 const LINK_OPENS: readonly { mode: OpenMode; label: string }[] = [
@@ -127,7 +129,7 @@ export function linkAddress(url: string): string {
   }
 }
 
-function linkGroup(url: string): MenuItem[] {
+function linkGroup(url: string, incognito: boolean): MenuItem[] {
   if (!url) return [];
   const protocol = scheme(url);
   if (protocol === "http:" || protocol === "https:")
@@ -136,6 +138,14 @@ function linkGroup(url: string): MenuItem[] {
         label,
         action: `open-link:${mode}`,
       })),
+      ...(incognito
+        ? []
+        : [
+            {
+              label: "Open link in incognito tab",
+              action: "open-link-incognito",
+            },
+          ]),
       MENU_SEPARATOR,
       { label: "Download linked file", action: "download-link" },
     ];
@@ -312,7 +322,7 @@ export function pageMenu(
   return menuGroups(
     credentialGroup(state),
     spellingGroup(target),
-    linkGroup(target.linkURL),
+    linkGroup(target.linkURL, state.incognito ?? false),
     media,
     selectionGroup(target, state.mac),
     ...editGroups(target, state),
@@ -347,7 +357,8 @@ export interface MenuPage {
 
 /** What a pick needs from outside the page. */
 export interface PageMenuHost {
-  openUrl(url: string, mode: OpenMode): void;
+  /** `incognito` opens it in an incognito tab whatever the page is in. */
+  openUrl(url: string, mode: OpenMode, incognito?: boolean): void;
   writeText(text: string): void;
   openExternal(url: string): void;
   showEmojiPanel(): void;
@@ -399,6 +410,10 @@ export function runPageMenuAction({
   );
   if (linkOpen) {
     host.openUrl(target.linkURL, linkOpen.mode);
+    return;
+  }
+  if (action === "open-link-incognito") {
+    host.openUrl(target.linkURL, "tab", true);
     return;
   }
   if (action.startsWith("spelling:")) {
