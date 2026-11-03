@@ -11,10 +11,7 @@ import type { ServerState } from "./ipc.js";
 import { registerProcessOwner } from "./process-owners.js";
 import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
 import { shellBinShimDir, shellIntegration } from "./shell-integration.js";
-import {
-  shellIpcMain as ipcMain,
-  isRegisteredShellContents,
-} from "./shell-ipc.js";
+import { shellIpcMain as ipcMain, shellSurfaceFor } from "./shell-ipc.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { TerminalLifecycle } from "./terminal-lifecycle.js";
 
@@ -262,7 +259,9 @@ export function registerTerminalSupport(
     for (const window of BrowserWindow.getAllWindows()) {
       if (
         !window.isDestroyed() &&
-        isRegisteredShellContents(window.webContents) &&
+        // Auxiliary Work documents (including voice's profileless audio
+        // page) are trusted shells, but never terminal subscribers.
+        shellSurfaceFor(window.webContents) === "workspace" &&
         projectId &&
         ipcPolicy?.canAccessProject(projectId, window.webContents)
       )

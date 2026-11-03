@@ -1,6 +1,6 @@
 vi.mock("./shell-ipc.js", async () => ({
   shellIpcMain: (await import("electron")).ipcMain,
-  isRegisteredShellContents: () => true,
+  shellSurfaceFor: () => "workspace",
 }));
 
 import { EventEmitter } from "node:events";
