@@ -1117,6 +1117,8 @@ export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
     .enum(["true", "false"])
     .transform((value) => value === "true")
     .optional(),
+  /** Words each found in the chat's title or one of its messages. */
+  query: z.string().max(500).optional(),
 }).refine((value) => !(value.rootsOnly && value.parentSessionId), {
   message: "Choose rootsOnly or parentSessionId, not both.",
 });
@@ -1226,6 +1228,8 @@ export const AgentSessionSchema = z.object({
   attentionMessage: z
     .object({ id: z.string().uuid(), content: z.string() })
     .optional(),
+  /** A searched list's excerpt of the message the words were found in. */
+  match: z.string().optional(),
   /** The project's key for this chat (ADR 0173); closing frees it. */
   key: z.string().nullable(),
   /** Workflows that delivered to the chat by its key. */

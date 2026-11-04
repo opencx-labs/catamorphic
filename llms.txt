@@ -38,6 +38,7 @@ We built Work because we believe one well-built piece of software can replace mo
 
 ## How it works
 
+- The palette's History mode finds the current project's chats by words in their titles and user and assistant messages, with a matching excerpt. It combines these with the profile's opened pages and work by recency. Tool output and reasoning are not searched.
 - On macOS, Finder's Open With menu and Work's Dock icon accept PDFs, images, media, web pages, text and code without changing the default app. Text and code open in the current project's editor, or as plain text in a browser tab when no project is open. Other supported files open in a browser tab. Reopening an editor file reuses its tab; browser files follow the Switch to a page's open tab preference.
 - A project is an ordinary folder and a git repository. Every agent turn that changes files becomes a checkpoint commit; you can inspect diffs or trust routine work to continue.
 - Chats float over whatever you are doing (a page, a document, a terminal) and can be minimized to a dock. Agents see the workspace context you give them: the page, the file, the terminal.
