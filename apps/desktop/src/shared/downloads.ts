@@ -1,4 +1,4 @@
-import { isBrowserFile } from "./surface-link.js";
+import { isBrowserFile, isTextFile } from "./surface-link.js";
 
 /**
  * Downloads (ADR 0153): files a browser tab saves. Chrome's model, in
@@ -33,13 +33,9 @@ export interface DownloadRecord {
   canResume: boolean;
 }
 
-/** Text Chromium renders as plain text; the rest is `isBrowserFile`. */
-const TEXT_FILE =
-  /\.(txt|md|markdown|json|csv|tsv|log|xml|yaml|yml|toml|ini|js|mjs|cjs|ts|tsx|jsx|css|sh|py|rb|go|rs|java|c|h|cpp|sql|diff|patch)$/i;
-
 /** Work can show this file itself (a browser tab renders it). */
-export function downloadOpensInWork(filename: string): boolean {
-  return isBrowserFile(filename) || TEXT_FILE.test(filename);
+export function opensInWork(filename: string): boolean {
+  return isBrowserFile(filename) || isTextFile(filename);
 }
 
 export function formatBytes(bytes: number): string {

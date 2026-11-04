@@ -38,6 +38,22 @@ async function clickMessageLink(modifiers = 0) {
   }
 }
 
+/** A real press at an element's center, where the person would click. */
+async function pressCenter(selector: string) {
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return {x:r.x+r.width/2,y:r.y+r.height/2};
+  })()`);
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+}
+
 const clickButton = (label: string) =>
   app.eval(
     `document.querySelector('button[aria-label=${JSON.stringify(label)}]').click()`,
@@ -331,6 +347,39 @@ it("opens beside a full chat and does not let an old expansion undo new navigati
     "!!document.querySelector('[aria-label=\"Full width\"]') && !!document.querySelector('[data-workspace-slot=right] webview')",
   );
   await app.screenshot("/tmp/chat-link-split.png");
+  // A press inside the page reaches its guest, never the pane, yet it
+  // focuses the page's side of the split as a press on the chat does.
+  const currentTab = (kind: string) =>
+    `!!document.querySelector('[data-point-key^="${kind}:"] [aria-current]')`;
+  await pressCenter("[data-chat-local-id] [data-composer-input]");
+  await app.waitFor(currentTab("chat"), { label: "the chat's side focused" });
+  await pressCenter("[data-workspace-slot=right] webview");
+  await app.waitFor(currentTab("browser"), {
+    label: "the page's side focused by a press inside the page",
+  });
+  await pressCenter("[data-chat-local-id] [data-composer-input]");
+  await app.waitFor(currentTab("chat"), { label: "the chat's side again" });
+  // An agent's trusted input inside that page must not take the person's
+  // focused pane away. Exercise the ordinary browser tool and its control
+  // handoff, rather than a synthetic DOM event.
+  const browserKey = await app.eval<string>(
+    "document.querySelector('[data-workspace-slot=right] webview').closest('[data-surface-key]').dataset.surfaceKey",
+  );
+  const agentPress = `E2E workspace tool ${JSON.stringify({
+    name: "browser_act",
+    input: { key: browserKey, action: "click", x: 10, y: 10 },
+    serial: "split-agent-press",
+  })}`;
+  await app.eval(`(() => { ${setReactValueJs}
+    const input = document.querySelector('[data-chat-local-id] [data-composer-input]');
+    setReactValue(input, ${JSON.stringify(agentPress)});
+    input.closest('form').requestSubmit();
+  })()`);
+  await app.waitFor(
+    `document.body.innerText.includes('E2E result split-agent-press: {"ok":true}') && !document.querySelector('[data-testid="chat-stop"]')`,
+    { label: "the agent's page press completed", timeoutMs: 30_000 },
+  );
+  expect(await app.eval(currentTab("chat"))).toBe(true);
   await app.eval(`(() => { ${setReactValueJs}
     const input = document.querySelector('[data-chat-local-id] [data-composer-input]');
     setReactValue(input, 'Respond slowly while I read the page beside you');
