@@ -20,6 +20,20 @@ const expanded = () =>
   app.waitFor(
     `!${dock}?.hasAttribute('data-lurking')&&${dock}.getBoundingClientRect().height>400`,
   );
+const moveOutside = async () => {
+  // Settle hover in the shell before crossing into a native webview. The
+  // initial pointer can be parked under a card that moved during opening.
+  const shell = await app.eval<{ x: number; y: number }>(
+    `(()=>{const r=document.querySelector('[data-sidebar="left"]').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()`,
+  );
+  await app.movePointer(shell);
+  const page = await app.waitFor<{ x: number; y: number }>(
+    `(()=>{const view=document.querySelector('webview'),r=view.getBoundingClientRect(),card=${dock}.getBoundingClientRect();const x=(r.left+card.left)/2,y=r.top+r.height/2;return x>r.left&&x<card.left&&document.elementFromPoint(x,y)===view?{x,y}:false})()`,
+    { label: "visible page gutter outside the floating chat" },
+  );
+  await app.movePointer(page);
+  return page;
+};
 const send = async (text: string) => {
   await app.eval(`${composer}.focus()`);
   await app.insertText(text);
@@ -68,7 +82,7 @@ afterAll(async () => {
 });
 
 it("recovers a missed enter while approaching slowly from above", async () => {
-  await app.clickPointer({ x: 1000, y: 120 });
+  await app.clickPointer(await moveOutside());
   await compact();
   const bounds = await box();
   await app.movePointer({
@@ -100,8 +114,9 @@ it("recovers a missed enter while approaching slowly from above", async () => {
 });
 
 it("expands on repeated slow top entries across its header and edges", async () => {
+  await app.eval("window.catamorphicDesktop.devWindow('setSize',1024,700)");
   for (const fraction of [0.1, 0.5, 0.9, 0.02, 0.98]) {
-    await app.movePointer({ x: 1000, y: 120 });
+    await moveOutside();
     await compact();
     const bounds = await box();
     const x = bounds.left + (bounds.right - bounds.left) * fraction;
