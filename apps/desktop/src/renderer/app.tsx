@@ -79,6 +79,7 @@ import {
 import { siteHost, siteOrigin } from "../shared/site-settings.js";
 import {
   isBrowserFile,
+  isTextFile,
   localFileUrl,
   parseSurfaceLink,
   resolveProjectFileLocation,
@@ -2105,7 +2106,7 @@ export function App({
    */
   const switchToOpenPage = (url: string): string | null => {
     if (prefsRef.current?.switchToOpenTab === false) return null;
-    if (!/^https?:/i.test(url)) return null;
+    if (!/^(https?|file):/i.test(url)) return null;
     const ws = workspaceRef.current;
     const focused = ws.floatingKey ?? ws.activeTabKey;
     const open = ws.browsers.filter(
@@ -2235,6 +2236,8 @@ export function App({
       mode?: CommitMode;
       /** The person clicked it: a page already open goes to its tab. */
       clicked?: boolean;
+      /** A new tab, unless one already shows this file (another app's file). */
+      reuseOpen?: boolean;
     } = {},
   ): Promise<string> => {
     const intent =
@@ -2304,7 +2307,9 @@ export function App({
       }
     }
     const existingEditor =
-      target.kind === "file" && !browserUrl && intent !== "tab"
+      target.kind === "file" &&
+      !browserUrl &&
+      (intent !== "tab" || opts.reuseOpen)
         ? (workspaceRef.current.editors.find(
             (editor) => editor.filePath === location?.relativePath,
           ) ??
@@ -2661,9 +2666,22 @@ export function App({
       void desktopApi
         .browserTakePendingUrls()
         .then((urls) => {
-          for (const url of urls)
+          for (const url of urls) {
+            // A text file from Finder opens in the editor, in the project
+            // open here or outside it; with no project, as plain text.
+            if (
+              url.startsWith("file:") &&
+              isTextFile(url) &&
+              projectIdRef.current
+            ) {
+              void openLinkedSurfaceRef
+                .current(url, { mode: "tab", reuseOpen: true })
+                .catch(() => openBrowserTabRef.current(url));
+              continue;
+            }
             if (!switchToOpenPageRef.current(url))
               openBrowserTabRef.current(url);
+          }
         })
         .catch(() => {});
     };
@@ -6266,6 +6284,21 @@ export function App({
       ? { onMouseDownCapture: () => selectTab(key) }
       : {}),
   });
+  /**
+   * A press inside a page reaches its guest, never the pane's DOM, so the
+   * page reports it and the pane takes focus the same way.
+   */
+  const focusPaneOnPagePress = (key: string) => () => {
+    // Browser tools send trusted input too. Their existing activity scope
+    // keeps the page awake; it must not move the person's focused pane.
+    if (
+      !busyBrowsers.has(key.slice("browser:".length)) &&
+      split &&
+      workspace.activeTabKey !== key &&
+      isSplitSlot(key)
+    )
+      selectTab(key);
+  };
   const splitCompanionKey = split
     ? workspace.activeTabKey === split.leftKey
       ? split.rightKey
@@ -7859,6 +7892,9 @@ export function App({
                               final: true,
                             })
                           }
+                          onPagePress={focusPaneOnPagePress(
+                            browserTabKey(browser.localId),
+                          )}
                           onOpenSiteSettings={setSiteSettingsOrigin}
                           onOpenPasswords={() =>
                             openPasswords(browser.profileId)
@@ -8482,6 +8518,9 @@ export function App({
                             final: true,
                           })
                         }
+                        onPagePress={focusPaneOnPagePress(
+                          browserTabKey(browser.localId),
+                        )}
                         onOpenSiteSettings={setSiteSettingsOrigin}
                         onOpenPasswords={() => openPasswords(browser.profileId)}
                         onOpenExtensions={() =>
