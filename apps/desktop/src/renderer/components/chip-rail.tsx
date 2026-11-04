@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { parseChatIcon } from "../../shared/chat-icons.js";
 import {
   dangerLast,
@@ -39,10 +40,11 @@ import type {
 import type { SidebarSourceSession } from "../../shared/sidebar-source.js";
 import { shownChipCount } from "../lib/chip-layout.js";
 import type { Chip } from "../lib/chips.js";
-import { keyMovedFocus } from "../lib/focus-modality.js";
+import { keyLedLast, keyMovedFocus } from "../lib/focus-modality.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
+import { themeStyle, useTheme } from "../lib/theme.js";
 import { TONE_TEXT } from "../lib/tones.js";
 import type { SectionSource, SourceAccess } from "../sources/contract.js";
 import { runRowAction } from "../sources/run.js";
@@ -88,6 +90,8 @@ const CUSTOMIZE: ContextMenuEntry = {
 export interface ChipRailHandle {
   /** Focus the first chip, unfolding the rail; false when there is none. */
   focus: () => boolean;
+  /** A chip or a control in its portalled group belongs to this chat. */
+  contains: (node: Node) => boolean;
 }
 
 const isImage = (icon: string) => /^(https?:|data:image\/)/i.test(icon);
@@ -522,6 +526,7 @@ function ChipView({
 /** The chips inside a group, opened upward from it. */
 function GroupMembers({
   members,
+  focusRequest,
   pendingAction,
   onActivate,
   onRun,
@@ -529,6 +534,7 @@ function GroupMembers({
   onClose,
 }: {
   members: readonly Chip[];
+  focusRequest: number | null;
   pendingAction: (chip: Chip) => string | undefined;
   onActivate: (chip: Chip, mode: OpenMode) => void;
   onRun: (chip: Chip, entry: SidebarMenuEntry) => void;
@@ -536,6 +542,13 @@ function GroupMembers({
   onClose: () => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const hasMembers = members.length > 0;
+  useLayoutEffect(() => {
+    if (focusRequest !== null && hasMembers)
+      listRef.current
+        ?.querySelector<HTMLElement>("[data-member-main]")
+        ?.focus();
+  }, [focusRequest, hasMembers]);
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
     const rows = [
       ...(listRef.current?.querySelectorAll<HTMLElement>(
@@ -722,6 +735,7 @@ function useFirstFrames(): RefObject<boolean> {
  */
 export const ChipRail = memo(function ChipRail({
   chips,
+  visible,
   source,
   session,
   failure,
@@ -733,6 +747,7 @@ export const ChipRail = memo(function ChipRail({
 }: {
   /** A flat tree: a group's members name it as their parent. */
   chips: readonly Chip[];
+  visible: boolean;
   /** Where a chip's own actions go: the chips' source. */
   source: SectionSource;
   session?: SidebarSourceSession;
@@ -751,6 +766,8 @@ export const ChipRail = memo(function ChipRail({
   const membersOf = (id: string) =>
     chips.filter((chip) => chip.parentId === id);
   const railRef = useRef<HTMLDivElement>(null);
+  const groupSurfaceRef = useRef<HTMLDivElement>(null);
+  const theme = useTheme();
   const sizerRef = useRef<HTMLDivElement>(null);
   const flowRef = useRef<HTMLDivElement>(null);
   const measureMoreRef = useRef<HTMLSpanElement>(null);
@@ -763,6 +780,15 @@ export const ChipRail = memo(function ChipRail({
   const [cut, setCut] = useState<number | null>(null);
   const [width, setWidth] = useState(0);
   const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [groupFocusRequest, setGroupFocusRequest] = useState<number | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    if (!visible) setOpenGroup(null);
+  }, [visible]);
+  const [groupAnchor, setGroupAnchor] = useState<RefObject<HTMLElement | null>>(
+    { current: null },
+  );
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{
     at: MenuAt;
@@ -1053,6 +1079,9 @@ export const ChipRail = memo(function ChipRail({
   const foldedNow = folded;
   useEffect(() => {
     registerRef.current?.({
+      contains: (node) =>
+        railRef.current?.contains(node) === true ||
+        groupSurfaceRef.current?.contains(node) === true,
       focus: () => {
         const flow = flowRef.current;
         if (rootsCount === 0 || !flow || flow.closest("[inert]")) return false;
@@ -1093,7 +1122,7 @@ export const ChipRail = memo(function ChipRail({
   // A press elsewhere or Escape closes an open group.
   usePopoverDismiss({
     open: openGroup !== null,
-    within: [railRef],
+    within: [railRef, groupSurfaceRef],
     onDismiss: () => setOpenGroup(null),
   });
   useEffect(() => {
@@ -1171,14 +1200,18 @@ export const ChipRail = memo(function ChipRail({
   const activate = (chip: Chip, mode: OpenMode) => {
     setCurrentId(rootOf(chip.id));
     if (chip.hasChildren) {
+      keyMovedFocus();
+      setGroupAnchor({
+        current:
+          flowRef.current?.querySelector<HTMLElement>(
+            `[data-chip-root="${CSS.escape(rootOf(chip.id))}"] [data-chip-main]`,
+          ) ?? null,
+      });
       setOpenGroup((open) => (open === chip.id ? null : chip.id));
-      // Opened from the keyboard, focus goes to its first member.
-      if (document.documentElement.dataset.focusModality === "keyboard")
-        requestAnimationFrame(() =>
-          railRef.current
-            ?.querySelector<HTMLElement>("[data-member-main]")
-            ?.focus(),
-        );
+      // The member list takes focus when it mounts, including a quick reopen.
+      setGroupFocusRequest((current) =>
+        keyLedLast() ? (current ?? 0) + 1 : null,
+      );
       return;
     }
     if (chip.parentId) setOpenGroup(null);
@@ -1327,15 +1360,33 @@ export const ChipRail = memo(function ChipRail({
   // group's members and the chips' menu and dialog included).
   const onRailBlur = (event: FocusEvent<HTMLDivElement>) => {
     const next = event.relatedTarget;
-    if (next instanceof Node && railRef.current?.contains(next)) return;
+    if (
+      next instanceof Node &&
+      (railRef.current?.contains(next) ||
+        groupSurfaceRef.current?.contains(next))
+    )
+      return;
     // Settled a frame later: focus lost with a removed chip comes back.
     requestAnimationFrame(() => {
       const rail = railRef.current;
-      if (!rail || rail.contains(document.activeElement)) return;
+      if (
+        !rail ||
+        rail.contains(document.activeElement) ||
+        groupSurfaceRef.current?.contains(document.activeElement)
+      )
+        return;
       if (focusLost()) {
         focusCurrent();
         return;
       }
+      // Keyboard takeover (for example the command palette) dismisses
+      // the group too. Its own member menu or inspector stays above it.
+      if (
+        !document.activeElement?.closest(
+          "[data-sidebar-menu], [data-resource-inspector], [data-menu-shield]",
+        )
+      )
+        setOpenGroup(null);
       lastFocusedRef.current = null;
       if (unfoldedRef.current === "keyboard" && !menuOpen && !inputRequest)
         setUnfolded(null);
@@ -1360,34 +1411,55 @@ export const ChipRail = memo(function ChipRail({
       }}
       onBlur={onRailBlur}
     >
-      <PopPanel
-        id={groupPanelId}
-        role="group"
-        aria-label={
-          chips.find((chip) => chip.id === openGroup)?.label ?? "Chips"
-        }
-        open={openGroup !== null}
-        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised p-1 shadow-2xl"
-        testId="chip-group-members"
-      >
-        <GroupMembers
-          members={openMembers}
-          pendingAction={pendingFor}
-          onActivate={activate}
-          onRun={runFromChip}
-          onMenu={showMenu}
-          onClose={() => {
-            const group = openGroup;
-            setOpenGroup(null);
-            if (group)
-              flowRef.current
-                ?.querySelector<HTMLElement>(
-                  `[data-chip-root="${CSS.escape(rootOf(group))}"] [data-chip-main]`,
-                )
-                ?.focus();
-          }}
-        />
-      </PopPanel>
+      {visible &&
+        createPortal(
+          // biome-ignore lint/a11y/noStaticElementInteractions: focus bookkeeping for the portalled group controls
+          <div
+            ref={groupSurfaceRef}
+            data-theme={theme?.appearance}
+            style={themeStyle(theme)}
+            className="contents"
+            onFocus={(event) => {
+              lastFocusedRef.current = event.target;
+            }}
+            onBlur={onRailBlur}
+          >
+            <PopPanel
+              anchorRef={groupAnchor}
+              layoutRef={sizerRef}
+              minWidth={320}
+              maxHeight={256}
+              id={groupPanelId}
+              role="group"
+              aria-label={
+                chips.find((chip) => chip.id === openGroup)?.label ?? "Chips"
+              }
+              open={openGroup !== null}
+              className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised p-1 shadow-2xl"
+              testId="chip-group-members"
+            >
+              <GroupMembers
+                members={openMembers}
+                focusRequest={groupFocusRequest}
+                pendingAction={pendingFor}
+                onActivate={activate}
+                onRun={runFromChip}
+                onMenu={showMenu}
+                onClose={() => {
+                  const group = openGroup;
+                  setOpenGroup(null);
+                  if (group)
+                    flowRef.current
+                      ?.querySelector<HTMLElement>(
+                        `[data-chip-root="${CSS.escape(rootOf(group))}"] [data-chip-main]`,
+                      )
+                      ?.focus();
+                }}
+              />
+            </PopPanel>
+          </div>,
+          document.body,
+        )}
       <div
         ref={sizerRef}
         data-testid="chip-viewport"

@@ -28,6 +28,8 @@ export function Collapsible({
   const inner = useRef<HTMLDivElement>(null);
   const lastChange = useRef(0);
   const settled = useRef(false);
+  const previousOpen = useRef(open);
+  const disclosureUntil = useRef(0);
   // Hidden with an ancestor (an inactive tab, a background view) the content
   // measures 0. Keep the last height instead, and take the real one without
   // a tween once it is shown again.
@@ -56,7 +58,9 @@ export function Collapsible({
         "200ms"
       );
     };
-    const apply = () => {
+    const toggling = previousOpen.current !== open;
+    previousOpen.current = open;
+    const apply = (toggle = false) => {
       if (content.getClientRects().length === 0) {
         wasHidden.current = true;
         return;
@@ -66,26 +70,40 @@ export function Collapsible({
       wasHidden.current = false;
       if (box.style.height === `${target}px`) return;
       const now = performance.now();
+      const base = duration();
+      if (toggle)
+        disclosureUntil.current =
+          now + Number.parseFloat(base) * (base.endsWith("ms") ? 1 : 1000);
+      const disclosure = toggle || now < disclosureUntil.current;
       const follow =
         !settled.current ||
         reappeared ||
-        now - lastChange.current < CONTINUOUS_MS ||
-        animatingHeight(content);
+        // A disclosure owns its open/close motion, even when a descendant
+        // changes height in the same turn (a paginated tree drops its tail
+        // when inactive). Keep that ownership across observer callbacks;
+        // a changing target retakes only the time left in this disclosure.
+        (!disclosure &&
+          (now - lastChange.current < CONTINUOUS_MS ||
+            animatingHeight(content)));
       lastChange.current = now;
       const write = () => {
-        const base = duration();
         // transition-property is [height, opacity]; the fade keeps its tween.
-        box.style.transitionDuration = `${follow ? "0ms" : base}, ${base}`;
+        const heightDuration = follow
+          ? "0ms"
+          : disclosure && !toggle
+            ? `${Math.max(0, disclosureUntil.current - performance.now())}ms`
+            : base;
+        box.style.transitionDuration = `${heightDuration}, ${base}`;
         box.style.height = `${target}px`;
       };
       cancelAnimationFrame(frame);
       if (nested && settled.current) frame = requestAnimationFrame(write);
       else write();
     };
-    apply();
+    apply(toggling);
     settled.current = true;
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(apply);
+    const observer = new ResizeObserver(() => apply());
     observer.observe(content);
     return () => {
       observer.disconnect();

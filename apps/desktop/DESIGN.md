@@ -446,6 +446,17 @@ rides the panel's, and the chrome's sidebar toggle folds and unfolds in
 step so the tabs after it never jump. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
+Every sidebar section uses the app kit's measured-height `Collapsible`.
+A disclosure keeps its own paired height and opacity transition when a child
+also resizes, including a paginated list giving up its loading tail. Loading
+skeletons and replacement status messages use matching collapsibles, so the
+handoff moves neighbouring sections continuously. A refresh indicator gives
+back its 28px place while fading over 150ms. All respect reduced motion.
+
+Palette text inputs use the palette's outer border, including the Ask agent
+editable. Keyboard edits never add an outline inside that border. The input
+owns scrolling; the frames that glide to its height stay unscrolled.
+
 What an agent does to the workspace moves as what a person does: its opens
 and closes go through the same functions as a press on its surface's chip
 or a tab's close button, with their tab, split, floating and sidebar
@@ -649,6 +660,10 @@ and one component (`source-section.tsx`) draws every list.
   tree), never a margin inside the row, so the ring and the row's highlight
   start where the row does. The ring glides 150ms to the next row as the
   arrows move it, and moves with its row when rows slide.
+  At a scrolling edge, the tree reveals the ring's current animated box,
+  through the list and its scrollable ancestors. The row and the ring move
+  together rather than scrolling to the destination before the ring arrives.
+  Focus moves immediately; manual scrolling or a pointer press ends the reveal.
 - **An opened sidebar takes focus to what is in front.** Opening a sidebar
   focuses the row of what is in front (a list's selected row, when the list
   has it loaded), so the arrows work at once; with none, focus stays where
@@ -856,6 +871,8 @@ wrap and widen again inside the card's smooth resize. The card keeps its border
 width, easing its color into the tab's background instead. Empty side gutters focus
 the composer; controls and text selection keep their behavior. Running background
 rows align with the conversation instead of nesting under the steps line.
+Every step row reserves the disclosure slot, keeping icons and labels aligned.
+Only rows with expandable content show a chevron in that slot.
 
 Successful folder and unsupported-file previews offer no retry. PR chips can
 read public GitHub status without sign-in (ADR 0279); a recorded fallback is
@@ -1231,6 +1248,11 @@ between a chip's buttons, Escape closes an open group and then returns to the
 composer. Right-click offers the open modes, a chip's own entries and
 Customize chips, which opens a chat with "Help me customize my chat chips."
 waiting in its composer.
+
+A group's panel opens above its own root chip, follows the rail as it reflows,
+and stays within the window. Its members belong to that chat for focus and
+engagement, including when portalled beside the rail. Hiding the chat closes
+its panel. Member menus and previews appear above the group.
 
 ### 2026-10-16: Google's sign-in admits Work, because a page finds `chrome.app`
 

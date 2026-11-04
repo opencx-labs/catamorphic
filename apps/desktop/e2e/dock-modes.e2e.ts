@@ -116,7 +116,7 @@ const hoverChip = async (selector: string) => {
   await app.movePointer({ x: 1, y: 1 });
   const point = await runWait<{ x: number; y: number }>(
     `
-    const button = frontDock()?.querySelector(${JSON.stringify(selector)});
+    const button = frontDock()?.querySelector(${JSON.stringify(selector)}) ?? document.querySelector(${JSON.stringify(selector)});
     if (!button) return false;
     const dock = frontDock();
     if (dock.getAnimations({subtree:true}).some(animation =>
@@ -130,7 +130,7 @@ const hoverChip = async (selector: string) => {
     { label: "surface chip ready for native hover" },
   );
   await app.movePointer(point);
-  const hovered = `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`;
+  const hovered = `return (frontDock()?.querySelector(${JSON.stringify(selector)}) ?? document.querySelector(${JSON.stringify(selector)}))?.matches(':hover');`;
   // A person's pointer keeps moving: if hover has not landed, arrive once
   // more before deciding.
   const seen = await runWait<boolean>(hovered, {
@@ -763,8 +763,8 @@ describe("dock modes", () => {
       `frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click(); return true;`,
     );
     await runWait(
-      `const pop = frontDock().querySelector('.animate-pop-in');
-       const members = pop?.querySelector('[data-testid="chip-group-members"]') ?? frontDock().querySelector('[data-testid="chip-group-members"]');
+      `const pop = document.querySelector('[data-testid="chip-group-members"].animate-pop-in');
+       const members = pop;
        return !!pop && (members?.querySelectorAll('[data-testid="chip-member"]').length ?? 0) >= 4;`,
       { label: "group popover popped in" },
     );
@@ -778,8 +778,8 @@ describe("dock modes", () => {
       `frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click(); return true;`,
     );
     await runWait(
-      `return !!frontDock().querySelector('.animate-pop-out') ||
-              !frontDock().querySelector('.animate-pop-in');`,
+      `const panel = document.querySelector('[data-testid="chip-group-members"]');
+       return !panel || panel.classList.contains('animate-pop-out');`,
       { label: "group popover popping out" },
     );
     // Individual chips reserve no width for the split affordance: it

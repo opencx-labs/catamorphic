@@ -134,6 +134,7 @@ import { ThemeBackdrop } from "../lib/theme.js";
 import { untrustedHost, useTrustedHosts } from "../lib/trusted-hosts.js";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
+import { useComposerDraft } from "../lib/use-composer-draft.js";
 import { MAX_ATTACHMENTS, useComposerFiles } from "../lib/use-composer-files";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
@@ -789,45 +790,28 @@ function ChatDockContent({
   // mirror what it says so the rest of the dock can react — the prose
   // (recall gate, emptiness, the "/" that opens skills) and how many
   // pills are live.
-  const [draft, setDraft] = useState("");
+  const draftRef = useRef("");
+  const [hasText, setHasText] = useState(false);
   const [pillCount, setPillCount] = useState(0);
   const composerRef = useRef<ComposerInputHandle>(null);
-  const restoringDraft = useRef(false);
-  const draftLoaded = useRef(false);
-  const draftSerial = useRef("");
-  useEffect(() => {
-    let live = true;
-    const restore = (
-      next: import("../../shared/desktop-workspace.js").ChatDraft,
-    ) => {
-      const serial = JSON.stringify(next);
-      if (serial === draftSerial.current) return;
-      draftSerial.current = serial;
-      restoringDraft.current = true;
-      composerRef.current?.restore(next);
-      restoringDraft.current = false;
-    };
-    void desktopApi.dockDraftGet(entry.localId).then((next) => {
-      if (!live) return;
-      if (next) restore(next);
-      draftLoaded.current = true;
-      // A chat opened with words waiting ("Customize chips"): they go in
-      // the composer, unsent, and become its draft.
+  const publishDraft = useComposerDraft({
+    localId: entry.localId,
+    composer: composerRef,
+    onLoaded: ({ saved, superseded }) => {
+      // A chat opened with words waiting ("Customize chips"): consume the
+      // seed even if the person already started typing, which takes priority.
       const seeded = entryRef.current.draftMessage;
       if (!seeded) return;
       onEntryChangeRef.current({
         ...entryRef.current,
         draftMessage: undefined,
       });
-      if (next?.message || next?.attachments.length) return;
-      // Its pills follow the words, each where a marker stands.
+      if (superseded || saved?.message || saved?.attachments.length) return;
       const attachments = seeded.attachments ?? [];
-      const draft = {
+      composerRef.current?.restore({
         message: `${seeded.text}${attachments.length ? " " : ""}${ATTACHMENT_MARKER.repeat(attachments.length)}`,
         attachments,
-      };
-      restore(draft);
-      void desktopApi.dockDraftSet(entry.localId, draft);
+      });
       // The caret waits after the words, for the person to go on.
       const root = composerRef.current?.element();
       composerRef.current?.focus();
@@ -838,26 +822,8 @@ function ChatDockContent({
         document.getSelection()?.removeAllRanges();
         document.getSelection()?.addRange(range);
       }
-    });
-    const stop = desktopApi.onDockDraft((update) => {
-      if (update.localId === entry.localId) restore(update.draft);
-    });
-    return () => {
-      live = false;
-      stop();
-    };
-  }, [entry.localId]);
-  const publishDraft = () => {
-    if (restoringDraft.current || !draftLoaded.current) return;
-    const next = composerRef.current?.snapshot();
-    if (!next) return;
-    const serial = JSON.stringify(next);
-    if (serial === draftSerial.current) return;
-    draftSerial.current = serial;
-    void desktopApi.dockDraftSet(entry.localId, next);
-  };
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+    },
+  });
   // Set while the dock itself rewrites the prose (history recall)
   // so the change handler can tell "the user typed" from "we swapped".
   const rewritingRef = useRef(false);
@@ -1230,8 +1196,8 @@ function ChatDockContent({
   const recallUp = (): boolean => {
     if (sentHistory.length === 0) return false;
     if (recall === null) {
-      if (draft.trim() !== "") return false;
-      applyRecall(sentHistory.length - 1, draft, "up");
+      if (draftRef.current.trim() !== "") return false;
+      applyRecall(sentHistory.length - 1, draftRef.current, "up");
       return true;
     }
     if (recall.index === 0) return true; // at the oldest — swallow the key
@@ -1501,7 +1467,9 @@ function ChatDockContent({
   useLayoutEffect(() => {
     if (!frontSurface) return;
     const inDock = (target: EventTarget | null) =>
-      target instanceof Node && sectionRef.current?.contains(target) === true;
+      target instanceof Node &&
+      (sectionRef.current?.contains(target) === true ||
+        chipRailRef.current?.contains(target) === true);
     const onFocusIn = (event: FocusEvent) => {
       // The app's own moves (this composer's autofocus, a New Tab greeting
       // its user) do not stand in for the person: a pending autofocus still
@@ -1542,7 +1510,12 @@ function ChatDockContent({
         box,
         msSinceMove: 0,
       });
-      setDockHovered((hovered) => (hovered && outside ? false : hovered));
+      // A webview or a changing overlay can miss the enter event. A real
+      // move over the card recovers hover, including slow entry from above.
+      const inside =
+        inDock(event.target) ||
+        inDock(document.elementFromPoint(event.clientX, event.clientY));
+      setDockHovered((hovered) => !outside && (inside || hovered));
     };
     // Paste and drop can be the first interaction when invoked through a
     // context menu, accessibility tooling, or automation, so there is no
@@ -1650,7 +1623,7 @@ function ChatDockContent({
   // chat that no longer exists. The unmount cleanup is a separate effect:
   // a combined effect's cleanup would fire on every dep change, flapping
   // working false→true and producing phantom "finished" notifications.
-  const hasDraft = draft.trim().length > 0 || pillCount > 0;
+  const hasDraft = hasText || pillCount > 0;
   const awaitingInput = chat.requests.some(
     (request) => request.blocking && request.answerable,
   );
@@ -1836,7 +1809,7 @@ function ChatDockContent({
     chat.pending.length === 0 &&
     !chat.isSending &&
     chat.queue.length === 0 &&
-    draft.trim() === "" &&
+    draftRef.current.trim() === "" &&
     pillCount === 0;
   const isEmptyRef = useRef(isEmpty);
   isEmptyRef.current = isEmpty;
@@ -1946,10 +1919,13 @@ function ChatDockContent({
   // "/" starting a message that holds nothing else: the agent's own
   // commands apply, sent as written.
   const slashAlone =
-    menuKind === "/" && pillCount === 0 && draft.trim() === `/${menuQuery}`;
+    menuKind === "/" &&
+    pillCount === 0 &&
+    draftRef.current.trim() === `/${menuQuery}`;
   // "/" starting the message, before any words (pills may come first).
   const slashLeads =
-    menuKind === "/" && draft.trimStart().startsWith(`/${menuQuery}`);
+    menuKind === "/" &&
+    draftRef.current.trimStart().startsWith(`/${menuQuery}`);
   // The chat's own commands, offered when the inspector offers them.
   const turnBusy = Boolean(chat.isSending || chat.session?.running);
   const editAgent = turnBusy || otherAgents === 0 ? undefined : onEditAgent;
@@ -2311,7 +2287,7 @@ function ChatDockContent({
     // still under the caret, and that break must win over the pill.
     if (
       event.key === "Backspace" &&
-      draft.trim().length === 0 &&
+      draftRef.current.trim().length === 0 &&
       composerRef.current?.emptyButPills() &&
       !event.metaKey &&
       !event.altKey
@@ -3332,6 +3308,7 @@ function ChatDockContent({
                 >
                   <ChipRail
                     chips={chipView.chips}
+                    visible={expanded && frontSurface && !lurking}
                     source={chipView.source}
                     session={chipView.session}
                     failure={chipView.failure}
@@ -3353,7 +3330,7 @@ function ChatDockContent({
                   className="mx-3 mb-2 rounded border border-border px-3 py-2 text-left text-xs hover:bg-bg-overlay"
                   onClick={() => {
                     setRemoteAgentId(action.agentId);
-                    setDraft(action.prompt);
+                    rewriteText(action.prompt);
                   }}
                 >
                   {action.label}
@@ -3685,15 +3662,18 @@ function ChatDockContent({
                       : ""
                   }`}
                   onChange={(state) => {
+                    const previous = draftRef.current;
+                    draftRef.current = state.text;
                     publishDraft();
                     setPillCount(state.pillCount);
-                    setDraft(state.text);
+                    setHasText(state.text.trim() !== "");
                     readTrigger();
                     // Typing (or pasting) exits history-recall mode; the
                     // dock's own rewrites (recall itself) don't count.
                     if (
+                      recall !== null &&
                       !rewritingRef.current &&
-                      state.text !== draftRef.current
+                      state.text !== previous
                     )
                       setRecall(null);
                   }}
@@ -3742,7 +3722,7 @@ function ChatDockContent({
                   the running turn instead. */}
                 {chat.isWorking &&
                 !awaitingInput &&
-                !draft.trim() &&
+                !draftRef.current.trim() &&
                 pillCount === 0 ? (
                   <ShortcutHint label="Stop">
                     {/* The send button's place and colour: the theme's
@@ -3774,7 +3754,7 @@ function ChatDockContent({
                       className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0 disabled:opacity-35"
                       disabled={
                         pendingTransfers > 0 ||
-                        (!draft.trim() && pillCount === 0)
+                        (!draftRef.current.trim() && pillCount === 0)
                       }
                       data-disabled-reason="Write a message or attach a file first"
                       aria-label="Send message"

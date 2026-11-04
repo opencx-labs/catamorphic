@@ -146,6 +146,9 @@ keeps its place.
 
 A working floating chat can compact when the background receives focus. Hover or
 focus expands it; leaving compacts it again. Completion or a question expands it.
+Pointer moves over the compact card recover hover if an enter event was missed,
+including a slow approach from above. Portalled chip members count as part of
+their chat for interaction; their panel closes when the chat is hidden.
 Both panes of a valid split are visible regardless of keyboard focus. Visible
 responses do not acquire hidden-chat unread or activity cues.
 

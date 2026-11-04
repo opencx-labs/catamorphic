@@ -162,6 +162,28 @@ const PLACEHOLDER_WIDTHS = [62, 84, 48];
 const READS_PER_GESTURE = 3;
 const NO_BRANCHES: ReadonlySet<string | null> = new Set();
 
+/** Reveal the moving ring, inner viewport first, without scrolling clip frames. */
+function revealRing(ring: HTMLElement, viewport: HTMLElement) {
+  for (let node = ring.parentElement; node; node = node.parentElement) {
+    if (node.scrollHeight <= node.clientHeight) continue;
+    const style = getComputedStyle(node);
+    if (node !== viewport && !/^(auto|scroll)$/.test(style.overflowY)) continue;
+    const view = node.getBoundingClientRect();
+    const box = ring.getBoundingClientRect();
+    const top =
+      view.top +
+      node.clientTop +
+      (Number.parseFloat(style.scrollPaddingTop) || 0);
+    const bottom =
+      view.top +
+      node.clientTop +
+      node.clientHeight -
+      (Number.parseFloat(style.scrollPaddingBottom) || 0);
+    if (box.top < top) node.scrollTop -= top - box.top;
+    else if (box.bottom > bottom) node.scrollTop += box.bottom - bottom;
+  }
+}
+
 type TreeRow = ReturnType<typeof indexTree>["rows"][number];
 type TreeSlot =
   | { kind: "row"; key: string; row: TreeRow }
@@ -484,6 +506,57 @@ export function Tree<T extends TreeItem>({
     onScreen.current = renderedNow;
   });
   const viewport = useRef<HTMLDivElement>(null);
+  const focusRing = useRef<HTMLDivElement>(null);
+  const revealFrame = useRef<number | undefined>(undefined);
+  const releaseReveal = useRef<(() => void) | undefined>(undefined);
+  const cancelReveal = useCallback(() => {
+    if (revealFrame.current !== undefined)
+      cancelAnimationFrame(revealFrame.current);
+    revealFrame.current = undefined;
+    viewport.current?.removeAttribute("data-tree-revealing");
+    releaseReveal.current?.();
+    releaseReveal.current = undefined;
+  }, []);
+  useEffect(() => cancelReveal, [cancelReveal]);
+  const followRing = useCallback(
+    (node: HTMLDivElement, ring: HTMLDivElement) => {
+      cancelReveal();
+      node.setAttribute("data-tree-revealing", "");
+      // Commit the old pose before focus retargets the CSS transition.
+      ring.getBoundingClientRect();
+      const document = node.ownerDocument;
+      const inputs = ["wheel", "touchstart", "pointerdown"];
+      for (const type of inputs)
+        document.addEventListener(type, cancelReveal, {
+          capture: true,
+          passive: true,
+        });
+      releaseReveal.current = () => {
+        for (const type of inputs)
+          document.removeEventListener(type, cancelReveal, true);
+      };
+      const frame = () => {
+        if (!node.contains(document.activeElement) || !ring.isConnected) {
+          cancelReveal();
+          return;
+        }
+        revealRing(ring, node);
+        if (
+          ring
+            .getAnimations()
+            .some(
+              (animation) =>
+                animation.playState === "running" &&
+                animation.effect?.getTiming().iterations !== Infinity,
+            )
+        )
+          revealFrame.current = requestAnimationFrame(frame);
+        else cancelReveal();
+      };
+      revealFrame.current = requestAnimationFrame(frame);
+    },
+    [cancelReveal],
+  );
   useEffect(() => {
     const node = viewport.current;
     return node && onViewport ? onViewport(node) : undefined;
@@ -614,6 +687,7 @@ export function Tree<T extends TreeItem>({
   );
   const reveal = useCallback(
     (id: string) => {
+      cancelReveal();
       const index = layout.indexById.get(id) ?? -1;
       const node = viewport.current;
       if (index < 0 || !node) return;
@@ -628,21 +702,23 @@ export function Tree<T extends TreeItem>({
         node.scrollTop = top + rowHeight + after - actualHeight;
       setScrollTop(node.scrollTop);
     },
-    [layout, rowHeight, actualHeight],
+    [layout, rowHeight, actualHeight, cancelReveal],
   );
   const previousAnchor = useRef<{ id: string; offset: number } | undefined>(
     undefined,
   );
+  const anchoredLayout = useRef(layout);
   useLayoutEffect(() => {
     const anchor = previousAnchor.current;
     const node = viewport.current;
-    if (node && anchor) {
+    if (anchoredLayout.current !== layout && node && anchor) {
       const index = layout.indexById.get(anchor.id);
       if (index !== undefined) {
         node.scrollTop = index * rowHeight + anchor.offset;
         setScrollTop(node.scrollTop);
       }
     }
+    anchoredLayout.current = layout;
     if (focusedId && !tree.indexById.has(focusedId)) {
       const previous = byId.get(focusedId)?.parentId;
       setFocusedId(
@@ -660,13 +736,22 @@ export function Tree<T extends TreeItem>({
       !(holdsFocus.current && (active === null || active === document.body))
     )
       return;
-    reveal(focusedId);
+    const viewportNode = viewport.current;
+    const ring = focusRing.current;
+    if (
+      viewportNode &&
+      ring &&
+      typeof ring.getAnimations === "function" &&
+      !matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      followRing(viewportNode, ring);
+    else reveal(focusedId);
     const node = [
       ...(viewport.current?.querySelectorAll<HTMLElement>("[data-tree-id]") ??
         []),
     ].find((entry) => entry.dataset.treeId === focusedId);
     node?.focus({ preventScroll: true });
-  }, [focusedId, reveal]);
+  }, [focusedId, reveal, followRing]);
   // A host asks for a row by name (focusTreeRow): the first, the last or
   // the selected one, revealed and focused. Handled, the event is canceled.
   useEffect(() => {
@@ -1153,6 +1238,7 @@ export function Tree<T extends TreeItem>({
           // A focused row taken away leaves focus to its neighbour.
           if (!(event.target instanceof Node) || event.target.isConnected)
             holdsFocus.current = false;
+          cancelReveal();
           setRing(null);
         }}
         onKeyDown={(event) => {
@@ -1248,6 +1334,8 @@ export function Tree<T extends TreeItem>({
           event.preventDefault();
           event.stopPropagation();
           if (next) {
+            if (next !== row.id)
+              setRing((current) => current ?? { id: row.id, glide: false });
             setFocusedId(next);
             allowReads();
           }
@@ -1275,6 +1363,7 @@ export function Tree<T extends TreeItem>({
               if (index === undefined || slot?.kind !== "row") return null;
               return (
                 <div
+                  ref={focusRing}
                   aria-hidden="true"
                   data-tree-focus=""
                   data-glide={ring?.glide ? "" : undefined}

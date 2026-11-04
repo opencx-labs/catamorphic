@@ -189,8 +189,12 @@ const keepRowInView = (event: ReactFocusEvent<HTMLDivElement>) => {
     row &&
     document.documentElement.dataset.focusModality === "keyboard" &&
     !appIsMovingFocus()
-  )
+  ) {
+    // The tree follows its rendered ring through both scrollports while
+    // gliding. Revealing the destination row here would jump ahead of it.
+    if (row.closest("[data-tree-revealing]")) return;
     revealInPanel(row);
+  }
 };
 
 interface LayoutState {

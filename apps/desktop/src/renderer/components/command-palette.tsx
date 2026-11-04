@@ -1151,7 +1151,6 @@ export function CommandPalette({
                 }
                 aria-label="Search commands, pages, and more"
                 className="field-sizing-content block max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
-                style={{ outline: "none" }}
               />
             )}
           </div>

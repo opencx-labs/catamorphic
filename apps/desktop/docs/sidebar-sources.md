@@ -294,7 +294,8 @@ Public GitHub PR chips need no sign-in (ADR 0279). Anonymous reads refresh every
 five minutes while visible and omit check-run requests; authenticated reads
 refresh every minute. A merged PR stops polling, while a closed PR can reopen.
 A failed refresh retains the last good read. When live information is unavailable,
-the chip labels its saved metadata **Recorded**. GitHub CLI access is an explicit
+the chip shows its saved metadata without a placeholder badge. Live chips show
+the modified-file count; line counts remain in their preview. GitHub CLI access is an explicit
 profile connection; a working CLI login alone does not enable that connection.
 
 An agent can discover `refresh_chips` and call it with no input after changing

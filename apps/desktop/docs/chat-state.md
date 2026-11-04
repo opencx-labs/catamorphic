@@ -343,3 +343,15 @@ from the preceding destination while scrolling is still in motion. A wheel,
 touch gesture or scrollbar press takes over. These keys stay with browser pages
 and other surfaces outside chat. Incoming agent messages use the sender's harness
 mark through the timeline's optional `renderAgentIcon` host slot.
+
+Navigation skips a message whose clamped destination is already reached, using
+the article's actual geometry after the coarse row search. Fractional scroll
+settlement and short final messages cannot consume repeated taps.
+
+The composer DOM owns draft text and native editing history. The dock mirrors
+the latest text in a ref and renders on emptiness, attachment, menu and recall
+changes, rather than rendering the conversation for every character. An initial
+saved-draft read loses to edits or broadcasts that arrived while it waited;
+persistence never acknowledges a local edit by replacing the editable DOM.
+`e2e/chat-input-navigation.e2e.ts` exercises native character input and paging;
+`use-composer-draft.test.tsx` covers deferred reads and caret preservation.

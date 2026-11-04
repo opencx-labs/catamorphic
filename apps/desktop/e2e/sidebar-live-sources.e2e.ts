@@ -12,10 +12,11 @@ let version = 1;
 let delay = 700;
 let requests = 0;
 async function click(selector: string) {
-  // A control that just appeared may still be opening (sidebar content grows
-  // into place): click once the point lands on it, as a person would.
+  // A control that just appeared may still be opening. Finish the sidebar's
+  // finite motion before measuring: a reachable point can move between the
+  // measurement and mouse release, especially after another card closes.
   const point = await app.waitFor<{ x: number; y: number }>(
-    `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
+    `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return false;const sidebar=el.closest('[data-sidebar]');if(sidebar?.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return el.contains(document.elementFromPoint(x,y))?{x,y}:false})()`,
     { label: `${selector} reachable` },
   );
   await app.cdp("Input.dispatchMouseEvent", {
@@ -117,10 +118,15 @@ beforeAll(async () => {
     false,
   );
   expect(requests).toBe(0);
-  for (const id of sections)
+  for (const id of sections) {
     await click(
       `[data-sidebar-section="${id}"] [data-testid="module-access-allow"]`,
     );
+    await app.waitFor(
+      `!document.querySelector('[data-sidebar-section="${id}"] [data-testid="module-access-request"]')`,
+      { label: `${id} allowed and its request closed` },
+    );
+  }
   await app.waitFor(
     `!!document.querySelector('[data-sidebar-source="todos"]') && !document.querySelector('[data-testid="module-access-request"]')`,
   );

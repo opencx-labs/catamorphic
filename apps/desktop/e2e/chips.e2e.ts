@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
@@ -197,7 +198,7 @@ it("draws a recorded pull request as a wide chip that says where it stands", asy
   }>(
     `const el = chip('https://github.com/acme/widgets/pull/4');
      const badges = [...(el?.querySelectorAll('[data-chip-badge]') ?? [])];
-     if (!el || badges.length < 4) return false;
+     if (!el || badges.length < 3) return false;
      return { wide: el.hasAttribute('data-wide'), tone: el.dataset.tone,
        label: el.querySelector('[data-chip-main]').textContent,
        badges: badges.map((badge) => badge.textContent),
@@ -206,7 +207,7 @@ it("draws a recorded pull request as a wide chip that says where it stands", asy
   );
   expect(live).toMatchObject({ wide: true, tone: "success" });
   expect(live.label).toContain("#4");
-  expect(live.badges).toEqual(["+1,556", "−212", "4", "Checks"]);
+  expect(live.badges).toEqual(["7 files", "4", "Checks"]);
   expect(live.checkTone).toBe("warning");
   // Wide chips stack against the composer, the composer's width (layout
   // widths: a chip still rising in is drawn a little smaller).
@@ -221,6 +222,11 @@ it("draws a recorded pull request as a wide chip that says where it stands", asy
   await wait(
     `return chip('https://git.invalid/acme/web/pull/12')?.dataset.tone === 'success';`,
   );
+  expect(
+    await run(
+      `return chip('https://git.invalid/acme/web/pull/12').querySelectorAll('[data-chip-badge]').length;`,
+    ),
+  ).toBe(0);
   await tool("set_session_metadata", {
     key: "pull_requests",
     value: [
@@ -578,6 +584,252 @@ it("runs the project's chips module once allowed: its order, its chip and its bu
   });
   fs.rmSync(path.join(projectRoot, ".work/workspace.js"));
   await wait(`return !chip('standup');`, { label: "Work's chips again" });
+});
+
+it("anchors each group to its own chip through switching and wrapped reflow", async () => {
+  const groups = [
+    { id: "lead-a", label: "Audit allocation", icon: "Bot" },
+    { id: "lead-b", label: "Review isolation", icon: "Bot" },
+    {
+      id: "pages",
+      label: "Pages",
+      icon: "Globe",
+      hasChildren: true,
+      badges: [{ label: "19" }],
+    },
+    {
+      id: "notes-group",
+      label: "Notes",
+      icon: "File",
+      hasChildren: true,
+      badges: [{ label: "4" }],
+    },
+    ...Array.from({ length: 19 }, (_, i) => ({
+      id: `page-${i}`,
+      label: `Fixture page ${i}`,
+      parentId: "pages",
+      icon: "Globe",
+      preview: false,
+    })),
+    ...Array.from({ length: 4 }, (_, i) => ({
+      id: `note-${i}`,
+      label: `Fixture note ${i}`,
+      parentId: "notes-group",
+      icon: "File",
+      preview: false,
+      contextMenu: [{ action: "choose", label: "Choose note" }],
+    })),
+  ];
+  fs.mkdirSync(path.join(projectRoot, ".work/group-chip-fixture"), {
+    recursive: true,
+  });
+  fs.writeFileSync(
+    path.join(projectRoot, ".work/group-chip-fixture/package.json"),
+    JSON.stringify({
+      name: "group-chip-fixture",
+      private: true,
+      catamorphic: { access: { lists: ["chips"] } },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, ".work/group-chip-fixture/index.ts"),
+    `export default {load(){return {items:${JSON.stringify(groups)}}},action({itemId}){return {message:'Opened '+itemId}}}`,
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, ".work/workspace.js"),
+    `module.exports={sidebars:{left:[{id:'project',title:'Project',icon:'House',sections:[{id:'files',source:'work:files'}]}],right:[]},chips:{source:'.work/group-chip-fixture/index.ts'}}`,
+  );
+  const panel =
+    "document.querySelector('[data-testid=\"chip-group-members\"]:not([inert])')";
+  const clickChip = async (id: string) => {
+    const point = await wait<{ x: number; y: number }>(
+      `const button=chip(${JSON.stringify(id)})?.querySelector('[data-chip-main]');if(!button||rail().getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=button.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}`,
+    );
+    await app.movePointer(point);
+    await app.clickPointer(point);
+  };
+  const aligned = async (id: string) =>
+    wait(
+      `const button=chip(${JSON.stringify(id)})?.querySelector('[data-chip-main]'),panel=${panel};if(!button||!panel||button.getAttribute('aria-controls')!==panel.id)return false;if(panel.getAnimations().some(a=>a.playState==='running'))return false;const a=button.getBoundingClientRect(),p=panel.getBoundingClientRect();return Math.abs(p.left-Math.max(8,Math.min(a.left,innerWidth-p.width-8)))<2&&Math.abs(a.top-p.bottom-8)<2&&Math.abs(p.width-320)<2&&p.height<=256.5;`,
+      { label: `${id} panel follows its own trigger` },
+    );
+  const backdrop = http.createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end("<title>Chip backdrop</title><body>Local chip fixture</body>");
+  });
+  await new Promise<void>((resolve) =>
+    backdrop.listen(0, "127.0.0.1", resolve),
+  );
+  try {
+    await wait(
+      `const railView=rail();const allow=railView?.querySelector('[data-testid="module-access-allow"]');if(allow&&!allow.disabled)allow.click();const failure=railView?.querySelector('[data-testid="chip-rail-failure"]');if(failure)throw Error(failure.textContent);return !!chip('pages')&&!!chip('notes-group');`,
+      { label: "group fixture source loaded" },
+    );
+    expect(
+      await run(
+        `return chip('pages').getBoundingClientRect().left-rail().getBoundingClientRect().left;`,
+      ),
+    ).toBeGreaterThan(100);
+    await clickChip("pages");
+    await aligned("pages");
+    if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+          "chip-pages-anchor.png",
+        ),
+      );
+    await clickChip("notes-group");
+    await aligned("notes-group");
+    await app.eval("window.catamorphicDesktop.devWindow('setSize',760,700)");
+    await aligned("notes-group");
+    if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+          "chip-group-wrapped.png",
+        ),
+      );
+    // A member's menu sits above the group and its shield, never underneath it.
+    const point = await wait<{ x: number; y: number }>(
+      `const button=${panel}?.querySelector('[data-member-main]');if(!button)return false;const r=button.getBoundingClientRect();return{x:r.left+20,y:r.top+r.height/2}`,
+    );
+    for (const type of ["mousePressed", "mouseReleased"])
+      await app.cdp("Input.dispatchMouseEvent", {
+        type,
+        ...point,
+        button: "right",
+        clickCount: 1,
+      });
+    await wait(
+      `const item=[...document.querySelectorAll('[role="menuitem"]')].find(e=>e.textContent.includes('Choose note'));if(!item)return false;const r=item.getBoundingClientRect();return item.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2));`,
+      { label: "member menu is above its group" },
+    );
+    await app.press("Escape");
+    await app.waitFor("!document.querySelector('[data-menu-shield]')");
+    await app.clickPointer(point);
+    await wait(
+      `return rail().querySelector('[role="status"]')?.textContent==='Opened note-0';`,
+    );
+    await wait(`return !${panel};`);
+    // Keyboard entry and Escape keep their focus relationship across the portal.
+    await run(
+      `chip('pages').querySelector('[data-chip-main]').focus();return true;`,
+    );
+    await app.press("Enter");
+    await wait(
+      `return document.activeElement?.hasAttribute('data-member-main');`,
+    );
+    await app.press("Escape");
+    await wait(
+      `return document.activeElement===chip('pages').querySelector('[data-chip-main]')&&!${panel};`,
+    );
+    await app.press("Enter");
+    await wait(
+      `return document.activeElement?.hasAttribute('data-member-main');`,
+    );
+    await app.press("p", await primary());
+    await app.waitFor(
+      `!!document.querySelector('[aria-hidden="false"] [data-palette="overlay"]')&&!document.querySelector('[data-testid="chip-group-members"]:not([inert])')`,
+    );
+    await app.press("Escape");
+    await app.waitFor(
+      `!document.querySelector('[aria-hidden="false"] [data-palette="overlay"]')`,
+    );
+    await clickChip("notes-group");
+    await aligned("notes-group");
+    const memberPoint = await wait<{ x: number; y: number }>(
+      `const button=${panel}?.querySelector('[data-member-main]');if(!button)return false;const r=button.getBoundingClientRect();return{x:r.left+20,y:r.top+r.height/2}`,
+    );
+    for (const type of ["mousePressed", "mouseReleased"])
+      await app.cdp("Input.dispatchMouseEvent", {
+        type,
+        ...memberPoint,
+        button: "right",
+        clickCount: 1,
+      });
+    await app.waitFor(`!!document.querySelector('[data-menu-shield]')`);
+    await app.press("p", await primary());
+    await app.waitFor(
+      `!!document.querySelector('[aria-hidden="false"] [data-palette="overlay"]')&&!document.querySelector('[data-testid="chip-group-members"]:not([inert])')&&!document.querySelector('[data-menu-shield]')`,
+    );
+    await app.press("Escape");
+    await app.waitFor(
+      `!document.querySelector('[aria-hidden="false"] [data-palette="overlay"]')`,
+    );
+    // Portalled keyboard focus still belongs to a working floating chat.
+    const address = backdrop.address();
+    if (!address || typeof address === "string")
+      throw Error("No backdrop port");
+    await run(`composer().focus();return true;`);
+    await app.insertText(`show: http://127.0.0.1:${address.port}/`);
+    await app.press("Enter");
+    await wait(
+      `return !!document.querySelector('webview')&&!dock().querySelector('[aria-label="Stop the agent"]');`,
+    );
+    await run(`composer().focus();return true;`);
+    await app.insertText("perf turn steps=0 quiet=60 stream=0");
+    await app.press("Enter");
+    await wait(
+      `return !!dock().querySelector('[aria-label="Stop the agent"]');`,
+    );
+    await app.movePointer({ x: 1, y: 100 });
+    await run(
+      `chip('pages').querySelector('[data-chip-main]').focus();return true;`,
+    );
+    await app.press("Enter");
+    await wait(
+      `return document.activeElement?.hasAttribute('data-member-main');`,
+    );
+    await wait(
+      `return !dock().hasAttribute('data-lurking')&&!dock().getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity);`,
+    );
+    expect(
+      await run(
+        `return document.activeElement?.hasAttribute('data-member-main')&&!!${panel};`,
+      ),
+    ).toBe(true);
+    await app.press("Escape");
+    await run(
+      `dock().querySelector('[aria-label="Stop the agent"]').click();return true;`,
+    );
+    await wait(
+      `return !dock().querySelector('[aria-label="Stop the agent"]');`,
+    );
+    // Switching tabs hides a retained owner's portal immediately.
+    await app.press("m", (await primary()) | 8);
+    await wait(`return dock()?.hasAttribute('data-chat-tab');`);
+    await run(
+      `chip('pages').querySelector('[data-chip-main]').focus();return true;`,
+    );
+    await app.press("Enter");
+    await wait(
+      `return document.activeElement?.hasAttribute('data-member-main');`,
+    );
+    await app.press("t", await primary());
+    await app.waitFor(
+      `!document.querySelector('[data-chat-tab]')&&!document.querySelector('[data-testid="chip-group-members"]')`,
+    );
+    await app.press("w", await primary());
+    await wait(`return dock()?.hasAttribute('data-chat-tab');`);
+    await app.press("Escape");
+    await wait(`return dock()?.hasAttribute('data-floating-chat');`);
+  } catch (error) {
+    throw new Error(
+      JSON.stringify(
+        await run(
+          `return {text:rail()?.textContent,active:document.activeElement?.outerHTML,panels:[...document.querySelectorAll('[data-testid="chip-group-members"]')].map(el=>({box:el.getBoundingClientRect().toJSON(),inert:el.inert,text:el.textContent})),chips:[...(rail()?.querySelectorAll('[data-chip-main]')??[])].map(e=>({id:e.closest('[data-chip-root]')?.dataset.chipRoot,box:e.getBoundingClientRect().toJSON(),expanded:e.getAttribute('aria-expanded')}))};`,
+        ),
+      ),
+      { cause: error },
+    );
+  } finally {
+    backdrop.closeAllConnections();
+    await new Promise<void>((resolve) => backdrop.close(() => resolve()));
+    fs.rmSync(path.join(projectRoot, ".work/workspace.js"));
+    await app.eval("window.catamorphicDesktop.devWindow('setSize',1200,850)");
+    await wait(`return !chip('pages');`);
+  }
 });
 
 it("keeps Work's chips beside a Retry when the chips module fails", async () => {
