@@ -115,7 +115,8 @@ it("keeps character-by-character edits and caret order while the agent works", a
     ),
   ).toBe(true);
   await shot("chat-typing-caret");
-  // Chromium groups the replacement with its preceding deletion.
+  // Chromium groups the replacement with its preceding deletion. CDP skips
+  // macOS's native key binding lookup, so supply its editing command too.
   for (const type of ["keyDown", "keyUp"])
     await app.cdp("Input.dispatchKeyEvent", {
       type,
@@ -123,6 +124,7 @@ it("keeps character-by-character edits and caret order while the agent works", a
       code: "KeyZ",
       windowsVirtualKeyCode: 90,
       modifiers: process.platform === "darwin" ? 4 : 2,
+      ...(type === "keyDown" ? { commands: ["undo"] } : {}),
     });
   expect(await app.eval(`${editor}.textContent`)).toBe(text);
   const stop = await app.eval<boolean>(
