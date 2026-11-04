@@ -173,14 +173,13 @@ export function pullRequestChip({
   const repository = status?.repository ?? repositoryOf(pr.url);
   const badges: SidebarBadge[] = status
     ? [
-        { label: `+${count(status.additions)}`, tone: "success" },
-        { label: `−${count(status.deletions)}`, tone: "danger" },
+        { label: plural(status.changedFiles, "file") },
         ...(status.comments
           ? [{ label: count(status.comments), icon: "MessageSquare" }]
           : []),
         ...(status.checks ? [checksBadge(status.checks)] : []),
       ]
-    : [{ label: "Recorded" }];
+    : [];
   const facts: SidebarPreviewMetadata[] = [
     { label: "State", value: looks.label },
     ...(!status ? [{ label: "Status source", value: "Last recorded" }] : []),

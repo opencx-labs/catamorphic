@@ -660,6 +660,10 @@ and one component (`source-section.tsx`) draws every list.
   tree), never a margin inside the row, so the ring and the row's highlight
   start where the row does. The ring glides 150ms to the next row as the
   arrows move it, and moves with its row when rows slide.
+  At a scrolling edge, the tree reveals the ring's current animated box,
+  through the list and its scrollable ancestors. The row and the ring move
+  together rather than scrolling to the destination before the ring arrives.
+  Focus moves immediately; manual scrolling or a pointer press ends the reveal.
 - **An opened sidebar takes focus to what is in front.** Opening a sidebar
   focuses the row of what is in front (a list's selected row, when the list
   has it loaded), so the arrows work at once; with none, focus stays where
@@ -1242,6 +1246,11 @@ between a chip's buttons, Escape closes an open group and then returns to the
 composer. Right-click offers the open modes, a chip's own entries and
 Customize chips, which opens a chat with "Help me customize my chat chips."
 waiting in its composer.
+
+A group's panel opens above its own root chip, follows the rail as it reflows,
+and stays within the window. Its members belong to that chat for focus and
+engagement, including when portalled beside the rail. Hiding the chat closes
+its panel. Member menus and previews appear above the group.
 
 ### 2026-10-16: Google's sign-in admits Work, because a page finds `chrome.app`
 

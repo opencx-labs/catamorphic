@@ -56,7 +56,10 @@ describe("pull request chips", () => {
       data: { kind: "pull-request", state: "draft", number: 12 },
     });
     expect(chip.tone).toBeUndefined();
-    expect(chip.badges).toEqual([{ label: "Recorded" }]);
+    expect(chip.badges).toBeUndefined();
+    expect(
+      pullRequestChip({ pr: { url: chip.url ?? "" }, status: null }).badges,
+    ).toBeUndefined();
     const preview = chip.preview;
     if (!preview) throw new Error("Missing pull request preview");
     expect(preview.metadata).toContainEqual({
@@ -87,11 +90,7 @@ describe("pull request chips", () => {
       description: "Chips that say where work stands",
       icon: "GitMerge",
       tone: "info",
-      badges: [
-        { label: "+14,215", tone: "success" },
-        { label: "−0", tone: "danger" },
-        { label: "9", icon: "MessageSquare" },
-      ],
+      badges: [{ label: "113 files" }, { label: "9", icon: "MessageSquare" }],
     });
     const failing = pullRequestChip({
       pr: { url: "https://github.com/acme/web/pull/12" },

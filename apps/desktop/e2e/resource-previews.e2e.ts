@@ -341,15 +341,15 @@ it("expands a plural group into every member without clipping the list", async (
     `front().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click();`,
   );
   await wait(
-    `const panel = front().querySelector('[data-testid="chip-group-members"]'); if (!panel || panel.querySelectorAll('[data-testid="chip-member"]').length !== 4) return false; const button = panel.querySelector('[data-member-main]'); const rect = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(rect.left + 10, rect.top + rect.height / 2));`,
+    `const panel = document.querySelector('[data-testid="chip-group-members"]'); if (!panel || panel.querySelectorAll('[data-testid="chip-member"]').length !== 4) return false; const button = panel.querySelector('[data-member-main]'); const rect = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(rect.left + 10, rect.top + rect.height / 2));`,
   );
   const memberLabels = await run<string[]>(
-    `return [...front().querySelectorAll('[data-testid="chip-group-members"] [data-testid="chip-member"]')].map(row => row.querySelector('[data-member-main]')?.textContent);`,
+    `return [...document.querySelectorAll('[data-testid="chip-group-members"] [data-testid="chip-member"]')].map(row => row.querySelector('[data-member-main]')?.textContent);`,
   );
   expect(new Set(memberLabels).size).toBe(4);
   await app.screenshot("/tmp/resource-preview-group.png");
   await run(
-    `front().querySelector('[data-testid="chip-group-members"] [data-member-main]').focus();`,
+    `document.querySelector('[data-testid="chip-group-members"] [data-member-main]').focus();`,
   );
   // The stationary pointer can hover a different member as the group expands.
   // Assert the focused member's own preview, identified by its ARIA relationship.

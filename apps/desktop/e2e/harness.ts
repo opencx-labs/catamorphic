@@ -682,6 +682,9 @@ const KEY_CODES = {
   ArrowDown: { windowsVirtualKeyCode: 40, code: "ArrowDown" },
   PageUp: { windowsVirtualKeyCode: 33, code: "PageUp" },
   PageDown: { windowsVirtualKeyCode: 34, code: "PageDown" },
+  Home: { windowsVirtualKeyCode: 36, code: "Home" },
+  End: { windowsVirtualKeyCode: 35, code: "End" },
+  t: { windowsVirtualKeyCode: 84, code: "KeyT" },
   ArrowLeft: { windowsVirtualKeyCode: 37, code: "ArrowLeft" },
   ArrowRight: { windowsVirtualKeyCode: 39, code: "ArrowRight" },
 } as const;

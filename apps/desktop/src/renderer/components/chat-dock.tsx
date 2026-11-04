@@ -1467,7 +1467,9 @@ function ChatDockContent({
   useLayoutEffect(() => {
     if (!frontSurface) return;
     const inDock = (target: EventTarget | null) =>
-      target instanceof Node && sectionRef.current?.contains(target) === true;
+      target instanceof Node &&
+      (sectionRef.current?.contains(target) === true ||
+        chipRailRef.current?.contains(target) === true);
     const onFocusIn = (event: FocusEvent) => {
       // The app's own moves (this composer's autofocus, a New Tab greeting
       // its user) do not stand in for the person: a pending autofocus still
@@ -1508,7 +1510,12 @@ function ChatDockContent({
         box,
         msSinceMove: 0,
       });
-      setDockHovered((hovered) => (hovered && outside ? false : hovered));
+      // A webview or a changing overlay can miss the enter event. A real
+      // move over the card recovers hover, including slow entry from above.
+      const inside =
+        inDock(event.target) ||
+        inDock(document.elementFromPoint(event.clientX, event.clientY));
+      setDockHovered((hovered) => !outside && (inside || hovered));
     };
     // Paste and drop can be the first interaction when invoked through a
     // context menu, accessibility tooling, or automation, so there is no
@@ -3301,6 +3308,7 @@ function ChatDockContent({
                 >
                   <ChipRail
                     chips={chipView.chips}
+                    visible={expanded && frontSurface && !lurking}
                     source={chipView.source}
                     session={chipView.session}
                     failure={chipView.failure}

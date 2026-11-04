@@ -2102,8 +2102,8 @@ describe("subagents and background watchers", () => {
       return true;
     `);
     await runWait(
-      `const pop = floatingDock()?.querySelector(
-         '[data-testid="chip-group-members"]');
+      `const pop = document.querySelector(
+         '[data-testid="chip-group-members"]:not([inert])');
        return !!pop && pop.textContent.includes('bun test');`,
       { label: "subagent activity popover" },
     );
