@@ -50,6 +50,11 @@ editors, project files, apps, and connectors you can also use yourself. You can
 take over a surface at any moment, inspect diffs when a change deserves your
 eyes, or trust routine work to continue.
 
+The palette's History mode finds the current project's chats by words in their
+titles and messages, showing a matching excerpt beside the pages and work opened
+in the profile. It searches user and assistant messages, excluding tool output
+and reasoning.
+
 Projects are ordinary folders and git repositories. Every agent turn that
 changes files creates a checkpoint commit, and any turn can be undone with
 its files. A session is a durable log of turns that every client folds the

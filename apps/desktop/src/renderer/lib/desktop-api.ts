@@ -1688,7 +1688,11 @@ export interface CatamorphicDesktopApi {
   bridgeTakeover: (key: string) => void;
 
   webviewPreloadPath: () => Promise<string>;
-  browserPrepareProfile: (profileId: string) => Promise<string>;
+  /** The page session's partition: the profile's, or its incognito one. */
+  browserPrepareProfile: (
+    profileId: string,
+    incognito?: boolean,
+  ) => Promise<string>;
   siteSettingsGet: (input: { origin: string }) => Promise<SiteDetails>;
   siteSettingsSet: (input: {
     origin: string;
@@ -1903,8 +1907,9 @@ export interface CatamorphicDesktopApi {
     menuId: string;
     action: string | null;
   }) => Promise<void>;
+  /** `incognito`: an incognito page opened it, so its tab is incognito too. */
   onBrowserOpenUrl: (
-    listener: (url: string, mode?: OpenMode) => void,
+    listener: (url: string, mode?: OpenMode, incognito?: boolean) => void,
   ) => () => void;
   /** A notification of a page was clicked: bring that tab forward. */
   onBrowserRevealGuest: (

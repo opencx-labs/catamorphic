@@ -157,6 +157,23 @@ export const BUILTIN_ACTIONS = [
     keywords: ["browser", "web", "page", "open"],
   },
   {
+    id: "new-incognito-tab",
+    label: "New incognito tab",
+    icon: "Ghost",
+    description:
+      "open a browser tab that records no history; its cookies and sign-ins go when the last incognito tab closes",
+    defaultBinding: "Cmd+Shift+N",
+    keywords: [
+      "incognito",
+      "private",
+      "browser",
+      "web",
+      "page",
+      "secret",
+      "ghost",
+    ],
+  },
+  {
     id: "browser-back",
     label: "Go back",
     icon: "ArrowLeft",

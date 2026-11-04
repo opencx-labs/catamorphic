@@ -17,6 +17,7 @@ import {
   Download,
   FileCode,
   FileDiff,
+  Ghost,
   GitFork,
   Globe,
   KeyRound,
@@ -84,6 +85,8 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
   if (needs || doing) return [needs, doing].filter(Boolean).join(" · ");
   if (tab.kind === "browser" && tab.asleep)
     return "Asleep to save memory. Opens where you left off";
+  if (tab.kind === "browser" && tab.incognito)
+    return "Incognito. Keeps no history and does not reopen after Work quits";
   return null;
 }
 
@@ -798,6 +801,18 @@ function TabStrip({
                       )}
                     </SignalGlyph>
                     <SleepRing tab={tab} />
+                    {/* An incognito page keeps its site's icon; a ghost on
+                      its lower corner says where it lives. */}
+                    {tab.kind === "browser" &&
+                      tab.incognito &&
+                      !tab.activity && (
+                        <span
+                          className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised"
+                          data-tab-incognito=""
+                        >
+                          <Ghost className="size-1.5 text-fg-muted" />
+                        </span>
+                      )}
                     {/* A custom conversation icon still reads as a chat: a
                       tiny chat marker rides the glyph's lower corner, which
                       what the chat is doing takes while it says anything. */}

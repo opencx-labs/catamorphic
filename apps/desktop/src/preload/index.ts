@@ -868,8 +868,11 @@ const api = {
   // --- browser tabs ---
   webviewPreloadPath: (): Promise<string> =>
     invoke("catamorphic:webview-preload"),
-  browserPrepareProfile: (profileId: string): Promise<string> =>
-    invoke("catamorphic:browser-prepare-profile", profileId),
+  browserPrepareProfile: (
+    profileId: string,
+    incognito = false,
+  ): Promise<string> =>
+    invoke("catamorphic:browser-prepare-profile", { profileId, incognito }),
 
   // --- site settings (ADR 0150) ---
   siteSettingsGet: (input: { origin: string }): Promise<unknown> =>
@@ -1217,12 +1220,12 @@ const api = {
     action: string | null;
   }): Promise<void> => invoke("catamorphic:browser-context-menu-pick", input),
   onBrowserOpenUrl: (
-    listener: (url: string, mode?: OpenMode) => void,
+    listener: (url: string, mode?: OpenMode, incognito?: boolean) => void,
   ): (() => void) => {
     const handler = (
       _event: unknown,
-      payload: { url: string; mode?: OpenMode },
-    ) => listener(payload.url, payload.mode);
+      payload: { url: string; mode?: OpenMode; incognito?: boolean },
+    ) => listener(payload.url, payload.mode, payload.incognito === true);
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);

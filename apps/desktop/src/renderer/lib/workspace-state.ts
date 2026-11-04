@@ -20,6 +20,11 @@ export interface BrowserEntry {
   background?: boolean;
   /** Back and forward list, so a reopened or restored tab can go back. */
   history?: BrowserHistory;
+  /**
+   * The page lives in the profile's incognito session (ADR 0303): it
+   * records no history and does not outlive the app.
+   */
+  incognito?: boolean;
 }
 
 export interface TerminalEntry {
@@ -96,6 +101,7 @@ export type ClosedTab = (
       profileId: string;
       chatLocalId?: string;
       history?: BrowserHistory;
+      incognito?: boolean;
     }
   | {
       kind: "terminal";
@@ -204,7 +210,8 @@ export const editorTabKey = (localId: string) => `editor:${localId}`;
  * Dropped because they cannot survive: terminals (the PTY dies with the
  * app), sessionless chats (nothing to reopen), unsent composer state,
  * agent-setup tabs (they re-open themselves), and mcpapp tabs (their tool
- * results are runtime data). Editor tabs lose unsaved buffers; browser
+ * results are runtime data), and incognito pages (ADR 0303: they end with
+ * the app). Editor tabs lose unsaved buffers; browser
  * tabs reopen on their last URL. Workflow tabs retain their draft source and
  * baseline so returning to a project can detect external conflicts.
  *
@@ -230,17 +237,22 @@ export const serializeWorkspace = (
   const chatIds = new Set(chats.map((chat) => chat.localId));
   const chatRef = (id: string | undefined) =>
     id && chatIds.has(id) ? { chatLocalId: id } : {};
-  const browsers = ws.browsers.map((browser) => ({
-    localId: browser.localId,
-    profileId: browser.profileId,
-    initialUrl: browser.url || browser.initialUrl,
-    url: browser.url,
-    title: browser.title,
-    faviconUrl: browser.faviconUrl,
-    ...chatRef(browser.chatLocalId),
-    ...(browser.background ? { background: true } : {}),
-    ...(browser.history ? { history: browser.history } : {}),
-  }));
+  // Incognito pages go with a moving project: the app, and their
+  // session, are still running.
+  const browsers = ws.browsers
+    .filter((browser) => moving || !browser.incognito)
+    .map((browser) => ({
+      localId: browser.localId,
+      profileId: browser.profileId,
+      initialUrl: browser.url || browser.initialUrl,
+      url: browser.url,
+      title: browser.title,
+      faviconUrl: browser.faviconUrl,
+      ...chatRef(browser.chatLocalId),
+      ...(browser.background ? { background: true } : {}),
+      ...(browser.history ? { history: browser.history } : {}),
+      ...(browser.incognito ? { incognito: true } : {}),
+    }));
   const editors = ws.editors.map((editor) => ({
     localId: editor.localId,
     filePath: editor.filePath,
@@ -326,7 +338,11 @@ export const serializeWorkspace = (
         : null,
     tabOrder: ws.tabOrder.filter((key) => keys.has(key)),
     recentTabKeys: ws.recentTabKeys.filter((key) => keys.has(key)),
-    closedTabs: ws.closedTabs.filter((record) => record.kind !== "terminal"),
+    closedTabs: ws.closedTabs.filter(
+      (record) =>
+        record.kind !== "terminal" &&
+        (moving || record.kind !== "browser" || !record.incognito),
+    ),
   };
 };
 
@@ -348,7 +364,10 @@ export const hydrateWorkspace = (
         )
       : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
-    browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
+    // Only a moving project brings its incognito pages along.
+    browsers: Array.isArray(snapshot.browsers)
+      ? snapshot.browsers.filter((browser) => moved || !browser.incognito)
+      : [],
     terminals:
       moved && Array.isArray(snapshot.terminals)
         ? snapshot.terminals.filter(
@@ -364,7 +383,11 @@ export const hydrateWorkspace = (
     recentTabKeys: Array.isArray(snapshot.recentTabKeys)
       ? snapshot.recentTabKeys
       : [],
-    closedTabs: Array.isArray(snapshot.closedTabs) ? snapshot.closedTabs : [],
+    closedTabs: Array.isArray(snapshot.closedTabs)
+      ? snapshot.closedTabs.filter(
+          (record) => moved || record.kind !== "browser" || !record.incognito,
+        )
+      : [],
     ...(typeof snapshot.activeTabKey === "string"
       ? { activeTabKey: snapshot.activeTabKey }
       : {}),
@@ -833,6 +856,7 @@ function applyWorkspaceEvent(
                   profileId: closing.profileId,
                   chatLocalId: closing.chatLocalId,
                   ...(closing.history ? { history: closing.history } : {}),
+                  ...(closing.incognito ? { incognito: true } : {}),
                   ...splitContext,
                 }
               : null,
@@ -1013,6 +1037,7 @@ function applyWorkspaceEvent(
             faviconUrl: record.faviconUrl,
             chatLocalId: record.chatLocalId,
             ...(record.history ? { history: record.history } : {}),
+            ...(record.incognito ? { incognito: true } : {}),
           };
           key = browserTabKey(entry.localId);
           patch = { browsers: [...ws.browsers, entry] };

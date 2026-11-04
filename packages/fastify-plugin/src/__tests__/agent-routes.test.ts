@@ -95,12 +95,13 @@ describe("agent routes", () => {
     });
   });
 
-  it("rejects ambiguous or invalid hierarchy list queries", async () => {
+  it("rejects ambiguous hierarchy filters and invalid session list queries", async () => {
     const app = await buildApp();
     for (const query of [
       `rootsOnly=true&parentSessionId=${SESSION_ID}`,
       "rootsOnly=yes",
       "parentSessionId=unknown",
+      `query=${"a".repeat(501)}`,
     ]) {
       const response = await app.inject({
         method: "GET",
