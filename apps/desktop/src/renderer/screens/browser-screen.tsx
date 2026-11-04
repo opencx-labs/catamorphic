@@ -209,6 +209,7 @@ export function BrowserScreen({
   onRevealToolbar,
   onStateChange,
   onPageClose,
+  onPagePress,
   registerNavigate,
   registerHistoryNavigate,
   registerGuest,
@@ -264,6 +265,11 @@ export function BrowserScreen({
   onStateChange: (state: BrowserPageState) => void;
   /** The page closed itself (`window.close()`); the tab should go too. */
   onPageClose?: () => void;
+  /**
+   * The person pressed inside the page. The press never reaches the host's
+   * DOM, so this is how the pane holding the page learns it was clicked.
+   */
+  onPagePress?: () => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /** Opens the site settings modal for the page's origin (toolbar gear). */
@@ -305,6 +311,8 @@ export function BrowserScreen({
   previewLinksRef.current = previewLinksWithAlt;
   const onPreviewLinkRef = useRef(onPreviewLink);
   onPreviewLinkRef.current = onPreviewLink;
+  const onPagePressRef = useRef(onPagePress);
+  onPagePressRef.current = onPagePress;
   useEffect(() => {
     if (guestReadyRef.current)
       webviewRef.current?.send(
@@ -800,6 +808,7 @@ export function BrowserScreen({
         if (autofillMessageRef.current(message.channel, message.args)) return;
         if (message.channel === "catamorphic:page-press") {
           notePagePress();
+          onPagePressRef.current?.();
           return;
         }
         if (message.channel === "catamorphic:dismiss-floating") {
