@@ -13,6 +13,7 @@ function settled(id: string, usage: Record<string, unknown>): TimelineTurn {
     priority: 0,
     activity: null,
     activityAt: null,
+    providerRetry: null,
     attemptCount: 1,
     activeAttemptId: null,
     providerThreadId: null,

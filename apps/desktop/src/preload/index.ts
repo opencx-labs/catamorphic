@@ -1,10 +1,19 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
+import { SHELL_WINDOW_CLOSE_CHANNEL } from "../shared/desktop-workspace.js";
 import type { ResourceSnapshot } from "../shared/resources.js";
 import type { TerminalCreateInput } from "../shared/terminal.js";
 import type { TrustedHosts } from "../shared/trusted-hosts.js";
 import type { WindowImageRequest } from "../shared/window-images.js";
+import { installShellWindowClose } from "./shell-window-close.js";
+
+installShellWindowClose({
+  bridge: contextBridge,
+  requestClose: () => ipcRenderer.send(SHELL_WINDOW_CLOSE_CHANNEL),
+  isMainFrame: process.isMainFrame,
+  argv: process.argv,
+});
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -251,6 +260,8 @@ const api = {
   updateState: (): Promise<DesktopUpdateState> =>
     invoke("catamorphic:update-state"),
   updateCheck: (): Promise<void> => invoke("catamorphic:update-check"),
+  updateDismiss: (messageKey: string): Promise<void> =>
+    invoke("catamorphic:update-dismiss", messageKey),
   updateDownload: (): Promise<void> => invoke("catamorphic:update-download"),
   updateInstall: (): Promise<void> => invoke("catamorphic:update-install"),
   updateMove: (): Promise<void> => invoke("catamorphic:update-move"),
@@ -486,16 +497,32 @@ const api = {
   },
 
   // --- MCP Apps (embedded views for connection tools) ---
+  appGuestDocument: (input: {
+    url: string;
+    mountId: string;
+  }): Promise<string> => invoke("catamorphic:app-guest-document", input),
+  appGuestClose: (input: { url: string }): Promise<void> =>
+    invoke("catamorphic:app-guest-close", input),
+  pdfGuestDocument: (input: {
+    projectId: string;
+    filePath: string;
+  }): Promise<string> => invoke("catamorphic:pdf-guest-document", input),
   mcpAppsUiTools: (): Promise<unknown> =>
     invoke("catamorphic:mcp-apps-ui-tools"),
-  mcpAppsView: (toolKey: string): Promise<unknown> =>
-    invoke("catamorphic:mcp-apps-view", toolKey),
+  mcpAppsView: (input: {
+    projectId: string;
+    sessionId: string;
+    toolKey: string;
+    toolUseId: string;
+  }): Promise<unknown> => invoke("catamorphic:mcp-apps-view", input),
+  mcpAppsClose: (mountId: string): Promise<void> =>
+    invoke("catamorphic:mcp-apps-close", mountId),
   mcpAppsCall: (
-    viewToolKey: string,
+    mountId: string,
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<unknown> =>
-    invoke("catamorphic:mcp-apps-call", viewToolKey, toolName, args),
+    invoke("catamorphic:mcp-apps-call", mountId, toolName, args),
 
   // --- OpenRouter catalog (searchable model selector, best-free default) ---
   openrouterModels: (): Promise<unknown> =>
@@ -841,8 +868,11 @@ const api = {
   // --- browser tabs ---
   webviewPreloadPath: (): Promise<string> =>
     invoke("catamorphic:webview-preload"),
-  browserPrepareProfile: (profileId: string): Promise<string> =>
-    invoke("catamorphic:browser-prepare-profile", profileId),
+  browserPrepareProfile: (
+    profileId: string,
+    incognito = false,
+  ): Promise<string> =>
+    invoke("catamorphic:browser-prepare-profile", { profileId, incognito }),
 
   // --- site settings (ADR 0150) ---
   siteSettingsGet: (input: { origin: string }): Promise<unknown> =>
@@ -1190,12 +1220,12 @@ const api = {
     action: string | null;
   }): Promise<void> => invoke("catamorphic:browser-context-menu-pick", input),
   onBrowserOpenUrl: (
-    listener: (url: string, mode?: OpenMode) => void,
+    listener: (url: string, mode?: OpenMode, incognito?: boolean) => void,
   ): (() => void) => {
     const handler = (
       _event: unknown,
-      payload: { url: string; mode?: OpenMode },
-    ) => listener(payload.url, payload.mode);
+      payload: { url: string; mode?: OpenMode; incognito?: boolean },
+    ) => listener(payload.url, payload.mode, payload.incognito === true);
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);

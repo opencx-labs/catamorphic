@@ -1441,6 +1441,13 @@ const TurnErrorSchema = describes<TurnError>()(
   }),
 );
 
+const ProviderRetrySchema = z.object({
+  error: TurnErrorSchema.omit({ retrySafe: true }),
+  attempt: z.number().int().positive().nullable(),
+  maxAttempts: z.number().int().positive().nullable(),
+  retryAt: z.string().nullable(),
+});
+
 const AgentTurnUsageSchema = describes<AgentTurnUsage>()(
   z.object({
     model: z.string().optional(),
@@ -1493,6 +1500,7 @@ export const TurnSchema = describes<Turn>()(
       priority: z.number(),
       activity: z.string().nullable(),
       activityAt: z.string().nullable(),
+      providerRetry: ProviderRetrySchema.nullable(),
       attemptCount: z.number().int(),
       activeAttemptId: z.string().nullable(),
       providerThreadId: z.string().nullable(),

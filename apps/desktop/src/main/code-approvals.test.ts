@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ ipcMain: {} }));
+vi.mock("./shell-ipc.js", () => ({ shellIpcMain: {} }));
 const { CodeApprovals } = await import("./code-approvals.js");
 
 /** A keychain stand-in: sealing is reversible only through it. */
@@ -92,5 +93,66 @@ describe("approvals (ADR 0277)", () => {
     await expect(locked.approved("app:p:activity")).rejects.toThrow(
       "keychain is not available",
     );
+  });
+  it("refuses an existing key when its OS storage is unavailable and can retry after unlock", async () => {
+    const { dir, approvals } = store();
+    await approvals.approve("app:p:activity", { lists: ["chats"] });
+    const keyBefore = fs.readFileSync(path.join(dir, "approvals.key"));
+    const recordsBefore = fs.readFileSync(path.join(dir, "approvals.json"));
+    let available = false;
+    const decrypt = vi.fn(keyring.decrypt);
+    const locked = new CodeApprovals({
+      dir,
+      keyring: { ...keyring, available: async () => available, decrypt },
+    });
+    await expect(locked.approved("app:p:activity")).rejects.toThrow(
+      "Unlock your operating system's keychain",
+    );
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(dir, "approvals.key"))).toEqual(keyBefore);
+    expect(fs.readFileSync(path.join(dir, "approvals.json"))).toEqual(
+      recordsBefore,
+    );
+    available = true;
+    await expect(locked.approved("app:p:activity")).resolves.toEqual({
+      lists: ["chats"],
+    });
+  });
+
+  it.each(["", "00", "not a key", "ab".repeat(33)])(
+    "refuses an invalid decrypted signing key %j without replacing it",
+    async (secret) => {
+      const { dir } = store();
+      const sealed = await keyring.encrypt(secret);
+      fs.writeFileSync(path.join(dir, "approvals.key"), sealed);
+      const approvals = new CodeApprovals({ dir, keyring });
+      await expect(
+        approvals.approve("app:p:activity", { lists: ["chats"] }),
+      ).rejects.toThrow("Work could not unlock saved approvals");
+      expect(fs.readFileSync(path.join(dir, "approvals.key"))).toEqual(sealed);
+      expect(fs.existsSync(path.join(dir, "approvals.json"))).toBe(false);
+    },
+  );
+  it("never mistakes a keychain item error for a missing signing-key file", async () => {
+    const { dir, approvals } = store();
+    await approvals.approve("app:p:activity", { lists: ["chats"] });
+    const sealed = fs.readFileSync(path.join(dir, "approvals.key"));
+    const records = fs.readFileSync(path.join(dir, "approvals.json"));
+    const unreadable = new CodeApprovals({
+      dir,
+      keyring: {
+        ...keyring,
+        decrypt: async () => {
+          throw Object.assign(new Error("Keychain item missing"), {
+            code: "ENOENT",
+          });
+        },
+      },
+    });
+    await expect(unreadable.approved("app:p:activity")).rejects.toThrow(
+      "Work could not unlock saved approvals",
+    );
+    expect(fs.readFileSync(path.join(dir, "approvals.key"))).toEqual(sealed);
+    expect(fs.readFileSync(path.join(dir, "approvals.json"))).toEqual(records);
   });
 });

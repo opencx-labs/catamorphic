@@ -850,11 +850,15 @@ describe("agents and profiles", () => {
     // Account-auth OpenRouter agent → the card offers a one-click
     // reconnect beside Retry.
     await runWait(
-      `return !!$('[data-testid="chat-error-card"]') &&
-              !!$('[data-testid="chat-reauth"]');`,
+      `return !!visibleDock()?.querySelector('[data-testid="chat-error-card"]:not([inert], [inert] *)') &&
+              !!visibleDock()?.querySelector('[data-testid="chat-reauth"]:not([inert], [inert] *)');`,
       { timeoutMs: 30_000, label: "reconnect button on the auth card" },
     );
-    await run(`$('[data-testid="chat-reauth"]').click(); return true;`);
+    await runWait(
+      `const button = visibleDock()?.querySelector('[data-testid="chat-reauth"]:not([inert], [inert] *)');
+      if (!button) return false; button.click(); return true;`,
+      { label: "active reconnect control" },
+    );
     // The e2e login stub completes ~immediately and stamps a NEW key —
     // which rebuilds the provider (production PKCE parity), so this
     // retry runs against a freshly re-anchored harness session. The

@@ -39,6 +39,7 @@ import {
 } from "../../shared/extensions.js";
 import { matchesShortcut } from "../../shared/keybindings.js";
 import { MENU_SEPARATOR, type MenuItem } from "../../shared/menu.js";
+import { shellIpcMain } from "../shell-ipc.js";
 import { ActionStore, cssColor, DEFAULT_BADGE_BACKGROUND } from "./actions.js";
 import { type ApiHandler, type Caller, createApi } from "./api.js";
 import { extractArchive } from "./archive.js";
@@ -1198,7 +1199,7 @@ export class ExtensionsHost {
     channel: string,
     listener: (event: IpcMainInvokeEvent, input: unknown) => unknown,
   ): void {
-    ipcMain.handle(channel, listener);
+    shellIpcMain.handle(channel, listener);
     this.disposers.push(() => ipcMain.removeHandler(channel));
   }
 
@@ -1208,6 +1209,14 @@ export class ExtensionsHost {
   ): void {
     ipcMain.on(channel, listener);
     this.disposers.push(() => ipcMain.removeListener(channel, listener));
+  }
+
+  private onShell(
+    channel: string,
+    listener: (event: IpcMainEvent, ...args: unknown[]) => void,
+  ): void {
+    shellIpcMain.on(channel, listener);
+    this.disposers.push(() => shellIpcMain.removeListener(channel, listener));
   }
 
   private registerIpc(): void {
@@ -1406,7 +1415,7 @@ export class ExtensionsHost {
           ordered.find((entry) => entry.visible)?.activeGuestId ?? null,
       });
     });
-    this.on("catamorphic:extensions-window-response", (event, input) => {
+    this.onShell("catamorphic:extensions-window-response", (event, input) => {
       const parsed = extensionWindowResponseSchema.safeParse(input);
       if (!parsed.success) return;
       const pending = this.windowRequests.get(parsed.data.id);

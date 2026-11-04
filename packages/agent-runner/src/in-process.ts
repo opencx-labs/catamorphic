@@ -5,6 +5,9 @@ import type {
 } from "@catamorphic/agent-protocol/runner";
 import { AttemptRunner } from "./runner.js";
 
+/** Bound an adapter that ignores cancellation, without claiming it exited. */
+const KILL_GRACE_MS = 15_000;
+
 /**
  * A runner in the host's own process: the desktop's harnesses and the
  * control plane's built-in agent (ADR 0198). Same protocol, no transport.
@@ -96,12 +99,33 @@ export class InProcessRunner {
    * Stop the attempt for good: its holder is gone, so nobody may read it
    * again. A reader still attached sees it exit.
    */
-  kill(): void {
-    if (this.killed) return;
-    this.killed = true;
-    this.runner.handle({ id: "kill", command: { kind: "stop" } });
-    for (const wake of this.waiters) wake();
-    this.waiters.clear();
+  kill(): Promise<void> {
+    if (!this.killed) {
+      this.killed = true;
+      this.runner.kill();
+      for (const wake of this.waiters) wake();
+      this.waiters.clear();
+    }
+    // The next attempt must not resume the native thread until this
+    // harness has let go of it, including its child process.
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new Error("The harness did not let go after its runner stopped."),
+          ),
+        KILL_GRACE_MS,
+      );
+      timer.unref?.();
+      void this.done.then(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  get stopping(): boolean {
+    return this.killed;
   }
 
   get exited(): boolean {

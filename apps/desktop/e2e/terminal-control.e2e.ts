@@ -113,7 +113,9 @@ async function startTerminal(command: string) {
 }
 
 beforeAll(async () => {
-  app = await launchApp();
+  app = await launchApp({
+    env: { CATAMORPHIC_E2E_FAKE_VOICE: JSON.stringify([""]) },
+  });
   const root = path.join(app.userDataDir, "terminal-control");
   await fs.mkdir(root, { recursive: true });
   await nativeGit(root, ["init", "-b", "main"]);
@@ -279,4 +281,53 @@ it("opens a fresh user shell after a finished command, preserving its history an
     ),
   ).toBe(false);
   expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("streams terminal output, activity and exit while voice's profileless audio page is open", async () => {
+  await app.eval(`window.catamorphicDesktop.voiceReadAloud({
+    itemId:'terminal-broadcast-regression',
+    text:'Checking terminal delivery with the audio page open.',
+    agentId:null
+  })`);
+  const audio = await app.connectToFrame("voice.html");
+  const gate = path.join(checkout, "terminal-voice-gate");
+  try {
+    expect(await audio.eval("location.pathname")).toBe("/voice.html");
+    await app.eval(`
+      window.__terminalVoiceBusy=[];
+      window.__terminalVoiceExits=[];
+      window.__stopTerminalVoiceBusy=window.catamorphicDesktop.onTerminalBusy(event=>window.__terminalVoiceBusy.push(event));
+      window.__stopTerminalVoiceExits=window.catamorphicDesktop.onTerminalExit(event=>window.__terminalVoiceExits.push(event));
+      true;
+    `);
+    await fs.writeFile(gate, "hold until the terminal activity arrives\n");
+    const terminalId = await startTerminal(
+      `bash -c 'printf "VOICE_TERMINAL_READY\\n"; while [ -f terminal-voice-gate ]; do sleep 0.05; done; printf "VOICE_TERMINAL_DONE\\n"'`,
+    );
+    await app.waitFor(
+      `window.__terminalControlOutput.some(event=>event.sessionId===${JSON.stringify(terminalId)} && event.data.includes('VOICE_TERMINAL_READY')) &&
+       window.__terminalVoiceBusy.some(event=>event.sessionId===${JSON.stringify(terminalId)} && event.busy)`,
+      { label: "terminal output and activity delivered beside the audio page" },
+    );
+    await fs.unlink(gate);
+    await app.waitFor(
+      `window.__terminalControlOutput.some(event=>event.sessionId===${JSON.stringify(terminalId)} && event.data.includes('VOICE_TERMINAL_DONE')) &&
+       window.__terminalVoiceBusy.some(event=>event.sessionId===${JSON.stringify(terminalId)} && !event.busy) &&
+       window.__terminalVoiceExits.some(event=>event.sessionId===${JSON.stringify(terminalId)} && event.exitCode===0)`,
+      {
+        label:
+          "terminal final output, idle and exit delivered beside the audio page",
+      },
+    );
+    expect(await audio.eval("location.pathname")).toBe("/voice.html");
+    expect(app.getRendererErrors()).toEqual([]);
+  } finally {
+    audio.close();
+    await fs.rm(gate, { force: true });
+    await app.eval(`
+      window.__stopTerminalVoiceBusy?.();
+      window.__stopTerminalVoiceExits?.();
+      true;
+    `);
+  }
 });

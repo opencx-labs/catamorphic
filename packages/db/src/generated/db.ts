@@ -255,6 +255,7 @@ export interface AgentTurns {
   ordinal: number;
   outcome: Json | null;
   priority: Generated<number>;
+  provider_retry: Json | null;
   provider_thread_id: string | null;
   session_id: string;
   started_at: Timestamp | null;

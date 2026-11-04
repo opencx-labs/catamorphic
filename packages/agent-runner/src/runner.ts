@@ -73,6 +73,7 @@ export class AttemptRunner {
   private control?: AttemptControl;
   private completed = false;
   private exited = false;
+  private killed = false;
   private callCounter = 0;
   private resolveDone!: () => void;
   /** Settles after the `exit` frame was written. */
@@ -81,6 +82,24 @@ export class AttemptRunner {
   });
 
   constructor(private readonly options: AttemptRunnerOptions) {}
+
+  /**
+   * Its host is gone: no call can be answered any more. Unlike a normal
+   * stop while draining native state, release every wait before ending
+   * the harness, and refuse anything it calls while it shuts down.
+   */
+  kill(): void {
+    this.killed = true;
+    for (const [callId, pending] of this.calls) {
+      this.calls.delete(callId);
+      pending.reject(new Error("The runner stopped"));
+    }
+    for (const [key, pending] of this.requests) {
+      this.requests.delete(key);
+      pending.reject(new RequestClosedError("The runner stopped"));
+    }
+    this.stop();
+  }
 
   private emitFrame(frame: UnsequencedFrame): void {
     if (this.exited) return;
@@ -318,6 +337,7 @@ export class AttemptRunner {
   }
 
   private call(call: HostCall): Promise<JsonValue | undefined> {
+    if (this.killed) return Promise.reject(new Error("The runner stopped"));
     // A call is never shortened (stored native state would be corrupted).
     const bytes = callLineBytes(call);
     if (bytes > RUNNER_LINE_MAX_BYTES) {

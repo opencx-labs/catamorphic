@@ -64,6 +64,7 @@ describe("pageMenu", () => {
       "Open link in new tab",
       "Open link to the side",
       "Open link floating",
+      "Open link in incognito tab",
       "—",
       "Download linked file",
       "—",
@@ -72,6 +73,17 @@ describe("pageMenu", () => {
       "—",
       "Inspect",
     ]);
+  });
+
+  it("offers no separate incognito tab from an incognito page", () => {
+    expect(
+      read(
+        pageMenu(
+          target({ linkURL: "https://example.test/next" }),
+          state({ incognito: true }),
+        ),
+      ),
+    ).not.toContain("Open link in incognito tab");
   });
 
   it("writes to an email address and calls a phone number", () => {
@@ -146,6 +158,7 @@ describe("pageMenu", () => {
       "Open link in new tab",
       "Open link to the side",
       "Open link floating",
+      "Open link in incognito tab",
       "—",
       "Download linked file",
       "—",
@@ -339,6 +352,17 @@ describe("runPageMenuAction", () => {
     expect(host.openUrl).toHaveBeenCalledWith(
       "https://example.test/next",
       "side",
+    );
+    runPageMenuAction({
+      action: "open-link-incognito",
+      target: link,
+      page,
+      host,
+    });
+    expect(host.openUrl).toHaveBeenLastCalledWith(
+      "https://example.test/next",
+      "tab",
+      true,
     );
     runPageMenuAction({ action: "copy-link", target: link, page, host });
     expect(host.writeText).toHaveBeenLastCalledWith(

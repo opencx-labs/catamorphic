@@ -6,7 +6,10 @@ import type {
   AttemptStart,
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
-import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
+import {
+  NO_CAPABILITIES,
+  RUNNER_PROTOCOL_VERSION,
+} from "@catamorphic/agent-protocol/runner";
 import {
   definitionHash,
   steeredTurnId,
@@ -16,6 +19,7 @@ import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const starts = vi.hoisted(() => [] as AttemptStart[]);
+const encryption = vi.hoisted(() => ({ available: true }));
 vi.mock("@catamorphic/claude-code", () => ({
   CLAUDE_CODE_CAPABILITIES: { steer: true, toolSearch: true },
   createClaudeCodeAdapter: () => ({
@@ -36,7 +40,40 @@ vi.mock("@catamorphic/claude-code", () => ({
     },
   }),
 }));
-vi.mock("electron", () => ({ safeStorage: {} }));
+vi.mock("@catamorphic/codex", async (original) => ({
+  ...(await original<typeof import("@catamorphic/codex")>()),
+  readCodexConfig: vi.fn(async () => ({
+    shell_environment_policy: { set: { ZDOTDIR: "/configured dotfiles" } },
+  })),
+  createCodexAdapter: () => ({
+    id: "codex",
+    capabilities: () => ({ steer: true }),
+    start: (attempt: AttemptStart, host: AttemptHost) => {
+      starts.push(attempt);
+      host.emit({ type: "turn.completed", status: "completed" });
+      return {
+        steer: async () => false,
+        interrupt: () => {},
+        finished: Promise.resolve(),
+      };
+    },
+  }),
+}));
+vi.mock("electron", () => ({
+  app: { isPackaged: false },
+  safeStorage: {
+    isEncryptionAvailable: () => encryption.available,
+    getSelectedStorageBackend: () => "gnome_libsecret",
+    encryptString: (text: string) => Buffer.from(`sealed:${text}`),
+    decryptString: (ciphertext: Buffer) => {
+      const text = ciphertext.toString();
+      if (!text.startsWith("sealed:")) throw new Error("Invalid ciphertext");
+      return text.slice(7);
+    },
+  },
+}));
+
+import { AgentsStore } from "../agents-store.js";
 
 import {
   DesktopAgentRegistry,
@@ -44,6 +81,21 @@ import {
   SIGN_IN_RETRY_MS,
   signInOf,
 } from "./agent-registry.js";
+
+function metadataOf({ apiKey, ...config }: Record<string, unknown>) {
+  return {
+    ...config,
+    hasApiKey: typeof apiKey === "string" && apiKey.length > 0,
+  };
+}
+
+function agentStore(config: Record<string, unknown>) {
+  return {
+    listMetadata: () => [metadataOf(config)],
+    getMetadata: () => metadataOf(config),
+    get: () => config,
+  };
+}
 
 function registryWith(
   config: Record<string, unknown>,
@@ -57,7 +109,7 @@ function registryWith(
     },
     profileConfig: {
       forProfile: () => ({
-        agents: { list: () => [config], get: () => config },
+        agents: agentStore(config),
         connections: { list: () => connections },
       }),
       forProject: () => ({
@@ -138,6 +190,7 @@ it("registers an ACP agent as its own command over ACP, one harness per agent, n
 
 const projectRoots: string[] = [];
 afterEach(() => {
+  encryption.available = true;
   for (const root of projectRoots.splice(0))
     fs.rmSync(root, { recursive: true, force: true });
 });
@@ -183,7 +236,7 @@ function approvedRegistry(definition: Record<string, unknown>) {
     projectRootPath: () => root,
     profileConfig: {
       forProfile: () => ({
-        agents: { list: () => [claudeAgent], get: () => claudeAgent },
+        agents: agentStore(claudeAgent),
         connections: { list: () => [] },
       }),
       forProject: () => ({
@@ -329,6 +382,38 @@ it("starts the downloaded executable with its toolchain and friendly errors", as
   ).toContain('Claude Code rejected the credentials of the "Claude" agent');
 });
 
+it("gives Codex's process and native commands the same private shell startup files", async () => {
+  const registry = registryWith({
+    ...claudeAgent,
+    id: "codex",
+    harness: "codex",
+  });
+  const { harness } = hostOf(registry, "codex");
+  const control = harness.adapter.start(
+    {
+      options: { config: { "analytics.enabled": false } },
+      env: { CODEX_HOME: "/codex-home", ZDOTDIR: "/my dotfiles" },
+    } as unknown as AttemptStart,
+    { emit: () => {} } as unknown as AttemptHost,
+  );
+  await control.finished;
+  const attempt = starts.at(-1);
+  expect(attempt?.env).toEqual({
+    PATH: "/toolchain",
+    CODEX_HOME: "/codex-home",
+    ZDOTDIR: expect.stringMatching(/codex-zsh$/),
+    USER_ZDOTDIR: "/configured dotfiles",
+  });
+  expect(attempt?.options).toEqual({
+    command: "/bin/claude",
+    config: {
+      "analytics.enabled": false,
+      "shell_environment_policy.set.ZDOTDIR": attempt?.env.ZDOTDIR,
+      "shell_environment_policy.set.USER_ZDOTDIR": "/configured dotfiles",
+    },
+  });
+});
+
 it("does not expose settings-specific tools to agents", () => {
   const { harness } = hostOf(
     registryWith(
@@ -364,6 +449,129 @@ it("leaves the built-in agent unregistered until it has a key", () => {
     apiKey: null,
   });
   expect(registry.get("agent")).toBeUndefined();
+});
+
+const credentialAttempt: AttemptStart = {
+  protocol: RUNNER_PROTOCOL_VERSION,
+  sessionId: "credential-session",
+  projectId: "project",
+  turnId: "turn",
+  attemptId: "attempt",
+  reason: "initial",
+  harness: "claude-code",
+  workingDirectory: "/unused",
+  stateDirectory: "/unused",
+  thread: { mode: "fresh", providerThreadId: "thread" },
+  input: { itemId: "message", text: "Hello", attachments: [] },
+  systemPrompt: "",
+  context: "",
+  permissions: {},
+  modelAccess: { kind: "host" },
+  toolPolicies: {},
+  toolAnnotations: {},
+  mcpServers: {},
+  hostTools: [],
+  plugins: [],
+  env: {},
+  options: {},
+};
+
+function credentialHost(): AttemptHost {
+  return {
+    emit: () => {},
+    callTool: async () => {
+      throw new Error("No tools in blocked attempts");
+    },
+    authorize: async () => ({ allowed: false, message: "Blocked attempt" }),
+    request: async () => {
+      throw new Error("No questions in blocked attempts");
+    },
+    nativeState: {
+      append: async () => {},
+      load: async () => null,
+      subpaths: async () => [],
+    },
+    signal: new AbortController().signal,
+  };
+}
+
+it.each(["locked", "corrupt"])(
+  "keeps registry startup and other agents available when a saved API key is %s",
+  (condition) => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "registry-credentials-"),
+    );
+    projectRoots.push(root);
+    const file = path.join(root, "agents.json");
+    const original = new AgentsStore(file);
+    const blocked = original.create({
+      harness: "claude-code",
+      name: "Saved key",
+      auth: "api-key",
+      apiKey: "stored-test-key",
+    });
+    const healthy = original.create({
+      harness: "claude-code",
+      name: "Local account",
+      auth: "local",
+    });
+    if (condition === "corrupt") {
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      raw.agents[0].apiKeyEncrypted =
+        Buffer.from("invalid ciphertext").toString("base64");
+      fs.writeFileSync(file, JSON.stringify(raw));
+    } else encryption.available = false;
+    const before = fs.readFileSync(file, "utf8");
+    const store = new AgentsStore(file);
+    const readCredential = vi.spyOn(store, "get");
+    const registry = registryWith(claudeAgent, {
+      profileConfig: {
+        forProfile: () => ({ agents: store, connections: { list: () => [] } }),
+      },
+    });
+    expect(readCredential).not.toHaveBeenCalled();
+    const prepare = vi.fn();
+    Reflect.set(registry, "ensureNativeComponents", prepare);
+    const registered = registry.list();
+    expect(registered.map((agent) => agent.id)).toEqual([
+      blocked.id,
+      healthy.id,
+    ]);
+    expect(
+      registered.find((agent) => agent.id === healthy.id)?.unavailable,
+    ).toBeUndefined();
+    const { agent, harness } = hostOf(registry, blocked.id);
+    expect(agent.unavailable).toContain("keychain");
+    expect(harness.adapter.id).toBe("unavailable");
+    expect(harness.adapter.capabilities()).toEqual(NO_CAPABILITIES);
+    const started = starts.length;
+    expect(() =>
+      harness.adapter.start(credentialAttempt, credentialHost()),
+    ).toThrow("keychain");
+    expect(starts).toHaveLength(started);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  },
+);
+
+it("refuses native API-key startup when the key is missing instead of using a CLI account", () => {
+  const registry = registryWith({
+    ...claudeAgent,
+    auth: "api-key",
+    apiKey: null,
+  });
+  const prepare = vi.fn();
+  Reflect.set(registry, "ensureNativeComponents", prepare);
+  const { agent, harness } = hostOf(registry, "claude");
+  expect(agent.unavailable).toContain(
+    'The API key for "Claude" is unavailable',
+  );
+  const started = starts.length;
+  expect(() =>
+    harness.adapter.start(credentialAttempt, credentialHost()),
+  ).toThrow("update the key in agent settings");
+  expect(starts).toHaveLength(started);
+  expect(prepare).not.toHaveBeenCalled();
 });
 
 it("fails an unapproved project agent's turns with the fix", () => {

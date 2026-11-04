@@ -92,7 +92,11 @@ export function ProjectAuthorityProvider({
     }
     let queries = authorityCaches.get(key);
     if (!queries) {
-      queries = workQueryClient({ retry: 1, staleTime: 1000 });
+      queries = workQueryClient({
+        retry: 1,
+        staleTime: 1000,
+        networkMode: "online",
+      });
       // Shared at once: a chat and the sidebar beside it mounting in the
       // same commit read one cache, so the chat's stream reaches both.
       authorityCaches.set(key, queries);

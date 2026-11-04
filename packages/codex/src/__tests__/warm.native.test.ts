@@ -5,6 +5,7 @@ import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { expect, it } from "vitest";
 import { createCodexAdapter } from "../adapter.js";
 import { pinnedCodexCommand } from "../testing/pinned.js";
+import { processTransport } from "../transport.js";
 import {
   type AttemptResult,
   driveAttempt,
@@ -176,6 +177,94 @@ it("an interrupted turn's unread steer never reaches its warm Codex's next turn"
     // Unread when the turn stopped, it is Work's to run again: the warm
     // Codex never ran it on its own. Read, it was the stopped turn's.
     if (!consumed) expect(problems).toEqual([]);
+  } finally {
+    await adapter.dispose?.();
+    await model.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 10 });
+  }
+}, 90_000);
+
+it("a lost host releases its native writer before the same thread resumes", async () => {
+  const root = await mkdtemp(
+    path.join(await realpath(tmpdir()), "codex-lost-host-"),
+  );
+  const problems: string[] = [];
+  const model = await modelServer(
+    [
+      {
+        items: [{ message: "Working before the machine stopped." }],
+        hang: true,
+      },
+      { items: [{ message: "Continued after the machine returned." }] },
+    ],
+    problems,
+  );
+  let launches = 0;
+  let exited = false;
+  const adapter = createCodexAdapter({
+    warm: { idleMs: 60_000, max: 2 },
+    transport: (input) => {
+      if (launches > 0) expect(exited).toBe(true);
+      launches += 1;
+      exited = false;
+      return processTransport({
+        ...input,
+        onExit: (exit) => {
+          exited = true;
+          input.onExit(exit);
+        },
+      });
+    },
+  });
+  try {
+    await mkdir(path.join(root, "work"), { recursive: true });
+    await writeFile(path.join(root, "model-key"), "fixture-model-key");
+    const context = {
+      root,
+      model: model.url,
+      node: process.execPath,
+      fixtures: MCP_FIXTURES,
+      command: pinnedCodexCommand(),
+    };
+    const store = new NativeStore();
+    let killed = false;
+    const first = await driveAttempt({
+      adapter,
+      store,
+      attempt: attemptBase(context, {
+        ordinal: 1,
+        text: "Carry on with the task.",
+      }),
+      script: {
+        onEvent: (event, act) => {
+          if (event.type !== "item.delta" || killed) return;
+          killed = true;
+          act.kill();
+        },
+      },
+    });
+    expect(killed).toBe(true);
+    expect(exited).toBe(true);
+    const thread = threadOf(first);
+    const second = await driveAttempt({
+      adapter,
+      store,
+      attempt: {
+        ...attemptBase(context, {
+          ordinal: 2,
+          text: "The machine is back. Continue where you left off.",
+        }),
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread-1",
+          nativeRef: thread.ref,
+          ...(thread.statePath ? { statePath: thread.statePath } : {}),
+        },
+      },
+    });
+    expect(launches).toBe(2);
+    expect(completed(second)?.status).toBe("completed");
+    expect(problems).toEqual([]);
   } finally {
     await adapter.dispose?.();
     await model.close();

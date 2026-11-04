@@ -22,8 +22,43 @@ Layout that carries the view past its saved endpoint also counts as arrival.
 
 Running background commands remain visible outside the folded steps list and
 align with the main conversation column, without a nested border or indentation.
+When background work finishes, its row becomes inert and collapses before joining
+folded history. It never appears in both places during that handoff.
+
+Folded step lists release their rows after the closing transition. Closed step
+payloads release their Markdown and other detail DOM the same way. Expanded
+detail choices belong to the step list and survive folding and reopening it;
+manual reopening does not replay every historical row's entrance. Long expanded
+lists mount nearby headers in the conversation's existing scroller, with measured
+space for distant headers. Opened details, focused controls, selection and an
+active pointer press remain mounted. Tab and Shift+Tab materialize the next
+logical row across skipped ranges; this remains a document log, not a tree with
+roving focus. Notification targets mount before message navigation looks them up.
+Scrolling an existing row back into view never replays its arrival animation.
+
+The dock entrance belongs to initial or restored floating chats. Tab chats use a
+settled pose even if the first opening was interrupted by a fast tab switch.
+Moving an already visible tab back to floating morphs its geometry without a
+fresh entrance fade.
+
+The chat's watcher strip retains each stopped watch through its actual height
+transition, with a bounded fallback for hidden or stalled renderers. Surviving
+watchers move into their new positions, including across wrapped lines. Exiting
+chips fade outside the rail's shrinking viewport, clipped to the viewport that
+was visible when they left. Scrolling updates that exit position. Leaving
+controls are inert immediately, and script-driven motion honors reduced motion.
 
 ## Three independent facts
+
+Opening a local chat reads the embedded server even when Chromium reports no
+internet. The desktop's local query and mutation cache uses `networkMode: "always"`;
+remote authority caches retain `online` mode. While the initial history loads,
+`ChatTimeline.isLoading` replaces the empty prompt with a centered, accessible
+spinner. A failed load shows its error without the empty prompt; a background
+refresh keeps the loaded conversation visible. A reconnecting stream shows
+"Waiting for connection. Reconnecting…" independently of agent activity. Thinking
+keeps its normal activity and elapsed clock; time since the last update never
+creates a warning or implies a network problem.
 
 - Delivery: local session creation and command receipts. `isSending` ends when
   those operations settle; mutation-observer pending flags are not authority.
@@ -269,6 +304,14 @@ Native session ownership conflicts must explain which client to close and retain
 manual retry. Do not automatically fork history, steal a writer lock, or present
 this as an authentication failure. Local-auth Codex sessions can also be opened
 by the Codex desktop app, which then owns the native writer lock.
+
+After machine loss, a local runner releases its outstanding calls and ends its
+harness process before the native thread is resumed. A surviving remote runner
+keeps its attempt and cursor while its machine is disconnected, then reattaches
+when it returns. A lost continuation can continue again after a later machine
+stop; each lost turn queues at most one continuation, and Stop or newer input
+still takes precedence. Codex's temporary workspace routing discovery failure
+uses the existing durable retry backoff when no work began.
 
 ## Switching agents
 

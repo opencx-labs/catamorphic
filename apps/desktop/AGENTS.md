@@ -43,8 +43,10 @@ mobile" (ADR 0060) — the QR palette action's LAN listener that serves
 the built `apps/pwa` bundle, exchanges single-use codes for device
 tokens (SHA-256 hashes + persisted port in
 `<userData>/mobile-pairing.json`), and proxies `/api/*` to the loopback
-embedded server with bearer auth. The embedded server itself stays
-loopback-only and auth-free — never expose it directly. The pairing
+embedded server with bearer auth. The embedded server itself stays loopback-only;
+admitted shell frames receive a per-launch API token in main. Guest documents
+never receive it. Never expose the embedded server directly. See
+[security boundaries](docs/security.md). The pairing
 claim carries the profile's remote-project links + a
 localProjectId→remote mirror map, and the focused chat's context, so
 the phone deep-links into the open conversation and can fall back to a

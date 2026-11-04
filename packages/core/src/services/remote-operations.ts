@@ -448,7 +448,7 @@ export class ExecutorKeyMissingError extends Error {
   }
 }
 
-/** The executor is not connected right now: nothing was sent. */
+/** The executor is disconnected; the operation had no effects to repeat. */
 export class ExecutorNotConnectedError extends Error {
   constructor(label: string) {
     super(`${label} is not connected right now`);
@@ -764,8 +764,7 @@ export class RemoteOperationQueue {
               typeof args.leaseToken === "function"
                 ? await args.leaseToken()
                 : args.leaseToken;
-            if (!leaseToken)
-              throw new Error(`${args.label} is not connected right now`);
+            if (!leaseToken) throw new ExecutorNotConnectedError(args.label);
             return this.dispatch({
               executor: args.executor,
               leaseToken,
@@ -938,6 +937,7 @@ export class RemoteOperationQueue {
     try {
       const deadline = Date.now() + timeoutMs;
       let leaseCheckedAt = Date.now();
+      let disconnected = false;
       while (Date.now() < deadline) {
         const receipt = this.wakeups.forReceipt(id);
         try {
@@ -959,7 +959,10 @@ export class RemoteOperationQueue {
               : new Error(job.error ?? "Remote execution failed");
           if (Date.now() - leaseCheckedAt >= LEASE_CHECK_MS) {
             leaseCheckedAt = Date.now();
-            if (!(await args.leaseHeld(args.leaseToken))) break;
+            if (!(await args.leaseHeld(args.leaseToken))) {
+              disconnected = true;
+              break;
+            }
           }
           await nap({ ms: RECEIPT_POLL_MS, wakeup: receipt });
         } finally {
@@ -973,6 +976,15 @@ export class RemoteOperationQueue {
         .where("id", "=", id)
         .where("status", "in", ["pending", "running"])
         .execute();
+      // Following a runner is a cursor read, and discovering it is a
+      // list. Neither can repeat an effect when its machine reconnects.
+      // Writes and other operations retain their uncertain-outcome error.
+      if (
+        disconnected &&
+        (args.operation.kind === "process.read" ||
+          args.operation.kind === "process.list")
+      )
+        throw new ExecutorNotConnectedError(args.label);
       throw new Error(
         `${args.label} disconnected or timed out; the outcome may be unknown. Check the last action before retrying.`,
       );

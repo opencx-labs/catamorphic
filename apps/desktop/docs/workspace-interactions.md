@@ -49,7 +49,10 @@ A chat open as a tab groups the tabs attached to it. Dragging a tab onto a chat
 attaches it, as if the chat had opened it, and opens a folded group; dropped
 among another group's tabs it joins that chat, and dropped among the top tabs it
 leaves its chat (`attach`, `attachBlocker`). A page an agent drives and an
-agent's or remote chat's terminal stay with their chat; chats never nest.
+agent's or remote chat's terminal stay with their chat; chats never nest. A
+drag whose tab closes or whose row leaves before the drop still ends: its
+dragend reaches a detached element React never hears, so the next press, or
+move with no button held, takes its drop targets away (`useEndOfDrag`).
 
 Ctrl+` opens a terminal in the focused chat's working folder, including its
 assigned worktree. The same applies to a floating chat and its Open terminal
@@ -363,7 +366,10 @@ Clicks on empty chat gutters focus the composer. Links, controls, message text,
 code and an active text selection retain their normal behavior.
 
 Maximizing and floating a chat animate the conversation and composer's maximum
-width with their padding. The composer must not briefly narrow and wrap while
+width with their padding. A visible tab becoming floating keeps its opacity;
+only an initial floating opening or a return from its bubble plays the dock
+entrance. Tab pages never carry that floating rise/fade, even on a fast first
+open and switch away. The composer must not briefly narrow and wrap while
 the surrounding card expands or contracts. Folder and unsupported-file previews
 show their summary; retry is offered only after an actual preview read failure.
 
@@ -376,3 +382,22 @@ The palette's Ask agent mode shows the default agent's harness mark and its name
 model name and reasoning effort, separated by middle dots. Unpinned models resolve
 from the harness for the current project; focused-chat overrides do not change the
 identity of a new chat. Unsupported reasoning controls are omitted.
+
+### Profile recovery and shared update messages
+
+Profile selection uses the complete project catalog, including projects beyond
+its first API page. A later-page failure keeps the previous complete catalog;
+it never removes retained workspaces based on a partial result. A change between
+pages retries the read. Main validates saved project claims and removes deleted
+projects through its confirmed forget event; a catalog refresh never disposes
+retained resources. Profile changes restart that catalog read in every window. While profile settings or the project
+claim resolve, the shell shows loading. Onboarding appears only for a confirmed
+empty profile; a refused claim offers opening the existing project.
+
+Update messages share dismissal across windows. Closing one hides that same
+message everywhere, including newly opened windows. Download progress keeps it
+closed; a new phase or explicit check can show the next message.
+
+The sidebar panel's overlay thumb passes wheel input to the native scroller
+beneath it, preserving the screen edge's scrolling. A press on the thumb still
+captures its drag; section thumbs continue to address their own nested lists.

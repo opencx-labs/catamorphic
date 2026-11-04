@@ -258,10 +258,10 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       urlSubstring: string,
       frameOpts: { timeoutMs?: number } = {},
     ): Promise<FrameHandle> => {
-      const deadline = Date.now() + (frameOpts.timeoutMs ?? 30_000);
+      const deadline = performance.now() + (frameOpts.timeoutMs ?? 30_000);
       let seen = "";
       let attachError = "";
-      while (Date.now() < deadline) {
+      while (performance.now() < deadline) {
         try {
           const targets = (await fetch(`http://127.0.0.1:${port}/json`).then(
             (response) => response.json(),
@@ -402,9 +402,10 @@ async function connectCdp(
   child: ChildProcess,
   port: number,
 ): Promise<WebSocket> {
-  const deadline = Date.now() + 60_000;
+  // Wall-clock corrections must not shorten or extend polling deadlines.
+  const deadline = performance.now() + 60_000;
   let lastError: unknown;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         `Electron exited early: ${child.signalCode ?? child.exitCode}`,
@@ -415,7 +416,13 @@ async function connectCdp(
         (response) => response.json(),
       )) as { type: string; url: string; webSocketDebuggerUrl: string }[];
       // The app window is the only "page" target that isn't a webview guest.
-      const page = targets.find((target) => target.type === "page");
+      const page = targets.find(
+        (target) =>
+          target.type === "page" &&
+          (target.url.startsWith("work-internal://shell/index.html") ||
+            (target.url.startsWith("file:") &&
+              target.url.includes("/index.html"))),
+      );
       if (page) {
         const ws = new WebSocket(page.webSocketDebuggerUrl);
         await new Promise<void>((resolve, reject) => {
@@ -549,10 +556,10 @@ async function createClient(
     opts?: { timeoutMs?: number; label?: string },
   ): Promise<T> => {
     const timeoutMs = opts?.timeoutMs ?? 15_000;
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     let last: unknown;
     let thrown: string | undefined;
-    while (Date.now() < deadline) {
+    while (performance.now() < deadline) {
       try {
         last = await evaluate(expression);
         thrown = undefined;

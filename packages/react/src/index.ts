@@ -27,6 +27,7 @@ export type {
   JsonValue,
   NoticeItem,
   PlanItem,
+  ProviderRetry,
   ReasoningItem,
   RequestItem,
   RuntimeRequest,
@@ -41,6 +42,7 @@ export type {
   TaskNotificationStatus,
   ToolCallItem,
   Turn,
+  TurnError,
   TurnStatus,
   UserMessageItem,
 } from "@catamorphic/agent-protocol";
@@ -59,6 +61,7 @@ export {
   orderedTurns,
   pendingRequests,
   queuedTurns,
+  SESSION_PROTOCOL_VERSION,
 } from "@catamorphic/agent-protocol";
 // The marker helpers live beside the harness renderers in the sandbox
 // package (its browser-safe subpath) so pills mean the same on both sides.

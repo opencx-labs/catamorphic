@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Columns2,
+  Ghost,
   Globe,
   RotateCw,
   Search,
@@ -196,6 +197,7 @@ export function BrowserScreen({
   projectName,
   initialUrl,
   history,
+  incognito = false,
   surfaceKey,
   active,
   toolbarActive = active,
@@ -234,6 +236,11 @@ export function BrowserScreen({
    * fresh guest takes it instead of loading `initialUrl`.
    */
   history?: BrowserHistory;
+  /**
+   * The page lives in the profile's incognito session (ADR 0303): it
+   * records no history and runs no extensions.
+   */
+  incognito?: boolean;
   /**
    * The tab's workspace key, on its toolbar wherever that renders, so a
    * press there is known to belong to this browser (ADR 0188).
@@ -342,6 +349,9 @@ export function BrowserScreen({
   // history changes with every page.
   const historyRef = useRef(history);
   historyRef.current = history;
+  // Read by the guest's listeners, which attach once per guest.
+  const incognitoRef = useRef(incognito);
+  incognitoRef.current = incognito;
   const [historySource, setHistorySource] = useState(() =>
     history ? browserHistorySource(history) : null,
   );
@@ -530,7 +540,7 @@ export function BrowserScreen({
     let retryTimer: number | undefined;
     const prepare = (attempt: number) => {
       void Promise.all([
-        desktopApi.browserPrepareProfile(profileId),
+        desktopApi.browserPrepareProfile(profileId, incognito),
         desktopApi.webviewPreloadPath(),
       ])
         .then(([resolvedPartition, preload]) => {
@@ -552,7 +562,7 @@ export function BrowserScreen({
       cancelled = true;
       window.clearTimeout(retryTimer);
     };
-  }, [profileId]);
+  }, [profileId, incognito]);
 
   const registerGuestRef = useRef(registerGuest);
   registerGuestRef.current = registerGuest;
@@ -921,11 +931,12 @@ export function BrowserScreen({
         sync();
         report({ url });
         readHistory();
-        void desktopApi.browserRecordHistory({
-          url,
-          title: view.getTitle() || url,
-          project: historyProjectRef.current,
-        });
+        if (!incognitoRef.current)
+          void desktopApi.browserRecordHistory({
+            url,
+            title: view.getTitle() || url,
+            project: historyProjectRef.current,
+          });
       }) as EventListener);
       listen("did-navigate-in-page", ((event: CustomEvent) => {
         const { url, isMainFrame } = event as unknown as {
@@ -938,28 +949,30 @@ export function BrowserScreen({
         sync();
         report({ url });
         readHistory();
-        void desktopApi.browserRecordHistory({
-          url,
-          title: view.getTitle() || url,
-          project: historyProjectRef.current,
-        });
+        if (!incognitoRef.current)
+          void desktopApi.browserRecordHistory({
+            url,
+            title: view.getTitle() || url,
+            project: historyProjectRef.current,
+          });
       }) as EventListener);
       listen("page-title-updated", ((event: CustomEvent) => {
         const { title } = event as unknown as { title: string };
         pageTitleRef.current = title;
         report({ title });
         readHistory();
-        void desktopApi.browserRetitleHistory({
-          url: view.getURL(),
-          title,
-        });
+        if (!incognitoRef.current)
+          void desktopApi.browserRetitleHistory({
+            url: view.getURL(),
+            title,
+          });
       }) as EventListener);
       listen("page-favicon-updated", ((event: CustomEvent) => {
         const { favicons } = event as unknown as { favicons: string[] };
         const nextFavicon = favicons[0] ?? null;
         setFaviconUrl(nextFavicon);
         report({ faviconUrl: nextFavicon });
-        if (nextFavicon) {
+        if (nextFavicon && !incognitoRef.current) {
           void desktopApi.browserSetHistoryFavicon({
             url: view.getURL(),
             faviconUrl: nextFavicon,
@@ -1669,6 +1682,18 @@ export function BrowserScreen({
         )}
       </div>
 
+      {incognito && (
+        <ShortcutHint label="Incognito: Work keeps no history of this tab, and its cookies and sign-ins go when the last incognito tab closes">
+          <span
+            data-browser-incognito
+            className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+          >
+            <Ghost className="size-3" />
+            Incognito
+          </span>
+        </ShortcutHint>
+      )}
+
       <AuthorizationInspector />
 
       {/* Bookmark star, Chrome-style: filled means saved, click toggles.
@@ -1713,7 +1738,7 @@ export function BrowserScreen({
           </button>
         </ShortcutHint>
       )}
-      {onOpenExtensions && onOpenUrl && (
+      {onOpenExtensions && onOpenUrl && !incognito && (
         <ExtensionToolbar
           guestId={guestId}
           partition={partition}

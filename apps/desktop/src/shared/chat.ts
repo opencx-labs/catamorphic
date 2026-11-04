@@ -36,6 +36,12 @@ export type ChatLiveSignals = Required<
 
 export type ChatMode = "min" | "partial" | "tab";
 
+/** The conversation whose live permissions govern an MCP app view. */
+export interface McpAppContext {
+  projectId: string;
+  sessionId: string;
+}
+
 /** An MCP Apps view reachable from a chat's tool call. */
 export interface McpAppRef {
   toolKey: string;

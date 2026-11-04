@@ -405,6 +405,124 @@ describe("Codex adapter, replayed from the pinned app-server", () => {
     });
   });
 
+  it("retains retries through tool output and unrelated notifications, resuming only on main model output", async () => {
+    const transcript = await loadCodexFixture("simple-reply");
+    const index = transcript.entries.findIndex(
+      (entry) =>
+        "emit_inbound" in entry &&
+        entry.emit_inbound.method === "item/reasoning/summaryTextDelta",
+    );
+    const entry = transcript.entries[index];
+    if (!entry || !("emit_inbound" in entry))
+      throw new Error("Missing reasoning delta");
+    const params = entry.emit_inbound.params;
+    if (!params || typeof params !== "object" || Array.isArray(params))
+      throw new Error("Missing params");
+    const inbound = (
+      method: string,
+      fields: typeof params,
+    ): CodexTranscriptEntry => ({
+      emit_inbound: { method, params: { ...params, ...fields } },
+    });
+    transcript.entries.splice(
+      index,
+      0,
+      inbound("error", {
+        error: { message: "A late error" },
+        willRetry: true,
+        turnId: "previous-turn",
+      }),
+      inbound("error", {
+        error: {
+          message: "Upstream connection reset",
+          codexErrorInfo: "httpConnectionFailed",
+        },
+        willRetry: true,
+      }),
+      inbound("item/commandExecution/outputDelta", {
+        itemId: "ongoing-command",
+        delta: "still running",
+      }),
+      inbound("item/started", {
+        item: { type: "reasoning", id: "rs_empty", summary: [], content: [] },
+      }),
+      inbound("item/reasoning/summaryTextDelta", { delta: "" }),
+      inbound("item/agentMessage/delta", {
+        threadId: "unrelated-child",
+        delta: "A child finished",
+      }),
+      inbound("thread/tokenUsage/updated", { tokenUsage: {} }),
+    );
+    const run = await replay("simple-reply", { transcript });
+    const events = eventsOf(run);
+    expect(all(events, "provider.retrying")).toEqual([
+      {
+        type: "provider.retrying",
+        error: { message: "Upstream connection reset", kind: "unavailable" },
+        attempt: null,
+        maxAttempts: null,
+        retryAt: null,
+      },
+    ]);
+    const resumed = one(events, "provider.resumed");
+    const recovery = all(events, "item.delta").find((event) =>
+      event.text.startsWith("**Greeting"),
+    );
+    if (!recovery) throw new Error("No recovered model output");
+    expect(events.indexOf(resumed)).toBeLessThan(events.indexOf(recovery));
+    expect(
+      events
+        .slice(events.indexOf(resumed) + 1, events.indexOf(recovery))
+        .every(
+          (event) =>
+            event.type === "status" ||
+            (event.type === "item.started" && event.item.kind === "reasoning"),
+        ),
+    ).toBe(true);
+    expect(completionOf(run)?.status).toBe("completed");
+  });
+
+  it("recovers on a fresh main-model tool call and keeps unclassified retry wording intact", async () => {
+    const transcript = await loadCodexFixture("simple-reply");
+    const index = transcript.entries.findIndex(
+      (entry) =>
+        "emit_inbound" in entry && entry.emit_inbound.method === "item/started",
+    );
+    const entry = transcript.entries[index];
+    if (!entry || !("emit_inbound" in entry)) throw new Error("Missing item");
+    const params = entry.emit_inbound.params;
+    if (!params || typeof params !== "object" || Array.isArray(params))
+      throw new Error("Missing params");
+    transcript.entries.splice(
+      index,
+      0,
+      {
+        emit_inbound: {
+          method: "error",
+          params: {
+            ...params,
+            willRetry: true,
+            error: { message: "Opaque provider error: E_SPECIAL" },
+          },
+        },
+      },
+      {
+        emit_inbound: {
+          method: "item/started",
+          params: {
+            ...params,
+            item: { type: "webSearch", id: "fresh-call", query: "fixture" },
+          },
+        },
+      },
+    );
+    const run = await replay("simple-reply", { transcript });
+    expect(one(eventsOf(run), "provider.retrying").error).toEqual({
+      message: "Opaque provider error: E_SPECIAL",
+    });
+    expect(all(eventsOf(run), "provider.resumed")).toHaveLength(1);
+  });
+
   it("classifies an auth failure before any work as safe to retry", async () => {
     const run = await replay("error-auth");
     expect(completionOf(run)).toMatchObject({

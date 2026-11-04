@@ -17,6 +17,7 @@ import {
   Download,
   FileCode,
   FileDiff,
+  Ghost,
   GitFork,
   Globe,
   KeyRound,
@@ -41,6 +42,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { useEndOfDrag } from "../lib/drag-end.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
@@ -83,6 +85,8 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
   if (needs || doing) return [needs, doing].filter(Boolean).join(" · ");
   if (tab.kind === "browser" && tab.asleep)
     return "Asleep to save memory. Opens where you left off";
+  if (tab.kind === "browser" && tab.incognito)
+    return "Incognito. Keeps no history and does not reopen after Work quits";
   return null;
 }
 
@@ -464,6 +468,14 @@ function TabStrip({
     );
     return () => window.clearTimeout(timer);
   }, [exitingKeys]);
+  const endDrag = () => {
+    setDragKey(null);
+    setDropAt(null);
+    onDragStateChange?.(null);
+  };
+  // A tab closed mid-drag never hears its dragend: the close buttons would
+  // stay hidden and the strip's ends would stop moving the window.
+  useEndOfDrag(Boolean(dragKey), endDrag);
 
   if (rendered.length === 0 && !onNew) return null;
   // Groups holding the tab in front or its split companion.
@@ -501,11 +513,6 @@ function TabStrip({
     )
       onAttach(dragged, into, beforeKey);
     else onReorder?.(dragged, beforeKey);
-  };
-  const endDrag = () => {
-    setDragKey(null);
-    setDropAt(null);
-    onDragStateChange?.(null);
   };
   // The strip's spare room drags the window, as Chrome's does: the strip
   // takes presses for its tabs and their drops, so its empty ends hand
@@ -794,6 +801,18 @@ function TabStrip({
                       )}
                     </SignalGlyph>
                     <SleepRing tab={tab} />
+                    {/* An incognito page keeps its site's icon; a ghost on
+                      its lower corner says where it lives. */}
+                    {tab.kind === "browser" &&
+                      tab.incognito &&
+                      !tab.activity && (
+                        <span
+                          className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised"
+                          data-tab-incognito=""
+                        >
+                          <Ghost className="size-1.5 text-fg-muted" />
+                        </span>
+                      )}
                     {/* A custom conversation icon still reads as a chat: a
                       tiny chat marker rides the glyph's lower corner, which
                       what the chat is doing takes while it says anything. */}

@@ -135,20 +135,33 @@ export function EditorScreen({
     editorRef.current.revealLineInCenter(line);
   }, [line, column, navigation]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   useEffect(() => {
     if (!pdfFile || !filePath) {
       setPdfUrl(null);
       return;
     }
     let cancelled = false;
-    void desktopApi.projectRoot(projectId).then((root) => {
-      if (cancelled || !root) return;
-      const url = new URL("file:///");
-      url.pathname = `${root.replace(/\/$/, "")}/${filePath}`;
-      setPdfUrl(url.href);
-    });
+    setPdfError(null);
+    let documentUrl: string | undefined;
+    void desktopApi
+      .pdfGuestDocument({ projectId, filePath })
+      .then((url) => {
+        documentUrl = url;
+        if (cancelled) void desktopApi.appGuestClose({ url });
+        else setPdfUrl(url);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled)
+          setPdfError(
+            error instanceof Error
+              ? error.message
+              : "This PDF could not be opened. Try again.",
+          );
+      });
     return () => {
       cancelled = true;
+      if (documentUrl) void desktopApi.appGuestClose({ url: documentUrl });
     };
   }, [filePath, pdfFile, projectId]);
 
@@ -422,9 +435,9 @@ export function EditorScreen({
         }
         onClose={() => setNaming(null)}
       />
-      {(fileQuery.error || writeFile.error) && (
+      {(fileQuery.error || writeFile.error || pdfError) && (
         <p role="alert" className="p-3 text-xs text-danger">
-          {fileQuery.error?.message ?? writeFile.error?.message}
+          {fileQuery.error?.message ?? writeFile.error?.message ?? pdfError}
         </p>
       )}
       <div className="flex min-h-0 flex-1 flex-col">

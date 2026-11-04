@@ -55,8 +55,20 @@ and verifies the app, then retains the DMG, ZIP, blockmaps, update metadata,
 and checksum file as workflow artifacts. It does not create a GitHub release
 or change the Homebrew tap.
 
+The disposable signing runner blocks UDP port 443 so Apple's ticket lookup uses
+HTTPS over TCP. This works around the hosted-runner
+[HTTP/3 connection failure](https://github.com/actions/runner-images/issues/14924);
+notarization, Gatekeeper assessment, and stapled-ticket validation remain required.
+
 A manual dispatch from a feature branch verifies only npm packages. Signing
 remains restricted to `main` and release tags by the desktop environment.
+
+The signing job also launches the actual packaged app on its isolated macOS
+runner, with fresh and seeded legacy profiles. It requires a visible native
+window, a successful embedded-server boot, and a normal quit. It verifies
+old file-origin values remain separate and untouched, and a second launch keeps
+newer drafts. These checks run with the distributed fuses and without a remote
+debugging port. They do not replace the manual first-use checks below.
 
 Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
@@ -100,7 +112,8 @@ not match the desktop package version. It then:
    Composer app icon (`build/icon.icon`), so packaging elsewhere needs Xcode
    26 too.
 3. Signs the app with Developer ID and submits it to Apple's notary service.
-4. Verifies the signature, Gatekeeper assessment, stapled ticket, bundle id,
+4. Verifies the signature, hardened Electron fuses in the packaged framework,
+   Gatekeeper assessment, stapled ticket, bundle id,
    URL scheme, the icon's asset catalog, DMG, and ZIP.
 5. Rewrites generated update metadata to the tagged GitHub asset URLs.
 6. Creates or updates the GitHub release and uploads the DMG, ZIP, blockmaps,
@@ -152,6 +165,15 @@ adapters but excludes their large platform packages. If either dependency is
 updated, update the matching platform version, tarball URL, and SHA-512 pins in
 `src/main/harness-components.ts` for every supported platform, run its focused
 tests, and repeat the clean-account first-use checks above.
+
+`electron-builder.yml` disables Electron's RunAsNode, Node environment options,
+Node inspector and extra `file:` privileges. It enables cookie encryption,
+embedded ASAR integrity validation and loading application code only from ASAR.
+`scripts/desktop-signature.ts` reads the actual signed Electron framework's fuse
+wire and rejects missing or incorrect settings, including each architecture in
+a universal binary. Packaged startup also rejects Chromium remote debugging
+launch flags. Development builds retain their local debugging tools. Cookie
+encryption is a one-way migration; keep it enabled in later releases.
 
 ## One-time npm setup
 

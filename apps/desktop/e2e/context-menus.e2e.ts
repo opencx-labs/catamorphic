@@ -312,29 +312,56 @@ describe("sidebar menus", () => {
         rowOutline: getComputedStyle(row).outlineStyle, duration: getComputedStyle(ring).transitionDuration };
     })()`);
     const before = await readRing();
-    // Record in the renderer before sending the key: a slow CDP round trip
-    // must not miss a correct 150 ms glide on a busy CI runner.
+    // Observe the focus update before paint. A busy renderer can skip every
+    // natural frame inside the 150 ms glide, so seek the real transition and
+    // restore it synchronously, as the chat reveal probes do.
     await app.eval(`(() => {
       const first = document.activeElement;
-      window.__menuRingFrames = [];
+      const ring = ${ring};
+      ring.getBoundingClientRect();
+      window.__menuRingProbe = { frames: [], error: null, duration: null };
       window.__menuRingDone = false;
-      let start;
-      const sample = now => {
-        const row = document.activeElement;
-        if (row !== first || start !== undefined) {
-          start ??= now;
-          window.__menuRingFrames.push({ top: ${ring}.getBoundingClientRect().top, target: row.getBoundingClientRect().top });
+      const observer = new MutationObserver(() => {
+        if (document.activeElement === first) return;
+        observer.disconnect();
+        const probe = window.__menuRingProbe;
+        let motion, savedTime;
+        try {
+          motion = ring.getAnimations().find(animation =>
+            animation instanceof CSSTransition && animation.transitionProperty === 'top');
+          const duration = motion?.effect?.getComputedTiming().duration;
+          if (typeof duration !== 'number' || duration <= 0 || !Number.isFinite(duration) ||
+              motion.playState !== 'running' || typeof motion.currentTime !== 'number')
+            throw new Error('The menu ring did not start a running top transition');
+          probe.duration = duration;
+          savedTime = motion.currentTime;
+          for (const fraction of [0.25, 0.5, 0.75]) {
+            motion.currentTime = duration * fraction;
+            probe.frames.push({ top: ring.getBoundingClientRect().top,
+              target: document.activeElement.getBoundingClientRect().top });
+          }
+        } catch (error) {
+          probe.error = String(error);
+        } finally {
+          if (savedTime !== undefined) motion.currentTime = savedTime;
+          window.__menuRingDone = true;
         }
-        if (start === undefined || now - start < 250) requestAnimationFrame(sample);
-        else window.__menuRingDone = true;
-      };
-      requestAnimationFrame(sample);
+      });
+      observer.observe(ring, { attributes: true, attributeFilter: ['style', 'data-glide'] });
       return true;
     })()`);
     await app.press("ArrowDown");
     await app.waitFor("window.__menuRingDone");
-    const frames = await app.eval<{ top: number; target: number }[]>(
-      "window.__menuRingFrames",
+    const probe = await app.eval<{
+      frames: { top: number; target: number }[];
+      error: string | null;
+      duration: number | null;
+    }>("window.__menuRingProbe");
+    expect(probe.error, JSON.stringify(probe)).toBeNull();
+    expect(probe.duration).toBe(150);
+    const frames = probe.frames;
+    await app.waitFor(
+      `Math.abs(${ring}.getBoundingClientRect().top - document.activeElement.getBoundingClientRect().top) < 1`,
     );
     const during = await readRing();
     expect(during.target).toBeGreaterThan(before.target);
@@ -620,6 +647,7 @@ describe("page menus", () => {
       "Open link in new tab",
       "Open link to the side",
       "Open link floating",
+      "Open link in incognito tab",
       "—",
       "Download linked file",
     ]);
@@ -711,6 +739,29 @@ describe("page menus", () => {
     await app.waitFor(`document.activeElement === ${view}`, {
       label: "page focused",
     });
+  });
+
+  it("open a link in an incognito tab", async () => {
+    const incognitoTabs =
+      "document.querySelectorAll('[data-tab-incognito]').length";
+    expect(await app.eval<number>(incognitoTabs)).toBe(0);
+    await pageMenuAt("#link");
+    await pick("Open link in incognito tab");
+    await app.waitFor(`${incognitoTabs} === 1`, {
+      label: "link opened in an incognito tab",
+    });
+    await loaded("Next page");
+    expect(await app.eval<string>(`${view}.getAttribute('partition')`)).toMatch(
+      /^incognito-profile-/,
+    );
+    // Closing it brings the page with the link back to the front.
+    await run(
+      `document.querySelector('[data-tab-incognito]').closest('[data-point-key^="browser:"]').querySelector('button[aria-label^="Close"]').click()`,
+    );
+    await app.waitFor(`${incognitoTabs} === 0`, {
+      label: "incognito tab closed",
+    });
+    await loaded("Menu lab");
   });
 
   it("open a link in a new tab", async () => {

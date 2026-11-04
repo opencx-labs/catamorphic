@@ -27,11 +27,11 @@ import {
   ClipboardItem,
   clipboard,
   dialog,
-  ipcMain,
   nativeImage,
   shell,
   type WebContents,
 } from "electron";
+import { z } from "zod";
 import { HERMES } from "../shared/acp-agents.js";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
@@ -81,6 +81,7 @@ import {
   type UpdateConnectionInput,
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
+import { CredentialStorageError } from "./credential-encryption.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
 import {
   readEditorFile,
@@ -110,6 +111,7 @@ import {
 import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
+import { McpAppOpenSchema } from "./mcp-app-view-authorization.js";
 import type { McpAppsService } from "./mcp-apps.js";
 import type { MobilePairingService, PairingContext } from "./mobile-pairing.js";
 import {
@@ -180,8 +182,10 @@ import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
 import { shellQuote } from "./shell-integration.js";
+import { shellIpcMain as ipcMain, shellSurfaceFor } from "./shell-ipc.js";
 import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
+import { voiceMenuPrefsPatchSchema } from "./voice/voice-bubble.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
 /** A remote root holds every permission; `/me` lists projects only for members. */
@@ -473,22 +477,20 @@ export function registerIpcHandlers(
 
   // In-place switch (empty workspace): rebind the window, then the renderer
   // refetches all profile-scoped state under its full-surface fade.
-  ipcMain.handle(
-    "catamorphic:window-set-profile",
-    (event, profileId: string) => {
-      cancelAuthorization(event.sender);
-      windows.assign(event.sender, profileId);
-      return windows.profileFor(event.sender);
-    },
-  );
+  ipcMain.handle("catamorphic:window-set-profile", (event, raw: unknown) => {
+    const profileId = z.string().min(1).max(256).parse(raw);
+    if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+    cancelAuthorization(event.sender);
+    windows.assign(event.sender, profileId);
+    return windows.profileFor(event.sender);
+  });
 
   // Occupied workspace: the profile opens in its own window instead.
-  ipcMain.handle(
-    "catamorphic:open-profile-window",
-    (_event, profileId: string) => {
-      windows.openWindow(profileId);
-    },
-  );
+  ipcMain.handle("catamorphic:open-profile-window", (_event, raw: unknown) => {
+    const profileId = z.string().min(1).max(256).parse(raw);
+    if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+    windows.openWindow(profileId);
+  });
 
   // --- per-profile config (theme, keybindings) ---
 
@@ -572,7 +574,11 @@ export function registerIpcHandlers(
   // windows (same live-reload contract as keybindings).
   ipcMain.handle("catamorphic:prefs-set", (event, patch: unknown) =>
     storesFor(event).prefs.save(
-      typeof patch === "object" && patch !== null ? patch : {},
+      shellSurfaceFor(event.sender) === "voice"
+        ? voiceMenuPrefsPatchSchema.parse(patch)
+        : typeof patch === "object" && patch !== null
+          ? patch
+          : {},
     ),
   );
 
@@ -687,7 +693,7 @@ export function registerIpcHandlers(
   // --- per-profile agents ---
 
   const agentsSnapshot = (store: AgentsStore): AgentsSnapshot => ({
-    agents: store.list().map(toPublicAgent),
+    agents: store.listPublic(),
     defaultAgentId: store.defaultAgentId() ?? null,
     projectDefaults: store.projectDefaults(),
   });
@@ -730,7 +736,7 @@ export function registerIpcHandlers(
     "catamorphic:agents-update",
     (event, id: string, patch: UpdateAgentInput) => {
       const store = storesFor(event).agents;
-      const before = store.get(id);
+      const before = store.getMetadata(id);
       const agent = store.update(id, patch);
       agentsChanged(event, store);
       // A new key or sign-in mode: chats that failed on the old one run
@@ -738,7 +744,8 @@ export function registerIpcHandlers(
       if (
         agent &&
         before &&
-        (agent.apiKey !== before.apiKey || agent.auth !== before.auth)
+        ((typeof patch.apiKey === "string" && patch.apiKey.length > 0) ||
+          agent.auth !== before.auth)
       )
         void state.current?.signInRecovery.signedIn(id);
       return agent ? toPublicAgent(agent) : null;
@@ -817,7 +824,7 @@ export function registerIpcHandlers(
       source !== "secret" &&
       source !== "connection"
     ) {
-      const binding = owning.agentBindings.get(projectId, entry.slug);
+      const binding = owning.agentBindings.getMetadata(projectId, entry.slug);
       consent = !binding
         ? "none"
         : binding.consentHash === hash
@@ -943,14 +950,19 @@ export function registerIpcHandlers(
       const owning = profileConfig.forProject(projectId);
       const harness = kindHarness(definition.kind);
       const match = owning.agents
-        .list()
+        .listMetadata()
         .find((agent) => agent.harness === harness);
       let auth: BindingAuth;
       // An ACP agent signs in on its own (ADR 0241): nothing of ours to bind.
       if (definition.kind === "e2e-fake" || definition.kind === "acp") {
         auth = { mode: "local" };
-      } else if (match?.auth === "api-key" && match.apiKey) {
-        auth = { mode: "api-key", apiKey: match.apiKey };
+      } else if (match?.auth === "api-key") {
+        const key = owning.agents.get(match.id)?.apiKey;
+        if (!key)
+          throw new Error(
+            "This agent's API key is unavailable. Unlock your system keychain or update its key in Settings, then approve again.",
+          );
+        auth = { mode: "api-key", apiKey: key };
       } else if (harness === "ai-sdk") {
         // The built-in harness only speaks API keys; without one on the
         // roster there is nothing safe to bind.
@@ -990,8 +1002,11 @@ export function registerIpcHandlers(
   // not only the calling window's (ProfileConfigManager.connectionPreviews).
   ipcMain.handle(
     "catamorphic:profile-connections",
-    (_event, profileId: string): ProfileConnection[] =>
-      profileConfig.connectionPreviews(profileId),
+    (_event, raw: unknown): ProfileConnection[] => {
+      const profileId = z.string().min(1).max(256).parse(raw);
+      if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+      return profileConfig.connectionPreviews(profileId);
+    },
   );
 
   ipcMain.handle(
@@ -1171,38 +1186,39 @@ export function registerIpcHandlers(
     }
   });
 
+  ipcMain.handle("catamorphic:mcp-apps-view", async (event, input: unknown) => {
+    const server = state.current;
+    if (!server?.mcpAppViews) throw new Error("MCP apps are unavailable");
+    const app = McpAppOpenSchema.parse(input);
+    const view = await server.mcpAppViews.open({
+      ownerId: event.sender.id,
+      profileId: windows.profileFor(event.sender),
+      app,
+    });
+    return { ...view, url: server.mcpAppViewUrl(view.mountId) };
+  });
+
   ipcMain.handle(
-    "catamorphic:mcp-apps-view",
-    async (event, toolKey: string) => {
-      if (!mcpApps) throw new Error("MCP apps are unavailable");
-      const profileId = windows.profileFor(event.sender);
-      const view = await mcpApps.view(profileId, String(toolKey));
-      // The renderer's iframe navigates to the served document (its own
-      // CSP); the embedded server must therefore be up.
-      const base = state.current?.url;
-      if (!base) throw new Error("The embedded server is not ready");
-      const url = new URL("/desktop/mcp-app-view", base);
-      url.searchParams.set("profileId", profileId);
-      url.searchParams.set("toolKey", view.toolKey);
-      return { ...view, url: url.toString() };
+    "catamorphic:mcp-apps-call",
+    async (event, mountId: unknown, toolName: unknown, args: unknown) => {
+      const views = state.current?.mcpAppViews;
+      if (!views) throw new Error("MCP apps are unavailable");
+      const call = z
+        .object({
+          mountId: z.string().min(1),
+          toolName: z.string().min(1),
+          args: z.record(z.string(), z.unknown()),
+        })
+        .parse({ mountId, toolName, args });
+      return views.call({ ownerId: event.sender.id, ...call });
     },
   );
 
   ipcMain.handle(
-    "catamorphic:mcp-apps-call",
-    async (
-      event,
-      viewToolKey: string,
-      toolName: string,
-      args: Record<string, unknown>,
-    ) => {
-      if (!mcpApps) throw new Error("MCP apps are unavailable");
-      return mcpApps.callTool(
-        windows.profileFor(event.sender),
-        String(viewToolKey),
-        String(toolName),
-        args ?? {},
-      );
+    "catamorphic:mcp-apps-close",
+    async (event, mountId: unknown) => {
+      if (typeof mountId !== "string") return;
+      state.current?.mcpAppViews?.close({ ownerId: event.sender.id, mountId });
     },
   );
 
@@ -1299,7 +1315,9 @@ export function registerIpcHandlers(
       return {
         models: [],
         error:
-          "Could not load models. Check the agent’s sign-in and try again.",
+          cause instanceof CredentialStorageError
+            ? cause.message
+            : "Could not load models. Check the agent’s sign-in and try again.",
       };
     }
   });
@@ -1332,12 +1350,18 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:agent-login-status",
     async (event, id: string) => {
-      const agent = storesFor(event).agents.get(id);
+      const store = storesFor(event).agents;
+      const agent = store.getMetadata(id);
       if (!agent) return false;
       // An ACP agent signs in on its own (ADR 0241); Work never sees it.
       if (agent.harness === "acp") return true;
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
-        return agent.apiKey !== null;
+        try {
+          return store.get(id)?.apiKey != null;
+        } catch (cause) {
+          if (cause instanceof CredentialStorageError) return false;
+          throw cause;
+        }
       }
       return (await agentCredentials(agent)).present;
     },
@@ -1349,7 +1373,8 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:agent-auth-health",
     async (event, id: string): Promise<AgentAuthHealthReport> => {
-      const agent = storesFor(event).agents.get(id);
+      const store = storesFor(event).agents;
+      const agent = store.getMetadata(id);
       // Single authority on the one-click re-login offer: `account`
       // logins (agent-scoped CLI home, incl. OpenRouter PKCE) and
       // `local` claude-code/codex logins (the machine's own CLI
@@ -1370,7 +1395,16 @@ export function registerIpcHandlers(
       if (!agent) return { health: "missing", reauth };
       if (agent.harness === "acp") return { health: "ok", reauth };
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
-        return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
+        try {
+          return {
+            health: store.get(id)?.apiKey != null ? "ok" : "missing",
+            reauth,
+          };
+        } catch (cause) {
+          if (cause instanceof CredentialStorageError)
+            return { health: "missing", reauth };
+          throw cause;
+        }
       }
       const credentials = await agentCredentials(agent);
       if (agent.harness === "codex") {
@@ -1420,11 +1454,13 @@ export function registerIpcHandlers(
           ...input,
           workingDirectory,
         });
-      } catch {
+      } catch (cause) {
         return {
           commands: [],
           error:
-            "Could not load agent commands. Check the agent configuration and skill files, then retry.",
+            cause instanceof CredentialStorageError
+              ? cause.message
+              : "Could not load agent commands. Check the agent configuration and skill files, then retry.",
         };
       }
     },
@@ -1452,10 +1488,13 @@ export function registerIpcHandlers(
           agentId: input.agentId,
           workingDirectory,
         });
-      } catch {
+      } catch (cause) {
         return {
           model: null,
-          error: "Could not ask the agent which model it uses by default.",
+          error:
+            cause instanceof CredentialStorageError
+              ? cause.message
+              : "Could not ask the agent which model it uses by default.",
         };
       }
     },
@@ -1537,7 +1576,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle("catamorphic:agent-login", async (event, id: string) => {
     const store = storesFor(event).agents;
-    const agent = store.get(id);
+    const agent = store.getMetadata(id);
     if (agent === undefined || agent.auth === "api-key") {
       return { started: false, error: "This agent authenticates with a key" };
     }
@@ -2883,27 +2922,30 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle(
-    "catamorphic:project-delete",
-    async (_event, input: { projectId: string; trashFolder?: boolean }) => {
-      const server = state.current;
-      if (!server) throw new Error("Server not running");
-      const rootPath = await server.projectRoots.get(input.projectId);
-      // Trash first: a failed trash should leave the project intact rather
-      // than half-deleted, and after the row is gone we lose the path.
-      if (input.trashFolder && rootPath) {
-        await shell.trashItem(rootPath);
-      }
-      await server.catamorphic.core.projects.delete(identity, input.projectId);
-      workspaceLifecycle?.forgetProject(input.projectId);
-      await server.projectRoots.delete(input.projectId);
-      await server.workspaceStates.delete(input.projectId);
-      await removeComposerFiles({
-        attachmentsDir: paths.attachmentsDir,
-        projectId: input.projectId,
-      });
-    },
-  );
+  ipcMain.handle("catamorphic:project-delete", async (_event, raw: unknown) => {
+    const input = z
+      .object({
+        projectId: z.string().min(1),
+        trashFolder: z.boolean().optional(),
+      })
+      .parse(raw);
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    const rootPath = await server.projectRoots.get(input.projectId);
+    // Trash first: a failed trash should leave the project intact rather
+    // than half-deleted, and after the row is gone we lose the path.
+    if (input.trashFolder && rootPath) {
+      await shell.trashItem(rootPath);
+    }
+    await server.catamorphic.core.projects.delete(identity, input.projectId);
+    workspaceLifecycle?.forgetProject(input.projectId);
+    await server.projectRoots.delete(input.projectId);
+    await server.workspaceStates.delete(input.projectId);
+    await removeComposerFiles({
+      attachmentsDir: paths.attachmentsDir,
+      projectId: input.projectId,
+    });
+  });
 
   ipcMain.handle(
     "catamorphic:project-root",
@@ -2939,17 +2981,15 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle(
-    "catamorphic:reveal-folder",
-    async (_event, folderPath: string) => {
-      if (!path.isAbsolute(folderPath))
-        throw new Error("Choose an absolute file or folder path");
-      if (fs.statSync(folderPath).isDirectory()) {
-        const error = await shell.openPath(folderPath);
-        if (error) throw new Error(error);
-      } else shell.showItemInFolder(folderPath);
-    },
-  );
+  ipcMain.handle("catamorphic:reveal-folder", async (_event, raw: unknown) => {
+    const folderPath = z.string().min(1).max(32_768).parse(raw);
+    if (!path.isAbsolute(folderPath))
+      throw new Error("Choose an absolute file or folder path");
+    if (fs.statSync(folderPath).isDirectory()) {
+      const error = await shell.openPath(folderPath);
+      if (error) throw new Error(error);
+    } else shell.showItemInFolder(folderPath);
+  });
 
   ipcMain.handle(
     "catamorphic:copy-file-to-clipboard",
@@ -2983,10 +3023,16 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     "catamorphic:composer-file-save",
-    async (
-      _event,
-      input: { projectId: string; name: string; bytes: Uint8Array },
-    ) => {
+    async (_event, raw: unknown) => {
+      const input = z
+        .object({
+          projectId: z.string().min(1).max(256),
+          name: z.string().min(1).max(1024),
+          bytes: z
+            .instanceof(Uint8Array)
+            .refine((bytes) => bytes.byteLength <= 64 * 1024 * 1024),
+        })
+        .parse(raw);
       await requireRoot(input.projectId);
       return saveComposerFile({
         attachmentsDir: paths.attachmentsDir,
@@ -3093,9 +3139,10 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle(
-    "catamorphic:editor-file-read",
-    (_event, input: { filePath: string }) => readEditorFile(input),
+  ipcMain.handle("catamorphic:editor-file-read", (_event, raw: unknown) =>
+    readEditorFile(
+      z.object({ filePath: z.string().min(1).max(32_768) }).parse(raw),
+    ),
   );
   const activeSearches = new Map<number, AbortController>();
   ipcMain.handle("catamorphic:file-search-cancel", (event) => {
@@ -3174,12 +3221,16 @@ export function registerIpcHandlers(
       return renameEditorFile(input);
     },
   );
-  ipcMain.handle(
-    "catamorphic:editor-file-write",
-    (
-      _event,
-      input: { filePath: string; content: string; expectedContent: string },
-    ) => writeEditorFile(input),
+  ipcMain.handle("catamorphic:editor-file-write", (_event, raw: unknown) =>
+    writeEditorFile(
+      z
+        .object({
+          filePath: z.string().min(1).max(32_768),
+          content: z.string().max(4 * 1024 * 1024),
+          expectedContent: z.string().max(4 * 1024 * 1024),
+        })
+        .parse(raw),
+    ),
   );
 
   ipcMain.handle(

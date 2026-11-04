@@ -70,10 +70,7 @@ export function workflowMcpConnectionEntries(
   connection: McpConnection;
   server: AgentMcpServerConfig;
 }> {
-  const configured = connections.filter(
-    (connection) => connection.enabled && toAgentMcpServer(connection),
-  );
-  return [...connectionServerKeys(configured)].flatMap(
+  return [...connectionServerKeys([...connections])].flatMap(
     ([alias, connection]) => {
       const server = toAgentMcpServer(connection);
       return server ? [{ alias, connection, server }] : [];

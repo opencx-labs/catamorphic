@@ -143,9 +143,9 @@ async function terminalShows(text: string): Promise<void> {
     app.eval<string>(
       `window.catamorphicDesktop.terminalBuffer(window.__terminalIds[0]).then((b) => b?.buffer ?? '')`,
     );
-  const deadline = Date.now() + 30_000;
+  const deadline = performance.now() + 30_000;
   let printed = "";
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     printed = await buffer();
     if (printed.includes(text)) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -433,9 +433,9 @@ describe("remote development on a Work server", () => {
       },
       stdio: ["ignore", log, log],
     });
-    const deadline = Date.now() + 90_000;
+    const deadline = performance.now() + 90_000;
     while (!(await fetch(`${serverBase}/healthz`).catch(() => null))?.ok) {
-      if (Date.now() > deadline || server.exitCode !== null)
+      if (performance.now() > deadline || server.exitCode !== null)
         throw new Error("The Work server did not start; see its log");
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -730,9 +730,9 @@ describe("remote development on a Work server", () => {
     try {
       // The tab may still be loading when it is found: until its page has
       // a context, evaluating answers an error, so ask again.
-      const deadline = Date.now() + 30_000;
+      const deadline = performance.now() + 30_000;
       let shown = "";
-      while (!shown.includes(marker) && Date.now() < deadline) {
+      while (!shown.includes(marker) && performance.now() < deadline) {
         shown = await page
           .eval<string>("document.body?.innerText ?? ''")
           .catch(() => "");

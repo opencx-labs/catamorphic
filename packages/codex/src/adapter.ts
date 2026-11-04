@@ -198,11 +198,13 @@ class CodexAttempt {
   private finishing = false;
   private completed = false;
   private interruptRequested = false;
+  private hostStopped = false;
   private interruptTimer?: ReturnType<typeof setTimeout>;
   private mirror?: RolloutMirror;
   private readonly usage: AgentTurnUsage[] = [];
   private contextWindow?: number;
   private lastError?: JsonObject;
+  private providerRetrying = false;
   private readonly steered = new Set<string>();
   /** Open server requests by JSON-RPC id → the request key Work knows them by. */
   private readonly requestKeys = new Map<JsonRpcId, string>();
@@ -258,8 +260,17 @@ class CodexAttempt {
   }
 
   control(): AttemptControl {
-    const onAbort = () => this.interrupt();
+    // A dead host cannot answer tools or store native state. Close its
+    // process before a continuation tries to open the same thread.
+    const onAbort = () => {
+      if (this.completed) return;
+      this.hostStopped = true;
+      this.interruptRequested = true;
+      this.complete({ status: "interrupted" });
+      void this.client?.close();
+    };
     this.host.signal.addEventListener("abort", onAbort, { once: true });
+    if (this.host.signal.aborted) onAbort();
     const finished = this.run().finally(() =>
       this.host.signal.removeEventListener("abort", onAbort),
     );
@@ -285,7 +296,13 @@ class CodexAttempt {
       const thread = session?.thread;
       // Only a turn Codex itself finished leaves its thread ready for the
       // next one; anything else ends this Codex.
-      if (this.sessions && session?.alive && thread && this.turnFinished) {
+      if (
+        this.sessions &&
+        session?.alive &&
+        thread &&
+        this.turnFinished &&
+        !this.hostStopped
+      ) {
         session.release(this);
         this.sessions.release(thread.id, session);
         await this.removeInputs();
@@ -819,6 +836,12 @@ class CodexAttempt {
       this.itemNotification(method, params, parentKey);
       return;
     }
+    if (
+      typeof params.turnId === "string" &&
+      this.turnId &&
+      params.turnId !== this.turnId
+    )
+      return;
     switch (method) {
       case "turn/started": {
         const turn = isObject(params.turn) ? params.turn : {};
@@ -856,13 +879,20 @@ class CodexAttempt {
       }
       case "error": {
         const error = isObject(params.error) ? params.error : {};
-        if (params.willRetry === true)
-          this.host.emit({
-            type: "diagnostic",
-            level: "warn",
-            message: String(error.message ?? "Codex is retrying."),
+        if (params.turnId !== this.turnId || !this.turnId) return;
+        if (params.willRetry === true) {
+          this.providerRetrying = true;
+          const { message, kind } = classifyTurnError(error, {
+            workStarted: true,
           });
-        else this.lastError = error;
+          this.host.emit({
+            type: "provider.retrying",
+            error: { message, ...(kind ? { kind } : {}) },
+            attempt: null,
+            maxAttempts: null,
+            retryAt: null,
+          });
+        } else this.lastError = error;
         return;
       }
       case "warning":
@@ -892,6 +922,43 @@ class CodexAttempt {
   ): void {
     const itemId = typeof params.itemId === "string" ? params.itemId : "";
     const delta = typeof params.delta === "string" ? params.delta : "";
+    if (!parentKey && this.providerRetrying) {
+      const item = isObject(params.item) ? params.item : undefined;
+      const modelDelta =
+        delta.length > 0 &&
+        [
+          "item/agentMessage/delta",
+          "item/reasoning/summaryTextDelta",
+          "item/reasoning/textDelta",
+        ].includes(method);
+      const modelItem =
+        method === "item/started" &&
+        item &&
+        [
+          "commandExecution",
+          "fileChange",
+          "mcpToolCall",
+          "dynamicToolCall",
+          "webSearch",
+          "collabAgentToolCall",
+        ].includes(String(item.type));
+      const completedText =
+        method === "item/completed" &&
+        item?.type === "agentMessage" &&
+        typeof item.text === "string" &&
+        item.text.length > 0;
+      const completedReasoning =
+        method === "item/completed" &&
+        item?.type === "reasoning" &&
+        Array.isArray(item.summary) &&
+        item.summary.some(
+          (part) => typeof part === "string" && part.length > 0,
+        );
+      if (modelDelta || modelItem || completedText || completedReasoning) {
+        this.providerRetrying = false;
+        this.host.emit({ type: "provider.resumed" });
+      }
+    }
     switch (method) {
       case "item/started": {
         const item = isObject(params.item) ? params.item : undefined;
@@ -1435,7 +1502,8 @@ export function classifyTurnError(
     name === "responseStreamConnectionFailed" ||
     name === "responseStreamDisconnected" ||
     name === "responseTooManyFailedAttempts" ||
-    (status !== undefined && status >= 500)
+    (status !== undefined && status >= 500) ||
+    /\bworkspace routing discovery failed\b/i.test(message)
   )
     kind = "unavailable";
   else if (name === "badRequest" && /reasoning|encrypted/i.test(message))

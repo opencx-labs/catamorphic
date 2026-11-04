@@ -367,6 +367,8 @@ function Chat({
           }}
           className="min-h-0 flex-1"
           timeline={chat.timeline}
+          isLoading={chat.isLoading}
+          isReconnecting={chat.connectionLost}
           pending={chat.pending}
           activity={chat.activity}
           onRetry={(turnId) => void chat.retry(turnId)}
@@ -570,11 +572,7 @@ function Chat({
                 <ConnectionTrouble
                   connection={connection}
                   projectId={projectId}
-                  message={
-                    chat.connectionLost
-                      ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
-                      : chat.error.message
-                  }
+                  message={chat.error.message}
                 />
               )}
               {chat.queue.length > 0 && (

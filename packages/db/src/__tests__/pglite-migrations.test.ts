@@ -151,6 +151,7 @@ describe("PGlite migrations", () => {
       "069_encrypted_project_secrets_only.sql",
       "072_workflow_signal_inbox.sql",
       "074_turn_bound_model_grants.sql",
+      "075_provider_retry_state.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

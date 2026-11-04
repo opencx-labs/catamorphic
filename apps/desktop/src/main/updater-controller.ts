@@ -1,6 +1,7 @@
-import type {
-  DesktopUpdateChannel,
-  DesktopUpdateState,
+import {
+  type DesktopUpdateChannel,
+  type DesktopUpdateState,
+  updateMessageKey,
 } from "../shared/update.js";
 
 export interface UpdateInfoLike {
@@ -105,6 +106,7 @@ export class DesktopUpdaterController {
   private state: DesktopUpdateState;
   private preparing = false;
   private manualCheckId = 0;
+  private dismissedMessage: string | null = null;
   private checking: Promise<boolean> | null = null;
   private downloading: Promise<void> | null = null;
   private readonly logger: Pick<Console, "error" | "info" | "warn">;
@@ -181,7 +183,16 @@ export class DesktopUpdaterController {
   }
 
   current(): DesktopUpdateState {
-    return this.state;
+    return updateMessageKey(this.state) === this.dismissedMessage
+      ? { ...this.state, dismissed: true }
+      : this.state;
+  }
+
+  /** A delayed click cannot dismiss a newer check or phase. */
+  dismiss(messageKey: string): void {
+    if (messageKey !== updateMessageKey(this.state)) return;
+    this.dismissedMessage = messageKey;
+    this.options.broadcast(this.current());
   }
 
   setChannel(channel: DesktopUpdateChannel): boolean {
@@ -413,7 +424,7 @@ export class DesktopUpdaterController {
       ...state,
       ...(this.manualCheckId ? { manualCheckId: this.manualCheckId } : {}),
     };
-    this.options.broadcast(this.state);
+    this.options.broadcast(this.current());
   }
 
   private configureChannel(channel: DesktopUpdateChannel): void {

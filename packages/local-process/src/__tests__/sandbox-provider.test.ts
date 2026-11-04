@@ -7,8 +7,11 @@ import {
   signInHomePath,
   volumeKey,
 } from "@catamorphic/sandbox";
+import { TestSandboxes } from "@catamorphic/sandbox/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LocalProcessSandboxProvider } from "../sandbox-provider.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 describe("LocalProcessSandboxProvider", () => {
   let root: string;
@@ -16,10 +19,11 @@ describe("LocalProcessSandboxProvider", () => {
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-lp-test-"));
-    provider = new LocalProcessSandboxProvider({ root });
+    provider = ownedSandboxes.track(new LocalProcessSandboxProvider({ root }));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await ownedSandboxes.cleanup();
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -27,7 +31,9 @@ describe("LocalProcessSandboxProvider", () => {
     const isolatedRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "catamorphic-lp-cleanup-"),
     );
-    const isolated = new LocalProcessSandboxProvider({ root: isolatedRoot });
+    const isolated = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({ root: isolatedRoot }),
+    );
     try {
       for (let i = 0; i < 100; i++) {
         const sandbox = await isolated.createSandbox({
@@ -40,14 +46,17 @@ describe("LocalProcessSandboxProvider", () => {
       expect(Reflect.get(isolated, "sandboxes").size).toBe(0);
       expect(Reflect.get(isolated, "stopped").size).toBe(0);
     } finally {
+      await ownedSandboxes.cleanup();
       fs.rmSync(isolatedRoot, { recursive: true, force: true });
     }
   });
 
   it("keeps volumes under ~ across sandboxes and refuses other paths (ADR 0208)", async () => {
-    const machine = new LocalProcessSandboxProvider({
-      root: path.join(root, "volume-sandboxes"),
-    });
+    const machine = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(root, "volume-sandboxes"),
+      }),
+    );
     expect(machine.capabilities).toContain("volumes");
     const cache = volumeKey({ projectId: "p", owner: "m", name: "cache" });
     const scratch = volumeKey({ projectId: "p", owner: "m", name: "scratch" });
@@ -105,7 +114,9 @@ describe("LocalProcessSandboxProvider", () => {
 
   it("refuses nested volumes and leaves nothing behind when creation fails", async () => {
     const sandboxRoot = path.join(root, "nested-volume-sandboxes");
-    const machine = new LocalProcessSandboxProvider({ root: sandboxRoot });
+    const machine = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({ root: sandboxRoot }),
+    );
     const home = volumeKey({ projectId: "p", owner: "m", name: "home" });
     const cache = volumeKey({ projectId: "p", owner: "m", name: "cache" });
     await expect(
@@ -133,13 +144,15 @@ describe("LocalProcessSandboxProvider", () => {
       }),
       { recursive: true },
     );
-    const broken = new LocalProcessSandboxProvider({
-      root: sandboxRoot,
-      signInRoot,
-      projectDataDirectory: async () => {
-        throw new Error("no project data");
-      },
-    });
+    const broken = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: sandboxRoot,
+        signInRoot,
+        projectDataDirectory: async () => {
+          throw new Error("no project data");
+        },
+      }),
+    );
     await expect(
       broken.createSandbox({
         signIns: [{ harness: "codex", member: "dana" }],
@@ -159,10 +172,12 @@ describe("LocalProcessSandboxProvider", () => {
       fs.mkdirSync(home(member), { recursive: true });
       fs.writeFileSync(path.join(home(member), "owner"), member);
     }
-    const machine = new LocalProcessSandboxProvider({
-      root: path.join(root, "sign-in-sandboxes"),
-      signInRoot,
-    });
+    const machine = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(root, "sign-in-sandboxes"),
+        signInRoot,
+      }),
+    );
     const sandbox = await machine.createSandbox({
       signIns: [{ harness: "codex", member: "alice" }],
     });
@@ -209,11 +224,15 @@ describe("LocalProcessSandboxProvider", () => {
       }),
     ).rejects.toThrow("work worker sign-in codex --member carol");
     await expect(
-      new LocalProcessSandboxProvider({
-        root: path.join(root, "no-sign-ins"),
-      }).createSandbox({
-        signIns: [{ harness: "codex", member: "alice" }],
-      }),
+      ownedSandboxes
+        .track(
+          new LocalProcessSandboxProvider({
+            root: path.join(root, "no-sign-ins"),
+          }),
+        )
+        .createSandbox({
+          signIns: [{ harness: "codex", member: "alice" }],
+        }),
     ).rejects.toThrow("keeps no members' sign-ins");
   });
 
@@ -221,13 +240,15 @@ describe("LocalProcessSandboxProvider", () => {
     const data = path.join(root, "project-data");
     fs.mkdirSync(data);
     const requests: string[] = [];
-    const isolated = new LocalProcessSandboxProvider({
-      root: path.join(root, "runtimes"),
-      projectDataDirectory: async ({ projectId }) => {
-        requests.push(projectId);
-        return data;
-      },
-    });
+    const isolated = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(root, "runtimes"),
+        projectDataDirectory: async ({ projectId }) => {
+          requests.push(projectId);
+          return data;
+        },
+      }),
+    );
     const first = await isolated.createSandbox({
       labels: { purpose: "deployment-runtime", projectId: "one" },
     });

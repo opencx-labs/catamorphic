@@ -1,15 +1,11 @@
 import path from "node:path";
-import {
-  app,
-  ipcMain,
-  autoUpdater as nativeUpdater,
-  powerMonitor,
-} from "electron";
+import { app, autoUpdater as nativeUpdater, powerMonitor } from "electron";
 import electronUpdater from "electron-updater";
 import type {
   DesktopUpdateChannel,
   DesktopUpdateState,
 } from "../shared/update.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 import {
   defaultDesktopUpdateChannel,
   UpdatePreferencesStore,
@@ -127,6 +123,12 @@ export function registerDesktopUpdater(options: {
     return answered;
   };
   ipcMain.handle("catamorphic:update-check", () => checkNow(true));
+  ipcMain.handle(
+    "catamorphic:update-dismiss",
+    (_event, messageKey: unknown) => {
+      if (typeof messageKey === "string") controller.dismiss(messageKey);
+    },
+  );
   ipcMain.handle("catamorphic:update-download", () => controller.download());
   ipcMain.handle("catamorphic:update-install", () => controller.install());
   ipcMain.handle("catamorphic:update-move", () => controller.move());
@@ -185,6 +187,7 @@ export function registerDesktopUpdater(options: {
       for (const channel of [
         "catamorphic:update-state",
         "catamorphic:update-check",
+        "catamorphic:update-dismiss",
         "catamorphic:update-download",
         "catamorphic:update-install",
         "catamorphic:update-move",

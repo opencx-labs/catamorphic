@@ -676,6 +676,7 @@ function FoldChip({
 }
 
 interface Ghost {
+  clipPath: string;
   id: string;
   chip?: Chip;
   label?: string;
@@ -685,6 +686,9 @@ interface Ghost {
 }
 
 interface Position {
+  screenTop: number;
+  viewportHeight: number;
+  height: number;
   left: number;
   top: number;
   width: number;
@@ -928,6 +932,12 @@ export const ChipRail = memo(function ChipRail({
         left: element.offsetLeft,
         top: element.offsetTop,
         width: element.offsetWidth,
+        height: element.offsetHeight,
+        screenTop: element.offsetTop - (sizerRef.current?.scrollTop ?? 0),
+        viewportHeight:
+          Number.parseFloat(sizerRef.current?.style.height ?? "") ||
+          sizerRef.current?.clientHeight ||
+          0,
       };
       now.set(id, position);
       if (!animate) continue;
@@ -954,12 +964,19 @@ export const ChipRail = memo(function ChipRail({
     const left: Ghost[] = [];
     if (animate)
       for (const [id, position] of before) {
-        if (now.has(id)) continue;
+        if (
+          now.has(id) ||
+          position.screenTop + position.height <= 0 ||
+          position.screenTop >= position.viewportHeight
+        )
+          continue;
         const chip = lastChipsRef.current.get(id);
         left.push({
           id: `${id}\u0000${performance.now()}`,
           ...(chip ? { chip } : { label: lastFoldLabelRef.current }),
           ...position,
+          top: position.screenTop,
+          clipPath: `inset(${Math.max(0, -position.screenTop)}px 0 ${Math.max(0, position.screenTop + position.height - position.viewportHeight)}px 0)`,
         });
       }
     positionsRef.current = now;
@@ -1373,7 +1390,18 @@ export const ChipRail = memo(function ChipRail({
       </PopPanel>
       <div
         ref={sizerRef}
+        data-testid="chip-viewport"
         className="overflow-x-hidden overflow-y-hidden transition-[height] duration-200 ease-standard [scrollbar-width:thin]"
+        onScroll={() => {
+          const viewport = sizerRef.current;
+          if (!viewport) return;
+          // A scroll changes where an exit will be drawn without changing
+          // any chip's logical layout. Keep its last visible viewport.
+          for (const position of positionsRef.current.values()) {
+            position.screenTop = position.top - viewport.scrollTop;
+            position.viewportHeight = viewport.clientHeight;
+          }
+        }}
       >
         <div
           ref={flowRef}
@@ -1439,51 +1467,57 @@ export const ChipRail = memo(function ChipRail({
           >
             {`${Math.max(roots.length, 10)} more`}
           </span>
-          {ghosts.map((ghost) => (
-            <div
-              key={ghost.id}
-              aria-hidden="true"
-              inert
-              className="pointer-events-none absolute"
-              style={{ left: ghost.left, top: ghost.top, width: ghost.width }}
-              ref={(element) => {
-                if (!element || element.dataset.leaving) return;
-                element.dataset.leaving = "true";
-                const duration = motionMs(180);
-                const finish = () =>
-                  setGhosts((all) =>
-                    all.filter((item) => item.id !== ghost.id),
-                  );
-                if (!duration) {
-                  finish();
-                  return;
-                }
-                element.animate(
-                  [
-                    { opacity: 1, transform: "scale(1)" },
-                    { opacity: 0, transform: "translateY(4px) scale(0.96)" },
-                  ],
-                  { duration, easing: EASE_STANDARD, fill: "forwards" },
-                ).onfinish = finish;
-              }}
-            >
-              {ghost.chip ? (
-                <ChipView
-                  chip={ghost.chip}
-                  ghost
-                  current={false}
-                  groupOpen={false}
-                  onActivate={() => {}}
-                  onRun={() => {}}
-                  onMenu={() => {}}
-                />
-              ) : (
-                <FoldChip label={ghost.label ?? ""} ghost />
-              )}
-            </div>
-          ))}
         </div>
       </div>
+      {/* Exit copies live outside the shrinking scroller so its height
+          cannot clip their fade. Their old viewport still clips them. */}
+      {ghosts.map((ghost) => (
+        <div
+          key={ghost.id}
+          data-testid="chip-exit"
+          aria-hidden="true"
+          inert
+          className="pointer-events-none absolute"
+          style={{
+            left: ghost.left,
+            top: ghost.top,
+            width: ghost.width,
+            clipPath: ghost.clipPath,
+          }}
+          ref={(element) => {
+            if (!element || element.dataset.leaving) return;
+            element.dataset.leaving = "true";
+            const duration = motionMs(180);
+            const finish = () =>
+              setGhosts((all) => all.filter((item) => item.id !== ghost.id));
+            if (!duration) {
+              finish();
+              return;
+            }
+            element.animate(
+              [
+                { opacity: 1, transform: "scale(1)" },
+                { opacity: 0, transform: "translateY(4px) scale(0.96)" },
+              ],
+              { duration, easing: EASE_STANDARD, fill: "forwards" },
+            ).onfinish = finish;
+          }}
+        >
+          {ghost.chip ? (
+            <ChipView
+              chip={ghost.chip}
+              ghost
+              current={false}
+              groupOpen={false}
+              onActivate={() => {}}
+              onRun={() => {}}
+              onMenu={() => {}}
+            />
+          ) : (
+            <FoldChip label={ghost.label ?? ""} ghost />
+          )}
+        </div>
+      ))}
       {access && (
         <div data-testid="chip-rail-access" className="mt-1 w-fit max-w-full">
           <AccessRequest

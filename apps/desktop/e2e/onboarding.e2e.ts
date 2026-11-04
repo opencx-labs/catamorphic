@@ -57,9 +57,9 @@ const until = async (
   timeoutMs: number,
   label: string,
 ): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   let lastError: unknown;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     try {
       if (fn()) return;
       lastError = undefined;

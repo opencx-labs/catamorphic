@@ -2,7 +2,9 @@
 export const BROWSER_GUEST = String.raw`
 (() => {
   if (globalThis.catamorphicBrowser) return;
-  const generation = crypto.randomUUID();
+  // Failed loads and ordinary HTTP pages are not secure contexts.
+  // getRandomValues supplies a document identity in those worlds too.
+  const generation = Array.from(crypto.getRandomValues(new Uint32Array(4)), word => word.toString(16).padStart(8, '0')).join('');
   let sequence = 0;
   // An element keeps its uid for as long as it stays in the page, across
   // snapshots; one that leaves (or a navigation) makes its uid stale.

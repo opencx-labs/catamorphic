@@ -42,8 +42,9 @@ it("explains native writer ownership without classifying it for automatic retry"
     agentName: "Codex",
     providerLabel: "Codex",
   });
-  expect(owned.message).toContain("Close it there, then retry here");
-  expect(owned.message).not.toContain("01a090c8");
+  expect(owned.message).toContain("Wait for the previous process to stop");
+  expect(owned.message).toContain(original);
+  expect(owned.message).not.toContain("another Codex window");
   expect(owned.kind).toBeUndefined();
   const tool = friendlyTurnError({
     error: { message: `Tool read failed: ${original}` },
@@ -76,4 +77,20 @@ it("rewrites a provider's raw auth failure into the reconnect path", () => {
   expect(error.message).toContain(
     'rejected the credentials of the "Fake Agent"',
   );
+});
+
+it("preserves the complete provider message, including ambiguous and long errors", () => {
+  const original = `Provider failure: ${"request detail ".repeat(100)}request-id-at-the-end`;
+  const unknown = friendlyTurnError({
+    error: { message: original },
+    agentName: "Agent",
+    providerLabel: "Provider",
+  });
+  expect(unknown.message).toBe(original);
+  const known = friendlyTurnError({
+    error: { message: original, kind: "unavailable" },
+    agentName: "Agent",
+    providerLabel: "Provider",
+  });
+  expect(known.message).toContain(original);
 });

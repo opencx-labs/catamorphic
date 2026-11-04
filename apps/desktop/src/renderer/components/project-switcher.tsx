@@ -9,6 +9,9 @@ import { ResourceInspector } from "./resource-inspector";
 export interface ProjectSwitcherProps {
   projects: ProjectSummary[];
   activeProjectId?: string;
+  loading?: boolean;
+  loadError?: boolean;
+  onRetry?: () => void;
   onSelect: (projectId: string) => void;
   onOpenWindow?: (projectId: string) => void;
   onNewProject: () => void;
@@ -19,6 +22,9 @@ export interface ProjectSwitcherProps {
 export function ProjectSwitcher({
   projects,
   activeProjectId,
+  loading = false,
+  loadError = false,
+  onRetry,
   onSelect,
   onOpenWindow,
   onNewProject,
@@ -91,7 +97,12 @@ export function ProjectSwitcher({
           >
             <Box className="size-3.5 shrink-0 text-fg-muted" />
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">
-              {active?.name ?? "No projects"}
+              {active?.name ??
+                (loadError
+                  ? "Projects unavailable"
+                  : loading
+                    ? "Loading projects…"
+                    : "Choose project")}
             </span>
             <ChevronsUpDown className="size-3.5 shrink-0 text-fg-faint" />
           </button>
@@ -175,11 +186,22 @@ export function ProjectSwitcher({
               </ResourceInspector>
             );
           })}
-          {projects.length === 0 && (
+          {loadError ? (
+            <div role="alert" className="px-2 py-1.5 text-xs text-fg-muted">
+              Could not load your projects.
+              <button
+                type="button"
+                onClick={onRetry}
+                className="button-ghost button-sm mt-1"
+              >
+                Try again
+              </button>
+            </div>
+          ) : projects.length === 0 ? (
             <p className="px-2 py-1.5 text-xs text-fg-faint">
-              No projects yet.
+              {loading ? "Loading projects…" : "Add your first project."}
             </p>
-          )}
+          ) : null}
         </div>
         <div className="mt-1 border-t border-border pt-1">
           <button

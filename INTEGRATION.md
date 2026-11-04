@@ -669,6 +669,13 @@ to adapt their presentation and suspend optional refresh work while hidden;
 the returned function unsubscribes. Layout and default widget choices belong
 to the host. Compact mounting never grants workspace or Electron access.
 
+Native hosts can supply `resolveGuestDocument={({ url }) => ...}` to serve
+guest HTML through their own document-only origin. It receives the authorized
+view's URL and returns a host-owned document URL before the iframe mounts.
+The host validates the source, binds each grant to its owner and mount, and
+revokes it when the mount closes. This callback does not change how app calls
+are authorized or give guests the host's API credentials.
+
 
 For Tailwind hosts, import the UI stylesheet from the **same CSS entry** as
 Tailwind so its packaged component classes are included:

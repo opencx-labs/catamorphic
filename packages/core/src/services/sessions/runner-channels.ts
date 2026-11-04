@@ -105,18 +105,22 @@ function inProcessChannel(
       };
     },
     kill: async () => {
+      await runner.kill();
       inProcessRunners.delete(runnerId);
-      runner.kill();
     },
   };
 }
 
 /** Finds an in-process runner again, only within the process that made it. */
-export function reattachInProcessRunner(
+export async function reattachInProcessRunner(
   location: Extract<RunnerLocation, { kind: "in_process" }>,
-): RunnerChannel | undefined {
+): Promise<RunnerChannel | undefined> {
   if (location.process !== PROCESS_INSTANCE) return undefined;
   const runner = inProcessRunners.get(location.runnerId);
+  if (runner?.stopping) {
+    await runner.kill();
+    return undefined;
+  }
   return runner ? inProcessChannel(location.runnerId, runner) : undefined;
 }
 

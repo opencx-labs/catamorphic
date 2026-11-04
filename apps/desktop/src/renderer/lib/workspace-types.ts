@@ -1,5 +1,6 @@
 export type { ChatDockEntry, ChatMode } from "../../shared/chat.js";
 
+import type { McpAppContext } from "../../shared/chat.js";
 import type { GitDiffMode } from "../../shared/git.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
 import type { SidebarActivity } from "../../shared/sidebar.js";
@@ -88,6 +89,8 @@ export type WorkspaceTab = (
       asleep?: boolean;
       /** The page waits on its dialog (ADR 0227). */
       pageDialog?: boolean;
+      /** The page is in the profile's incognito session (ADR 0303). */
+      incognito?: boolean;
     }
   | {
       kind: "settings";
@@ -130,6 +133,8 @@ export type WorkspaceTab = (
       name: string;
       label?: string;
       toolKey: string;
+      /** Absent on old saved tabs, which must be reopened from their chat. */
+      context?: McpAppContext;
       toolInput?: unknown;
       toolResult?: unknown;
     }

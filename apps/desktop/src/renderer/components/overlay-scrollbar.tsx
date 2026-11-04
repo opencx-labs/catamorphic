@@ -127,6 +127,8 @@ export function OverlayScrollbar({
       settle();
     };
     const onScroll = (event: Event) => {
+      // The thumb can move away from a stationary pointer while wheeling.
+      bar.removeAttribute("data-hovered");
       if (drag) {
         place();
         return;
@@ -173,6 +175,16 @@ export function OverlayScrollbar({
       }
       return found;
     };
+    const overThumb = (event: PointerEvent) => {
+      if (bar.dataset.shown !== "true") return false;
+      const rect = handle.getBoundingClientRect();
+      return (
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom
+      );
+    };
     const onPointerMove = (event: PointerEvent) => {
       if (drag) return;
       const outer = box.getBoundingClientRect();
@@ -190,10 +202,12 @@ export function OverlayScrollbar({
         near = false;
         settle();
       }
+      bar.toggleAttribute("data-hovered", overThumb(event));
     };
     const onPointerLeave = () => {
       near = false;
       lists = null;
+      bar.removeAttribute("data-hovered");
       settle();
     };
     const onThumbDown = (event: PointerEvent) => {
@@ -220,10 +234,17 @@ export function OverlayScrollbar({
     const onThumbUp = (event: PointerEvent) => {
       if (!drag || event.pointerId !== drag.pointerId) return;
       drag = null;
+      bar.toggleAttribute("data-hovered", overThumb(event));
       delete bar.dataset.dragging;
       settle();
     };
-    // The thumb sits over the list's edge: a wheel there still scrolls it.
+    // The panel thumb is transparent to hit testing: Chromium scrolls the
+    // panel under it, preserving the same wheel smoothing as the outer edge.
+    // Catch only a press in its geometry so dragging still owns the pointer.
+    const onPanelDown = (event: PointerEvent) => {
+      if (overThumb(event)) onThumbDown(event);
+    };
+    // A section's thumb lies outside its list, so it forwards the wheel.
     const onThumbWheel = (event: WheelEvent) => {
       event.preventDefault();
       active?.scrollBy({ top: event.deltaY, left: 0 });
@@ -238,12 +259,22 @@ export function OverlayScrollbar({
     });
     box.addEventListener("pointermove", onPointerMove, { signal });
     box.addEventListener("pointerleave", onPointerLeave, { signal });
-    handle.addEventListener("pointerdown", onThumbDown, { signal });
+    if (lane === "panel")
+      box.addEventListener("pointerdown", onPanelDown, {
+        capture: true,
+        signal,
+      });
+    else {
+      handle.addEventListener("pointerdown", onThumbDown, { signal });
+      handle.addEventListener("wheel", onThumbWheel, {
+        passive: false,
+        signal,
+      });
+    }
     handle.addEventListener("pointermove", onThumbMove, { signal });
     handle.addEventListener("pointerup", onThumbUp, { signal });
     handle.addEventListener("pointercancel", onThumbUp, { signal });
     handle.addEventListener("lostpointercapture", onThumbUp, { signal });
-    handle.addEventListener("wheel", onThumbWheel, { passive: false, signal });
     return () => {
       listen.abort();
       window.clearTimeout(idle);

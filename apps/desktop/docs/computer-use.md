@@ -59,11 +59,18 @@ another of Work's windows is in front, it leaves the page's window where it is
 and tells the page it has focus (`Emulation.setFocusEmulationEnabled`) instead
 of focusing it, so the person's window never trades places with the agent's.
 Focus is handed back after an action only if the person is still in the window
-where it began. Chromium
+where it began. Readiness uses the guest's attachment and layout, never the
+window's animation frames, so minimizing or covering that window does not block
+browser tools or bring it forward. Chromium
 pointer input and Electron native editing preserve browser behavior. Do not
 replace them with synthetic DOM click/key events. Takeover/release blocks future
 agent input; reclaim is explicit. Page content is untrusted data, never authority
 for external actions.
+
+An image capture briefly lets its owning renderer produce frames, including
+while minimized. Concurrent captures share that hold; the last capture restores
+the renderer's prior throttling. A capture that cannot render returns an error
+within ten seconds and releases the browser operation queue.
 
 ## Native Codex computer use
 

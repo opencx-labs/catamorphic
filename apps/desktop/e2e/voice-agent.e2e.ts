@@ -981,13 +981,13 @@ describe("voice", () => {
     // Longer than a tap, which would leave voice listening on its own.
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     await holdTalkKeys("keyUp");
-    const letGo = Date.now();
+    const letGo = performance.now();
     await runWait(`return mic().dataset.phase === 'off';`, {
       timeoutMs: 30_000,
       label: "voice off as the keys came up",
     });
     // Not after the wait of a voice that had something to do (4 s).
-    expect(Date.now() - letGo).toBeLessThan(3_000);
+    expect(performance.now() - letGo).toBeLessThan(3_000);
     expect(await heard()).toBe(before);
     const status = await run<{ error: string | null; pending: boolean }>(
       `return api.voiceStatus();`,

@@ -1,8 +1,4 @@
-import {
-  type AgentSession,
-  useAgentAttention,
-  useProjects,
-} from "@catamorphic/react";
+import { type AgentSession, useAgentAttention } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -23,13 +19,27 @@ import {
 } from "./lib/project-move.js";
 import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { ProjectTheme } from "./lib/theme.js";
+import { useDesktopProjects } from "./lib/use-desktop-projects.js";
 import { WorkspaceContext } from "./lib/workspace-context.js";
 import { flushWorkspaceSaves } from "./lib/workspace-persistence.js";
 
 /** Hiding a project never unmounts its resources or agent tool handlers. */
 export function WorkspaceRoot() {
   const queryClient = useQueryClient();
-  const projectList = useProjects();
+  const projectList = useDesktopProjects();
+  useEffect(
+    () =>
+      desktopApi.onProfilesChanged(() => {
+        // Invalidation alone joins an initial in-flight query. Restart it so
+        // a profile's new ownership cannot settle against an older catalog.
+        void queryClient
+          .cancelQueries({ queryKey: ["cat", "projects"] })
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: ["cat", "projects"] }),
+          );
+      }),
+    [queryClient],
+  );
   const [attentionByProject, setAttentionByProject] = useState<
     Record<string, AgentSession[]>
   >({});
@@ -55,20 +65,8 @@ export function WorkspaceRoot() {
   const [active, setActive] = useState("initial");
   const current = useRef(projects);
   current.current = projects;
-  useEffect(() => {
-    if (!projectList.data || projectList.isFetching) return;
-    const ids = new Set(projectList.data.items.map((project) => project.id));
-    setProjects((current) => {
-      const retained = current.filter(
-        (project) => !project.projectId || ids.has(project.projectId),
-      );
-      return retained.length === current.length
-        ? current
-        : retained.length
-          ? retained
-          : [{ key: crypto.randomUUID() }];
-    });
-  }, [projectList.data, projectList.isFetching]);
+  // Main confirms saved claims at workspaceInitial and sends forget only
+  // after deletion. A paged catalog refresh cannot dispose retained resources.
   useEffect(() => {
     if (!ready) return;
     const ids = Object.entries(attentionByProject)

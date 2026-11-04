@@ -4,6 +4,9 @@ import {
   voiceBubbleRest,
   voiceSpotsLayout,
 } from "../../shared/voice-bubble.js";
+import { registerShellContents } from "../shell-ipc.js";
+
+vi.mock("../shell-ipc.js", () => ({ registerShellContents: vi.fn() }));
 
 const hoisted = vi.hoisted(async () => {
   // A display 1000 wide under a 25 high menu bar.
@@ -20,6 +23,8 @@ const hoisted = vi.hoisted(async () => {
     landings: { x: number; y: number; animate: boolean }[] = [];
     sent: { channel: string; value: unknown }[] = [];
     webContents = {
+      on: () => {},
+      setWindowOpenHandler: () => {},
       send: (channel: string, value: unknown) =>
         this.sent.push({ channel, value }),
     };
@@ -73,6 +78,7 @@ const hoisted = vi.hoisted(async () => {
 vi.mock("electron", async () => {
   const { FakeWindow, workArea } = await hoisted;
   return {
+    app: { isPackaged: false },
     BrowserWindow: FakeWindow,
     systemPreferences: {
       getAnimationSettings: () => ({ prefersReducedMotion: false }),
@@ -87,10 +93,45 @@ vi.mock("electron", async () => {
 
 const fake = await hoisted;
 
-const { createVoiceBubble } = await import("./voice-bubble.js");
+const { createVoiceBubble, voiceMenuPrefsPatchSchema } = await import(
+  "./voice-bubble.js"
+);
 
 const rest = voiceBubbleRest(fake.workArea);
 const layout = voiceSpotsLayout(fake.workArea);
+
+describe("floating microphone preference scope", () => {
+  it("accepts each existing menu option", () => {
+    for (const patch of [
+      { voiceAssistant: null },
+      { voiceAssistant: "agent" },
+      { voiceId: "af_heart" },
+      { agentVoices: { agent: "am_michael" } },
+      { voiceMicrophone: null },
+      { voiceMicrophone: "microphone-id" },
+      { voiceprint: null },
+      { voiceDictation: true },
+      { voiceInDock: false },
+    ])
+      expect(voiceMenuPrefsPatchSchema.parse(patch)).toEqual(patch);
+  });
+  it("rejects unrelated settings, forged voiceprints and invalid option values", () => {
+    for (const patch of [
+      { githubCliEnabled: true },
+      { terminalMacros: [] },
+      { lastProjectId: "other" },
+      { assistantSession: { projectId: "other", sessionId: "other-chat" } },
+      { voiceDictation: true, chatQueueMessages: false },
+      { voiceprint: { model: "fake", vector: [1] } },
+      { voiceId: "fake" },
+      { agentVoices: { agent: "fake" } },
+      { voiceDictation: "true" },
+      null,
+      [],
+    ])
+      expect(voiceMenuPrefsPatchSchema.safeParse(patch).success).toBe(false);
+  });
+});
 
 describe("createVoiceBubble", () => {
   let spots: Record<string, DockSpot>;
@@ -102,6 +143,7 @@ describe("createVoiceBubble", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fake.FakeWindow.all = [];
+    vi.mocked(registerShellContents).mockClear();
     spots = { a: "left", b: "right" };
     saved = [];
     reads = [];
@@ -139,6 +181,40 @@ describe("createVoiceBubble", () => {
     expect(spotsWindow.visible).toBe(false);
     // The bubble's page, then the spots' page as it loads.
     expect(reads).toEqual(["a", "a"]);
+  });
+
+  it("grants the bubble its existing menu calls while the inert spots page only reads its colors and state", () => {
+    const { window, spotsWindow } = shown();
+    const registrations = vi
+      .mocked(registerShellContents)
+      .mock.calls.map(([registration]) => registration);
+    const bubbleGrant = registrations.find((registration) =>
+      Object.is(registration.contents, window.webContents),
+    );
+    const spotsGrant = registrations.find((registration) =>
+      Object.is(registration.contents, spotsWindow.webContents),
+    );
+    expect(bubbleGrant?.surface).toBe("voice");
+    expect(bubbleGrant?.channels).toEqual(
+      expect.arrayContaining([
+        "catamorphic:agents-list",
+        "catamorphic:prefs-get",
+        "catamorphic:prefs-set",
+        "catamorphic:voice-learn",
+        "catamorphic:voice-reset",
+        "catamorphic:voice-bubble-menu",
+      ]),
+    );
+    expect(spotsGrant?.channels).toEqual([
+      "catamorphic:theme-get",
+      "catamorphic:voice-bubble-spots-state",
+    ]);
+    for (const channel of [
+      "catamorphic:agents-create",
+      "catamorphic:terminal-create",
+      "catamorphic:editor-file-write",
+    ])
+      expect(bubbleGrant?.channels).not.toContain(channel);
   });
 
   it("follows a drag, shows where it can rest, and glides to where it lands", () => {

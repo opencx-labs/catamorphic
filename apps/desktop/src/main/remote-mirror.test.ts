@@ -227,6 +227,7 @@ function queuedTurn(): Turn {
     priority: 0,
     activity: null,
     activityAt: null,
+    providerRetry: null,
     attemptCount: 0,
     activeAttemptId: null,
     providerThreadId: null,

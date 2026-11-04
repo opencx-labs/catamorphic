@@ -240,6 +240,39 @@ describe("public collection presentation", () => {
     );
     expect(document.activeElement).toBe(screen.getByRole("textbox"));
   });
+  it("ends the drag of a row that left before its dragend, once the pointer is back", () => {
+    const onDragEnd = vi.fn();
+    const dragAndDrop = {
+      drag: () => ({ data: { "text/plain": "row" } }),
+      accept: () => true,
+      onDrop: vi.fn(),
+      onDragEnd,
+    };
+    const view = (items: { id: string }[]) => (
+      <Tree
+        items={items}
+        label="Tabs"
+        dragAndDrop={dragAndDrop}
+        renderItem={(item) => <span>{item.id}</span>}
+      />
+    );
+    const { container, rerender } = render(
+      view([{ id: "closed" }, { id: "kept" }]),
+    );
+    const source = container.querySelector('[data-tree-id="closed"]');
+    if (!source) throw new Error("No row to drag");
+    fireEvent.dragStart(source, {
+      dataTransfer: { setData: vi.fn(), effectAllowed: "" },
+    });
+    rerender(view([{ id: "kept" }]));
+    // Its dragend arrives at the row, now out of the page: React never hears it.
+    fireEvent.dragEnd(source);
+    expect(onDragEnd).not.toHaveBeenCalled();
+    expect(screen.getByRole("tree").dataset.dragging).toBe("true");
+    fireEvent.pointerDown(window);
+    expect(onDragEnd).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tree").dataset.dragging).toBeUndefined();
+  });
 });
 
 it("reorders loaded siblings when a sort field changes across pages", async () => {

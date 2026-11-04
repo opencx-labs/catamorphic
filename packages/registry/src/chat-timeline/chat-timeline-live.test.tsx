@@ -17,7 +17,7 @@ import type { WorkDisplay } from "./turn-rows.js";
 
 /**
  * A running turn's live chrome: the activity line stays one quiet line
- * (spinner and words), and the turn's clock and silence sit on its latest
+ * (spinner and words), and the turn's clock sits on its latest
  * steps line, in every work display.
  */
 describe("ChatTimeline live chrome", () => {
@@ -120,6 +120,71 @@ describe("ChatTimeline live chrome", () => {
       ).toBeNull();
     });
 
+  it("keeps the raw provider error, reports only known retry metadata, and retains an inert exit", async () => {
+    vi.useFakeTimers();
+    const retry = {
+      error: { message: "Upstream refused the request: opaque E42" },
+      attempt: null,
+      maxAttempts: null,
+      retryAt: null,
+    };
+    const props = (providerRetry: Turn["providerRetry"]) => ({
+      timeline: timelineOf({
+        turns: [running({ providerRetry })],
+        items: working,
+      }),
+      activity: "Thinking",
+    });
+    await render(props(retry));
+    const card = $('[data-testid="chat-provider-retry"]');
+    expect(card?.textContent).toContain(retry.error.message);
+    expect(card?.textContent).toContain("Retrying…");
+    expect(card?.textContent).not.toContain("Attempt");
+    expect(card?.textContent).not.toContain("Cannot reach");
+    expect($('[data-testid="chat-activity"]')).toBeNull();
+    await render(props(null));
+    expect(card?.textContent).toContain(retry.error.message);
+    expect(card?.closest("[inert]")?.getAttribute("aria-hidden")).toBe("true");
+    await render(
+      props({
+        ...retry,
+        error: { message: "HTTP 429: provider detail", kind: "rate_limit" },
+        attempt: 2,
+        maxAttempts: 5,
+        retryAt: iso(4000),
+      }),
+    );
+    expect($('[data-testid="chat-provider-retry"]')).toBe(card);
+    expect(card?.closest("[inert]")).toBeNull();
+    expect(card?.textContent).toContain("Provider rate limit reached");
+    expect(card?.textContent).toContain("HTTP 429: provider detail");
+    expect(card?.textContent).toContain("Attempt 2 of 5");
+    await render(props(null));
+    await act(async () => vi.advanceTimersByTimeAsync(300));
+    expect($('[data-testid="chat-provider-retry"]')).toBeNull();
+    expect($('[data-testid="chat-activity"]')?.textContent).toBe("Thinking");
+  });
+
+  it("retains a terminal error during manual retry, without animating loaded history", async () => {
+    vi.useFakeTimers();
+    const failed = running({
+      status: "failed",
+      error: { message: "Provider E99" },
+    });
+    const props = (state: Turn) => ({
+      timeline: timelineOf({ turns: [state], items: working }),
+      onRetry: vi.fn(),
+    });
+    await render(props(failed));
+    const card = $('[data-testid="chat-error-card"]');
+    expect(card?.closest("[data-entering]")).toBeNull();
+    await render(props({ ...failed, status: "preparing", error: null }));
+    expect(card?.textContent).toContain("Provider E99");
+    expect(card?.closest("[inert]")).not.toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(300));
+    expect($('[data-testid="chat-error-card"]')).toBeNull();
+  });
+
   it("stays with the latest note's steps until more work follows it", async () => {
     vi.useFakeTimers();
     const answered = working.slice(0, 4);
@@ -141,7 +206,7 @@ describe("ChatTimeline live chrome", () => {
     expect(clockRows()).toEqual(["live work"]);
   });
 
-  it("says a long silence beside the clock on the steps line", async () => {
+  it("keeps thinking and working free of silence warnings", async () => {
     await render({
       timeline: timelineOf({
         turns: [running({ activityAt: iso(-45_000) })],
@@ -149,15 +214,14 @@ describe("ChatTimeline live chrome", () => {
       }),
       activity: "Running tests",
     });
-    const silence = $('[data-testid="chat-activity-stalled"]');
-    expect(silence?.textContent).toBe("No updates for 45s");
-    expect(silence?.closest("[data-live-work]")).not.toBeNull();
+    expect($('[data-testid="chat-activity-stalled"]')).toBeNull();
+    expect($('[data-testid="chat-activity-elapsed"]')).not.toBeNull();
     expect($('[data-testid="chat-activity"]')?.textContent).toBe(
       "Running tests",
     );
   });
 
-  it("counts no silence while the turn waits on work it runs in the background", async () => {
+  it("keeps the turn clock while background work runs and finishes without silence warnings", async () => {
     const items: Item[] = [
       input("t1", "Run the suite and watch the checks"),
       // Its call took six seconds to start the work, which runs on.
@@ -190,16 +254,14 @@ describe("ChatTimeline live chrome", () => {
       row?.querySelector('[data-testid="chat-background-status"]')?.textContent,
     ).toBe("Running in background");
     expect(row?.querySelector('[data-testid="chat-step-duration"]')).toBeNull();
-    // Quiet by design while it waits: the clock runs, the silence is not said.
+    // The clock runs while background work progresses independently.
     expect($('[data-testid="chat-activity-elapsed"]')?.textContent).toBe(
       "1m 15s",
     );
     expect($('[data-testid="chat-activity-stalled"]')).toBeNull();
-    // Once the work is done, a silence is the turn's own again.
+    // Finishing the background work does not imply a connection problem.
     await render({ ...props, backgroundCommands: [suite("finished")] });
-    expect($('[data-testid="chat-activity-stalled"]')?.textContent).toBe(
-      "No updates for 45s",
-    );
+    expect($('[data-testid="chat-activity-stalled"]')).toBeNull();
   });
 
   it("keeps the first steps line's place from the start, the clock on it", async () => {
@@ -234,7 +296,7 @@ describe("ChatTimeline live chrome", () => {
         $('[data-testid="chat-activity"]') ?? document.body,
       ),
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    // And a long silence before the first step says so there.
+    // Long thinking before the first step keeps just the elapsed clock.
     await render({
       timeline: timelineOf({
         turns: [running({ startedAt: iso(-40_000), activityAt: null })],
@@ -242,8 +304,8 @@ describe("ChatTimeline live chrome", () => {
       }),
       activity: "Working",
     });
-    // (The clock last ticked as the turn started, a moment ago.)
-    expect(line()?.textContent).toMatch(/No updates for (39|40)s/);
+    expect(line()?.textContent).not.toContain("No updates");
+    expect(line()?.querySelector('[role="timer"]')).not.toBeNull();
   });
 
   for (const live of ["all", "notes"] as const)
@@ -292,9 +354,7 @@ describe("ChatTimeline live chrome", () => {
       await wait(50);
       expect(block?.closest("article")?.className).toContain("opacity-100");
       // Every step in view: the list opens its height under the line.
-      const list = $('[data-live-work] [data-testid="chat-step"]')?.closest(
-        ".grid",
-      );
+      const list = $('[data-live-work] [data-testid="chat-step-list"]');
       if (live === "all") expect(list?.className).toContain("cat-step-in");
       else expect(list?.className).not.toContain("cat-step-in");
     });
@@ -535,6 +595,12 @@ describe("ChatTimeline live chrome", () => {
       workDisplay: { live: "all", settled: "keep" } as const,
     };
     await render({ ...props, timeline: at("The") });
+    expect(resolveToolIcon).not.toHaveBeenCalled();
+    await act(async () => {
+      (
+        $('[data-testid="chat-turn-steps-toggle"]') as HTMLButtonElement
+      ).click();
+    });
     expect(resolveToolIcon.mock.calls.length).toBeGreaterThanOrEqual(20);
     resolveToolIcon.mockClear();
     for (const text of ["The parser", "The parser reads", "The parser reads."])

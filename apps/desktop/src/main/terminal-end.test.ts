@@ -1,3 +1,8 @@
+vi.mock("./shell-ipc.js", async () => ({
+  shellIpcMain: (await import("electron")).ipcMain,
+  shellSurfaceFor: () => "workspace",
+}));
+
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -63,7 +68,15 @@ vi.mock("@lydell/node-pty", () => ({
   },
 }));
 
-import { registerTerminalSupport } from "./terminal.js";
+import { registerTerminalSupport as registerTerminalSupportWithPolicy } from "./terminal.js";
+
+const registerTerminalSupport = (
+  ...args: Parameters<typeof registerTerminalSupportWithPolicy>
+) =>
+  registerTerminalSupportWithPolicy(args[0], args[1], args[2], {
+    canAccessProject: () => true,
+    profileFor: () => "profile",
+  });
 
 const until = async (check: () => boolean, ms = 3_000) => {
   const deadline = Date.now() + ms;
@@ -186,7 +199,7 @@ describe("a terminal's activity ends with it (ADR 0223)", () => {
           newsFor(user.sessionId).length > 0,
       );
       expect(terminals.agentTerminals.killForOwners("p", ["chat"])).toBe(1);
-      handlers.get("catamorphic:terminal-kill")?.({}, user.sessionId);
+      handlers.get("catamorphic:terminal-kill")?.({ sender }, user.sessionId);
       for (const sessionId of [agent.sessionId, user.sessionId])
         expect(newsFor(sessionId).map(({ payload }) => payload)).toEqual([
           { sessionId, busy: true },

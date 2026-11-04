@@ -12,7 +12,11 @@ import {
   CLAUDE_CODE_CAPABILITIES,
   createClaudeCodeAdapter,
 } from "@catamorphic/claude-code";
-import { CODEX_CAPABILITIES, createCodexAdapter } from "@catamorphic/codex";
+import {
+  CODEX_CAPABILITIES,
+  createCodexAdapter,
+  readCodexConfig,
+} from "@catamorphic/codex";
 import type {
   AgentCoordinationStrategy,
   AgentDefinition,
@@ -65,7 +69,11 @@ import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
-import { agentShellEnvFile, shellBinShimDir } from "../shell-integration.js";
+import {
+  agentShellEnvFile,
+  codexShellEnvironment,
+  shellBinShimDir,
+} from "../shell-integration.js";
 import {
   ASSISTANT_INSTRUCTIONS,
   personPlaceContext,
@@ -349,7 +357,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       .profiles.some((profile) =>
         deps.profileConfig
           .forProfile(profile.id)
-          .agents.list()
+          .agents.listMetadata()
           .some(
             (agent) =>
               agent.harness === "ai-sdk" &&
@@ -739,6 +747,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   get(id: string): RegisteredCodingAgent | undefined {
+    try {
+      return this.resolveRegistered(id);
+    } catch (error) {
+      return this.failFast(
+        id,
+        error instanceof Error
+          ? error.message
+          : "This agent's credentials are unavailable. Unlock your system keychain and try again.",
+      );
+    }
+  }
+
+  private resolveRegistered(id: string): RegisteredCodingAgent | undefined {
     const projectRef = parseProjectAgentId(id);
     if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
@@ -783,7 +804,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const agents: RegisteredCodingAgent[] = [];
     for (const profile of this.deps.profiles.list().profiles) {
       const store = this.deps.profileConfig.forProfile(profile.id).agents;
-      for (const config of store.list()) {
+      for (const config of store.listMetadata()) {
         const agent = this.get(config.id);
         if (agent) agents.push(agent);
       }
@@ -1084,6 +1105,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     /** The assistant (ADR 0216): its tools over the person's chats. */
     assistant?: boolean;
   }): BuiltAgent | undefined {
+    if (
+      config.harness !== "ai-sdk" &&
+      config.auth === "api-key" &&
+      !config.apiKey &&
+      !apiKey
+    )
+      throw new Error(
+        `The API key for "${config.name}" is unavailable. Unlock your system keychain or update the key in agent settings, then try again.`,
+      );
     const errors = this.errorLabels(config);
     const signIn = signInOf(config);
     const retry = signIn ? this.signInRetry(signIn) : undefined;
@@ -1447,8 +1477,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       },
     );
     const key = input.keyEnv ? await input.keyEnv() : {};
+    const nativeAttempt = {
+      ...input.attempt,
+      env: { ...environment, ...input.attempt.env, ...key },
+      options: {
+        ...input.attempt.options,
+        command: component.executablePath,
+      },
+    };
     const shellFile =
       input.harness === "claude-code" ? await agentShellEnvFile() : null;
+    const shellEnvironment =
+      input.harness === "codex" && process.platform !== "win32"
+        ? await codexShellEnvironment({
+            env: { ...process.env, ...nativeAttempt.env },
+            config: await readCodexConfig({ attempt: nativeAttempt }),
+          })
+        : null;
+    const config = input.attempt.options.config;
     const debugFile =
       input.harness === "claude-code"
         ? this.signInRetryLog(input.attempt)
@@ -1457,6 +1503,21 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       ...input.attempt.options,
       command: component.executablePath,
       ...(debugFile ? { debugFile } : {}),
+      ...(shellEnvironment
+        ? {
+            config: {
+              ...(config && typeof config === "object" && !Array.isArray(config)
+                ? config
+                : {}),
+              ...Object.fromEntries(
+                Object.entries(shellEnvironment).map(([name, value]) => [
+                  `shell_environment_policy.set.${name}`,
+                  value,
+                ]),
+              ),
+            },
+          }
+        : {}),
     };
     return {
       adapter: input.adapter,
@@ -1466,6 +1527,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ...environment,
           ...(shellFile ? { CLAUDE_ENV_FILE: shellFile } : {}),
           ...input.attempt.env,
+          ...shellEnvironment,
           ...key,
         },
         options,

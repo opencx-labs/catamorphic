@@ -13,6 +13,10 @@ import {
   type SandboxEgress,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
@@ -33,6 +37,8 @@ import { ProjectsService } from "../services/projects-service.js";
 import { SecretsService } from "../services/secrets-service.js";
 import { SessionWorkspaces } from "../services/session-workspaces.js";
 import { RecordingAdapter } from "./recording-adapter.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /**
  * A setup on its own network (ADR 0257), end to end: in a chat at a ref of
@@ -228,10 +234,12 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
       })
       .execute();
 
-    machine = new LocalProcessSandboxProvider({
-      root: path.join(tmpDir, "machine"),
-      acceptUnenforcedEgress: true,
-    });
+    machine = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(tmpDir, "machine"),
+        acceptUnenforcedEgress: true,
+      }),
+    );
     // The machine writes each switch beside what setup writes.
     const switching = new Proxy(machine, {
       get(target, property) {
@@ -326,9 +334,14 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
   }, 60_000);
 
   afterAll(async () => {
-    await sessions?.stopLocalTurns();
-    await db.destroy();
-    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
+    await cleanupTestResources(
+      [
+        () => sessions?.stopLocalTurns(),
+        () => ownedSandboxes.cleanup(),
+        () => db.destroy(),
+      ],
+      () => fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 }),
+    );
   });
 
   it("widens a new sandbox holding its base alone, then the agent gets its work back", async () => {

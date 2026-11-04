@@ -5,7 +5,6 @@ import {
   useCatamorphic,
   useCreateAgentSession,
   useForkAgentSession,
-  useProjects,
   useRenameAgentSession,
   useUnarchiveAgentSession,
   useUpdateAgentSession,
@@ -193,6 +192,7 @@ import {
   type SidebarSectionConfig,
   type WorkspaceConfig,
 } from "./lib/desktop-api.js";
+import { useEndOfDrag } from "./lib/drag-end.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
 import {
   OPEN_EXTENSION_POPUP_EVENT,
@@ -230,6 +230,7 @@ import {
   visitSurface,
 } from "./lib/surface-history.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
+import { useDesktopProjects } from "./lib/use-desktop-projects.js";
 import { useWorktreesAvailable } from "./lib/use-session-checkout.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
@@ -671,7 +672,7 @@ export function App({
       }),
     [queryClient],
   );
-  const projectsQuery = useProjects();
+  const projectsQuery = useDesktopProjects();
   // Subscribe to loading/error changes even while the workspace branch is
   // rendered. Query observers track property reads; recovery cannot depend
   // on whether the empty-state branch happened to read them last render.
@@ -984,21 +985,21 @@ export function App({
     : allProjects;
   // A window may suggest its profile's last/default project, but it cannot
   // mount that project's resources or saver until WorkspaceRoot owns its claim.
+  const projectCatalogPending =
+    projectsLoading || (projectsFetching && projects.length === 0);
   const fallbackSelectionReady = Boolean(
-    activeProfileId && profilesData && profilePrefs && !projectsLoading,
+    activeProfileId && profilesData && profilePrefs && !projectCatalogPending,
   );
+  const preferredProject =
+    projects.find((project) => project.id === activeProjectId) ??
+    projects.find((project) => project.id === profilePrefs?.lastProjectId) ??
+    projects.find(
+      (project) => project.id === activeProfile?.defaultProjectId,
+    ) ??
+    projects[0];
   const fallbackProjectId =
     !runtimeProjectId && fallbackSelectionReady
-      ? (
-          projects.find((project) => project.id === activeProjectId) ??
-          projects.find(
-            (project) => project.id === profilePrefs?.lastProjectId,
-          ) ??
-          projects.find(
-            (project) => project.id === activeProfile?.defaultProjectId,
-          ) ??
-          projects[0]
-        )?.id
+      ? preferredProject?.id
       : undefined;
   // A request token identifies this candidate's UI decision only. An earlier
   // candidate's answer cannot let links drain while a newer claim is pending.
@@ -1149,12 +1150,14 @@ export function App({
           setFallbackDecision({ request: fallbackRequest, accepted });
       })
       .catch((error: unknown) => {
-        if (current)
+        if (current) {
+          setFallbackDecision({ request: fallbackRequest, accepted: false });
           setLinkError(
             error instanceof Error
               ? error.message
               : "Could not open the project",
           );
+        }
       });
     return () => {
       current = false;
@@ -2006,6 +2009,7 @@ export function App({
         // Hover card: the page's address under its full title.
         detail: browser.url || browser.initialUrl || undefined,
         bookmarkUrl: browser.url || browser.initialUrl || undefined,
+        ...(browser.incognito ? { incognito: true } : {}),
       }),
     );
 
@@ -2044,6 +2048,8 @@ export function App({
         side?: boolean;
         title?: string;
         floating?: boolean;
+        /** In the profile's incognito session (ADR 0303). */
+        incognito?: boolean;
       },
     ) => {
       if (!activeProfile) return null;
@@ -2055,6 +2061,7 @@ export function App({
         title: opts?.title ?? (url || "New Tab"),
         faviconUrl: null,
         chatLocalId: opts?.chatLocalId,
+        ...(opts?.incognito ? { incognito: true } : {}),
       };
       updateWorkspace((ws) => {
         const key = browserTabKey(entry.localId);
@@ -2092,8 +2099,9 @@ export function App({
    * A page already open in a tab opens there (`switchToOpenTab`): a link,
    * a bookmark or a link from another app goes to that tab instead of
    * opening the page twice. Callers asked for a new tab on purpose never
-   * ask. A page an agent is driving, and a chip kept off the strip, do
-   * not count. Returns the tab's key, or null to open the page as usual.
+   * ask. A page an agent is driving, a chip kept off the strip, and an
+   * incognito page do not count. Returns the tab's key, or null to open
+   * the page as usual.
    */
   const switchToOpenPage = (url: string): string | null => {
     if (prefsRef.current?.switchToOpenTab === false) return null;
@@ -2104,6 +2112,7 @@ export function App({
       (browser) =>
         !browser.agentControlled &&
         !browser.background &&
+        !browser.incognito &&
         samePage(browser.url || browser.initialUrl, url),
     );
     const target =
@@ -2662,16 +2671,18 @@ export function App({
     return desktopApi.onPendingBrowserUrls(take);
   }, [runtime.visible, activeProfile?.id, linksLandSettled]);
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl((url, mode) => {
+    return desktopApi.onBrowserOpenUrl((url, mode, incognito) => {
       if (!visibleRef.current) return;
       // No mode: a page's link to a new window, or a link from another app.
-      // A mode is a new tab (or side, floating) asked for on purpose.
-      if (!mode && switchToOpenPageRef.current(url)) return;
+      // A mode is a new tab (or side, floating) asked for on purpose. What
+      // an incognito page opens is incognito too.
+      if (!mode && !incognito && switchToOpenPageRef.current(url)) return;
       openBrowserTabRef.current(url, {
         floating: mode
           ? mode === "floating"
           : prefsRef.current?.linkOpenMode === "floating",
         side: mode === "side",
+        incognito,
       });
     });
   }, []);
@@ -2739,7 +2750,10 @@ export function App({
     candidates: workspace.browsers.map((browser) => ({
       localId: browser.localId,
       hasPage: Boolean(browser.url || browser.initialUrl),
+      // An incognito page never sleeps: its session ends with its last
+      // page, so one unloaded would wake signed out.
       awake:
+        Boolean(browser.incognito) ||
         (runtime.visible &&
           Boolean(sleepSlots[browserTabKey(browser.localId)])) ||
         busyBrowsers.has(browser.localId),
@@ -4216,6 +4230,12 @@ export function App({
   const [dropSideHover, setDropSideHover] = useState<"left" | "right" | null>(
     null,
   );
+  // The targets cover the pages: a drag whose end never came must not
+  // leave them there.
+  useEndOfDrag(Boolean(tabDragKey), () => {
+    setTabDragKey(null);
+    setDropSideHover(null);
+  });
 
   // Divider drag: ratio updates live; the overlay keeps webviews from
   // swallowing the mousemoves.
@@ -4614,6 +4634,12 @@ export function App({
       openBrowserTab("", {
         side: mode === "side",
         floating: mode === "floating",
+      }),
+    "new-incognito-tab": (mode) =>
+      openBrowserTab("", {
+        side: mode === "side",
+        floating: mode === "floating",
+        incognito: true,
       }),
     "reopen-tab": reopenTab,
     "new-terminal-tab": (mode) =>
@@ -5314,13 +5340,19 @@ export function App({
               return next;
             }),
           );
-          // Let Chromium attach and lay out the guest before native input/capture.
-          if (params.active === true)
-            await new Promise<void>((resolve) =>
-              requestAnimationFrame(() =>
-                requestAnimationFrame(() => resolve()),
-              ),
+          if (params.active === true) {
+            // guestFor already waited for dom-ready. Flush the layout after
+            // keepAwake reveals the guest; a covered or minimized window may
+            // never paint another frame, so painting cannot acknowledge it.
+            const guest = document.querySelector(
+              `[data-surface-key="${CSS.escape(key)}"] webview`,
             );
+            const bounds = guest?.getBoundingClientRect();
+            if (!bounds || bounds.width === 0 || bounds.height === 0)
+              return {
+                error: "Browser page has no layout. Try again when it loads.",
+              };
+          }
           return { ok: true };
         }
         case "browserGuest": {
@@ -6051,7 +6083,9 @@ export function App({
     window.clearTimeout(tabsReportTimer.current);
     tabsReportTimer.current = window.setTimeout(() => {
       const guests = browserGuestIdsRef.current;
+      // Extensions never see incognito pages, as in Chrome by default.
       const guestIds = workspaceRef.current.browsers
+        .filter((browser) => !browser.incognito)
         .map((browser) => guests.get(browser.localId))
         .filter((id): id is number => id !== undefined);
       const last = lastBrowserTabRef.current;
@@ -6660,6 +6694,7 @@ export function App({
               "manage-connectors",
               "connect-remote-project",
               "new-browser-tab",
+              "new-incognito-tab",
               "toggle-sidebar",
             ].includes(action.id),
           ]),
@@ -7164,6 +7199,9 @@ export function App({
       <ProjectSwitcher
         projects={projects}
         activeProjectId={projectId}
+        loading={projectCatalogPending || !activeProfileId || !profilesData}
+        loadError={projectsLoadError}
+        onRetry={() => void projectsQuery.refetch()}
         onSelect={selectProject}
         onOpenWindow={(id) => {
           void desktopApi.workspaceNavigate({
@@ -7654,6 +7692,8 @@ export function App({
                             />
                           ) : tab.kind === "mcpapp" ? (
                             <McpAppScreen
+                              context={tab.context}
+                              toolUseId={tab.name}
                               toolKey={tab.toolKey}
                               toolInput={tab.toolInput}
                               toolResult={tab.toolResult}
@@ -7777,6 +7817,7 @@ export function App({
                           // last known URL, not the tab's original one.
                           initialUrl={browser.url || browser.initialUrl}
                           history={browser.history}
+                          incognito={browser.incognito}
                           surfaceKey={browserTabKey(browser.localId)}
                           active={
                             runtime.visible &&
@@ -7846,6 +7887,7 @@ export function App({
                             openBrowserTab(url, {
                               floating: mode === "floating",
                               side: mode === "side",
+                              incognito: browser.incognito,
                             })
                           }
                           registerCommands={(commands) => {
@@ -8123,6 +8165,7 @@ export function App({
                 (it becomes a tab pill there). */}
                   {tabDragKey && (
                     <div
+                      data-tab-drop-sides
                       className={`absolute inset-x-0 top-0 z-50 flex ${
                         workspace.chats.some(
                           (entry) =>
@@ -8219,6 +8262,7 @@ export function App({
                       onOpenSurface={openSurface}
                       onRemoveSurface={removeSurface}
                       onOpenMcpApp={(view, mode) => {
+                        if (!entry.sessionId) return;
                         const name = view.toolUseId;
                         openTab(
                           {
@@ -8226,6 +8270,7 @@ export function App({
                             name,
                             label: view.title,
                             toolKey: view.toolKey,
+                            context: { projectId, sessionId: entry.sessionId },
                             toolInput: view.toolInput,
                             toolResult: view.toolResult,
                           },
@@ -8418,6 +8463,7 @@ export function App({
                         }
                         initialUrl={browser.url || browser.initialUrl}
                         history={browser.history}
+                        incognito={browser.incognito}
                         surfaceKey={browserTabKey(browser.localId)}
                         active={
                           runtime.visible &&
@@ -8485,7 +8531,13 @@ export function App({
               ) : (
                 <EmptyState
                   key={activeProfile?.id}
-                  loading={projectsLoading}
+                  loading={
+                    !fallbackSelectionReady ||
+                    (fallbackRequest !== null &&
+                      fallbackDecision?.request !== fallbackRequest)
+                  }
+                  openingProject={preferredProject}
+                  onOpenProject={selectProject}
                   loadError={projectsLoadError}
                   retrying={projectsFetching}
                   onRetry={() => void projectsQuery.refetch()}
@@ -8748,6 +8800,8 @@ function EmptyState({
   profiles,
   importCompleted,
   loading,
+  openingProject,
+  onOpenProject,
   loadError,
   retrying,
   onRetry,
@@ -8761,6 +8815,8 @@ function EmptyState({
   profiles?: ProfilesData | null;
   importCompleted: boolean;
   loading: boolean;
+  openingProject?: ProjectSummary;
+  onOpenProject: (projectId: string) => void;
   loadError: boolean;
   retrying: boolean;
   onRetry: () => void;
@@ -8813,6 +8869,20 @@ function EmptyState({
           </div>
         ) : loading ? (
           <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
+        ) : openingProject ? (
+          <div data-testid="project-open-recovery">
+            <h1 className="text-sm font-medium text-fg">Open your project</h1>
+            <p className="mt-2 text-sm text-fg-muted">
+              Continue in {openingProject.name}.
+            </p>
+            <button
+              type="button"
+              onClick={() => onOpenProject(openingProject.id)}
+              className="button-primary mt-4"
+            >
+              Open project
+            </button>
+          </div>
         ) : (
           <>
             <h1 className="text-xl font-semibold text-fg">

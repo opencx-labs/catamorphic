@@ -6,6 +6,7 @@ import type {
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useId, useRef } from "react";
 import { useRemoteProject } from "../components/project-authority-provider.js";
 import { type AppSummary, appsQuery } from "../lib/apps.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -51,6 +52,34 @@ export function AppScreen({
   collections?: AppCollections;
   onContentState?: (state: AppContentState) => void;
 }) {
+  const guestDocuments = useRef(new Set<string>());
+  const mountId = useId();
+  const generation = useRef(0);
+  const resolveGuestDocument = useCallback(
+    async (input: { url: string }) => {
+      const opening = generation.current;
+      const url = await desktopApi.appGuestDocument({
+        ...input,
+        mountId: `${mountId}:${opening}`,
+      });
+      if (opening !== generation.current) {
+        await desktopApi.appGuestClose({ url });
+        throw new Error("The app mount closed.");
+      }
+      guestDocuments.current.add(url);
+      return url;
+    },
+    [mountId],
+  );
+  useEffect(() => {
+    const grants = guestDocuments.current;
+    return () => {
+      generation.current += 1;
+      for (const url of grants)
+        void desktopApi.appGuestClose({ url }).catch(() => {});
+      grants.clear();
+    };
+  }, []);
   const theme = useTheme();
   const apps = useApps(projectId);
   const app = apps.data?.find((entry) => entry.name === appName);
@@ -95,6 +124,7 @@ export function AppScreen({
   return (
     <div className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}>
       <AppMount
+        resolveGuestDocument={resolveGuestDocument}
         key={`${projectId}:${appName}`}
         projectId={projectId}
         appName={appName}

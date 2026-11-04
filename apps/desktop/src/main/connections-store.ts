@@ -14,8 +14,13 @@ import {
   serverKeyOf,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import { z } from "zod";
 import type { ProfileConnection } from "../shared/profile-connections.js";
-import { credentialEncryptionAvailable } from "./credential-encryption.js";
+import {
+  CredentialStorageError,
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 
 /**
  * Per-profile MCP connections: `<userData>/profiles/<id>/connections.json`.
@@ -35,6 +40,10 @@ export type ConnectionSource =
   | { kind: "plugin"; plugin: string };
 
 export interface McpConnection {
+  /** The saved credentials are unavailable; no transport may use this record. */
+  credentialError?: string;
+  /** Authorize can replace unreadable OAuth state after other credentials unlock. */
+  oauthRecoveryRequired?: boolean;
   id: string;
   /** Display name; also the basis of the harness-side server key. */
   name: string;
@@ -93,7 +102,15 @@ export interface CachedMcpTool {
 }
 
 interface StoredConnection
-  extends Omit<McpConnection, "headers" | "env" | "oauth" | "oauthClient"> {
+  extends Omit<
+    McpConnection,
+    | "headers"
+    | "env"
+    | "oauth"
+    | "oauthClient"
+    | "credentialError"
+    | "oauthRecoveryRequired"
+  > {
   headersEncrypted?: string;
   envEncrypted?: string;
   oauthEncrypted?: string;
@@ -187,6 +204,7 @@ export interface UpdateConnectionInput {
 export class ConnectionsStore {
   private data: ConnectionsFile;
   private readonly listeners = new Set<() => void>();
+  private readonly securityRevisions = new Map<string, number>();
 
   constructor(private readonly file: string) {
     this.data = this.load();
@@ -267,6 +285,15 @@ export class ConnectionsStore {
     };
   }
 
+  /** Process-local account/config epoch; mounted views never survive a restart. */
+  securityRevision(id: string): number {
+    return this.securityRevisions.get(id) ?? 0;
+  }
+
+  private invalidateSecurity(id: string): void {
+    this.securityRevisions.set(id, this.securityRevision(id) + 1);
+  }
+
   list(): McpConnection[] {
     return this.data.connections.map((stored) => this.decrypt(stored));
   }
@@ -274,6 +301,14 @@ export class ConnectionsStore {
   get(id: string): McpConnection | undefined {
     const stored = this.data.connections.find((entry) => entry.id === id);
     return stored ? this.decrypt(stored) : undefined;
+  }
+
+  /** Only the person's explicit Authorize action may discard unreadable OAuth. */
+  getForAuthorization(id: string): McpConnection | undefined {
+    const stored = this.data.connections.find((entry) => entry.id === id);
+    if (!stored) return undefined;
+    requireCredentialEncryption();
+    return this.decrypt(stored, { allowOAuthRecovery: true });
   }
 
   create(input: CreateConnectionInput): McpConnection {
@@ -302,18 +337,27 @@ export class ConnectionsStore {
   update(id: string, patch: UpdateConnectionInput): McpConnection | undefined {
     const stored = this.data.connections.find((entry) => entry.id === id);
     if (!stored) return undefined;
+    const previousSecurity = connectionSecurityConfig(stored);
     const headers =
       patch.headers === undefined
         ? undefined
-        : encryptMap("headers", patch.headers ?? undefined);
+        : encryptMap(
+            "headers",
+            patch.headers ?? undefined,
+            stored.headersEncrypted,
+          );
     const env =
       patch.env === undefined
         ? undefined
-        : encryptMap("env", patch.env ?? undefined);
+        : encryptMap("env", patch.env ?? undefined, stored.envEncrypted);
     const oauthClient =
       patch.oauthClient === undefined
         ? undefined
-        : encryptJson("oauthClient", patch.oauthClient ?? undefined);
+        : encryptJson(
+            "oauthClient",
+            patch.oauthClient ?? undefined,
+            stored.oauthClientEncrypted,
+          );
     if (patch.name !== undefined)
       stored.name = patch.name.trim() || stored.name;
     if (patch.url !== undefined) stored.url = patch.url;
@@ -328,6 +372,8 @@ export class ConnectionsStore {
       stored.ceiling = patch.ceiling ?? undefined;
     if (headers) stored.headersEncrypted = headers.headersEncrypted;
     if (env) stored.envEncrypted = env.envEncrypted;
+    if (connectionSecurityConfig(stored) !== previousSecurity)
+      this.invalidateSecurity(id);
     this.save();
     return this.decrypt(stored);
   }
@@ -369,12 +415,30 @@ export class ConnectionsStore {
 
   /** Replace the OAuth state (called from the provider on every step of a
    * flow — registration, verifier, tokens — and by the refresher). */
-  setOAuth(id: string, state: McpOAuthState | undefined): void {
+  setOAuth(
+    id: string,
+    state: McpOAuthState | undefined,
+    options:
+      | { refresh?: false; securityRevision?: number }
+      | { refresh: true; securityRevision: number } = {},
+  ): number | undefined {
+    if (
+      options.securityRevision !== undefined &&
+      options.securityRevision !== this.securityRevision(id)
+    )
+      throw new Error(
+        options.refresh
+          ? "The connection authorization changed during token renewal"
+          : "The connection authorization changed during authorization",
+      );
     const stored = this.data.connections.find((entry) => entry.id === id);
     if (!stored) return;
     const next = encryptJson("oauth", state);
     stored.oauthEncrypted = next.oauthEncrypted;
+    if (!options.refresh) this.invalidateSecurity(id);
+    const revision = this.securityRevision(id);
     this.save();
+    return revision;
   }
 
   remove(id: string): boolean {
@@ -383,6 +447,7 @@ export class ConnectionsStore {
       (entry) => entry.id !== id,
     );
     if (this.data.connections.length === before) return false;
+    this.invalidateSecurity(id);
     this.save();
     return true;
   }
@@ -396,6 +461,7 @@ export class ConnectionsStore {
       )
       .map((entry) => entry.id);
     if (removed.length > 0) {
+      for (const id of removed) this.invalidateSecurity(id);
       this.data.connections = this.data.connections.filter(
         (entry) => !removed.includes(entry.id),
       );
@@ -404,7 +470,10 @@ export class ConnectionsStore {
     return removed;
   }
 
-  private decrypt(stored: StoredConnection): McpConnection {
+  private decrypt(
+    stored: StoredConnection,
+    options: { allowOAuthRecovery?: boolean } = {},
+  ): McpConnection {
     const {
       headersEncrypted,
       envEncrypted,
@@ -412,53 +481,173 @@ export class ConnectionsStore {
       oauthClientEncrypted,
       ...rest
     } = stored;
-    const oauth = decryptJson<McpOAuthState>(oauthEncrypted);
-    const oauthClient = decryptJson<McpOAuthClientHint>(oauthClientEncrypted);
-    return {
-      ...rest,
-      ...maybeMap("headers", headersEncrypted),
-      ...maybeMap("env", envEncrypted),
-      ...(oauth ? { oauth } : {}),
-      ...(oauthClient ? { oauthClient } : {}),
-    };
+    try {
+      const oauthClient = decryptJson(oauthClientEncrypted, OAuthClientSchema);
+      const credentials = {
+        ...rest,
+        ...maybeMap("headers", headersEncrypted),
+        ...maybeMap("env", envEncrypted),
+        ...(oauthClient ? { oauthClient } : {}),
+      };
+      try {
+        const oauth = decryptJson(oauthEncrypted, OAuthStateSchema);
+        return { ...credentials, ...(oauth ? { oauth } : {}) };
+      } catch (cause) {
+        return options.allowOAuthRecovery
+          ? { ...credentials, oauthRecoveryRequired: true }
+          : {
+              ...rest,
+              credentialError:
+                cause instanceof CredentialStorageError
+                  ? cause.message
+                  : credentialUnlockError({ cause }).message,
+              oauthRecoveryRequired: true,
+            };
+      }
+    } catch (cause) {
+      return {
+        ...rest,
+        credentialError:
+          cause instanceof CredentialStorageError
+            ? cause.message
+            : credentialUnlockError({ cause }).message,
+      };
+    }
   }
+}
+
+/** Explicit connection edits, excluding labels, permissions and cached rosters. */
+function connectionSecurityConfig(connection: StoredConnection): string {
+  return stableValue({
+    transport: connection.transport,
+    url: connection.url,
+    command: connection.command,
+    args: connection.args,
+    cwd: connection.cwd,
+    envVars: connection.envVars,
+    headers: connection.headersEncrypted,
+    env: connection.envEncrypted,
+    oauthClient: connection.oauthClientEncrypted,
+    enabled: connection.enabled,
+  });
+}
+
+function stableValue(value: unknown): string {
+  return (
+    JSON.stringify(value, (_key, value: unknown) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+          )
+        : value,
+    ) ?? "undefined"
+  );
 }
 
 function encryptMap(
   key: "headers" | "env",
   map: Record<string, string> | undefined,
+  previousEncrypted?: string,
 ): Partial<StoredConnection> {
   if (!map || Object.keys(map).length === 0) return {};
-  if (!credentialEncryptionAvailable()) {
-    throw new Error("OS credential encryption is unavailable");
-  }
-  return { [`${key}Encrypted`]: encryptValue(map) };
+  requireCredentialEncryption();
+  return {
+    [`${key}Encrypted`]: reusableCiphertext(
+      previousEncrypted,
+      map,
+      StringMapSchema,
+    )
+      ? previousEncrypted
+      : encryptValue(map),
+  };
 }
 
 function encryptJson<T>(
   key: "oauth" | "oauthClient",
   value: T | undefined,
+  previousEncrypted?: string,
 ): Pick<Partial<StoredConnection>, "oauthEncrypted" | "oauthClientEncrypted"> {
   if (value === undefined) return {};
-  if (!credentialEncryptionAvailable()) {
-    throw new Error("OS credential encryption is unavailable");
+  requireCredentialEncryption();
+  return {
+    [`${key}Encrypted`]: reusableCiphertext(
+      previousEncrypted,
+      value,
+      key === "oauthClient" ? OAuthClientSchema : OAuthStateSchema,
+    )
+      ? previousEncrypted
+      : encryptValue(value),
+  };
+}
+
+/** A readable equivalent edit keeps its ciphertext and mounted account epoch. */
+function reusableCiphertext(
+  encrypted: string | undefined,
+  value: unknown,
+  schema: z.ZodType,
+): boolean {
+  if (encrypted === undefined) return false;
+  try {
+    return stableValue(decryptJson(encrypted, schema)) === stableValue(value);
+  } catch {
+    // Explicit replacement is still allowed when the old value cannot be unlocked.
+    return false;
   }
-  return { [`${key}Encrypted`]: encryptValue(value) };
 }
 
 function encryptValue(value: unknown): string {
-  return safeStorage.encryptString(JSON.stringify(value)).toString("base64");
+  try {
+    return safeStorage.encryptString(JSON.stringify(value)).toString("base64");
+  } catch (cause) {
+    throw credentialUnlockError({ cause });
+  }
 }
 
-function decryptJson<T>(encrypted: string | undefined): T | undefined {
-  if (encrypted) {
-    if (!credentialEncryptionAvailable()) return undefined;
+const StringMapSchema = z.record(z.string(), z.string());
+const OAuthClientSchema = z.strictObject({
+  clientId: z.string().min(1),
+  clientSecret: z.string().optional(),
+  callbackPort: z.number().int().min(1).max(65535).optional(),
+  scopes: z.array(z.string()).optional(),
+}) satisfies z.ZodType<McpOAuthClientHint>;
+const OAuthStateValidation = z.strictObject({
+  clientInformation: z
+    .object({
+      client_id: z.string().min(1),
+      client_secret: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
+  tokens: z
+    .object({
+      access_token: z.string().min(1),
+      token_type: z.string().min(1),
+      refresh_token: z.string().optional(),
+      scope: z.string().optional(),
+      expires_in: z.number().optional(),
+    })
+    .passthrough()
+    .optional(),
+  tokensObtainedAt: z.number().optional(),
+  discovery: z.record(z.string(), z.unknown()).optional(),
+  codeVerifier: z.string().optional(),
+});
+const OAuthStateSchema = z.custom<McpOAuthState>(
+  (value) => OAuthStateValidation.safeParse(value).success,
+);
+
+function decryptJson<T>(
+  encrypted: string | undefined,
+  schema: z.ZodType<T>,
+): T | undefined {
+  if (encrypted !== undefined) {
+    requireCredentialEncryption();
     try {
-      return JSON.parse(
-        safeStorage.decryptString(Buffer.from(encrypted, "base64")),
-      ) as T;
-    } catch {
-      return undefined;
+      return schema.parse(
+        JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, "base64"))),
+      );
+    } catch (cause) {
+      throw credentialUnlockError({ cause });
     }
   }
   return undefined;
@@ -468,19 +657,8 @@ function maybeMap(
   key: "headers" | "env",
   encrypted: string | undefined,
 ): Partial<Pick<McpConnection, "headers" | "env">> {
-  if (encrypted) {
-    if (!credentialEncryptionAvailable()) return {};
-    try {
-      return {
-        [key]: JSON.parse(
-          safeStorage.decryptString(Buffer.from(encrypted, "base64")),
-        ) as Record<string, string>,
-      };
-    } catch {
-      return {};
-    }
-  }
-  return {};
+  const value = decryptJson(encrypted, StringMapSchema);
+  return value === undefined ? {} : { [key]: value };
 }
 
 export function toPublicConnection(
@@ -586,6 +764,9 @@ function expandConnectionValue(
 export function connectionAuthorizationError(
   connection: McpConnection,
 ): string | undefined {
+  if (connection.credentialError) return connection.credentialError;
+  if (connection.oauthRecoveryRequired)
+    return "Authorize this connection again to replace its unreadable saved sign-in.";
   const values =
     connection.transport === "stdio"
       ? [

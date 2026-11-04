@@ -6,6 +6,10 @@ import path from "node:path";
 import { createDatabase, type DB, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
+import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -22,6 +26,8 @@ import {
 import { SessionWorkspaceUnavailableError } from "../services/session-workspace.js";
 import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /*
  * Terminals and previews in a chat's workspace (ADR 0209), on a real
@@ -92,9 +98,11 @@ describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
 
   beforeAll(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-terminals-"));
-    provider = new LocalProcessSandboxProvider({
-      root: path.join(tmpDir, "sandboxes"),
-    });
+    provider = ownedSandboxes.track(
+      new LocalProcessSandboxProvider({
+        root: path.join(tmpDir, "sandboxes"),
+      }),
+    );
     db = connectionString
       ? createDatabase({ connectionString, schema, poolSize: 4 })
       : new Kysely<DB>({
@@ -137,16 +145,14 @@ describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
   }, 120_000);
 
   afterAll(async () => {
-    // Every workspace goes, and whatever still runs in it.
-    const sandboxes = await db
-      .selectFrom("project_sandboxes")
-      .select("provider_id")
-      .execute();
-    for (const sandbox of sandboxes)
-      await provider.destroySandbox(sandbox.provider_id).catch(() => {});
-    await sql.raw(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).execute(db);
-    await db.destroy();
-    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 });
+    await cleanupTestResources(
+      [
+        () => ownedSandboxes.cleanup(),
+        () => sql.raw(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).execute(db),
+        () => db.destroy(),
+      ],
+      () => fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 }),
+    );
   });
 
   const terminals = () => {

@@ -3,7 +3,7 @@ import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { describe, expect, it } from "vitest";
 import { policedServer } from "../adapter.js";
 import {
-  apiRetryLine,
+  apiRetryMessage,
   ClaudeTranscript,
   lastSentence,
   parseMcpToolName,
@@ -28,7 +28,7 @@ const retry = (
 describe("API retries", () => {
   // The CLI backs off for minutes (ten attempts against a failing API);
   // a turn that only said "Working" looked hung.
-  it("say so on the activity line, attempt by attempt", () => {
+  it("reports structured retry metadata, attempt by attempt", () => {
     const events: HarnessEvent[] = [];
     const transcript = new ClaudeTranscript(
       (event) => events.push(event),
@@ -37,21 +37,26 @@ describe("API retries", () => {
     );
     transcript.handle(retry(1, "server_error", 500));
     transcript.handle(retry(2, "server_error", 500));
-    expect(events.filter((event) => event.type === "status")).toEqual([
-      {
-        type: "status",
-        text: "The Claude API returned an error (500). Trying again, attempt 1 of 10",
-      },
-      {
-        type: "status",
-        text: "The Claude API returned an error (500). Trying again, attempt 2 of 10",
-      },
-    ]);
+    expect(
+      events.filter((event) => event.type === "provider.retrying"),
+    ).toEqual(
+      [1, 2].map((attempt) => ({
+        type: "provider.retrying",
+        error: {
+          message: "The Claude API returned an error (500)",
+          kind: "unavailable",
+        },
+        attempt,
+        maxAttempts: 10,
+        retryAt: expect.any(String),
+      })),
+    );
+    expect(events.filter((event) => event.type === "status")).toEqual([]);
     // The diagnostic stays for logs.
     expect(events.some((event) => event.type === "diagnostic")).toBe(true);
   });
 
-  it("come down once the API answers", () => {
+  it("waits for substantive model output, then resumes once", () => {
     const events: HarnessEvent[] = [];
     const transcript = new ClaudeTranscript(
       (event) => events.push(event),
@@ -95,10 +100,99 @@ describe("API retries", () => {
       uuid: "00000000-0000-4000-8000-000000000009",
       session_id: "session",
     });
-    expect(events.filter((event) => event.type === "status").at(-1)).toEqual({
+    expect(events.filter((event) => event.type === "provider.resumed")).toEqual(
+      [],
+    );
+    // Empty assistant content, synthetic errors and child output are not recovery.
+    transcript.handle(response("empty", []));
+    transcript.handle({
+      ...response("error", [
+        { type: "text", text: "Still unavailable", citations: null },
+      ]),
+      error: "overloaded" as const,
+    } satisfies SDKMessage);
+    transcript.handle({
+      ...response("child", [
+        { type: "text", text: "A child finished", citations: null },
+      ]),
+      parent_tool_use_id: "child-tool",
+    });
+    expect(events.filter((event) => event.type === "provider.resumed")).toEqual(
+      [],
+    );
+    transcript.handle(
+      response("answer", [thinking("Checking the connection")]),
+    );
+    transcript.handle(
+      response("tool", [bash("fresh-tool", "Read the project")]),
+    );
+    expect(events.filter((event) => event.type === "provider.resumed")).toEqual(
+      [{ type: "provider.resumed" }],
+    );
+    expect(events.filter((event) => event.type === "status")).toContainEqual({
       type: "status",
       text: "Working",
     });
+  });
+
+  it("recovers on main text and thinking deltas, without waiting for message completion", () => {
+    for (const delta of [
+      { type: "text_delta", text: "Hello" },
+      { type: "thinking_delta", thinking: "Checking", estimated_tokens: 1 },
+    ] as const) {
+      const events: HarnessEvent[] = [];
+      const transcript = new ClaudeTranscript(
+        (event) => events.push(event),
+        new Set(),
+        [],
+      );
+      transcript.handle(retry(1, "overloaded", 529));
+      const event = (
+        event: Extract<SDKMessage, { type: "stream_event" }>["event"],
+      ): SDKMessage => ({
+        type: "stream_event",
+        event,
+        parent_tool_use_id: null,
+        uuid: "00000000-0000-4000-8000-000000000009",
+        session_id: "session",
+      });
+      transcript.handle(
+        event({
+          type: "message_start",
+          message: response("stream", []).message,
+        }),
+      );
+      transcript.handle(
+        event({
+          type: "content_block_start",
+          index: 0,
+          content_block:
+            delta.type === "text_delta"
+              ? { type: "text", text: "", citations: null }
+              : { type: "thinking", thinking: "", signature: "" },
+        }),
+      );
+      const stream = (
+        content: Extract<
+          Extract<SDKMessage, { type: "stream_event" }>["event"],
+          { type: "content_block_delta" }
+        >["delta"],
+      ) => event({ type: "content_block_delta", index: 0, delta: content });
+      transcript.handle(
+        stream(
+          delta.type === "text_delta"
+            ? { ...delta, text: "" }
+            : { ...delta, thinking: "" },
+        ),
+      );
+      expect(
+        events.filter((event) => event.type === "provider.resumed"),
+      ).toHaveLength(0);
+      transcript.handle(stream(delta));
+      expect(
+        events.filter((event) => event.type === "provider.resumed"),
+      ).toHaveLength(1);
+    }
   });
 
   it("names the problem in plain words", () => {
@@ -106,21 +200,15 @@ describe("API retries", () => {
       error: "overloaded" | "rate_limit" | "unknown",
       status: number | null,
     ) =>
-      apiRetryLine({
-        attempt: 3,
-        max_retries: 10,
+      apiRetryMessage({
         error,
         error_status: status,
       });
-    expect(line("overloaded", 529)).toBe(
-      "The Claude API is overloaded. Trying again, attempt 3 of 10",
-    );
+    expect(line("overloaded", 529)).toBe("The Claude API is overloaded");
     expect(line("rate_limit", 429)).toBe(
-      "The Claude API rate limit was reached. Trying again, attempt 3 of 10",
+      "The Claude API rate limit was reached",
     );
-    expect(line("unknown", null)).toBe(
-      "Can't reach the Claude API. Trying again, attempt 3 of 10",
-    );
+    expect(line("unknown", null)).toBe("Can't reach the Claude API");
   });
 });
 
@@ -165,7 +253,10 @@ type Block = Extract<
 >["message"]["content"][number];
 
 /** One main-thread response from the API, as the SDK reports it whole. */
-const response = (id: string, content: Block[]): SDKMessage => ({
+const response = (
+  id: string,
+  content: Block[],
+): Extract<SDKMessage, { type: "assistant" }> => ({
   type: "assistant",
   message: {
     id,

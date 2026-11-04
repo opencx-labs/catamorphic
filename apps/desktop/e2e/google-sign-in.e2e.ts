@@ -76,11 +76,11 @@ async function poll<T>(
   done: (value: T) => boolean,
   timeoutMs: number,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   for (;;) {
     const value = await read().catch(() => undefined);
     if (value !== undefined && done(value)) return value;
-    if (Date.now() > deadline) {
+    if (performance.now() > deadline) {
       if (value === undefined) throw new Error("No answer before the deadline");
       return value;
     }

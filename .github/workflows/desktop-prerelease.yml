@@ -137,6 +137,15 @@ jobs:
 
       - uses: ./.github/actions/xcode-26
 
+      - name: Use HTTPS over TCP for Apple notarization tickets
+        shell: bash
+        run: |
+          # Hosted macOS runners can lose CloudKit HTTP/3 connections (Error 68).
+          # https://github.com/actions/runner-images/issues/14924
+          # This disposable runner falls back to TCP; validation remains required.
+          printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
+          sudo pfctl -E
+
       - name: Build signed and notarized application
         env:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -175,6 +184,7 @@ jobs:
           bun scripts/desktop-signature.ts "${app}"
           spctl --assess --type execute --verbose=2 "${app}"
           xcrun stapler validate "${app}"
+          bun scripts/desktop-startup-smoke.ts "${app}"
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist")"
           scheme="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "${app}/Contents/Info.plist")"
           icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${app}/Contents/Info.plist")"

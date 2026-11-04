@@ -1,5 +1,11 @@
 # Catamorphic Desktop — Design System
 
+Native authority belongs to admitted Work documents, with explicit grants for
+auxiliary pages. Browser and app content has separate, revocable boundaries
+(ADR 0300). Sandboxing and the internal-origin migration preserve existing
+interaction, drafts and settings. Secure storage failures retain recovery access
+and explain how to unlock or reconnect the affected credential.
+
 App identity uses canonical semantic icons (ADR 0125). Review, dashboard,
 report, tracker, form, and calculator each have one monochrome glyph across
 tabs, lists, and chat surfaces. Agents choose a type at creation or through a
@@ -16,6 +22,17 @@ including the macOS audio-lowering input. Buffered transcription and playback
 finish separately, and long held dictation retains its last words (ADR 0297).
 The palette's Ask agent input shares the chat composer's pills, previews and
 file preparation, including image paste and agent capability checks.
+
+Provider waits are reported by the harness, not inferred from silence (ADR 0298).
+A retry shows the provider's full message, with a brief factual summary only for
+known causes. Reported attempts and deadlines stay honest; recovery requires new
+model output. Retry and failure cards open and close their height and surrounding
+space, retaining the last message and disabling actions through the exit.
+
+Returning to a retained chat tab preserves its layout, draft and scroll position.
+Messages received while it is hidden are already settled when it returns. New
+messages on screen keep their short rise and fade; switching tabs does not reopen
+the conversation.
 
 The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, system-first,
 terminal-editor calm. Everything visual flows from the tokens in
@@ -330,6 +347,14 @@ file with their job, registry copies included.
   child inside it, and never in addition to the box's own border. Nested
   bordered boxes, square rings inside rounded ones, and a ring beside a border
   are defects; check every new surface with keyboard focus before shipping.
+
+## Chat activity and connectivity
+
+Thinking keeps its normal activity and elapsed turn clock. Time since the last
+update never creates a warning or implies a network failure. A session stream
+that is reconnecting shows a quiet status: "Waiting for connection. Reconnecting…".
+Loaded history and drafts stay available. This supersedes the earlier design-log
+entries that displayed "No updates for" after 30 seconds.
 
 ## Focus rings
 
@@ -3898,3 +3923,39 @@ An agent can request `refresh_chips` after changing a PR or another chip's data
 (ADR 0286). The request reaches its own chat in either workspace or detached dock,
 without changing focus or metadata. Existing chip queries and source loads own
 the refresh and retain their normal access and failure behavior.
+
+
+### 2026-11-01: Folded history releases its rendered rows
+
+A retained chat keeps its transcript and disclosure choices, while folded step
+lists and closed payloads release their DOM after their closing motion. Reopening
+history restores the chosen details without replaying every row's entrance.
+Background work finishes in its existing row before joining history. Watchers
+collapse individually and move surviving tokens across wrapped lines; outgoing
+chips fade from their last visible position outside the rail's shrinking viewport.
+All leaving controls become inert immediately. See [chat state](docs/chat-state.md)
+and [resource verification](docs/performance.md).
+
+
+The floating dock entrance belongs to an initial floating opening or a return
+from its bubble. Tab chats render as settled pages; a fast first open and tab
+switch cannot carry an unfinished dock fade into the return frame. An already
+visible tab morphing back to floating retains its opacity and size/color motion.
+
+### 2026-11-01: Window expanded step headers
+
+Long expanded logs keep nearby headers in the conversation's own scroller and
+leave measured space for distant closed rows (ADR 0299). Open payloads and active
+interaction keep their keyed nodes. Native Tab still visits every logical row.
+Existing disclosure and list-close motion stays in charge; scrolling historical
+rows into view plays no arrival animation.
+
+### 2026-11-03: Incognito browser tabs
+
+An incognito tab looks like any other tab: it keeps its site's icon, with a
+small ghost on the icon's corner and an Incognito pill beside the address bar,
+so the strip stays calm and the difference is still visible at a glance. It
+opens from the palette (Cmd+Shift+N) or a link's menu. Everything it opens stays
+incognito, and its sign-ins end a moment after the last incognito tab closes
+(ADR 0303).
+

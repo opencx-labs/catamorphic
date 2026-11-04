@@ -2,10 +2,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { JsonObject } from "@catamorphic/agent-protocol";
 import { describe, expect, it } from "vitest";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import {
   agentShellEnvFile,
+  codexShellEnvironment,
   shellIntegration,
   withAgentShellOptions,
 } from "./shell-integration.js";
@@ -177,6 +179,213 @@ describe("shell integration for agent terminals", () => {
     for (const shell of ["/opt/homebrew/bin/fish", "/bin/bash", "/bin/sh"])
       expect(withAgentShellOptions("ls *.ts", shell)).toBe("ls *.ts");
   });
+
+  it.skipIf(!zsh)(
+    "applies Codex's options after each original startup file, without changing the person's files",
+    async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-dotfiles-"));
+      const own = path.join(home, "my dotfiles");
+      fs.mkdirSync(own);
+      const files = [".zshenv", ".zprofile", ".zshrc", ".zlogin"];
+      const content = `export OWN_STARTUP="\${OWN_STARTUP}x"\nsetopt nomatch null_glob csh_null_glob\n`;
+      for (const file of files) fs.writeFileSync(path.join(own, file), content);
+      const env = { PATH: process.env.PATH ?? "", HOME: home, ZDOTDIR: own };
+      try {
+        const integrated = await codexShellEnvironment({ env, config: {} });
+        expect(integrated).not.toBeNull();
+        for (const file of files)
+          expect(
+            fs.statSync(path.join(integrated?.ZDOTDIR ?? "", file)).mode &
+              0o777,
+          ).toBe(0o400);
+        for (const { args, startup } of [
+          { args: ["-c"], startup: "x" },
+          { args: ["-l", "-c"], startup: "xxx" },
+          { args: ["-l", "-i", "-c"], startup: "xxxx" },
+        ]) {
+          expect(
+            run(zsh ?? "", [...args, 'echo --include=*.zzz "$OWN_STARTUP"'], {
+              ...env,
+              ...integrated,
+            }),
+          ).toBe(`--include=*.zzz ${startup}`);
+        }
+        for (const file of files)
+          expect(fs.readFileSync(path.join(own, file), "utf8")).toBe(content);
+        expect(run(zsh ?? "", ["-c", "echo --include=*.zzz"], env)).toBe("");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!zsh)(
+    "forwards the person's .zlogout only when an integrated login shell exits",
+    async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-logout-"));
+      const logout = path.join(home, "logout.txt");
+      fs.writeFileSync(
+        path.join(home, ".zlogout"),
+        'printf "logout\\n" >> "$ZDOTDIR/logout.txt"\n',
+      );
+      const env = { PATH: process.env.PATH ?? "", HOME: home };
+      try {
+        const integrated = await codexShellEnvironment({ env, config: {} });
+        expect(
+          run(zsh ?? "", ["-i", "-c", "echo non-login"], {
+            ...env,
+            ...integrated,
+          }),
+        ).toBe("non-login");
+        expect(fs.existsSync(logout)).toBe(false);
+        expect(
+          run(zsh ?? "", ["-l", "-i", "-c", "echo login"], {
+            ...env,
+            ...integrated,
+          }),
+        ).toBe("login");
+        expect(fs.readFileSync(logout, "utf8")).toBe("logout\n");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!zsh).each([
+    { transition: 'ZDOTDIR=""', expected: "unset" },
+    { transition: "unset ZDOTDIR", expected: "home\nlogout-home" },
+  ])(
+    "preserves native startup and logout after .zshenv runs $transition",
+    async ({ transition, expected }) => {
+      const home = fs.mkdtempSync(
+        path.join(os.tmpdir(), "codex-dotdir-change-"),
+      );
+      const own = path.join(home, "dotfiles");
+      fs.mkdirSync(own);
+      fs.writeFileSync(path.join(own, ".zshenv"), `${transition}\n`);
+      fs.writeFileSync(
+        path.join(home, ".zprofile"),
+        "export ROOT_MARKER=home\n",
+      );
+      fs.writeFileSync(
+        path.join(home, ".zlogout"),
+        'printf "logout-home\\n"\n',
+      );
+      const env = { PATH: process.env.PATH ?? "", HOME: home, ZDOTDIR: own };
+      const args = ["-l", "-i", "-c", `printf "%s\\n" "\${ROOT_MARKER-unset}"`];
+      try {
+        const native = run(zsh ?? "", args, env);
+        expect(native).toBe(expected);
+        const integrated = await codexShellEnvironment({ env, config: {} });
+        expect(run(zsh ?? "", args, { ...env, ...integrated })).toBe(native);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  const roots: Array<{ policy: JsonObject; expected: string }> = [
+    { policy: {}, expected: "/process-dotfiles" },
+    {
+      policy: { inherit: "all", set: { HOME: "/configured-home" } },
+      expected: "/process-dotfiles",
+    },
+    {
+      policy: { inherit: "core", set: { HOME: "/configured-home" } },
+      expected: "/configured-home",
+    },
+    {
+      policy: { inherit: "none", set: { HOME: "/configured-home" } },
+      expected: "/configured-home",
+    },
+    { policy: { inherit: "core" }, expected: "/process-home" },
+    { policy: { inherit: "none" }, expected: os.userInfo().homedir },
+    {
+      policy: {
+        set: { ZDOTDIR: "/configured-dotfiles", HOME: "/configured-home" },
+      },
+      expected: "/configured-dotfiles",
+    },
+  ];
+  it.each(roots)(
+    "preserves the original dotfile root for $policy",
+    async ({ policy, expected }) => {
+      const result = await codexShellEnvironment({
+        env: { HOME: "/process-home", ZDOTDIR: "/process-dotfiles" },
+        config: { shell_environment_policy: policy },
+      });
+      expect(result?.USER_ZDOTDIR).toBe(expected);
+    },
+  );
+
+  const filtered: JsonObject[] = [
+    { exclude: ["ZDOTDIR"] },
+    { include_only: ["PATH", "HOME"] },
+    { filters: { ZDOTDIR: "exclude" } },
+    { experimental_use_profile: true },
+  ];
+  it.each(filtered)(
+    "leaves a custom Codex shell environment policy intact: %j",
+    async (policy) => {
+      expect(
+        await codexShellEnvironment({
+          env: {},
+          config: { shell_environment_policy: policy },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  const emptyRoots: Array<{ env: NodeJS.ProcessEnv; policy: JsonObject }> = [
+    { env: { ZDOTDIR: "" }, policy: {} },
+    { env: {}, policy: { set: { ZDOTDIR: "" } } },
+  ];
+  it.each(emptyRoots)(
+    "preserves an explicitly empty dotfile directory",
+    async ({ env, policy }) => {
+      expect(
+        await codexShellEnvironment({
+          env,
+          config: { shell_environment_policy: policy },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.skipIf(!zsh)(
+    "applies configured HOME inside zsh without moving the app-server home",
+    async () => {
+      const home = fs.mkdtempSync(
+        path.join(os.tmpdir(), "codex-configured-home-"),
+      );
+      const env = {
+        PATH: process.env.PATH ?? "",
+        HOME: "/original-process-home",
+      };
+      try {
+        fs.writeFileSync(
+          path.join(home, ".zshenv"),
+          'export OWN_HOME="$HOME"\n',
+        );
+        const integrated = await codexShellEnvironment({
+          env,
+          config: {
+            shell_environment_policy: { inherit: "none", set: { HOME: home } },
+          },
+        });
+        expect(integrated).not.toHaveProperty("HOME");
+        expect({ ...env, ...integrated }.HOME).toBe("/original-process-home");
+        expect(
+          run(zsh ?? "", ["-c", 'printf "%s" "$OWN_HOME"'], {
+            ...env,
+            ...integrated,
+          }),
+        ).toBe(home);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("leaves other shells to the foreground-process heuristic", async () => {
     expect(await shellIntegration("/usr/bin/fish")).toBeNull();

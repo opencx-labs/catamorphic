@@ -316,8 +316,14 @@ the released selector visited 12,013 elements in the test's style pass.
 
 A tab switch shows the new tab in the frame after the press, a chat as a
 page: a chat tab behind another keeps its tab pose and is hidden at once
-(`visibility: hidden` and `content-visibility: hidden`, no transition), so
-bringing it forward changes nothing about its box and replays no dock-in.
+(`visibility: hidden`, no transition), so
+bringing it forward changes nothing about its box. Tab chats carry no dock-in
+animation, including an initial opening interrupted by a fast switch. A dock
+entrance belongs to a floating arrival; a tab-to-floating morph stays visible.
+Inactive tab chats preserve descendant layout; only minimized chats skip their
+subtrees with `content-visibility: hidden`. Returning a large retained transcript
+otherwise resumes style, layout and observers before it can paint. The host passes
+visibility explicitly so hidden timers stay paused without relying on a resize.
 It used to take the minimised pose while behind, so every switch to or
 from a chat played the floating chat's open or close (a 250 ms fade and
 scale) and resized its transcript every frame; the scroller's resize
@@ -607,6 +613,126 @@ the published renderer files and 16.8 ms with the corrected files. Input-to-next
 frame samples stayed below 24 ms in both quiet typing runs; the comparison does
 not establish a quiet-typing speedup. Captures used software compositing while
 other checks ran, and neither app reported a renderer error.
+
+## Folded history retains data, not rendered payloads, 2026-11-01
+
+The installed alpha.32 windows held roughly 81,000 and 93,000 DOM elements,
+including thousands of hidden tool payloads and SVGs. One retained Reviewer chat
+accounted for about 54,000 elements in each window. Native process footprints
+were around 2 GiB per renderer. These observations establish a large retained
+rendering workload; they do not establish an overnight leak or explain every
+reported stall. Main and GPU samples were mostly waiting, and the available
+recordings did not isolate a single blocking JavaScript function.
+
+`TurnSteps` now mounts folded rows and expanded payloads only while visible or
+closing. Disclosure choices remain in React state; transcript data remains in the
+session cache. Closed Markdown is not parsed. `chat-retention.e2e.ts` exercises a
+500-command transcript, verifies that resting history contains no step or detail
+DOM, and measures the real grid-height close before releasing it. Shared DOM
+tests cover 1,000 folded rows, late transitions and preserved detail choices.
+A matched isolated Electron fixture retained 6,646 elements before and 149 after
+folding the same 500-command history (500 step/payload nodes before, none after).
+This is a DOM-count comparison, not an interaction-latency or memory benchmark.
+
+This bounds the cost of folded history without changing retained chat identity,
+scroll state or the event stream. An expanded log still renders its headers;
+this change does not virtualize visible history.
+
+The separate installed runner interruption investigation found a shutdown race
+already fixed in main by `1486c717`: the old in-process runner could disappear
+before its Codex child released the native conversation writer. Current shutdown
+waits for that child before the same thread resumes. The original lease loss
+remains unexplained by these samples. The writer-conflict message now describes
+the busy conversation without asserting another Codex window is open and keeps
+the provider's original error visible.
+
+## Isolated follow-up after process cleanup (2026-11-01)
+
+Two abandoned test runners each consumed about one core, alongside four
+abandoned development groups. After stopping only those verified groups, a
+120-second cumulative CPU recording of the installed app measured 8.7% of one
+core in main, 20.4% in the busy renderer, 5.7% in the other renderer, and 1.9%
+in GPU. Fresh native stacks showed rendering/animation work as well as JSON and
+GC work. They did not establish a single remaining cause or an overnight leak.
+
+A separate Linux Electron copy used a fixed synthetic 3,100-item, 10,973,257-byte
+session. No provider calls or private transcript content were used. Existing
+session-query observers and ordinary app animations were changed temporarily,
+then restored. The payload, sequence and query success state stayed fixed.
+Snapshots came from a loopback HTTP fixture; sending their bodies through CDP
+would distort main-process serialization measurements.
+
+One controlled set of A/B/A windows (20 seconds for polling, 15 seconds for
+retention) measured:
+
+| Variable | A | B | Restored A |
+| --- | ---: | ---: | ---: |
+| Hidden snapshot requests | 13 | 0 | 11 |
+| Hidden renderer CPU, % of one core | 38.5 | 20.5 | 60.6 |
+| Hidden renderer task time, seconds | 3.98 | 2.51 | 6.30 |
+| Expanded / folded DOM elements | 38,342 | 1,165 | 38,342 |
+| Expanded / folded renderer CPU, % of one core | 20.9 | 5.2 | 11.2 |
+
+The retention comparison kept two animations running and made no snapshot
+requests. A separate animation comparison paused those two loops: GPU CPU was
+14.8% / 0.5% / 11.4%. They were normal Working/status spinners, not SVG SMIL.
+This software-rendered Linux cost does not predict the installed macOS GPU cost.
+
+A second run with a successfully loaded HTML browser fixture confirmed zero
+snapshot requests during the polling intervention and restored reads afterward.
+CPU sums the Electron renderer processes; task time is the main page's CDP
+metric. The debugging launch disables backgrounding, and Xvfb uses software
+rendering. CPU and long-task counts varied under concurrent checks, so these measurements
+show mechanisms and ranges, not a precise speedup. In that run, mounting the
+3,098 expanded step rows took 1,068, 389 and 616 ms to the second animation frame,
+with main-thread long tasks of 1,020, 350 and 570 ms. These are synthetic stress
+measurements, not a before/after interaction benchmark or live-window timings.
+
+The next interaction target is bounded mounting of expanded step headers while
+preserving disclosure choices, scroll anchoring and the existing reveal motion.
+The next background target is incremental session-log refresh after the cached
+sequence, instead of parsing and reconstructing an unchanged full snapshot every
+1.5 seconds. Full snapshots remain useful for initial load and resynchronization.
+The expanded-header follow-up is recorded below. Incremental background refresh
+remains a separate target. Animation removal is not justified by the native evidence.
+
+
+## Bounded expanded step headers (2026-11-01)
+
+Long expanded lists now mount headers near the reading point in the conversation's
+existing scroller, leaving measured space for distant closed ranges (ADR 0299).
+Opened details and rows involved in focus, selection or a pointer press remain
+mounted. Their keyed nodes, inner scroll positions and disclosure motion survive
+scrolling. Native Tab and Shift+Tab materialize the adjacent logical control.
+
+A matched Linux Electron fixture held 3,098 completed command steps fixed. Three
+opening cycles, timed from the toggle to the second animation frame, measured:
+
+| Measurement | Before | Windowed |
+| --- | ---: | ---: |
+| Mounted headers at opening | 3,098 | 102 |
+| Chat DOM elements at opening | 37,326 | 1,377 |
+| Toggle to second animation frame, ms | 692 to 1,123 | 18 to 25 |
+| Observed opening long tasks, ms | 648 to 1,078 | none |
+| Mounted headers after scrolling into the middle | 3,098 | 195 |
+| Chat DOM elements in the middle | 37,326 | 2,496 |
+
+The bound follows viewport size plus overscan and deliberately retained interaction
+or opened details. The fixture uses public synthetic output, a loopback snapshot
+response, a private Xvfb display and software rendering. Other isolated test jobs
+were running on the same host; these three-cycle timings demonstrate the removed
+mount workload, not a precise speedup or installed macOS latency guarantee.
+
+Native Electron checks cover distant scrolling, retained selected output and inner
+scroll positions, both keyboard directions across a skipped range, narrow light
+layouts, reduced motion, list collapse, provider errors and existing chat motion.
+The before/after media retains the existing disclosure timing and appearance.
+Raw native-wheel frames exposed cutoffs when 1,200-pixel input exceeded the first
+800-pixel buffer. Keeping at least 1,600 pixels or two viewports on each side
+removes those cutoffs in the matched capture. Both the unchanged baseline and
+the final window still show occasional fully blank compositor frames under
+software rendering and storage pressure. These captures do not establish a
+macOS fling latency or a guarantee for jumps beyond a finite mounted buffer.
 
 ## Module confinement overhead
 

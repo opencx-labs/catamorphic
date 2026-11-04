@@ -380,6 +380,84 @@ describe("PersonalEnvironmentSync", () => {
     expect(status.server).toBe("sign-in");
   });
 
+  it("reports a failed project lookup on that link and keeps healthy links syncing", async () => {
+    const healthy = setup({
+      config: { files: [".env"] },
+      files: { ".env": "A=1" },
+    });
+    const broken = setup({});
+    const sync = new PersonalEnvironmentSync({
+      links: () => [
+        {
+          profileId: "profile",
+          localProjectId: "broken",
+          serverUrl: "https://work.example/api",
+          client: broken.client,
+        },
+        {
+          profileId: "profile",
+          localProjectId: "healthy",
+          serverUrl: "https://work.example/api",
+          client: healthy.client,
+        },
+      ],
+      projectRoot: async (projectId) => {
+        if (projectId === "broken")
+          throw new Error("The project folder could not be opened");
+        return healthy.root;
+      },
+      watchFiles: false,
+      writeStatusFile: false,
+    });
+    try {
+      await expect(sync.checkAll()).resolves.toBeUndefined();
+      expect(healthy.puts).toHaveLength(1);
+      expect(broken.client.personalEnvironment).not.toHaveBeenCalled();
+      expect(
+        (await sync.syncNow({ profileId: "profile", projectId: "broken" }))
+          .error,
+      ).toBe("The project folder could not be opened");
+      expect(
+        (await sync.syncNow({ profileId: "profile", projectId: "healthy" }))
+          .error,
+      ).toBeNull();
+    } finally {
+      sync.stop();
+    }
+  });
+
+  it("handles scheduled and focus-triggered discovery failures with a diagnostic", async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const links = vi.fn(() => {
+      throw new Error("Project links could not be read");
+    });
+    const sync = new PersonalEnvironmentSync({
+      links,
+      projectRoot: async () => null,
+    });
+    try {
+      sync.nudge();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(warning).toHaveBeenLastCalledWith(
+        "[desktop] Personal environment background check failed:",
+        "Project links could not be read",
+      );
+      sync.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(links).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(links).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(90_000);
+      // The local interval and remote interval both remain handled.
+      expect(warning).toHaveBeenCalledTimes(7);
+    } finally {
+      sync.stop();
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not send while the config file is broken", async () => {
     const env = setup({
       config: '{"files": ["../outside"]}',

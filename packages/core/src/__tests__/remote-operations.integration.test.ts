@@ -7,6 +7,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  ExecutorNotConnectedError,
   OPERATION_NOT_OPENED_ERROR,
   openRemoteOperation,
   RemoteExecutorLeaseLostError,
@@ -37,11 +38,12 @@ async function executor() {
   let held = true;
   const queue = new RemoteOperationQueue(db);
   const provider = queue.provider({
-    ...lease,
+    executor: lease.executor,
+    leaseToken: async () => (held ? lease.leaseToken : undefined),
     leaseHeld: async (token) => held && token === lease.leaseToken,
     label: "The worker",
     workspaceRoot: "/workspace",
-    processes: false,
+    processes: true,
   });
   return {
     lease,
@@ -290,6 +292,30 @@ describe("remote operation queue (ADR 0187)", () => {
       RemoteExecutorLeaseLostError,
     );
   });
+
+  it.each(["read", "list"] as const)(
+    "reports a disconnected runner %s as safe to resume",
+    async (kind) => {
+      const remote = await executor();
+      const processes = remote.provider.processes!;
+      const read = () =>
+        kind === "read"
+          ? processes.readProcessOutput({
+              sandboxId: "sandbox-1",
+              processId: "runner-1",
+              cursor: 42,
+            })
+          : processes.listProcesses({ sandboxId: "sandbox-1" });
+      const result = read();
+      const job = await remote.poll(crypto.randomUUID());
+      expect(job?.operation.kind).toBe(`process.${kind}`);
+      remote.drop();
+      await expect(result).rejects.toBeInstanceOf(ExecutorNotConnectedError);
+      // A later reattachment while still offline also stays recoverable,
+      // without queuing an operation for a lease that no longer exists.
+      await expect(read()).rejects.toBeInstanceOf(ExecutorNotConnectedError);
+    },
+  );
 
   it("records a failed operation's error", async () => {
     const remote = await executor();

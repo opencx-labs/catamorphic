@@ -64,6 +64,31 @@ describe("workflowMcpConnectionEntries", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("omits blocked credentials without changing another connection's alias", () => {
+    const entries = workflowMcpConnectionEntries([
+      {
+        id: "blocked",
+        name: "Mail",
+        transport: "http",
+        url: "https://blocked.test/mcp",
+        enabled: true,
+        source: { kind: "manual" },
+        credentialError: "Unlock your keychain",
+      },
+      {
+        id: "healthy",
+        name: "Mail",
+        transport: "http",
+        url: "https://healthy.test/mcp",
+        enabled: true,
+        source: { kind: "manual" },
+      },
+    ]);
+    expect(
+      entries.map(({ alias, connection }) => [alias, connection.id]),
+    ).toEqual([["mail-2", "healthy"]]);
+  });
 });
 
 describe("profile MCP connections in the broker (ADR 0225)", () => {

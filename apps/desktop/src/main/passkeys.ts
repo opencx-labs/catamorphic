@@ -10,6 +10,7 @@ import type {
 } from "../shared/passkeys.js";
 import { siteOrigin } from "../shared/site-settings.js";
 import type { PasswordVault, SavedPasskey } from "./browser-vault.js";
+import { shellIpcMain } from "./shell-ipc.js";
 import {
   assertionResponse,
   FLAG,
@@ -503,10 +504,12 @@ export function registerPasskeys({
 
   // The requests a sheet shows, for one that starts listening late: the
   // sheet over a browsing window loads with its first request.
-  ipcMain.handle("catamorphic:passkey-requests", (event): PasskeyRequest[] =>
-    [...pending.values()].flatMap((entry) =>
-      entry.host === event.sender && entry.request ? [entry.request] : [],
-    ),
+  shellIpcMain.handle(
+    "catamorphic:passkey-requests",
+    (event): PasskeyRequest[] =>
+      [...pending.values()].flatMap((entry) =>
+        entry.host === event.sender && entry.request ? [entry.request] : [],
+      ),
   );
 
   /** A modal request, for the window showing it. */
@@ -515,7 +518,7 @@ export function registerPasskeys({
     return entry?.host === host && !entry.guest.isDestroyed() ? entry : null;
   };
   const idInput = z.object({ id: z.string() });
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:passkey-cancel",
     (event, input: unknown): boolean => {
       const entry = shownTo(event.sender, idInput.parse(input).id);
@@ -532,7 +535,7 @@ export function registerPasskeys({
       return true;
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:passkey-use",
     (event, input: unknown): Promise<PasskeyUseResult> | PasskeyUseResult => {
       const { id, passkeyId } = idInput
@@ -542,7 +545,7 @@ export function registerPasskeys({
       return entry ? signIn(entry, passkeyId) : "gone";
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:passkey-save",
     (event, input: unknown): Promise<PasskeyUseResult> | PasskeyUseResult => {
       const entry = shownTo(event.sender, idInput.parse(input).id);
@@ -562,7 +565,7 @@ export function registerPasskeys({
     );
   };
   const guestInput = z.object({ guestId: z.number().int() });
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:passkey-autofill",
     async (
       event,
@@ -576,7 +579,7 @@ export function registerPasskeys({
       };
     },
   );
-  ipcMain.handle(
+  shellIpcMain.handle(
     "catamorphic:passkey-autofill-use",
     (event, input: unknown): Promise<PasskeyUseResult> | PasskeyUseResult => {
       const { guestId, requestId, passkeyId } = guestInput

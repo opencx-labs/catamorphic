@@ -243,6 +243,8 @@ export interface AgentInfo {
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** Saved ciphertext is retained; the affected agent cannot run until unlocked. */
+  credentialError?: string;
   /** Media kinds this agent's chat composer accepts. */
   accepts: Array<"image" | "document">;
   /** The agent's own main prompt ("" when none). */
@@ -544,6 +546,8 @@ export interface InstalledConnectorInfo {
 
 /** An MCP Apps view template, ready to mount in a sandboxed iframe. */
 export interface McpAppViewData {
+  mountId: string;
+  documentToken: string;
   toolKey: string;
   html: string;
   csp: { connectDomains: string[]; resourceDomains: string[] };
@@ -1254,6 +1258,7 @@ export interface CatamorphicDesktopApi {
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
   updateState: () => Promise<DesktopUpdateState>;
   updateCheck: () => Promise<void>;
+  updateDismiss: (messageKey: string) => Promise<void>;
   updateDownload: () => Promise<void>;
   updateInstall: () => Promise<void>;
   updateMove: () => Promise<void>;
@@ -1483,10 +1488,25 @@ export interface CatamorphicDesktopApi {
   workspaceStateSet: (projectId: string, snapshot: unknown) => Promise<void>;
 
   /** "server/tool" → ui:// resource uri, for tools declaring app views. */
+  appGuestDocument: (input: {
+    url: string;
+    mountId: string;
+  }) => Promise<string>;
+  appGuestClose: (input: { url: string }) => Promise<void>;
+  pdfGuestDocument: (input: {
+    projectId: string;
+    filePath: string;
+  }) => Promise<string>;
   mcpAppsUiTools: () => Promise<Record<string, string>>;
-  mcpAppsView: (toolKey: string) => Promise<McpAppViewData>;
+  mcpAppsView: (input: {
+    projectId: string;
+    sessionId: string;
+    toolKey: string;
+    toolUseId: string;
+  }) => Promise<McpAppViewData>;
+  mcpAppsClose: (mountId: string) => Promise<void>;
   mcpAppsCall: (
-    viewToolKey: string,
+    mountId: string,
     toolName: string,
     args: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
@@ -1668,7 +1688,11 @@ export interface CatamorphicDesktopApi {
   bridgeTakeover: (key: string) => void;
 
   webviewPreloadPath: () => Promise<string>;
-  browserPrepareProfile: (profileId: string) => Promise<string>;
+  /** The page session's partition: the profile's, or its incognito one. */
+  browserPrepareProfile: (
+    profileId: string,
+    incognito?: boolean,
+  ) => Promise<string>;
   siteSettingsGet: (input: { origin: string }) => Promise<SiteDetails>;
   siteSettingsSet: (input: {
     origin: string;
@@ -1883,8 +1907,9 @@ export interface CatamorphicDesktopApi {
     menuId: string;
     action: string | null;
   }) => Promise<void>;
+  /** `incognito`: an incognito page opened it, so its tab is incognito too. */
   onBrowserOpenUrl: (
-    listener: (url: string, mode?: OpenMode) => void,
+    listener: (url: string, mode?: OpenMode, incognito?: boolean) => void,
   ) => () => void;
   /** A notification of a page was clicked: bring that tab forward. */
   onBrowserRevealGuest: (

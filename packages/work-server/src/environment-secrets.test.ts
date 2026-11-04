@@ -20,6 +20,10 @@ import type {
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import {
+  cleanupTestResources,
+  TestSandboxes,
+} from "@catamorphic/sandbox/testing";
+import {
   createCatamorphic,
   defineStaticEnvironments,
   FsBackend,
@@ -28,8 +32,10 @@ import {
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { replyOf } from "./test-support.js";
+
+const ownedSandboxes = new TestSandboxes();
 
 /*
  * Project secrets in Environments, end to end (ADR 0206): a member's own
@@ -199,7 +205,9 @@ it("delivers a member's own value only to turns they wrote, on machines that iso
       resources: {},
       labels: { machine },
     },
-    sandboxProvider: new LocalProcessSandboxProvider({ root: roots[machine] }),
+    sandboxProvider: ownedSandboxes.track(
+      new LocalProcessSandboxProvider({ root: roots[machine] }),
+    ),
   }));
   const cat = createCatamorphic({
     hostId: "secrets-host",
@@ -484,9 +492,10 @@ it("delivers a member's own value only to turns they wrote, on machines that iso
     );
     await expect(fs.stat(openedFile)).rejects.toThrow();
   } finally {
-    await cat.close();
-    await db.destroy();
-    await fs.rm(directory, { recursive: true, force: true });
+    await cleanupTestResources(
+      [() => cat.close(), () => ownedSandboxes.cleanup(), () => db.destroy()],
+      () => fs.rm(directory, { recursive: true, force: true }),
+    );
   }
 }, 120_000);
 
@@ -520,9 +529,11 @@ it("masks every value the workspace held in what setup hands a teammate's turn",
           capabilities: [],
           resources: {},
         },
-        sandboxProvider: new LocalProcessSandboxProvider({
-          root: path.join(directory, "machine"),
-        }),
+        sandboxProvider: ownedSandboxes.track(
+          new LocalProcessSandboxProvider({
+            root: path.join(directory, "machine"),
+          }),
+        ),
       },
     ]),
     codingAgent: agent,
@@ -586,8 +597,10 @@ it("masks every value the workspace held in what setup hands a teammate's turn",
       JSON.stringify(await db.selectFrom("agent_items").selectAll().execute()),
     ).not.toContain("own-clickhouse");
   } finally {
-    await cat.close();
-    await db.destroy();
-    await fs.rm(directory, { recursive: true, force: true });
+    await cleanupTestResources(
+      [() => cat.close(), () => ownedSandboxes.cleanup(), () => db.destroy()],
+      () => fs.rm(directory, { recursive: true, force: true }),
+    );
   }
 }, 120_000);
+afterAll(() => ownedSandboxes.cleanup());

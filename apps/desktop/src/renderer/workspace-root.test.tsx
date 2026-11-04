@@ -13,33 +13,46 @@ import { WorkspaceRoot } from "./workspace-root.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
-const { listeners, invalidateQueries, consumed, projectList, attention } =
-  vi.hoisted(() => ({
-    listeners: new Set<(event: WorkspaceEvent) => void>(),
-    invalidateQueries: vi.fn<() => Promise<void>>(),
-    consumed: vi.fn<(surface: WorkspaceNavigation["surface"]) => void>(),
-    projectList: {
-      data: {
-        items: [
-          { id: "project", name: "Project" },
-          { id: "other", name: "Other project" },
-        ],
-      },
-      isFetching: false,
+const {
+  listeners,
+  invalidateQueries,
+  cancelQueries,
+  consumed,
+  projectList,
+  attention,
+} = vi.hoisted(() => ({
+  listeners: new Set<(event: WorkspaceEvent) => void>(),
+  invalidateQueries: vi.fn<() => Promise<void>>(),
+  cancelQueries: vi.fn<() => Promise<void>>(),
+  consumed: vi.fn<(surface: WorkspaceNavigation["surface"]) => void>(),
+  projectList: {
+    data: {
+      items: [
+        { id: "project", name: "Project" },
+        { id: "other", name: "Other project" },
+      ],
     },
-    attention: { data: [] },
-  }));
+    isFetching: false,
+  },
+  attention: { data: [] },
+}));
 
 vi.mock("@catamorphic/react", () => ({
-  useProjects: () => projectList,
   useAgentAttention: () => attention,
 }));
+vi.mock("./lib/use-desktop-projects.js", () => ({
+  useDesktopProjects: () => projectList,
+}));
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries }),
+  useQueryClient: () => ({
+    invalidateQueries,
+    cancelQueries,
+  }),
 }));
 vi.mock("./lib/desktop-api.js", () => ({
   desktopApi: {
     workspaceInitial: vi.fn(),
+    onProfilesChanged: vi.fn(() => () => {}),
     workspaceClaim: vi.fn(),
     workspaceActive: vi.fn(),
     setPrefs: vi.fn(),
@@ -92,6 +105,7 @@ let container: HTMLDivElement;
 beforeEach(() => {
   vi.clearAllMocks();
   invalidateQueries.mockResolvedValue(undefined);
+  cancelQueries.mockResolvedValue(undefined);
   vi.mocked(desktopApi.workspaceClaim).mockResolvedValue(true);
   vi.mocked(desktopApi.workspaceInitial).mockResolvedValue({
     projectIds: ["project"],
@@ -180,4 +194,41 @@ describe("workspace surface navigation", () => {
         ?.getAttribute("data-workspace-visible"),
     ).toBe("true");
   });
+});
+
+it("restarts an initial catalog read after another window changes profiles", async () => {
+  await mount();
+  const receive = vi
+    .mocked(desktopApi.onProfilesChanged)
+    .mock.calls.at(-1)?.[0];
+  const data = { profiles: [], defaultProfileId: "default" };
+  await act(async () => receive?.(data));
+  expect(cancelQueries).toHaveBeenCalledWith({ queryKey: ["cat", "projects"] });
+  expect(invalidateQueries).toHaveBeenCalledWith({
+    queryKey: ["cat", "projects"],
+  });
+  expect(cancelQueries.mock.invocationCallOrder[0]).toBeLessThan(
+    invalidateQueries.mock.invocationCallOrder[0] ?? Infinity,
+  );
+});
+
+it("keeps a retained project when a refreshed catalog omits its record", async () => {
+  const original = projectList.data;
+  try {
+    await mount();
+    projectList.data = { items: [] };
+    await mount();
+    expect(
+      container.querySelector('[data-project-runtime="project"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      for (const receive of listeners)
+        receive({ kind: "forget", projectId: "project" });
+    });
+    expect(
+      container.querySelector('[data-project-runtime="project"]'),
+    ).toBeNull();
+  } finally {
+    projectList.data = original;
+  }
 });

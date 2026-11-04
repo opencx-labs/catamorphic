@@ -21,7 +21,10 @@ import {
   type HarnessPermissions,
   type Sandboxing,
 } from "../shared/agent-permissions.js";
-import { credentialEncryptionAvailable } from "./credential-encryption.js";
+import {
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 
 /**
  * Per-profile AI agent roster: `<userData>/profiles/<id>/agents.json`.
@@ -144,6 +147,11 @@ export interface AgentConfig {
   delegation?: AgentDelegationPolicy;
 }
 
+/** Safe to enumerate while a credential is locked; never usable as credentials. */
+export interface AgentMetadata extends Omit<AgentConfig, "apiKey"> {
+  hasApiKey: boolean;
+}
+
 interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
   apiKeyEncrypted?: string;
 }
@@ -197,6 +205,8 @@ export interface PublicAgentConfig {
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** Recovery guidance for this agent alone when its saved key cannot be unlocked. */
+  credentialError?: string;
   /** What media the chat composer may attach for this agent. */
   accepts: AgentAttachmentKind[];
   /** The agent's own main prompt ("" when none). */
@@ -364,6 +374,34 @@ export class AgentsStore {
     return this.data.agents.map((agent) => this.decrypt(agent));
   }
 
+  listMetadata(): AgentMetadata[] {
+    return this.data.agents.map((agent) => this.metadata(agent));
+  }
+
+  getMetadata(id: string): AgentMetadata | undefined {
+    const stored = this.data.agents.find((agent) => agent.id === id);
+    return stored ? this.metadata(stored) : undefined;
+  }
+
+  /** Keep Settings available, with a per-agent error instead of losing the roster. */
+  listPublic(): PublicAgentConfig[] {
+    return this.data.agents.map((agent) => {
+      const metadata = toPublicAgent(this.metadata(agent));
+      try {
+        this.decrypt(agent);
+        return metadata;
+      } catch (cause) {
+        return {
+          ...metadata,
+          credentialError:
+            cause instanceof Error
+              ? cause.message
+              : credentialUnlockError({ cause }).message,
+        };
+      }
+    });
+  }
+
   get(id: string): AgentConfig | undefined {
     const stored = this.data.agents.find((agent) => agent.id === id);
     return stored ? this.decrypt(stored) : undefined;
@@ -499,7 +537,7 @@ export class AgentsStore {
     return this.decrypt(stored);
   }
 
-  update(id: string, patch: UpdateAgentInput): AgentConfig | undefined {
+  update(id: string, patch: UpdateAgentInput): AgentMetadata | undefined {
     const stored = this.data.agents.find((agent) => agent.id === id);
     if (!stored) return undefined;
     // Encryption failure must leave both the saved and in-memory agent intact.
@@ -561,7 +599,7 @@ export class AgentsStore {
     }
     if (key) stored.apiKeyEncrypted = key.apiKeyEncrypted;
     this.save();
-    return this.decrypt(stored);
+    return this.metadata(stored);
   }
 
   /**
@@ -594,8 +632,7 @@ export class AgentsStore {
     apiKeyEncrypted?: string;
   } {
     if (!apiKey) return {};
-    if (!credentialEncryptionAvailable())
-      throw new Error("OS credential encryption is unavailable");
+    requireCredentialEncryption();
     return {
       apiKeyEncrypted: safeStorage.encryptString(apiKey).toString("base64"),
     };
@@ -604,16 +641,30 @@ export class AgentsStore {
   private decrypt(stored: StoredAgent): AgentConfig {
     const { apiKeyEncrypted, ...rest } = stored;
     let apiKey: string | null = null;
-    if (apiKeyEncrypted && credentialEncryptionAvailable()) {
+    // Native local/account modes use their explicit CLI account. A key saved
+    // for another mode is unrelated to this operation and stays sealed.
+    if (
+      apiKeyEncrypted !== undefined &&
+      (rest.auth === "api-key" || rest.harness === "ai-sdk")
+    ) {
+      requireCredentialEncryption();
       try {
+        if (typeof apiKeyEncrypted !== "string" || !apiKeyEncrypted)
+          throw new Error("Invalid saved encrypted credential");
         apiKey = safeStorage.decryptString(
           Buffer.from(apiKeyEncrypted, "base64"),
         );
-      } catch {
-        apiKey = null;
+        if (!apiKey) throw new Error("Empty saved credential");
+      } catch (cause) {
+        throw credentialUnlockError({ cause });
       }
     }
     return { ...rest, apiKey };
+  }
+
+  private metadata(stored: StoredAgent): AgentMetadata {
+    const { apiKeyEncrypted, ...rest } = stored;
+    return { ...rest, hasApiKey: apiKeyEncrypted !== undefined };
   }
 }
 
@@ -645,8 +696,10 @@ function checkedHarnessPermissions(args: {
   return Object.keys(kept).length > 0 ? kept : undefined;
 }
 
-export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
-  const { apiKey } = agent;
+export function toPublicAgent(
+  agent: AgentConfig | AgentMetadata,
+): PublicAgentConfig {
+  const hasApiKey = "apiKey" in agent ? agent.apiKey !== null : agent.hasApiKey;
   return {
     id: agent.id,
     name: agent.name,
@@ -657,8 +710,8 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     effort: agent.effort,
     auth: agent.auth,
     ...(agent.environment ? { environment: agent.environment } : {}),
-    hasApiKey: apiKey !== null,
-    apiKeyMasked: apiKey ? "••••••••" : null,
+    hasApiKey,
+    apiKeyMasked: hasApiKey ? "••••••••" : null,
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
     sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
