@@ -10,8 +10,8 @@ import {
 import { Fragment, useMemo, useRef, useState } from "react";
 import {
   type DownloadRecord,
-  downloadOpensInWork,
   isActiveDownload,
+  opensInWork,
 } from "../../shared/downloads.js";
 import { MENU_SEPARATOR, type MenuItem } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
@@ -93,7 +93,7 @@ export function DownloadsScreen({
       void desktopApi.downloadsReveal({ id: record.id });
       return;
     }
-    if (downloadOpensInWork(record.filename)) onOpen(record, mode);
+    if (opensInWork(record.filename)) onOpen(record, mode);
     else void desktopApi.downloadsReveal({ id: record.id });
   };
   const pick = (record: DownloadRecord, action: string) => {

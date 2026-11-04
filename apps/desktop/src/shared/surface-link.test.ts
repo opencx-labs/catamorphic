@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  BROWSER_FILE_TYPES,
   isBrowserFile,
   localFileUrl,
   parseSurfaceLink,
   resolveProjectFileLocation,
+  TEXT_FILE_TYPES,
 } from "./surface-link.js";
 
 describe("workspace links", () => {
@@ -56,5 +59,38 @@ describe("workspace links", () => {
     );
     expect(isBrowserFile("report.PDF")).toBe(true);
     expect(isBrowserFile("notes.md")).toBe(false);
+  });
+});
+
+describe("Finder's Open With", () => {
+  it("lists Work, never as the default, for exactly what it opens", () => {
+    const config = readFileSync(
+      new URL("../../electron-builder.yml", import.meta.url),
+      "utf8",
+    );
+    const associations = [
+      ...config.matchAll(
+        /- name: (.+)\n\s+ext: \[(.+)\]\n\s+role: (\w+)\n\s+rank: (\w+)/g,
+      ),
+    ].map(([, name, ext, role, rank]) => ({
+      name,
+      ext: ext?.split(", "),
+      role,
+      rank,
+    }));
+    const listed = (
+      types: readonly { name: string; ext: readonly string[] }[],
+      role: string,
+    ) =>
+      types.map((type) => ({
+        name: type.name,
+        ext: [...type.ext],
+        role,
+        rank: "Alternate",
+      }));
+    expect(associations).toEqual([
+      ...listed(BROWSER_FILE_TYPES, "Viewer"),
+      ...listed(TEXT_FILE_TYPES, "Editor"),
+    ]);
   });
 });
