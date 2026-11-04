@@ -187,6 +187,9 @@ beforeAll(async () => {
     timeoutMs: 30_000,
     label: "project workspace",
   });
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
   await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
     key: 't', altKey: true, bubbles: true, cancelable: true,
     ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
