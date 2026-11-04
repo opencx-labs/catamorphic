@@ -28,7 +28,7 @@ export const fileNameFromPath = (filePath: string) =>
  * What comes to the front is a visit. History (ADR 0154) records pages,
  * project files, chats, apps, workflows, runs and artifacts; palette usage
  * (ADR 0186) counts the app's own surfaces (Settings, Usage, Sites, ...),
- * however they were opened. Incognito chats never reach either.
+ * however they were opened. Incognito chats and pages never reach either.
  */
 export function useVisitRecording({
   visible,
@@ -103,9 +103,10 @@ export function useVisitRecording({
       (item) => browserTabKey(item.localId) === key,
     );
     const browserUrl = browser?.url || browser?.initialUrl;
-    const fileSurface = browserUrl?.startsWith("file://")
-      ? parseSurfaceLink(browserUrl)
-      : null;
+    const fileSurface =
+      browserUrl?.startsWith("file://") && !browser?.incognito
+        ? parseSurfaceLink(browserUrl)
+        : null;
     // A file:// tab is one of the project's files when it lives under
     // the project root; anything else is a file on this machine. Until
     // the root is known the tab waits rather than recording as loose.

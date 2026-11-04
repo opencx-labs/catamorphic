@@ -164,6 +164,9 @@ import { DEFAULT_WORKSPACE_FILE } from "./workspace-config.js";
  *  - unpacked Chrome extensions loaded per profile.
  */
 
+/** How long an incognito session outlives its last page (a page remounting). */
+const INCOGNITO_END_DELAY_MS = 5_000;
+
 /** How long the share picker waits on a tab's thumbnail before listing it bare. */
 const TAB_THUMBNAIL_TIMEOUT_MS = 750;
 
@@ -264,6 +267,7 @@ let downloadHook:
       profileId: string,
       item: Electron.DownloadItem,
       contents: WebContents,
+      incognito: boolean,
     ) => void)
   | null = null;
 
@@ -293,6 +297,21 @@ const BRAND_HEADER_REQUESTS: Electron.WebRequestFilter = {
 export function partitionFor(profileId: string): string {
   return `persist:profile-${profileId}`;
 }
+
+/**
+ * A profile's incognito session (ADR 0303): in memory only, so nothing it
+ * keeps reaches the disk, and shared by all the profile's incognito tabs,
+ * as Chrome's incognito windows share theirs. It is cleared when the last
+ * of them closes.
+ */
+export function incognitoPartitionFor(profileId: string): string {
+  return `incognito-profile-${profileId}`;
+}
+
+/** Each prepared incognito session, by the profile it belongs to. */
+const incognitoSessions = new WeakMap<Session, string>();
+const isIncognito = (contents: WebContents) =>
+  !contents.isDestroyed() && incognitoSessions.has(contents.session);
 
 /**
  * The Sec-CH-UA rewrite as a webRequest listener. A profile whose
@@ -329,13 +348,20 @@ function setBrandHeaderListener(ses: Session, on: boolean): void {
   );
 }
 
-function prepareProfileSession(profileId: string): Promise<void> {
-  const partition = partitionFor(profileId);
+function prepareProfileSession(
+  profileId: string,
+  incognito = false,
+): Promise<void> {
+  const partition = incognito
+    ? incognitoPartitionFor(profileId)
+    : partitionFor(profileId);
   const existing = preparedSessions.get(partition);
   if (existing) return existing;
-  const prepare = doPrepareProfileSession(partition, profileId).then(() => {
-    readySessions.add(partition);
-  });
+  const prepare = doPrepareProfileSession(partition, profileId, incognito).then(
+    () => {
+      readySessions.add(partition);
+    },
+  );
   preparedSessions.set(partition, prepare);
   prepare.catch(() => preparedSessions.delete(partition));
   return prepare;
@@ -344,8 +370,10 @@ function prepareProfileSession(profileId: string): Promise<void> {
 async function doPrepareProfileSession(
   partition: string,
   profileId: string,
+  incognito: boolean,
 ): Promise<void> {
   const ses = session.fromPartition(partition);
+  if (incognito) incognitoSessions.set(ses, profileId);
   setBrandHeaderListener(ses, true);
 
   // Chrome-like site permissions: the profile's stored choices answer
@@ -384,7 +412,7 @@ async function doPrepareProfileSession(
   // Downloads save without a dialog; the manager names the file and
   // keeps the record the dock and the Downloads page show.
   ses.on("will-download", (_event, item, contents) => {
-    downloadHook?.(profileId, item, contents);
+    downloadHook?.(profileId, item, contents, incognito);
   });
   // Without a handler getDisplayMedia fails outright; with one, the
   // app's picker chooses a tab, window or screen.
@@ -399,7 +427,8 @@ async function doPrepareProfileSession(
 
   // Chrome extensions (ADR 0203): the profile's installed extensions load
   // before its first tab does, so their content scripts see every page.
-  await extensionsHost?.prepare(ses, profileId);
+  // Incognito pages run none, as Chrome's do by default.
+  if (!incognito) await extensionsHost?.prepare(ses, profileId);
 }
 
 export interface BrowserSupport {
@@ -582,13 +611,13 @@ export function registerBrowserSupport(
       for (const listener of downloadListeners) listener(profileId);
     },
   });
-  downloadHook = (profileId, item, contents) => {
+  downloadHook = (profileId, item, contents, incognito) => {
     // The tab's own record, for an agent driving it.
     recordDownload(contents, item);
     const page = contents.isDestroyed() ? "" : contents.getURL();
     const host =
       siteHost(siteOrigin(page) ?? siteOrigin(item.getURL()) ?? "") || null;
-    downloads.attach(profileId, item, host);
+    downloads.attach(profileId, item, host, { incognito });
   };
   const downloadInput = z.object({ id: z.string().min(1) });
   shellIpcMain.handle("catamorphic:downloads-list", (event) =>
@@ -654,8 +683,13 @@ export function registerBrowserSupport(
     vault.releaseProfile(profileId);
     siteSettings.releaseProfile(profileId);
     extensions.releaseProfile(profileId);
-    preparedSessions.delete(partitionFor(profileId));
-    readySessions.delete(partitionFor(profileId));
+    for (const partition of [
+      partitionFor(profileId),
+      incognitoPartitionFor(profileId),
+    ]) {
+      preparedSessions.delete(partition);
+      readySessions.delete(partition);
+    }
   });
   const bookmarks = profileConfig.bookmarks;
   // Each profile's keybindings, read once and kept current: pages and
@@ -843,11 +877,15 @@ export function registerBrowserSupport(
         attach.preventDefault();
         return;
       }
-      const partition = partitionFor(windows.profileFor(window.webContents));
-      if (
-        !readySessions.has(partition) ||
-        (preferences.partition ?? params.partition) !== partition
-      ) {
+      // A tab lives in its window's profile session, or in that
+      // profile's incognito one.
+      const profileId = windows.profileFor(window.webContents);
+      const asked = preferences.partition ?? params.partition;
+      const partition = [
+        partitionFor(profileId),
+        incognitoPartitionFor(profileId),
+      ].find((candidate) => candidate === asked);
+      if (!partition || !readySessions.has(partition)) {
         attach.preventDefault();
         return;
       }
@@ -1315,10 +1353,15 @@ export function registerBrowserSupport(
     password?: { profileId: string; origin: string };
     runExtension?: (action: string) => boolean;
   }): PageMenuHost => ({
-    openUrl: (url, mode) => {
+    openUrl: (url, mode, incognito) => {
       const host = opener.isDestroyed() ? null : opener.hostWebContents;
       if (host && !host.isDestroyed())
-        host.send("catamorphic:browser-open-url", { url, mode });
+        host.send("catamorphic:browser-open-url", {
+          url,
+          mode,
+          // An incognito page's links stay incognito.
+          ...(incognito || isIncognito(opener) ? { incognito: true } : {}),
+        });
     },
     writeText: (text) => clipboard.writeText(text),
     // The person chose this link's app from the menu, as a click on it
@@ -1365,6 +1408,7 @@ export function registerBrowserSupport(
       emojiPanel: app.isEmojiPanelSupported(),
       credentials: null,
       extensions: [],
+      incognito: isIncognito(opener),
     });
     void popupNativeMenu(window, items).then((action) => {
       if (action)
@@ -1412,6 +1456,7 @@ export function registerBrowserSupport(
       credentials:
         credentials?.map(({ id, username }) => ({ id, username })) ?? null,
       extensions: extension.items,
+      incognito: isIncognito(guest),
     });
     // One menu per page: a newer right-click replaces the one before it.
     for (const [menuId, menu] of pageMenus)
@@ -1458,6 +1503,33 @@ export function registerBrowserSupport(
   profileConfig.onPrefsChanged((profileId, prefs) =>
     guestMacros.set(profileId, prefs.terminalMacros),
   );
+  // A profile's incognito session ends with its last page: cookies,
+  // storage, cache and sign-ins go, and its downloads leave the list. A
+  // moment later, so a tab that replaces its page (a recovery, a project
+  // moving to a window of its own) keeps what it signed into.
+  const incognitoEnds = new Map<Session, ReturnType<typeof setTimeout>>();
+  const endIncognitoWhenUnused = (ses: Session) => {
+    clearTimeout(incognitoEnds.get(ses));
+    incognitoEnds.set(
+      ses,
+      setTimeout(() => {
+        incognitoEnds.delete(ses);
+        const inUse = webContents
+          .getAllWebContents()
+          .some((other) => !other.isDestroyed() && other.session === ses);
+        if (inUse) return;
+        void Promise.all([
+          ses.clearStorageData(),
+          ses.clearCache(),
+          ses.clearAuthCache(),
+        ]).catch((error: unknown) =>
+          console.warn("[browser] Incognito session not cleared:", error),
+        );
+        const profileId = incognitoSessions.get(ses);
+        if (profileId) downloads.forgetIncognito(profileId);
+      }, INCOGNITO_END_DELAY_MS),
+    );
+  };
   // Guests send actions only to their owning window. Match the same configured
   // bindings as the renderer, including Ctrl/Option combinations inside pages.
   app.on("web-contents-created", (_event, contents: WebContents) => {
@@ -1486,11 +1558,19 @@ export function registerBrowserSupport(
     contents.on("preload-error", (_event, preloadPath, error) => {
       console.error("[browser] Guest preload failed", preloadPath, error);
     });
+    const incognito = isIncognito(contents);
     const openAsTab = (url: string) => {
       const host = contents.hostWebContents;
       if (host && !host.isDestroyed())
-        host.send("catamorphic:browser-open-url", { url });
+        host.send("catamorphic:browser-open-url", {
+          url,
+          ...(incognito ? { incognito: true } : {}),
+        });
     };
+    if (incognito) {
+      const ses = contents.session;
+      contents.once("destroyed", () => endIncognitoWhenUnused(ses));
+    }
     contents.setWindowOpenHandler(({ url, disposition }) => {
       // Asked whether its tab may close, a page holds a user activation
       // Electron grants for the question; it opens nothing with it.
@@ -1524,6 +1604,10 @@ export function registerBrowserSupport(
     // lands as a workspace tab rather than a window tree. Its passkey
     // requests show in a sheet over it (passkeys.ts).
     contents.on("did-create-window", (popup) => {
+      if (incognito) {
+        const ses = popup.webContents.session;
+        popup.webContents.once("destroyed", () => endIncognitoWhenUnused(ses));
+      }
       popup.webContents.setWindowOpenHandler(({ url }) => {
         if (/^https?:/i.test(url)) openAsTab(url);
         return { action: "deny" };
@@ -1880,7 +1964,8 @@ export function registerBrowserSupport(
         },
       );
       if (!answer) return false;
-      if (answer.remember) {
+      // An incognito tab's choice lasts only for that page's request.
+      if (answer.remember && !isIncognito(guest)) {
         for (const kind of decision.kinds)
           siteSettings.set(profileId, origin, kind, answer.decision);
         siteSettingsChanged(profileId, origin);
@@ -2293,11 +2378,16 @@ export function registerBrowserSupport(
   shellIpcMain.handle(
     "catamorphic:browser-prepare-profile",
     async (event, raw: unknown) => {
+      const { profileId: asked, incognito } = z
+        .object({ profileId: z.string(), incognito: z.boolean() })
+        .parse(raw);
       const profileId = windows.profileFor(event.sender);
-      if (z.string().parse(raw) !== profileId)
+      if (asked !== profileId)
         throw new Error("This browser profile belongs to another window.");
-      await prepareProfileSession(profileId);
-      return partitionFor(profileId);
+      await prepareProfileSession(profileId, incognito);
+      return incognito
+        ? incognitoPartitionFor(profileId)
+        : partitionFor(profileId);
     },
   );
 
@@ -3408,6 +3498,8 @@ export function registerBrowserSupport(
       history.dispose();
       paletteUsage.dispose();
       vault.dispose();
+      for (const timer of incognitoEnds.values()) clearTimeout(timer);
+      incognitoEnds.clear();
       sitePermissionPolicy = null;
       downloadHook = null;
       extensionsHost = null;

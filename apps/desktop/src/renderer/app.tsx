@@ -2010,6 +2010,7 @@ export function App({
         // Hover card: the page's address under its full title.
         detail: browser.url || browser.initialUrl || undefined,
         bookmarkUrl: browser.url || browser.initialUrl || undefined,
+        ...(browser.incognito ? { incognito: true } : {}),
       }),
     );
 
@@ -2048,6 +2049,8 @@ export function App({
         side?: boolean;
         title?: string;
         floating?: boolean;
+        /** In the profile's incognito session (ADR 0303). */
+        incognito?: boolean;
       },
     ) => {
       if (!activeProfile) return null;
@@ -2059,6 +2062,7 @@ export function App({
         title: opts?.title ?? (url || "New Tab"),
         faviconUrl: null,
         chatLocalId: opts?.chatLocalId,
+        ...(opts?.incognito ? { incognito: true } : {}),
       };
       updateWorkspace((ws) => {
         const key = browserTabKey(entry.localId);
@@ -2096,8 +2100,9 @@ export function App({
    * A page already open in a tab opens there (`switchToOpenTab`): a link,
    * a bookmark or a link from another app goes to that tab instead of
    * opening the page twice. Callers asked for a new tab on purpose never
-   * ask. A page an agent is driving, and a chip kept off the strip, do
-   * not count. Returns the tab's key, or null to open the page as usual.
+   * ask. A page an agent is driving, a chip kept off the strip, and an
+   * incognito page do not count. Returns the tab's key, or null to open
+   * the page as usual.
    */
   const switchToOpenPage = (url: string): string | null => {
     if (prefsRef.current?.switchToOpenTab === false) return null;
@@ -2108,6 +2113,7 @@ export function App({
       (browser) =>
         !browser.agentControlled &&
         !browser.background &&
+        !browser.incognito &&
         samePage(browser.url || browser.initialUrl, url),
     );
     const target =
@@ -2683,16 +2689,18 @@ export function App({
     return desktopApi.onPendingBrowserUrls(take);
   }, [runtime.visible, activeProfile?.id, linksLandSettled]);
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl((url, mode) => {
+    return desktopApi.onBrowserOpenUrl((url, mode, incognito) => {
       if (!visibleRef.current) return;
       // No mode: a page's link to a new window, or a link from another app.
-      // A mode is a new tab (or side, floating) asked for on purpose.
-      if (!mode && switchToOpenPageRef.current(url)) return;
+      // A mode is a new tab (or side, floating) asked for on purpose. What
+      // an incognito page opens is incognito too.
+      if (!mode && !incognito && switchToOpenPageRef.current(url)) return;
       openBrowserTabRef.current(url, {
         floating: mode
           ? mode === "floating"
           : prefsRef.current?.linkOpenMode === "floating",
         side: mode === "side",
+        incognito,
       });
     });
   }, []);
@@ -2760,7 +2768,10 @@ export function App({
     candidates: workspace.browsers.map((browser) => ({
       localId: browser.localId,
       hasPage: Boolean(browser.url || browser.initialUrl),
+      // An incognito page never sleeps: its session ends with its last
+      // page, so one unloaded would wake signed out.
       awake:
+        Boolean(browser.incognito) ||
         (runtime.visible &&
           Boolean(sleepSlots[browserTabKey(browser.localId)])) ||
         busyBrowsers.has(browser.localId),
@@ -4642,6 +4653,12 @@ export function App({
         side: mode === "side",
         floating: mode === "floating",
       }),
+    "new-incognito-tab": (mode) =>
+      openBrowserTab("", {
+        side: mode === "side",
+        floating: mode === "floating",
+        incognito: true,
+      }),
     "reopen-tab": reopenTab,
     "new-terminal-tab": (mode) =>
       openTerminalTab({ side: mode === "side", floating: mode === "floating" }),
@@ -6084,7 +6101,9 @@ export function App({
     window.clearTimeout(tabsReportTimer.current);
     tabsReportTimer.current = window.setTimeout(() => {
       const guests = browserGuestIdsRef.current;
+      // Extensions never see incognito pages, as in Chrome by default.
       const guestIds = workspaceRef.current.browsers
+        .filter((browser) => !browser.incognito)
         .map((browser) => guests.get(browser.localId))
         .filter((id): id is number => id !== undefined);
       const last = lastBrowserTabRef.current;
@@ -6693,6 +6712,7 @@ export function App({
               "manage-connectors",
               "connect-remote-project",
               "new-browser-tab",
+              "new-incognito-tab",
               "toggle-sidebar",
             ].includes(action.id),
           ]),
@@ -7815,6 +7835,7 @@ export function App({
                           // last known URL, not the tab's original one.
                           initialUrl={browser.url || browser.initialUrl}
                           history={browser.history}
+                          incognito={browser.incognito}
                           surfaceKey={browserTabKey(browser.localId)}
                           active={
                             runtime.visible &&
@@ -7884,6 +7905,7 @@ export function App({
                             openBrowserTab(url, {
                               floating: mode === "floating",
                               side: mode === "side",
+                              incognito: browser.incognito,
                             })
                           }
                           registerCommands={(commands) => {
@@ -8459,6 +8481,7 @@ export function App({
                         }
                         initialUrl={browser.url || browser.initialUrl}
                         history={browser.history}
+                        incognito={browser.incognito}
                         surfaceKey={browserTabKey(browser.localId)}
                         active={
                           runtime.visible &&
