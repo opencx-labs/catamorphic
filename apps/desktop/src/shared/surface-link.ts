@@ -68,10 +68,63 @@ export function parseSurfaceLink(value: string): SurfaceLink | null {
   }
 }
 
-export const isBrowserFile = (path: string) =>
-  /\.(pdf|html?|svg|png|jpe?g|gif|webp|avif|ico|mp4|webm|mov|mp3|wav|ogg|m4a)$/i.test(
-    path,
-  );
+/**
+ * Files a browser tab renders, by kind. Finder lists Work under Open With
+ * for these and `TEXT_FILE_TYPES` (`mac.fileAssociations` in
+ * electron-builder.yml).
+ */
+export const BROWSER_FILE_TYPES = [
+  { name: "PDF document", ext: ["pdf"] },
+  { name: "Web page", ext: ["html", "htm"] },
+  {
+    name: "Image",
+    ext: ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico"],
+  },
+  { name: "Video", ext: ["mp4", "webm", "mov"] },
+  { name: "Audio", ext: ["mp3", "wav", "ogg", "m4a"] },
+] as const;
+
+/** Text the editor opens, and a browser tab shows as plain text. */
+export const TEXT_FILE_TYPES = [
+  { name: "Text", ext: ["txt", "log"] },
+  { name: "Markdown", ext: ["md", "markdown"] },
+  {
+    name: "Data",
+    ext: ["json", "csv", "tsv", "xml", "yaml", "yml", "toml", "ini"],
+  },
+  {
+    name: "Source code",
+    ext: [
+      "js",
+      "mjs",
+      "cjs",
+      "ts",
+      "tsx",
+      "jsx",
+      "css",
+      "sh",
+      "py",
+      "rb",
+      "go",
+      "rs",
+      "java",
+      "c",
+      "h",
+      "cpp",
+      "sql",
+    ],
+  },
+  { name: "Patch", ext: ["diff", "patch"] },
+] as const;
+
+const extensionPattern = (
+  types: readonly { readonly ext: readonly string[] }[],
+) => new RegExp(`\\.(${types.flatMap((type) => type.ext).join("|")})$`, "i");
+const BROWSER_FILE = extensionPattern(BROWSER_FILE_TYPES);
+const TEXT_FILE = extensionPattern(TEXT_FILE_TYPES);
+
+export const isBrowserFile = (path: string) => BROWSER_FILE.test(path);
+export const isTextFile = (path: string) => TEXT_FILE.test(path);
 
 export function resolveProjectFileLocation(
   projectRoot: string,

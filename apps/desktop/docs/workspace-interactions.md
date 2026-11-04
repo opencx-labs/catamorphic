@@ -49,6 +49,15 @@ press on the pane's toolbar does. Browser tools also send trusted page input;
 their existing browser activity scope keeps those presses from switching the
 person's focused pane.
 
+On macOS, Finder's Open With and files dropped on Work's Dock icon use the same
+pending delivery queue as external links, including a cold launch. Supported
+text and code files open in the current project's editor, including files outside
+the project; without a project, a browser tab shows plain text. PDFs, images,
+media and web pages open in browser tabs. Reopening an editor file reuses its tab;
+browser files follow the Switch to a page's open tab preference. Unsupported files
+are revealed in Finder. Work registers as an Alternate handler, so installation
+does not replace the person's chosen default app (ADR 0302).
+
 A chat open as a tab groups the tabs attached to it. Dragging a tab onto a chat
 (past its tab's leading edge in the strip, onto its row in the sidebar's tabs)
 attaches it, as if the chat had opened it, and opens a folded group; dropped

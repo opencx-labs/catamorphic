@@ -39,6 +39,13 @@ Work uses a fresh application identity and storage directory. Alpha data and
 credentials from the previous app are not migrated automatically. Project
 folders remain ordinary files you can import.
 
+On macOS, Finder's **Open With** menu and Work's Dock icon accept PDFs, images,
+media, web pages, text and code. Work appears as an alternative without changing
+your default app. Text and code open in the current project's editor, or as plain
+text in a browser tab when no project is open; other supported files open in a
+browser tab. Reopening an editor file reuses its tab; browser files follow the
+**Switch to a page's open tab** preference.
+
 ## One system, three ways to use it
 
 ### Desktop app
