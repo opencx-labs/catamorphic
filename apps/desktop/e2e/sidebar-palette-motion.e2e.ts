@@ -200,7 +200,31 @@ it("keeps long palette edits focused and free of an inner border in both inputs"
     await app.eval(`document.querySelector('${input}').scrollTop=0`);
     await shot(agent ? "palette-agent-scrolled" : "palette-textarea-scrolled");
     await app.press("Backspace");
-    await app.press("Backspace", process.platform === "darwin" ? 4 : 2);
+    const beforeDelete = await app.eval<number>(
+      `(()=>{const el=document.querySelector('${input}');return(el.isContentEditable?el.textContent:el.value).length})()`,
+    );
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "Backspace",
+        code: "Backspace",
+        windowsVirtualKeyCode: 8,
+        modifiers: process.platform === "darwin" ? 4 : 2,
+        ...(type === "keyDown"
+          ? {
+              commands: [
+                process.platform === "darwin"
+                  ? "deleteToBeginningOfLine"
+                  : "deleteWordBackward",
+              ],
+            }
+          : {}),
+      });
+    expect(
+      await app.eval<number>(
+        `(()=>{const el=document.querySelector('${input}');return(el.isContentEditable?el.textContent:el.value).length})()`,
+      ),
+    ).toBeLessThan(beforeDelete);
     await app.press("Backspace");
     await app.waitFor(`document.querySelector('${input}').scrollTop>0`);
     reports.push(
@@ -230,9 +254,16 @@ it("fades the shared refresh indicator both ways and settles under reduced motio
   await app.eval(
     `window.__holdChats();document.querySelector('${section} [aria-label="Refresh chats"]').click()`,
   );
-  await app.waitFor(
-    `!!document.querySelector('${section} [data-loading-for="chats"]')`,
-  );
+  try {
+    await app.waitFor(
+      `!!document.querySelector('${section} [data-loading-for="chats"]')`,
+    );
+  } catch (error) {
+    const state = await app.eval(
+      `(()=>{const root=document.querySelector('${section}');return{held:window.__heldChats(),text:root.textContent,rows:root.querySelectorAll('[role="treeitem"]').length,refreshDisabled:root.querySelector('[aria-label="Refresh chats"]').disabled,state:root.querySelector('[data-collapsible]').dataset.state}})()`,
+    );
+    throw new Error(JSON.stringify(state), { cause: error });
+  }
   await app.waitFor(
     `getComputedStyle(document.querySelector('${section} .sidebar-refresh')).width==='28px'`,
   );
@@ -339,8 +370,21 @@ it("keeps the caret visible after scroll-away deletion in a narrow New Tab", asy
       framesStill: true,
       outline: "none",
     });
-    await app.press("a", process.platform === "darwin" ? 4 : 2);
+    // CDP does not resolve macOS's native editing key bindings.
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "a",
+        code: "KeyA",
+        windowsVirtualKeyCode: 65,
+        modifiers: process.platform === "darwin" ? 4 : 2,
+        ...(type === "keyDown" ? { commands: ["selectAll"] } : {}),
+      });
     await app.press("Backspace");
+    await app.waitFor(
+      `(()=>{const el=document.querySelector('${target}');return(el.isContentEditable?el.textContent:el.value)===''})()`,
+      { label: "the previous palette input cleared" },
+    );
   }
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1100,850)`);
 });
