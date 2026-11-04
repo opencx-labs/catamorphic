@@ -12,6 +12,8 @@ const BROADCAST_THROTTLE_MS = 100;
 export class DownloadsStore {
   private cache = new Map<string, DownloadRecord[]>();
   private writes = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Incognito downloads: listed while their tabs live, never written. */
+  private readonly offRecord = new Set<string>();
   constructor(private readonly profilesDir: string) {}
 
   private file(profileId: string): string {
@@ -53,7 +55,8 @@ export class DownloadsStore {
     if (!records) return;
     const file = this.file(profileId);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(records), { mode: 0o600 });
+    const kept = records.filter((record) => !this.offRecord.has(record.id));
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(kept), { mode: 0o600 });
     fs.renameSync(`${file}.tmp`, file);
   }
 
@@ -86,7 +89,12 @@ export class DownloadsStore {
     return this.load(profileId).find((record) => record.id === id);
   }
 
-  upsert(profileId: string, record: DownloadRecord): void {
+  upsert(
+    profileId: string,
+    record: DownloadRecord,
+    { offRecord = false }: { offRecord?: boolean } = {},
+  ): void {
+    if (offRecord) this.offRecord.add(record.id);
     const records = this.load(profileId);
     const index = records.findIndex((entry) => entry.id === record.id);
     if (index === -1) records.push(record);
@@ -110,6 +118,25 @@ export class DownloadsStore {
         (record) => record.state === "progressing" || record.state === "paused",
       ),
     );
+    this.changed(profileId);
+  }
+
+  /**
+   * The profile's incognito session ended: its downloads leave the list.
+   * One still arriving stays until it finishes and the next session ends.
+   */
+  forgetOffRecord(profileId: string): void {
+    const records = this.load(profileId);
+    const forgotten = records.filter(
+      (record) =>
+        this.offRecord.has(record.id) &&
+        record.state !== "progressing" &&
+        record.state !== "paused",
+    );
+    if (forgotten.length === 0) return;
+    for (const record of forgotten) this.offRecord.delete(record.id);
+    const kept = records.filter((record) => !forgotten.includes(record));
+    this.cache.set(profileId, kept);
     this.changed(profileId);
   }
 
@@ -201,7 +228,14 @@ export class DownloadsManager {
     },
   ) {}
 
-  attach(profileId: string, item: DownloadItemLike, host: string | null) {
+  /** `incognito`: an incognito tab's download, kept off the record. */
+  attach(
+    profileId: string,
+    item: DownloadItemLike,
+    host: string | null,
+    { incognito = false }: { incognito?: boolean } = {},
+  ) {
+    const offRecord = { offRecord: incognito };
     const dir = this.options.downloadsDir();
     fs.mkdirSync(dir, { recursive: true });
     const claim = this.options.claim?.(profileId, item) ?? null;
@@ -226,11 +260,11 @@ export class DownloadsManager {
       canResume: item.canResume(),
     });
     this.active.set(id, item);
-    this.store.upsert(profileId, record());
+    this.store.upsert(profileId, record(), offRecord);
     this.notify(profileId);
     claim?.claimed(id);
     item.on("updated", () => {
-      this.store.upsert(profileId, record());
+      this.store.upsert(profileId, record(), offRecord);
       this.notify(profileId);
     });
     item.once("done", () => {
@@ -238,7 +272,7 @@ export class DownloadsManager {
       const done = record();
       done.finishedAt = Date.now();
       done.exists = done.state === "completed" && fs.existsSync(done.savePath);
-      this.store.upsert(profileId, done);
+      this.store.upsert(profileId, done, offRecord);
       this.notify(profileId, true);
     });
     return id;
@@ -293,6 +327,12 @@ export class DownloadsManager {
 
   clearFinished(profileId: string): void {
     this.store.clearFinished(profileId);
+    this.notify(profileId, true);
+  }
+
+  /** The last incognito tab closed: its downloads leave the list. */
+  forgetIncognito(profileId: string): void {
+    this.store.forgetOffRecord(profileId);
     this.notify(profileId, true);
   }
 
