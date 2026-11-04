@@ -1,12 +1,15 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 /**
  * History (ADR 0154) belongs to the profile: files of two projects and a
  * file outside any project all show on one page, the scope menu narrows
  * the page to one project, and a loose file reopens as a browser tab.
+ * The palette's History mode also finds the project's chats by the words
+ * written in them.
  */
 let app: AppHandle;
 let first: { id: string };
@@ -14,6 +17,7 @@ let second: { id: string };
 let loosePath: string;
 
 const isMac = `(/Mac/.test(navigator.platform))`;
+const paletteInput = `[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0)`;
 const rows = `[...document.querySelectorAll('[data-testid="history-row"]')]`;
 const visibleRows = `${rows}.map((row) => row.textContent)`;
 
@@ -149,6 +153,55 @@ describe("profile history", () => {
     await app.waitFor(
       `document.querySelectorAll('webview').length === ${before + 1} && [...document.querySelectorAll('webview')].filter((view) => (view.getAttribute('src') || '').endsWith('loose-letter.txt')).length === 2`,
       { label: "loose file opened again as a browser tab" },
+    );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("History mode finds a chat by words written in it and opens it", async () => {
+    const sessionId = await app.eval<string>(`(async()=>{
+      const api=window.catamorphicDesktop;
+      const agent=await api.agentsCreate({name:'History helper',harness:'ai-sdk'});
+      await api.agentsSetDefault(agent.id);
+      const {url}=await api.getServerState();
+      const base=url+'/api/projects/'+${JSON.stringify(second.id)}+'/agent/sessions';
+      const created=await fetch(base,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({agentId:agent.id,title:'Release planning',source:'desktop'})});
+      if(!created.ok)throw new Error(await created.text());
+      const {id}=await created.json();
+      const sent=await fetch(base+'/'+id+'/commands',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'send',commandId:crypto.randomUUID(),text:'Before shipping, walk through the zanzibar checklist with the team.'})});
+      if(!sent.ok)throw new Error(await sent.text());
+      return id;
+    })()`);
+    await focusWindow(app);
+    await app.waitFor(`!${paletteInput}`);
+    await app.press("p", process.platform === "darwin" ? 4 : 2);
+    await app.waitFor(`document.activeElement === ${paletteInput}`);
+    await app.insertText("history");
+    await app.press("Space");
+    await app.waitFor(`${paletteInput}?.placeholder === 'Search history…'`);
+    // Neither the title nor anything opened says it; the message does.
+    await app.insertText("Zanzibar");
+    // The overlay's rows; the chat may be renamed by its agent by now.
+    const row = `[...${paletteInput}.closest('[role="dialog"]').querySelectorAll('[role="option"]')].find(el=>el.textContent.includes('the zanzibar checklist'))`;
+    await app.waitFor(`!!${row}?.textContent.includes('Kitchen')`, {
+      label: "chat found by its message",
+    });
+    await app.waitFor(
+      `${paletteInput}.closest('[role="dialog"]').getAnimations({subtree:true}).every(animation=>animation.playState!=='running')`,
+    );
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "history-chat-match.png",
+      ),
+    );
+    await app.press("Enter");
+    await app.waitFor(
+      `[...document.querySelectorAll('section[data-chat-local-id]:not([inert], [inert] *)')].some(el=>el.textContent.includes('zanzibar checklist'))`,
+      { label: "chat opened", timeoutMs: 30_000 },
+    );
+    await app.waitFor(
+      `window.catamorphicDesktop.historyQuery({}).then((page) => page.entries.some((entry) => entry.target.kind === 'chat' && entry.target.resource === ${JSON.stringify(sessionId)}))`,
+      { label: "opened chat recorded in history" },
     );
     expect(app.getRendererErrors()).toEqual([]);
   });

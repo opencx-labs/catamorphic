@@ -2,6 +2,13 @@
 
 ## Opening resources
 
+The palette's History mode searches pages and work opened in the profile. Typed
+words also search the current project's chat titles and user and assistant
+messages, with a matching message excerpt in the result. Every word must match;
+tool output and reasoning are excluded. Results combine recorded history and
+matching chats by recency. If the project's server is unavailable, recorded
+history still answers. Other projects' message text is not searched.
+
 | Intent | Pointer | Keyboard |
 |---|---|---|
 | Open here | Click | Enter |
