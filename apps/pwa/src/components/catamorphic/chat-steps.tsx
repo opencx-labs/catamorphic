@@ -1606,10 +1606,12 @@ const StepRow = memo(function StepRow({
           }`}
           aria-expanded={expandable ? open : undefined}
         >
-          {expandable && (
+          {expandable ? (
             <ChevronRight
               className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
             />
+          ) : (
+            <span aria-hidden="true" className="size-3 shrink-0" />
           )}
           {agentIcon ||
             (iconUrl ? (

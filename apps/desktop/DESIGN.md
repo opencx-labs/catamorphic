@@ -871,6 +871,8 @@ wrap and widen again inside the card's smooth resize. The card keeps its border
 width, easing its color into the tab's background instead. Empty side gutters focus
 the composer; controls and text selection keep their behavior. Running background
 rows align with the conversation instead of nesting under the steps line.
+Every step row reserves the disclosure slot, keeping icons and labels aligned.
+Only rows with expandable content show a chevron in that slot.
 
 Successful folder and unsupported-file previews offer no retry. PR chips can
 read public GitHub status without sign-in (ADR 0279); a recorded fallback is
