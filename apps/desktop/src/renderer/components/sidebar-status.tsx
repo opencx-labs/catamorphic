@@ -1,4 +1,8 @@
+import { useRef } from "react";
+import { CLOSING_MS, useClosingItems } from "../lib/closing-items.js";
 import { AccessRequest } from "./access-request.js";
+import { transitionPlaying } from "./catamorphic/activity-text.js";
+import { Collapsible } from "./collapsible.js";
 import type { SidebarStatus } from "./sidebar-contribution.js";
 
 /** Three quiet placeholder rows shown before a section's first result. */
@@ -37,7 +41,38 @@ export function SidebarStatusBody({
   empty?: string;
   retry?: () => unknown;
 }) {
-  if (status.state === "loading") return <SidebarSkeleton />;
+  const message = statusMessage({ status, empty, retry });
+  const messageBody = useRef<HTMLDivElement>(null);
+  const messages = useClosingItems(
+    message ? [{ id: "status", content: message }] : [],
+    CLOSING_MS,
+    () =>
+      transitionPlaying(
+        messageBody.current?.closest("[data-collapsible]"),
+        "opacity",
+      ),
+  );
+  return (
+    <>
+      <Collapsible open={status.state === "loading"}>
+        <SidebarSkeleton />
+      </Collapsible>
+      <Collapsible open={message !== null}>
+        <div ref={messageBody}>{messages[0]?.item.content}</div>
+      </Collapsible>
+    </>
+  );
+}
+
+function statusMessage({
+  status,
+  empty,
+  retry,
+}: {
+  status: SidebarStatus;
+  empty?: string;
+  retry?: () => unknown;
+}) {
   if (status.state === "access" && status.access)
     return (
       <AccessRequest

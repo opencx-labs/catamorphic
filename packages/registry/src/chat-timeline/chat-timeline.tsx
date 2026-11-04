@@ -1480,12 +1480,29 @@ function ChatNavigation({
         }
         // At the absolute top the oldest message is already in view, even
         // when a host's top padding puts its row below the navigation line.
-        target =
-          targets[
-            direction < 0
-              ? low - 1
-              : Math.max(low, scroller.scrollTop < 1 ? 1 : 0)
-          ];
+        let candidate =
+          direction < 0
+            ? low - 1
+            : Math.max(low, scroller.scrollTop < 1 ? 1 : 0);
+        target = targets[candidate];
+        // Row padding and fractional scroll settlement can put the last
+        // destination just across the coarse search's threshold. Near the
+        // end, a short message cannot even reach the navigation line. Skip
+        // destinations already reached, using the article and the same
+        // clamping/tolerance as settlement, so every tap advances.
+        while (target) {
+          const offset = target.getBoundingClientRect().top - viewTop;
+          const top = Math.max(
+            0,
+            Math.min(
+              scroller.scrollHeight - scroller.clientHeight,
+              scroller.scrollTop + offset,
+            ),
+          );
+          if ((top - scroller.scrollTop) * direction > 2) break;
+          candidate += direction;
+          target = targets[candidate];
+        }
       }
       const instant = matchMedia("(prefers-reduced-motion: reduce)").matches;
       settling.current?.();

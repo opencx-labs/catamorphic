@@ -242,6 +242,8 @@ kbd {
   .field input,
   .field select,
   .field [contenteditable],
+  [data-palette] textarea,
+  [data-palette] [contenteditable],
   [data-settings-target="true"],
   [role="dialog"]
 ) {
@@ -1103,8 +1105,33 @@ kbd {
   overflow: hidden;
 }
 
+/* Every section's refresh indicator gives back its place as it fades.
+   Keeping display until exit finishes also stops the hidden spinner. */
+.sidebar-refresh {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  opacity: 1;
+  transition:
+    width 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    display 150ms var(--ease-standard);
+  transition-behavior: allow-discrete;
+}
+.sidebar-refresh[hidden] {
+  display: none;
+  width: 0;
+  opacity: 0;
+}
+@starting-style {
+  .sidebar-refresh {
+    width: 0;
+    opacity: 0;
+  }
+}
+
 /* The one loading placeholder for sidebar sections: still bars at row
-   height, no shimmer. The section header's spinner carries the motion. */
+   height, no shimmer. Its Collapsible owns paired height and opacity. */
 .sidebar-skeleton {
   display: flex;
   flex-direction: column;

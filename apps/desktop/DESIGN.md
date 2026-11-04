@@ -446,6 +446,17 @@ rides the panel's, and the chrome's sidebar toggle folds and unfolds in
 step so the tabs after it never jump. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
+Every sidebar section uses the app kit's measured-height `Collapsible`.
+A disclosure keeps its own paired height and opacity transition when a child
+also resizes, including a paginated list giving up its loading tail. Loading
+skeletons and replacement status messages use matching collapsibles, so the
+handoff moves neighbouring sections continuously. A refresh indicator gives
+back its 28px place while fading over 150ms. All respect reduced motion.
+
+Palette text inputs use the palette's outer border, including the Ask agent
+editable. Keyboard edits never add an outline inside that border. The input
+owns scrolling; the frames that glide to its height stay unscrolled.
+
 What an agent does to the workspace moves as what a person does: its opens
 and closes go through the same functions as a press on its surface's chip
 or a tab's close button, with their tab, split, floating and sidebar

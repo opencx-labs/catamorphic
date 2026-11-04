@@ -88,4 +88,32 @@ describe("a module's request (ADR 0277)", () => {
       "changed while you looked",
     );
   });
+
+  it("keeps a closed request for its exit and then unmounts it", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () =>
+        root.render(
+          <SidebarStatusBody
+            status={{
+              state: "access",
+              access: { request, allow: async () => {} },
+            }}
+          />,
+        ),
+      );
+      await act(async () =>
+        root.render(<SidebarStatusBody status={{ state: "ready" }} />),
+      );
+      const asked = node.querySelector('[data-testid="module-access-request"]');
+      expect(asked).not.toBeNull();
+      expect(asked?.closest("[inert]")).not.toBeNull();
+      await act(async () => vi.advanceTimersByTime(400));
+      expect(
+        node.querySelector('[data-testid="module-access-request"]'),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -20,6 +20,7 @@ import {
   serializeComposer,
 } from "../lib/composer-serialize";
 import { DICTATION_PREVIEW_ATTR } from "../lib/field-dictation.js";
+import { motionMs } from "../lib/motion.js";
 import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height";
 import { ContextPill } from "./context-pill";
 
@@ -552,6 +553,61 @@ export const ComposerInput = forwardRef<
   // Size changes glide instead of snapping, a wrapping pill's included.
   const frameRef = useRef<HTMLDivElement>(null);
   useGlidingHeight({ content: rootRef, frame: frameRef });
+
+  // Chromium reveals the caret during the edit, before a chip's width
+  // animation finishes rewrapping the prose. Follow that edit's reflow
+  // inside the editable alone; the gliding frames must never scroll.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let frame = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let editing = false;
+    const reveal = () => {
+      if (document.activeElement !== root) return;
+      const selection = document.getSelection();
+      if (!selection?.isCollapsed || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      if (!root.contains(range.startContainer)) return;
+      const caret = range.getBoundingClientRect();
+      if (!caret.height) return;
+      const viewport = root.getBoundingClientRect();
+      if (caret.top < viewport.top) root.scrollTop += caret.top - viewport.top;
+      else if (caret.bottom > viewport.bottom)
+        root.scrollTop += caret.bottom - viewport.bottom;
+    };
+    const schedule = () => {
+      if (!editing) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(reveal);
+    };
+    const edited = () => {
+      editing = true;
+      schedule();
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        schedule();
+        editing = false;
+      }, motionMs(200));
+    };
+    const cancel = () => {
+      editing = false;
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(root);
+    root.addEventListener("input", edited);
+    root.addEventListener("wheel", cancel, { passive: true });
+    root.addEventListener("pointerdown", cancel);
+    return () => {
+      cancel();
+      observer.disconnect();
+      root.removeEventListener("input", edited);
+      root.removeEventListener("wheel", cancel);
+      root.removeEventListener("pointerdown", cancel);
+    };
+  }, []);
 
   return (
     <div ref={frameRef} className={`${GLIDING_FRAME} ${wrapperClassName}`}>

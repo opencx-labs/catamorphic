@@ -410,19 +410,21 @@ function SidebarSection({
           >
             <span className="truncate">{title}</span>
           </button>
-          {refreshing && (
-            <span
-              role="status"
-              aria-label={`Refreshing ${title}`}
-              className="grid size-7 shrink-0 place-items-center text-fg-muted"
-            >
-              <LoaderCircle
-                aria-hidden="true"
-                data-loading-for={contribution?.section.id}
-                className="size-3 animate-spin motion-reduce:animate-none"
-              />
-            </span>
-          )}
+          <span
+            role="status"
+            aria-label={`Refreshing ${title}`}
+            aria-hidden={!refreshing}
+            hidden={!refreshing}
+            className="sidebar-refresh shrink-0 place-items-center overflow-hidden text-fg-muted"
+          >
+            <LoaderCircle
+              aria-hidden="true"
+              data-loading-for={
+                refreshing ? contribution?.section.id : undefined
+              }
+              className="size-3 shrink-0 animate-spin motion-reduce:animate-none"
+            />
+          </span>
           {headerActions.map((entry) => (
             <ShortcutHint
               key={`${entry.action}:${entry.label}:${entry.url ?? ""}`}
