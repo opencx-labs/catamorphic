@@ -44,6 +44,11 @@ Opening here can reuse a compatible clean browser/editor. Preserve dirty buffers
 and running sessions. An existing surface retains identity when focused, tiled,
 floated or restored. A collapsed tab group affects the strip, not materialization.
 
+A person's press inside a browser page focuses its side of a split, just as a
+press on the pane's toolbar does. Browser tools also send trusted page input;
+their existing browser activity scope keeps those presses from switching the
+person's focused pane.
+
 A chat open as a tab groups the tabs attached to it. Dragging a tab onto a chat
 (past its tab's leading edge in the strip, onto its row in the sidebar's tabs)
 attaches it, as if the chat had opened it, and opens a folded group; dropped

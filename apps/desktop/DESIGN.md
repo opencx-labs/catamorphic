@@ -3949,3 +3949,13 @@ leave measured space for distant closed rows (ADR 0299). Open payloads and activ
 interaction keep their keyed nodes. Native Tab still visits every logical row.
 Existing disclosure and list-close motion stays in charge; scrolling historical
 rows into view plays no arrival animation.
+
+### 2026-11-03: Incognito browser tabs
+
+An incognito tab looks like any other tab: it keeps its site's icon, with a
+small ghost on the icon's corner and an Incognito pill beside the address bar,
+so the strip stays calm and the difference is still visible at a glance. It
+opens from the palette (Cmd+Shift+N) or a link's menu. Everything it opens stays
+incognito, and its sign-ins end a moment after the last incognito tab closes
+(ADR 0303).
+

@@ -89,6 +89,8 @@ export type WorkspaceTab = (
       asleep?: boolean;
       /** The page waits on its dialog (ADR 0227). */
       pageDialog?: boolean;
+      /** The page is in the profile's incognito session (ADR 0303). */
+      incognito?: boolean;
     }
   | {
       kind: "settings";

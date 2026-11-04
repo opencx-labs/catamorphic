@@ -647,6 +647,7 @@ describe("page menus", () => {
       "Open link in new tab",
       "Open link to the side",
       "Open link floating",
+      "Open link in incognito tab",
       "—",
       "Download linked file",
     ]);
@@ -738,6 +739,29 @@ describe("page menus", () => {
     await app.waitFor(`document.activeElement === ${view}`, {
       label: "page focused",
     });
+  });
+
+  it("open a link in an incognito tab", async () => {
+    const incognitoTabs =
+      "document.querySelectorAll('[data-tab-incognito]').length";
+    expect(await app.eval<number>(incognitoTabs)).toBe(0);
+    await pageMenuAt("#link");
+    await pick("Open link in incognito tab");
+    await app.waitFor(`${incognitoTabs} === 1`, {
+      label: "link opened in an incognito tab",
+    });
+    await loaded("Next page");
+    expect(await app.eval<string>(`${view}.getAttribute('partition')`)).toMatch(
+      /^incognito-profile-/,
+    );
+    // Closing it brings the page with the link back to the front.
+    await run(
+      `document.querySelector('[data-tab-incognito]').closest('[data-point-key^="browser:"]').querySelector('button[aria-label^="Close"]').click()`,
+    );
+    await app.waitFor(`${incognitoTabs} === 0`, {
+      label: "incognito tab closed",
+    });
+    await loaded("Menu lab");
   });
 
   it("open a link in a new tab", async () => {
