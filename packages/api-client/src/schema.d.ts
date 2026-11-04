@@ -6179,6 +6179,7 @@ export interface paths {
                     visibility?: "promoted" | "latent" | "archived";
                     parentSessionId?: string;
                     rootsOnly?: "true" | "false";
+                    query?: string;
                 };
                 header?: never;
                 path: {
@@ -6263,6 +6264,7 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
                                 key: string | null;
                                 keyWorkflows: string[];
                                 placement: {
@@ -6408,6 +6410,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -6625,6 +6628,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -6761,6 +6765,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -6906,6 +6911,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -7427,6 +7433,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -7682,6 +7689,7 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
                                 key: string | null;
                                 keyWorkflows: string[];
                                 placement: {
@@ -7924,6 +7932,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -8160,6 +8169,7 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
                                 key: string | null;
                                 keyWorkflows: string[];
                                 placement: {
@@ -8320,6 +8330,7 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
                                 key: string | null;
                                 keyWorkflows: string[];
                                 placement: {
@@ -8519,6 +8530,7 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
                                 key: string | null;
                                 keyWorkflows: string[];
                                 placement: {
@@ -8743,6 +8755,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -9170,6 +9183,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -9319,6 +9333,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -9618,6 +9633,7 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
                                 key: string | null;
                                 keyWorkflows: string[];
                                 placement: {
@@ -9796,6 +9812,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
@@ -11420,6 +11437,7 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
                             key: string | null;
                             keyWorkflows: string[];
                             placement: {
