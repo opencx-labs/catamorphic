@@ -334,6 +334,14 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
     "$$('[data-tab-orientation=\"horizontal\"] [data-point-key]').length >= 2",
     "two tabs",
   );
+  // Each suite owns an app, but the private desktop's pointer survives
+  // between them. A project card opened by that pointer can cover the
+  // strip's drag room; measure the chrome with hover cards out of the way.
+  await app.movePointer({ x: 900, y: 700 });
+  await settle(
+    "!$('[data-resource-inspector][data-open]')",
+    "hover cards clear of the drag room",
+  );
   const strip = `$('[data-tab-orientation="horizontal"]')`;
   const controls = `[data-tab-orientation="horizontal"] [data-point-key] button, .workspace-chrome button[aria-label="New tab"], [data-sidebar="left"] [aria-label="Switch project"], button[aria-label$="sidebar"]`;
   const expectDragRoom = async (layout: string, min: number) => {

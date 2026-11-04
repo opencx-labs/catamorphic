@@ -39,6 +39,13 @@ Work uses a fresh application identity and storage directory. Alpha data and
 credentials from the previous app are not migrated automatically. Project
 folders remain ordinary files you can import.
 
+On macOS, Finder's **Open With** menu and Work's Dock icon accept PDFs, images,
+media, web pages, text and code. Work appears as an alternative without changing
+your default app. Text and code open in the current project's editor, or as plain
+text in a browser tab when no project is open; other supported files open in a
+browser tab. Reopening an editor file reuses its tab; browser files follow the
+**Switch to a page's open tab** preference.
+
 ## One system, three ways to use it
 
 ### Desktop app
@@ -49,6 +56,11 @@ models can work side by side in durable sessions. Agents use the browser, termin
 editors, project files, apps, and connectors you can also use yourself. You can
 take over a surface at any moment, inspect diffs when a change deserves your
 eyes, or trust routine work to continue.
+
+The palette's History mode finds the current project's chats by words in their
+titles and messages, showing a matching excerpt beside the pages and work opened
+in the profile. It searches user and assistant messages, excluding tool output
+and reasoning.
 
 Projects are ordinary folders and git repositories. Every agent turn that
 changes files creates a checkpoint commit, and any turn can be undone with

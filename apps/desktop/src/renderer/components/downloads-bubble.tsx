@@ -2,8 +2,8 @@ import { Download, FolderOpen, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   type DownloadRecord,
-  downloadOpensInWork,
   isActiveDownload,
+  opensInWork,
 } from "../../shared/downloads.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
@@ -287,7 +287,7 @@ export function DownloadsBubble({
             const openable =
               record.state === "completed" &&
               record.exists &&
-              downloadOpensInWork(record.filename);
+              opensInWork(record.filename);
             return (
               <li key={record.id} className="group flex items-center gap-1">
                 <button

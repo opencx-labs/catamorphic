@@ -597,4 +597,65 @@ describe("imported sessions", () => {
       after.snapshot.items.find((item) => item.kind === "command")?.status,
     ).toBe("completed");
   });
+
+  it("finds a chat by words written in its messages, with where they were", async () => {
+    const project = await projects.create(identity, { name: "Search" });
+    const { sessionId } = await importInto(
+      project.id,
+      transcript([firstTurn({ done: true }), secondTurn], {
+        nativeSessionId: randomUUID(),
+      }),
+      "sha-s1",
+    );
+    await importInto(
+      project.id,
+      transcript([secondTurn], { nativeSessionId: randomUUID() }),
+      "sha-s2",
+    );
+    const search = (query: string) =>
+      sessions.list(identity, project.id, { query, limit: 10 });
+
+    // Every word, each anywhere in the chat; the excerpt is the message
+    // holding the most of them.
+    const found = await search("SCHEMAS type");
+    expect(found.items.map((session) => session.id)).toEqual([sessionId]);
+    expect(found.items[0]?.match).toBe("A type error in schemas.ts.");
+    expect(
+      (await search("schemas fix")).items.map((session) => session.id),
+    ).toEqual([sessionId]);
+    expect((await search("why")).items[0]?.match).toBe(
+      "Why does the build fail?",
+    );
+    // Tool output is not the conversation; wildcards are plain characters.
+    expect((await search("TS2345")).items).toEqual([]);
+    expect((await search("%")).items).toEqual([]);
+    expect((await search("schemas missing")).items).toEqual([]);
+    // Without words, every chat.
+    expect((await search("  ")).total).toBe(2);
+
+    // A long message reads from a few words before the match.
+    const long = "We looked at the logs, the dashboards and the alerts, then";
+    await importInto(
+      project.id,
+      transcript(
+        [
+          {
+            ...secondTurn,
+            key: "prompt-long",
+            input: {
+              key: "prompt-long",
+              text: `${long} found the flaky migration in staging.`,
+              at: at(7),
+            },
+            items: [],
+          },
+        ],
+        { nativeSessionId: randomUUID() },
+      ),
+      "sha-s3",
+    );
+    expect((await search("flaky")).items[0]?.match).toBe(
+      "…alerts, then found the flaky migration in staging.",
+    );
+  });
 });

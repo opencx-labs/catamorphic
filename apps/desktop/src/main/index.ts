@@ -18,10 +18,13 @@ import {
   safeStorage,
   screen,
   session,
+  shell,
   type WebContents,
   webContents,
 } from "electron";
 import { SHELL_WINDOW_ARGUMENT } from "../shared/desktop-workspace.js";
+import { opensInWork } from "../shared/downloads.js";
+import { localFileUrl } from "../shared/surface-link.js";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { macApplicationMenu } from "./app-menu.js";
@@ -247,6 +250,18 @@ function notifyBrowserLinks(): void {
   window.focus();
   window.webContents.send("catamorphic:pending-browser-urls");
 }
+// Finder's Open With, or a file dropped on the Dock icon: a file Work can
+// show opens in a tab, as an opened download does (ADR 0153); anything
+// else is shown in Finder.
+app.on("open-file", (event, filePath) => {
+  event.preventDefault();
+  if (!opensInWork(filePath)) {
+    shell.showItemInFolder(filePath);
+    return;
+  }
+  pendingBrowserUrls.push(localFileUrl(filePath));
+  notifyBrowserLinks();
+});
 shellIpcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (!window || event.senderFrame !== event.sender.mainFrame) return [];
