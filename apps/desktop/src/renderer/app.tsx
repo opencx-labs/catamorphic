@@ -6284,6 +6284,21 @@ export function App({
       ? { onMouseDownCapture: () => selectTab(key) }
       : {}),
   });
+  /**
+   * A press inside a page reaches its guest, never the pane's DOM, so the
+   * page reports it and the pane takes focus the same way.
+   */
+  const focusPaneOnPagePress = (key: string) => () => {
+    // Browser tools send trusted input too. Their existing activity scope
+    // keeps the page awake; it must not move the person's focused pane.
+    if (
+      !busyBrowsers.has(key.slice("browser:".length)) &&
+      split &&
+      workspace.activeTabKey !== key &&
+      isSplitSlot(key)
+    )
+      selectTab(key);
+  };
   const splitCompanionKey = split
     ? workspace.activeTabKey === split.leftKey
       ? split.rightKey
@@ -7877,6 +7892,9 @@ export function App({
                               final: true,
                             })
                           }
+                          onPagePress={focusPaneOnPagePress(
+                            browserTabKey(browser.localId),
+                          )}
                           onOpenSiteSettings={setSiteSettingsOrigin}
                           onOpenPasswords={() =>
                             openPasswords(browser.profileId)
@@ -8500,6 +8518,9 @@ export function App({
                             final: true,
                           })
                         }
+                        onPagePress={focusPaneOnPagePress(
+                          browserTabKey(browser.localId),
+                        )}
                         onOpenSiteSettings={setSiteSettingsOrigin}
                         onOpenPasswords={() => openPasswords(browser.profileId)}
                         onOpenExtensions={() =>
