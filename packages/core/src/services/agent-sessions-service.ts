@@ -479,6 +479,8 @@ export interface AgentSession {
   attentionRequired: boolean;
   /** Most recent message explicitly requesting attention. */
   attentionMessage?: { id: string; content: string };
+  /** A searched list's excerpt of the message the words were found in. */
+  match?: string;
   status: "active" | "closed";
   /**
    * The project-scoped key automations reach this chat by (ADR 0173), or
@@ -754,6 +756,37 @@ function provisionalTitle(input: {
     .filter(Boolean);
   const text = input.text.replace(/\s+/g, " ").trim() || names.join(", ");
   return text.length > 500 ? `${text.slice(0, 499)}…` : text;
+}
+
+/** What a chat search reads: the conversation, not tool calls or reasoning. */
+const SEARCHED_ITEM_KINDS = ["user_message", "assistant_message"] as const;
+
+/** A chat search's distinct words, lowercased and bounded. */
+function searchTerms(query: string | undefined): string[] {
+  const words = (query ?? "").toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return [...new Set(words)].slice(0, 8).map((word) => word.slice(0, 100));
+}
+
+function containsPattern(term: string): string {
+  return `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
+
+/**
+ * The part of a matching message from a few words before its first matched
+ * word, so a one-line row still shows the word.
+ */
+function matchExcerpt(text: string, terms: readonly string[]): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const lower = flat.toLocaleLowerCase();
+  const at = Math.min(
+    ...terms.map((term) => lower.indexOf(term)).filter((index) => index >= 0),
+  );
+  const from = Number.isFinite(at) ? Math.max(0, at - 24) : 0;
+  const space = flat.indexOf(" ", from);
+  // Start on a word: the first one wholly inside the window.
+  const start = from > 0 && space >= 0 && space < at ? space + 1 : from;
+  const end = Math.min(flat.length, start + 200);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end).trim()}${end < flat.length ? "…" : ""}`;
 }
 
 /** Compact, bounded peer context derived from a session's latest request. */
@@ -1764,6 +1797,11 @@ export class AgentSessionsService {
       parentSessionId?: string;
       rootsOnly?: boolean;
       visibility?: SessionVisibility;
+      /**
+       * Words that must each appear in the chat's title or in one of its
+       * messages; matches come newest activity first, each with `match`.
+       */
+      query?: string;
     } = {},
   ): Promise<{ items: AgentSession[]; total: number }> {
     await this.requireProject(identity, projectId);
@@ -1890,9 +1928,26 @@ export class AgentSessionsService {
         : query.where("parent_session_id", "is", null);
     }
 
+    const terms = searchTerms(input.query);
+    const words = terms.map(containsPattern);
+    for (const word of words)
+      query = query.where((eb) =>
+        eb.or([
+          eb("title", "ilike", word),
+          eb.exists(
+            eb
+              .selectFrom("agent_items")
+              .select("agent_items.id")
+              .whereRef("agent_items.session_id", "=", "agent_sessions.id")
+              .where("agent_items.kind", "in", SEARCHED_ITEM_KINDS)
+              .where("agent_items.text", "ilike", word),
+          ),
+        ]),
+      );
+
     const rows = await query
       .selectAll()
-      .orderBy("created_at", "desc")
+      .orderBy(words.length ? "updated_at" : "created_at", "desc")
       .limit(limit)
       .offset(offset)
       .execute();
@@ -1929,6 +1984,39 @@ export class AgentSessionsService {
     );
     const running = await this.runningSessionIds(rows.map((row) => row.id));
 
+    // Each found chat's message with the most of the words, latest first.
+    const matches =
+      words.length && rows.length
+        ? await this.db
+            .selectFrom("agent_items")
+            .select(["session_id", "text"])
+            .where(
+              "session_id",
+              "in",
+              rows.map((row) => row.id),
+            )
+            .where("kind", "in", SEARCHED_ITEM_KINDS)
+            .where((eb) =>
+              eb.or(words.map((word) => eb("text", "ilike", word))),
+            )
+            .distinctOn("session_id")
+            .orderBy("session_id")
+            .orderBy(
+              sql`${sql.join(
+                words.map((word) => sql`(text ilike ${word})::int`),
+                sql` + `,
+              )} desc`,
+            )
+            .orderBy("position", "desc")
+            .execute()
+        : [];
+    const matchBySession = new Map(
+      matches.map((match) => [
+        match.session_id,
+        matchExcerpt(match.text, terms),
+      ]),
+    );
+
     const children = rows.length
       ? await visibleSessions
           .where(
@@ -1956,6 +2044,7 @@ export class AgentSessionsService {
         ),
         childCount: counts.get(row.id) ?? 0,
         attentionMessage: attentionBySession.get(row.id),
+        match: matchBySession.get(row.id),
       })),
       total,
     };
