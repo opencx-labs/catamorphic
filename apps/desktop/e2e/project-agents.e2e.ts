@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Project agents (ADR 0050): committed `.catamorphic/agents/<slug>.json` definitions
@@ -21,6 +26,7 @@ let projectRoot: string;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 });
 
 afterAll(async () => {

@@ -4,6 +4,7 @@ import {
   type AppHandle,
   type FrameHandle,
   launchApp,
+  openOnboardingStep,
   setReactValueJs,
 } from "./harness.js";
 
@@ -116,6 +117,7 @@ async function verifyReviewTheme(frame: FrameHandle) {
 }
 beforeAll(async () => {
   app = await launchApp({ env: { CATAMORPHIC_E2E_REVIEW: "1" } });
+  await openOnboardingStep(app, "Get started");
   await wait("return !!button('Create or import project');");
   await run("button('Create or import project').click();");
   await wait("return !!$('[data-testid=project-name-input]');");

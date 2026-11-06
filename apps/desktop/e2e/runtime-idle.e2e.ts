@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let fixture: http.Server;
@@ -18,6 +23,7 @@ beforeAll(async () => {
     throw new Error("Missing fixture port");
   fixtureUrl = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
   await app.waitFor(
     `!![...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project')`,
   );

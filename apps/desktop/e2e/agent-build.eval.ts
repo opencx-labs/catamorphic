@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { type FrameHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type FrameHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Eval-style e2e: a REAL model-backed agent builds a small app end to end —
@@ -98,6 +103,7 @@ describeIf("agent build eval (real model)", () => {
           : { OPENAI_API_KEY: openaiKey }),
       },
     });
+    await openOnboardingStep(app, "Get started");
     const run = <T>(body: string) =>
       app.eval<T>(`(async () => { ${helpers}\n${body} })()`);
     const runWait = <T>(

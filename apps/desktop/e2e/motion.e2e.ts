@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Motion-contract tests. These do NOT measure frame rate (machine-dependent,
@@ -52,6 +57,7 @@ beforeAll(async () => {
       CATAMORPHIC_PWA_DIST: pairingDist,
     },
   });
+  await openOnboardingStep(app, "Get started");
 });
 
 afterAll(async () => {

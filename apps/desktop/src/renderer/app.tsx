@@ -13,16 +13,11 @@ import {
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  Check,
   Columns2,
-  Download,
-  FolderPlus,
-  Link2,
   MessageSquare,
   PanelLeft,
   PanelRight,
   Settings as SettingsIcon,
-  Sparkles,
   Wand2,
 } from "lucide-react";
 import {
@@ -60,6 +55,7 @@ import {
   openModeFromEvent,
 } from "../shared/open-mode.js";
 import type { ProjectExperienceContext } from "../shared/project-experience.js";
+import type { SettingsDestination } from "../shared/settings-catalog.js";
 import {
   type SidebarSurface,
   sidebarSections,
@@ -79,7 +75,6 @@ import {
   AgentPointers,
 } from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
-import { BrowserImportDialog } from "./components/browser-import.js";
 import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
 import { ChatRegistration } from "./components/chat-registration.js";
 import {
@@ -88,7 +83,6 @@ import {
 } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
-import { DefaultBrowserButton } from "./components/default-browser.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import {
   ElicitationModal,
@@ -123,6 +117,7 @@ import type { SidebarContentState } from "./components/sidebar-contribution.js";
 import { ConfiguredSection } from "./components/sidebar-navigation.js";
 import { SiteSettingsHost } from "./components/site-settings-modal.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
+import { ThemePicker } from "./components/theme-picker.js";
 import {
   type PendingToolPermission,
   ToolPermissionModal,
@@ -202,6 +197,7 @@ import {
 import { DownloadsScreen } from "./screens/downloads-screen.js";
 import { HistoryScreen } from "./screens/history-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
+import { OnboardingScreen } from "./screens/onboarding-screen.js";
 import { PasswordsScreen } from "./screens/passwords-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { RunScreen } from "./screens/run-screen.js";
@@ -499,7 +495,7 @@ export function App({
   const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(
     null,
   );
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
   // Opening an empty sidebar is a temporary customization affordance, scoped
   // to this profile/project. It must not replace the populated-sidebar choice.
@@ -659,6 +655,23 @@ export function App({
   // auto-opened tab on agent-less profiles, the modal that gates starting
   // a chat with no agents, Settings' "Add agent", and the palette command.
   const [wizardModalOpen, setWizardModalOpen] = useState(false);
+  const [themePicker, setThemePicker] = useState<{
+    open: boolean;
+    destination?: SettingsDestination;
+  }>({ open: false });
+  const [themeCustomization, setThemeCustomization] = useState<{
+    projectId: string;
+    profileId: string;
+    step?: number;
+    ready?: boolean;
+  } | null>(null);
+  const onboardingProfileRef = useRef(activeProfile?.id);
+  onboardingProfileRef.current = activeProfile?.id;
+  useEffect(() => {
+    void activeProfileId;
+    setThemePicker({ open: false });
+    setThemeCustomization(null);
+  }, [activeProfileId]);
   // Either wizard surface (tab or modal) reports being mid-flow.
   const wizardEngagedRef = useRef(false);
   const setWizardEngaged = useCallback((engaged: boolean) => {
@@ -831,6 +844,12 @@ export function App({
   }, [projectId, onProjectResolved]);
 
   const startWithAgent = async (): Promise<void> => {
+    if (projectId) {
+      if (hasAgents) addChat("tab");
+      else
+        openTab({ kind: "agent-setup", name: "setup", label: "Set up agent" });
+      return;
+    }
     const project = await desktopApi.createDefaultProject();
     if (activeProfile) {
       // This entry point explicitly asks for the Cmd+N-style modal. Prevent
@@ -921,7 +940,10 @@ export function App({
       ws.terminals.length === 0 &&
       ws.editors.length === 0 &&
       ws.tabs.every(
-        (tab) => tab.kind === "palette" || tab.kind === "agent-setup",
+        (tab) =>
+          tab.kind === "palette" ||
+          tab.kind === "agent-setup" ||
+          tab.kind === "onboarding",
       );
     if (
       !emptyWorkspaceNow ||
@@ -1390,7 +1412,13 @@ export function App({
   const openTab = (tab: WorkspaceTab, mode?: CommitMode) => {
     // Settings navigation must reveal its control, including keyboard commits
     // from a palette opened over a floating conversation.
-    if (tab.kind === "settings") minimizeFloatingChats();
+    if (tab.kind === "settings") {
+      minimizeFloatingChats();
+      if (tab.destination?.id.startsWith("theme.")) {
+        setThemePicker({ open: true, destination: tab.destination });
+        return;
+      }
+    }
     return updateWorkspace((ws) => {
       const key = tabKey(tab);
       const exists = ws.tabs.some((existing) => tabKey(existing) === key);
@@ -1402,7 +1430,9 @@ export function App({
         ...ws,
         tabs: exists
           ? ws.tabs.map((existing) =>
-              (tab.kind === "diff" || tab.kind === "settings") &&
+              (tab.kind === "diff" ||
+                tab.kind === "settings" ||
+                tab.kind === "onboarding") &&
               tabKey(existing) === key
                 ? { ...existing, ...tab }
                 : existing,
@@ -2192,7 +2222,10 @@ export function App({
       setClosingWorkflow(key);
       return;
     }
-    if (key.startsWith("agent-setup:") && activeProfileId)
+    if (
+      (key.startsWith("agent-setup:") || key.startsWith("onboarding:")) &&
+      activeProfileId
+    )
       setupDismissedRef.current.add(activeProfileId);
     const browser = workspaceRef.current.browsers.find(
       (item) => browserTabKey(item.localId) === key,
@@ -2211,6 +2244,7 @@ export function App({
     key: string,
     opts?: { force?: boolean; discardDraft?: boolean },
   ) => {
+    if (key === "agent-setup:theme") setThemeCustomization(null);
     if (workspaceRef.current.floatingKey === key)
       floatingMotion.dismiss(() => closeTabImmediately(key, opts));
     else closeTabImmediately(key, opts);
@@ -2362,37 +2396,37 @@ export function App({
     return entry.localId;
   };
 
-  // Agent-less profiles greet the user with the setup wizard as a real,
-  // closable tab: close it to skip; it returns as a modal on chat attempts.
+  // Keep the former empty-profile and agent-less-project entry conditions.
+  // Closing the tutorial skips it for this session, just as closing setup did.
   useEffect(() => {
     if (
-      !projectId ||
-      !remoteSurfaceResolved ||
-      !workspaceReady ||
+      !activeProfileId ||
+      projectsLoading ||
+      projectsLoadError ||
       agentsData === null ||
-      hasAgents
+      (projectId && (!remoteSurfaceResolved || !workspaceReady || hasAgents)) ||
+      setupDismissedRef.current.has(activeProfileId)
     )
       return;
-    if (!activeProfileId || setupDismissedRef.current.has(activeProfileId)) {
-      return;
-    }
     updateWorkspace((ws) => {
-      const key = "agent-setup:setup";
-      if (ws.tabs.some((tab) => tabKey(tab) === key)) return ws;
+      if (ws.tabs.some((tab) => tab.kind === "onboarding")) return ws;
       const tab: WorkspaceTab = {
-        kind: "agent-setup",
-        name: "setup",
-        label: "Set up agent",
+        kind: "onboarding",
+        name: "welcome",
+        label: "Onboarding",
+        step: 0,
       };
-      return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: key };
+      return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: tabKey(tab) };
     });
   }, [
-    projectId,
-    workspaceReady,
-    remoteSurfaceResolved,
-    agentsData,
-    hasAgents,
     activeProfileId,
+    projectsLoading,
+    projectsLoadError,
+    agentsData,
+    projectId,
+    remoteSurfaceResolved,
+    workspaceReady,
+    hasAgents,
     updateWorkspace,
   ]);
 
@@ -2406,7 +2440,9 @@ export function App({
     if (!hasAgents || wizardEngagedRef.current) return;
     setWizardModalOpen(false);
     updateWorkspace((ws) => {
-      const tabs = ws.tabs.filter((tab) => tab.kind !== "agent-setup");
+      const tabs = ws.tabs.filter(
+        (tab) => tab.kind !== "agent-setup" || tab.purpose === "theme",
+      );
       if (tabs.length === ws.tabs.length) return ws;
       const lastTab = tabs.at(-1);
       const activeTabKey = tabs.some((tab) => tabKey(tab) === ws.activeTabKey)
@@ -3545,6 +3581,17 @@ export function App({
     "submit-pr-comment": () => {
       const form = document.activeElement?.closest("form[data-pr-comment]");
       if (form instanceof HTMLFormElement) form.requestSubmit();
+    },
+    "open-onboarding": () =>
+      openTab({
+        kind: "onboarding",
+        name: "welcome",
+        label: "Onboarding",
+        step: 0,
+      }),
+    "choose-theme": () => {
+      minimizeFloatingChats();
+      setThemePicker({ open: true });
     },
     "open-settings": () =>
       openTab({ kind: "settings", name: "settings", label: "Settings" }),
@@ -5094,6 +5141,9 @@ export function App({
             action.id,
             [
               "check-for-updates",
+              "open-onboarding",
+              "choose-theme",
+              "open-settings",
               "setup-agent",
               "manage-connectors",
               "connect-remote-project",
@@ -5234,6 +5284,118 @@ export function App({
     setSidebarCustomization(null);
     openSidebarCustomizationRef.current(sidebarCustomization.side);
   }, [sidebarCustomization, projectId, workspaceReady, hasAgents]);
+
+  const customizeTheme = () => {
+    setThemePicker({ open: false });
+    const profileId = activeProfile?.id;
+    if (!profileId) return;
+    setupDismissedRef.current.add(profileId);
+    const tutorial = workspace.tabs.find((tab) => tab.kind === "onboarding");
+    const step =
+      tutorial?.kind === "onboarding" ? (tutorial.step ?? 1) : undefined;
+    void (async () => {
+      const targetId =
+        projectId ?? (await desktopApi.createDefaultProject()).id;
+      if (onboardingProfileRef.current !== profileId) return;
+      setThemeCustomization({ projectId: targetId, profileId, step });
+      if (!projectId) {
+        await projectsQuery.refetch();
+        if (onboardingProfileRef.current === profileId) selectProject(targetId);
+      }
+    })().catch((cause: unknown) =>
+      setLinkError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not start theme customization",
+      ),
+    );
+  };
+  const themeHandoffRef = useRef({ openTab, sendToAgent });
+  themeHandoffRef.current = { openTab, sendToAgent };
+  useEffect(() => {
+    const request = themeCustomization;
+    if (
+      !request ||
+      request.profileId !== activeProfileId ||
+      request.projectId !== projectId ||
+      !workspaceReady ||
+      !remoteSurfaceResolved
+    )
+      return;
+    // Copy the tutorial into the new project's workspace before opening setup.
+    if (request.step !== undefined)
+      updateWorkspace((ws) =>
+        ws.tabs.some((tab) => tab.kind === "onboarding")
+          ? ws
+          : {
+              ...ws,
+              tabs: [
+                ...ws.tabs,
+                {
+                  kind: "onboarding",
+                  name: "welcome",
+                  label: "Onboarding",
+                  step: request.step,
+                },
+              ],
+            },
+      );
+    if (!hasAgents) {
+      themeHandoffRef.current.openTab({
+        kind: "agent-setup",
+        name: "theme",
+        label: "Set up agent",
+        purpose: "theme",
+      });
+      if (!request.ready) setThemeCustomization({ ...request, ready: true });
+      return;
+    }
+    // An active setup flow owns its own completion; agent creation precedes sign-in.
+    if (request.ready) return;
+    setThemeCustomization(null);
+    themeHandoffRef.current.sendToAgent(
+      "Help me make a theme for Work. Ask me about the colors and style I have in mind, then customize my theme.",
+      "tab",
+    );
+  }, [
+    themeCustomization,
+    activeProfileId,
+    projectId,
+    workspaceReady,
+    remoteSurfaceResolved,
+    hasAgents,
+    updateWorkspace,
+  ]);
+  const finishAgentSetup = (tab: WorkspaceTab) => {
+    const request = themeCustomization;
+    closeTab(tabKey(tab));
+    if (tab.kind === "agent-setup" && tab.purpose === "theme")
+      setThemeCustomization(request ? { ...request, ready: false } : null);
+  };
+  const renderOnboarding = (
+    tab: Extract<WorkspaceTab, { kind: "onboarding" }>,
+  ) => (
+    <OnboardingScreen
+      key={`${activeProfileId}:${tabKey(tab)}`}
+      step={tab.step ?? 0}
+      onStepChange={(step) =>
+        updateWorkspace((ws) => ({
+          ...ws,
+          tabs: ws.tabs.map((item) =>
+            tabKey(item) === tabKey(tab) ? { ...tab, step } : item,
+          ),
+        }))
+      }
+      onChooseTheme={() => setThemePicker({ open: true })}
+      onStartWithAgent={startWithAgent}
+      onNewProject={() => setProjectModalOpen(true)}
+      onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
+      onFinish={() => closeTab(tabKey(tab))}
+      profileId={activeProfile?.id}
+      importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
+      hasProject={Boolean(projectId)}
+    />
+  );
 
   const sidebarTabs = (side: "left" | "right") => {
     if (side === "right" && !projectId) return [];
@@ -5866,6 +6028,7 @@ export function App({
                         onSearch={settingsSearch}
                         onAddAgent={() => setWizardModalOpen(true)}
                         onConfigureAgent={openConfigureAgent}
+                        onChooseTheme={() => setThemePicker({ open: true })}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
                       />
                     ) : tab.kind === "profile-settings" && profilesData ? (
@@ -5910,11 +6073,13 @@ export function App({
                         onClose={() => closeTab(tabKey(tab))}
                         {...paletteProps}
                       />
+                    ) : tab.kind === "onboarding" ? (
+                      renderOnboarding(tab)
                     ) : tab.kind === "agent-setup" ? (
                       <AgentWizard
                         variant="tab"
                         onClose={() => closeTab(tabKey(tab))}
-                        onDone={() => closeTab(tabKey(tab))}
+                        onDone={() => finishAgentSetup(tab)}
                         onEngagedChange={setWizardEngaged}
                       />
                     ) : tab.kind === "diff" ? (
@@ -6444,12 +6609,21 @@ export function App({
               />
             ))}
           </div>
+        ) : activeTab?.kind === "onboarding" ? (
+          renderOnboarding(activeTab)
+        ) : activeTab?.kind === "palette" ? (
+          <CommandPalette
+            variant="tab"
+            onClose={() => closeTab(tabKey(activeTab))}
+            {...paletteProps}
+          />
         ) : activeTab?.kind === "settings" ? (
           <SettingsScreen
             destination={activeTab.destination}
             onSearch={settingsSearch}
             onAddAgent={() => setWizardModalOpen(true)}
             onConfigureAgent={openConfigureAgent}
+            onChooseTheme={() => setThemePicker({ open: true })}
             onManageConnectors={() => setConnectorsModalOpen(true)}
           />
         ) : activeTab?.kind === "history" ? (
@@ -6522,16 +6696,11 @@ export function App({
           </div>
         ) : (
           <EmptyState
-            key={activeProfile?.id}
             loading={projectsLoading}
             loadError={projectsLoadError}
             retrying={projectsFetching}
             onRetry={() => void projectsQuery.refetch()}
-            onNewProject={() => setProjectModalOpen(true)}
-            onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
-            onStartWithAgent={startWithAgent}
-            profileId={activeProfile?.id}
-            importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
+            onOpenOnboarding={() => actionHandlers["open-onboarding"]()}
           />
         )}
       </main>
@@ -6575,6 +6744,14 @@ export function App({
           {...paletteProps}
         />
       )}
+
+      <ThemePicker
+        open={themePicker.open}
+        destination={themePicker.destination}
+        projectId={projectId}
+        onClose={() => setThemePicker({ open: false })}
+        onCustomize={customizeTheme}
+      />
 
       {/* The wizard modal: same experience as the setup tab, reachable from
           chat gating, Settings, and the palette command. */}
@@ -6751,145 +6928,47 @@ export function App({
 }
 
 function EmptyState({
-  profileId,
-  importCompleted,
   loading,
   loadError,
   retrying,
   onRetry,
-  onNewProject,
-  onConnectRemote,
-  onStartWithAgent,
+  onOpenOnboarding,
 }: {
-  profileId?: string;
-  importCompleted: boolean;
   loading: boolean;
   loadError: boolean;
   retrying: boolean;
   onRetry: () => void;
-  onNewProject: () => void;
-  onConnectRemote: () => void;
-  onStartWithAgent: () => Promise<void>;
+  onOpenOnboarding: () => void;
 }) {
-  const [importOpen, setImportOpen] = useState(false);
-  const [justImported, setJustImported] = useState(false);
-  const imported = importCompleted || justImported;
-  const [startingAgent, setStartingAgent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const start = async () => {
-    if (startingAgent) return;
-    setStartingAgent(true);
-    setError(null);
-    try {
-      await onStartWithAgent();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setStartingAgent(false);
-    }
-  };
-
   return (
-    <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-8">
-      <div className="w-full max-w-xs text-left">
+    <div className="grid min-h-0 flex-1 place-items-center p-6">
+      <div className="max-w-xs text-center">
         {loadError ? (
           <div role="alert" data-testid="project-load-error">
-            <h1 className="text-sm font-medium text-fg">
+            <h1 className="text-sm font-medium">
               Could not load your projects
             </h1>
             <p className="mt-2 text-sm text-fg-muted">
               Try again. If the problem continues, quit and reopen Work.
             </p>
             <PendingButton
-              type="button"
               pending={retrying}
               onClick={onRetry}
-              className="mt-4 h-8 cursor-pointer rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+              className="button-secondary mt-4"
             >
               Retry loading projects
             </PendingButton>
           </div>
         ) : loading ? (
-          <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
+          <p className="text-sm text-fg-muted">Loading…</p>
         ) : (
-          <>
-            <h1 className="text-xl font-semibold text-fg">
-              Make yourself at home
-            </h1>
-            <p className="mt-2 text-[13px] leading-5 text-fg-muted">
-              Bring your browser with you, then choose where to start.
-            </p>
-            <div className="mt-5 flex flex-col gap-2">
-              <PendingButton
-                pending={false}
-                type="button"
-                disabled={!profileId || startingAgent}
-                data-disabled-reason={
-                  !profileId ? "Loading this profile" : "Starting the agent"
-                }
-                done={imported}
-                doneLabel={
-                  <span className="inline-flex items-center gap-2">
-                    <Check className="size-3.5 text-success" />
-                    Browser import complete
-                  </span>
-                }
-                onClick={() => setImportOpen(true)}
-                data-testid="onboarding-browser-import"
-                className="browser-setup-action"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <Download className="size-3.5" />
-                  Import from a browser
-                </span>
-              </PendingButton>
-              <DefaultBrowserButton />
-              <div className="my-2 border-t border-border" />
-              <PendingButton
-                type="button"
-                pending={startingAgent}
-                pendingLabel="Starting…"
-                onClick={() => void start()}
-                data-testid="empty-start-agent"
-                className="button-primary h-9 w-full"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <Sparkles className="size-3.5" />
-                  Start with an agent
-                </span>
-              </PendingButton>
-              <button
-                type="button"
-                onClick={onNewProject}
-                disabled={startingAgent}
-                data-disabled-reason="Starting the agent"
-                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <FolderPlus className="size-3.5" />
-                Create or import project
-              </button>
-              <button
-                type="button"
-                onClick={onConnectRemote}
-                disabled={startingAgent}
-                data-disabled-reason="Starting the agent"
-                data-testid="empty-connect-remote"
-                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Link2 className="size-3.5" />
-                Connect to a server
-              </button>
-            </div>
-            {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
-            {profileId && (
-              <BrowserImportDialog
-                open={importOpen}
-                profileId={profileId}
-                onClose={() => setImportOpen(false)}
-                onComplete={() => setJustImported(true)}
-              />
-            )}
-          </>
+          <button
+            type="button"
+            className="button-ghost"
+            onClick={onOpenOnboarding}
+          >
+            Explore Work
+          </button>
         )}
       </div>
     </div>

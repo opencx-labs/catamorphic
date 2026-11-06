@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 });
 afterAll(async () => {
   await app?.stop();

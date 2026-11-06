@@ -7,6 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { THEME_TOKENS } from "../../shared/theme-tokens.js";
 import { desktopApi, type ResolvedTheme } from "./desktop-api.js";
 
 type AppHostTheme = NonNullable<AppMountProps["theme"]>;
@@ -47,8 +48,28 @@ export function appHostTheme(theme: ResolvedTheme): AppHostTheme {
  * remain the pre-JS first paint). `color-scheme` follows the resolved
  * appearance so native scrollbars/form controls match.
  */
+let colorsRegistered = false;
+function registerThemeColors() {
+  if (
+    colorsRegistered ||
+    document.documentElement.classList.contains("theme-colors")
+  )
+    return;
+  const computed = getComputedStyle(document.documentElement);
+  for (const token of THEME_TOKENS)
+    CSS.registerProperty({
+      name: `--color-${token}`,
+      syntax: "<color>",
+      inherits: true,
+      initialValue: computed.getPropertyValue(`--color-${token}`).trim(),
+    });
+  colorsRegistered = true;
+}
+
 export function applyTheme(theme: ResolvedTheme): void {
   const root = document.documentElement;
+  registerThemeColors();
+  root.classList.add("theme-colors");
   for (const [token, value] of Object.entries(theme.colors)) {
     root.style.setProperty(`--color-${token}`, value);
   }
@@ -160,7 +181,7 @@ export function ProjectTheme({
   return (
     <ThemeScope theme={theme}>
       <div
-        className="size-full"
+        className="theme-colors size-full"
         data-theme={theme?.appearance}
         style={themeStyle(theme)}
       >

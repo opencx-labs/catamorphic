@@ -34,9 +34,7 @@ describe("project loading and update access", () => {
   });
 
   it("checks for updates from Cmd+P before any project exists", async () => {
-    await app.waitFor(
-      `!!document.querySelector('[data-testid="empty-start-agent"]')`,
-    );
+    await app.waitFor(`!!document.querySelector('[data-testid="onboarding"]')`);
     await checkFromPalette();
   });
 

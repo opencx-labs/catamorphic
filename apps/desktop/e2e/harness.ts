@@ -114,6 +114,8 @@ export interface LaunchOpts {
   urls?: string[];
   /** Installed/packaged binary for release performance checks with isolated data. */
   executablePath?: string;
+  /** Exercise the shipped first-launch layout instead of the standard workspace fixture. */
+  firstLaunch?: boolean;
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
@@ -205,6 +207,19 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     await client.waitFor("document.hasFocus()", {
       label: "launched desktop activated",
     });
+    // Most interaction suites use an explicit, stable workspace layout. The
+    // tutorial/window suites opt into the real first-launch presentation.
+    if (!opts.userDataDir && !opts.firstLaunch) {
+      await client.eval(
+        "window.catamorphicDesktop.setPrefs({sidebarOpen:true})",
+      );
+      await client.eval(
+        "window.catamorphicDesktop.devWindow('setSize',1200,800)",
+      );
+      await client.waitFor(
+        `!!document.querySelector('[aria-label="Collapse sidebar"]')`,
+      );
+    }
     // App iframes with an opaque origin render out of process; their CDP
     // targets appear on the same /json endpoint as the page. Attach a
     // dedicated WebSocket so tests can evaluate inside the frame.
@@ -614,3 +629,14 @@ export async function terminate(child: ChildProcess): Promise<void> {
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Navigate the real tutorial when a suite needs one of its setup actions. */
+export async function openOnboardingStep(app: AppHandle, label: string) {
+  await app.waitFor(`!!document.querySelector('[data-testid="onboarding"]')`);
+  await app.eval(
+    `document.querySelector('.onboarding-progress button[aria-label=${JSON.stringify(label)}]').click()`,
+  );
+  await app.waitFor(
+    `document.querySelector('.onboarding-progress button[aria-current="step"]')?.getAttribute('aria-label') === ${JSON.stringify(label)} && document.querySelector('.onboarding-track')?.getAnimations().every(animation => animation.playState !== 'running')`,
+  );
+}

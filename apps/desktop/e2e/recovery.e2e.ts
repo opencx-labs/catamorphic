@@ -1,5 +1,10 @@
 import { afterAll, describe, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Recovery flows: the app dies mid-agent-turn (crash, quit, dev restart)
@@ -53,6 +58,7 @@ const runWait = <T>(
 describe("interrupted turn recovery", () => {
   it("a turn killed mid-flight settles as interrupted on relaunch", async () => {
     app = await launchApp();
+    await openOnboardingStep(app, "Get started");
     await runWait(`return !!byText('button', 'Create or import project');`, {
       timeoutMs: 60_000,
       label: "empty state",

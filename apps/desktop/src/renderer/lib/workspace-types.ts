@@ -92,7 +92,8 @@ export type WorkspaceTab = (
   | { kind: "downloads"; name: string; label?: string }
   | { kind: "usage"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
-  | { kind: "agent-setup"; name: string; label?: string }
+  | { kind: "onboarding"; name: string; label?: string; step?: number }
+  | { kind: "agent-setup"; name: string; label?: string; purpose?: "theme" }
   | { kind: "terminal"; name: string; label?: string }
   | { kind: "editor"; name: string; label?: string }
   | {

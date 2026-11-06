@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * End-to-end flows against the real Electron app: isolated userData dir,
@@ -12,6 +17,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 });
 
 afterAll(async () => {

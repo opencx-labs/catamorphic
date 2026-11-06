@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
@@ -17,6 +22,7 @@ async function send(scenario: string) {
 }
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
   await wait("return !!button('Create or import project');");
   await run("button('Create or import project').click();");
   await wait("return !!$('[data-testid=project-name-input]');");

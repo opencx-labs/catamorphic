@@ -126,3 +126,22 @@ complete and keeps the existing next actions. Imports preserve existing accounts
 cookie scope and expiry, source visit dates and bookmark folders. Repeat imports
 merge without duplicates. Unsupported individual items are omitted quietly.
 Whole-operation errors are retryable and cancellation never marks import complete.
+
+## Onboarding
+
+The welcome experience is a normal Onboarding tab, automatically offered for an
+empty profile or an agent-less project once project and remote state resolve.
+Loading and project-load errors remain separate, with retry on failure. Closing
+onboarding skips it for that profile during this session. The palette can open it
+again using onboarding, tutorial, welcome, tour, getting started, learn, guide,
+or help. Reopening resets the same tab to Welcome rather than creating a duplicate.
+Project tabs persist their current step across relaunches.
+
+The tutorial introduces themes and the palette, then offers browser import,
+default-browser setup, and the existing starting choices. Each action reuses its
+normal implementation. Component previews are inert and use local example data.
+Theme customization carries the tutorial into the default project when needed,
+opens agent setup in another tab, then starts a normal theme conversation.
+
+First launch opens maximized with both sidebars collapsed. Existing profile
+preferences and saved window placement are respected on subsequent launches.

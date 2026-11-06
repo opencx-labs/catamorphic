@@ -23,7 +23,7 @@ export interface WindowState {
 export const DEFAULT_WINDOW_STATE: WindowState = {
   width: 1200,
   height: 800,
-  maximized: false,
+  maximized: true,
   fullscreen: false,
 };
 

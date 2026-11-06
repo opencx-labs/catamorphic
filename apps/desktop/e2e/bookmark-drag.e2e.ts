@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let folderId: string;
@@ -34,6 +39,7 @@ const bookmarks = () =>
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
   await app.waitFor(
     "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Create or import project')",
   );

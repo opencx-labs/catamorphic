@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { emitLog } from "@catamorphic/otel";
 import {
@@ -321,6 +322,13 @@ function createWindow(
     path.join(app.getPath("userData"), "window-state.json"),
   );
   const saved = windowState.load();
+  if (
+    !dock &&
+    !fs.existsSync(windowState.file) &&
+    !fs.existsSync(stores.prefs.file)
+  ) {
+    stores.prefs.save({ sidebarOpen: false, rightSidebarOpen: false });
+  }
   const window = new BrowserWindow({
     width: dock ? 780 : saved.width,
     height: dock ? 124 : saved.height,

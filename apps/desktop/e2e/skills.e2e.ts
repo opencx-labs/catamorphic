@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Skills as commands (ADR 0052): the two-tier skill list (project files +
@@ -18,6 +23,7 @@ let projectRoot: string;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 });
 
 afterAll(async () => {

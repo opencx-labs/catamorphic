@@ -35,7 +35,9 @@ with the same cask you installed. Work keeps a pre-migration database backup.
 
 Work uses a fresh application identity and storage directory. Alpha data and
 credentials from the previous app are not migrated automatically. Project
-folders remain ordinary files you can import.
+folders remain ordinary files you can import. The Onboarding tab introduces the
+workspace and walks through theme, browser, and agent setup. Reopen it from the
+command palette at any time.
 
 ## One system, three ways to use it
 

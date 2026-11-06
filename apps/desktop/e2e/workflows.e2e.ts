@@ -1,5 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 import {
   WORKFLOW_EDITOR_EXPANDED_SOURCE,
   WORKFLOW_EDITOR_SOURCE,
@@ -9,6 +14,7 @@ let app: AppHandle;
 let projectId: string;
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 });
 afterAll(async () => {
   await app?.stop();

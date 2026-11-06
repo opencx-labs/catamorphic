@@ -1,7 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * OAuth for a remote connection, end to end inside the app: a connection
@@ -37,6 +42,7 @@ beforeAll(async () => {
     fake.once("exit", () => reject(new Error("fake OAuth server exited")));
   });
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 }, 180_000);
 
 afterAll(async () => {

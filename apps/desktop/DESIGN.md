@@ -90,7 +90,7 @@ ordinary documents, privacy, or the existence of a proposal.
 | `--font-mono` | JetBrains Mono, ui-monospace | code, logs, ids, timestamps |
 
 These are defaults. Each profile can override `fonts.sans` and `fonts.mono`
-in `theme.json` or Settings > Theme using installed CSS font stacks.
+in `theme.json` or the theme picker using installed CSS font stacks.
 Removing a key restores its default. Font choices survive color preset
 changes and apply live to the shell, editors, terminals, and themed apps.
 
@@ -1054,3 +1054,24 @@ fell back to the display's edge instead of the workspace's chat region.
 The area now keeps the profile's last workspace window as its anchor
 while the dock itself is the one in focus; only focus leaving the app
 sends the dock to the display's edge.
+
+### 2026-11-06: A welcome you can come back to
+
+Onboarding is an ordinary tab (ADR 0155), with Welcome, Theme, Palette, Browser
+import, Default browser, and Get started steps. It opens under the former welcome
+and automatic setup conditions. The palette finds it as onboarding, tutorial,
+welcome, tour, getting started, learn, guide, or help. The track slides left as
+users advance and reverses for Back, over 250ms on the standard easing. Navigation
+stays in place; reduced motion settles immediately.
+
+The theme preview uses the workspace's tabs, sidebar rows, chat timeline, and
+composer with inert local example data. Theme selection is one modal across the
+tour, Settings, and palette. Registered color tokens interpolate over 200ms instead
+of repainting abruptly. Advanced colors and fonts remain in this picker. Asking
+an agent for a theme opens setup and then a chat in another tab, retaining the
+tutorial and its current step.
+
+A first launch fills the display's work area with both sidebars collapsed. This
+initial profile choice is written only when neither saved window state nor profile
+preferences exist. Later launches restore the person's window placement and sidebar
+choices; onboarding never forces those choices again.

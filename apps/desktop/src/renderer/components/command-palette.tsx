@@ -11,6 +11,7 @@ import {
   CircleDot,
   Columns2,
   Command,
+  Compass,
   Cpu,
   Diff,
   Download,
@@ -30,6 +31,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Minimize2,
+  Palette,
   PanelLeft,
   PanelRight,
   Plug,
@@ -101,6 +103,7 @@ import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
 import { OpenResourceButton } from "./open-resource-button.js";
+import { PaletteSurface } from "./palette-surface.js";
 import { SiteFavicon } from "./site-favicon.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
@@ -128,6 +131,8 @@ import type { WorkspaceTab } from "./workspace-tabs.js";
  */
 const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
   "open-settings": SettingsIcon,
+  "open-onboarding": Compass,
+  "choose-theme": Palette,
   "open-floating-settings": SettingsIcon,
   "search-files": FileSearch,
   "search-content": TextSearch,
@@ -2356,52 +2361,51 @@ export function CommandPalette({
           : null;
 
   const panel = (
-    <div
-      role="dialog"
-      aria-label="Command palette"
-      className="pointer-events-auto flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-raised shadow-2xl"
-    >
-      <div className="mx-3 flex items-start gap-2 border-b border-border">
-        {chip && (
-          <span
-            data-testid={chip.live ? "palette-mode-chip" : undefined}
-            onAnimationEnd={(event) => {
-              if (event.animationName === "chip-out") {
-                setExitingMode(null);
-                setExitingPicker(null);
-              }
+    <PaletteSurface
+      input={
+        <>
+          {chip && (
+            <span
+              data-testid={chip.live ? "palette-mode-chip" : undefined}
+              onAnimationEnd={(event) => {
+                if (event.animationName === "chip-out") {
+                  setExitingMode(null);
+                  setExitingPicker(null);
+                }
+              }}
+              className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
+                chip.live ? "animate-chip-in" : "animate-chip-out"
+              }`}
+            >
+              <chip.icon className="size-3.5 shrink-0" />
+              {chip.label}
+            </span>
+          )}
+          <textarea
+            ref={inputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelectedIndex(0);
+              if (listRef.current) listRef.current.scrollTop = 0;
             }}
-            className={`mt-[9px] flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap py-1 pl-1.5 pr-2 ${PILL_SURFACE} ${
-              chip.live ? "animate-chip-in" : "animate-chip-out"
-            }`}
-          >
-            <chip.icon className="size-3.5 shrink-0" />
-            {chip.label}
-          </span>
-        )}
-        <textarea
-          ref={inputRef}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setSelectedIndex(0);
-            if (listRef.current) listRef.current.scrollTop = 0;
-          }}
-          onKeyDown={onInputKeyDown}
-          rows={1}
-          spellCheck={false}
-          placeholder={
-            mode
-              ? mode.placeholder
-              : picker
-                ? PICKER_CHIPS[picker].placeholder
-                : "Search or ask anything…"
-          }
-          aria-label="Search commands, pages, and more"
-          className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
-          style={{ outline: "none" }}
-        />
-      </div>
+            onKeyDown={onInputKeyDown}
+            rows={1}
+            spellCheck={false}
+            placeholder={
+              mode
+                ? mode.placeholder
+                : picker
+                  ? PICKER_CHIPS[picker].placeholder
+                  : "Search or ask anything…"
+            }
+            aria-label="Search commands, pages, and more"
+            className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
+            style={{ outline: "none" }}
+          />
+        </>
+      }
+    >
       <div
         ref={listRef}
         className="h-(--palette-list-height) max-h-[350px] overflow-y-auto overscroll-contain transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
@@ -2529,7 +2533,7 @@ export function CommandPalette({
         <FooterHint keycap="⌘⇧↵" label="side" />
         <FooterHint keycap="⌥↵" label="floating" />
       </footer>
-    </div>
+    </PaletteSurface>
   );
 
   if (variant === "tab") {

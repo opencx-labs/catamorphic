@@ -28,13 +28,10 @@ const geometry = () =>
 const settle = () => new Promise((resolve) => setTimeout(resolve, 700));
 
 describe("window state", () => {
-  it("a maximized window relaunches maximized", async () => {
-    app = await launchApp();
+  it("the first window starts maximized and relaunches maximized", async () => {
+    app = await launchApp({ firstLaunch: true });
     await app.waitFor(
       "window.catamorphicDesktop.devWindow('get').then(state => state.visible)",
-    );
-    await (app as AppHandle).eval(
-      `window.catamorphicDesktop.devWindow('maximize')`,
     );
     await app.waitFor(
       "window.catamorphicDesktop.devWindow('get').then(state => state.maximized)",

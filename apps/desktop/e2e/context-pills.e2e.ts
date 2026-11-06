@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Context pills e2e: the composer is a contenteditable with INLINE pills.
@@ -18,6 +23,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 }, 180_000);
 
 afterAll(async () => {

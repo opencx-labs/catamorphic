@@ -78,6 +78,8 @@ const KEY_SYMBOLS: Record<string, string> = {
 
 /** "Cmd+Shift+T" → "⌘⇧T" for ShortcutHint display. */
 export function formatBinding(binding: string): string {
+  const mac = /Mac/.test(navigator.platform);
+  if (!mac) return binding.replaceAll("Cmd", "Ctrl");
   return binding
     .split("+")
     .map((part) => MOD_SYMBOLS[part] ?? KEY_SYMBOLS[part] ?? part.toUpperCase())

@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * User-onboarding flows, asserted on the REAL filesystem and git repo the
@@ -95,6 +100,7 @@ const createProjectViaUi = async (name: string): Promise<void> => {
 describe("agent-first onboarding", () => {
   beforeAll(async () => {
     app = await launchApp();
+    await openOnboardingStep(app, "Get started");
     await run(`
       return window.catamorphicDesktop.agentsList().then((data) =>
         Promise.all(data.agents.map((agent) =>
@@ -224,6 +230,7 @@ describe("blank project onboarding", () => {
 
   beforeAll(async () => {
     app = await launchApp();
+    await openOnboardingStep(app, "Get started");
   });
 
   afterAll(async () => {
@@ -347,6 +354,7 @@ describe.each([false, true])(
       app = await launchApp({
         env: { CATAMORPHIC_E2E_PICK_FOLDER: importDir },
       });
+      await openOnboardingStep(app, "Get started");
     });
 
     afterAll(async () => {

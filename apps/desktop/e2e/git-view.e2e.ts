@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let temp: string;
@@ -52,6 +57,7 @@ beforeAll(async () => {
       CATAMORPHIC_E2E_PICK_FOLDER: root,
     },
   });
+  await openOnboardingStep(app, "Get started");
   await wait(`return !!byText('button','Create or import project');`);
   await run(`byText('button','Create or import project').click();return true;`);
   await wait(`return !!byText('button','Import folder');`);

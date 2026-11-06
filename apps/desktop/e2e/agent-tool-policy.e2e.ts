@@ -1,7 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Agent-level tool access (ADR 0054): Settings → edit agent shows a row per
@@ -36,6 +41,7 @@ beforeAll(async () => {
     fake.once("exit", () => reject(new Error("fake server exited")));
   });
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 }, 180_000);
 
 afterAll(async () => {

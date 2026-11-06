@@ -169,3 +169,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
+| [0155](0155-tab-onboarding-and-theme-picker.md) | Tab onboarding and one shared theme picker | Accepted |

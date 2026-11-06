@@ -71,7 +71,7 @@ it("finds a setting in ordinary search and opens its control", async () => {
     "contentFrame",
   );
 });
-it("settings Space scopes search and reuses Settings for advanced colors", async () => {
+it("settings Space scopes search and opens the shared theme picker for colors", async () => {
   await open();
   await type("settings");
   await run(`key(' ')`);
@@ -88,7 +88,9 @@ it("settings Space scopes search and reuses Settings for advanced colors", async
   );
   await app.screenshot("/tmp/palette-settings-scope.png");
   await run(`key('Enter')`);
-  await destination("theme.overrides.accent");
+  await app.waitFor(
+    `document.querySelector('.theme-editor [data-setting-id="theme.overrides.accent"]')?.dataset.settingsTarget === 'true'`,
+  );
   expect(
     await app.eval(
       `document.querySelectorAll('[data-point-key="settings:settings"]').length`,
@@ -99,10 +101,14 @@ it("settings Space scopes search and reuses Settings for advanced colors", async
   );
   expect(
     await app.eval(
-      `document.querySelector('[aria-label="Settings categories"] [aria-current="location"]')?.textContent`,
+      `!!document.querySelector('[aria-labelledby="theme-picker-title"]')`,
     ),
-  ).toBe("Appearance");
+  ).toBe(true);
   await app.screenshot("/tmp/palette-settings-destination.png");
+  await app.press("Escape");
+  await app.waitFor(
+    `!document.querySelector('[aria-labelledby="theme-picker-title"]')`,
+  );
 });
 it("supports repeated destinations and leaving the mode", async () => {
   await open();

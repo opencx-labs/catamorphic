@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, openOnboardingStep } from "./harness.js";
 
 /**
  * Remote projects end to end (ADR 0055): a member pastes a connect link,
@@ -322,6 +322,7 @@ describe("remote projects (ADR 0055)", () => {
   beforeAll(async () => {
     await startFakeServer();
     app = await launchApp();
+    await openOnboardingStep(app, "Get started");
   }, 120_000);
 
   afterAll(async () => {

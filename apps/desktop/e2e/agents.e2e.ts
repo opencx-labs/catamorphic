@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Agent commands and profile switching, on their own app instance: these
@@ -13,6 +18,7 @@ let app: AppHandle;
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
 });
 
 afterAll(async () => {
@@ -593,19 +599,8 @@ describe("agents and profiles", () => {
           window.catamorphicDesktop.agentsRemove(agent.id))));
     `);
     await runWait(
-      `const visibleFree = $$('[data-testid="agent-wizard-free"]')
-         .filter((el) => !el.closest('[inert]'));
-       const wizard = $$('[data-testid="agent-wizard"]')
-         .find((el) => !el.closest('[inert]'));
-       const freeMentions = wizard?.innerText.match(/\\bfree\\b/gi) ?? [];
-       return wizardVisible() &&
-              !!byText('[role="tab"], button', 'Set up agent') &&
-              visibleFree.length === 1 &&
-              freeMentions.length === 1;`,
-      {
-        timeoutMs: 15_000,
-        label: "setup tab auto-opened, free option present",
-      },
+      `return !!$('[data-testid="onboarding"]') && !!byText('[role="tab"], button', 'Onboarding');`,
+      { label: "tutorial tab auto-opened" },
     );
 
     // Closing the tab skips setup entirely…

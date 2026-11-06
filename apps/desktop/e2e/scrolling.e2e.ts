@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openOnboardingStep,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 
@@ -14,6 +19,7 @@ const run = <T>(body: string) =>
 
 beforeAll(async () => {
   app = await launchApp();
+  await openOnboardingStep(app, "Get started");
   await app.waitFor(`!![...document.querySelectorAll('button')].find(
     el => el.textContent.trim() === 'Create or import project')`);
   await run(`byText('button', 'Create or import project').click();`);

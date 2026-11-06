@@ -122,7 +122,7 @@ it("shows a project's chat and theme over another project's workspace and routes
     await app.eval(
       `getComputedStyle(document.querySelector('[data-floating-chat]:not([inert])')).getPropertyValue('--color-accent').trim()`,
     ),
-  ).toBe("#8b72d8");
+  ).toBe("rgb(139, 114, 216)");
   await app.waitFor(
     `document.querySelector('[data-floating-chat]:not([inert])')?.innerText.includes('Done after a long think.')`,
     { label: "agent completes after project switch" },

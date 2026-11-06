@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createBrowserProfile } from "./fixtures/browser-profile.js";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, openOnboardingStep } from "./harness.js";
 
 let app: AppHandle;
 let directory: string;
@@ -79,14 +79,7 @@ afterAll(async () => {
 
 describe("shared browser import and personal history", () => {
   it("uses themed, animated controls with keyboard selection and nested Escape", async () => {
-    await app.waitFor(
-      `!!document.querySelector('[data-testid="default-browser-button"]')`,
-    );
-    expect(
-      await app.eval(
-        `(()=>{const a=document.querySelector('[data-testid="onboarding-browser-import"]').getBoundingClientRect();const b=document.querySelector('[data-testid="default-browser-button"]').getBoundingClientRect();return b.y >= a.bottom && a.width === b.width;})()`,
-      ),
-    ).toBe(true);
+    await openOnboardingStep(app, "Default browser");
     expect(
       await app.eval(`(() => {
         const button = document.querySelector('[data-testid="default-browser-button"]');
@@ -96,6 +89,7 @@ describe("shared browser import and personal history", () => {
       disabled: true,
       reason: "Use the installed Work app to set your default browser.",
     });
+    await openOnboardingStep(app, "Browser import");
     await click('[data-testid="onboarding-browser-import"]');
     await app.waitFor(
       `document.querySelector('select[aria-label="Browser profile"]')?.options.length === 2`,
@@ -248,6 +242,7 @@ describe("shared browser import and personal history", () => {
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Fresh import profile"]')`,
     );
+    await openOnboardingStep(app, "Browser import");
     await app.waitFor(
       `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'idle'`,
     );
