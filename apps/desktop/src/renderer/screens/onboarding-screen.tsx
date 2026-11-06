@@ -116,7 +116,7 @@ export function OnboardingScreen({
     </Step>,
     <Step
       key="agents"
-      heading="Work is where AI agents can do wonders"
+      heading="Where AI agents can do wonders"
       description="Configure your agents in Work, and let them do the heavy lifting. Once configured, your agents will be able to fully customize the workspace for you; all you need to do is ask."
     >
       <div className="onboarding-browser-mark">

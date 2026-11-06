@@ -354,7 +354,7 @@ describe("the Work tutorial", () => {
       await app.eval(
         `document.querySelector('.onboarding-copy h1')?.textContent`,
       ),
-    ).toBe("Work is where AI agents can do wonders");
+    ).toBe("Where AI agents can do wonders");
     await click('[data-testid="onboarding-setup-agent"]');
     await app.waitFor(
       `!!document.querySelector('[role="dialog"] [data-testid="agent-wizard-free"]')`,
