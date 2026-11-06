@@ -324,9 +324,28 @@ describe("the Work tutorial", () => {
     expect(
       Math.abs(expandedCenter - (await app.eval<number>("innerWidth/2"))),
     ).toBeLessThan(1);
-    await app.waitFor(
-      `getComputedStyle(document.querySelector('${demo}')).getPropertyValue('--dock-demo-collapse-x') !== ''`,
-    );
+    // Observe uninterrupted playback. Seeking a paused animation can repair
+    // stale compositor keyframes and conceal a pointer rendered at the origin.
+    for (const width of [1800, 900, 1200]) {
+      await app.eval(
+        `window.catamorphicDesktop.devWindow('setSize',${width},800)`,
+      );
+      for (const target of [
+        { selector: '[aria-label="New chat"]', start: 2700, end: 3600 },
+        { selector: "[data-dock-arrows]", start: 4500, end: 4750 },
+      ]) {
+        const position = await app.waitFor<{ distance: number }>(`(() => {
+          const root=document.querySelector('${demo}');
+          const cursor=root.querySelector('.onboarding-demo-cursor');
+          const phase=Number(cursor.getAnimations()[0]?.currentTime)%7200;
+          if(phase<${target.start} || phase>${target.end} || !Number.isFinite(phase)) return false;
+          const pointer=cursor.querySelector('svg').getBoundingClientRect();
+          const button=root.querySelector('${target.selector}').getBoundingClientRect();
+          return {distance:Math.hypot(pointer.x+pointer.width/6-button.x-button.width/2,pointer.y+pointer.height/6-button.y-button.height/2)};
+        })()`);
+        expect(position.distance).toBeLessThan(1);
+      }
+    }
     // A visibility refresh must not reset the dock independently of the pointer.
     expect(
       await app.eval(`(async () => {
@@ -341,22 +360,6 @@ describe("the Work tutorial", () => {
         } finally { animation.currentTime=original; animation.play(); }
       })()`),
     ).toBe("false");
-    expect(
-      await app.eval(`(() => {
-      const cursor=document.querySelector('${demo} .onboarding-demo-cursor');
-      const animation=cursor.getAnimations()[0];
-      const original=animation.currentTime;
-      animation.pause(); animation.currentTime=4680;
-      try {
-        const pointer=cursor.querySelector('svg').getBoundingClientRect();
-        const ring=cursor.querySelector('.onboarding-demo-click').getBoundingClientRect();
-        const button=document.querySelector('${demo} [data-dock-arrows]').getBoundingClientRect();
-        const tip={x:pointer.x+pointer.width/6,y:pointer.y+pointer.height/6};
-        return Math.hypot(tip.x-button.x-button.width/2,tip.y-button.y-button.height/2)<1 && Math.hypot(tip.x-ring.x-ring.width/2,tip.y-ring.y-ring.height/2)<1;
-      } finally { animation.currentTime=original; animation.play(); }
-    })()`),
-    ).toBe(true);
-
     expect(
       await app.eval(
         `getComputedStyle(document.querySelector('[data-testid="onboarding"]')).paddingBottom`,

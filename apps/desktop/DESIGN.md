@@ -1090,9 +1090,10 @@ The agent step opens the existing wizard as a modal and keeps the tutorial in
 place. Its action becomes complete
 when an agent is configured. The dock starts collapsed in the right corner;
 opening a conversation expands it. Its tutorial hero reuses the real bubble strip
-with an animated cursor. Its CSS animation timeline also drives expansion, so
-visibility changes and preview refreshes cannot separate the pointer from the
-dock. It pauses while hidden and settles under reduced motion.
+with an animated cursor. One Web Animations timeline drives the pointer and expansion. Cursor keyframes
+use measured pixel coordinates, updated after the controls settle, so compositor
+playback never depends on unresolved CSS variables. It pauses while hidden and
+settles under reduced motion.
 Keyboard shortcuts and palette steps have no extra actions; their shortcut labels
 follow the effective bindings. Project creation remains in the project switcher.
 

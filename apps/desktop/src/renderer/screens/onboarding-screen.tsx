@@ -373,6 +373,13 @@ function PlusIcon() {
 /** The real dock, driven by a local demonstration instead of workspace state. */
 function DockPreview() {
   const frame = useRef<HTMLDivElement>(null);
+  const cursorAnimation = useRef<Animation | null>(null);
+  const clickAnimation = useRef<Animation | null>(null);
+  const targets = useRef<{
+    expand?: { x: number; y: number };
+    new?: { x: number; y: number };
+    collapse?: { x: number; y: number };
+  }>({});
   const [playing, setPlaying] = useState(false);
   const [expanded, setExpanded] = useState(false);
   useLayoutEffect(() => {
@@ -396,7 +403,7 @@ function DockPreview() {
       );
       if (stale) return;
       const bounds = root.getBoundingClientRect();
-      const targets = expanded
+      const controls = expanded
         ? [
             { name: "collapse", selector: "[data-dock-arrows]" },
             { name: "new", selector: 'button[aria-label="New chat"]' },
@@ -407,18 +414,77 @@ function DockPreview() {
               selector: 'button[aria-label="Expand chat bubbles"]',
             },
           ];
-      for (const target of targets) {
+      for (const target of controls) {
         const button = root.querySelector(target.selector);
         if (!button) continue;
         const rect = button.getBoundingClientRect();
-        root.style.setProperty(
-          `--dock-demo-${target.name}-x`,
-          `${rect.x + rect.width / 2 - bounds.x - 4}px`,
+        const point = {
+          x: rect.x + rect.width / 2 - bounds.x - 4,
+          y: rect.y + rect.height / 2 - bounds.y - 4,
+        };
+        if (target.name === "expand") targets.current.expand = point;
+        else if (target.name === "new") targets.current.new = point;
+        else targets.current.collapse = point;
+      }
+      const cursor = root.querySelector(".onboarding-demo-cursor");
+      const click = root.querySelector(".onboarding-demo-click");
+      const expand = targets.current.expand;
+      if (!cursor || !click || !expand) return;
+      const translate = ({ x, y }: { x: number; y: number }) =>
+        `translate(${x}px, ${y}px)`;
+      const home = translate({ x: expand.x + 54, y: expand.y - 64 });
+      const collapse = translate(targets.current.collapse ?? expand);
+      const open = translate(expand);
+      const newChat = translate(targets.current.new ?? expand);
+      const easing = getComputedStyle(root)
+        .getPropertyValue("--ease-standard")
+        .trim();
+      // Give the compositor concrete coordinates. CSS keyframes that reference
+      // targets discovered mid-animation can keep rendering their initial,
+      // unresolved transform even while computed style reports the right path.
+      const keyframes = [
+        { offset: 0, transform: home, opacity: 0 },
+        { offset: 0.12, transform: open, opacity: 1 },
+        { offset: 0.18, transform: `${open} scale(0.86)`, opacity: 1 },
+        { offset: 0.21, transform: open, opacity: 1 },
+        { offset: 0.28, transform: open, opacity: 1 },
+        { offset: 0.35, transform: newChat, opacity: 1 },
+        { offset: 0.52, transform: newChat, opacity: 1 },
+        { offset: 0.62, transform: collapse, opacity: 1 },
+        { offset: 0.65, transform: `${collapse} scale(0.86)`, opacity: 1 },
+        { offset: 0.68, transform: collapse, opacity: 1 },
+        { offset: 0.8, transform: open, opacity: 1 },
+        { offset: 0.92, transform: home, opacity: 0 },
+        { offset: 1, transform: home, opacity: 0 },
+      ].map((keyframe) => ({ ...keyframe, easing }));
+      const effect = cursorAnimation.current?.effect;
+      if (effect instanceof KeyframeEffect) effect.setKeyframes(keyframes);
+      else {
+        const options = { duration: 7200, iterations: Infinity };
+        const animation = cursor.animate(keyframes, options);
+        cursorAnimation.current = animation;
+        const pulse = click.animate(
+          [
+            { offset: 0, opacity: 0, transform: "scale(0.5)" },
+            { offset: 0.17, opacity: 0, transform: "scale(0.5)" },
+            { offset: 0.19, opacity: 0.6, transform: "scale(1)" },
+            { offset: 0.25, opacity: 0, transform: "scale(1.8)" },
+            { offset: 0.62, opacity: 0, transform: "scale(0.5)" },
+            { offset: 0.65, opacity: 0.6, transform: "scale(1)" },
+            { offset: 0.71, opacity: 0, transform: "scale(1.8)" },
+            { offset: 1, opacity: 0, transform: "scale(0.5)" },
+          ].map((keyframe) => ({ ...keyframe, easing })),
+          options,
         );
-        root.style.setProperty(
-          `--dock-demo-${target.name}-y`,
-          `${rect.y + rect.height / 2 - bounds.y - 4}px`,
-        );
+        pulse.startTime = animation.startTime;
+        clickAnimation.current = pulse;
+        if (
+          document.hidden ||
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ) {
+          animation.pause();
+          pulse.pause();
+        }
       }
     };
     void measure();
@@ -433,21 +499,12 @@ function DockPreview() {
   }, [expanded]);
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    // Fast Refresh can retain CSS playback while rebuilding the measured DOM.
-    // Begin a fresh cycle so the collapsed target is ready before the click.
-    const animation = frame.current
-      ?.querySelector(".onboarding-demo-cursor")
-      ?.getAnimations()[0];
-    if (animation) animation.currentTime = 0;
-    setExpanded(false);
     let frameId = 0;
     let previousPhase: boolean | undefined;
     const tick = () => {
-      const cursor = frame.current?.querySelector(".onboarding-demo-cursor");
-      const time = cursor?.getAnimations()[0]?.currentTime;
+      const time = cursorAnimation.current?.currentTime;
       if (typeof time === "number") {
-        // One timeline owns both the pointer and the real dock. Visibility
-        // changes and hot reloads can never reset one without the other.
+        // One timeline owns both the pointer and the real dock.
         const phase = time % 7200;
         const next = phase >= 1400 && phase < 4800;
         if (next !== previousPhase) {
@@ -462,14 +519,27 @@ function DockPreview() {
       previousPhase = undefined;
       const animate = !media.matches && !document.hidden;
       setPlaying(animate);
-      if (animate) frameId = requestAnimationFrame(tick);
-      else setExpanded(true);
+      for (const animation of [
+        cursorAnimation.current,
+        clickAnimation.current,
+      ]) {
+        if (animate) animation?.play();
+        else animation?.pause();
+      }
+      if (animate) {
+        if (!cursorAnimation.current) setExpanded(false);
+        frameId = requestAnimationFrame(tick);
+      } else setExpanded(true);
     };
     update();
     media.addEventListener("change", update);
     document.addEventListener("visibilitychange", update);
     return () => {
       cancelAnimationFrame(frameId);
+      cursorAnimation.current?.cancel();
+      clickAnimation.current?.cancel();
+      cursorAnimation.current = null;
+      clickAnimation.current = null;
       media.removeEventListener("change", update);
       document.removeEventListener("visibilitychange", update);
     };
