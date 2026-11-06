@@ -75,6 +75,16 @@ drag whose tab closes or whose row leaves before the drop still ends: its
 dragend reaches a detached element React never hears, so the next press, or
 move with no button held, takes its drop targets away (`useEndOfDrag`).
 
+Closing a collapsed group closes its header and every subtab through the same
+close transition, including its X, Cmd+W and chat controls (ADR 0304). Page leave
+guards and confirmation of unsaved file or workflow edits apply before the group
+is removed or its chat starts exit motion.
+Closing is all-or-nothing: Stay on any page keeps every tab loaded, including
+pages that already approved. Draft confirmation precedes non-destructive native
+page checks. Cancellation releases earlier approvals; retained pages remain
+usable after the native close activation expires.
+Closing an expanded chat leaves its attached tabs open.
+
 Ctrl+` opens a terminal in the focused chat's working folder, including its
 assigned worktree. The same applies to a floating chat and its Open terminal
 action. Without a chat in focus, a terminal starts in the project folder. A
@@ -235,6 +245,17 @@ in place only when that profile has no workspace window. If an empty duplicate
 already exists, profile selection prefers a window retaining that profile's work.
 **Rename current chat…** uses the existing rename dialog
 and can name the current chat while its bubble is minimized.
+
+Voice shortcuts use the project shown by their workspace window, including keys
+pressed in an embedded page. From another app they use the last workspace window.
+"Talk to this chat" remembers a chat only within that window and project; hidden
+projects do not publish the window's current chat. The assistant retains one
+conversation per profile (ADR 0216), with its working screen following the person
+(ADR 0265). A new conversation starts in the invoking project when local; a linked
+project's assistant uses a local project. Every microphone's "Open assistant chat"
+sends the chat destination directly to its owning workspace, including the
+detached dock and floating microphone. Cross-project chat links use the same owner
+routing before materializing the conversation.
 
 A restart, including an update, restores every workspace window with its profile,
 owned project group, active project, normal bounds, maximized/fullscreen modes,

@@ -1,5 +1,6 @@
 import type {
   AssistantMessageItem,
+  TaskNotificationItem,
   TimelineEntry,
   TimelineTurn,
   WorkItem,
@@ -68,6 +69,16 @@ export type TurnRow =
 const work = (items: readonly WorkItem[]): StepSource[] =>
   items.map((item) => ({ kind: "work", item }));
 
+/** Read task updates are work; unread or actionable deliveries stay visible. */
+function foldsNotification(item: TaskNotificationItem): boolean {
+  return (
+    item.status === "completed" &&
+    item.attention !== "required" &&
+    item.task.status !== "needs_input" &&
+    !(item.task.type === "subsession" && item.task.status === "failed")
+  );
+}
+
 /**
  * The rows a turn renders as. `live` is whether the turn is still
  * running. Folding stays within a run of the agent's own writing: a
@@ -82,7 +93,9 @@ export function turnRows(
     ? display.live === "latest"
     : display.settled === "collapse";
   const rows: TurnRow[] = [];
-  let run: Array<Extract<TimelineEntry, { kind: "reply" | "steps" }>> = [];
+  let run: Array<
+    Extract<TimelineEntry, { kind: "reply" | "steps" | "notifications" }>
+  > = [];
   const lastReplyId = [...group.entries]
     .reverse()
     .find(
@@ -96,9 +109,12 @@ export function turnRows(
     let folded: AssistantMessageItem[] = [];
     for (const entry of run) {
       if (entry.kind === "steps") {
-        if (fold && last && entry !== run.at(-1))
-          buffer.push(...work(entry.steps));
+        if (fold) buffer.push(...work(entry.steps));
         else rows.push({ kind: "steps", steps: work(entry.steps) });
+        continue;
+      }
+      if (entry.kind === "notifications") {
+        buffer.push(...work(entry.items));
         continue;
       }
       if (fold && replies.length > 1 && entry !== last) {
@@ -116,10 +132,18 @@ export function turnRows(
       buffer = [];
       folded = [];
     }
+    if (buffer.length > 0) rows.push({ kind: "steps", steps: buffer });
     run = [];
   };
   for (const entry of group.entries) {
-    if (entry.kind === "reply" || entry.kind === "steps") {
+    if (
+      entry.kind === "reply" ||
+      entry.kind === "steps" ||
+      (!live &&
+        fold &&
+        entry.kind === "notifications" &&
+        entry.items.every(foldsNotification))
+    ) {
       run.push(entry);
       continue;
     }
@@ -128,4 +152,118 @@ export function turnRows(
   }
   flush();
   return rows;
+}
+
+/**
+ * Automatic task wakeups can produce several execution turns for one person's
+ * request. Fold their completed work toward the last answer without changing
+ * those turns, their item identities, outcomes, or action targets. Human input,
+ * attention, and unfinished/failed turns remain reading boundaries.
+ */
+export function createCompletedRowsProjector<
+  T extends { group: TimelineTurn; rows: TurnRow[]; live: boolean },
+>(): (views: T[]) => T[] {
+  // Keep only the latest projection's targets. A former answer can remain
+  // in the timeline for hours; retaining each old merged prefix is quadratic.
+  let runs = new Map<TurnRow, { sources: TurnRow[]; row: TurnRow }>();
+  const projections = new WeakMap<T, { rows: TurnRow[]; view: T }>();
+  return (views) => {
+    const nextRuns = new Map<TurnRow, { sources: TurnRow[]; row: TurnRow }>();
+    const changes = new Map<number, Map<TurnRow, TurnRow | null>>();
+    let run: Array<{
+      index: number;
+      row: Exclude<TurnRow, { kind: "entry" }>;
+    }> = [];
+    const change = (index: number, row: TurnRow, next: TurnRow | null) => {
+      let rows = changes.get(index);
+      if (!rows) {
+        rows = new Map();
+        changes.set(index, rows);
+      }
+      rows.set(row, next);
+    };
+    const flush = () => {
+      const target =
+        [...run].reverse().find(({ row }) => row.kind === "reply") ??
+        run.at(-1);
+      if (!target || run.length < 2) {
+        run = [];
+        return;
+      }
+      const before = run.slice(0, run.indexOf(target));
+      if (before.length === 0) {
+        run = [];
+        return;
+      }
+      const sources = run
+        .slice(0, run.indexOf(target) + 1)
+        .map(({ row }) => row);
+      const cached = runs.get(target.row);
+      if (
+        cached &&
+        cached.sources.length === sources.length &&
+        cached.sources.every((row, index) => row === sources[index])
+      ) {
+        nextRuns.set(target.row, cached);
+        for (const { index, row } of before) change(index, row, null);
+        change(target.index, target.row, cached.row);
+        run = [];
+        return;
+      }
+      const steps: StepSource[] = [];
+      const folded: AssistantMessageItem[] = [];
+      for (const { index, row } of before) {
+        steps.push(...row.steps);
+        if (row.kind === "reply") {
+          steps.push({ kind: "note", item: row.item });
+          folded.push(...row.folded, row.item);
+        }
+        change(index, row, null);
+      }
+      const row = target.row;
+      const merged: TurnRow =
+        row.kind === "reply"
+          ? {
+              ...row,
+              steps: [...steps, ...row.steps],
+              folded: [...folded, ...row.folded],
+            }
+          : { ...row, steps: [...steps, ...row.steps] };
+      nextRuns.set(row, { sources, row: merged });
+      change(target.index, row, merged);
+      run = [];
+    };
+    views.forEach((view, index) => {
+      const completed =
+        !view.live &&
+        (!view.group.turn || view.group.turn.status === "completed");
+      if (!completed) {
+        flush();
+        return;
+      }
+      for (const row of view.rows) {
+        if (row.kind === "entry") flush();
+        else run.push({ index, row });
+      }
+    });
+    flush();
+    runs = nextRuns;
+    return views.map((view, index) => {
+      const changed = changes.get(index);
+      if (!changed) return view;
+      const rows = view.rows.flatMap((row) =>
+        changed.has(row) ? (changed.get(row) ?? []) : row,
+      );
+      const cached = projections.get(view);
+      if (
+        cached &&
+        cached.rows.length === rows.length &&
+        cached.rows.every((row, index) => row === rows[index])
+      )
+        return cached.view;
+      const projected = { ...view, rows };
+      projections.set(view, { rows, view: projected });
+      return projected;
+    });
+  };
 }

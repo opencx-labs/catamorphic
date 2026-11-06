@@ -296,6 +296,8 @@ export function registerVoiceSupport(deps: {
   isWorkspace: (window: BrowserWindow) => boolean;
   /** The project a workspace window shows now, if it shows one. */
   activeProject: (window: BrowserWindow) => string | null;
+  /** Opens the assistant's stored conversation through the workspace owner. */
+  openChat: (input: { sender: WebContents; session: VoiceSessionRef }) => void;
 }): { dispose: () => Promise<void> } {
   const { state, profileConfig, profiles, windows, incognito } = deps;
   const shellProfileFor = (contents: WebContents) => {
@@ -872,7 +874,11 @@ export function registerVoiceSupport(deps: {
       throw new Error("Add an agent in Settings to talk to Work.");
     const agentId = assistantAgentId(assistant);
     const stored = prefs(profileId).load().assistantSession;
-    if (stored && !linked(profileId, stored.projectId)) {
+    if (
+      stored &&
+      profiles.get(profileId)?.projectIds.includes(stored.projectId) &&
+      !linked(profileId, stored.projectId)
+    ) {
       const existing = await agentSessions()
         .get(identity, stored.projectId, stored.sessionId)
         .catch(() => null);
@@ -1770,6 +1776,17 @@ export function registerVoiceSupport(deps: {
   shellIpcMain.handle("catamorphic:voice-get-status", (event) =>
     statusFor(windows.profileFor(event.sender)),
   );
+  shellIpcMain.handle("catamorphic:voice-open-chat", async (event) => {
+    const profileId = windows.profileFor(event.sender);
+    const session = prefs(profileId).load().assistantSession;
+    if (
+      !session ||
+      !profiles.get(profileId)?.projectIds.includes(session.projectId)
+    )
+      return;
+    await agentSessions().get(identity, session.projectId, session.sessionId);
+    deps.openChat({ sender: event.sender, session });
+  });
   // Resolve at once: the status events say when it plays and ends.
   shellIpcMain.handle(
     "catamorphic:voice-read-aloud",
@@ -1821,8 +1838,8 @@ export function registerVoiceSupport(deps: {
   );
 
   /** The chat in front of each window, for "Talk to this chat". */
-  const frontChats = new Map<number, VoiceShortcutChat>();
-  const lastFrontChats = new Map<string, VoiceShortcutChat>();
+  const frontChats = new WeakMap<WebContents, VoiceShortcutChat>();
+  const lastFrontChats = new WeakMap<WebContents, VoiceShortcutChat>();
   const onFrontChat = (event: Electron.IpcMainEvent, raw: unknown) => {
     const parsed = z
       .object({ projectId: z.string().min(1), sessionId: z.string().min(1) })
@@ -1832,12 +1849,12 @@ export function registerVoiceSupport(deps: {
     const profileId = windows.profileFor(event.sender);
     const chat = parsed.data ? { ...parsed.data, profileId } : null;
     if (!chat) {
-      frontChats.delete(event.sender.id);
+      frontChats.delete(event.sender);
       return;
     }
     if (profiles.profileForProject(chat.projectId).id !== profileId) return;
-    frontChats.set(event.sender.id, chat);
-    lastFrontChats.set(profileId, chat);
+    frontChats.set(event.sender, chat);
+    lastFrontChats.set(event.sender, chat);
   };
   shellIpcMain.on("catamorphic:voice-front-chat", onFrontChat);
 
@@ -1847,17 +1864,27 @@ export function registerVoiceSupport(deps: {
     action: VoiceAction,
     contents: WebContents | null,
   ): VoicePress => {
+    if (action === "dictate") return { action };
+    const source = contents
+      ? BrowserWindow.fromWebContents(contents.hostWebContents ?? contents)
+      : null;
+    const window =
+      source && ofProfile(source, profileId) ? source : windowFor(profileId);
+    const projectId = windowProject(window, profileId);
+    // The assistant works in this window's project, independently of
+    // whether a chat has focus here or was last used in another window.
+    if (action === "talk-to-work")
+      return { action, ...(projectId ? { projectId } : {}) };
+    const host = window?.webContents;
     const chat = chatForVoiceShortcut({
       profileId,
-      frontChat: contents ? frontChats.get(contents.id) : undefined,
-      lastChat: lastFrontChats.get(profileId),
+      projectId,
+      frontChat: host ? frontChats.get(host) : undefined,
+      lastChat: host ? lastFrontChats.get(host) : undefined,
       profileForProject: (projectId) =>
         profiles.profileForProject(projectId).id,
     });
-    if (action === "dictate") return { action };
-    if (action === "talk-to-chat")
-      return chat ? { action, ...chat } : { action };
-    return chat ? { action, projectId: chat.projectId } : { action };
+    return chat ? { action, ...chat } : { action };
   };
 
   /** Each profile's voice shortcuts, kept until they change. */
@@ -1896,8 +1923,15 @@ export function registerVoiceSupport(deps: {
    * The window of Work's the person was last in: whose shortcuts work in
    * every app, and whose chat is "this chat".
    */
-  const lastWorkWindow = () =>
-    recentWindows.find((window) => workWindows().includes(window)) ?? null;
+  const lastWorkWindow = () => {
+    const open = workWindows();
+    const focused = BrowserWindow.getFocusedWindow();
+    return (
+      (focused && open.includes(focused) ? focused : null) ??
+      recentWindows.find((window) => open.includes(window)) ??
+      null
+    );
+  };
   const keysProfile = (): string | null => {
     const focused = BrowserWindow.getFocusedWindow();
     if (focused && workWindows().includes(focused))
@@ -2240,6 +2274,7 @@ export function registerVoiceSupport(deps: {
         "catamorphic:voice-press",
         "catamorphic:voice-release",
         "catamorphic:voice-reset",
+        "catamorphic:voice-open-chat",
         "catamorphic:voice-learn",
         "catamorphic:voice-keys-status",
         "catamorphic:voice-keys-allow",

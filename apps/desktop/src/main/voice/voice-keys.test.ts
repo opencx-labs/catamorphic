@@ -175,6 +175,26 @@ describe("native guest voice messages", () => {
 });
 
 describe("voice shortcut chat ownership", () => {
+  it("never borrows a chat from another project in the same profile", () => {
+    const other = {
+      profileId: "profile",
+      projectId: "other-project",
+      sessionId: "other-chat",
+    };
+    const here = { ...other, projectId: "here", sessionId: "here-chat" };
+    const input = {
+      profileId: "profile",
+      projectId: "here",
+      profileForProject: () => "profile",
+    };
+    expect(
+      chatForVoiceShortcut({ ...input, frontChat: other, lastChat: other }),
+    ).toBeUndefined();
+    expect(
+      chatForVoiceShortcut({ ...input, frontChat: undefined, lastChat: here }),
+    ).toEqual({ projectId: "here", sessionId: "here-chat" });
+  });
+
   it("keeps a popup's fallback in its profile and rejects stale window chats after a profile switch", () => {
     const first = {
       profileId: "first",

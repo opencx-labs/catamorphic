@@ -448,6 +448,16 @@ export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
     .map((editor) => editorTabKey(editor.localId)),
 ];
 
+/** Closing a folded chat group includes every tab hidden behind its header. */
+export function closingTabKeys(ws: Workspace, key: string): string[] {
+  const chat = key.startsWith("chat:")
+    ? ws.chats.find((chat) => chatTabKey(chat.localId) === key)
+    : undefined;
+  return chat?.mode === "tab" && chat.surfacesCollapsed
+    ? [...attachedTabKeys(ws, chat.localId), key]
+    : [key];
+}
+
 /**
  * Why a tab cannot move into a tab chat (or, with null, out of its chat),
  * in a sentence; undefined when it can. What an agent is using stays with
@@ -804,6 +814,17 @@ function applyWorkspaceEvent(
     case "close": {
       const { key, force, discardDraft } = event;
       const opts = { force, discardDraft };
+      const group = closingTabKeys(ws, key);
+      if (group.length > 1) {
+        const children = group
+          .slice(0, -1)
+          .reduce(
+            (current, key) =>
+              applyWorkspaceEvent(current, { ...event, key, force: true }),
+            ws,
+          );
+        return applyWorkspaceEvent(children, event);
+      }
 
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
       // split context so a reopened pane re-tiles with its partner.
@@ -977,7 +998,7 @@ function applyWorkspaceEvent(
           ...ws,
           chats,
           closedTabs: remember(
-            closing
+            closing?.sessionId
               ? {
                   kind: "chat",
                   sessionId: closing.sessionId,

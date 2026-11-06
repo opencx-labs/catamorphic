@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   agentOpenInFront,
   attachBlocker,
+  closingTabKeys,
   emptyUtilityWorkspace,
   hydrateWorkspace,
   newTabInFront,
@@ -26,6 +27,85 @@ const initial = (): Workspace => ({
   chats: [{ localId: "c", mode: "tab", sessionId: "session" }],
   activeTabKey: "chat:c",
 });
+
+it.each([false, true])(
+  "closing a chat group closes its subtabs only while folded (%s)",
+  (folded) => {
+    const ws: Workspace = {
+      ...emptyUtilityWorkspace(),
+      tabs: [
+        { kind: "settings", name: "settings" },
+        { kind: "app", name: "attached", chatLocalId: "group" },
+      ],
+      chats: [
+        {
+          localId: "group",
+          mode: "tab",
+          sessionId: "session",
+          surfacesCollapsed: folded,
+        },
+      ],
+      browsers: [
+        {
+          localId: "page",
+          profileId: "p",
+          initialUrl: "https://example.com/",
+          url: "https://example.com/",
+          title: "Page",
+          faviconUrl: null,
+          chatLocalId: "group",
+        },
+      ],
+      terminals: [{ localId: "shell", title: "Shell", chatLocalId: "group" }],
+      editors: [
+        {
+          localId: "file",
+          filePath: "README.md",
+          dirty: false,
+          chatLocalId: "group",
+        },
+      ],
+      activeTabKey: "chat:group",
+      recentTabKeys: ["settings:settings"],
+    };
+    expect(closingTabKeys(ws, "chat:group")).toEqual(
+      folded
+        ? [
+            "app:attached",
+            "browser:page",
+            "terminal:shell",
+            "editor:file",
+            "chat:group",
+          ]
+        : ["chat:group"],
+    );
+    const closed = transitionWorkspace(ws, {
+      type: "close",
+      key: "chat:group",
+    });
+    expect(closed.chats).toEqual([]);
+    expect(orderedTabKeys(closed)).toEqual(
+      folded
+        ? ["settings:settings"]
+        : [
+            "settings:settings",
+            "app:attached",
+            "browser:page",
+            "terminal:shell",
+            "editor:file",
+          ],
+    );
+    expect(closed.activeTabKey).toBe("settings:settings");
+    expect(closed.browsers).toHaveLength(folded ? 0 : 1);
+    expect(closed.terminals).toHaveLength(folded ? 0 : 1);
+    expect(closed.editors).toHaveLength(folded ? 0 : 1);
+    expect(closed.closedTabs.at(-1)).toMatchObject({
+      kind: "chat",
+      sessionId: "session",
+    });
+    expect(closed.closedTabs).toHaveLength(folded ? 5 : 1);
+  },
+);
 it("preserves chat identity and presentation across all resource opening modes", () => {
   const ws = initial();
   const opened = transitionWorkspace(ws, { type: "side", key: "palette:a" });

@@ -3994,3 +3994,27 @@ opens from the palette (Cmd+Shift+N) or a link's menu. Everything it opens stays
 incognito, and its sign-ins end a moment after the last incognito tab closes
 (ADR 0303).
 
+
+### 2026-11-05: A folded group closes together; voice follows its window
+
+Closing a collapsed chat group closes all its subtabs, through the same
+transition for the X, Cmd+W and chat controls (ADR 0304). Page leave guards and
+confirmation of unsaved file or workflow edits apply to the whole group. The
+person chose all-or-nothing closure: Stay retains every loaded tab. An expanded chat keeps
+its existing close behavior.
+
+Voice shortcuts take their project and remembered chat from the workspace
+window they came from. Only the visible project reports its current chat.
+Every microphone opens the profile's continuous assistant conversation through
+its owning workspace, including the detached dock and floating microphone.
+
+Browser guests use Chromium's opaque canvas in the page's own color scheme.
+Work no longer paints `html` white: that prevented a site's body background
+from covering the canvas and revealed white when scrolling beyond its box.
+
+### 2026-11-06: Completed work stays with the latest answer
+
+With "Fold notes into steps", completed notes, steps and read terminal updates
+share one activity disclosure, including automatic follow-up turns (ADR 0305).
+A person's messages and items needing attention remain visible boundaries. The
+full work remains available in order when opened.

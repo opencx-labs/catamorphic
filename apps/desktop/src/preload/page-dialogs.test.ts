@@ -60,6 +60,44 @@ const pageFunctions = () => ({
 });
 
 describe("a frame's dialogs in the preload", () => {
+  it("arms only a temporary non-cancelling close listener and ignores stale releases", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    installPageDialogs({ top: true });
+    const prepare = vi
+      .mocked(ipcRenderer.on)
+      .mock.calls.find(
+        ([channel]) => channel === "catamorphic:page-close-prepare",
+      )?.[1];
+    const release = vi
+      .mocked(ipcRenderer.on)
+      .mock.calls.find(
+        ([channel]) => channel === "catamorphic:page-close-release",
+      )?.[1];
+    if (!prepare || !release) throw new Error("No close preparation handlers");
+    expect(add.mock.calls.some(([type]) => type === "beforeunload")).toBe(
+      false,
+    );
+    Reflect.apply(prepare, undefined, [{}, "first"]);
+    expect(
+      window.dispatchEvent(new Event("beforeunload", { cancelable: true })),
+    ).toBe(true);
+    expect(ipcRenderer.send).toHaveBeenCalledWith(
+      "catamorphic:page-close-ready",
+      "first",
+    );
+    Reflect.apply(prepare, undefined, [{}, "second"]);
+    Reflect.apply(release, undefined, [{}, "first"]);
+    expect(remove.mock.calls.some(([type]) => type === "beforeunload")).toBe(
+      false,
+    );
+    Reflect.apply(release, undefined, [{}, "second"]);
+    expect(
+      remove.mock.calls.filter(([type]) => type === "beforeunload"),
+    ).toHaveLength(1);
+    add.mockRestore();
+    remove.mockRestore();
+  });
   it("send main only text it can show, and answer the page with main's answer", () => {
     const { frame, sent } = frameAnswering([
       { answer: true },
@@ -235,8 +273,9 @@ describe("the page's alert, confirm and prompt", () => {
   it("reach main through the preload's bridge, which stops asking from pagehide on", () => {
     vi.mocked(ipcRenderer.sendSync).mockReturnValue({ answer: true });
     installPageDialogs({ top: false });
-    const { func, args } = vi.mocked(contextBridge.executeInMainWorld).mock
-      .calls[0]?.[0] ?? { func: () => {}, args: [] };
+    const { func, args } = vi
+      .mocked(contextBridge.executeInMainWorld)
+      .mock.calls.at(-1)?.[0] ?? { func: () => {}, args: [] };
     Reflect.apply(func, undefined, args ?? []);
     const page = pageFunctions();
     expect(page.confirm("Sure?")).toBe(true);

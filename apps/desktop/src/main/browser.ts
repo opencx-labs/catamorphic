@@ -925,6 +925,10 @@ export function registerBrowserSupport(
       preferences.webSecurity = true;
       preferences.allowRunningInsecureContent = false;
       preferences.webviewTag = false;
+      // Let Chromium paint an opaque canvas in the page's own color scheme.
+      // Styling html's background blocks body-to-canvas propagation on sites
+      // that color only body, exposing a white canvas while scrolling.
+      preferences.transparent = false;
       // Work owns the only guest preload. Extension pages receive their
       // protocol bridge through the prepared session instead.
       if (params.src?.startsWith("chrome-extension://")) {
@@ -1565,23 +1569,6 @@ export function registerBrowserSupport(
     trackConsole(contents);
     if (historyForNextGuest) historyForGuest.set(contents, historyForNextGuest);
     historyForNextGuest = null;
-    // Pages that set no background render on white, as in Chrome. The
-    // guest is otherwise transparent, which a tab share captures as black.
-    // User-origin CSS: any rule of the page's own wins over it.
-    contents.on("dom-ready", () => {
-      if (contents.isDestroyed()) return;
-      // Extension pages (popups, side panels, options) paint as Chrome
-      // paints them, in the scheme the person uses (ADR 0203).
-      if (contents.getURL().startsWith("chrome-extension:")) return;
-      void contents
-        // color-scheme too: Chromium's plain-text and image viewers
-        // otherwise pick dark text colors from the app's dark scheme and
-        // paint them on the white canvas.
-        .insertCSS("html{background-color:#fff;color-scheme:light}", {
-          cssOrigin: "user",
-        })
-        .catch(() => {});
-    });
     contents.on("preload-error", (_event, preloadPath, error) => {
       console.error("[browser] Guest preload failed", preloadPath, error);
     });

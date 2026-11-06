@@ -120,7 +120,10 @@ export interface BrowserCommands {
    * Ask the page whether its tab may close: its beforeunload may hold it
    * with "Leave site?" (ADR 0227). Resolves false when the person stays.
    */
-  mayClose: () => Promise<boolean>;
+  mayClose: (options?: { preserve: boolean }) => Promise<boolean>;
+  /** A wider close was cancelled: this retained page is usable again. */
+  cancelClose: () => Promise<void>;
+  closeApproved: () => Promise<boolean>;
 }
 
 export interface BrowserPageState {
@@ -410,6 +413,9 @@ export function BrowserScreen({
   const [dialogFocus, setDialogFocus] = useState(0);
   /** Closing the tab, waiting on the page's beforeunload. */
   const closeWaitRef = useRef<((leave: boolean) => void) | null>(null);
+  const closeRequestRef = useRef<{ guestId: number; requestId: string } | null>(
+    null,
+  );
 
   // Find in page, as Chrome's find bar does it. The query stays with the
   // tab for the next opening; a count belongs to the latest request only.
@@ -1085,48 +1091,79 @@ export function BrowserScreen({
     },
     [setDialogs],
   );
-  const mayClose = useCallback(async (): Promise<boolean> => {
-    const view = webviewRef.current;
-    if (!view || !guestReadyRef.current) return true;
-    let id: number;
-    try {
-      id = view.getWebContentsId();
-    } catch {
-      return true;
-    }
-    // Already asking: that question decides.
-    if (closeWaitRef.current) return false;
-    return new Promise<boolean>((resolve) => {
-      let timer: number | undefined;
-      let stopAnswers = () => {};
-      const finish = (leave: boolean) => {
-        if (closeWaitRef.current !== finish) return;
-        closeWaitRef.current = null;
-        window.clearTimeout(timer);
-        stopAnswers();
-        resolve(leave);
-      };
-      closeWaitRef.current = finish;
-      stopAnswers = desktopApi.onBrowserCloseAnswer((answer) => {
-        if (answer.guestId === id) finish(answer.leave);
-      });
-      desktopApi.browserCloseAsk({ guestId: id }).then(
-        (ask) => {
-          if (ask === "close") {
-            finish(true);
-            return;
-          }
+  const mayClose = useCallback(
+    async (options?: { preserve: boolean }): Promise<boolean> => {
+      const view = webviewRef.current;
+      if (!view || !guestReadyRef.current) return true;
+      let id: number;
+      try {
+        id = view.getWebContentsId();
+      } catch {
+        return true;
+      }
+      // Already asking: that question decides.
+      if (closeWaitRef.current) return false;
+      const preserve = options?.preserve === true;
+      const request = { guestId: id, requestId: crypto.randomUUID(), preserve };
+      closeRequestRef.current = request;
+      return new Promise<boolean>((resolve) => {
+        let timer: number | undefined;
+        let stopAnswers = () => {};
+        const finish = (leave: boolean) => {
           if (closeWaitRef.current !== finish) return;
-          // A page that neither lets go nor asks in time is stuck, and
-          // its tab closes, as in Chrome.
-          timer = window.setTimeout(() => {
-            if (!dialogsRef.current.some((d) => d.kind === "beforeunload"))
+          closeWaitRef.current = null;
+          window.clearTimeout(timer);
+          stopAnswers();
+          resolve(leave);
+        };
+        closeWaitRef.current = finish;
+        stopAnswers = desktopApi.onBrowserCloseAnswer((answer) => {
+          if (answer.guestId === id && answer.requestId === request.requestId)
+            finish(answer.leave);
+        });
+        desktopApi.browserCloseAsk(request).then(
+          (ask) => {
+            if (ask === "close") {
               finish(true);
-          }, CLOSE_ASK_MS);
-        },
-        () => finish(true),
-      );
-    });
+              return;
+            }
+            if (ask === "cancel") {
+              finish(false);
+              return;
+            }
+            if (closeWaitRef.current !== finish) return;
+            // Silence is not approval: a group must retain every guest if
+            // preparation or its native check cannot complete.
+            timer = window.setTimeout(() => {
+              if (!dialogsRef.current.some((d) => d.kind === "beforeunload"))
+                finish(!preserve);
+            }, CLOSE_ASK_MS);
+          },
+          () => finish(!preserve),
+        );
+      });
+    },
+    [],
+  );
+  const cancelClose = useCallback(async () => {
+    const request = closeRequestRef.current;
+    if (!request) return;
+    closeRequestRef.current = null;
+    closeWaitRef.current?.(false);
+    try {
+      await desktopApi.browserCloseCancel(request);
+    } catch {
+      // Removed or replaced meanwhile: the native guest owns its cleanup.
+    }
+  }, []);
+  const closeApproved = useCallback(async () => {
+    const request = closeRequestRef.current;
+    if (!request) return !guestReadyRef.current;
+    try {
+      return await desktopApi.browserCloseApproved(request);
+    } catch {
+      return false;
+    }
   }, []);
 
   const sidePanel = useExtensionSidePanel(guestId);
@@ -1348,6 +1385,8 @@ export function BrowserScreen({
       findNext: () => stepFind("next"),
       findPrevious: () => stepFind("previous"),
       mayClose,
+      cancelClose,
+      closeApproved,
       sleepBlocker: async () => {
         const view = webviewRef.current;
         if (!view || !guestReadyRef.current) return null;
@@ -1361,7 +1400,16 @@ export function BrowserScreen({
       },
     });
     return () => registerCommandsRef.current?.(null);
-  }, [focusAddress, reload, openFind, stepFind, navigateHistory, mayClose]);
+  }, [
+    focusAddress,
+    reload,
+    openFind,
+    stepFind,
+    navigateHistory,
+    mayClose,
+    cancelClose,
+    closeApproved,
+  ]);
 
   // A fresh New Tab greets with the address bar focused (Chrome behavior);
   // a page takes focus as its tab comes forward. Both answer what brought

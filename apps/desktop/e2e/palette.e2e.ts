@@ -830,3 +830,54 @@ it("restores typing focus when Backspace leaves an empty Ask agent mode", async 
   expect(await run(`return input().value`)).toBe("focus restored");
   await close();
 });
+
+it.each([false, true])(
+  "keeps the caret and a partial selection while editing the palette (Ask agent: %s)",
+  async (agent) => {
+    await open();
+    if (agent) {
+      await type("agent");
+      await run(`key(' ')`);
+      await wait(
+        `return input()?.isContentEditable && document.activeElement===input()`,
+      );
+    }
+    const text = "Keep this draft while I edit words in the middle. ".repeat(8);
+    await app.insertText(text);
+    const select = () =>
+      run(`
+      const field=input();
+      if(field instanceof HTMLTextAreaElement) field.setSelectionRange(5,9);
+      else getSelection().setBaseAndExtent(field.firstChild,5,field.firstChild,9);
+      return true;
+    `);
+    const selection = () =>
+      run<[number, number]>(`
+      const field=input(), selection=getSelection();
+      return field instanceof HTMLTextAreaElement
+        ? [field.selectionStart,field.selectionEnd]
+        : [selection.anchorOffset,selection.focusOffset];
+    `);
+    try {
+      await select();
+      // Let results, height and profile updates commit while the person
+      // has selected one word, then edit through Chromium's own path.
+      await app.eval(
+        `window.catamorphicDesktop.getPrefs().then(prefs=>window.catamorphicDesktop.setPrefs({voiceInChats:!prefs.voiceInChats}))`,
+      );
+      expect(await selection()).toEqual([5, 9]);
+      await app.insertText("those");
+      expect(await selection()).toEqual([10, 10]);
+      for (let index = 0; index < 8; index++) {
+        await app.press("ArrowRight");
+        await app.insertText("x");
+        const [start, end] = await selection();
+        expect(start).toBe(end);
+      }
+      await shot(`palette-selection-${agent ? "agent" : "search"}.png`);
+    } finally {
+      await close();
+    }
+    expect(app.getRendererErrors()).toEqual([]);
+  },
+);
