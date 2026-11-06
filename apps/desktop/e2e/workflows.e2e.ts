@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 import {
   WORKFLOW_EDITOR_EXPANDED_SOURCE,
@@ -19,7 +20,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.stop();
 });
-const helpers = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); ${setReactValueJs}`;
+const helpers = `${workspaceDomHelpersJs} const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); ${setReactValueJs}`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async () => { ${helpers} ${body} })()`);
 const wait = (body: string, label: string) =>

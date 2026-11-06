@@ -6,6 +6,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -31,8 +32,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const visible = (selector) =>
     $$(selector).filter((el) => {
       const rect = el.getBoundingClientRect();

@@ -6,6 +6,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -73,8 +74,7 @@ const ARTIFACTS_DIR = path.join(import.meta.dirname, "artifacts");
 
 /** DOM helpers injected into every page eval (same idiom as the e2e files). */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>

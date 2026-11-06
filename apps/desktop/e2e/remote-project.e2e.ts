@@ -2,7 +2,12 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, openProjectSwitcher } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  openProjectSwitcher,
+  workspaceDomHelpersJs,
+} from "./harness.js";
 
 /**
  * Remote projects end to end (ADR 0055): a member pastes a connect link,
@@ -30,8 +35,7 @@ let introspectionUnavailable = false;
 const proposals: Array<Record<string, unknown>> = [];
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const setReactValue = (el, value) => {

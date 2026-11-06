@@ -4,10 +4,11 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 let app: AppHandle;
-const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
+const helpers = `${setReactValueJs}; ${workspaceDomHelpersJs} const button = text => $$('button').find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async()=>{${helpers};${body}})()`);
 const wait = (body: string) =>

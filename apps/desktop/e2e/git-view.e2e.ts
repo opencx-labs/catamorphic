@@ -8,13 +8,14 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 let app: AppHandle;
 let temp: string;
 let root: string;
 let linked: string;
-const helper = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
+const helper = `${workspaceDomHelpersJs} const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helper};${body}})()`, { timeoutMs: 60_000 });

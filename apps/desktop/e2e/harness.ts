@@ -657,3 +657,12 @@ export async function openProjectSwitcher(app: AppHandle) {
     `!!document.querySelector('[data-testid="switcher-connect-remote"]:not([inert] *)')`,
   );
 }
+
+/** Ordinary UI queries ignore retained project runtimes that the user cannot see.
+ * Hidden panes within the active workspace remain queryable for lifecycle tests.
+ * Portaled dialogs and the shared dock are outside project runtimes. */
+export const workspaceDomHelpersJs = `
+  const $$ = (selector) => [...document.querySelectorAll(selector)]
+    .filter(element => !element.closest('[data-workspace-visible="false"]'));
+  const $ = (selector) => $$(selector)[0] ?? null;
+`;

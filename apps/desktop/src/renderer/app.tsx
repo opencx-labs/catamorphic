@@ -961,7 +961,7 @@ export function App({
       // Resolve the destination and its preferences together so the workspace
       // owner never claims a project using the previous profile's settings.
       setActiveProfileId(profile.id);
-      setActiveProjectId(profile.defaultProjectId);
+      setActiveProjectId(nextPrefs.lastProjectId ?? profile.defaultProjectId);
       window.dispatchEvent(new Event("catamorphic:profile-refetch"));
       setProfileVeil({ stage: "out" });
     } finally {

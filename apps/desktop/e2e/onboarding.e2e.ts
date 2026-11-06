@@ -9,6 +9,7 @@ import {
   openOnboardingStep,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -22,8 +23,7 @@ let app: AppHandle;
 
 /** DOM helpers injected into every eval — keep selectors in one place. */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>

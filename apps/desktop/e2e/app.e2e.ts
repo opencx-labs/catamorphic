@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -26,8 +27,7 @@ afterAll(async () => {
 
 /** DOM helpers injected into every eval — keep selectors in one place. */
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
@@ -136,10 +136,13 @@ const settleAnimationFrame = () =>
   `);
 
 describe("first launch", () => {
-  it("boots to the empty state with no projects", async () => {
-    await runWait(`return !!byText('button', 'New project');`, {
-      label: "empty-state New project button",
-    });
+  it("starts in Default Project and offers the normal project switcher", async () => {
+    await runWait(
+      `return !!byText('button', 'New project') && $('[aria-label="Switch project"]')?.textContent.includes('Default Project');`,
+      {
+        label: "empty-state New project button",
+      },
+    );
   });
 
   it("creates a project and lands on a palette New Tab", async () => {
@@ -858,7 +861,7 @@ describe("palette intent", () => {
 
 describe("chat tab activity indicators", () => {
   // Locate the tab surface independently of its placement and styling.
-  const tabStrip = `document.querySelector('[data-tab-orientation]')`;
+  const tabStrip = `$('[data-tab-orientation]')`;
   const tabSpinnerOn = `[...${tabStrip}.querySelectorAll('svg.animate-spin')]
     .some((el) => getComputedStyle(el).opacity === '1')`;
   const tabDotOn = `[...${tabStrip}.querySelectorAll('span.bg-accent')]

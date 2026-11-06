@@ -4,6 +4,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 /**
@@ -26,8 +27,7 @@ afterAll(async () => {
 });
 
 const helpers = `
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  ${workspaceDomHelpersJs}
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () => {
@@ -429,8 +429,14 @@ describe("agents and profiles", () => {
   });
 
   it("switches profile in place under the veil when only New Tabs are open", async () => {
-    // The workspace holds only the seeded palette New Tab — that counts
-    // as empty, so switching runs in place. The 200ms veil fades can slip
+    // Reload the selected project to exercise the one-workspace case,
+    // without retaining the initial Default Project in the background.
+    await app.reload();
+    await runWait(
+      `return document.querySelectorAll('[data-project-runtime]').length === 1 && !!byText('button', 'New Tab');`,
+      { label: "one workspace with a New Tab" },
+    );
+    // A workspace with only a New Tab is empty, so switching runs in place. The 200ms veil fades can slip
     // between 200ms polls; observe the DOM from inside the page instead.
     await run(`
       window.__veilSeen = false;
@@ -469,8 +475,8 @@ describe("agents and profiles", () => {
       { timeoutMs: 15_000, label: "veil played and settled on Work" },
     );
 
-    // Switch back the same way (the fresh profile has no projects, which
-    // must still count as an empty workspace).
+    // The fresh profile's Default Project only has onboarding, which also
+    // counts as empty. Switching back restores the previously selected project.
     await run(
       `byText('button[aria-haspopup="menu"]', 'Work').click(); return true;`,
     );
