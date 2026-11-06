@@ -606,9 +606,16 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       const result = z
         .object({
           target: z.string(),
-          build: z.object({ status: z.literal("ready") }),
+          build: z.object({
+            status: z.enum(["building", "ready", "failed"]),
+            error: z.string().nullish(),
+          }),
         })
         .parse(body);
+      if (result.build.status !== "ready")
+        throw new Error(
+          result.build.error ?? "Review fixture build did not finish",
+        );
       yield {
         type: "tool_call",
         toolName: "invoke_capability",

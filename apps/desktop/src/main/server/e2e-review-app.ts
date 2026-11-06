@@ -25,9 +25,11 @@ export function reviewAppFiles(value: unknown): Record<string, string> {
     .parse(JSON.parse(packageSource));
   for (const dependency of pack.dependencies) {
     const separator = dependency.lastIndexOf("@");
-    manifest.dependencies[dependency.slice(0, separator)] = dependency.slice(
-      separator + 1,
-    );
+    // Exercise the pack's declared baseline, rather than a different diff or
+    // syntax bundle whenever a newer compatible release reaches the registry.
+    manifest.dependencies[dependency.slice(0, separator)] = dependency
+      .slice(separator + 1)
+      .replace(/^[~^]/, "");
   }
   return {
     ...Object.fromEntries(

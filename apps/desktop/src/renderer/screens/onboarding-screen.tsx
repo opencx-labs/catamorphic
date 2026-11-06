@@ -122,7 +122,7 @@ export function OnboardingScreen({
       heading="The way to find everything"
       description={
         <>
-          Open a new tab
+          Open the palette by opening a new tab
           {bindings["new-tab"] && (
             <>
               {" "}
@@ -133,12 +133,12 @@ export function OnboardingScreen({
           {bindings["command-palette"] ? (
             <>
               {" "}
-              press <kbd>{formatBinding(bindings["command-palette"])}</kbd>
+              pressing <kbd>{formatBinding(bindings["command-palette"])}</kbd>
             </>
           ) : (
-            <> use the app menu</>
-          )}{" "}
-          to open the palette.
+            <> using the app menu</>
+          )}
+          .
           <br />
           Quickly find your tabs, bookmarks, frequently used items, and more.
         </>
@@ -149,9 +149,9 @@ export function OnboardingScreen({
     </Step>,
     <Step
       key="import"
-      heading="Bring your browser with you"
+      heading="Browse the web from Work"
       description="Work is a fully-featured browser. Import your bookmarks, passwords, signed-in accounts, and history."
-      hint="Choose what to bring. You can also do this later in Settings or from the palette."
+      hint="You can do this later in Settings or from the palette."
     >
       <div className="onboarding-browser-mark">
         <Globe strokeWidth={1} />
@@ -175,7 +175,7 @@ export function OnboardingScreen({
         >
           Import from a browser
         </PendingButton>
-        <DefaultBrowserButton />
+        <DefaultBrowserButton showAvailabilityReason={false} />
       </div>
     </Step>,
     <Step

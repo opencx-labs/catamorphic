@@ -83,11 +83,12 @@ describe("shared browser import and personal history", () => {
     expect(
       await app.eval(`(() => {
         const button = document.querySelector('[data-testid="default-browser-button"]');
-        return {disabled: button.disabled, reason: document.getElementById(button.getAttribute('aria-describedby')).innerText};
+        return {disabled: button.disabled, reason: button.dataset.disabledReason, description: button.getAttribute('aria-describedby')};
       })()`),
     ).toEqual({
       disabled: true,
       reason: "Use the installed Work app to set your default browser.",
+      description: null,
     });
     await click('[data-testid="onboarding-browser-import"]');
     await app.waitFor(

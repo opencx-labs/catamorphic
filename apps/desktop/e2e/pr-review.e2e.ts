@@ -178,15 +178,27 @@ it("generates an ordinary review app, follows evidence and retains the result", 
   try {
     // A fresh merge-gate cache performs the real dependency install. Match
     // the service's bounded install + compile budget; UI errors fail early.
-    await app.waitFor(
-      `(()=>{${helper};return !!button('Open review') || !!document.querySelector('[aria-label="Code review guide"] [role="alert"]');})()`,
+    const result = await app.waitFor<{ ready: boolean; error?: string }>(
+      `(async () => {
+        ${helper}
+        if (button('Open review')) return {ready:true};
+        const alert = $('[aria-label="Code review guide"] [role="alert"]');
+        if (alert) return {ready:false,error:alert.textContent};
+        const api = window.catamorphicDesktop;
+        const projectId = (await api.getPrefs()).lastProjectId;
+        const key = Object.keys(localStorage).find(key => key.startsWith('review-app:' + projectId + ':') && key.endsWith(':session'));
+        const sessionId = key && localStorage.getItem(key);
+        if (!sessionId) return false;
+        const server = await api.getServerState();
+        const base = server.url + '/api/projects/' + projectId;
+        const session = await (await fetch(base + '/agent/sessions/' + sessionId)).json();
+        return session.execution?.status === 'failed'
+          ? {ready:false,error:session.messages.findLast(message => message.role === 'assistant')?.content}
+          : false;
+      })()`,
       { timeoutMs: 630_000, label: "review app build" },
     );
-    expect(
-      await run(
-        "return $('[aria-label=\"Code review guide\"] [role=alert]')?.textContent ?? null;",
-      ),
-    ).toBeNull();
+    expect(result).toEqual({ ready: true });
   } catch (error) {
     console.error(
       "Review readiness",
