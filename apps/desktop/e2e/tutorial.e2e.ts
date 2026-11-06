@@ -229,9 +229,14 @@ describe("the Work tutorial", () => {
     ).toBe(true);
     expect(
       await app.eval(
-        `document.querySelector('.onboarding-copy small')?.textContent`,
+        `document.querySelector('.onboarding-copy p + p')?.textContent`,
       ),
-    ).toBe("One place to search, open, and explore.");
+    ).toContain("The palette is very versatile. Try searching for “history”");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy small') === null && document.querySelector('.onboarding-copy p + p').textContent.includes('Just ask your agent to create a new mode for you.')`,
+      ),
+    ).toBe(true);
     expect(
       await app.eval(
         `document.querySelector('.onboarding-hint').textContent.trim()`,
@@ -250,6 +255,67 @@ describe("the Work tutorial", () => {
     await app.eval(
       `window.catamorphicDesktop.setKeybindings(${JSON.stringify(original)})`,
     );
+  });
+
+  it("introduces sidebars after the palette and keeps the chat centered as they fold", async () => {
+    await openOnboardingStep(app, "Palette");
+    await click('[data-testid="onboarding-next"]');
+    await app.waitFor(
+      `document.querySelector('.onboarding-copy h1')?.textContent === 'Sidebars that show exactly what you want'`,
+    );
+    await settled();
+    const preview = ".onboarding-workspace-preview[data-preview-sidebars]";
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-copy p')?.textContent`,
+      ),
+    ).toBe(
+      "Sidebars are completely customizable. Just ask your agent to modify or add completely new sections, no matter how detailed.",
+    );
+    const states = await app.eval<{
+      narrow: number;
+      wide: number;
+      drift: number;
+    }>(
+      `new Promise(resolve => {
+        const root=document.querySelector('${preview}');
+        const started=performance.now();
+        let narrow=Infinity, wide=0, drift=0;
+        const sample=()=>{
+          const frame=root.getBoundingClientRect();
+          const main=root.querySelector('.onboarding-preview-main').getBoundingClientRect();
+          const sides=[...root.querySelectorAll('aside')].map(element=>element.getBoundingClientRect().width);
+          narrow=Math.min(narrow,...sides);
+          wide=Math.max(wide,...sides);
+          drift=Math.max(drift,Math.abs(main.left+main.width/2-frame.left-frame.width/2));
+          if(performance.now()-started>=6500) resolve({narrow,wide,drift});
+          else requestAnimationFrame(sample);
+        };
+        sample();
+      })`,
+    );
+    expect(states.narrow).toBeLessThan(2);
+    expect(states.wide).toBeGreaterThan(100);
+    expect(states.drift).toBeLessThan(1);
+    await app.cdp("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    await settled();
+    expect(
+      await app.eval(
+        `document.querySelector('${preview} aside').getAnimations().length`,
+      ),
+    ).toBe(0);
+    await app.eval(`window.catamorphicDesktop.devWindow('setSize',700,650)`);
+    await settled();
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-page:not([inert])').scrollWidth <= document.querySelector('.onboarding-page:not([inert])').clientWidth`,
+      ),
+    ).toBe(true);
+    await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,800)`);
+    await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+    expect(app.getRendererErrors()).toEqual([]);
   });
 
   it("reopens from tutorial synonyms without duplicating the tab", async () => {

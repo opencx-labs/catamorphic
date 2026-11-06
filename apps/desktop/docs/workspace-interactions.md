@@ -144,7 +144,9 @@ or help. Reopening resets the same tab to Welcome rather than creating a duplica
 Project tabs persist their current step across relaunches.
 
 The tutorial introduces themes, agent setup, the dock, keyboard shortcuts, the
-palette, and combined browser import/default-browser setup. The agent step opens
+palette modes, sidebar customization, and combined browser import/default-browser
+setup. The sidebar hero uses the real workspace preview, with a centered chat
+and both sidebars expanding and collapsing. Reduced motion shows it statically. The agent step opens
 the existing wizard as a modal, retains the tutorial and its step, and shows a
 completed action once configured. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
 cursor, expanding from the right corner into the center of the window, with a

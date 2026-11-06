@@ -49,6 +49,7 @@ export const ONBOARDING_STEPS = [
   "The dock",
   "Keyboard shortcuts",
   "Palette",
+  "Sidebars",
   "Browser setup",
 ];
 
@@ -99,6 +100,7 @@ export function OnboardingScreen({
     null,
     null,
     "You can see all bindings in Settings.",
+    null,
     null,
     "You can do this later in Settings or from the palette.",
   ];
@@ -178,7 +180,8 @@ export function OnboardingScreen({
               <kbd>{formatBinding(bindings["new-floating-chat"])}</kbd>
             </>
           )}
-          .
+          . Expand a floating chat into a workspace tab, or bring it back to the
+          dock.
         </>
       }
     >
@@ -219,9 +222,23 @@ export function OnboardingScreen({
           Quickly find your tabs, bookmarks, frequently used items, and more.
         </>
       }
+      detail={
+        <>
+          The palette is very versatile. Try searching for “history” and enter
+          that mode. Palettes let you search and access anything, and they’re
+          completely customizable. Just ask your agent to create a new mode for
+          you.
+        </>
+      }
     >
       <PalettePreview />
-      <small>One place to search, open, and explore.</small>
+    </Step>,
+    <Step
+      key="sidebars"
+      heading="Sidebars that show exactly what you want"
+      description="Sidebars are completely customizable. Just ask your agent to modify or add completely new sections, no matter how detailed."
+    >
+      <WorkspacePreview animateSidebars />
     </Step>,
     <Step
       key="import"
@@ -608,7 +625,11 @@ const PREVIEW_MESSAGES: ChatTimelineMessage[] = [
 const noop = () => {};
 
 /** Real tab, sidebar, chat timeline, and composer components, with local example data. */
-export function WorkspacePreview() {
+export function WorkspacePreview({
+  animateSidebars = false,
+}: {
+  animateSidebars?: boolean;
+}) {
   const frame = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   useLayoutEffect(() => {
@@ -624,7 +645,12 @@ export function WorkspacePreview() {
     <div
       ref={frame}
       className="onboarding-workspace-preview"
-      aria-label="Workspace theme preview"
+      data-preview-sidebars={animateSidebars || undefined}
+      aria-label={
+        animateSidebars
+          ? "A centered chat with both sidebars expanding and collapsing"
+          : "Workspace theme preview"
+      }
       role="img"
     >
       <div

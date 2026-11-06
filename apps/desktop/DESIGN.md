@@ -1060,7 +1060,7 @@ sends the dock to the display's edge.
 ### 2026-11-06: A welcome you can come back to
 
 Tutorial is the user-facing name for the ordinary onboarding tab (ADR 0155), with Welcome, Theme, AI agents, The dock,
-Keyboard shortcuts, Palette, and Browser setup steps. Import and default-browser actions share one step.
+Keyboard shortcuts, Palette, Sidebars, and Browser setup steps. Import and default-browser actions share one step.
 Done closes the tutorial and opens a normal New Tab palette. It opens under the former welcome
 and automatic setup conditions. The palette finds it as onboarding, tutorial,
 welcome, tour, getting started, learn, guide, or help. The track slides left as
@@ -1095,7 +1095,11 @@ use measured pixel coordinates, updated after the controls settle, so compositor
 playback never depends on unresolved CSS variables. It pauses while hidden and
 settles under reduced motion.
 Keyboard shortcuts and palette steps have no extra actions; their shortcut labels
-follow the effective bindings. Project creation remains in the project switcher.
+follow the effective bindings. The palette explains entering and customizing modes
+using History as the example. The following sidebar step reuses the workspace
+preview with a centered chat and both sidebars folding over 300ms, then holding
+before the reverse motion; reduced motion keeps them open. Project creation
+remains in the project switcher.
 
 New profiles start in Default Project with onboarding selected and the dock
 visible before agent setup. Initialization reuses one profile-owned project even

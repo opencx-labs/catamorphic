@@ -19,7 +19,7 @@ Tutorial, Onboarding, Welcome, Tour, Getting started, Learn, Guide, and Help.
 Tutorial is the user-facing name in the tab, palette, and return hint.
 
 Begin with Welcome, Theme, AI agents, The dock, Keyboard shortcuts, Palette,
-and Browser setup for import and default browser. Agent configuration opens the
+Sidebars, and Browser setup for import and default browser. Agent configuration opens the
 existing wizard as a modal and retains the tutorial; its action shows completion
 when configured. The dock starts collapsed on the right, and its tutorial uses
 the real bubble strip with an animated cursor. Project creation and server
