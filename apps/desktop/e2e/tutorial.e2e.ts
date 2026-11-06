@@ -301,6 +301,31 @@ describe("the Work tutorial", () => {
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
   });
 
+  it("expands the first dock from the right corner after navigating backward", async () => {
+    await openOnboardingStep(app, "Keyboard shortcuts");
+    await click(".onboarding-navigation > button:first-child");
+    const motion = await app.eval<{ pastCenter: number; expanded: boolean }>(
+      `new Promise(resolve => {
+        const started=performance.now();
+        let pastCenter=0, expanded=false;
+        const sample=()=>{
+          const root=document.querySelector('.onboarding-dock-preview');
+          const rail=root?.querySelector('[data-dock-rail]');
+          if(root && rail){
+            const frame=root.getBoundingClientRect(), bounds=rail.getBoundingClientRect();
+            pastCenter=Math.max(pastCenter,frame.left+frame.width/2-bounds.left-bounds.width/2);
+            expanded ||= rail.dataset.dockCollapsed==='false';
+          }
+          if(performance.now()-started>=2200) resolve({pastCenter,expanded});
+          else requestAnimationFrame(sample);
+        };
+        sample();
+      })`,
+    );
+    expect(motion.expanded).toBe(true);
+    expect(motion.pastCenter).toBeLessThan(1);
+  });
+
   it("demonstrates the dock, uses the effective chat shortcut, and explains keyboard bindings", async () => {
     await openOnboardingStep(app, "The dock");
     const demo = ".onboarding-dock-preview";

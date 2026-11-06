@@ -250,6 +250,7 @@ describe("shared browser import and personal history", () => {
     const completed = await app.eval<{
       disabled: boolean;
       state: string;
+      checked: boolean;
       background: string;
       border: string;
       x: number;
@@ -258,10 +259,11 @@ describe("shared browser import and personal history", () => {
       const button = document.querySelector('[data-testid="onboarding-browser-import"]');
       const style = getComputedStyle(button);
       const bounds = button.getBoundingClientRect();
-      return {disabled: button.disabled, state: button.dataset.actionState, background: style.backgroundColor, border: style.borderTopColor, x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2};
+      return {disabled: button.disabled, state: button.dataset.actionState, checked: !!button.querySelector('[aria-hidden="false"] .lucide-check'), background: style.backgroundColor, border: style.borderTopColor, x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2};
     })()`);
     expect(completed.disabled).toBe(true);
     expect(completed.state).toBe("done");
+    expect(completed.checked).toBe(true);
     expect(completed.border).toBe("rgba(0, 0, 0, 0)");
     await app.movePointer({ x: completed.x, y: completed.y });
     expect(

@@ -1,4 +1,4 @@
-import { Check, Globe } from "lucide-react";
+import { Check } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { DefaultBrowserState } from "../../shared/default-browser.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -82,10 +82,7 @@ export function DefaultBrowserButton({
         data-testid="default-browser-button"
         className="button-secondary browser-setup-action"
       >
-        <span className="inline-flex items-center gap-2">
-          <Globe className="size-3.5" />
-          Make Work your default browser
-        </span>
+        Make Work your default browser
       </PendingButton>
       {(showAvailabilityReason || message) && (
         <p

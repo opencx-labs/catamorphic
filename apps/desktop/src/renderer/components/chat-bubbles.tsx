@@ -485,13 +485,18 @@ export function ChatBubbles({
     return () => observer.disconnect();
   }, []);
   const spot = collapsed ? side : placement;
-  const lastRect = useRef<DOMRect | null>(null);
+  const lastRect = useRef<{ left: number; right: number } | null>(null);
   const lastSpot = useRef(spot);
   useLayoutEffect(() => {
     const rail = railRef.current;
     if (!rail) return;
     const previous = lastRect.current;
-    const rect = rail.getBoundingClientRect();
+    // Resting spots belong to the dock's container. An ancestor can slide the
+    // whole surface (for example when entering a tutorial page) between these
+    // measurements; that movement must not become part of the dock's FLIP.
+    const bounds = rail.getBoundingClientRect();
+    const origin = rail.parentElement?.getBoundingClientRect().left ?? 0;
+    const rect = { left: bounds.left - origin, right: bounds.right - origin };
     lastRect.current = rect;
     if (lastSpot.current === spot || dragLeft !== null) {
       lastSpot.current = spot;
