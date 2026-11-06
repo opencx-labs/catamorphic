@@ -70,7 +70,7 @@ describe("configurable browser workspace", () => {
     await run("button('Settings').click()");
     await app.waitFor("!!document.querySelector('select[name=tabPlacement]')");
     const before = await run<string[]>(
-      "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
+      "return [...document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
     );
     await run("button('Choose theme').click()");
     await app.waitFor("!!document.querySelector('[data-theme-preset=light]')");
@@ -86,11 +86,11 @@ describe("configurable browser workspace", () => {
     );
     await run("setReactValue($('select[name=tabPlacement]'), 'sidebar')");
     await app.waitFor(
-      "document.documentElement.dataset.theme === 'light' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "document.documentElement.dataset.theme === 'light' && !!document.querySelector('[data-workspace-visible=true] aside [data-tab-orientation=vertical]')",
     );
     expect(
       await run(
-        "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
+        "return [...document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
       ),
     ).toEqual(before);
     expect(
@@ -126,7 +126,7 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "!!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside [data-tab-orientation=vertical]')",
     );
   });
 
@@ -263,13 +263,13 @@ describe("configurable browser workspace", () => {
       "window.dispatchEvent(new KeyboardEvent('keydown', {key:'t', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), altKey:true, bubbles:true, cancelable:true}))",
     );
     await app.waitFor(
-      "!!document.querySelector('.workspace-chrome input[aria-label=\"Address and search bar\"]')",
+      "!!document.querySelector('[data-workspace-visible=true] .workspace-chrome input[aria-label=\"Address and search bar\"]')",
     );
     await run(
       "const input = $('input[aria-label=\"Address and search bar\"]'); input.focus(); setReactValue(input, 'data:text/html,<title>Header check</title><h1>Same page</h1>'); input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))",
     );
     await app.waitFor(
-      "[...document.querySelectorAll('aside button')].some(b => b.textContent.includes('Header check'))",
+      "[...document.querySelectorAll('[data-workspace-visible=true] aside button')].some(b => b.textContent.includes('Header check'))",
     );
     const guest = await run("return $('webview').getWebContentsId()");
     expect(
@@ -279,7 +279,7 @@ describe("configurable browser workspace", () => {
     ).toBe(1);
     await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
     await app.waitFor(
-      "!!document.querySelector('main [data-tab-orientation=horizontal]')",
+      "!!document.querySelector('[data-workspace-visible=true] main [data-tab-orientation=horizontal]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
@@ -287,7 +287,7 @@ describe("configurable browser workspace", () => {
       "!!document.querySelector('button[aria-label=\"Expand sidebar\"]')",
     );
     await app.waitFor(
-      "document.querySelector('[data-tab-orientation=horizontal]').getAnimations({subtree:true}).every(animation => animation.animationName !== 'tab-in' || animation.playState === 'finished')",
+      "document.querySelector('[data-workspace-visible=true] [data-tab-orientation=horizontal]').getAnimations({subtree:true}).every(animation => animation.animationName !== 'tab-in' || animation.playState === 'finished')",
       { label: "tab entrance animation settled" },
     );
     const centers = await run<[number, number]>(
@@ -299,14 +299,14 @@ describe("configurable browser workspace", () => {
       "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar'})",
     );
     await app.waitFor(
-      "!!document.querySelector('.workspace-chrome [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] .workspace-chrome [data-browser-toolbar]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await app.eval(
       "window.catamorphicDesktop.setPrefs({headerPlacement:'sidebar'})",
     );
     await app.waitFor(
-      "!!document.querySelector('aside input[aria-label=\"Address and search bar\"]') && !!document.querySelector('[data-sidebar-navigation] button[aria-label=Back]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside input[aria-label=\"Address and search bar\"]') && !!document.querySelector('[data-sidebar-navigation] button[aria-label=Back]')",
     );
     expect(await run("return !!$('main .workspace-chrome')")).toBe(false);
     expect(
@@ -316,10 +316,10 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await app.waitFor(
-      "document.querySelector('aside').getBoundingClientRect().width === 260",
+      "document.querySelector('[data-workspace-visible=true] aside').getBoundingClientRect().width === 260",
     );
     const tabCount = await run<number>(
-      "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
+      "return document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
     );
     await run(
       "const row = $('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); const target = document.elementFromPoint(r.right-6,r.y+r.height/2); if (!target?.closest('button[aria-label=\"New tab\"]')) throw new Error('New Tab does not fill its row'); target.click()",
@@ -330,19 +330,19 @@ describe("configurable browser workspace", () => {
     expect(await app.eval("window.__sidebarErrors")).toEqual([]);
     expect(
       await run(
-        "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
+        "return document.querySelectorAll('[data-workspace-visible=true] [data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
       ),
     ).toBe(tabCount + 1);
     await run(
-      "[...document.querySelectorAll('aside button')].find(b => b.textContent.includes('Header check')).click()",
+      "[...document.querySelectorAll('[data-workspace-visible=true] aside button')].find(b => b.textContent.includes('Header check')).click()",
     );
     await app.waitFor(
-      "!!document.querySelector('aside [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside [data-browser-toolbar]')",
     );
     expect(await run("return $('webview').getWebContentsId()")).toBe(guest);
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getBoundingClientRect().width === 0",
+      "document.querySelector('[data-workspace-visible=true] aside').getBoundingClientRect().width === 0",
     );
     expect(
       await run(
@@ -350,7 +350,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+        "[0, 0, innerWidth - document.querySelector('[data-workspace-visible=true] [data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
       ),
     );
     expect(
@@ -368,7 +368,7 @@ describe("configurable browser workspace", () => {
     const pointerY = await app.eval<number>("innerHeight / 2");
     await app.movePointer({ x: 3, y: pointerY });
     await app.waitFor(
-      "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.sidebarRevealed === 'true'",
       { label: "native pointer reveals collapsed sidebar" },
     );
     // The compositor may still send guest entry events while the sidebar
@@ -377,7 +377,7 @@ describe("configurable browser workspace", () => {
       "$('webview').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,clientX:3,clientY:innerHeight/2})); $('webview').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,clientX:200,clientY:innerHeight/2}))",
     );
     await app.waitFor(
-      "document.querySelector('aside').getBoundingClientRect().width === 260",
+      "document.querySelector('[data-workspace-visible=true] aside').getBoundingClientRect().width === 260",
     );
     expect(await run("return $('aside').dataset.sidebarRevealed")).toBe("true");
     expect(
@@ -386,7 +386,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+        "[0, 0, innerWidth - document.querySelector('[data-workspace-visible=true] [data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
       ),
     );
     expect(
@@ -403,34 +403,34 @@ describe("configurable browser workspace", () => {
     );
     await run("$('webview').focus()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'true'",
     );
     await run("$('button[aria-label=\"Show sidebar\"]').focus()");
     await app.waitFor(
-      "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').dataset.sidebarRevealed === 'true'",
     );
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'false'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'false'",
     );
     expect(await run("return $('aside').dataset.sidebarRevealed")).toBe(
       "false",
     );
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'true'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'true'",
     );
     await run(
       "window.dispatchEvent(new KeyboardEvent('keydown', {key:'l',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}))",
     );
     await app.waitFor(
-      "document.querySelector('aside').getAttribute('aria-hidden') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
+      "document.querySelector('[data-workspace-visible=true] aside').getAttribute('aria-hidden') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",
     );
     await app.eval(
       "window.catamorphicDesktop.setPrefs({headerPlacement:'top'})",
     );
     await app.waitFor(
-      "!!document.querySelector('.workspace-chrome [data-browser-toolbar]')",
+      "!!document.querySelector('[data-workspace-visible=true] .workspace-chrome [data-browser-toolbar]')",
     );
     await run("$('button[aria-label=\"Close Header check\"]').click()");
     await app.waitFor("!document.querySelector('[data-browser-toolbar]')");
@@ -438,7 +438,7 @@ describe("configurable browser workspace", () => {
 
   it("aligns the compact footer controls", async () => {
     await app.waitFor(
-      "!!document.querySelector('aside footer button[aria-label=Settings]') && !!document.querySelector('button[aria-label^=\"Switch profile:\"]')",
+      "!!document.querySelector('[data-workspace-visible=true] aside footer button[aria-label=Settings]') && !!document.querySelector('button[aria-label^=\"Switch profile:\"]')",
       { label: "profile footer after changing layout" },
     );
     const centers = await run<[number, number]>(
