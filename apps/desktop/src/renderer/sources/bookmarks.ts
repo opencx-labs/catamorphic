@@ -10,6 +10,7 @@ import {
   desktopApi,
   type ProjectBookmarks,
 } from "../lib/desktop-api.js";
+import { tabKey } from "../lib/workspace-types.js";
 import {
   capabilitiesOf,
   childrenOf,
@@ -25,6 +26,67 @@ import type { WorkSourceDeps } from "./deps.js";
  * that started before it, and an older read is never cancelled under a list.
  */
 const generations = new Map<string, number>();
+const scopeKeyOf = (projectId: string, profileId: string) =>
+  `${profileId}\u0000${projectId}`;
+
+/** One profile's bookmarks for the project, through the window's cache. */
+export function readBookmarks(
+  deps: WorkSourceDeps,
+  profileId: string,
+): Promise<BookmarksData> {
+  return deps.queryClient.fetchQuery({
+    queryKey: [
+      "desktop",
+      "bookmarks",
+      profileId,
+      deps.projectId,
+      generations.get(scopeKeyOf(deps.projectId, profileId)) ?? 0,
+    ],
+    staleTime: 1000,
+    queryFn: () =>
+      desktopApi.bookmarksGet({ projectId: deps.projectId, profileId }),
+  });
+}
+
+/** Calls `listener` when this profile's bookmarks for the project change. */
+export function onBookmarksChange(
+  deps: WorkSourceDeps,
+  listener: () => void,
+): () => void {
+  return desktopApi.onBookmarksChanged((change) => {
+    if (
+      change.profileId !== deps.profileId ||
+      (change.projectId && change.projectId !== deps.projectId)
+    )
+      return;
+    const key = scopeKeyOf(deps.projectId, change.profileId);
+    generations.set(key, (generations.get(key) ?? 0) + 1);
+    listener();
+  });
+}
+
+/**
+ * What the sidebar keeps above the open tabs: the project's bookmarks and
+ * the pinned pages. A tab open on one of these is listed there, not twice.
+ */
+export function savedAddresses(data: BookmarksData): Set<string> {
+  return new Set(
+    [...data.project.bookmarks, ...data.pinned.bookmarks].map(
+      (bookmark) => bookmark.url,
+    ),
+  );
+}
+
+/** The window's open tabs by the address they would be saved under. */
+function openTabs(deps: WorkSourceDeps): Map<string, string> {
+  return new Map(
+    deps
+      .host()
+      .tabs.flatMap((tab): [string, string][] =>
+        tab.bookmarkUrl ? [[tab.bookmarkUrl, tabKey(tab)]] : [],
+      ),
+  );
+}
 
 /** What the address field holds, as the web address it names. */
 export function webAddress(input: string): string {
@@ -104,7 +166,11 @@ function folderMenu(scope: BookmarkScope, label: string): SidebarMenuEntry[] {
   ];
 }
 
-function rowsOf(scope: BookmarkScope, list: ProjectBookmarks) {
+function rowsOf(
+  scope: BookmarkScope,
+  list: ProjectBookmarks,
+  open: ReadonlyMap<string, string>,
+) {
   const folders: SidebarSourceItem[] = list.folders.map((folder) => ({
     id: folder.id,
     parentId: folder.parentId ?? null,
@@ -121,6 +187,14 @@ function rowsOf(scope: BookmarkScope, list: ProjectBookmarks) {
     url: bookmark.url,
     // A favicon seen on the page; otherwise the address decides the glyph.
     ...(bookmark.faviconUrl ? { icon: bookmark.faviconUrl } : {}),
+    // Open in a tab, the bookmark stands for it: the tab closes from here.
+    ...(open.has(bookmark.url)
+      ? {
+          actions: [
+            { label: `Close ${bookmark.label}`, action: "close", icon: "X" },
+          ],
+        }
+      : {}),
     menu: bookmarkMenu(scope, bookmark),
     data: {
       url: bookmark.url,
@@ -160,24 +234,10 @@ export function bookmarksSource(
     if (!deps.profileId) throw new Error("Bookmarks need a profile.");
     return deps.profileId;
   };
-  const scopeKey = () => `${profileId()}\u0000${deps.projectId}`;
-  const key = () => [
-    "desktop",
-    "bookmarks",
-    profileId(),
-    deps.projectId,
-    generations.get(scopeKey()) ?? 0,
-  ];
-  const read = () =>
-    deps.queryClient.fetchQuery({
-      queryKey: key(),
-      staleTime: 1000,
-      queryFn: () =>
-        desktopApi.bookmarksGet({
-          projectId: deps.projectId,
-          profileId: profileId(),
-        }),
-    });
+  const read = () => readBookmarks(deps, profileId());
+  // The library is a browser's imported bookmarks: no tab stands for one.
+  const opened = () =>
+    scope === "library" ? new Map<string, string>() : openTabs(deps);
   const target = () => ({ projectId: deps.projectId, profileId: profileId() });
   const source: SectionSource = {
     title:
@@ -202,24 +262,32 @@ export function bookmarksSource(
             ? data.library && unpinned(data, data.library)
             : unpinned(data, data.project);
       return pageOf(
-        childrenOf(list ? rowsOf(scope, list) : [], parentId),
+        childrenOf(list ? rowsOf(scope, list, opened()) : [], parentId),
         cursor,
         1000,
       );
     },
-    subscribe: (publish, { branches }) =>
-      desktopApi.onBookmarksChanged((change) => {
-        if (
-          change.profileId !== deps.profileId ||
-          (change.projectId && change.projectId !== deps.projectId)
-        )
-          return;
-        generations.set(scopeKey(), (generations.get(scopeKey()) ?? 0) + 1);
-        invalidateBranches(publish, branches());
-      }),
+    subscribe: (publish, { branches }) => {
+      const reread = () => invalidateBranches(publish, branches());
+      const stops = [
+        onBookmarksChange(deps, reread),
+        // A tab opening or closing on a bookmark changes its row.
+        ...(scope === "library" ? [] : [deps.onWindowChange("tabs", reread)]),
+      ];
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
     action: async ({ itemId, action, values }) => {
       const label = values?.label?.trim() ?? "";
-      if (action === "add") {
+      if (action === "close") {
+        const data = await read();
+        const list = scope === "pinned" ? data.pinned : data.project;
+        const url = list.bookmarks.find((entry) => entry.id === itemId)?.url;
+        const key = url && opened().get(url);
+        if (!key) throw new Error("This bookmark is not open.");
+        deps.host().closeTab(key);
+      } else if (action === "add") {
         if (scope !== "project")
           throw new Error("Add bookmarks to the project's list.");
         const address = webAddress(values?.url ?? "");

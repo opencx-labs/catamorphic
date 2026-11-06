@@ -3,18 +3,42 @@ import { createApiClient } from "@catamorphic/api-client";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkspaceTab } from "../lib/workspace-types.js";
+import { bookmarksSource } from "./bookmarks.js";
 import type { WorkSourceDeps, WorkSourceHost } from "./deps.js";
 import { moduleSource } from "./module.js";
 import { filesSource, tabsSource } from "./resources.js";
 
 const mocks = vi.hoisted(() => ({
   files: [] as Array<{ path: string }>,
+  bookmarks: {
+    project: { folders: [], bookmarks: [] },
+    pinned: { folders: [], bookmarks: [] },
+  } as {
+    project: {
+      folders: never[];
+      bookmarks: { id: string; label: string; url: string }[];
+    };
+    pinned: {
+      folders: never[];
+      bookmarks: { id: string; label: string; url: string }[];
+    };
+  },
+  bookmarkListeners: new Set<
+    (change: { profileId: string; projectId?: string }) => void
+  >(),
   changed: new Set<(event: { leaseId: string; error?: string }) => void>(),
   requests: [] as unknown[],
 }));
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
     projectLocalFiles: async () => mocks.files,
+    bookmarksGet: async () => mocks.bookmarks,
+    onBookmarksChanged: (
+      listener: (change: { profileId: string; projectId?: string }) => void,
+    ) => {
+      mocks.bookmarkListeners.add(listener);
+      return () => mocks.bookmarkListeners.delete(listener);
+    },
     onGitChanged: () => () => {},
     sidebarSourceRequest: async (input: unknown) => {
       mocks.requests.push(input);
@@ -36,6 +60,11 @@ vi.mock("../lib/desktop-api.js", () => ({
 }));
 afterEach(() => {
   mocks.files = [];
+  mocks.bookmarks = {
+    project: { folders: [], bookmarks: [] },
+    pinned: { folders: [], bookmarks: [] },
+  };
+  mocks.bookmarkListeners.clear();
   mocks.requests = [];
   mocks.changed.clear();
 });
@@ -136,6 +165,66 @@ it("lists the window's tabs with what their chats are doing, a chat's tabs under
     drop: false,
     reveal: false,
   });
+});
+
+it("leaves a tab its bookmark stands for out of the list, and closes it from the bookmark", async () => {
+  const chatUrl = "catamorphic://chat?project=p&session=s2";
+  mocks.bookmarks = {
+    project: {
+      folders: [],
+      bookmarks: [
+        { id: "k1", label: "Docs", url: "https://docs.example.com" },
+        {
+          id: "k2",
+          label: "Fix login",
+          url: "catamorphic://chat?project=p&session=s1",
+        },
+      ],
+    },
+    pinned: {
+      folders: [],
+      bookmarks: [{ id: "k3", label: "Plan", url: chatUrl }],
+    },
+  };
+  const { value, host } = deps({
+    tabs: tabs.map((tab) =>
+      tab.name === "c1"
+        ? { ...tab, bookmarkUrl: "catamorphic://chat?project=p&session=s1" }
+        : tab.name === "c2"
+          ? { ...tab, bookmarkUrl: chatUrl }
+          : tab,
+    ),
+  });
+  value.profileId = "me";
+  const roots = await tabsSource(value).load({ parentId: null, signal });
+  expect(roots.items.map((row) => [row.id, Boolean(row.hide)])).toEqual([
+    // A bookmark and a pinned page stand for these.
+    ["browser:b1", true],
+    // A chat with pages under it stays, bookmarked or not.
+    ["chat:c1", false],
+    ["chat:c2", true],
+  ]);
+  const pinned = bookmarksSource(value, "pinned");
+  const [plan] = (await pinned.load({ parentId: null, signal })).items;
+  expect(plan?.actions?.map((entry) => entry.action)).toEqual(["close"]);
+  await pinned.action?.({ itemId: "k3", action: "close", signal });
+  expect(host.closeTab).toHaveBeenCalledWith("chat:c2");
+});
+
+it("reads the tabs again when bookmarks change", () => {
+  const { value } = deps();
+  value.profileId = "me";
+  const publish = vi.fn();
+  const stop = tabsSource(value).subscribe?.(publish, {
+    branches: () => [null],
+    branchSize: () => 0,
+    fail: () => {},
+  });
+  for (const listener of mocks.bookmarkListeners)
+    listener({ profileId: "me", projectId: "p" });
+  expect(publish).toHaveBeenCalled();
+  stop?.();
+  expect(mocks.bookmarkListeners.size).toBe(0);
 });
 
 it("renames a chat's tab as its chat, in the window's one rename dialog", async () => {
