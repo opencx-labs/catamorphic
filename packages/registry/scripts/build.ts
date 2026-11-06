@@ -9,64 +9,16 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { type RegistryItem, readRegistryItem } from "./item.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
-const SRC = path.join(ROOT, "src");
-const DIST = path.join(ROOT, "dist", "r");
-
-interface RegistryFile {
-  path: string;
-  type: string;
-  content?: string;
-  target?: string;
-}
-
-interface RegistryItem {
-  $schema?: string;
-  name: string;
-  type: string;
-  description?: string;
-  title?: string;
-  docs?: string;
-  dependencies?: string[];
-  devDependencies?: string[];
-  registryDependencies?: string[];
-  files: RegistryFile[];
-}
-
-async function readRegistryItem(itemDir: string): Promise<RegistryItem> {
-  const manifestPath = path.join(itemDir, "registry-item.json");
-  const raw = await fs.readFile(manifestPath, "utf8");
-  return JSON.parse(raw) as RegistryItem;
-}
-
-/**
- * Cross-item imports in source live at `../<item>/<file>.js`; installed
- * files all land flat in the same target directory, so rewrite them to
- * sibling imports (`./<file>`).
- */
-function rewriteCrossItemImports(content: string): string {
-  return content.replaceAll(
-    /from "\.\.\/[\w-]+\/([\w-]+)\.js"/g,
-    'from "./$1"',
+/** Build both public registry surfaces from the versioned package at root. */
+export async function buildRegistry(root = ROOT): Promise<void> {
+  const SRC = path.join(root, "src");
+  const DIST = path.join(root, "dist", "r");
+  const { version }: { version: string } = JSON.parse(
+    await fs.readFile(path.join(root, "package.json"), "utf8"),
   );
-}
-
-async function inlineFiles(
-  itemDir: string,
-  item: RegistryItem,
-): Promise<RegistryItem> {
-  const files: RegistryFile[] = [];
-  for (const file of item.files) {
-    const sourceName = path.basename(file.path);
-    const sourcePath = path.join(itemDir, sourceName);
-    const content = await fs.readFile(sourcePath, "utf8");
-    files.push({ ...file, content: rewriteCrossItemImports(content) });
-  }
-  return { ...item, files };
-}
-
-async function build(): Promise<void> {
   await fs.rm(DIST, { recursive: true, force: true });
   await fs.mkdir(DIST, { recursive: true });
 
@@ -87,8 +39,7 @@ async function build(): Promise<void> {
 
   for (const name of itemDirs) {
     const itemDir = path.join(SRC, name);
-    const item = await readRegistryItem(itemDir);
-    const inlined = await inlineFiles(itemDir, item);
+    const inlined = readRegistryItem({ directory: itemDir, version });
     catalog.push(inlined);
     const outPath = path.join(DIST, `${name}.json`);
     await fs.writeFile(outPath, `${JSON.stringify(inlined, null, 2)}\n`);
@@ -97,16 +48,16 @@ async function build(): Promise<void> {
       type: inlined.type,
       description: inlined.description,
     });
-    console.log(`registry: built ${name} -> ${path.relative(ROOT, outPath)}`);
+    console.log(`registry: built ${name} -> ${path.relative(root, outPath)}`);
   }
 
   const indexPath = path.join(DIST, "index.json");
   await fs.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`);
   console.log(`registry: built index (${index.length} items)`);
   await fs.writeFile(
-    path.join(ROOT, "dist", "catalog.json"),
+    path.join(root, "dist", "catalog.json"),
     `${JSON.stringify(catalog, null, 2)}\n`,
   );
 }
 
-await build();
+if (import.meta.main) await buildRegistry();

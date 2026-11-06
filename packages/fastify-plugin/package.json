@@ -1,7 +1,6 @@
 {
   "name": "@catamorphic/fastify-plugin",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.37",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,34 +8,68 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./mcp": {
+      "import": "./dist/mcp.js",
+      "types": "./dist/mcp.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/fastify-plugin --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json",
+    "typecheck": "bun check --project ./tsconfig.json",
     "generate-spec": "bun run scripts/generate-spec.ts && biome format --write ../api-client/openapi.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/mcp.ts"
+    ]
   },
   "dependencies": {
     "@catamorphic/app": "workspace:*",
     "@catamorphic/core": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
-    "@catamorphic/github": "workspace:*",
     "@catamorphic/parser": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@fastify/cors": "^11.3.0",
     "@fastify/swagger": "^9.8.0",
     "@fastify/swagger-ui": "^6.1.0",
-    "fastify": "^5.10.0",
+    "fastify": "^5.12.7",
     "fastify-type-provider-zod": "^7.0.0",
     "kysely": "^0.29.3",
-    "zod": "^4.4.3",
+    "zod": "^4.6.7",
     "@catamorphic/otel": "workspace:*",
-    "@opentelemetry/api": "^1.9.1"
+    "@catamorphic/workflow": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
+    "@catamorphic/agent-protocol": "workspace:*"
   },
   "devDependencies": {
-    "@opentelemetry/sdk-trace-node": "^2.9.0"
-  }
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
+    "@catamorphic/agent-runner": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/fastify-plugin"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
+  ]
 }

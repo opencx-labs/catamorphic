@@ -13,16 +13,19 @@ export { migrateWorkflowToProject } from "./migrate-workflow.js";
 export {
   discoverLocalFolder,
   hasLocalGit,
-  INTERNAL_REMOTE_PREFIX,
   type LocalFolder,
   nativeGit,
 } from "./native-git.js";
 export { NativeProjectRepo } from "./native-project-repo.js";
 export {
+  assertPushAllowed,
   type CloneFromRemoteOptions,
   cloneFromRemote,
   fetchFromRemote,
+  isManagedBranch,
   pushToRemote,
+  type RemoteOwnership,
+  RemotePushRefusedError,
 } from "./network.js";
 export {
   type NetworkSyncResult,
@@ -33,28 +36,53 @@ export {
   ObjectOriginRepo,
   ObjectRemoteBackend,
   type ObjectRemoteBackendOpts,
+  probeConditionalWrites,
 } from "./object-remote-backend.js";
 export type { ObjectStore } from "./object-store.js";
 export { PreconditionFailedError } from "./object-store.js";
 export {
+  DraftBusyError,
+  type DraftChange,
+  DraftContentChangedError,
+  type DraftPublishResult,
+  DraftRefNotAllowedError,
+  DraftsUnsupportedError,
+  DraftUnresolvedError,
+  InvalidBaseError,
+  NoDraftError,
+  OriginDraftRepo,
+  type ProjectDraft,
+  refreshPublished,
+} from "./origin-draft.js";
+export {
+  DraftBinaryResolutionError,
+  DraftIgnoredPathError,
+  DraftPathError,
+  GitObjectCache,
+} from "./origin-objects.js";
+export {
   ensurePersonalFilesExcluded,
   isPersonalFile,
-  PERSONAL_FILES_ROOT,
 } from "./personal-files.js";
 export {
-  generateWorkBranchName,
+  PROGRAM_READER_ID,
   PROJECT_GITIGNORE,
-  PROJECT_MANIFEST_PATH,
   ProjectManager,
-  WORK_BRANCH_PREFIX,
 } from "./project-manager.js";
 export { ProjectRepoImpl } from "./project-repo.js";
+export { RefMovedError } from "./ref-moved-error.js";
+export {
+  assertValidRefName,
+  InvalidRefNameError,
+  isValidRefName,
+} from "./ref-names.js";
 export type {
   BranchInfo,
   CloneSource,
   CommitInfo,
   ConflictEntry,
   DiffEntry,
+  DraftSupport,
   FileChange,
   GitCredentials,
   InitProjectOptions,
@@ -66,3 +94,17 @@ export type {
   RepoStatus,
   StorageBackend,
 } from "./types.js";
+export {
+  type BaseMoveOutcome,
+  buildSeedPack,
+  copyFromMirror,
+  fetchIntoMirror,
+  isCommitId,
+  mirrorChangedFiles,
+  moveCheckoutBase,
+  parseWorkspaceRef,
+  seedPackInstallScript,
+  shellQuote,
+  unpinMirrorRef,
+  type WorkspaceBase,
+} from "./workspace-mirror.js";

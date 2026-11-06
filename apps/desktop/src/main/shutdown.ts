@@ -3,7 +3,10 @@ interface QuitEvent {
 }
 
 interface ShutdownApp {
-  on(event: "will-quit", listener: (event: QuitEvent) => void): unknown;
+  on(
+    event: "before-quit" | "will-quit",
+    listener: (event: QuitEvent) => void,
+  ): unknown;
   exit(code: number): void;
   quit(): void;
 }
@@ -14,11 +17,20 @@ export function registerDesktopShutdown({
   shutdown,
   onError,
   signals = process,
+  pendingRequests = nativeRequestsInFlight,
+  openWindows = () => [],
+  quitWaitMs = 5_000,
 }: {
   app: ShutdownApp;
   shutdown: () => Promise<void>;
   onError: (error: unknown) => void;
   signals?: { on(event: "SIGTERM" | "SIGINT", listener: () => void): unknown };
+  /** Native requests still in flight (a DNS lookup, a file read). */
+  pendingRequests?: () => readonly string[];
+  /** The windows still open, described for the log. */
+  openWindows?: () => readonly string[];
+  /** How long Quit may wait on windows closing before they are named. */
+  quitWaitMs?: number;
 }): void {
   // Development runners and test harnesses must use the same cleanup as Quit.
   const requestQuit = (signal: string) => {
@@ -28,16 +40,41 @@ export function registerDesktopShutdown({
   signals.on("SIGTERM", () => requestQuit("SIGTERM"));
   signals.on("SIGINT", () => requestQuit("SIGINT"));
   let started = false;
+  // A window that never accepts closing holds Quit before any service
+  // stops: name what is still open, for a test that times out.
+  let waiting: ReturnType<typeof setTimeout> | undefined;
+  app.on("before-quit", () => {
+    if (started || waiting) return;
+    console.info(
+      `[desktop] Quitting; closing windows: ${diagnose(openWindows).join("; ") || "none"}`,
+    );
+    waiting = setTimeout(() => {
+      waiting = undefined;
+      if (started) return;
+      const open = diagnose(openWindows);
+      console.info(
+        `[desktop] Quit still waiting on windows after ${quitWaitMs}ms: ${open.join("; ") || "none"}`,
+      );
+    }, quitWaitMs);
+  });
   app.on("will-quit", (event) => {
+    clearTimeout(waiting);
+    waiting = undefined;
     event.preventDefault();
     if (started) return;
     started = true;
+    const startedAt = Date.now();
     console.info("[desktop] Windows closed; shutting down services");
     void Promise.resolve()
       .then(shutdown)
       .then(
         () => {
-          console.info("[desktop] Shutdown complete");
+          // Electron frees Node only once these settle, so one left
+          // running holds the exit: name it, for a test that times out.
+          const pending = diagnose(pendingRequests);
+          console.info(
+            `[desktop] Shutdown complete in ${Date.now() - startedAt}ms${pending.length ? `; still in flight: ${pending.join(", ")}` : ""}`,
+          );
           app.exit(0);
         },
         (error: unknown) => {
@@ -51,6 +88,25 @@ export function registerDesktopShutdown({
         },
       );
   });
+}
+
+/** A diagnostic never stands between quit and exit. */
+function diagnose(read: () => readonly string[]): readonly string[] {
+  try {
+    return read();
+  } catch {
+    return [];
+  }
+}
+
+/** Native requests still running, counted by kind (`GetAddrInfoReqWrap×1`). */
+function nativeRequestsInFlight(): string[] {
+  const counts = new Map<string, number>();
+  for (const kind of process.getActiveResourcesInfo()) {
+    if (kind.endsWith("ReqWrap") || kind.startsWith("FSReq"))
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return [...counts].map(([kind, count]) => `${kind}×${count}`);
 }
 
 /** Stop producers in order, then storage, attempting every cleanup on failure. */

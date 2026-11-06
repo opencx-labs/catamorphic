@@ -6,6 +6,20 @@ import type {
 
 type Agent = Pick<AgentInfo, "harness" | "provider">;
 
+/**
+ * Every reasoning effort, lowest first, by the names Claude Code and Codex
+ * give them. Neither harness labels or describes its levels, so pickers and
+ * the chat's status show these names as they are, lowercase, and nothing
+ * beside them.
+ */
+export const EFFORT_LEVELS: readonly AgentEffort[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
 /** Values the shipped adapters can forward without silently clamping them. */
 export function supportedEfforts(
   agent: Agent | undefined,
@@ -14,15 +28,16 @@ export function supportedEfforts(
   if (!agent) return [];
   if (model?.supportsEffort === false) return [];
   if (model?.supportedEffortLevels) return model.supportedEffortLevels;
-  if (agent.harness === "codex")
-    return ["low", "medium", "high", "xhigh", "max"];
+  if (agent.harness === "codex") return EFFORT_LEVELS;
+  // An ACP agent reasons as its own configuration says (ADR 0241).
+  if (agent.harness === "acp") return [];
   if (agent.harness === "ai-sdk" && agent.provider === "openrouter") return [];
   if (agent.harness === "ai-sdk" && agent.provider === "openai")
     return ["low", "medium", "high"];
-  return ["low", "medium", "high", "xhigh", "max"];
+  return EFFORT_LEVELS;
 }
 
-/** Match CodexAgent.threadOptions and AiSdkCodingAgent's provider mapping. */
+/** Match the Codex adapter's thread options and the built-in agent's provider mapping. */
 export function effectiveEffort(
   agent: Agent | undefined,
   effort: AgentEffort | null | undefined,

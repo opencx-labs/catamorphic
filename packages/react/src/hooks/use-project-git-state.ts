@@ -2,16 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCatamorphic } from "../provider.js";
-import type {
-  BranchInfo,
-  CommitInfo,
-  ConflictEntry,
-  RepoStatus,
-} from "../types.js";
+import type { CommitInfo, ConflictEntry, RepoStatus } from "../types.js";
 
 const STATUS_POLL_MS = 10_000;
 
-export type { BranchInfo, CommitInfo, ConflictEntry, RepoStatus };
+export type { CommitInfo, ConflictEntry, RepoStatus };
 
 /**
  * Host-injected git transport.
@@ -23,7 +18,6 @@ export type { BranchInfo, CommitInfo, ConflictEntry, RepoStatus };
  */
 export interface ProjectGitApi {
   getStatus: (projectId: string) => Promise<RepoStatus>;
-  getBranches: (projectId: string) => Promise<BranchInfo[]>;
   getCommits: (projectId: string) => Promise<{ items: CommitInfo[] }>;
   getFilesAtRef: (
     projectId: string,
@@ -123,7 +117,6 @@ export interface UseProjectGitStateOptions {
 
 export interface ProjectGitState {
   status: RepoStatus | null;
-  branches: BranchInfo[];
   commits: CommitInfo[];
   /** Files reflected in the UI: baseline + drafts. */
   files: Record<string, string>;
@@ -141,7 +134,6 @@ export interface ProjectGitState {
   versionLabel: string;
   refreshStatus: () => Promise<void>;
   refreshCommits: () => Promise<void>;
-  refreshBranches: () => Promise<void>;
   setFile: (path: string, content: string) => void;
   discardDrafts: () => void;
   selectVersion: (sha: string | null) => Promise<void>;
@@ -174,7 +166,6 @@ export function useProjectGitState({
     [api, apiClient],
   );
   const [status, setStatus] = useState<RepoStatus | null>(null);
-  const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [drafts, setDrafts] = useState<Drafts>({});
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
@@ -202,15 +193,6 @@ export function useProjectGitState({
     }
   }, [projectId]);
 
-  const refreshBranches = useCallback(async () => {
-    try {
-      const next = await apiRef.current.getBranches(projectId);
-      setBranches(next);
-    } catch {
-      // Ignore
-    }
-  }, [projectId]);
-
   const refreshCommits = useCallback(async () => {
     try {
       const next = await apiRef.current.getCommits(projectId);
@@ -222,13 +204,12 @@ export function useProjectGitState({
 
   useEffect(() => {
     refreshStatus();
-    refreshBranches();
     refreshCommits();
     const id = setInterval(() => {
       refreshStatus();
     }, STATUS_POLL_MS);
     return () => clearInterval(id);
-  }, [refreshStatus, refreshBranches, refreshCommits]);
+  }, [refreshStatus, refreshCommits]);
 
   const files = useMemo(() => {
     return { ...baselineRef.current, ...drafts };
@@ -294,22 +275,11 @@ export function useProjectGitState({
       });
       if (result.status === "deployed") {
         discardDrafts();
-        await Promise.all([
-          refreshStatus(),
-          refreshBranches(),
-          refreshCommits(),
-        ]);
+        await Promise.all([refreshStatus(), refreshCommits()]);
       }
       return { status: result.status, conflicts: result.conflicts };
     },
-    [
-      projectId,
-      drafts,
-      discardDrafts,
-      refreshStatus,
-      refreshBranches,
-      refreshCommits,
-    ],
+    [projectId, drafts, discardDrafts, refreshStatus, refreshCommits],
   );
 
   const pull = useCallback(async () => {
@@ -326,8 +296,8 @@ export function useProjectGitState({
   const discard = useCallback(async () => {
     discardDrafts();
     await apiRef.current.discard(projectId).catch(() => undefined);
-    await Promise.all([refreshStatus(), refreshBranches()]);
-  }, [projectId, discardDrafts, refreshStatus, refreshBranches]);
+    await refreshStatus();
+  }, [projectId, discardDrafts, refreshStatus]);
 
   const resolveConflicts = useCallback(
     async (resolutions: Record<string, string>) => {
@@ -346,7 +316,7 @@ export function useProjectGitState({
     }
     if (isDirty) {
       const b = status?.branch ?? "main";
-      return b === "main" ? "Draft" : `Draft — ${b}`;
+      return b === "main" ? "Draft" : `Draft: ${b}`;
     }
     if (status?.branch && status.branch !== "main") {
       return status.branch;
@@ -365,7 +335,6 @@ export function useProjectGitState({
 
   return {
     status,
-    branches,
     commits,
     files,
     modifiedFiles,
@@ -376,7 +345,6 @@ export function useProjectGitState({
     versionLabel,
     refreshStatus,
     refreshCommits,
-    refreshBranches,
     setFile,
     discardDrafts,
     selectVersion,
@@ -410,13 +378,6 @@ function buildApiFromClient(apiClient: ApiClient): ProjectGitApi {
           params: { path: { projectId } },
         }),
         "GET status",
-      ),
-    getBranches: (projectId) =>
-      unwrap(
-        apiClient.GET("/api/projects/{projectId}/branches", {
-          params: { path: { projectId } },
-        }),
-        "GET branches",
       ),
     getCommits: async (projectId) => {
       const data = await unwrap(

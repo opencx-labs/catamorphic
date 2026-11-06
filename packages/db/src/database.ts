@@ -1,6 +1,7 @@
 import { Kysely, PostgresDialect, WithSchemaPlugin } from "kysely";
 import pg from "pg";
 import { DEFAULT_SCHEMA } from "./config.js";
+import { StorableParametersPlugin } from "./storable-parameters.js";
 
 export type CreateDatabaseOptions =
   | {
@@ -63,10 +64,12 @@ export function knownPoolSize(db: object): number | undefined {
 
 export function createDatabase(options: CreateDatabaseOptions) {
   if ("pool" in options) {
-    const db = new Kysely<import("./generated/db.js").DB>({
-      dialect: new PostgresDialect({ pool: options.pool }),
-      plugins: [new WithSchemaPlugin(options.schema ?? DEFAULT_SCHEMA)],
-    });
+    const db = withStorableParameters(
+      new Kysely<import("./generated/db.js").DB>({
+        dialect: new PostgresDialect({ pool: options.pool }),
+        plugins: [new WithSchemaPlugin(options.schema ?? DEFAULT_SCHEMA)],
+      }),
+    );
     const max = options.pool.options?.max;
     if (typeof max === "number") poolSizes.set(db, max);
     return db;
@@ -81,10 +84,42 @@ export function createDatabase(options: CreateDatabaseOptions) {
     options: poolOptions,
     max: options.poolSize ?? DEFAULT_POOL_SIZE,
   });
-
-  const db = new Kysely<import("./generated/db.js").DB>({
-    dialect: new PostgresDialect({ pool }),
+  // The server can end an idle pooled connection (a restart, a failover, an
+  // administrator, a dropped database). node-postgres discards that client
+  // and reports it on the pool; without a listener Node treats the report
+  // as an unhandled error and the process dies. A host-owned pool is the
+  // host's to watch.
+  pool.on("error", (error) => {
+    console.warn(
+      `[catamorphic] An idle database connection closed; the pool replaces it: ${error.message}`,
+    );
   });
+
+  const db = withStorableParameters(
+    new Kysely<import("./generated/db.js").DB>({
+      dialect: new PostgresDialect({ pool }),
+    }),
+  );
   poolSizes.set(db, options.poolSize ?? DEFAULT_POOL_SIZE);
   return db;
+}
+
+const withStorable = new WeakSet<object>();
+
+/**
+ * The same database, sending every parameter as a value Postgres stores
+ * ({@link StorableParametersPlugin}): arrays and plain objects as JSON text
+ * jsonb accepts, strings without U+0000 or half of a surrogate pair.
+ * node-postgres would send an array as a Postgres array, which jsonb stores
+ * as `{}` or refuses, and jsonb refuses half of a surrogate pair. Idempotent, and the wrapped instance
+ * keeps the pool size recorded for the original. Core applies it to
+ * whatever database a host injects.
+ */
+export function withStorableParameters<T>(db: Kysely<T>): Kysely<T> {
+  if (withStorable.has(db)) return db;
+  const wrapped = db.withPlugin(new StorableParametersPlugin());
+  withStorable.add(wrapped);
+  const size = poolSizes.get(db);
+  if (size !== undefined) poolSizes.set(wrapped, size);
+  return wrapped;
 }

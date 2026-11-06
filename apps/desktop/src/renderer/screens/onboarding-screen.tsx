@@ -1,3 +1,4 @@
+import type { ItemCommon, TimelineTurn } from "@catamorphic/react";
 import {
   ArrowLeft,
   ArrowUp,
@@ -24,10 +25,7 @@ import {
   useState,
 } from "react";
 import { BrowserImportDialog } from "../components/browser-import.js";
-import {
-  ChatTimeline,
-  type ChatTimelineMessage,
-} from "../components/catamorphic/chat-timeline.js";
+import { ChatTimeline } from "../components/catamorphic/chat-timeline.js";
 import { ChatBubbles } from "../components/chat-bubbles.js";
 import { ChatGlyph } from "../components/chat-icon.js";
 import { ComposerInput } from "../components/composer-input.js";
@@ -54,6 +52,7 @@ export const ONBOARDING_STEPS = [
 ];
 
 export function OnboardingScreen({
+  active = true,
   step,
   onStepChange,
   onChooseTheme,
@@ -64,6 +63,7 @@ export function OnboardingScreen({
   importCompleted,
   hasAgents,
 }: {
+  active?: boolean;
   step: number;
   onStepChange: (step: number) => void;
   onChooseTheme: () => void;
@@ -185,7 +185,7 @@ export function OnboardingScreen({
         </>
       }
     >
-      <DockPreview />
+      <DockPreview active={active} />
     </Step>,
     <Step
       key="shortcuts"
@@ -238,7 +238,7 @@ export function OnboardingScreen({
       heading="Sidebars that show exactly what you want"
       description="Sidebars are completely customizable. Just ask your agent to modify or add completely new sections, no matter how detailed."
     >
-      <WorkspacePreview animateSidebars />
+      <WorkspacePreview animateSidebars active={active} />
     </Step>,
     <Step
       key="import"
@@ -325,7 +325,7 @@ export function OnboardingScreen({
                 aria-current={current === index ? "step" : undefined}
                 onClick={() => navigate(index)}
               >
-                <span />
+                <span className="onboarding-progress-dot" />
               </button>
             ))}
           </nav>
@@ -388,7 +388,7 @@ function PlusIcon() {
 }
 
 /** The real dock, driven by a local demonstration instead of workspace state. */
-function DockPreview() {
+function DockPreview({ active }: { active: boolean }) {
   const frame = useRef<HTMLDivElement>(null);
   const cursorAnimation = useRef<Animation | null>(null);
   const clickAnimation = useRef<Animation | null>(null);
@@ -496,6 +496,7 @@ function DockPreview() {
         pulse.startTime = animation.startTime;
         clickAnimation.current = pulse;
         if (
+          !active ||
           document.hidden ||
           window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ) {
@@ -513,7 +514,16 @@ function DockPreview() {
       stale = true;
       observer.disconnect();
     };
-  }, [expanded]);
+  }, [expanded, active]);
+  useEffect(
+    () => () => {
+      cursorAnimation.current?.cancel();
+      clickAnimation.current?.cancel();
+      cursorAnimation.current = null;
+      clickAnimation.current = null;
+    },
+    [],
+  );
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     let frameId = 0;
@@ -534,7 +544,7 @@ function DockPreview() {
     const update = () => {
       cancelAnimationFrame(frameId);
       previousPhase = undefined;
-      const animate = !media.matches && !document.hidden;
+      const animate = active && !media.matches && !document.hidden;
       setPlaying(animate);
       for (const animation of [
         cursorAnimation.current,
@@ -553,14 +563,10 @@ function DockPreview() {
     document.addEventListener("visibilitychange", update);
     return () => {
       cancelAnimationFrame(frameId);
-      cursorAnimation.current?.cancel();
-      clickAnimation.current?.cancel();
-      cursorAnimation.current = null;
-      clickAnimation.current = null;
       media.removeEventListener("change", update);
       document.removeEventListener("visibilitychange", update);
     };
-  }, []);
+  }, [active]);
   return (
     <div
       ref={frame}
@@ -589,7 +595,8 @@ function DockPreview() {
           menus={{}}
           side="right"
           placement="center"
-          autoCollapse={!expanded}
+          collapsed={!expanded}
+          onFoldedChange={noop}
           onToggle={noop}
           onClose={noop}
           onMenuAction={noop}
@@ -609,17 +616,54 @@ const PREVIEW_TABS: WorkspaceTab[] = [
   { kind: "app", name: "notes", label: "My notes" },
   { kind: "browser", name: "inspiration", label: "Inspiration" },
 ];
-const PREVIEW_MESSAGES: ChatTimelineMessage[] = [
+const PREVIEW_ITEM: ItemCommon = {
+  id: "preview",
+  sessionId: "preview",
+  turnId: null,
+  attemptId: null,
+  parentItemId: null,
+  position: 0,
+  status: "completed",
+  nativeRef: null,
+  createdAt: "2026-11-06T12:00:00.000Z",
+  updatedAt: "2026-11-06T12:00:00.000Z",
+  startedAt: null,
+  endedAt: null,
+};
+const PREVIEW_TIMELINE: TimelineTurn[] = [
   {
-    id: "hello",
-    role: "user",
-    content: "I have an idea. Can you help me bring it to life?",
-  },
-  {
-    id: "reply",
-    role: "assistant",
-    content:
-      "Of course. Tell me what you have in mind, and we’ll make it happen.",
+    key: "preview",
+    turn: null,
+    entries: [
+      {
+        kind: "input",
+        item: {
+          ...PREVIEW_ITEM,
+          id: "hello",
+          kind: "user_message",
+          author: { kind: "user", externalUserId: "preview" },
+          text: "I have an idea. Can you help me bring it to life?",
+          attachments: [],
+          dispatch: "queue",
+          attention: null,
+          idempotencyKey: null,
+          deliveredBy: null,
+          causation: [],
+        },
+      },
+      {
+        kind: "reply",
+        item: {
+          ...PREVIEW_ITEM,
+          id: "reply",
+          position: 1,
+          kind: "assistant_message",
+          text: "Of course. Tell me what you have in mind, and we’ll make it happen.",
+          agentId: null,
+        },
+        steps: [],
+      },
+    ],
   },
 ];
 const noop = () => {};
@@ -627,8 +671,10 @@ const noop = () => {};
 /** Real tab, sidebar, chat timeline, and composer components, with local example data. */
 export function WorkspacePreview({
   animateSidebars = false,
+  active = true,
 }: {
   animateSidebars?: boolean;
+  active?: boolean;
 }) {
   const frame = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -646,6 +692,7 @@ export function WorkspacePreview({
       ref={frame}
       className="onboarding-workspace-preview"
       data-preview-sidebars={animateSidebars || undefined}
+      data-preview-active={active}
       aria-label={
         animateSidebars
           ? "A centered chat with both sidebars expanding and collapsing"
@@ -709,7 +756,7 @@ export function WorkspacePreview({
             />
           </div>
           <ChatTimeline
-            messages={PREVIEW_MESSAGES}
+            timeline={PREVIEW_TIMELINE}
             className="min-h-0 flex-1"
           />
           <div className="mx-5 mb-5 rounded-xl border border-border bg-bg-inset p-3">

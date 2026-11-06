@@ -1,6 +1,11 @@
 import { createApiClient } from "@catamorphic/api-client";
-import { CatamorphicProvider, useCatamorphic } from "@catamorphic/react";
-import { QueryClient, useQuery } from "@tanstack/react-query";
+import {
+  CatamorphicProvider,
+  SESSION_PROTOCOL_MISMATCH_MESSAGE,
+  speaksSessionProtocol,
+  useCatamorphic,
+} from "@catamorphic/react";
+import { useQuery } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
@@ -9,25 +14,65 @@ import {
   useMemo,
 } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
+import { workQueryClient } from "../lib/query-client.js";
+import {
+  remoteQueryClients,
+  remoteQueryClientUsers,
+} from "../lib/remote-query-clients.js";
 
 const RemoteAuthority = createContext<{
   remoteProjectId: string;
   serverUrl: string;
-  builder: boolean;
+  /** The member edits the program (`program:write`, ADR 0158). */
+  writesProgram: boolean;
+  /** Who the server knows this member as, once `/me` answered. */
+  externalUserId: string | undefined;
 } | null>(null);
 export const useRemoteAuthority = () => useContext(RemoteAuthority);
-const authorityCaches = new Map<string, QueryClient>();
-const authorityUsers = new Map<QueryClient, number>();
+
+/**
+ * Whether the project lives on a server, from outside its authority
+ * provider: the same query the provider reads.
+ */
+export function useRemoteProject(projectId: string | undefined): boolean {
+  const authority = useQuery({
+    queryKey: ["desktop", "project-authority", projectId],
+    queryFn: () => desktopApi.remoteAuthority(projectId ?? ""),
+    enabled: Boolean(projectId),
+    staleTime: 0,
+  });
+  return Boolean(authority.data);
+}
+const authorityCaches = remoteQueryClients;
+const authorityUsers = remoteQueryClientUsers;
+
+/**
+ * Fetch a remote project's agent catalog again wherever it is shown, as
+ * after a Codex sign-in changed which agents it offers (ADR 0213).
+ */
+export function refreshRemoteAgentCatalog(projectId: string): void {
+  for (const queries of authorityCaches.values())
+    void queries.invalidateQueries({
+      queryKey: ["cat", "project", projectId, "agent-catalog"],
+    });
+}
 
 /** Keep global connection/auth routes and caches with the project's authority. */
 export function ProjectAuthorityProvider({
   projectId,
   children,
   localOnly = false,
+  fallback,
 }: {
   projectId: string;
   children: ReactNode;
   localOnly?: boolean;
+  /**
+   * What shows while the project's access is read, or when it cannot be
+   * reached (`error`), in place of the default lines: a sidebar section
+   * reports its status to its chrome instead.
+   */
+  fallback?: (error: Error | null) => ReactNode;
 }) {
   const local = useCatamorphic();
   const authority = useQuery({
@@ -47,9 +92,14 @@ export function ProjectAuthorityProvider({
     }
     let queries = authorityCaches.get(key);
     if (!queries) {
-      queries = new QueryClient({
-        defaultOptions: { queries: { retry: 1, staleTime: 1000 } },
+      queries = workQueryClient({
+        retry: 1,
+        staleTime: 1000,
+        networkMode: "online",
       });
+      // Shared at once: a chat and the sidebar beside it mounting in the
+      // same commit read one cache, so the chat's stream reaches both.
+      authorityCaches.set(key, queries);
     }
     const baseUrl = `${local.apiClient.baseUrl.replace(/\/+$/, "")}/desktop/projects/${encodeURIComponent(projectId)}/remote-api`;
     return {
@@ -90,13 +140,17 @@ export function ProjectAuthorityProvider({
     refetchInterval: 10000,
   });
   if (authority.isPending)
-    return (
+    return fallback ? (
+      fallback(null)
+    ) : (
       <p role="status" className="p-3 text-sm text-fg-muted">
         Loading project access…
       </p>
     );
   if (authority.error)
-    return (
+    return fallback ? (
+      fallback(authority.error)
+    ) : (
       <p role="alert" className="p-3 text-sm text-danger">
         {authority.error.message}
       </p>
@@ -109,6 +163,20 @@ export function ProjectAuthorityProvider({
         the remote project.
       </p>
     );
+  // A server on another session protocol cannot be talked to (ADR 0197):
+  // say so instead of failing every chat request.
+  if (member.data && !speaksSessionProtocol(member.data))
+    return fallback ? (
+      fallback(new Error(SESSION_PROTOCOL_MISMATCH_MESSAGE))
+    ) : (
+      <p
+        role="alert"
+        className="p-3 text-sm text-fg-muted"
+        data-testid="remote-protocol-mismatch"
+      >
+        {SESSION_PROTOCOL_MISMATCH_MESSAGE}
+      </p>
+    );
   return (
     <CatamorphicProvider
       apiClient={context.apiClient}
@@ -119,10 +187,12 @@ export function ProjectAuthorityProvider({
       <RemoteAuthority.Provider
         value={{
           ...remote,
-          builder:
+          externalUserId: member.data?.identity.externalUserId,
+          writesProgram:
             member.data?.projects.some(
               (project) =>
-                project.projectId === remote.remoteProjectId && project.builder,
+                project.projectId === remote.remoteProjectId &&
+                project.permissions.includes("program:write"),
             ) ?? false,
         }}
       >

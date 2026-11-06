@@ -1,4 +1,4 @@
-import type { SandboxProvider } from "./types.js";
+import type { SandboxProvider, SignInHarness } from "./types.js";
 
 export type WorkloadKind = "agent" | "workflow";
 export type EnvironmentTrust = "local" | "managed";
@@ -14,7 +14,12 @@ export interface EnvironmentResourcePolicy {
   memoryMb?: number;
   storageMb?: number;
   gpu?: boolean;
-  timeoutSeconds?: number;
+  /**
+   * The longest one foreground command may run (ADR 0174): an agent's
+   * shell command, a workflow step's sandbox command. Background processes
+   * are bounded by their sandbox's lifetime instead.
+   */
+  commandTimeoutSeconds?: number;
   maxConcurrency?: number;
 }
 
@@ -30,6 +35,14 @@ export interface EnvironmentBinding {
   capabilities: readonly string[];
   resources: EnvironmentResourcePolicy;
   resourceLimits?: readonly ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
+  /** Host-assigned labels an Environment's `pool` selects on (ADR 0167). */
+  labels?: Readonly<Record<string, string>>;
+  /**
+   * What runs the machine's sandboxes and why it was chosen (ADR 0204),
+   * for operators: `microsandbox`, `container` with its runtime (`runsc`,
+   * `runc`), or `local-process`.
+   */
+  backend?: { kind: string; runtime?: string; reason?: string };
 }
 
 /** Internal realization. Provider objects never cross an API boundary. */
@@ -39,6 +52,48 @@ export interface EnvironmentRuntimeBinding {
   workerNodeId?: string;
   workerLeaseToken?: string;
   sandboxProvider?: SandboxProvider;
+  /**
+   * The host placed the owner's work on a machine no one else's work
+   * reaches (ADR 0167 access naming only that person, or for a project's
+   * own work only that project), so it may hold the owner's personal
+   * credentials (ADR 0184) and the Environment's secrets (ADR 0206).
+   */
+  servesOnlyOwner?: boolean;
+  /**
+   * The host lets this placement hold its owner's own harness sign-in (ADR
+   * 0213): a machine of theirs alone, or a single person's server whose
+   * operator accepted personal credentials on it. Never a machine several
+   * people's sign-ins would share.
+   */
+  ownSignIns?: boolean;
+}
+
+/**
+ * What a machine offers beside its sandbox provider's own capabilities
+ * (ADR 0184), advertised in its binding descriptor like them.
+ */
+export const MACHINE_CAPABILITIES = {
+  /**
+   * The operator lets members' own sign-ins run on this machine although
+   * it runs several people's work as processes (ADR 0199).
+   */
+  personalCredentials: "credentials.personal",
+  /** The machine's sandboxes can mount members' own sign-ins (ADR 0199). */
+  signIns: "sign-ins",
+  /** The Claude Code CLI is on the machine's path. */
+  claudeCode: "harness.claude-code",
+  /** The Codex CLI is on the machine's path. */
+  codex: "harness.codex",
+} as const;
+
+export type MachineCapability =
+  (typeof MACHINE_CAPABILITIES)[keyof typeof MACHINE_CAPABILITIES];
+
+/** The machine capability saying a harness's CLI is installed. */
+export function harnessCapability(harness: SignInHarness): string {
+  return harness === "codex"
+    ? MACHINE_CAPABILITIES.codex
+    : MACHINE_CAPABILITIES.claudeCode;
 }
 
 export interface EnvironmentRequirements {
@@ -53,11 +108,20 @@ export interface EnvironmentRequirements {
 export interface EnvironmentProvider {
   get(args: {
     tenantId: string;
-    externalUserId?: string;
     projectId?: string;
+    /**
+     * Whose work this is: the session owner. Absent for project-owned work,
+     * which only nodes open to everyone or to `projectId` take (ADR 0167,
+     * 0173).
+     */
+    ownerUserId?: string;
     clientRunnerId?: string;
+    /** Resolve an existing Allocation's binding again, by its id. */
     allocationBindingId?: string;
-    bindingId: string;
+    /** Node labels the Environment selects; every key must match. */
+    pool: Readonly<Record<string, string>>;
+    /** Never fall back past the narrowest nodes open to the owner. */
+    strict?: boolean;
     requirements?: EnvironmentRequirements;
     /** Preserve an existing Allocation's physical owner when resolving a pool. */
     workerNodeId?: string;
@@ -65,6 +129,84 @@ export interface EnvironmentProvider {
     | Promise<EnvironmentRuntimeBinding | undefined>
     | EnvironmentRuntimeBinding
     | undefined;
+}
+
+/** Whether a binding's labels satisfy an Environment's pool selector. */
+export function poolMatches(
+  labels: Readonly<Record<string, string>> | undefined,
+  pool: Readonly<Record<string, string>>,
+): boolean {
+  return Object.entries(pool).every(([key, value]) => labels?.[key] === value);
+}
+
+/**
+ * Whose work a node takes (ADR 0167): everyone, or named people and
+ * groups, and the owner-less work of named projects (ADR 0173). Host state,
+ * never declared by the node itself.
+ */
+export type NodeAccess =
+  | { everyone: true }
+  | {
+      everyone?: false;
+      users: readonly string[];
+      groups: readonly string[];
+      /** Projects whose own work (project chats, automations) it takes. */
+      projects?: readonly string[];
+    };
+
+/**
+ * How narrowly a node serves a piece of work: 0 for a node of the owner's
+ * alone (or, for a project's own work, of that project's alone), 1 for one
+ * shared with other named people, groups or projects, 2 for a node open to
+ * everyone, undefined when the node does not take the work. A member's
+ * work never lands on a node opened only to projects.
+ */
+export function accessTier(args: {
+  access: NodeAccess;
+  /** The work's owner; absent for a project's own work. */
+  owner: { userId: string; groups: readonly string[] } | undefined;
+  projectId?: string;
+}): 0 | 1 | 2 | undefined {
+  const { access, owner } = args;
+  if (access.everyone) return 2;
+  if (!owner) {
+    const projects = access.projects ?? [];
+    if (!args.projectId || !projects.includes(args.projectId)) return undefined;
+    return projects.length === 1 &&
+      access.users.length === 0 &&
+      access.groups.length === 0
+      ? 0
+      : 1;
+  }
+  const named = access.users.includes(owner.userId);
+  if (named && access.users.length === 1 && access.groups.length === 0)
+    return (access.projects ?? []).length === 0 ? 0 : 1;
+  if (named || access.groups.some((group) => owner.groups.includes(group)))
+    return 1;
+  return undefined;
+}
+
+/**
+ * Candidates the owner may use, narrowest first. `strict` keeps only the
+ * narrowest tier present, so a full dedicated machine never spills onto a
+ * shared one.
+ */
+export function placementOrder<T>(
+  candidates: readonly T[],
+  tier: (candidate: T) => 0 | 1 | 2 | undefined,
+  options?: { strict?: boolean },
+): T[] {
+  const ranked = candidates
+    .map((candidate) => ({ candidate, tier: tier(candidate) }))
+    .filter(
+      (entry): entry is { candidate: T; tier: 0 | 1 | 2 } =>
+        entry.tier !== undefined,
+    )
+    .sort((left, right) => left.tier - right.tier);
+  const narrowest = ranked[0]?.tier;
+  return ranked
+    .filter((entry) => !options?.strict || entry.tier === narrowest)
+    .map((entry) => entry.candidate);
 }
 
 export type EnvironmentCompatibility =
@@ -155,9 +297,9 @@ export function environmentSatisfies(
     reasons,
   });
   compareResource({
-    requested: requirements.resources?.timeoutSeconds,
-    ceiling: binding.resources.timeoutSeconds,
-    label: "Timeout requirement",
+    requested: requirements.resources?.commandTimeoutSeconds,
+    ceiling: binding.resources.commandTimeoutSeconds,
+    label: "Command time requirement",
     unit: " seconds",
     reasons,
   });

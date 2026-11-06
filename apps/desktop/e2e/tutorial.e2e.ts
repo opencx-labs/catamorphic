@@ -276,19 +276,24 @@ describe("the Work tutorial", () => {
       narrow: number;
       wide: number;
       drift: number;
+      order: string[];
     }>(
       `new Promise(resolve => {
         const root=document.querySelector('${preview}');
         const started=performance.now();
         let narrow=Infinity, wide=0, drift=0;
+        const order=[];
         const sample=()=>{
           const frame=root.getBoundingClientRect();
           const main=root.querySelector('.onboarding-preview-main').getBoundingClientRect();
           const sides=[...root.querySelectorAll('aside')].map(element=>element.getBoundingClientRect().width);
           narrow=Math.min(narrow,...sides);
           wide=Math.max(wide,...sides);
-          drift=Math.max(drift,Math.abs(main.left+main.width/2-frame.left-frame.width/2));
-          if(performance.now()-started>=6500) resolve({narrow,wide,drift});
+          if(Math.abs(sides[0]-sides[1])<1) drift=Math.max(drift,Math.abs(main.left+main.width/2-frame.left-frame.width/2));
+          const left=sides[0]>100, right=sides[1]>100;
+          const state=left ? right ? 'both' : 'left' : right ? 'right' : 'closed';
+          if(order.at(-1)!==state) order.push(state);
+          if(performance.now()-started>=6500) resolve({narrow,wide,drift,order});
           else requestAnimationFrame(sample);
         };
         sample();
@@ -297,6 +302,7 @@ describe("the Work tutorial", () => {
     expect(states.narrow).toBeLessThan(2);
     expect(states.wide).toBeGreaterThan(100);
     expect(states.drift).toBeLessThan(1);
+    expect(states.order.join(",")).toContain("left,both,right,closed");
     await app.cdp("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });

@@ -3,11 +3,12 @@ import pathModule from "node:path";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { publishedRef } from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
 import {
   type DocumentRef,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   scopeCovers,
 } from "../identity.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
@@ -30,15 +31,14 @@ import { requireTenantProject } from "./projects-service.js";
  * The documents surface (ADR 0055): one path namespace, two backings.
  *
  * - Paths outside `store/` are the **program** — git, read at the shared
- *   origin `main` (the working tree on single-machine hosts). Builders read
- *   all of it; viewers exactly the document refs their scope grants.
+ *   origin `main` (the working tree on single-machine hosts). `program:read`
+ *   reads all of it; viewers exactly the document refs their scope grants.
  *   Read-only through this surface (the program changes by checkpoint,
  *   push and PR).
  * - Paths under `store/` are the **project store** — audience-partitioned
  *   data (customer notes, contracts, generated decks), versioned per write,
- *   never deployed. Reachable ONLY through document refs, builders included:
- *   "admin" is program access, not a licence to read every customer's
- *   contract. The root identity (a host's service calls, the desktop's own
+ *   never deployed. Reachable ONLY through document refs, admins included:
+ *   a permission is not a licence to read every customer's contract. The root identity (a host's service calls, the desktop's own
  *   local projects) sees everything.
  *
  * Every store write is stamped with the caller. Search is the tree
@@ -69,6 +69,11 @@ export interface DocumentEntry {
   /** Program only: a content digest (`git:<oid>` / `sha256:<hex>`) so a
    * syncing client can skip unchanged files without fetching them. */
   digest?: string;
+  /**
+   * Program only: the published commit the listing read, so a client that
+   * publishes these files back can name its base (ADR 0191).
+   */
+  commit?: string;
 }
 
 export interface DocumentContent extends DocumentEntry {
@@ -237,9 +242,9 @@ function textOf(bytes: Uint8Array, contentType: string): string | undefined {
 
 /**
  * Whether an identity may reach a path with the given access. Root: yes.
- * Program paths: builders read; viewers need a covering read ref; nobody
- * writes through this surface. Store paths: a covering document ref, for
- * everyone — a builder's project ref does not count.
+ * Program paths: `program:read` reads; viewers need a covering read ref;
+ * nobody writes through this surface. Store paths: a covering document ref,
+ * for everyone; no permission counts.
  */
 export function documentAccessAllowed(
   identity: Identity,
@@ -252,7 +257,7 @@ export function documentAccessAllowed(
   const store = isStorePath(path);
   if (!store) {
     if (access === "write") return false;
-    if (isBuilder(identity, projectId)) return true;
+    if (hasProjectPermission(identity, projectId, "program:read")) return true;
   }
   const ref: DocumentRef = { kind: "document", projectId, path, access };
   return scopeCovers(identity.scope, ref);
@@ -307,7 +312,7 @@ export class DocumentsService {
       input.projectId,
     );
     try {
-      return await repo.resolveRef("refs/catamorphic/published/main").then(
+      return await repo.resolveRef(publishedRef()).then(
         () => true,
         () => false,
       );
@@ -384,11 +389,14 @@ export class DocumentsService {
         `${STORE_ROOT}/`.startsWith(prefix));
 
     if (wantsProgram && (await this.programVisible(args))) {
-      const blobs = await withProgram(
+      const { blobs, commit } = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
-        (repo, ref) => listProgramBlobs(repo, ref, prefix),
+        async (repo, ref) => ({
+          blobs: await listProgramBlobs(repo, ref, prefix),
+          commit: ref,
+        }),
         { workingTree: args.identity.scope === undefined },
       );
       for (const { path, digest } of blobs) {
@@ -404,6 +412,7 @@ export class DocumentsService {
           contentType: contentTypeFor(path),
           size: -1,
           digest,
+          ...(commit ? { commit } : {}),
         });
       }
     }
@@ -605,6 +614,7 @@ export class DocumentsService {
     content: Uint8Array | string;
     contentType?: string;
     ifVersion?: number;
+    signal?: AbortSignal;
   }): Promise<DocumentEntry> {
     return withSpan(
       {
@@ -625,6 +635,7 @@ export class DocumentsService {
           );
         this.assertAccess(args.identity, args.projectId, normalized, "write");
         await this.refreshLocal({ ...args, path: normalized });
+        args.signal?.throwIfAborted();
         const result = await this.writeInner(args);
         return result;
       },
@@ -639,6 +650,7 @@ export class DocumentsService {
       content: Uint8Array | string;
       contentType?: string;
       ifVersion?: number;
+      signal?: AbortSignal;
     },
     localRefresh = false,
   ): Promise<DocumentEntry> {
@@ -669,6 +681,7 @@ export class DocumentsService {
       : args.identity.externalUserId;
 
     return this.db.transaction().execute(async (trx) => {
+      args.signal?.throwIfAborted();
       await trx
         .insertInto("store_documents")
         .values({
@@ -690,6 +703,7 @@ export class DocumentsService {
         .forUpdate()
         .selectAll()
         .executeTakeFirstOrThrow();
+      args.signal?.throwIfAborted();
       const currentVersion = current.version;
       if (args.ifVersion !== undefined && args.ifVersion !== currentVersion)
         throw new DocumentConflictError(path, currentVersion);
@@ -712,6 +726,7 @@ export class DocumentsService {
           inlineBytes = Buffer.from(bytes);
         }
       }
+      args.signal?.throwIfAborted();
       const writtenAt = new Date();
       await trx
         .insertInto("store_document_versions")
@@ -728,6 +743,7 @@ export class DocumentsService {
           written_at: writtenAt,
         })
         .execute();
+      args.signal?.throwIfAborted();
       await trx
         .updateTable("store_documents")
         .set({
@@ -743,20 +759,28 @@ export class DocumentsService {
         })
         .where("id", "=", documentId)
         .execute();
+      args.signal?.throwIfAborted();
       if (!localRefresh) {
         const root = await this.projectManager.localPath({
           tenantId: args.identity.tenantId,
           projectId: args.projectId,
         });
+        args.signal?.throwIfAborted();
         if (root) {
           await protectLocalDocuments(root);
           const target = await localDocumentPath(root, path);
           await fs.mkdir(pathModule.dirname(target), { recursive: true });
           const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-          await fs.writeFile(temporary, bytes);
-          await fs.rename(temporary, target);
+          try {
+            await fs.writeFile(temporary, bytes, { signal: args.signal });
+            args.signal?.throwIfAborted();
+            await fs.rename(temporary, target);
+          } finally {
+            await fs.rm(temporary, { force: true }).catch(() => {});
+          }
         }
       }
+      args.signal?.throwIfAborted();
       return {
         path,
         source: "store",
@@ -775,6 +799,7 @@ export class DocumentsService {
     projectId: string;
     path: string;
     ifVersion?: number;
+    signal?: AbortSignal;
   }): Promise<{ version: number }> {
     return withSpan(
       {
@@ -796,6 +821,7 @@ export class DocumentsService {
         }
         this.assertAccess(args.identity, args.projectId, path, "write");
         await this.refreshLocal({ ...args, path });
+        args.signal?.throwIfAborted();
         return this.deleteInner({ ...args, path });
       },
     );
@@ -807,6 +833,7 @@ export class DocumentsService {
       projectId: string;
       path: string;
       ifVersion?: number;
+      signal?: AbortSignal;
     },
     localRefresh = false,
   ): Promise<{ version: number }> {
@@ -822,6 +849,7 @@ export class DocumentsService {
         .forUpdate()
         .selectAll()
         .executeTakeFirst();
+      args.signal?.throwIfAborted();
       if (!current || current.deleted) throw new DocumentNotFoundError(path);
       if (args.ifVersion !== undefined && args.ifVersion !== current.version) {
         throw new DocumentConflictError(path, current.version);
@@ -840,6 +868,7 @@ export class DocumentsService {
           written_at: writtenAt,
         })
         .execute();
+      args.signal?.throwIfAborted();
       await trx
         .updateTable("store_documents")
         .set({
@@ -858,8 +887,10 @@ export class DocumentsService {
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
       });
+      args.signal?.throwIfAborted();
       if (root && !localRefresh)
         await fs.rm(await localDocumentPath(root, path), { force: true });
+      args.signal?.throwIfAborted();
       return { version };
     });
     return result;
@@ -1046,7 +1077,7 @@ export class DocumentsService {
 
   /**
    * Cheap pre-check for listing/search: a scoped identity with no document
-   * ref (and no builder ref, for program prefixes) under this prefix gets
+   * ref (and no `program:read`, for program prefixes) under this prefix gets
    * an empty answer without touching git or the store.
    */
   private mayReadAnythingUnder(
@@ -1057,7 +1088,7 @@ export class DocumentsService {
     if (identity.scope === undefined) return true;
     if (
       !isStorePath(prefix.replace(/\/$/, "")) &&
-      isBuilder(identity, projectId)
+      hasProjectPermission(identity, projectId, "program:read")
     ) {
       return true;
     }

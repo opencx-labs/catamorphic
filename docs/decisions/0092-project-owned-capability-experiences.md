@@ -1,6 +1,6 @@
 # 0092: Project-owned capability experiences
 
-- **Status:** Accepted
+- **Status:** Accepted (`when.builder` removed by [0158](0158-project-permissions.md); target `program:write` instead)
 - **Date:** 2026-09-04
 - **Refines:** 0055, 0071, 0089
 

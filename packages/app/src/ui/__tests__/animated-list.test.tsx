@@ -90,6 +90,29 @@ describe("AnimatedList", () => {
     }
   });
 
+  it("removes a departed row on time even while the list keeps updating", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <List
+          items={[
+            { id: "a", label: "Milk" },
+            { id: "b", label: "Eggs" },
+          ]}
+        />,
+      );
+      rerender(<List items={[{ id: "b", label: "Eggs" }]} />);
+      // A live source refreshing every 100ms must not postpone the removal.
+      for (const label of ["Eggs 1", "Eggs 2", "Eggs 3"]) {
+        act(() => vi.advanceTimersByTime(100));
+        rerender(<List items={[{ id: "b", label }]} />);
+      }
+      expect(screen.queryByText("Milk")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores animationend bubbling up from row content", () => {
     const { rerender } = render(
       <List

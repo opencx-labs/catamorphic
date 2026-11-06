@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SIDEBAR_PREVIEW_DELAY_MS } from "./sidebar-preview";
 
@@ -102,6 +103,35 @@ describe("SidebarItemRow hover preview", () => {
     ).toContain("Production deployments");
   });
 
+  it("does not preview focus handed back while the pointer leads", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const button = container.querySelector("button");
+    document.documentElement.dataset.focusModality = "pointer";
+    try {
+      act(() => button?.focus());
+      act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+      expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.focusModality;
+    }
+  });
+
+  it("does not preview focus the app moves, though the keyboard leads", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const button = container.querySelector("button");
+    document.documentElement.dataset.focusModality = "keyboard";
+    try {
+      // An opening sidebar's focus onto the row of what is in front.
+      act(() => moveFocusAsApp(() => button?.focus()));
+      act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+      expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.focusModality;
+    }
+  });
+
   it("keeps the preview open while the pointer moves onto the card", () => {
     vi.useFakeTimers();
     const container = mountRow();
@@ -172,8 +202,9 @@ describe("SidebarItemRow menu motion", () => {
 
     const menu = document.querySelector('[role="menu"]');
     if (!(menu instanceof HTMLElement)) throw new Error("menu did not open");
-    const panel = menu.firstElementChild;
-    if (!(panel instanceof HTMLElement)) throw new Error("menu panel missing");
+    // The menu itself animates; the list inside it scrolls, so the slide
+    // never shows a scrollbar.
+    const panel = menu;
     const buttons = [...menu.querySelectorAll<HTMLButtonElement>("button")];
     expect(panel.classList).toContain("animate-pop-in");
     expect(document.activeElement).toBe(buttons[0]);
@@ -185,12 +216,45 @@ describe("SidebarItemRow menu motion", () => {
     });
     expect(document.activeElement).toBe(buttons[1]);
 
-    act(() => window.dispatchEvent(new Event("pointerdown")));
+    // A press anywhere else lands on the shield under the menu.
+    act(() => {
+      const shield = document.querySelector("[data-menu-shield]");
+      shield?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      shield?.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+      );
+    });
     expect(document.querySelector('[role="menu"]')).toBe(menu);
     expect(panel.classList).toContain("animate-pop-out");
 
     act(() => vi.advanceTimersByTime(180));
     expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("stays open while something else scrolls, and closes when its row scrolls", () => {
+    vi.useFakeTimers();
+    const { container } = mountMenuRow();
+    const row = container.firstElementChild;
+    if (!(row instanceof HTMLElement)) throw new Error("row did not mount");
+    const elsewhere = document.createElement("div");
+    document.body.append(elsewhere);
+    containers.push(elsewhere);
+
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+      );
+    });
+    const panel = document.querySelector('[role="menu"]');
+    if (!(panel instanceof HTMLElement)) throw new Error("menu did not open");
+
+    // A chat timeline following its output scrolls somewhere else.
+    act(() => elsewhere.dispatchEvent(new Event("scroll")));
+    expect(panel.classList).not.toContain("animate-pop-out");
+
+    // The sidebar scrolling carries the row away from its menu.
+    act(() => container.dispatchEvent(new Event("scroll")));
+    expect(panel.classList).toContain("animate-pop-out");
   });
 
   it("applies a selected action only after its exit finishes", () => {
@@ -211,9 +275,9 @@ describe("SidebarItemRow menu motion", () => {
 
     act(() => archive.click());
     expect(onAction).not.toHaveBeenCalled();
-    expect(
-      document.querySelector('[role="menu"]')?.firstElementChild?.classList,
-    ).toContain("animate-pop-out");
+    expect(document.querySelector('[role="menu"]')?.classList).toContain(
+      "animate-pop-out",
+    );
 
     act(() => vi.advanceTimersByTime(180));
     expect(onAction).toHaveBeenCalledWith({
@@ -251,5 +315,42 @@ describe("SidebarItemRow icons", () => {
     const unknown = mountIconRow("NoSuchIconName");
     expect(unknown.querySelector("svg")).not.toBeNull();
     expect(unknown.textContent).toBe("Support answers");
+  });
+});
+
+describe("SidebarItemRow disclosure", () => {
+  it("ends the row, after its actions, so every row's icon starts in one place", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const onToggle = vi.fn();
+    act(() => {
+      root.render(
+        <SidebarItemRow
+          label="Engineering"
+          icon="Folder"
+          actions={[{ label: "Add", action: "add", icon: "Plus" }]}
+          menu={[{ label: "Rename", action: "rename" }]}
+          disclosure={{ open: false, onToggle }}
+          onOpen={() => {}}
+          onAction={() => {}}
+        />,
+      );
+    });
+    const row = container.firstElementChild as HTMLElement;
+    const controls = [...row.querySelectorAll("button")].map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(controls.at(-1)).toBe("Expand Engineering");
+    // The label leads: nothing stands before it, with or without children.
+    expect(row.firstElementChild?.matches("[data-tree-primary]")).toBe(true);
+    const disclosure = row.querySelector<HTMLButtonElement>(
+      "[data-row-disclosure]",
+    );
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    act(() => disclosure?.click());
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

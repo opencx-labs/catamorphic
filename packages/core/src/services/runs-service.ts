@@ -1,11 +1,10 @@
 import type { DB, Json } from "@catamorphic/db";
-import { fetchRemote, type ProjectManager } from "@catamorphic/git";
+import { type ProjectManager, refreshPublished } from "@catamorphic/git";
 import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import {
   executionFiles,
   prepareWorkflowExecution,
   validateAgainstSchema,
-  WORKFLOW_SOURCE_ROOT,
   type WorkflowCapabilities,
   type WorkflowExecutionDescriptor,
   type WorkflowGraph,
@@ -19,14 +18,26 @@ import {
   type SandboxProvider,
   type WorkflowPackagePayload,
 } from "@catamorphic/sandbox";
+import {
+  hasProjectLockfile,
+  isProjectSourcePath,
+  MANAGED_BRANCH_PREFIX,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import { type Kysely, type Selectable, sql } from "kysely";
-import { type Identity, identityCovers, isBuilder } from "../identity.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  identityCovers,
+  intersectProjectPermissions,
+} from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import {
   AccessDeniedError,
-  assertBuilder,
+  assertProjectPermission,
   assertScopeAllowsWorkflow,
   resolveScope,
 } from "./artifact-scope.js";
@@ -41,7 +52,10 @@ import { DeploymentRuntimeService as EnvironmentDeploymentRuntimeService } from 
 import { KyselyDeploymentRuntimeStore } from "./deployment-runtime-store.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  admissionPolicy,
+  type ExecutionEnvironmentsService,
+} from "./execution-environments-service.js";
 import type { ExecutionJobsService } from "./execution-jobs-service.js";
 import type {
   ExecutionWorkerHandle,
@@ -52,6 +66,7 @@ import { ProjectNotFoundError } from "./projects-service.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import { jsonColumn, jsonRecord, toJson } from "./run-coordinator.js";
 import type { RunPluginsLoader } from "./run-plugins-loader.js";
+import type { RunSignalReceipt, SignalRunInput } from "./run-signals.js";
 import type { RuntimeEventsService } from "./runtime-events-service.js";
 import type { TenantPoliciesService } from "./tenant-policies-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
@@ -86,6 +101,8 @@ export type StepStatus =
 
 export interface RunProvenance {
   commitSha?: string;
+  /** The workflow's `@displayname` at that commit, when it declares one. */
+  displayName?: string;
 }
 
 export interface RunArtifact {
@@ -388,7 +405,9 @@ export class PluginSecretsMissingError extends Error {
 
 export class SandboxProviderNotConfiguredError extends Error {
   constructor() {
-    super("Sandbox provider not configured");
+    super(
+      "This host has no execution environment for workflows. The host passes a sandbox or local-process provider when it creates Catamorphic.",
+    );
     this.name = "SandboxProviderNotConfiguredError";
   }
 }
@@ -404,19 +423,6 @@ export class RunEnrollmentConflictError extends Error {
       `Workflow '${workflowName}' already has an active run for correlation key '${correlationKey}'`,
     );
     this.name = "RunEnrollmentConflictError";
-  }
-}
-
-export class RunSignalNotFoundError extends Error {
-  constructor(
-    readonly workflowName: string,
-    readonly correlationKey: string,
-    readonly signal: string,
-  ) {
-    super(
-      `Workflow '${workflowName}' has no run awaiting signal '${signal}' for correlation key '${correlationKey}'`,
-    );
-    this.name = "RunSignalNotFoundError";
   }
 }
 
@@ -508,7 +514,9 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 export class RunsService {
+  /** Replica memory (b): sizes of the prepared sources below. */
   private readonly preparedSourceBytes = new Map<string, number>();
+  /** Replica memory (b): prepared sources keyed by commit sha. */
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
 
   constructor(
@@ -687,7 +695,7 @@ export class RunsService {
   }
 
   async listItems(args: ListBatchItemsInput): Promise<ListBatchItemsResult> {
-    await this.assertBuilderForRun(args.identity, args.runId);
+    await this.assertRunPermission(args.identity, args.runId, "runs:read");
     await this.requireBatchScope(args);
     const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
     const offset = Math.max(0, args.offset ?? 0);
@@ -736,7 +744,7 @@ export class RunsService {
   }
 
   async listItemSteps(args: ListBatchItemStepsInput): Promise<BatchItemStep[]> {
-    await this.assertBuilderForRun(args.identity, args.runId);
+    await this.assertRunPermission(args.identity, args.runId, "runs:read");
     await this.requireBatchScope(args);
     const item = await this.db
       .selectFrom("batch_items")
@@ -808,7 +816,9 @@ export class RunsService {
       .where("source.owner_external_user_id", "=", args.identity.externalUserId)
       .where(({ or, eb }) =>
         or([
-          eb.val(isBuilder(args.identity, args.projectId)),
+          eb.val(
+            hasProjectPermission(args.identity, args.projectId, "runs:read"),
+          ),
           ...(appNames.length
             ? [
                 sql<boolean>`('session-' || source.id::text) in (${sql.join(appNames)})`,
@@ -1097,9 +1107,8 @@ export class RunsService {
           continue;
         }
         if (job.kind !== "durable_boundary") return suspended("batch");
-        if (new Date(job.availableAt).getTime() > Date.now()) {
-          return suspended("backoff");
-        }
+        if (!job.due) return suspended("backoff");
+        const claimedAt = performance.now();
         const claimed = await this.deps.executionJobs.claimById({
           jobId: job.id,
           workerId,
@@ -1110,6 +1119,7 @@ export class RunsService {
           job: claimed,
           workerId,
           leaseSeconds: SYNC_LEASE_SECONDS,
+          claimedAt,
           signal: controller.signal,
         });
         // Every disposition — completed, deferred, failed, lease lost — is
@@ -1132,7 +1142,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         const run = await this.get(args);
         const allocationRuntime = run.allocationId
           ? await this.runtimeForAllocation({
@@ -1165,7 +1175,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         const outcome = await this.deps.coordinator.pauseOperator(args);
         if (outcome === "unavailable") {
           throw new RunCapabilityError("pauseProcessing", "pause");
@@ -1187,7 +1197,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         const outcome = await this.deps.coordinator.resumeOperator(args);
         if (outcome === "unavailable") {
           throw new RunCapabilityError("resumeProcessing", "resume");
@@ -1209,60 +1219,31 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         await this.deps.coordinator.resumePause(args);
         return this.get(args);
       },
     );
   }
 
-  /**
-   * Delivers an external event to whichever run is currently waiting on a named
-   * signal for this correlation key.
-   *
-   * This is the read side of enrollment: the caller knows the contact, not the
-   * run. Resolution is by (workflow, key, signal name), so a webhook handler
-   * never has to track run ids.
-   */
-  async signalByKey(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    correlationKey: string;
-    signal: string;
-    idempotencyKey: string;
-    value: Json;
-  }): Promise<Run> {
-    assertBuilder(args.identity, args.projectId);
-    const run = await this.findActiveByKey(args);
-    if (!run) {
-      throw new RunSignalNotFoundError(
-        args.workflowName,
-        args.correlationKey,
-        args.signal,
-      );
-    }
-    const pause = await this.db
-      .selectFrom("workflow_pauses")
-      .where("run_id", "=", run.id)
-      .where("signal_name", "=", args.signal)
-      .where("status", "=", "open")
-      .select("id")
-      .executeTakeFirst();
-    if (!pause) {
-      throw new RunSignalNotFoundError(
-        args.workflowName,
-        args.correlationKey,
-        args.signal,
-      );
-    }
-    return this.resumePause({
-      identity: args.identity,
-      runId: run.id,
-      pauseId: pause.id,
-      idempotencyKey: args.idempotencyKey,
-      value: args.value,
-    });
+  /** Buffer or deliver a named callback to the explicitly addressed generation. */
+  async signalByKey(args: SignalRunInput): Promise<RunSignalReceipt> {
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.signal",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        assertProjectPermission(args.identity, args.projectId, "runs:write");
+        await this.requireProject(args.identity, args.projectId);
+        return this.deps.coordinator.signalByKey(args);
+      },
+    );
   }
 
   /**
@@ -1280,7 +1261,7 @@ export class RunsService {
     correlationKey: string;
     reason?: string;
   }): Promise<Run | null> {
-    assertBuilder(args.identity, args.projectId);
+    assertProjectPermission(args.identity, args.projectId, "runs:write");
     const run = await this.findActiveByKey(args);
     if (!run) return null;
     return this.cancel({
@@ -1310,9 +1291,8 @@ export class RunsService {
 
   /**
    * Decides what an enrollment should do about an already-live run for the same
-   * key. Deliberately performs no writes: a `restart` cancels only once the new
-   * run is ready to be inserted, so a failure in between cannot leave the
-   * subject with no journey at all.
+   * key. This observation performs no writes; replacement rechecks and locks
+   * the observed generation in its enrollment transaction (ADR 0290).
    */
   private async resolveEnrollmentConflict(args: {
     identity: Identity;
@@ -1403,6 +1383,7 @@ export class RunsService {
   }): Promise<{
     artifact: DeploymentArtifact;
     requirements: WorkflowGraph["connections"];
+    permissions: WorkflowGraph["permissions"];
   }> {
     await this.requireProject(args.identity, args.projectId);
     const source = await this.prepareProductionSource(args);
@@ -1424,7 +1405,11 @@ export class RunsService {
         workflowPackage: source.workflowPackage,
       }),
     });
-    return { artifact, requirements: source.graph.connections };
+    return {
+      artifact,
+      requirements: source.graph.connections,
+      permissions: source.graph.permissions,
+    };
   }
 
   async resolveArtifactAtCommit(args: {
@@ -1507,11 +1492,15 @@ export class RunsService {
   }): Promise<{
     capabilities: WorkflowCapabilities;
     execution: WorkflowExecutionDescriptor;
+    permissions: readonly string[];
+    displayName?: string;
   }> {
     const graph = (await this.prepareProductionSource(args)).graph;
     return {
       capabilities: graph.capabilities,
       execution: graph.execution,
+      permissions: graph.permissions,
+      ...(graph.displayName ? { displayName: graph.displayName } : {}),
     };
   }
 
@@ -1531,6 +1520,7 @@ export class RunsService {
     input: unknown;
     attempt: number;
     timeoutSeconds?: number;
+    deadlineAt?: string;
     signal?: AbortSignal;
   }): Promise<RuntimeInvocationReceipt> {
     return withSpan(
@@ -1580,12 +1570,14 @@ export class RunsService {
             `Deployment artifact '${args.artifactId}' does not match run`,
           );
         }
+        args.signal?.throwIfAborted();
         const runtime = await deploymentRuntime.ensure({
           projectId: args.projectId,
           artifact,
           files: source.files,
           plugins: runtimePackagesForArtifact,
         });
+        args.signal?.throwIfAborted();
         const base = {
           protocolVersion: RUNTIME_PROTOCOL_VERSION,
           runtimeId: runtime.runtimeId,
@@ -1596,9 +1588,11 @@ export class RunsService {
           runtimeVersion: artifact.runtimeVersion,
           input: args.input,
           attempt: args.attempt,
-          deadlineAt: new Date(
-            Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
-          ).toISOString(),
+          deadlineAt:
+            args.deadlineAt ??
+            new Date(
+              Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
+            ).toISOString(),
           env: plugins?.secrets,
           signal: args.signal,
         } as const;
@@ -1700,6 +1694,9 @@ export class RunsService {
     const binding = await this.deps.executionEnvironments.getRuntimeBinding({
       identity: args.identity,
       bindingId: allocation.bindingId,
+      ...(allocation.workerNodeId
+        ? { workerNodeId: allocation.workerNodeId }
+        : {}),
     });
     const baseProvider = binding?.sandboxProvider;
     const provider =
@@ -1891,7 +1888,12 @@ export class RunsService {
         : [];
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    const provenance: RunProvenance = { commitSha: source.commitSha };
+    const provenance: RunProvenance = {
+      commitSha: source.commitSha,
+      ...(source.graph.displayName
+        ? { displayName: source.graph.displayName }
+        : {}),
+    };
     {
       const artifact = await this.deps.deploymentArtifacts.ensure({
         tenantId: args.identity.tenantId,
@@ -1903,18 +1905,25 @@ export class RunsService {
           workflowPackage: source.workflowPackage,
         }),
       });
-      // Deferred to here so everything that can fail an enrollment — source
-      // preparation, artifact build — has already succeeded. Cancelling any
-      // earlier risks ending the old journey without starting a new one.
-      if (supersededRunId) {
-        await this.cancel({
-          identity: args.identity,
-          runId: supersededRunId,
-          reason: `Re-enrolled for correlation key '${correlationKey}'`,
-        });
-      }
+      // Resolve the old runtime while its allocation is still active, but
+      // do not touch execution until cancellation and replacement commit.
+      if (supersededRunId)
+        await this.assertRunPermission(
+          args.identity,
+          supersededRunId,
+          "runs:write",
+        );
+      const previous = supersededRunId
+        ? await this.get({ identity: args.identity, runId: supersededRunId })
+        : undefined;
+      const previousRuntime = previous?.allocationId
+        ? await this.runtimeForAllocation({
+            identity: args.identity,
+            allocationId: previous.allocationId,
+          }).catch(() => undefined)
+        : undefined;
       try {
-        await this.db.transaction().execute(async (trx) => {
+        const invocations = await this.db.transaction().execute(async (trx) => {
           // Enrollment and retirement serialize on the retained source row.
           // Source preparation may race discard; it must not enqueue work after it.
           const retained = args.remoteBranch
@@ -1949,14 +1958,48 @@ export class RunsService {
                 .executeTakeFirst();
               if (!revision) throw new AccessDeniedError();
             } else if (
-              /^catamorphic\/(artifacts|watchers)\//.test(args.remoteBranch)
+              [
+                `${MANAGED_BRANCH_PREFIX}artifacts/`,
+                `${MANAGED_BRANCH_PREFIX}watchers/`,
+              ].some((prefix) => (args.remoteBranch ?? "").startsWith(prefix))
             )
               throw new AccessDeniedError();
           }
-          // A restart replaces a run it already cancelled, so it cannot grow
-          // the active set. Counting it would let a cap lowered under existing
-          // load strand the subject: cancelled, then refused re-entry.
-          if (!supersededRunId) {
+          // Lock the live generation again after preparation. A competing
+          // restart must not lend us authority over its replacement.
+          const replacing =
+            supersededRunId && correlationKey
+              ? await trx
+                  .selectFrom("workflow_runs")
+                  .select("id")
+                  .where("project_id", "=", args.projectId)
+                  .where("workflow_name", "=", args.workflowName)
+                  .where("correlation_key", "=", correlationKey)
+                  .where("status", "not in", [
+                    "completed",
+                    "failed",
+                    "canceled",
+                  ])
+                  .forUpdate()
+                  .executeTakeFirst()
+              : undefined;
+          if (replacing && replacing.id !== supersededRunId)
+            throw new RunEnrollmentConflictError(
+              args.workflowName,
+              correlationKey ?? "",
+              replacing.id,
+            );
+          const canceled = replacing
+            ? await this.deps.coordinator.cancel({
+                identity: args.identity,
+                runId: replacing.id,
+                reason: `Re-enrolled for correlation key '${correlationKey}'`,
+                trx,
+              })
+            : [];
+          // Replacing a live run cannot grow the logical active set, even
+          // when an operator lowered the limit below existing load.
+          if (!replacing) {
             await this.deps.tenantPolicies.assertActiveRunCapacity({
               trx,
               tenantId: args.identity.tenantId,
@@ -1969,12 +2012,13 @@ export class RunsService {
             workloadKind: "workflow",
             rootWorkloadId: runId,
             workerNodeId: admission.runtime.workerNodeId,
-            policy: {
-              binding: admission.binding,
-              requirements: admission.effectiveRequirements,
+            policy: admissionPolicy({
+              admission,
               connections,
-              workflowEnablementId: args.workflowEnablementId,
-            },
+              ...(args.workflowEnablementId
+                ? { workflowEnablementId: args.workflowEnablementId }
+                : {}),
+            }),
             transaction: trx,
           });
           await trx
@@ -1995,7 +2039,7 @@ export class RunsService {
               workflow_enablement_id: args.workflowEnablementId ?? null,
               external_user_id: args.identity.externalUserId,
               // Who triggered the run, as verified by the host (ADR 0055):
-              // the caller's scope, or null for builders/root.
+              // the caller's scope, or null for the root identity.
               caller_scope:
                 args.identity.scope === undefined
                   ? null
@@ -2008,6 +2052,22 @@ export class RunsService {
                 args.identity.connectionScope === undefined
                   ? null
                   : jsonColumn(toJson(args.identity.connectionScope)),
+              // A scoped caller's run acts with only what it holds of the
+              // workflow's declared permissions (ADR 0158).
+              caller_project_permissions:
+                args.identity.scope === undefined
+                  ? null
+                  : jsonColumn(
+                      toJson(
+                        intersectProjectPermissions(
+                          source.graph.permissions.map((permission) => ({
+                            projectId: args.projectId,
+                            permission,
+                          })),
+                          args.identity,
+                        ),
+                      ),
+                    ),
               status: "pending",
               phase:
                 source.graph.execution.steps[0]?.type === "batch"
@@ -2023,7 +2083,14 @@ export class RunsService {
             execution: source.graph.execution,
             input,
           });
+          return canceled;
         });
+        const runtime = previousRuntime?.runtime ?? this.deps.deploymentRuntime;
+        await Promise.all(
+          invocations.map((invocation) =>
+            runtime?.cancel(invocation).catch(() => {}),
+          ),
+        );
       } catch (error) {
         if (correlationKey && isCorrelationKeyConflict(error)) {
           return this.resolveEnrollmentRace({
@@ -2058,15 +2125,15 @@ export class RunsService {
       );
       if (hit) return hit;
     }
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
-    );
+    const repo = await this.deps.projectManager.openDraft({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+    });
     try {
-      // A preview app build (the `dev` channel) is compiled from the project
-      // as it is on this host, uncommitted edits included, so its calls read
-      // the same working tree; HEAD is recorded as provenance only.
+      // A preview app build (the `dev` channel) is compiled from the caller's
+      // draft, so its calls read the same files; HEAD is recorded as
+      // provenance only.
       if (!args.commitSha && callsPreviewApp(args.identity)) {
         return await prepareSource({
           projectId: args.projectId,
@@ -2075,12 +2142,12 @@ export class RunsService {
           commitSha: await repo.resolveRef("HEAD").catch(() => null),
         });
       }
-      await fetchRemote({
-        dev: repo,
+      await refreshPublished({
+        repo,
         remote,
         tenantId: args.identity.tenantId,
         projectId: args.projectId,
-        remoteBranch: args.remoteBranch ?? "main",
+        branch: args.remoteBranch ?? "main",
       });
       // Without a sha the caller asks for "whatever main is now": the ref is
       // resolved first so that an unchanged main is still a cache hit.
@@ -2187,7 +2254,6 @@ export class RunsService {
     const plugins = await this.deps.runPluginsLoader.load({
       identity,
       projectId,
-      stage: "production",
       workflowName,
     });
     if (plugins.missingRequiredSecrets.length > 0) {
@@ -2210,13 +2276,15 @@ export class RunsService {
   }
 
   /**
-   * Run controls and drill-downs are builder operations; a run names its
-   * project, so the check goes through the run row (tenant-filtered — a
-   * foreign run id reads as not found, never as a builder-of-nothing pass).
+   * Drill-downs (`runs:read`) and controls (`runs:write`) on one run: your
+   * own runs need no permission, anyone's else do (ADR 0158). A run names
+   * its project, so the check goes through the run row, tenant-filtered: a
+   * foreign run id reads as denied, never as a pass.
    */
-  private async assertBuilderForRun(
+  private async assertRunPermission(
     identity: Identity,
     runId: string,
+    permission: "runs:read" | "runs:write",
   ): Promise<void> {
     if (identity.scope === undefined) return;
     const row = await this.db
@@ -2224,11 +2292,12 @@ export class RunsService {
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")
       .where("workflow_runs.id", "=", runId)
       .where("projects.tenant_id", "=", identity.tenantId)
-      .select("workflow_runs.project_id")
+      .select(["workflow_runs.project_id", "workflow_runs.external_user_id"])
       .executeTakeFirst();
     // Uniform denial: a scoped caller must not learn which run ids exist.
     if (!row) throw new AccessDeniedError();
-    assertBuilder(identity, row.project_id);
+    if (row.external_user_id === identity.externalUserId) return;
+    assertProjectPermission(identity, row.project_id, permission);
   }
 
   private async requireBatchScope(args: {
@@ -2260,15 +2329,10 @@ export class RunsService {
 const PREPARED_SOURCE_CACHE_MAX = 32;
 
 /** The source every viewer of a published app runs. */
-const PUBLISHED_REF = "refs/catamorphic/published/main";
+const PUBLISHED_REF = publishedRef();
 
 /** Files a run's workflows are parsed from; app data is host state, not source. */
-function isWorkflowSourceFile(file: string): boolean {
-  return (
-    file.startsWith(".catamorphic/") &&
-    !file.startsWith(".catamorphic/app-data/")
-  );
-}
+const isWorkflowSourceFile = isProjectSourcePath;
 
 /** Whether a run is an app on its `dev` channel calling in (ADR 0148). */
 function callsPreviewApp(identity: Identity): boolean {
@@ -2314,8 +2378,7 @@ async function prepareSource(args: {
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
       packageJson: workflowPackageJson(files),
-      hasLockfile:
-        ".catamorphic/bun.lock" in files || ".catamorphic/bun.lockb" in files,
+      hasLockfile: hasProjectLockfile(files),
     }),
   };
 }
@@ -2326,7 +2389,7 @@ async function prepareSource(args: {
 function workflowPackageJson(
   files: Record<string, string>,
 ): string | undefined {
-  return files[`${WORKFLOW_SOURCE_ROOT}/package.json`];
+  return files[PROJECT_WORKFLOWS_PACKAGE_PATH];
 }
 
 function mapRun(args: {
@@ -2402,6 +2465,9 @@ function mapRun(args: {
     provenance: {
       ...(typeof provenance.commitSha === "string"
         ? { commitSha: provenance.commitSha }
+        : {}),
+      ...(typeof provenance.displayName === "string"
+        ? { displayName: provenance.displayName }
         : {}),
     },
     ...(args.row.deployment_artifact_id

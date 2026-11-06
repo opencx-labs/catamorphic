@@ -48,11 +48,11 @@ export interface AgentDelegations {
   completed_at: Timestamp | null;
   context_mode: Generated<string>;
   created_at: Generated<Timestamp>;
+  grant_agent: string;
   id: Generated<string>;
   interrupted_by_external_user_id: string | null;
   project_id: string;
-  result_message_id: string | null;
-  route_id: string;
+  result_item_id: string | null;
   source_session_id: string;
   status: Generated<string>;
   target_session_id: string;
@@ -60,38 +60,59 @@ export interface AgentDelegations {
   tenant_id: string;
 }
 
-export interface AgentMessages {
-  author_kind: Generated<string>;
-  author_payload: Generated<Json>;
-  commit_sha: string | null;
-  content: string;
+export interface AgentItems {
+  attempt_id: string | null;
+  attention: Generated<boolean>;
+  author_kind: string | null;
+  author_payload: Json | null;
   created_at: Generated<Timestamp>;
-  delivery_mode: Generated<string>;
-  id: Generated<string>;
+  dispatch: string | null;
+  id: string;
   idempotency_key: string | null;
-  metadata: Json | null;
-  role: string;
-  seq: Generated<Int8>;
+  kind: string;
+  parent_item_id: string | null;
+  payload: Json;
+  position: Int8;
   session_id: string;
+  status: string;
+  text: Generated<string>;
+  turn_id: string | null;
+  updated_at: Generated<Timestamp>;
 }
 
-export interface AgentRuntimeEvents {
+export interface AgentProviderThreadEntries {
   created_at: Generated<Timestamp>;
-  event_id: string;
-  event_type: string;
-  occurred_at: Timestamp;
-  payload: Json;
-  provider_payload_ref: string | null;
-  sequence: Int8;
+  entry: Json;
+  entry_uuid: string | null;
+  seq: Int8;
+  subpath: Generated<string>;
+  thread_id: string;
+}
+
+export interface AgentProviderThreads {
+  created_at: Generated<Timestamp>;
+  fork_source: Json | null;
+  harness: string;
+  id: Generated<string>;
+  last_turn_ordinal: number | null;
+  native_ref: Json | null;
+  portable: Generated<boolean>;
   session_id: string;
-  turn_id: string | null;
+  state_path: string | null;
+  status: Generated<string>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface AgentRuntimeRequests {
+  answerable: Generated<boolean>;
+  attempt_id: string | null;
+  blocking: Generated<boolean>;
   created_at: Timestamp;
   expires_at: Timestamp | null;
+  item_id: string | null;
   kind: string;
   payload: Json;
+  reason: string | null;
   request_id: string;
   resolved_at: Timestamp | null;
   resolved_by_external_user_id: string | null;
@@ -103,32 +124,63 @@ export interface AgentRuntimeRequests {
   updated_at: Generated<Timestamp>;
 }
 
+export interface AgentSessionCommands {
+  command_id: string;
+  created_at: Generated<Timestamp>;
+  error: Json | null;
+  external_user_id: string | null;
+  result: Json | null;
+  sequence: Int8;
+  session_id: string;
+  status: string;
+  type: string;
+}
+
+export interface AgentSessionEvents {
+  command_id: string | null;
+  created_at: Generated<Timestamp>;
+  payload: Json;
+  sequence: Int8;
+  session_id: string;
+  type: string;
+}
+
 export interface AgentSessions {
   activity: string | null;
   agent_id: string | null;
   allocation_id: string | null;
+  approvers: Json | null;
   attention_revision: Generated<Int8>;
   attention_seen_revision: Generated<Int8>;
   authority_host_id: Generated<string>;
   authority_revision: Generated<Int8>;
   authority_seen_at: Generated<Timestamp>;
   base_commit_sha: string | null;
+  chat_key: string | null;
+  chat_workflows: Generated<Json>;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
+  event_sequence: Generated<Int8>;
   external_user_id: string;
   forked_from_session_id: string | null;
   handoff_destination_host_id: string | null;
   handoff_status: Generated<string>;
+  harness: string | null;
   icon: string | null;
   id: Generated<string>;
-  mirror_message_count: Generated<number>;
+  imported: Json | null;
+  metadata: Generated<Json>;
+  mirror_sequence: Generated<Int8>;
   model: string | null;
   model_effort: string | null;
   parent_session_id: string | null;
+  placement: Json | null;
   project_id: string;
-  provider: string;
-  provider_session_id: string | null;
+  read_only: Generated<boolean>;
+  rewind_until: Timestamp | null;
   sandbox_id: string | null;
+  secrets_delivered_ref: string | null;
+  secrets_held_at: Timestamp | null;
   source: Generated<string>;
   source_action_id: string | null;
   state_revision: Generated<Int8>;
@@ -137,8 +189,9 @@ export interface AgentSessions {
   title: string | null;
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
-  wake_key: string | null;
   work_status: Generated<string>;
+  workspace: Json | null;
+  workspace_move: Json | null;
 }
 
 export interface AgentSessionViews {
@@ -151,24 +204,59 @@ export interface AgentSessionViews {
   visibility: Generated<string>;
 }
 
-export interface AgentTurns {
-  activity: string | null;
-  activity_at: Timestamp | null;
-  attempt: Generated<number>;
-  available_at: Generated<Timestamp>;
-  cancellation_requested_at: Timestamp | null;
+export interface AgentTurnAttempts {
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
-  delivery_mode: string;
-  error: string | null;
+  error: Json | null;
   id: Generated<string>;
+  native_turn_ref: Json | null;
+  ordinal: number;
+  provider_started_at: Timestamp | null;
+  provider_thread_id: string | null;
+  reason: string;
+  runner: Json | null;
+  session_id: string;
+  started_at: Timestamp | null;
+  status: string;
+  turn_id: string;
+}
+
+export interface AgentTurnCommands {
+  acknowledged_at: Timestamp | null;
+  attempt_id: string | null;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  kind: string;
+  payload: Generated<Json>;
+  sent_at: Timestamp | null;
+  status: Generated<string>;
+  turn_id: string;
+}
+
+export interface AgentTurns {
+  active_attempt_id: string | null;
+  activity: string | null;
+  activity_at: Timestamp | null;
+  attempt_count: Generated<number>;
+  available_at: Generated<Timestamp>;
+  cancellation_requested_at: Timestamp | null;
+  checkpoint_after: string | null;
+  checkpoint_before: string | null;
+  completed_at: Timestamp | null;
+  continuation_of: string | null;
+  created_at: Generated<Timestamp>;
+  dispatch: Generated<string>;
+  error: Json | null;
+  id: Generated<string>;
+  input_item_id: string | null;
   lease_expires_at: Timestamp | null;
   lease_owner: string | null;
   lease_token: string | null;
-  message_id: string;
-  phase: Generated<string>;
+  ordinal: number;
+  outcome: Json | null;
   priority: Generated<number>;
-  result_message_id: string | null;
+  provider_retry: Json | null;
+  provider_thread_id: string | null;
   session_id: string;
   started_at: Timestamp | null;
   status: Generated<string>;
@@ -333,19 +421,8 @@ export interface BatchStepMembers {
   workflow_step_attempt_id: string;
 }
 
-export interface ClientRunnerJobs {
-  created_at: Generated<Timestamp>;
-  error: string | null;
-  expires_at: Timestamp;
-  id: Generated<string>;
-  lease_token: string;
-  operation: Json;
-  response: Json | null;
-  runner_id: string;
-  status: Generated<string>;
-}
-
 export interface ClientRunners {
+  capabilities: Generated<Json>;
   environment_name: string;
   external_user_id: string;
   id: string;
@@ -353,6 +430,7 @@ export interface ClientRunners {
   label: string;
   lease_expires_at: Timestamp;
   lease_token: string;
+  processes: Generated<boolean>;
   project_id: string;
   resource_limits: Generated<Json>;
   tenant_id: string;
@@ -393,17 +471,19 @@ export interface ConnectionAuditEvents {
 }
 
 export interface ConnectionAuthorizationAttempts {
-  alias: string;
+  alias: string | null;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
-  environment_name: string;
+  environment_name: string | null;
   expires_at: Timestamp;
   external_user_id: string;
   id: Generated<string>;
+  personal: Generated<boolean>;
   private_state_ref: string | null;
-  project_id: string;
+  project_id: string | null;
   provider_kind: string;
   reauthorize_connection_id: string | null;
+  service_connection_id: string | null;
   state_hash: string;
   status: Generated<string>;
   tenant_id: string;
@@ -411,14 +491,19 @@ export interface ConnectionAuthorizationAttempts {
 
 export interface ConnectionCapabilityGrants {
   agent_session_id: string | null;
+  alias: string;
   allocation_id: string;
-  binding_id: string;
   capabilities: Json;
+  channel: Generated<string>;
   connection_id: string;
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;
   id: Generated<string>;
+  model_attempt_id: string | null;
+  model_lease_token: string | null;
+  model_turn_id: string | null;
   project_id: string;
+  publication_revision: Generated<Int8>;
   revoked_at: Timestamp | null;
   tenant_id: string;
   token_hash: string;
@@ -432,6 +517,7 @@ export interface Connections {
   expires_at: Timestamp | null;
   id: Generated<string>;
   label: string;
+  name: string | null;
   owner_external_user_id: string | null;
   principal_kind: string;
   project_id: string | null;
@@ -472,28 +558,17 @@ export interface DeploymentRuntimes {
   status: Generated<string>;
 }
 
-export interface EnvironmentConnectionBindings {
-  alias: string;
-  capabilities: Generated<Json>;
-  created_at: Generated<Timestamp>;
-  environment_name: string;
-  id: Generated<string>;
-  principal_kinds: Json;
-  project_id: string;
-  provider_kind: string;
-  service_connection_id: string | null;
-  tenant_id: string;
-  updated_at: Generated<Timestamp>;
-}
-
 export interface ExecutionAllocations {
   binding_id: string;
   capacity_released_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   environment_name: string;
   id: Generated<string>;
+  maintenance_claim: string | null;
+  maintenance_claimed_until: Timestamp | null;
   policy_snapshot: Json;
   project_id: string;
+  release_reason: string | null;
   released_at: Timestamp | null;
   reserved_cpu_millis: Generated<number>;
   reserved_memory_mb: Generated<number>;
@@ -533,6 +608,12 @@ export interface ExecutionJobs {
   workflow_step_attempt_id: string | null;
 }
 
+export interface ExecutorKeys {
+  executor: string;
+  public_key: string;
+  registered_at: Generated<Timestamp>;
+}
+
 export interface MemberConnectionAttachments {
   alias: string;
   connection_id: string;
@@ -553,6 +634,26 @@ export interface Memberships {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ModelUsage {
+  agent_session_id: string | null;
+  alias: string;
+  allocation_id: string;
+  cache_creation_tokens: Generated<Int8>;
+  cached_input_tokens: Generated<Int8>;
+  connection_id: string;
+  created_at: Generated<Timestamp>;
+  endpoint: string;
+  id: Generated<Int8>;
+  input_tokens: Generated<Int8>;
+  model: string | null;
+  output_tokens: Generated<Int8>;
+  project_id: string;
+  reasoning_tokens: Generated<Int8>;
+  settled_at: Timestamp | null;
+  tenant_id: string;
+  turn_id: string | null;
+}
+
 export interface NotificationDeliveries {
   attempt_count: Generated<number>;
   created_at: Generated<Timestamp>;
@@ -565,6 +666,43 @@ export interface NotificationDeliveries {
   status: Generated<string>;
   subscription_id: string;
   updated_at: Generated<Timestamp>;
+}
+
+export interface PersonalEnvironmentEntries {
+  bytes: number;
+  credential_ref: string;
+  expires_at: Timestamp | null;
+  external_user_id: string;
+  fingerprint: string;
+  kind: string;
+  name: string;
+  project_id: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PersonalEnvironmentSetups {
+  command: string;
+  external_user_id: string;
+  project_id: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PlacementWaits {
+  environment_name: string;
+  expires_at: Timestamp | null;
+  last_tried_at: Generated<Timestamp>;
+  owner: string | null;
+  pool: Generated<Json>;
+  project_id: string;
+  reason: string;
+  requirements: Generated<Json>;
+  retry_at: Generated<Timestamp>;
+  root_workload_id: string;
+  tenant_id: string;
+  waiting_since: Generated<Timestamp>;
+  workload_kind: string;
 }
 
 export interface ProjectEventDeliveries {
@@ -624,6 +762,8 @@ export interface Projects {
   id: Generated<string>;
   name: string;
   remote_branch: string | null;
+  remote_diverged_at: Timestamp | null;
+  remote_ownership: string | null;
   remote_url: string | null;
   storage_type: Generated<string>;
   tenant_id: string;
@@ -645,11 +785,12 @@ export interface ProjectSandboxes {
 
 export interface ProjectSecrets {
   created_at: Generated<Timestamp>;
+  credential_ref: string;
+  member_external_user_id: string | null;
   name: string;
   project_id: string;
-  stage: Generated<string>;
+  set_by: string | null;
   updated_at: Generated<Timestamp>;
-  value: string;
 }
 
 export interface Publications {
@@ -689,6 +830,26 @@ export interface RateReservationBuckets {
   tenant_id: string;
   tokens: Numeric;
   updated_at: Generated<Timestamp>;
+}
+
+export interface RemoteOperations {
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  executor: string;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  lease_token: string;
+  operation: Json;
+  poll_id: string | null;
+  reply_key: string;
+  response: Json | null;
+  status: Generated<string>;
+}
+
+export interface ReplicaClaims {
+  expires_at: Timestamp;
+  holder: string;
+  name: string;
 }
 
 export interface ScheduleBindings {
@@ -765,17 +926,20 @@ export interface SessionArtifacts {
 
 export interface SessionMailboxItems {
   acknowledged_at: Timestamp | null;
-  author_kind: string;
-  author_payload: Json;
+  action: Json | null;
+  attention: Generated<boolean>;
   authority_revision: Int8;
-  content: string;
+  causation: Generated<Json>;
   created_at: Generated<Timestamp>;
-  delivery_mode: string;
+  delivered_by: string | null;
+  delivery_mode: string | null;
   destination_host_id: string;
   id: Generated<string>;
   idempotency_key: string | null;
-  message_id: Generated<string>;
-  metadata: Json | null;
+  input: Json | null;
+  item_id: Generated<string>;
+  kind: string;
+  owner_authored: Generated<boolean>;
   project_id: string;
   session_id: string;
   source_host_id: string;
@@ -784,11 +948,11 @@ export interface SessionMailboxItems {
 
 export interface SessionSyncIntents {
   acknowledged_authority_revision: Int8 | null;
-  acknowledged_message_count: number | null;
+  acknowledged_sequence: Int8 | null;
   attempt_count: Generated<number>;
   created_at: Generated<Timestamp>;
   desired_authority_revision: Int8;
-  desired_message_count: number;
+  desired_sequence: Int8;
   destination_key: string;
   id: Generated<string>;
   last_error: string | null;
@@ -801,38 +965,19 @@ export interface SessionSyncIntents {
   updated_at: Generated<Timestamp>;
 }
 
-export interface StockProjectAccessRequests {
-  decided_at: Timestamp | null;
-  decided_by_external_user_id: string | null;
-  email: string;
-  email_verified: boolean;
+export interface SessionTerminals {
   external_user_id: string;
-  id: Generated<string>;
-  project_id: string;
-  requested_at: Generated<Timestamp>;
-  status: Generated<string>;
+  opened_at: Generated<Timestamp>;
+  process_id: string;
+  pty: boolean;
+  sandbox_id: string;
+  session_id: string;
+  terminal_key: string;
 }
 
-export interface StockProjectAdmissionPolicies {
-  approved_domains: Generated<Json>;
-  default_role: string;
-  mode: string;
-  project_id: string;
-  updated_at: Generated<Timestamp>;
-  updated_by_external_user_id: string;
-}
-
-export interface StockProjectInvitations {
-  created_at: Generated<Timestamp>;
-  created_by_external_user_id: string;
-  expires_at: Timestamp;
-  grants: Generated<Json>;
-  id: Generated<string>;
-  invited_email: string | null;
-  project_id: string;
-  redeemed_at: Timestamp | null;
-  redeemed_by_external_user_id: string | null;
-  roles: Json;
+export interface SessionWorkspaceUse {
+  session_id: string;
+  used_at: Generated<Timestamp>;
 }
 
 export interface StoredObjects {
@@ -903,6 +1048,7 @@ export interface Tenants {
 }
 
 export interface TriggerDefinitions {
+  binding_index: Generated<number>;
   can_suspend: boolean;
   commit_sha: string;
   config: Json;
@@ -913,7 +1059,9 @@ export interface TriggerDefinitions {
   input_schema: Generated<Json>;
   output_schema: Generated<Json>;
   project_id: string;
+  project_kind: string | null;
   trigger_kind: string;
+  where_filters: Generated<Json>;
   workflow_name: string;
 }
 
@@ -935,6 +1083,13 @@ export interface UserNotificationEvents {
   session_id: string | null;
   tenant_id: string;
   title: string;
+}
+
+export interface VolumeHolds {
+  allocation_id: string;
+  created_at: Generated<Timestamp>;
+  node: string;
+  volume_key: string;
 }
 
 export interface WatcherRuns {
@@ -966,22 +1121,67 @@ export interface Watchers {
   workflow_name: string;
 }
 
+export interface WebhookEndpoints {
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  name: string;
+  project_id: string;
+  token: string;
+}
+
+export interface WorkAccounts {
+  administrator: Generated<boolean>;
+  directory_checked_at: Timestamp | null;
+  directory_groups: Generated<Json>;
+  directory_tracked_groups: Generated<Json>;
+  disabled_at: Timestamp | null;
+  disabled_reason: string | null;
+  joined_at: Timestamp | null;
+  lifecycle_revision: Generated<number>;
+  updated_at: Generated<Timestamp>;
+  user_id: string;
+}
+
+export interface WorkDirectoryAnnouncements {
+  attempts: Generated<number>;
+  created_at: Generated<Timestamp>;
+  external_id: string;
+  id: Generated<string>;
+  kind: string;
+  last_error: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  occurred_at: Timestamp;
+  payload: Json;
+  revision: number;
+  tenant_id: string;
+  user_id: string;
+}
+
+export interface WorkDirectoryGrants {
+  project_id: string;
+  roles: Generated<Json>;
+  updated_at: Generated<Timestamp>;
+  user_id: string;
+}
+
 export interface WorkerNodes {
   authority_id: string;
   capacity: Json | null;
   default_resources: Generated<Json>;
   descriptor: Json;
+  disposable: Generated<boolean>;
   enabled: Generated<boolean>;
   id: string;
   lease_expires_at: Timestamp;
   lease_token: string;
+  recovery_attempted_at: Timestamp | null;
+  remote: Json | null;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
 }
 
 export interface WorkflowEnablementConnections {
   alias: string;
-  binding_id: string;
   capabilities: Generated<Json>;
   connection_id: string;
   created_at: Generated<Timestamp>;
@@ -1010,11 +1210,10 @@ export interface WorkflowEnablements {
   environment_name: string;
   expires_at: Timestamp | null;
   id: Generated<string>;
-  owner_connection_id: string | null;
   owner_external_user_id: string | null;
   owner_identity: Json;
   owner_kind: string;
-  owner_principal_kind: string | null;
+  permissions: Generated<Json>;
   project_id: string;
   remote_branch: Generated<string>;
   revision: Generated<number>;
@@ -1070,6 +1269,7 @@ export interface WorkflowRuns {
   attempt: Generated<number>;
   caller_connection_scope: Json | null;
   caller_execution_scope: Json | null;
+  caller_project_permissions: Json | null;
   caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
@@ -1123,8 +1323,24 @@ export interface WorkflowRunSteps {
   status: Generated<string>;
 }
 
+export interface WorkflowSignals {
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  idempotency_key: string;
+  pause_id: string | null;
+  payload_hash: string;
+  resolved_at: Timestamp | null;
+  run_id: string;
+  sequence: Generated<Int8>;
+  signal_name: string;
+  status: Generated<string>;
+  value: Json | null;
+}
+
 export interface WorkflowStepAttempts {
   attempt: number;
+  call_state: Json | null;
+  call_state_present: Generated<boolean>;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   error: string | null;
@@ -1143,15 +1359,161 @@ export interface WorkflowStepAttempts {
   updated_at: Generated<Timestamp>;
 }
 
+export interface WorkGithubAppRegistrations {
+  app_ref: string | null;
+  app_slug: string | null;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  input: Json;
+  state_hash: string;
+  status: Generated<string>;
+  tenant_id: string;
+}
+
+export interface WorkMachineRules {
+  created_at: Generated<Timestamp>;
+  definition: Json;
+  last_failure: string | null;
+  last_failure_at: Timestamp | null;
+  name: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface WorkProjectAccessRequests {
+  decided_at: Timestamp | null;
+  decided_by_external_user_id: string | null;
+  email: string;
+  email_verified: boolean;
+  external_user_id: string;
+  id: Generated<string>;
+  project_id: string;
+  requested_at: Generated<Timestamp>;
+  status: Generated<string>;
+}
+
+export interface WorkProjectAdmissionPolicies {
+  approved_domains: Generated<Json>;
+  default_role: string;
+  directory_roles: Generated<Json>;
+  mode: string;
+  project_id: string;
+  updated_at: Generated<Timestamp>;
+  updated_by_external_user_id: string;
+}
+
+export interface WorkProjectInvitations {
+  created_at: Generated<Timestamp>;
+  created_by_external_user_id: string;
+  expires_at: Timestamp;
+  grants: Generated<Json>;
+  id: Generated<string>;
+  invited_email: string | null;
+  project_id: string;
+  redeemed_at: Timestamp | null;
+  redeemed_by_external_user_id: string | null;
+  roles: Json;
+}
+
+export interface WorkRefreshTokens {
+  family_id: string;
+  grant_id: string;
+  issued_at: Generated<Timestamp>;
+  rotated_at: Timestamp | null;
+  token_hash: string;
+}
+
+export interface WorkShareEvents {
+  action: string;
+  created_at: Generated<Timestamp>;
+  detail: string | null;
+  id: Generated<Int8>;
+  share_id: string;
+  viewer_email: string;
+  viewer_user_id: string;
+}
+
+export interface WorkShares {
+  audience_domains: Generated<Json>;
+  audience_emails: Generated<Json>;
+  created_at: Generated<Timestamp>;
+  created_by: string;
+  environment: string | null;
+  expires_at: Timestamp | null;
+  id: string;
+  kind: string;
+  project_id: string;
+  revoked_at: Timestamp | null;
+  target: string;
+  title: string;
+}
+
+export interface WorkTokenFamilies {
+  client_id: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  revoked_at: Timestamp | null;
+  revoked_reason: string | null;
+  user_id: string;
+}
+
+export interface WorkWorkerEnrollments {
+  access: Generated<Json>;
+  code_hash: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  labels: Generated<Json>;
+  machine_ref: string | null;
+  machine_rule: string | null;
+  name: string;
+  pool: Generated<boolean>;
+  tenant_id: string;
+  trusted: Generated<boolean>;
+  used_at: Timestamp | null;
+}
+
+export interface WorkWorkers {
+  access: Generated<Json>;
+  credential_hash: string;
+  credential_issued_at: Generated<Timestamp>;
+  enrolled_at: Generated<Timestamp>;
+  labels: Generated<Json>;
+  last_seen_at: Timestamp | null;
+  machine_destroyed_at: Timestamp | null;
+  machine_member: string | null;
+  machine_ref: string | null;
+  machine_rule: string | null;
+  machine_slot: number | null;
+  name: string;
+  node_id: string;
+  pending_credential_hash: string | null;
+  pending_issued_at: Timestamp | null;
+  pending_public_key: string | null;
+  pending_rotation: string | null;
+  pool: Generated<boolean>;
+  released_at: Timestamp | null;
+  retain_days: number | null;
+  revoked_at: Timestamp | null;
+  rotation_requested_at: Timestamp | null;
+  tenant_id: string;
+  trusted: Generated<boolean>;
+}
+
 export interface DB {
   _migrations: _Migrations;
   active_run_invocations: ActiveRunInvocations;
   agent_delegations: AgentDelegations;
-  agent_messages: AgentMessages;
-  agent_runtime_events: AgentRuntimeEvents;
+  agent_items: AgentItems;
+  agent_provider_thread_entries: AgentProviderThreadEntries;
+  agent_provider_threads: AgentProviderThreads;
   agent_runtime_requests: AgentRuntimeRequests;
+  agent_session_commands: AgentSessionCommands;
+  agent_session_events: AgentSessionEvents;
   agent_session_views: AgentSessionViews;
   agent_sessions: AgentSessions;
+  agent_turn_attempts: AgentTurnAttempts;
+  agent_turn_commands: AgentTurnCommands;
   agent_turns: AgentTurns;
   app_storage: AppStorage;
   app_versions: AppVersions;
@@ -1162,7 +1524,6 @@ export interface DB {
   batch_sink_chunks: BatchSinkChunks;
   batch_step_invocations: BatchStepInvocations;
   batch_step_members: BatchStepMembers;
-  client_runner_jobs: ClientRunnerJobs;
   client_runners: ClientRunners;
   connection_action_requirements: ConnectionActionRequirements;
   connection_audit_events: ConnectionAuditEvents;
@@ -1171,12 +1532,16 @@ export interface DB {
   connections: Connections;
   deployment_artifacts: DeploymentArtifacts;
   deployment_runtimes: DeploymentRuntimes;
-  environment_connection_bindings: EnvironmentConnectionBindings;
   execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
+  executor_keys: ExecutorKeys;
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
+  model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
+  personal_environment_entries: PersonalEnvironmentEntries;
+  personal_environment_setups: PersonalEnvironmentSetups;
+  placement_waits: PlacementWaits;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
@@ -1187,6 +1552,8 @@ export interface DB {
   publications: Publications;
   push_subscriptions: PushSubscriptions;
   rate_reservation_buckets: RateReservationBuckets;
+  remote_operations: RemoteOperations;
+  replica_claims: ReplicaClaims;
   schedule_bindings: ScheduleBindings;
   schedule_occurrences: ScheduleOccurrences;
   session_actions: SessionActions;
@@ -1194,9 +1561,8 @@ export interface DB {
   session_artifacts: SessionArtifacts;
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
-  stock_project_access_requests: StockProjectAccessRequests;
-  stock_project_admission_policies: StockProjectAdmissionPolicies;
-  stock_project_invitations: StockProjectInvitations;
+  session_terminals: SessionTerminals;
+  session_workspace_use: SessionWorkspaceUse;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
   stored_objects: StoredObjects;
@@ -1206,8 +1572,24 @@ export interface DB {
   trigger_definition_scans: TriggerDefinitionScans;
   trigger_definitions: TriggerDefinitions;
   user_notification_events: UserNotificationEvents;
+  volume_holds: VolumeHolds;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
+  webhook_endpoints: WebhookEndpoints;
+  work_accounts: WorkAccounts;
+  work_directory_announcements: WorkDirectoryAnnouncements;
+  work_directory_grants: WorkDirectoryGrants;
+  work_github_app_registrations: WorkGithubAppRegistrations;
+  work_machine_rules: WorkMachineRules;
+  work_project_access_requests: WorkProjectAccessRequests;
+  work_project_admission_policies: WorkProjectAdmissionPolicies;
+  work_project_invitations: WorkProjectInvitations;
+  work_refresh_tokens: WorkRefreshTokens;
+  work_share_events: WorkShareEvents;
+  work_shares: WorkShares;
+  work_token_families: WorkTokenFamilies;
+  work_worker_enrollments: WorkWorkerEnrollments;
+  work_workers: WorkWorkers;
   worker_nodes: WorkerNodes;
   workflow_enablement_connections: WorkflowEnablementConnections;
   workflow_enablement_events: WorkflowEnablementEvents;
@@ -1218,5 +1600,6 @@ export interface DB {
   workflow_run_states: WorkflowRunStates;
   workflow_run_steps: WorkflowRunSteps;
   workflow_runs: WorkflowRuns;
+  workflow_signals: WorkflowSignals;
   workflow_step_attempts: WorkflowStepAttempts;
 }

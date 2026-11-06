@@ -108,8 +108,10 @@ Desktop dropdowns and checkboxes follow the app-owned
 [control contract](../apps/desktop/DESIGN.md#dropdowns-and-checkboxes), with one
 [host stylesheet](../apps/desktop/src/renderer/form-controls.css). Keep semantic
 HTML and keyboard behavior; never introduce OS-native select menus or unstyled
-checkboxes in desktop chrome. Use the same tokens and motion as project/profile
-menus. This is host design guidance, not a restriction on library embedders.
+checkboxes in desktop chrome. A setting that applies at once is a
+[switch](../apps/desktop/DESIGN.md#switches): the same checkbox with
+`role="switch"`, from the same stylesheet. Use the same tokens and motion as
+project/profile menus. This is host design guidance, not a restriction on library embedders.
 
 Async actions follow the [button contract](../apps/desktop/DESIGN.md#buttons):
 use the shared PendingButton, preserve its dimensions and reserve loading status

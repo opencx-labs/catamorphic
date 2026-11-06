@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
@@ -6,6 +9,7 @@ import {
   setReactValueJs,
   workspaceDomHelpersJs,
 } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
  * End-to-end flows against the real Electron app: isolated userData dir,
@@ -164,6 +168,8 @@ describe("first launch", () => {
               !!$('textarea[placeholder*="Search or ask"]');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+    // The chat flows below act on chats as a sidebar list (ADR 0234).
+    await addSidebarSections(app, [CHATS_SECTION]);
   });
 
   it("does not load editor or terminal runtimes before first use", async () => {
@@ -204,6 +210,20 @@ describe("browser tabs", () => {
   });
 
   it("navigates browser history with Cmd+Left and Cmd+Right", async () => {
+    // The ACTIVE tab's exact title: "E2E Page" is a substring of "Second E2E
+    // Page", so a substring check passed before the back navigation
+    // committed, and the next forward press landed with no forward entry.
+    const showsTab = (title: string, label: string) =>
+      runWait(
+        // Active tab in either strip: a horizontal tab's button carries
+        // aria-current; a vertical tab's tree row carries aria-selected.
+        // The title is the button's last child; the glyph before it adds text.
+        `return $$('[data-point-key] button').some((button) =>
+           (button.hasAttribute('aria-current') ||
+             !!button.closest('[aria-selected="true"]')) &&
+           button.lastElementChild?.textContent.trim() === ${JSON.stringify(title)});`,
+        { timeoutMs: 30_000, label },
+      );
     await run(`
       const input = $('input[aria-label="Address and search bar"]');
       input.focus();
@@ -212,46 +232,45 @@ describe("browser tabs", () => {
         { key: 'Enter', bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(`return !!byText('button', 'Second E2E Page');`, {
-      timeoutMs: 30_000,
-      label: "second browser history entry",
-    });
+    await showsTab("Second E2E Page", "second browser history entry");
 
+    // With nothing focused in Work's window, no text field keeps Cmd+Left
+    // and Cmd+Right for its caret (text-field-keys.e2e.ts): the address
+    // bar would.
+    await run(`document.activeElement?.blur(); return true;`);
     await run(`pressKey('ArrowLeft', { metaKey: true }); return true;`);
-    await runWait(`return !!byText('button', 'E2E Page');`, {
-      timeoutMs: 30_000,
-      label: "browser history moved back",
-    });
+    await showsTab("E2E Page", "browser history moved back");
     await run(`pressKey('ArrowRight', { metaKey: true }); return true;`);
-    await runWait(`return !!byText('button', 'Second E2E Page');`, {
-      timeoutMs: 30_000,
-      label: "browser history moved forward",
-    });
+    await showsTab("Second E2E Page", "browser history moved forward");
 
     const isMac = await run<boolean>(
       `return navigator.platform.toLowerCase().startsWith('mac');`,
     );
     if (isMac) {
+      // The tab's title changes when a navigation commits, before the guest
+      // has finished loading. Press a mouse button only in a loaded page the
+      // host can navigate away from, as a person would.
+      const loadedWith = (title: string, history: string) =>
+        runWait(
+          `const view = $('webview'); return !view.isLoading() && view.getTitle() === ${JSON.stringify(title)} && view.${history}();`,
+          { timeoutMs: 30_000, label: `${title} loaded` },
+        );
+      await loadedWith("Second E2E Page", "canGoBack");
       await run(`
         void $('webview').executeJavaScript(
           "window.dispatchEvent(new MouseEvent('mouseup', { button: 3, bubbles: true, cancelable: true }))",
         );
         return true;
       `);
-      await runWait(`return !!byText('button', 'E2E Page');`, {
-        timeoutMs: 30_000,
-        label: "browser mouse button moved back",
-      });
+      await showsTab("E2E Page", "browser mouse button moved back");
+      await loadedWith("E2E Page", "canGoForward");
       await run(`
         void $('webview').executeJavaScript(
           "window.dispatchEvent(new MouseEvent('mouseup', { button: 4, bubbles: true, cancelable: true }))",
         );
         return true;
       `);
-      await runWait(`return !!byText('button', 'Second E2E Page');`, {
-        timeoutMs: 30_000,
-        label: "browser mouse button moved forward",
-      });
+      await showsTab("Second E2E Page", "browser mouse button moved forward");
     }
   });
 
@@ -344,11 +363,16 @@ describe("terminal tabs", () => {
   it("opens a terminal with the new-terminal-tab shortcut", async () => {
     await run(`pressKey('\\u0060', { ctrlKey: true }); return true;`);
     // The emulator (ghostty-web) mounts a canvas once its WASM module
-    // loads and the PTY session is live.
-    await runWait(`return !!byText('button', 'Terminal') && !!$('canvas');`, {
-      timeoutMs: 30_000,
-      label: "terminal tab with canvas",
-    });
+    // loads and the PTY session is live. The tab is named by the shell's
+    // title when it sets one (Debian's .bashrc does), so find the terminal
+    // by its input.
+    await runWait(
+      `return !!$('textarea[aria-label="Terminal input"]') && !!$('canvas');`,
+      {
+        timeoutMs: 30_000,
+        label: "terminal tab with canvas",
+      },
+    );
   });
 
   it("hides the input textarea's caret (no phantom top-left cursor)", async () => {
@@ -378,7 +402,7 @@ describe("terminal tabs", () => {
 describe("editor tabs", () => {
   it("opens an editor file through the Files palette", async () => {
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",
@@ -437,16 +461,22 @@ describe("chat flows", () => {
       `return timelineMessages().some((m) => m.text.includes('You said: hello agent'));`,
       { timeoutMs: 30_000, label: "agent reply in timeline" },
     );
-    // set_title flowed through: the session shows up renamed in the sidebar.
-    await runWait(`return !!byText('button', 'Quick chat');`, {
-      timeoutMs: 30_000,
-      label: "session title in sidebar",
-    });
+    // set_title flowed through: the session shows up renamed in the sidebar
+    // (not only on its tab, when the chat opened as one).
+    await runWait(
+      `return !!byText('[data-sidebar="left"] button', 'Quick chat');`,
+      {
+        timeoutMs: 30_000,
+        label: "session title in sidebar",
+      },
+    );
   });
 
   it("previews a chat's agent, environment, and current state", async () => {
+    // The sidebar's row: a chat that opened as a tab has a "Quick chat" tab
+    // too, whose hover card is not the chat's preview.
     await run(`
-      const chat = byText('button', 'Quick chat');
+      const chat = byText('[data-sidebar="left"] button', 'Quick chat');
       chat.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       return true;
     `);
@@ -458,12 +488,16 @@ describe("chat flows", () => {
         label: "chat metadata hover preview",
       },
     );
-    const previewText = await run<string>(
-      `return $('[data-resource-inspector]').textContent;`,
+    // The reply arrives before its turn has finished saving: the chat
+    // reads Ready once the turn settled.
+    const previewText = await runWait<string>(
+      `const text = $('[data-resource-inspector]')?.textContent ?? '';
+       return text.includes('Ready') && text;`,
+      { label: "the chat's preview reads Ready once its turn settled" },
     );
     expect(previewText).toContain("Fake Agent");
     expect(previewText).toContain("Environment");
-    expect(previewText).toContain("local");
+    expect(previewText).toContain("default");
     expect(previewText).toContain("Status");
     expect(previewText).toContain("Ready");
   });
@@ -516,8 +550,7 @@ describe("chat flows", () => {
 
     await runWait(
       `const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
-       if (!toggle) return false;
-       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
        const step = [...visibleDock().querySelectorAll('[data-testid="chat-step"] button')]
          .find((button) => button.textContent.includes('Updated the todo list'));
        if (!step) return false;
@@ -558,18 +591,16 @@ describe("chat flows", () => {
       `return timelineMessages().some((m) => m.text.includes('two preambles, one summary'));`,
       { timeoutMs: 30_000, label: "final summary message" },
     );
-    const agentTexts = await run<string[]>(`
-      return timelineMessages()
-        .filter((m) => m.role === 'Agent')
-        .map((m) => m.text);
-    `);
     // By default only the answer stays in the conversation; the notes the
-    // agent wrote on the way are rows of its steps, one click away.
-    expect(
-      agentTexts.filter((text) =>
-        /look at the project|writing some notes|two preambles/.test(text),
-      ),
-    ).toHaveLength(1);
+    // agent wrote on the way are rows of its steps, one click away. They
+    // close up as the turn settles, then leave.
+    await runWait(
+      `return timelineMessages()
+        .filter((m) => m.role === 'Agent' &&
+          /look at the project|writing some notes|two preambles/.test(m.text))
+        .length === 1;`,
+      { label: "notes folded under the answer" },
+    );
     // Expanded, the step log holds both notes in emission order and the
     // file the fake agent wrote.
     await runWait(
@@ -596,6 +627,153 @@ describe("chat flows", () => {
     ]);
   });
 
+  it("shows the work as it happens, then folds it under the answer", async () => {
+    await run(
+      `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!visibleDock();`);
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'narrate the fix');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    // A step joins the live row at its end: the row and the steps already
+    // on screen keep their nodes while the activity line changes under them.
+    await runWait(
+      `const edit = $$('[data-live-work] [data-step-kind="file_edit"]')
+         .find((step) => step.textContent.includes('src/parser.ts'));
+       if (!edit) return false;
+       window.__narratedEdit = edit;
+       window.__narratedRow = edit.closest('[data-live-work]');
+       return true;`,
+      { timeoutMs: 30_000, label: "live row with the edit step" },
+    );
+    expect(
+      await runWait<boolean>(
+        `const row = $('[data-live-work]');
+         if (!row?.textContent.includes('Run the tests')) return false;
+         return row === window.__narratedRow &&
+           window.__narratedEdit.isConnected;`,
+        { timeoutMs: 30_000, label: "test step appended to the same row" },
+      ),
+    ).toBe(true);
+    // While the tests run: the notes stay in place, and the running step
+    // shows below them with its target and how long it has run.
+    const live = await runWait<{ notes: string[]; step: string }>(
+      `const dock = visibleDock();
+       const step = dock?.querySelector(
+         '[data-live-work] [data-testid="chat-step"][data-running]');
+       const time = step?.querySelector('[data-testid="chat-step-duration"]');
+       if (!step?.textContent.includes('Run the tests') || !time) return false;
+       if (!dock.querySelector('[data-testid="chat-activity-elapsed"]')) return false;
+       const notes = timelineMessages()
+         .filter((m) => m.role === 'Agent' && !m.text.includes('Run the tests'))
+         .map((m) => m.text);
+       return { notes, step: step.querySelector('button').textContent };`,
+      { timeoutMs: 30_000, label: "running step with its time" },
+    );
+    expect(live.notes.some((text) => text.includes("read the parser"))).toBe(
+      true,
+    );
+    expect(
+      live.notes.some((text) => text.includes("Fixing it, then testing")),
+    ).toBe(true);
+    expect(live.step).toMatch(/Run the tests\d+s$/);
+    // Settled: only the answer stays; the work is one click away, closed.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('handles empty input')) &&
+         !visibleDock().querySelector('[data-live-work]');`,
+      { timeoutMs: 30_000, label: "narrated answer" },
+    );
+    // The notes close up as they fold, then leave.
+    const settled = await runWait<{ agent: number; expanded: string | null }>(
+      `const agent = timelineMessages().filter((m) =>
+         /read the parser|Fixing it|handles empty input/.test(m.text)).length;
+       if (agent !== 1) return false;
+       return {
+         agent,
+         expanded: $$('[data-testid="chat-turn-steps-toggle"]').at(-1)
+           ?.getAttribute('aria-expanded') ?? null,
+       };`,
+      { label: "narrated notes folded under the answer" },
+    );
+    expect(settled).toEqual({ agent: 1, expanded: "false" });
+  });
+
+  it("with Notes only, shows the notes as they come and keeps the steps folded", async () => {
+    const before = await run<string>(
+      `return window.catamorphicDesktop.getPrefs().then((prefs) => prefs.chatWorkLive);`,
+    );
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'notes' }).then(() => true);`,
+    );
+    try {
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!visibleDock();`);
+      await run(`
+        const ta = visibleDock().querySelector('[data-composer-input]');
+        setReactValue(ta, 'narrate the fix again');
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+      // This chat only (earlier tests' chats are still on the page), and
+      // in it this turn: what follows its message.
+      const chat = `[...document.querySelectorAll('section[aria-label]')].find((section) =>
+        [...section.querySelectorAll('[role="log"] article')].some((article) =>
+          article.textContent.includes('narrate the fix again')))`;
+      const thisTurn = `((el) => [...${chat}.querySelectorAll('[role="log"] article')]
+        .find((article) => article.textContent.includes('narrate the fix again'))
+        .compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)`;
+      const toggles = `[...${chat}.querySelectorAll('[data-testid="chat-turn-steps-toggle"]')]
+        .filter((toggle) => !toggle.closest('[inert]') && ${thisTurn}(toggle))`;
+      // While the tests run: both notes in place, and every steps line in
+      // the turn closed, the running command's included. The choice reaches
+      // the window a beat after it is saved, so this holds once it has.
+      await runWait(
+        `const section = ${chat};
+         if (!section?.querySelector('[data-live-work]')) return false;
+         if (section.querySelector('[data-live-work] [data-testid="chat-step"]')) return false;
+         const notes = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
+           .filter((prose) => ${thisTurn}(prose) &&
+             /read the parser|Fixing it, then testing/.test(prose.textContent));
+         const lines = ${toggles};
+         if (notes.length !== 2 || lines.length < 2 ||
+           !lines.every((toggle) => toggle.getAttribute('aria-expanded') === 'false')) return false;
+         // The folded command has no DOM. Its session item still proves
+         // this assertion runs during the test command, not before it.
+         return (async () => {
+           const api = window.catamorphicDesktop;
+           const dock = await api.dockSnapshot();
+           const chat = dock.chats.find(chat => chat.entry.localId === section.dataset.chatLocalId);
+           const {url} = await api.getServerState();
+           const response = await fetch(url+'/api/projects/'+chat.projectId+'/agent/sessions/'+chat.entry.sessionId);
+           const {snapshot} = await response.json();
+           return snapshot.items.some(item => item.kind === 'command' && item.description === 'Run the tests' && item.status === 'in_progress');
+         })();`,
+        {
+          timeoutMs: 30_000,
+          label: "notes in place, steps folded while running",
+        },
+      );
+      // Answered: the notes fold away under the answer's closed line.
+      const settled = await runWait<string[]>(
+        `const section = ${chat};
+         const prose = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
+           .filter((el) => ${thisTurn}(el) &&
+             /read the parser|Fixing it|handles empty input/.test(el.textContent));
+         if (prose.length !== 1 || section.querySelector('[data-live-work]')) return false;
+         return ${toggles}.map((toggle) => toggle.getAttribute('aria-expanded'));`,
+        { timeoutMs: 30_000, label: "notes folded under the answer" },
+      );
+      expect(settled).toEqual(["false"]);
+    } finally {
+      await run(
+        `return window.catamorphicDesktop.setPrefs({ chatWorkLive: ${JSON.stringify(before)} }).then(() => true);`,
+      );
+    }
+  });
+
   it("shares archive and unread actions between the sidebar and dock", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!floatingDock();`, { label: "chat dock open" });
@@ -609,6 +787,14 @@ describe("chat flows", () => {
       `return !![...document.querySelectorAll('aside [data-session-id]')]
         .find((row) => row.textContent.includes('Session menu'));`,
       { timeoutMs: 30_000, label: "session menu row in the sidebar" },
+    );
+    await runWait(
+      `const dock = floatingDock();
+       return dock?.textContent.includes('The session menu is ready.') &&
+         !dock.querySelector('[aria-label="Stop the agent"]') &&
+         !dock.getAnimations().some(animation => animation.playState === 'running') &&
+         dock.contains(document.activeElement);`,
+      { label: "new chat settled before opening its session menu" },
     );
 
     // Sidebar and dock titles settle independently. Open the dock's menu only
@@ -627,7 +813,7 @@ describe("chat flows", () => {
     );
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'New subsession|Mark as unread|Archive';`,
+       return labels.join('|') === 'Rename…|New subsession|Open terminal|Mark as unread|Archive';`,
       { label: "dock session menu" },
     );
     await run(
@@ -636,7 +822,7 @@ describe("chat flows", () => {
     await runWait(
       `const row = [...document.querySelectorAll('aside [data-session-id]')]
          .find((item) => item.textContent.includes('Session menu'));
-       return !!row?.querySelector('[data-testid="session-unread"]');`,
+       return !!row?.querySelector('[data-signal="unread"]');`,
       { label: "manual unread dot in the sidebar" },
     );
     // The dock applies its action before its menu finishes animating out.
@@ -657,7 +843,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|New subsession|Mark as read|Archive';`,
+       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|Rename…|New subsession|Open terminal|Mark as read|Archive';`,
       { label: "sidebar session menu matches the dock" },
     );
     await run(
@@ -666,7 +852,7 @@ describe("chat flows", () => {
     await runWait(
       `const row = [...document.querySelectorAll('aside [data-session-id]')]
          .find((item) => item.textContent.includes('Session menu'));
-       return !!row && !row.querySelector('[data-testid="session-unread"]');`,
+       return !!row && !row.querySelector('[data-signal="unread"]');`,
       { label: "session marked read" },
     );
 
@@ -696,13 +882,13 @@ describe("chat flows", () => {
     // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
     // that state instead of turning the searchable palette off.
     await run(`
-      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      const input = $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
       if (!input) pressKey('p', { metaKey: true });
       return true;
     `);
     await runWait(
-      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      `const input = $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
        if (!input) return false;
        setReactValue(input, 'Session menu');
@@ -746,6 +932,166 @@ describe("chat flows", () => {
       { label: "unarchived chat restored to the sidebar" },
     );
   });
+
+  it("renames a chat from its sidebar row, dock bubble, the palette and its tab, in one dialog, and keeps the name", async () => {
+    const sidebarRow = (text: string) =>
+      `[...document.querySelectorAll('aside [data-session-id]')].find((row) => row.textContent.includes(${JSON.stringify(text)}))`;
+    const dockBubble = (text: string) =>
+      `[...document.querySelectorAll('[data-chat-bubble][data-session-id]')].find((row) => !row.closest('aside') && row.querySelector(${JSON.stringify(`button[aria-label*="${text}"]`)}))`;
+    // The rename form (ADR 0234's action input) opens with the name it had.
+    const rename = async (from: string, to: string) => {
+      await runWait(
+        `const field = document.querySelector('form input[name="title"]');
+         return field?.value === ${JSON.stringify(from)} && document.activeElement === field &&
+                field.selectionStart === 0 && field.selectionEnd === field.value.length;`,
+        { label: `rename form filled with ${from}` },
+      );
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+          "rename-chat-selection.png",
+        ),
+      );
+      await app.insertText(to);
+      await run(`
+        const field = document.querySelector('form input[name="title"]');
+        field.closest('form').requestSubmit();
+        return true;
+      `);
+      await runWait(`return !!${sidebarRow(to)};`, {
+        timeoutMs: 30_000,
+        label: `sidebar row renamed to ${to}`,
+      });
+      await runWait(
+        `return !document.querySelector('form input[name="title"]');`,
+        {
+          label: "rename form closed",
+        },
+      );
+    };
+
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat dock open" });
+    await run(`
+      const input = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'answer slowly private-marker');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(`return !!${sidebarRow("Private marker")};`, {
+      timeoutMs: 30_000,
+      label: "the agent's own title in the sidebar",
+    });
+    await run(`
+      ${sidebarRow("Private marker")}.firstElementChild.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 210, clientY: 360 }),
+      );
+      return true;
+    `);
+    await runWait(`return !!byText('[role="menuitem"]', 'Rename…');`, {
+      label: "rename in the sidebar row's menu",
+    });
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Private marker", "Launch checklist");
+
+    // The agent titles every reply; the person's name stays.
+    await runWait(
+      `return [...document.querySelectorAll('[role="log"] article')]
+        .some((article) => article.textContent.includes('Done after a long think.'));`,
+      { timeoutMs: 30_000, label: "the slow turn settled" },
+    );
+    await run(`
+      const input = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'and once more');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return [...document.querySelectorAll('[role="log"] article')]
+        .some((article) => article.textContent.includes('You said: and once more'));`,
+      { timeoutMs: 30_000, label: "the agent answered and titled the chat" },
+    );
+    expect(
+      await run<boolean>(`return !!${sidebarRow("Launch checklist")};`),
+    ).toBe(true);
+
+    // The dock's bubble offers the same verb.
+    await runWait(`return !document.querySelector('[data-sidebar-menu]');`, {
+      label: "sidebar menu dismissed",
+    });
+    await runWait(
+      `const bubble = ${dockBubble("Launch checklist")};
+       if (!bubble) return false;
+       bubble.querySelector('button').dispatchEvent(
+         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+       );
+       return true;`,
+      { label: "dock bubble named by the person" },
+    );
+    await runWait(`return !!byText('[role="menuitem"]', 'Rename…');`, {
+      label: "rename in the dock bubble's menu",
+    });
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Launch checklist", "Launch notes");
+
+    // Rename current chat remains findable while the current chat is minimized.
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, {
+      label: "current chat minimized before palette rename",
+    });
+    await run(`
+      const input = $$('[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+      if (!input) pressKey('p', { metaKey: true });
+      return true;
+    `);
+    await runWait(
+      `const input = $$('[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+       if (!input) return false;
+       setReactValue(input, '>rename current chat');
+       return true;`,
+      { label: "palette asked for Rename current chat" },
+    );
+    await runWait(
+      `const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Rename current chat'));
+       if (!option) return false;
+       option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+       return true;`,
+      { label: "Rename current chat in the palette" },
+    );
+    await rename("Launch notes", "Launch plan");
+
+    // As a tab, its right-click has the chat's verbs after the ways to
+    // open it.
+    await run(`pressKey('M', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(
+      `return !floatingDock() && !!visibleDock() &&
+              visibleDock().className.includes('max-w-full');`,
+      { label: "the chat as a tab" },
+    );
+    await runWait(
+      `const label = $$('.workspace-tab-label').find((el) => el.textContent.includes('Launch plan'));
+       if (!label) return false;
+       const r = label.getBoundingClientRect();
+       label.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 10 }));
+       return true;`,
+      { label: "the chat's tab in the strip" },
+    );
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels[0] === 'Open here' && labels.includes('Rename…');`,
+      { label: "the tab's menu: open modes, then the chat's verbs" },
+    );
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Launch plan", "Launch tab");
+    // Back to floating, as the next tests expect.
+    await run(`pressKey('Escape'); return true;`);
+    await runWait(`return !!floatingDock();`, {
+      label: "the chat floating again",
+    });
+  });
 });
 
 describe("palette intent", () => {
@@ -753,9 +1099,9 @@ describe("palette intent", () => {
   // back to any non-inert one. Blind Cmd+P would TOGGLE an already-open
   // overlay closed, so ensurePalette checks before pressing.
   const paletteInput = `(
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => document.activeElement === el) ??
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => !el.closest('[inert]'))
   )`;
   const ensurePalette = async () => {
@@ -803,7 +1149,7 @@ describe("palette intent", () => {
     await runWait(
       `const chip = ${inDialog('[data-testid="palette-mode-chip"]')}[0];
        return !!chip && chip.textContent.includes('Ask agent') &&
-              (${paletteInput}).value === '';`,
+              ((${paletteInput}).value ?? (${paletteInput}).textContent) === '';`,
       { label: "agent chip committed, input cleared" },
     );
   });
@@ -880,6 +1226,18 @@ describe("chat tab activity indicators", () => {
     await runWait(`return !!byText('button', 'New chat');`, {
       label: "chat tab in the strip",
     });
+    // The spinner shows for the few seconds the turn runs. Watched every
+    // frame from before the send: polling can miss it on a loaded runner,
+    // where hiding the chat takes most of that time.
+    await run(`
+      window.__tabSpinnerSeen = false;
+      const watch = () => {
+        if (${tabSpinnerOn}) window.__tabSpinnerSeen = true;
+        else requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
+      return true;
+    `);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'work slowly please');
@@ -896,7 +1254,7 @@ describe("chat tab activity indicators", () => {
           .find((el) => !el.closest('[inert]'));`,
       { label: "chat hidden behind a fresh palette tab" },
     );
-    await runWait(`return ${tabSpinnerOn};`, {
+    await runWait(`return window.__tabSpinnerSeen;`, {
       label: "tab icon spinner during the turn",
     });
   });
@@ -917,18 +1275,19 @@ describe("chat tab activity indicators", () => {
       { label: "chat tab selectable by its title" },
     );
     await runWait(`return !(${tabDotOn});`, { label: "dot cleared on open" });
-    // Leave a clean slate: close the chat tab and the extra palette tab.
-    // Sidebar rows and activity chips also have pointer keys and can update
-    // independently while the session settles. Count only workspace tabs.
+    // The New Tab that hid the chat went nowhere, so showing the chat closed
+    // it. Leave a clean slate by closing the chat tab too. Sidebar rows and
+    // activity chips also have pointer keys and can update independently
+    // while the session settles. Count only workspace tabs.
     const tabItems = `$$('[data-tab-orientation] [data-point-key]')`;
+    await runWait(
+      `return !${tabItems}.some((el) => el.dataset.pointKey.startsWith('palette:'));`,
+      { label: "the New Tab left behind closed" },
+    );
     const tabsBeforeClose = await run<number>(`return ${tabItems}.length;`);
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return ${tabItems}.length === ${tabsBeforeClose - 1};`, {
-      label: "chat tab closed before the next close",
-    });
-    await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(`return ${tabItems}.length === ${tabsBeforeClose - 2};`, {
-      label: "extra palette tab closed",
+      label: "chat tab closed",
     });
   });
 
@@ -1204,8 +1563,12 @@ describe("navigation shortcuts", () => {
       label: "background New Tab open",
     });
     // Fresh empty chat ("New chat") joins the titled chats from earlier
-    // groups — cycling must swap which chat the dock shows.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // groups — cycling must swap which chat the dock shows. Cmd+N would open
+    // it in the New Tab; the dock's + floats it over the New Tab.
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!floatingDock();`, { label: "dock open" });
     const first = await run<string>(
       `return floatingDock().getAttribute('aria-label');`,
@@ -1296,20 +1659,23 @@ describe("tiling and chat surfaces", () => {
         label: "agent reply renders the link",
       },
     );
-    // Clicking the agent's link opens an ATTACHED browser tab (the page
-    // itself may not load offline — the tab and rail chip still appear).
+    // The untrusted host asks first. Opening it once still preserves the
+    // attached tab and rail behavior, even when the page is offline.
     await run(
       `floatingDock().querySelector('.cat-markdown a').click(); return true;`,
     );
+    await runWait(`return !!$('[data-testid="link-trust-open"]');`, {
+      label: "the agent's link asks before contacting its host",
+    });
+    await run(`$('[data-testid="link-trust-open"]').click(); return true;`);
     await runWait(`return !!$('input[aria-label="Address and search bar"]');`, {
       timeoutMs: 30_000,
       label: "attached browser tab",
     });
     await runWait(
-      `return [...(floatingDock()?.querySelectorAll('button') ?? [])]
-         .some((el) =>
-           (el.getAttribute('aria-label') ?? '').endsWith('to the right'));`,
-      { label: "browser chip on the surfaces rail" },
+      `return !!floatingDock()?.querySelector(
+         '[data-testid="chip"][data-kind="browser"] [data-chip-button="open-side"]');`,
+      { label: "browser chip on the chat's chips" },
     );
     // A terminal to anchor the upcoming split against.
     await run(`pressKey('\u0060', { ctrlKey: true }); return true;`);
@@ -1322,8 +1688,8 @@ describe("tiling and chat surfaces", () => {
   it("opens a surface to the right as a split; Cmd+\\ toggles it", async () => {
     // Terminal is the active tab; split-open the browser chip beside it.
     await run(
-      `[...floatingDock().querySelectorAll('button')]
-         .find((el) => el.getAttribute('aria-label')?.endsWith('to the right'))
+      `floatingDock()
+         .querySelector('[data-testid="chip"][data-kind="browser"] [data-chip-button="open-side"]')
          .click();
        return true;`,
     );
@@ -1446,23 +1812,267 @@ describe("agent shows and points", () => {
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(
       `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-attention][data-kind="app"]');`,
+         '[data-testid="chip"][data-signal="attention"][data-kind="app"]');`,
       { label: "app chip carries the attention indicator" },
     );
     // Clicking the chip clears the attention and focuses the tab
     // (dismissal-by-interaction): every browser pane goes hidden.
     await run(`
       floatingDock()
-        .querySelector('[data-testid="surface-chip"][data-attention] button')
+        .querySelector('[data-testid="chip"][data-signal="attention"] [data-chip-main]')
         .click();
       return true;
     `);
     await runWait(
-      `return !$('[data-testid="surface-chip"][data-attention]') &&
+      `return !$('[data-testid="chip"][data-signal="attention"]') &&
               $$('input[aria-label="Address and search bar"]')
                 .every((el) => el.closest('.invisible'));`,
       { label: "attention cleared and the app tab focused" },
     );
+  });
+
+  // What an agent does moves as what a person does (DESIGN.md, motion
+  // contract): animationstart records which motion each step played.
+  /**
+   * The motion that starts, by animation name. A floating surface's exit is
+   * recorded as it enters its closing state, which plays
+   * floating-surface-out: the surface leaves on a timer, so its
+   * animationstart can miss a frame a busy runner drops.
+   */
+  const recordMotion = () =>
+    run(`
+      window.__agentMotion = [];
+      if (!window.__agentMotionListener) {
+        window.__agentMotionListener = (event) => {
+          if (/^(pane-in|agent-pointer)/.test(event.animationName))
+            window.__agentMotion.push(event.animationName);
+        };
+        document.addEventListener('animationstart', window.__agentMotionListener, true);
+        new MutationObserver((records) => {
+          for (const record of records)
+            if (record.target.getAttribute('data-floating-state') === 'closing')
+              window.__agentMotion.push('floating-surface-out');
+        }).observe(document.body, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-floating-state'],
+        });
+      }
+      return true;
+    `);
+  const motion = () => run<string[]>(`return window.__agentMotion;`);
+  const strip = `$$('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]')`;
+  /** The pane-in an agent's open of `key` plays: from its side of the strip. */
+  const arrivalFrom = (key: string) =>
+    run<string>(`
+      const keys = ${strip}.map((el) => el.getAttribute('data-point-key'));
+      const active = ${strip}.find((el) => el.querySelector('button[aria-current]'))
+        ?.getAttribute('data-point-key');
+      return keys.indexOf(${JSON.stringify(key)}) > keys.indexOf(active)
+        ? 'pane-in-right' : 'pane-in-left';
+    `);
+  /** Sends a message from the chat on screen and waits for the reply. */
+  const askAgent = async (message: string, reply: string) => {
+    // The turn before has ended: this one is a turn of its own (ADR 0240).
+    await runWait(
+      `return !visibleDock()?.querySelector('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "the turn before settled" },
+    );
+    const before = await run<number>(
+      `return timelineMessages().filter((m) => m.text.includes(${JSON.stringify(reply)})).length;`,
+    );
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, ${JSON.stringify(message)});
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().filter((m) => m.text.includes(${JSON.stringify(reply)})).length > ${before};`,
+      { timeoutMs: 30_000, label: `agent replied ${reply}` },
+    );
+  };
+
+  it("an agent's show brings the tab in from its side of the strip; a click swaps at once", async () => {
+    const page = await run<string>(
+      `return ${strip}.find((el) => el.getAttribute('data-point-key').startsWith('browser:'))
+         ?.getAttribute('data-point-key');`,
+    );
+    expect(page).toBeTruthy();
+    const arrival = await arrivalFrom(page);
+    await recordMotion();
+    await askAgent(
+      `show: ${page}`,
+      `Opened ${page} ("key":"${page}", "opened":"focused")`,
+    );
+    await runWait(
+      `return window.__agentMotion.includes(${JSON.stringify(arrival)});`,
+      { label: "the page arrived from its side of the strip" },
+    );
+    // A person's own click is its own cue: the content swaps at once.
+    await recordMotion();
+    await run(
+      `$('[data-tab-orientation] [data-point-key="app:bg-demo"] button').click(); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-tab-orientation] [data-point-key="app:bg-demo"] button[aria-current]');`,
+      { label: "the app tab is in front" },
+    );
+    await run(
+      `return new Promise((resolve) => setTimeout(() => resolve(true), 400));`,
+    );
+    expect(
+      (await motion()).filter((name) => name.startsWith("pane-in")),
+    ).toEqual([]);
+  });
+
+  it("an agent's close brings the next tab in", async () => {
+    const page = await run<string>(
+      `return ${strip}.find((el) => el.getAttribute('data-point-key').startsWith('browser:'))
+         ?.getAttribute('data-point-key');`,
+    );
+    await askAgent(
+      `show: ${page}`,
+      `Opened ${page} ("key":"${page}", "opened":"focused")`,
+    );
+    await recordMotion();
+    await askAgent(
+      `E2E workspace tool ${JSON.stringify({
+        name: "surface_control",
+        input: { key: page, action: "close" },
+        serial: "agent-close",
+      })}`,
+      "E2E result agent-close:",
+    );
+    await runWait(`return !$('[data-point-key=${JSON.stringify(page)}]');`, {
+      label: "the agent's page closed",
+    });
+    await runWait(
+      `return window.__agentMotion.some((name) => name.startsWith('pane-in'));`,
+      { label: "the next tab arrived" },
+    );
+  });
+
+  it("an agent's show over a floating surface plays the floating exit first", async () => {
+    // The chat as a tab, with its app floating over it: the person still
+    // watches the chat, so the show opens in front.
+    await run(`pressKey('m', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(`return !floatingDock() && !!visibleDock();`, {
+      label: "chat is a tab",
+    });
+    await run(`
+      visibleDock()
+        .querySelector('[data-testid="chip"][data-kind="app"] [data-chip-main]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }));
+      return true;
+    `);
+    await runWait(`return !!$('[data-floating-surface="app:bg-demo"]');`, {
+      label: "the app floats over the chat",
+    });
+    await recordMotion();
+    const url = "https://example.com/?agent-motion";
+    await askAgent(`show: ${url}`, `Opened ${url}`);
+    await runWait(`return !$('[data-floating-surface]') && !!floatingDock();`, {
+      label: "the floating app left and the chat stepped aside",
+    });
+    // The page arrives a frame after it commits.
+    await runWait(
+      `return window.__agentMotion.some((name) => name.startsWith('pane-in'));`,
+      { label: "the page arrived" },
+    );
+    const played = await motion();
+    const exit = played.indexOf("floating-surface-out");
+    expect(exit).toBeGreaterThanOrEqual(0);
+    expect(
+      played.findIndex((name) => name.startsWith("pane-in")),
+    ).toBeGreaterThan(exit);
+  });
+
+  it("point_at fades its glow in and out, holds it through a re-render, and refuses what a closed sidebar holds", async () => {
+    // A tab not in front: bringing it in front rewrites its classes, and
+    // the ring stays on, steady, without fading in again.
+    const tab = "app:bg-demo";
+    const glow = `$('[data-tab-orientation] [data-point-key=${JSON.stringify(tab)}]')`;
+    await recordMotion();
+    await askAgent(`point: ${tab}`, `Pointing at ${tab}.`);
+    await runWait(`return ${glow}.classList.contains('agent-pointer');`, {
+      label: "the glow faded in",
+    });
+    await askAgent(
+      `show: ${tab}`,
+      `Opened ${tab} ("key":"${tab}", "opened":"focused")`,
+    );
+    await runWait(`return !!${glow}.querySelector('button[aria-current]');`, {
+      label: "the pointed tab in front",
+    });
+    expect(
+      await run<boolean>(
+        `const el = ${glow};
+         return el.classList.contains('agent-pointer') &&
+           getComputedStyle(el).boxShadow !== 'none';`,
+      ),
+    ).toBe(true);
+    expect(
+      (await motion()).filter((name) => name === "agent-pointer-in"),
+    ).toHaveLength(1);
+    await askAgent("unpoint", "Cleared the pointers.");
+    await runWait(`return !${glow}.classList.contains('agent-pointer');`, {
+      label: "the glow left",
+    });
+    expect(await motion()).toEqual(
+      expect.arrayContaining(["agent-pointer-in", "agent-pointer-out"]),
+    );
+    // Closed sidebars: a row there, or a tab while tabs live in the
+    // sidebar, would glow off screen.
+    const placement = await run<string>(
+      `return window.catamorphicDesktop.getPrefs().then((prefs) => prefs.tabPlacement);`,
+    );
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ tabPlacement: 'sidebar' }).then(() => true);`,
+    );
+    await runWait(
+      `return !!$('[data-workspace-visible="true"] aside[data-sidebar="left"] [data-point-key=${JSON.stringify(tab)}]');`,
+      { label: "tabs in the left sidebar" },
+    );
+    const toggles = ["sidebar", "right sidebar"];
+    const reopen: string[] = [];
+    for (const side of toggles) {
+      const collapse = `[data-workspace-visible="true"] [aria-label="Collapse ${side}"]`;
+      if (await run<boolean>(`return !!$('${collapse}');`)) {
+        reopen.push(side);
+        await run(`$('${collapse}').click(); return true;`);
+      }
+    }
+    await runWait(
+      `return $$('[data-workspace-visible="true"] aside[data-sidebar]')
+         .every((el) => el.getAttribute('data-motion') === 'closed');`,
+      { label: "sidebars closed" },
+    );
+    const refused = (name: string) =>
+      run<boolean>(
+        `return timelineMessages().some((m) => m.text.includes('point error:') &&
+           m.text.includes(${JSON.stringify(name)}) && m.text.includes('closed sidebar'));`,
+      );
+    await askAgent("point: sidebar:Anything", "point error:");
+    expect(await refused("Anything")).toBe(true);
+    await askAgent(`point: ${tab}`, "point error:");
+    expect(await refused(tab)).toBe(true);
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ tabPlacement: ${JSON.stringify(placement)} }).then(() => true);`,
+    );
+    for (const side of reopen) {
+      await run(
+        `$('[data-workspace-visible="true"] [aria-label="Expand ${side}"]').click(); return true;`,
+      );
+      await runWait(
+        `return !!$('[data-workspace-visible="true"] [aria-label="Collapse ${side}"]');`,
+        { label: `${side} open again` },
+      );
+    }
+    if (placement !== "sidebar")
+      await runWait(`return !!$('[data-tab-orientation="horizontal"]');`, {
+        label: "tabs back on top",
+      });
   });
 });
 
@@ -1478,7 +2088,7 @@ describe("subagents and background watchers", () => {
     `);
     await runWait(
       `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="subagent"]');`,
+         '[data-testid="chip"][data-kind="subagent"]');`,
       { timeoutMs: 30_000, label: "subagent chip on the rail" },
     );
     // Chip survives the finished turn; clicking opens the activity popover.
@@ -1489,52 +2099,287 @@ describe("subagents and background watchers", () => {
     );
     expect(
       await run(
-        `return floatingDock()?.querySelector('[data-testid="surface-chip"][data-kind="subagent"]')?.textContent;`,
+        `return floatingDock()?.querySelector('[data-testid="chip"][data-kind="subagent"]')?.textContent;`,
       ),
     ).toContain("Review the changes");
     await run(`
       floatingDock()
-        .querySelector('[data-testid="surface-chip"][data-kind="subagent"] button')
+        .querySelector('[data-testid="chip"][data-kind="subagent"] [data-chip-main]')
         .click();
       return true;
     `);
     await runWait(
-      `const pop = floatingDock()?.querySelector(
-         '[data-testid="surface-info-popover"]');
+      `const pop = document.querySelector(
+         '[data-testid="chip-group-members"]:not([inert])');
        return !!pop && pop.textContent.includes('bun test');`,
       { label: "subagent activity popover" },
     );
   });
 
-  it("a background process gets a persistent watcher chip", async () => {
-    await run(`
+  it("a background command pulses until it ends, then wakes the chat and leaves no terminal behind", async () => {
+    // This scenario inspects notification delivery in place. The folded
+    // presentation across wakeup turns has its own completed-work suite.
+    await app.eval(
+      "window.catamorphicDesktop.setPrefs({chatWorkSettled:'keep'})",
+    );
+    // Keep the real child running until every running-state assertion has
+    // observed it, including on a loaded native runner.
+    const gate = path.join(app.userDataDir, "background-command-ready");
+    const command = `background: while [ ! -f '${gate.replaceAll("'", "'\\''")}' ]; do sleep 0.05; done; echo bg-done`;
+    const ownMark = `(() => {
+      const id = floatingDock()?.closest('[data-chat-local-id]')?.dataset.chatLocalId;
+      const bubble = id && $('[data-chat-bubble="' + id + '"]');
+      return bubble ? (bubble.querySelector('[data-activity]')?.dataset.activity ?? 'none') : null;
+    })()`;
+    try {
+      await run(`
       const ta = floatingDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'start a watcher for the dev server');
+      setReactValue(ta, ${JSON.stringify(command)});
       ta.closest('form').requestSubmit();
       return true;
     `);
+      // The turn ends at once; the command keeps running: its step stays in
+      // view outside the fold, pulsing, and its terminal chip spins.
+      await runWait(
+        `const step = floatingDock()?.querySelector(
+         '[data-testid="chat-step"][data-step-kind="background"][data-running]');
+       return !!step &&
+         step.textContent.includes('Running in background') &&
+         step.textContent.includes('Run it in the background') &&
+         !!step.querySelector('.animate-pulse');`,
+        { timeoutMs: 30_000, label: "running background step pulses" },
+      );
+      const backgroundAlignment = await run<number>(`
+      const row=floatingDock().querySelector('[data-step-kind="background"][data-running]');
+      return Math.abs(row.getBoundingClientRect().left-row.closest('[data-testid="chat-turn-steps"]').getBoundingClientRect().left);
+    `);
+      expect(backgroundAlignment).toBeLessThan(1);
+      await runWait(
+        `return !!floatingDock()?.querySelector(
+         '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,
+        { label: "its terminal chip spins" },
+      );
+      // The chat's own icon (its bubble) says what it left running while it
+      // rests.
+      await runWait(`return ${ownMark} === 'command';`, {
+        label: "the chat's icon shows its running command",
+      });
+    } finally {
+      fs.writeFileSync(gate, "ready");
+    }
+    // When it finishes, the chat gets a task notification row (ADR 0217),
+    // never a message bubble, and the agent answers.
     await runWait(
-      `const chip = floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="watcher"]');
-       return !!chip && chip.textContent.includes('npm run dev');`,
-      { timeoutMs: 30_000, label: "watcher chip on the rail" },
+      `const row = floatingDock()?.querySelector('[data-testid="chat-task-notification"]');
+       return !!row && row.textContent.includes('Run it in the background finished') &&
+         row.dataset.taskStatus === 'completed' && !row.closest('article');`,
+      { timeoutMs: 30_000, label: "finish notification in the chat" },
     );
-    // Another turn later, the watcher is still there — background work
-    // persists across turns until something ends it.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('bg-done'));`,
+      {
+        timeoutMs: 30_000,
+        label: "the agent read the output it was woken with",
+      },
+    );
+    await runWait(
+      `return !floatingDock()?.querySelector('[data-testid="chat-step"][data-running]') &&
+         [...floatingDock().querySelectorAll('[data-testid="chat-background-status"]')]
+           .some((el) => el.textContent === 'Ran command in background');`,
+      { label: "the step says it ran" },
+    );
+    await runWait(`return ${ownMark} === 'none';`, {
+      label: "the chat's icon lets the ended command go",
+    });
+    // Its terminal ended with it (ADR 0223): the chip left the chat, and
+    // the notification has no terminal to open.
+    await runWait(
+      `return ![...floatingDock().querySelectorAll('[data-testid="chip"][data-kind="terminal"]')]
+         .some((el) => el.textContent.includes('Run it in the background'));`,
+      { label: "its terminal chip left with it" },
+    );
+    expect(
+      await run(
+        `const row = [...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
+           .find((el) => el.textContent.includes('Run it in the background finished'));
+         return !!row && !row.querySelector('[data-testid="chat-input-source"]');`,
+      ),
+    ).toBe(true);
+  });
+
+  it("a turn that only waits on its command shows the command on its icon, not the spinner", async () => {
     await run(`
       const ta = floatingDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'thanks');
+      setReactValue(ta, 'wait on: sleep 5 && echo waited');
       ta.closest('form').requestSubmit();
       return true;
     `);
+    const ownMark = `(() => {
+      const id = floatingDock()?.closest('[data-chat-local-id]')?.dataset.chatLocalId;
+      const bubble = id && $('[data-chat-bubble="' + id + '"]');
+      return bubble ? (bubble.querySelector('[data-activity]')?.dataset.activity ?? 'none') : null;
+    })()`;
+    // The turn still runs (it can be stopped), yet all it does is wait.
     await runWait(
-      `return timelineMessages().some((m) => m.text.includes('You said: thanks'));`,
-      { timeoutMs: 30_000, label: "next turn finished" },
+      `return ${ownMark} === 'command' &&
+         !!floatingDock()?.querySelector('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "the waiting turn shows its command" },
     );
     await runWait(
-      `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="watcher"]');`,
-      { label: "watcher chip persists across turns" },
+      `return timelineMessages().some((m) => m.text.includes('Waited on it'));`,
+      { timeoutMs: 30_000, label: "the wait ended" },
     );
+    await runWait(`return ${ownMark} === 'none';`, {
+      label: "nothing left to show",
+    });
+  });
+});
+
+describe("news from a background command (ADR 0217)", () => {
+  it("reaches the working turn as a step, once per line it has not reported, and never as the person's message", async () => {
+    // Quiet past the command's start (its first output is news for the
+    // turn, not its start), then one error printed again and again, and an
+    // end well after the turn's. The command's own text never matches:
+    // \105 is the error's "E".
+    const command = [
+      "sleep 5; for i in 1 2 3 4 5 6 7 8; do",
+      "printf 'reason: \\105rror: Inspector method Debugger.enable is not supported\\n';",
+      "sleep 1; done; sleep 15",
+    ].join(" ");
+    await run(
+      `const input = floatingDock().querySelector('[data-composer-input]');
+       setReactValue(input, ${JSON.stringify(`monitor: ${command}`)});
+       input.closest('form').requestSubmit();`,
+    );
+    // The first error reaches the turn while it works: a step of its work
+    // with the task's icon, never a queued bubble with the model's text.
+    await runWait(
+      `const step = floatingDock()?.querySelector('[data-testid="chat-step"][data-step-kind="notification"]');
+       return !!step && step.textContent.includes('Start the worker printed what you were waiting for');`,
+      { timeoutMs: 30_000, label: "news reaches the working turn as a step" },
+    );
+    expect(
+      await run(
+        `return floatingDock().querySelectorAll('[data-testid="chat-queued-message"]').length;`,
+      ),
+    ).toBe(0);
+    // The error keeps printing while the turn works: it is not news again.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('Done with the worker for now.'));`,
+      { timeoutMs: 30_000, label: "the turn finished working" },
+    );
+    // Its turn's steps open, and the step opens to the output it carried
+    // and a link to its terminal.
+    await runWait(
+      `for (const toggle of floatingDock().querySelectorAll('[data-testid="chat-turn-steps-toggle"]'))
+         if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
+       const step = floatingDock().querySelector('[data-step-kind="notification"]');
+       const button = step?.querySelector('button');
+       if (button?.getAttribute('aria-expanded') === 'false') button.click();
+       return !!button;`,
+      { label: "folded notification mounted and opened" },
+    );
+    await runWait(
+      `const step = floatingDock()?.querySelector('[data-step-kind="notification"]');
+       return step?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
+         step.querySelector('[data-testid="chat-step-detail"]')?.textContent.includes('Debugger.enable') &&
+         step.querySelector('[data-testid="chat-step-source"]')?.textContent === 'Open terminal';`,
+      { label: "the step opens to its output and terminal" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "task-notification-step.png",
+      ),
+    );
+    // Its end is news too, never the person's bubble: a row of its own,
+    // since the shell marks the command's end exactly (OSC 133, zsh and
+    // bash alike) and it ends long after the turn it woke settled. An end
+    // read from a passing idle moment in its loop would land early, as a
+    // step of that turn, and kill the command with its terminal.
+    const ended = `[...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
+      .find((el) => el.textContent.includes('Start the worker finished'))`;
+    await runWait(`return !!${ended};`, {
+      timeoutMs: 45_000,
+      label: "the command's end reads as a row",
+    });
+    const news = await run<{ printed: number; bubbles: number }>(
+      `return {
+         printed: [...floatingDock().querySelectorAll('[data-step-kind="notification"], [data-testid="chat-task-notification"]')]
+           .filter((el) => el.textContent.includes('printed what you were waiting for')).length,
+         bubbles: [...floatingDock().querySelectorAll('[data-user-message]')]
+           .filter((el) => /task-notification|printed what you were waiting for|finished/i.test(el.textContent)).length,
+       };`,
+    );
+    expect(news.bubbles).toBe(0);
+    // The repeating error woke the chat once, for all eight prints.
+    expect(news.printed).toBe(1);
+    // It opens to what the agent read; its terminal ended with it.
+    await run(
+      `const end = ${ended};
+       const toggle = end.closest('[data-testid="chat-turn-steps"]')
+         ?.querySelector('[data-testid="chat-turn-steps-toggle"]');
+       if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+       end.querySelector('button').click();`,
+    );
+    await runWait(
+      `const end = ${ended};
+       return end?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
+         end.textContent.includes('Debugger.enable') &&
+         !end.querySelector('[data-testid="chat-step-source"], [data-testid="chat-input-source"] a');`,
+      { label: "the end opens to its output, with no terminal to open" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "task-notification-rows.png",
+      ),
+    );
+  });
+});
+
+describe("arriving surfaces and focus", () => {
+  it("a New Tab whose greeting lands after a chat opened over it leaves the chat focused", async () => {
+    const { tabPlacement, headerPlacement } = await run<{
+      tabPlacement: string;
+      headerPlacement: string;
+    }>(`return window.catamorphicDesktop.getPrefs();`);
+    // With the toolbar in the sidebar, a New Tab focuses its address bar a
+    // frame after it arrives; hold frames so a chat opens in between.
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ tabPlacement: 'sidebar', headerPlacement: 'sidebar' }).then(() => true);`,
+    );
+    await runWait(`return !!$('[data-header-placement="sidebar"]');`, {
+      label: "toolbar in the sidebar",
+    });
+    try {
+      await settleAnimationFrame();
+      await holdAnimationFrames();
+      await run(`pressKey('t', { metaKey: true, altKey: true }); return true;`);
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, {
+        label: "a chat over the New Tab",
+      });
+      await waitForHeldAnimationFrame();
+      await releaseAnimationFrames();
+      await settleAnimationFrame();
+      // The person's last act was opening the chat: it keeps focus.
+      await runWait(
+        `return document.activeElement?.matches?.('[data-composer-input]') &&
+          document.activeElement.closest('[data-floating-chat]') !== null;`,
+        { label: "composer focused, not the New Tab's address bar" },
+      );
+    } finally {
+      await restoreAnimationFrames();
+      await run(
+        `return window.catamorphicDesktop.setPrefs(${JSON.stringify({ tabPlacement, headerPlacement })}).then(() => true);`,
+      );
+      await runWait(
+        `return !!$('[data-header-placement="${headerPlacement}"]');`,
+        { label: "layout restored" },
+      );
+    }
   });
 });

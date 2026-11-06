@@ -13,8 +13,7 @@ Related: [`AGENTS.md`](./AGENTS.md), [`packages/cloudflare/README.md`](packages/
 ## TL;DR
 
 - **Sandbox provider (default)**: [Cloudflare Sandbox](https://developers.cloudflare.com/sandbox/) — isolated VM per deployment — accessed through a thin Worker we deploy called the **Sandbox Bridge**. `CloudflareSandboxProvider` in `@catamorphic/cloudflare`.
-- **Sandbox provider (alternate)**: Daytona, via the `@catamorphic/daytona` plugin package.
-- **Git code storage**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — `ArtifactsRemoteBackend` in `@catamorphic/cloudflare` (REST + [`isomorphic-git`](https://isomorphic-git.org/)). Requires the Artifacts closed beta; hosts fall back to filesystem remotes until access is granted.
+- **Git code storage**: [Cloudflare Artifacts](https://developers.cloudflare.com/artifacts/) — versioned repos with a Git-compatible HTTPS remote — `ArtifactsRemoteBackend` in `@catamorphic/cloudflare` (REST + [`isomorphic-git`](https://isomorphic-git.org/)). Requires the Artifacts closed beta; hosts fall back to filesystem remotes until access is granted. Artifacts origins do not keep members' drafts (ADR 0191): sandbox clone tokens read every ref of the repository, so hosts that let members draft on the server use an object-store (R2, S3, Postgres) or bare-repository origin.
 - **Worker deploy**: `wrangler deploy` to Cloudflare's edge — nothing to self-host.
 - **Fastify host**: unchanged — runs on your existing container platform and calls the Bridge Worker over HTTPS when the Cloudflare path is selected.
 
@@ -99,7 +98,7 @@ flowchart LR
 
 1. The Runs service resolves deployed `origin/main`, creates one canonical Run row, and enqueues Postgres work.
 2. An explicitly started host execution worker claims the job and resolves the immutable deployment artifact.
-3. Core reads the committed capability source under `.catamorphic/`, excludes `app-data/`, and uploads the verified execution snapshot. Deployment runtimes never clone the full imported repository (ADR 0142).
+3. Core reads the committed capability source under `.work/`, excludes `app-data/`, and uploads the verified execution snapshot. Deployment runtimes never clone the full imported repository (ADR 0142).
 4. `CloudflareSandboxProvider` creates or reuses the deployment-scoped sandbox through the Bridge Worker and materializes the immutable artifact.
 5. A warm Bun supervisor dispatches plain Workflow execution, boundary callbacks, or batch source/process/sink operations in isolated Bun Workers.
 6. Sequenced runtime events update `workflow_runs` and supporting state. Postgres schedules retries, pauses, child Runs, and subsequent scopes; the deployment sandbox may sleep between invocations.
@@ -140,7 +139,6 @@ We use `.env` files (not `.env.local`) in this setup:
 | `CLOUDFLARE_ARTIFACTS_NAMESPACE` | Namespace grouping repos (e.g. `catamorphic-dev`, `catamorphic-prod`) | Both |
 | `CLOUDFLARE_SANDBOX_API_URL` | URL of the deployed Bridge Worker (`http://localhost:8787` in dev) | Both |
 | `CLOUDFLARE_SANDBOX_API_KEY` | Shared bearer key between server and Bridge Worker | Both |
-| `DAYTONA_API_KEY` | Optional — fallback provider when CF vars unset | Optional |
 
 ### Bridge Worker (deploy-time, not Fastify's runtime env)
 
@@ -330,8 +328,6 @@ const remoteBackend = new ArtifactsRemoteBackend({
   cachePath: "/var/catamorphic/artifacts-cache",
 });
 ```
-
-To exercise the Daytona path instead, construct `DaytonaSandboxProvider` from `@catamorphic/daytona`.
 
 ---
 

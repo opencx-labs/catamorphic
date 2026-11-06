@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
+  NEW_TAB_INPUT,
   openProjectSwitcher,
   setReactValueJs,
   workspaceDomHelpersJs,
@@ -65,19 +66,22 @@ beforeAll(async () => {
   );
   await run("$('[data-testid=project-submit]').click()");
   await app.waitFor(
-    "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
+    `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    { label: "New Tab palette" },
   );
   await prefs({ tabPlacement: "sidebar", headerPlacement: "sidebar" });
+  // The new layout mounts the New Tab page again: wait for its input too.
   await app.waitFor(
-    "!!document.querySelector('aside [data-tab-orientation=vertical]') && !document.querySelector('.workspace-chrome')",
+    `!!document.querySelector('aside [data-sidebar-section=tabs]') && !document.querySelector('.workspace-chrome') && !!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    { label: "sidebar layout with its New Tab palette" },
   );
   await run(
-    `setReactValue($('textarea[placeholder*="Search or ask"]'),${JSON.stringify(`${origin}/anchor`)})`,
+    `setReactValue($(${JSON.stringify(NEW_TAB_INPUT)}),${JSON.stringify(`${origin}/anchor`)})`,
   );
   await app.waitFor(
     "document.querySelector('[data-workspace-visible=true] [data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
   );
-  await run("$('textarea[placeholder*=\"Search or ask\"]').focus()");
+  await run(`$(${JSON.stringify(NEW_TAB_INPUT)}).focus()`);
   await app.press("Enter");
   await app.waitFor(
     "[...document.querySelectorAll('webview')].some(v=>{try{return v.getTitle()==='Anchor page'}catch{return false}})",
@@ -274,13 +278,35 @@ describe("floating surfaces", () => {
     await click("Open as full tab");
     await app.waitFor(`!${floating}`);
     expect(await run("return !!$('select[name=linkOpenMode]')")).toBe(true);
+    // The expanded page is the whole view once its pane settles: a full
+    // slot, no frame animation left from the floating panel.
+    await app.waitFor(
+      "(()=>{const body=document.querySelector('[data-settings-scroll]');const pane=body?.closest('[data-workspace-slot]');return pane?.dataset.workspaceSlot==='full'&&!pane.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity)})()",
+      { label: "settings expanded into a full tab" },
+    );
     await run(
       "const body=$('[data-settings-scroll]');body.scrollTop=0;body.tabIndex=-1;body.focus()",
     );
-    await app.press("PageDown");
+    // PageDown scrolls whatever holds focus. Press only once the page still
+    // holds it after the expansion's effects, and is taller than its pane.
     await app.waitFor(
-      "document.querySelector('[data-settings-scroll]').scrollTop>0",
+      "(()=>{const body=document.querySelector('[data-settings-scroll]');return document.activeElement===body&&body.scrollTop===0&&body.scrollHeight>body.clientHeight})()",
+      { label: "settings page focused at its top and scrollable" },
     );
+    await app.press("PageDown");
+    await app
+      .waitFor("document.querySelector('[data-settings-scroll]').scrollTop>0", {
+        label: "PageDown scrolled the settings page",
+      })
+      .catch(async (error: unknown) => {
+        const state = await run(`const body=$('[data-settings-scroll]');return {
+          active: document.activeElement?.outerHTML.slice(0, 200),
+          windowFocused: document.hasFocus(),
+          scrollers: document.querySelectorAll('[data-settings-scroll]').length,
+          scrollTop: body?.scrollTop, scrollHeight: body?.scrollHeight, clientHeight: body?.clientHeight,
+        };`);
+        throw new Error(`${String(error)}; state: ${JSON.stringify(state)}`);
+      });
 
     guest.close();
   });
@@ -352,12 +378,13 @@ describe("floating surfaces", () => {
       );
       const row = `document.activeElement.closest('[role=dialog]').querySelector('[data-item-id="${item}"]')`;
       await app.waitFor(`!!${row}`);
-      // Choose this result explicitly; other open palettes and hover-driven
-      // selection must not decide which resource the Enter gesture exercises.
-      await app.eval(
-        `${row}.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}))`,
+      // Choose this result explicitly: walk the keyboard highlight to it,
+      // since rows can still re-rank as sources arrive and only a moving
+      // pointer takes the highlight.
+      await app.waitFor(
+        `(()=>{const rows=[...document.activeElement.closest('[role=dialog]').querySelectorAll('[role="option"]')];const target=rows.findIndex(row=>row.dataset.itemId===${JSON.stringify(item)});const current=rows.findIndex(row=>row.getAttribute('aria-selected')==='true');if(target===current)return true;document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:target>current?'ArrowDown':'ArrowUp',bubbles:true,cancelable:true}));return false})()`,
+        { label: `${item} highlighted` },
       );
-      await app.waitFor(`${row}?.getAttribute('aria-selected')==='true'`);
     };
     await choose("Settings", "tab:settings");
     expect(
@@ -403,6 +430,10 @@ describe("floating surfaces", () => {
     const sessions = await app.eval<number>("window.__terminalIds.length");
     await run(
       "$$('button').find(b=>b.textContent.trim()==='Add macro').click()",
+    );
+    // The editor renders after the click; a slow runner would fill nothing.
+    await app.waitFor(
+      "!!document.querySelector('[name=macroName]') && !!document.querySelector('[name=macroCommand]')",
     );
     await run(
       "setReactValue($('[name=macroName]'),'Working directory');setReactValue($('[name=macroCommand]'),'pwd')",
@@ -566,10 +597,10 @@ describe("floating surfaces", () => {
       "const section=$('[data-sidebar-widget=files]');const toggle=section.querySelector('button[aria-expanded=false]');toggle?.click()",
     );
     await app.waitFor(
-      "!!document.querySelector('[data-testid=files-nav] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
+      "!!document.querySelector('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
     );
     await run(
-      "$('[data-testid=files-nav] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+      "$('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
     );
     await app.waitFor(`!!${floating}?.querySelector('.monaco-editor')`);
     await app.waitFor(
@@ -579,7 +610,7 @@ describe("floating surfaces", () => {
       `${floating}.getAttribute('data-floating-surface')`,
     );
     await run(
-      "$('[data-testid=files-nav] [data-sidebar-item-id=\"placement-two.ts\"] [data-tree-primary]').click()",
+      "$('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-two.ts\"] [data-tree-primary]').click()",
     );
     await app.waitFor(
       `!!${floating}?.querySelector('.view-lines')?.textContent.replace(/\\s/g,'').includes('exportconsttwo')`,

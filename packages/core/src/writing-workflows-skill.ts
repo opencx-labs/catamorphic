@@ -1,3 +1,5 @@
+import { GITHUB_TRIGGER_LIBRARY } from "./github-trigger-library.js";
+
 /** Agent guidance; shipped through the existing skill discovery surfaces. */
 export const WRITING_WORKFLOWS_SKILL = `---
 name: writing-workflows
@@ -46,9 +48,10 @@ export const prepareGreeting = defineWorkflow(({ defineBoundary }) => ({
   steps: [
     /** @displayname Format greeting */
     defineBoundary({
-      run: async ({ input }: BoundaryContext<{ name: string }>) => ({
-        message: await formatGreeting({ name: input.name }),
-      }),
+      run: async ({ input }: BoundaryContext<{ name: string }>) => {
+        const message = await formatGreeting({ name: input.name });
+        return { message };
+      },
     }),
   ],
 }));
@@ -67,6 +70,9 @@ Use one destructured object parameter for step helpers and explicit
 \`BoundaryContext<Input>\` types for boundary callbacks. A named context parameter
 is also supported for returned host calls. Put IO in \`"use step"\` helpers;
 keep orchestration readable with calls, conditions, loops, and \`Promise.all\`.
+Write each call as its own statement (\`const x = await step(...)\`) or return
+it: a call nested inside an object literal or another call's arguments runs but
+is not drawn on the canvas.
 
 Add \`@displayname\` to UI-facing workflows, boundaries, steps, and parameter
 metadata. Optional \`@description\` and \`@icon\` explain purpose. Place scope JSDoc
@@ -76,9 +82,12 @@ Labels describe real behavior: a formatting example must not claim to send mail.
 ## Triggers and connections
 
 Declare \`triggers: [trigger("literal-kind", { constant: "config" })]\` alongside
-\`steps\`. Kind names and config/payload shapes come from the host-generated
-\`.catamorphic/workflows/src/catamorphic-triggers.d.ts\`. Config is inline constant data, not an
-expression evaluated at runtime. Conditions belong in ordinary workflow code.
+\`steps\`, with \`trigger\` imported from \`@catamorphic/workflow\` (it is not a
+builder argument). Kind names and config/payload shapes come from the host-generated
+\`.work/workflows/src/work-triggers.d.ts\`: the host's kinds and the project's own
+(see Project trigger kinds). Config is inline constant data, not an expression
+evaluated at runtime. Which events start a run belongs in \`where\`; what a run
+does with one belongs in ordinary workflow code.
 
 The trigger payload is the first scope's input. Multiple triggers require an
 input accepting every payload. A generated \`Hole<"Name">\` asks this workflow's
@@ -87,23 +96,153 @@ concrete input type to define that part of the schema; do not use \`any\` or
 If every kind is rejected as \`never\`, refresh types through the host rather than
 fabricating a registry or editing generated declarations.
 
+Every binding may add \`where\`, a filter the host checks before a run starts:
+\`trigger("schedule", { cron: "0 8 * * 1-5", timezone: "UTC", where: { ... } })\`.
+It mirrors the payload; a leaf is a value (equal), a list of values (one of),
+\`{ $exists: true | false }\`, or \`{ $prefix: "slack:" }\` (a string that starts
+with it, such as a namespace of chat keys). Keys starting with \`$\` are
+operators, so a payload field named \`exists\` or \`prefix\` matches by value.
+Header names match in any case.
+Filter in \`where\` rather than in code, so unrelated events never start runs.
+
+Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
+becomes the project's URL segment. The server stores each request durably and
+answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
+once. The payload's \`payload\` holds \`{ name, headers, query, contentType, body }\`,
+with JSON and form bodies parsed, and \`hostVerified: true\` when the host fetched
+the event itself instead of receiving a signed request (the desktop's GitHub
+poller). The config declares how the endpoint checks senders, always with a
+project secret's name:
+
+- \`verify: { scheme: "hmac", secret, header, prefix?, encoding?: "hex" | "base64",
+  algorithm?: "sha1" | "sha256" | "sha512", content?, timestamp?, separator?,
+  secretEncoding?, secretPrefix? }\` signs \`content\` (default \`"{body}"\`; also
+  \`{timestamp}\` and \`{header:<name>}\`). \`timestamp: { header, prefix?,
+  separator?, toleranceSeconds? }\` rejects replays (default 300 seconds) and
+  requires \`{timestamp}\` in \`content\`, since an unsigned timestamp can be
+  rewritten. A composite header is split on \`separator\` and its parts that
+  start with \`prefix\` are the values: Stripe is \`separator: ",", prefix: "v1="\`
+  with \`timestamp: { header: "stripe-signature", separator: ",", prefix: "t=" }\`;
+  Standard Webhooks is \`separator: " ", prefix: "v1,"\` with keys in
+  \`secretEncoding: "base64", secretPrefix: "whsec_"\`. Signing keys shorter than
+  16 bytes are rejected.
+- \`verify: { scheme: "token", secret, header | query, prefix? }\` compares a
+  shared token (GitLab's \`x-gitlab-token\`); the token is never stored.
+- \`respond: [{ when, echo, token? }]\` answers a handshake with 200 and the
+  echoed value instead of starting runs: \`{ when: { body: { type:
+  "url_verification" } }, echo: "body.challenge" }\` for Slack, or for GET
+  subscriptions \`{ when: { method: "GET", query: { "hub.mode": "subscribe" } },
+  echo: "query.hub.challenge", token: { secret, query: "hub.verify_token" } }\`.
+  A rule without \`token\` answers only requests that pass \`verify\`.
+- \`deliveryId\` names where a sender repeats its own event id when it sends
+  no delivery-id header (\`"body.event_id"\` for Slack, \`"body.id"\` for
+  Stripe), so a retried event is stored and run once.
+- \`maxBodyBytes\` raises the 1 MiB body limit up to the server's maximum.
+
+Every binding of one webhook name in a commit must declare identical settings,
+so declare an integration's webhook once, in a project trigger kind. While
+enablements sit on different commits (one workflow updated, another not yet),
+the URL checks requests by the most recently deployed commit's settings and
+every listening workflow still receives the events; expired enablements do not
+count. Declare the secret
+it names with \`defineSecrets\` in the same file and mark it
+\`use: "webhook"\`, so the project can store its value while runs never
+receive it: signing secrets are checked on the server only. People who manage the
+project copy the URL from the workflow's **Automatic** view after enabling it.
+Webhooks reach servers that are online, so enable them on a brain server.
+
 Schedules use either \`{ at: "an absolute ISO timestamp with offset" }\` or
 \`{ cron: "0 8 * * 1-5", timezone: "Asia/Amman" }\`. Their payload is
 \`{ activationId: string; scheduledFor: string; firedAt: string }\`. Use
 \`session-workflows\` for complete executable timer and notification recipes.
-Triggers are inert until enabled and enablements pin a revision.
+Event triggers (schedules, webhooks, session and GitHub events) are inert
+until enabled, and enablements pin a revision. An \`ai.tool-call\` trigger
+needs no enablement: once deployed, the workflow is a tool on the project MCP
+for every caller whose role grants it, and it runs as that caller.
 
 Declare required provider aliases, principal policy, and actions in an inline
 \`connections\` array. Roles and the host's enablement flow resolve access and
 credentials; see \`workflow-lifecycle\`. Brokered calls such as
 \`context.connections.gmail.search(...)\` are returned host transitions, not
-ordinary promises. Session notifications use \`deliver\` with \`attention: "required"\`;
-\`mode: "message_only"\` alerts without invoking a model. Use \`wake\` when a workflow
-needs a stable member session to perform agent work, not just display a reminder.
+ordinary promises; pass \`{ state }\` as a second argument to keep data across
+one (\`durable-workflows\`). Chats are reached with one operation, \`deliver\`: by \`sessionId\`
+for a known chat, or by \`key\` for the chat this workflow keeps for that key,
+started on first use (the enabling member's chat, or for a project enablement a
+project chat; see \`session-workflows\`). \`mode: "message_only"\` with
+\`attention: "required"\` alerts without invoking a model (the agent reads it
+with its next turn); \`queue\` (the default) has the agent do work.
+
+A run holds no project permission it does not declare. Name the ones it needs
+in an inline \`permissions\` array, such as \`permissions: ["sessions:write"]\`
+to deliver into other people's chats by \`sessionId\`, or \`["sessions:read"]\`
+to list them. Turning the workflow on shows the list, and only someone who
+holds every permission can turn it on. A member's automation keeps them only
+while that member does; a project automation keeps what was consented to.
+Declare the fewest that work; see \`workflow-lifecycle\`.
+
+## Project trigger kinds
+
+A project names the events it cares about in \`.work/triggers/<name>.ts\`: each
+export is \`defineTrigger({ name, description?, from: trigger(...), where? })\`,
+another kind narrowed by a filter. Workflows bind it by name like a host kind,
+with their own \`where\` on top; every filter along the chain must match. Write
+\`name\` and \`from\` literally (no variables) and pick names the host does not
+already register. A type argument states the payload the filtered events carry;
+\`Narrow<Base, Patch>\` types part of it, such as a webhook's body. The host
+regenerates \`work-triggers.d.ts\` with these kinds; \`bun run --cwd .work check\`
+checks them.
+
+A GitHub library, for a repository or GitHub App webhook sending JSON to the
+project's \`github\` URL with the secret stored as \`GITHUB_WEBHOOK_SECRET\`. The
+desktop has no public URL; its session watchers receive the same events by
+polling (see \`session-workflows\`), so this library works there too:
+
+\`\`\`typescript
+${GITHUB_TRIGGER_LIBRARY}\`\`\`
+
+Ready-made automations are packs: \`registry.read\` lists them, and fetches
+one with its files and docs to copy into the project and adapt. The
+\`slack-threads\` pack has the Slack library (\`slack.event\`, \`slack.mention\`,
+\`slack.message\`) and a chat per thread; the \`pull-request-reviews\` pack is a
+code and security review of every pull request, built on this library.
+
+A workflow that runs only for merged pull requests:
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/**
+ * @displayname Summarize a merged pull request
+ * @param title - @displayname Title | @description The pull request's title
+ * @param url - @displayname Link | @description Where the pull request lives
+ */
+async function summarizeMerge({ title, url }: { title: string; url: string }) {
+  "use step";
+  return \`Merged: \${title} (\${url})\`;
+}
+
+/** @displayname Note merged pull requests */
+export const noteMergedPullRequests = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("github.pull_request", {
+      where: { payload: { body: { action: "closed", pull_request: { merged: true } } } },
+    }),
+  ],
+  steps: [
+    /** @displayname Summarize */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
+        const pull = input.payload.body.pull_request;
+        return { summary: await summarizeMerge({ title: pull.title, url: pull.html_url }) };
+      },
+    }),
+  ],
+}));
+\`\`\`
 
 ## App contracts and secrets
 
-Expose only intended workflows from \`.catamorphic/workflows/src/app-api.ts\`; use \`building-apps\`
+Expose only intended workflows from \`.work/workflows/src/app-api.ts\`; use \`building-apps\`
 for the app contract and client. App inputs are untrusted: validate identifiers,
 clamp numbers, and bound arrays before acting. Inputs and outputs must survive
 JSON: use ISO strings and plain data, not dates, maps, streams, or functions.
@@ -119,12 +258,12 @@ cannot start with \`CATAMORPHIC_\`. Configure values through the host; an unset
 required secret throws. Secrets stay in backend execution, never app bundles or
 returned results. Prefer declared connections for member accounts and brokered access.
 
-The host-provided non-secret \`process.env.CATAMORPHIC_APP_DATA_DIR\` is the location
-for persistent local data. Follow \`catamorphic-projects\` for its storage contract.
+The host-provided non-secret \`process.env.WORK_APP_DATA_DIR\` is the location
+for persistent local data. Follow \`work-projects\` for its storage contract.
 
 ## Verify the result
 
-Run \`bun run --cwd .catamorphic check\` after structural changes. It checks parsing,
+Run \`bun run --cwd .work check\` after structural changes. It checks parsing,
 trigger bindings, and app contracts; \`--write\` refreshes generated app types.
 Fix the earliest boundary type mismatch instead of adding assertions or ignoring
 errors. Check the actual workflow through the host at the intended revision and

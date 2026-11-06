@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Columns2,
+  Ghost,
   Globe,
   RotateCw,
   Search,
@@ -9,12 +10,43 @@ import {
   Star,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
+import type { BookmarkScope } from "../../shared/bookmark-target.js";
+import {
+  type BrowserHistory,
+  type BrowserSleepBlocker,
+  browserHistorySource,
+  browserWakeSource,
+} from "../../shared/browser-history.js";
 import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type {
+  PageDialog,
+  PageDialogAnswer,
+  UnloadIntent,
+} from "../../shared/page-dialogs.js";
+import { samePage } from "../../shared/page-url.js";
 import { siteOrigin } from "../../shared/site-settings.js";
+import { VOICE_ACTIONS } from "../../shared/voice.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
+import {
+  ExtensionDebuggingBar,
+  ExtensionSidePanelView,
+  useExtensionDebugging,
+  useExtensionSidePanel,
+} from "../components/extensions/extension-side-panel.js";
+import { ExtensionToolbar } from "../components/extensions/extension-toolbar.js";
+import { FindBar, type FindResult } from "../components/find-bar.js";
+import { PageDialogLayer } from "../components/page-dialog.js";
+import { PageMenu } from "../components/page-menu.js";
 import { usePasswordAutofill } from "../components/password-autofill.js";
 import {
   type PasswordDraft,
@@ -24,13 +56,24 @@ import {
   PasswordPrompt,
   type PasswordPromptState,
 } from "../components/password-prompt.js";
+import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
+import {
+  moveFocusAsApp,
+  notePagePress,
+  personInputCount,
+  personMovedOn,
+} from "../lib/app-focus.js";
 import {
   type Bookmark,
   type BookmarksData,
   desktopApi,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { setPageDialogWaiting } from "../lib/page-dialogs.js";
+import { pageThemeCss } from "../lib/page-theme.js";
+import { pointerMoved } from "../lib/pointer-moved.js";
+import { useTheme } from "../lib/theme.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -43,10 +86,8 @@ interface WebviewElement extends HTMLElement {
   loadURL: (url: string) => Promise<void>;
   getURL: () => string;
   getTitle: () => string;
-  canGoBack: () => boolean;
-  canGoForward: () => boolean;
-  goBack: () => void;
-  goForward: () => void;
+  canGoToOffset: (offset: number) => boolean;
+  goToOffset: (offset: number) => void;
   reload: () => void;
   reloadIgnoringCache: () => void;
   stop: () => void;
@@ -54,6 +95,13 @@ interface WebviewElement extends HTMLElement {
   send: (channel: string, payload: unknown) => void;
   getWebContentsId: () => number;
   getZoomFactor: () => number;
+  findInPage: (
+    text: string,
+    options: { forward?: boolean; findNext?: boolean },
+  ) => number;
+  stopFindInPage: (
+    action: "clearSelection" | "keepSelection" | "activateSelection",
+  ) => void;
 }
 
 export interface BrowserCommands {
@@ -62,12 +110,28 @@ export interface BrowserCommands {
   reloadIgnoringCache: () => void;
   back: () => void;
   forward: () => void;
+  /** Opens the page's find bar, or focuses it when open. */
+  find: () => void;
+  findNext: () => void;
+  findPrevious: () => void;
+  /** What keeps the page awake, or null when it may sleep (ADR 0194). */
+  sleepBlocker: () => Promise<BrowserSleepBlocker | null>;
+  /**
+   * Ask the page whether its tab may close: its beforeunload may hold it
+   * with "Leave site?" (ADR 0227). Resolves false when the person stays.
+   */
+  mayClose: (options?: { preserve: boolean }) => Promise<boolean>;
+  /** A wider close was cancelled: this retained page is usable again. */
+  cancelClose: () => Promise<void>;
+  closeApproved: () => Promise<boolean>;
 }
 
 export interface BrowserPageState {
   url: string;
   title: string;
   faviconUrl: string | null;
+  /** Present when read: the tab's back and forward list, or null for none. */
+  history?: BrowserHistory | null;
 }
 
 /** "cnn.com" → https URL; anything not URL-shaped becomes a search. */
@@ -83,7 +147,7 @@ export function resolveInput(raw: string): string {
   ) {
     return `https://${input}`;
   }
-  if (input === "localhost" || /^localhost:\d+/.test(input)) {
+  if (/^localhost(:\d+)?(\/\S*)?$/i.test(input)) {
     return `http://${input}`;
   }
   return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
@@ -99,23 +163,35 @@ interface Suggestion {
 
 /** Matches the `tab-in` keyframe duration in styles.css. */
 const TAB_OPEN_ANIMATION_MS = 200;
+/** A page that neither closes nor asks within this is stuck: it closes. */
+const CLOSE_ASK_MS = 2_000;
+/** An opening toolbar may arrive over several frames, never indefinitely. */
+const ADDRESS_FOCUS_WAIT_MS = 1500;
 
 /**
- * Match bookmarks by normalized URL so "example.com" and "example.com/"
- * (or a trailing #fragment) are the same page — otherwise the star reads
- * as unstarred right after starring.
+ * Tell main what is about to leave the page, before it does: a page whose
+ * beforeunload holds it asks "Leave site?", and Leave does it again (ADR
+ * 0227).
  */
-function sameUrl(a: string, b: string): boolean {
-  const normalize = (raw: string) => {
-    try {
-      const url = new URL(raw);
-      url.hash = "";
-      return url.href.replace(/\/$/, "");
-    } catch {
-      return raw.replace(/\/$/, "");
-    }
-  };
-  return normalize(a) === normalize(b);
+function announceLeaving(view: WebviewElement, intent: UnloadIntent): void {
+  try {
+    desktopApi.browserUnloadIntent({
+      guestId: view.getWebContentsId(),
+      intent,
+    });
+  } catch {
+    // Not attached yet: there is no page to leave.
+  }
+}
+
+/** Step the page back or forward through its history, as the tab asks. */
+function stepHistory(view: WebviewElement, direction: "back" | "forward") {
+  // Chromium's back/forward UI can skip entries made without a gesture,
+  // including autoplayed videos. An explicit offset keeps each visit reachable.
+  const offset = direction === "back" ? -1 : 1;
+  if (!view.canGoToOffset(offset)) return;
+  announceLeaving(view, { kind: direction });
+  view.goToOffset(offset);
 }
 
 export function BrowserScreen({
@@ -123,10 +199,14 @@ export function BrowserScreen({
   projectId,
   projectName,
   initialUrl,
+  history,
+  incognito = false,
+  surfaceKey,
   active,
   toolbarActive = active,
   visible = active,
   keepAwake = false,
+  asleep = false,
   integratedToolbar = false,
   toolbarHost,
   sidebarToolbar = false,
@@ -134,6 +214,7 @@ export function BrowserScreen({
   onRevealToolbar,
   onStateChange,
   onPageClose,
+  onPagePress,
   registerNavigate,
   registerHistoryNavigate,
   registerGuest,
@@ -145,6 +226,8 @@ export function BrowserScreen({
   onUnsplit,
   onOpenSiteSettings,
   onOpenPasswords,
+  onOpenExtensions,
+  onOpenUrl,
 }: {
   profileId: string;
   /** Null only for a temporary profile browser before its first project. */
@@ -152,6 +235,21 @@ export function BrowserScreen({
   /** Names the project in the profile's history (ADR 0154). */
   projectName?: string;
   initialUrl: string;
+  /**
+   * The tab's saved back and forward list (a reopened or restored tab): a
+   * fresh guest takes it instead of loading `initialUrl`.
+   */
+  history?: BrowserHistory;
+  /**
+   * The page lives in the profile's incognito session (ADR 0303): it
+   * records no history and runs no extensions.
+   */
+  incognito?: boolean;
+  /**
+   * The tab's workspace key, on its toolbar wherever that renders, so a
+   * press there is known to belong to this browser (ADR 0188).
+   */
+  surfaceKey: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
   /** Keep the anchor page's toolbar available behind a floating panel. */
@@ -163,6 +261,12 @@ export function BrowserScreen({
    * the page regardless of what the user is looking at).
    */
   keepAwake?: boolean;
+  /**
+   * Unload the page to free its memory (ADR 0194); it loads again, at
+   * the same place, when this turns false. A tab that starts asleep loads
+   * only once woken.
+   */
+  asleep?: boolean;
   integratedToolbar?: boolean;
   toolbarHost?: HTMLElement | null;
   sidebarToolbar?: boolean;
@@ -171,12 +275,21 @@ export function BrowserScreen({
   onStateChange: (state: BrowserPageState) => void;
   /** The page closed itself (`window.close()`); the tab should go too. */
   onPageClose?: () => void;
+  /**
+   * The person pressed inside the page. The press never reaches the host's
+   * DOM, so this is how the pane holding the page learns it was clicked.
+   */
+  onPagePress?: () => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /** Opens the site settings modal for the page's origin (toolbar gear). */
   onOpenSiteSettings?: (origin: string) => void;
   /** Opens the Passwords page ("Manage passwords"). */
   onOpenPasswords?: () => void;
+  /** Opens the Extensions page (ADR 0203). */
+  onOpenExtensions?: () => void;
+  /** Opens a page in a new tab (the Chrome Web Store from extension UI). */
+  onOpenUrl?: (url: string) => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
   /** Hands the host back/forward navigation for actions and mouse buttons. */
@@ -208,6 +321,8 @@ export function BrowserScreen({
   previewLinksRef.current = previewLinksWithAlt;
   const onPreviewLinkRef = useRef(onPreviewLink);
   onPreviewLinkRef.current = onPreviewLink;
+  const onPagePressRef = useRef(onPagePress);
+  onPagePressRef.current = onPagePress;
   useEffect(() => {
     if (guestReadyRef.current)
       webviewRef.current?.send(
@@ -216,6 +331,11 @@ export function BrowserScreen({
       );
   }, [previewLinksWithAlt]);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const cancelAddressFocus = useRef<(() => void) | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!active) cancelAddressFocus.current?.();
+  }, [active]);
+  useLayoutEffect(() => () => cancelAddressFocus.current?.(), []);
   const [partition, setPartition] = useState<string>();
   const [preloadPath, setPreloadPath] = useState<string>();
   // Empty initialUrl = a fresh "New Tab": no webview until the first
@@ -234,6 +354,18 @@ export function BrowserScreen({
   // (Electron's oldest webview wart) and a crashed/never-attached guest
   // can only be revived by replacing the element.
   const [webviewNonce, setWebviewNonce] = useState(0);
+  // A guest with a saved history is created from it (see
+  // browserHistorySource) instead of from its URL, so it can still go back.
+  // Fixed per guest: a webview navigates whenever its src changes, and the
+  // history changes with every page.
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  // Read by the guest's listeners, which attach once per guest.
+  const incognitoRef = useRef(incognito);
+  incognitoRef.current = incognito;
+  const [historySource, setHistorySource] = useState(() =>
+    history ? browserHistorySource(history) : null,
+  );
   const pageUrlRef = useRef(pageUrl);
   pageUrlRef.current = pageUrl;
   // Navigations issued before the guest can accept them (not yet
@@ -264,6 +396,125 @@ export function BrowserScreen({
   );
   const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
   const pageAreaRef = useRef<HTMLDivElement | null>(null);
+  // What the page waits on (ADR 0227): alert, confirm, prompt, Leave site?
+  // and sign-ins, shown over the page one at a time.
+  const [dialogs, setShownDialogs] = useState<PageDialog[]>([]);
+  const dialogsRef = useRef(dialogs);
+  dialogsRef.current = dialogs;
+  // Answered here and on their way to main: a list main sent meanwhile
+  // must not bring them back.
+  const answeredRef = useRef(new Set<string>());
+  const setDialogs = useCallback((list: PageDialog[]) => {
+    const answered = answeredRef.current;
+    for (const id of answered)
+      if (!list.some((dialog) => dialog.id === id)) answered.delete(id);
+    setShownDialogs(list.filter((dialog) => !answered.has(dialog.id)));
+  }, []);
+  const [dialogFocus, setDialogFocus] = useState(0);
+  /** Closing the tab, waiting on the page's beforeunload. */
+  const closeWaitRef = useRef<((leave: boolean) => void) | null>(null);
+  const closeRequestRef = useRef<{ guestId: number; requestId: string } | null>(
+    null,
+  );
+
+  // Find in page, as Chrome's find bar does it. The query stays with the
+  // tab for the next opening; a count belongs to the latest request only.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findResult, setFindResult] = useState<FindResult | null>(null);
+  const [findFocus, setFindFocus] = useState(0);
+  const findRequestRef = useRef(0);
+  const findQueryRef = useRef(findQuery);
+  findQueryRef.current = findQuery;
+  const findOpenRef = useRef(findOpen);
+  findOpenRef.current = findOpen;
+  /** A new text starts a new search; a step moves through its matches. */
+  const search = useCallback((text: string, step?: "next" | "previous") => {
+    const view = webviewRef.current;
+    if (!view || !guestReadyRef.current) return;
+    if (!text) {
+      findRequestRef.current = 0;
+      setFindResult(null);
+      view.stopFindInPage("clearSelection");
+      return;
+    }
+    findRequestRef.current = view.findInPage(
+      text,
+      step ? { forward: step === "next", findNext: false } : { findNext: true },
+    );
+  }, []);
+  const openFind = useCallback(() => {
+    if (!webviewRef.current || !guestReadyRef.current) return;
+    // Reopening searches again for the query it kept, as Chrome does; a
+    // first opening has none, and leaves the page's selection alone.
+    if (!findOpenRef.current && findQueryRef.current)
+      search(findQueryRef.current);
+    setFindOpen(true);
+    setFindFocus((request) => request + 1);
+  }, [search]);
+  const stepFind = useCallback(
+    (direction: "next" | "previous") => {
+      if (!findOpenRef.current || !findQueryRef.current) openFind();
+      else search(findQueryRef.current, direction);
+    },
+    [openFind, search],
+  );
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindResult(null);
+    findRequestRef.current = 0;
+    const view = webviewRef.current;
+    if (!view || !guestReadyRef.current) return;
+    // The current match stays selected, and the page takes focus back.
+    view.stopFindInPage("keepSelection");
+    view.focus();
+  }, []);
+  const findCommandsRef = useRef({ openFind, stepFind });
+  findCommandsRef.current = { openFind, stepFind };
+  // Find, back and forward reach the page first (see preload/webview.ts),
+  // which asks for them as each document starts.
+  const pageKeys = useMemo(
+    () => ({
+      find: keybindings.find,
+      "find-next": keybindings["find-next"],
+      "find-previous": keybindings["find-previous"],
+      "browser-back": keybindings["browser-back"],
+      "browser-forward": keybindings["browser-forward"],
+    }),
+    [
+      keybindings.find,
+      keybindings["find-next"],
+      keybindings["find-previous"],
+      keybindings["browser-back"],
+      keybindings["browser-forward"],
+    ],
+  );
+  const pageKeysRef = useRef(pageKeys);
+  pageKeysRef.current = pageKeys;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:page-keys", pageKeys);
+  }, [pageKeys]);
+  // Voice's keys: the page swallows them, and the main process hears them
+  // go down and up (ADR 0236).
+  const voiceKeys = VOICE_ACTIONS.map((action) => keybindings[action])
+    .filter(Boolean)
+    .join("\n");
+  const voiceKeysRef = useRef(voiceKeys);
+  voiceKeysRef.current = voiceKeys;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:voice-keys", voiceKeys);
+  }, [voiceKeys]);
+  // Selected text and find matches take the theme's accent (lib/page-theme).
+  const theme = useTheme();
+  const pageCss = theme ? pageThemeCss(theme) : "";
+  const pageCssRef = useRef(pageCss);
+  pageCssRef.current = pageCss;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:page-theme", pageCss);
+  }, [pageCss]);
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.
@@ -303,7 +554,7 @@ export function BrowserScreen({
     let retryTimer: number | undefined;
     const prepare = (attempt: number) => {
       void Promise.all([
-        desktopApi.browserPrepareProfile(profileId),
+        desktopApi.browserPrepareProfile(profileId, incognito),
         desktopApi.webviewPreloadPath(),
       ])
         .then(([resolvedPartition, preload]) => {
@@ -325,10 +576,12 @@ export function BrowserScreen({
       cancelled = true;
       window.clearTimeout(retryTimer);
     };
-  }, [profileId]);
+  }, [profileId, incognito]);
 
   const registerGuestRef = useRef(registerGuest);
   registerGuestRef.current = registerGuest;
+  // The page's guest, which extensions know as this tab (ADR 0203).
+  const [guestId, setGuestId] = useState<number | null>(null);
 
   /**
    * Replace the <webview> element with a fresh one pointed at the latest
@@ -348,6 +601,11 @@ export function BrowserScreen({
     }
     guestReadyRef.current = false;
     const target = pendingUrlRef.current ?? pageUrlRef.current ?? null;
+    // The replacement keeps the way back unless a navigation was waiting.
+    const saved = historyRef.current;
+    setHistorySource(
+      !pendingUrlRef.current && saved ? browserHistorySource(saved) : null,
+    );
     pendingUrlRef.current = null;
     if (target) {
       setFirstUrl(target);
@@ -356,6 +614,73 @@ export function BrowserScreen({
     setWebviewNonce((nonce) => nonce + 1);
   }, []);
   const attachWatchdogRef = useRef<number | undefined>(undefined);
+
+  // Asleep, the tab has no guest at all. Main keeps the page's state when
+  // it sleeps; the wake builds a fresh guest from it, or from the tab's
+  // saved history when there is none.
+  const [slept, setSlept] = useState(asleep);
+  const wakeSourceRef = useRef<string | null>(null);
+  const snapshotRef = useRef<string | null>(null);
+  // A tab closed in its sleep never claims what main kept for it.
+  useEffect(
+    () => () => {
+      const snapshotId = snapshotRef.current;
+      if (snapshotId) void desktopApi.browserSleepRelease({ snapshotId });
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!asleep) {
+      if (!slept) return;
+      recoveriesRef.current = 0;
+      guestReadyRef.current = false;
+      setLoadError(null);
+      const saved = historyRef.current;
+      setHistorySource(
+        wakeSourceRef.current ?? (saved ? browserHistorySource(saved) : null),
+      );
+      wakeSourceRef.current = null;
+      snapshotRef.current = null;
+      if (pageUrlRef.current) setFirstUrl(pageUrlRef.current);
+      setWebviewNonce((nonce) => nonce + 1);
+      setSlept(false);
+      return;
+    }
+    if (slept) return;
+    let cancelled = false;
+    let guestId: number | null = null;
+    try {
+      guestId = guestReadyRef.current
+        ? (webviewRef.current?.getWebContentsId() ?? null)
+        : null;
+    } catch {
+      guestId = null;
+    }
+    void (
+      guestId === null
+        ? Promise.resolve(null)
+        : desktopApi.browserSleep({ guestId }).catch(() => null)
+    ).then((snapshot) => {
+      if (cancelled) {
+        if (snapshot)
+          void desktopApi.browserSleepRelease({ snapshotId: snapshot });
+        return;
+      }
+      snapshotRef.current = snapshot;
+      const saved = historyRef.current;
+      wakeSourceRef.current = snapshot
+        ? browserWakeSource(
+            snapshot,
+            saved ? browserHistorySource(saved) : pageUrlRef.current,
+          )
+        : null;
+      setLoading(false);
+      setSlept(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [asleep, slept]);
 
   const guestListenersRef = useRef<AbortController | null>(null);
   const attachWebview = useCallback(
@@ -368,6 +693,13 @@ export function BrowserScreen({
         window.clearTimeout(attachWatchdogRef.current);
         guestReadyRef.current = false;
         registerGuestRef.current?.(null);
+        setGuestId(null);
+        // A page's dialogs go with it.
+        setDialogs([]);
+        closeWaitRef.current?.(true);
+        // A find belongs to the guest it searched.
+        setFindOpen(false);
+        setFindResult(null);
         return;
       }
       const listeners = new AbortController();
@@ -384,6 +716,22 @@ export function BrowserScreen({
         window.clearTimeout(attachWatchdogRef.current);
       };
       listen("did-attach", markAlive);
+      // What the page already waits on (it may ask before it is ready).
+      const readDialogs = () => {
+        let id: number;
+        try {
+          id = view.getWebContentsId();
+        } catch {
+          return;
+        }
+        void desktopApi
+          .pageDialogs({ guestId: id })
+          .then((list) => {
+            if (!listeners.signal.aborted) setDialogs(list);
+          })
+          .catch(() => {});
+      };
+      listen("did-attach", readDialogs);
       listen("did-start-loading", markAlive);
       // A navigation ends any swipe cue, whichever page started it.
       listen("did-start-loading", () => setSwipe(null));
@@ -397,7 +745,11 @@ export function BrowserScreen({
       // done) leaves a dead guest behind: a blank view that keeps focus
       // and swallows every shortcut, Cmd+W included. Chrome closes the
       // tab; so do we.
-      listen("close", () => onPageCloseRef.current?.());
+      listen("close", () => {
+        // Asked to close (Cmd+W), the page let its tab go.
+        if (closeWaitRef.current) closeWaitRef.current(true);
+        else onPageCloseRef.current?.();
+      });
       listen("did-fail-load", ((event: CustomEvent) => {
         const { errorCode, errorDescription, validatedURL, isMainFrame } =
           event as unknown as {
@@ -418,7 +770,9 @@ export function BrowserScreen({
         markAlive();
         guestReadyRef.current = true;
         try {
-          registerGuestRef.current?.(view.getWebContentsId());
+          const id = view.getWebContentsId();
+          registerGuestRef.current?.(id);
+          setGuestId(id);
         } catch {
           // Guest detached between events; the next dom-ready re-reports.
         }
@@ -431,6 +785,9 @@ export function BrowserScreen({
             previewLinksRef.current,
           );
           view.send("catamorphic:floating-preview", floatingBindingRef.current);
+          view.send("catamorphic:page-keys", pageKeysRef.current);
+          view.send("catamorphic:voice-keys", voiceKeysRef.current);
+          view.send("catamorphic:page-theme", pageCssRef.current);
         } catch {
           // Guest gone mid-call; the next dom-ready re-sends.
         }
@@ -465,8 +822,32 @@ export function BrowserScreen({
           return;
         }
         if (autofillMessageRef.current(message.channel, message.args)) return;
+        if (message.channel === "catamorphic:page-press") {
+          notePagePress();
+          onPagePressRef.current?.();
+          return;
+        }
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
+          return;
+        }
+        if (message.channel === "catamorphic:page-keys-wanted") {
+          try {
+            view.send("catamorphic:page-keys", pageKeysRef.current);
+            view.send("catamorphic:voice-keys", voiceKeysRef.current);
+          } catch {
+            // Guest gone mid-call; its dom-ready re-sends.
+          }
+          return;
+        }
+        if (message.channel === "catamorphic:page-key") {
+          const action = message.args[0];
+          if (action === "find") findCommandsRef.current.openFind();
+          if (action === "find-next") findCommandsRef.current.stepFind("next");
+          if (action === "find-previous")
+            findCommandsRef.current.stepFind("previous");
+          if (action === "browser-back") stepHistory(view, "back");
+          if (action === "browser-forward") stepHistory(view, "forward");
           return;
         }
         if (message.channel === "catamorphic:browser-swipe") {
@@ -477,8 +858,8 @@ export function BrowserScreen({
           setSwipe(
             payload.direction &&
               (payload.direction === "back"
-                ? view.canGoBack()
-                : view.canGoForward())
+                ? view.canGoToOffset(-1)
+                : view.canGoToOffset(1))
               ? { direction: payload.direction, progress: payload.progress }
               : null,
           );
@@ -490,13 +871,13 @@ export function BrowserScreen({
           payload && typeof payload === "object" && "direction" in payload
             ? payload.direction
             : undefined;
-        if (direction === "back" && view.canGoBack()) view.goBack();
-        if (direction === "forward" && view.canGoForward()) view.goForward();
+        if (direction === "back" || direction === "forward")
+          stepHistory(view, direction);
       }) as EventListener);
 
       const sync = () => {
-        setCanGoBack(view.canGoBack());
-        setCanGoForward(view.canGoForward());
+        setCanGoBack(view.canGoToOffset(-1));
+        setCanGoForward(view.canGoToOffset(1));
       };
       const report = (patch: Partial<BrowserPageState>) => {
         onStateChangeRef.current({
@@ -506,14 +887,56 @@ export function BrowserScreen({
           ...patch,
         });
       };
+      // The back and forward list, read a beat after the page settles, so
+      // closing the tab (or the app) keeps the way back.
+      let historyTimer: number | undefined;
+      const readHistory = () => {
+        window.clearTimeout(historyTimer);
+        historyTimer = window.setTimeout(() => {
+          let guestId: number;
+          try {
+            guestId = view.getWebContentsId();
+          } catch {
+            return;
+          }
+          void desktopApi
+            .browserNavigationHistory({ guestId })
+            .then((read) => {
+              if (!listeners.signal.aborted) report({ history: read });
+            })
+            .catch(() => {});
+        }, 300);
+      };
+      listeners.signal.addEventListener("abort", () =>
+        window.clearTimeout(historyTimer),
+      );
 
-      listen("did-start-loading", () => {
-        setLoading(true);
-        setLoadError(null);
-      });
+      // A failed page stays until another page commits in its place (or
+      // fails in turn), as Chrome's error page does: clearing it as a retry
+      // starts showed Chromium's white error page under it until then.
+      listen("did-start-loading", () => setLoading(true));
       listen("did-stop-loading", () => setLoading(false));
+      listen("found-in-page", ((event: CustomEvent) => {
+        const { result } = event as unknown as {
+          result: {
+            requestId: number;
+            activeMatchOrdinal: number;
+            matches: number;
+          };
+        };
+        if (result.requestId !== findRequestRef.current) return;
+        setFindResult({
+          active: result.activeMatchOrdinal,
+          matches: result.matches,
+        });
+      }) as EventListener);
       listen("did-navigate", ((event: CustomEvent) => {
         const { url } = event as unknown as { url: string };
+        setLoadError(null);
+        // Another page ends the find, as in Chrome; the query stays.
+        setFindOpen(false);
+        setFindResult(null);
+        findRequestRef.current = 0;
         setPageUrl(url);
         setInputValue(url);
         // A save offer rides out the sign-in's redirects (a login on
@@ -522,11 +945,13 @@ export function BrowserScreen({
         closeAutofillRef.current();
         sync();
         report({ url });
-        void desktopApi.browserRecordHistory({
-          url,
-          title: view.getTitle() || url,
-          project: historyProjectRef.current,
-        });
+        readHistory();
+        if (!incognitoRef.current)
+          void desktopApi.browserRecordHistory({
+            url,
+            title: view.getTitle() || url,
+            project: historyProjectRef.current,
+          });
       }) as EventListener);
       listen("did-navigate-in-page", ((event: CustomEvent) => {
         const { url, isMainFrame } = event as unknown as {
@@ -538,27 +963,31 @@ export function BrowserScreen({
         setInputValue(url);
         sync();
         report({ url });
-        void desktopApi.browserRecordHistory({
-          url,
-          title: view.getTitle() || url,
-          project: historyProjectRef.current,
-        });
+        readHistory();
+        if (!incognitoRef.current)
+          void desktopApi.browserRecordHistory({
+            url,
+            title: view.getTitle() || url,
+            project: historyProjectRef.current,
+          });
       }) as EventListener);
       listen("page-title-updated", ((event: CustomEvent) => {
         const { title } = event as unknown as { title: string };
         pageTitleRef.current = title;
         report({ title });
-        void desktopApi.browserRetitleHistory({
-          url: view.getURL(),
-          title,
-        });
+        readHistory();
+        if (!incognitoRef.current)
+          void desktopApi.browserRetitleHistory({
+            url: view.getURL(),
+            title,
+          });
       }) as EventListener);
       listen("page-favicon-updated", ((event: CustomEvent) => {
         const { favicons } = event as unknown as { favicons: string[] };
         const nextFavicon = favicons[0] ?? null;
         setFaviconUrl(nextFavicon);
         report({ faviconUrl: nextFavicon });
-        if (nextFavicon) {
+        if (nextFavicon && !incognitoRef.current) {
           void desktopApi.browserSetHistoryFavicon({
             url: view.getURL(),
             faviconUrl: nextFavicon,
@@ -566,7 +995,7 @@ export function BrowserScreen({
         }
       }) as EventListener);
     },
-    [remountWebview],
+    [remountWebview, setDialogs],
   );
 
   useEffect(() => {
@@ -596,6 +1025,149 @@ export function BrowserScreen({
       stopSaved();
     };
   }, []);
+
+  // The page's dialogs, as main changes them.
+  useEffect(
+    () =>
+      desktopApi.onPageDialogs((change) => {
+        let own = false;
+        try {
+          own = webviewRef.current?.getWebContentsId() === change.guestId;
+        } catch {
+          own = false;
+        }
+        if (own) setDialogs(change.dialogs);
+      }),
+    [setDialogs],
+  );
+  // A tab out of sight still shows that its page waits.
+  const waiting = dialogs.length > 0;
+  useEffect(() => {
+    setPageDialogWaiting(surfaceKey, waiting);
+  }, [surfaceKey, waiting]);
+  useEffect(() => () => setPageDialogWaiting(surfaceKey, false), [surfaceKey]);
+  // "Leave site?" gone without leaving (Cancel, an agent's answer, taken
+  // back): the address shows the page that stayed, not where it was going.
+  const holding = dialogs.some((dialog) => dialog.kind === "beforeunload");
+  const heldRef = useRef(false);
+  useEffect(() => {
+    if (heldRef.current && !holding) {
+      try {
+        const url = webviewRef.current?.getURL();
+        if (url) setPageUrl(url);
+      } catch {
+        // The page went with its tab.
+      }
+    }
+    heldRef.current = holding;
+  }, [holding]);
+  const answerDialog = useCallback(
+    (answer: PageDialogAnswer, hadFocus: boolean) => {
+      const rest = dialogsRef.current.filter(
+        (dialog) => dialog.id !== answer.id,
+      );
+      answeredRef.current.add(answer.id);
+      setShownDialogs(rest);
+      // Main refused the answer (or never got it): the dialog comes back
+      // as main has it, rather than staying hidden over a waiting page.
+      const reread = () => {
+        answeredRef.current.delete(answer.id);
+        let guestId: number;
+        try {
+          guestId = webviewRef.current?.getWebContentsId() ?? -1;
+        } catch {
+          return;
+        }
+        void desktopApi
+          .pageDialogs({ guestId })
+          .then(setDialogs)
+          .catch(() => {});
+      };
+      void desktopApi.pageDialogAnswer(answer).then((taken) => {
+        if (!taken) reread();
+      }, reread);
+      // Focus goes back to the page, unless another dialog takes it.
+      if (hadFocus && rest.length === 0) webviewRef.current?.focus();
+    },
+    [setDialogs],
+  );
+  const mayClose = useCallback(
+    async (options?: { preserve: boolean }): Promise<boolean> => {
+      const view = webviewRef.current;
+      if (!view || !guestReadyRef.current) return true;
+      let id: number;
+      try {
+        id = view.getWebContentsId();
+      } catch {
+        return true;
+      }
+      // Already asking: that question decides.
+      if (closeWaitRef.current) return false;
+      const preserve = options?.preserve === true;
+      const request = { guestId: id, requestId: crypto.randomUUID(), preserve };
+      closeRequestRef.current = request;
+      return new Promise<boolean>((resolve) => {
+        let timer: number | undefined;
+        let stopAnswers = () => {};
+        const finish = (leave: boolean) => {
+          if (closeWaitRef.current !== finish) return;
+          closeWaitRef.current = null;
+          window.clearTimeout(timer);
+          stopAnswers();
+          resolve(leave);
+        };
+        closeWaitRef.current = finish;
+        stopAnswers = desktopApi.onBrowserCloseAnswer((answer) => {
+          if (answer.guestId === id && answer.requestId === request.requestId)
+            finish(answer.leave);
+        });
+        desktopApi.browserCloseAsk(request).then(
+          (ask) => {
+            if (ask === "close") {
+              finish(true);
+              return;
+            }
+            if (ask === "cancel") {
+              finish(false);
+              return;
+            }
+            if (closeWaitRef.current !== finish) return;
+            // Silence is not approval: a group must retain every guest if
+            // preparation or its native check cannot complete.
+            timer = window.setTimeout(() => {
+              if (!dialogsRef.current.some((d) => d.kind === "beforeunload"))
+                finish(!preserve);
+            }, CLOSE_ASK_MS);
+          },
+          () => finish(!preserve),
+        );
+      });
+    },
+    [],
+  );
+  const cancelClose = useCallback(async () => {
+    const request = closeRequestRef.current;
+    if (!request) return;
+    closeRequestRef.current = null;
+    closeWaitRef.current?.(false);
+    try {
+      await desktopApi.browserCloseCancel(request);
+    } catch {
+      // Removed or replaced meanwhile: the native guest owns its cleanup.
+    }
+  }, []);
+  const closeApproved = useCallback(async () => {
+    const request = closeRequestRef.current;
+    if (!request) return !guestReadyRef.current;
+    try {
+      return await desktopApi.browserCloseApproved(request);
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const sidePanel = useExtensionSidePanel(guestId);
+  const debugging = useExtensionDebugging(guestId);
 
   const autofill = usePasswordAutofill({
     profileId,
@@ -664,13 +1236,20 @@ export function BrowserScreen({
   const navigate = useCallback(
     (raw: string) => {
       if (!raw.trim()) return;
+      // Chrome's address for its extensions page opens Work's.
+      if (/^chrome:\/\/extensions\/?$/i.test(raw.trim()) && onOpenExtensions) {
+        setEditing(false);
+        setSuggestions([]);
+        setInputValue(pageUrl);
+        onOpenExtensions();
+        return;
+      }
       const url = resolveInput(raw);
       recoveriesRef.current = 0;
       setEditing(false);
       setSuggestions([]);
       setPageUrl(url);
       setInputValue(url);
-      setLoadError(null);
       // Going somewhere else answers an open save offer with "not now".
       dismissPasswordPrompt();
       if (firstUrl === null) {
@@ -687,12 +1266,16 @@ export function BrowserScreen({
         pendingUrlRef.current = url;
         return;
       }
-      void view.loadURL(url).catch(() => {
+      announceLeaving(view, { kind: "navigate", url });
+      void view.loadURL(url).catch((error: unknown) => {
+        // A page that held on (beforeunload) keeps the tab: "Leave site?"
+        // goes on to the address if the person leaves, never later.
+        if (guestReadyRef.current && /ERR_ABORTED/.test(String(error))) return;
         pendingUrlRef.current = url;
       });
       view.focus();
     },
-    [firstUrl, dismissPasswordPrompt],
+    [firstUrl, dismissPasswordPrompt, onOpenExtensions, pageUrl],
   );
 
   const registerNavigateRef = useRef(registerNavigate);
@@ -705,25 +1288,59 @@ export function BrowserScreen({
   revealToolbarRef.current = onRevealToolbar;
   // Cmd+L from the app (renderer keydown) and from inside page content
   // (forwarded by main via before-input-event on the guest).
-  const focusAddress = useCallback(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    const focus = () => {
-      setEditing(true);
-      input.focus();
-      input.select();
-    };
-    if (sidebarToolbar) {
-      revealToolbarRef.current?.();
-      requestAnimationFrame(focus);
-    } else focus();
-  }, [sidebarToolbar]);
+  const focusAddress = useCallback(
+    ({ greetingSince }: { greetingSince?: number | null } = {}) => {
+      cancelAddressFocus.current?.();
+      const greeting = greetingSince !== undefined;
+      const inputs = greeting ? greetingSince : personInputCount();
+      const started = performance.now();
+      let frame = 0;
+      let cancelled = false;
+      cancelAddressFocus.current = () => {
+        cancelled = true;
+        cancelAnimationFrame(frame);
+      };
+      const focus = () => {
+        // A greeting answers what brought the tab forward: not once the
+        // person has acted since, even a frame later. It is the app's own
+        // move, so a chat about to focus its composer keeps doing so.
+        if (
+          cancelled ||
+          performance.now() - started > ADDRESS_FOCUS_WAIT_MS ||
+          personMovedOn(inputs ?? null)
+        )
+          return;
+        // Opening the sidebar needs a React commit and motion state. Read
+        // the current field each time: a portal may have moved meanwhile.
+        const input = inputRef.current;
+        if (
+          input?.isConnected &&
+          !input.closest("[inert], [hidden]") &&
+          input.checkVisibility({ visibilityProperty: true })
+        ) {
+          const move = () => {
+            setEditing(true);
+            input.focus();
+            input.select();
+          };
+          if (greeting) moveFocusAsApp(move);
+          else move();
+          if (document.activeElement === input) return;
+        }
+        frame = requestAnimationFrame(focus);
+      };
+      if (sidebarToolbar) revealToolbarRef.current?.();
+      focus();
+    },
+    [sidebarToolbar],
+  );
 
   // Chrome reloads: Cmd+R, Cmd+Shift+R (hard, cache-ignoring).
   const reload = useCallback((hard: boolean) => {
     recoveriesRef.current = 0;
     const view = webviewRef.current;
     if (!view) return;
+    announceLeaving(view, { kind: hard ? "reload-hard" : "reload" });
     if (hard) view.reloadIgnoringCache();
     else view.reload();
   }, []);
@@ -732,9 +1349,7 @@ export function BrowserScreen({
   registerCommandsRef.current = registerCommands;
   const navigateHistory = useCallback((direction: "back" | "forward") => {
     const view = webviewRef.current;
-    if (!view) return;
-    if (direction === "back" && view.canGoBack()) view.goBack();
-    if (direction === "forward" && view.canGoForward()) view.goForward();
+    if (view) stepHistory(view, direction);
   }, []);
 
   const registerHistoryNavigateRef = useRef(registerHistoryNavigate);
@@ -753,34 +1368,74 @@ export function BrowserScreen({
       ) {
         return;
       }
-      if (command.webContentsId === null && !active) return;
+      // A press outside any page is the workspace's to route (ADR 0188).
+      if (command.webContentsId === null) return;
       navigateHistory(command.direction);
     });
-  }, [active, navigateHistory]);
+  }, [navigateHistory]);
 
   useEffect(() => {
     registerCommandsRef.current?.({
       focusAddress,
       reload: () => reload(false),
       reloadIgnoringCache: () => reload(true),
-      back: () => {
+      back: () => navigateHistory("back"),
+      forward: () => navigateHistory("forward"),
+      find: openFind,
+      findNext: () => stepFind("next"),
+      findPrevious: () => stepFind("previous"),
+      mayClose,
+      cancelClose,
+      closeApproved,
+      sleepBlocker: async () => {
         const view = webviewRef.current;
-        if (view?.canGoBack()) view.goBack();
-      },
-      forward: () => {
-        const view = webviewRef.current;
-        if (view?.canGoForward()) view.goForward();
+        if (!view || !guestReadyRef.current) return null;
+        try {
+          return await desktopApi.browserSleepBlocker({
+            guestId: view.getWebContentsId(),
+          });
+        } catch {
+          return null;
+        }
       },
     });
     return () => registerCommandsRef.current?.(null);
-  }, [focusAddress, reload]);
+  }, [
+    focusAddress,
+    reload,
+    openFind,
+    stepFind,
+    navigateHistory,
+    mayClose,
+    cancelClose,
+    closeApproved,
+  ]);
 
-  // A fresh New Tab greets with the address bar focused (Chrome behavior).
+  // A fresh New Tab greets with the address bar focused (Chrome behavior);
+  // a page takes focus as its tab comes forward. Both answer what brought
+  // the tab forward, so neither happens once the person has done something
+  // since (opened a chat over it, say), and both are the app's own moves.
+  const cameForwardAt = useRef<number | null>(null);
+  if (!active) cameForwardAt.current = null;
+  else cameForwardAt.current ??= personInputCount();
+  const firstUrlRef = useRef(firstUrl);
+  firstUrlRef.current = firstUrl;
   useEffect(() => {
-    if (!active) return;
-    if (firstUrl === null) focusAddress();
-    else webviewRef.current?.focus();
-  }, [active, firstUrl, focusAddress]);
+    if (!active || personMovedOn(cameForwardAt.current)) return;
+    if (firstUrlRef.current === null)
+      focusAddress({ greetingSince: cameForwardAt.current });
+    // A page waiting on its dialog hands focus to the dialog.
+    else if (dialogsRef.current.length > 0)
+      setDialogFocus((request) => request + 1);
+    else moveFocusAsApp(() => webviewRef.current?.focus());
+  }, [active, focusAddress]);
+  // A New Tab's first address hands focus to its page, as Enter does.
+  const hadUrl = useRef(firstUrl !== null);
+  useEffect(() => {
+    if (firstUrl === null || hadUrl.current) return;
+    hadUrl.current = true;
+    if (active) webviewRef.current?.focus();
+  }, [firstUrl, active]);
 
   // Follow bookmark changes from anywhere (this star, another tab's star,
   // the sidebar's delete/pin) so the star never drifts from the sidebar.
@@ -818,53 +1473,43 @@ export function BrowserScreen({
 
   // The saved entry for the current page, if any — pinned bookmarks count
   // too, so starring a pinned page doesn't create a project duplicate.
-  const currentBookmark:
-    | (Bookmark & { pinned: boolean; library?: boolean })
-    | undefined = (() => {
-    if (!bookmarks) return undefined;
-    const pinned = bookmarks.pinned.bookmarks.find((entry) =>
-      sameUrl(entry.url, pageUrl),
-    );
-    if (pinned) return { ...pinned, pinned: true };
-    const owned = bookmarks.project.bookmarks.find((entry) =>
-      sameUrl(entry.url, pageUrl),
-    );
-    if (owned) return { ...owned, pinned: false };
-    const saved = bookmarks.library?.bookmarks.find((entry) =>
-      sameUrl(entry.url, pageUrl),
-    );
-    return saved ? { ...saved, pinned: false, library: true } : undefined;
-  })();
+  const currentBookmark: (Bookmark & { scope: BookmarkScope }) | undefined =
+    (() => {
+      if (!bookmarks) return undefined;
+      for (const scope of ["pinned", "project", "library"] as const) {
+        const saved = bookmarks[scope]?.bookmarks.find((entry) =>
+          samePage(entry.url, pageUrl),
+        );
+        if (saved) return { ...saved, scope };
+      }
+      return undefined;
+    })();
 
   const toggleBookmark = () => {
     if (!projectId) return;
+    // A broken bookmarks file refuses changes; Settings names it, and the
+    // star keeps showing what the file holds.
+    const ignore = () => {};
     if (!currentBookmark) {
-      void desktopApi.bookmarksAdd({
-        projectId,
-        profileId,
-        label: pageTitleRef.current || pageUrl,
-        url: pageUrl,
-        faviconUrl: faviconUrl ?? undefined,
-      });
-      return;
-    }
-    void (currentBookmark.library
-      ? desktopApi.bookmarksRemoveLibrary({
+      desktopApi
+        .bookmarksAdd({
           projectId,
           profileId,
-          id: currentBookmark.id,
+          label: pageTitleRef.current || pageUrl,
+          url: pageUrl,
+          faviconUrl: faviconUrl ?? undefined,
         })
-      : currentBookmark.pinned
-        ? desktopApi.bookmarksRemovePinned({
-            projectId,
-            profileId,
-            id: currentBookmark.id,
-          })
-        : desktopApi.bookmarksRemove({
-            projectId,
-            profileId,
-            id: currentBookmark.id,
-          }));
+        .catch(ignore);
+      return;
+    }
+    desktopApi
+      .bookmarksRemove({
+        projectId,
+        profileId,
+        scope: currentBookmark.scope,
+        id: currentBookmark.id,
+      })
+      .catch(ignore);
   };
 
   const updateSuggestions = useCallback(
@@ -882,7 +1527,9 @@ export function BrowserScreen({
       if (seq !== suggestSeq.current) return;
 
       const urlish =
-        /^[\w-]+(\.[\w-]+)+/.test(trimmed) || /^https?:/i.test(trimmed);
+        /^[\w-]+(\.[\w-]+)+/.test(trimmed) ||
+        /^https?:/i.test(trimmed) ||
+        /^localhost(:\d+)?(\/|$)/i.test(trimmed);
       const first: Suggestion = urlish
         ? { kind: "url", label: trimmed, target: trimmed }
         : {
@@ -947,7 +1594,9 @@ export function BrowserScreen({
         event.preventDefault();
         commitSuggestion(suggestion);
       }}
-      onMouseEnter={() => setSelectedIndex(index)}
+      onMouseMove={(event) => {
+        if (pointerMoved(event)) setSelectedIndex(index);
+      }}
       className={`flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] ${
         index === selectedIndex ? "bg-bg-raised text-fg" : "text-fg-muted"
       }`}
@@ -974,7 +1623,7 @@ export function BrowserScreen({
       >
         <button
           type="button"
-          onClick={() => webviewRef.current?.goBack()}
+          onClick={() => navigateHistory("back")}
           disabled={!canGoBack}
           data-disabled-reason="No previous page in this tab"
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
@@ -989,7 +1638,7 @@ export function BrowserScreen({
       >
         <button
           type="button"
-          onClick={() => webviewRef.current?.goForward()}
+          onClick={() => navigateHistory("forward")}
           disabled={!canGoForward}
           data-disabled-reason="No next page in this tab"
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
@@ -1001,9 +1650,7 @@ export function BrowserScreen({
       <ShortcutHint label={loading ? "Stop loading" : "Reload"}>
         <button
           type="button"
-          onClick={() =>
-            loading ? webviewRef.current?.stop() : webviewRef.current?.reload()
-          }
+          onClick={() => (loading ? webviewRef.current?.stop() : reload(false))}
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           aria-label={loading ? "Stop" : "Reload"}
         >
@@ -1022,11 +1669,12 @@ export function BrowserScreen({
   const toolbar = (
     <div
       data-browser-toolbar
+      data-surface-key={surfaceKey}
       className={`app-no-drag relative flex min-w-0 shrink-0 items-center gap-1 ${integratedToolbar ? "h-full flex-1" : "h-10 border-b border-border bg-bg px-2"}`}
     >
       {!sidebarToolbar && navigation}
 
-      <div className="relative min-w-0 flex-1">
+      <div data-address-field className="relative min-w-0 flex-1">
         <input
           ref={inputRef}
           value={displayValue}
@@ -1040,8 +1688,13 @@ export function BrowserScreen({
             setEditing(true);
             setInputValue(pageUrl);
             lastInputLength.current = pageUrl.length;
-            // Chrome selects the full URL on focus.
-            requestAnimationFrame(() => event.target.select());
+            // Chrome selects the full URL on focus, a frame later. select()
+            // also focuses, so only while the address bar still has focus
+            // (a chat opened in that frame keeps its composer).
+            requestAnimationFrame(() => {
+              if (document.activeElement === event.target)
+                event.target.select();
+            });
           }}
           onBlur={() => {
             setEditing(false);
@@ -1086,6 +1739,18 @@ export function BrowserScreen({
         )}
       </div>
 
+      {incognito && (
+        <ShortcutHint label="Incognito: Work keeps no history of this tab, and its cookies and sign-ins go when the last incognito tab closes">
+          <span
+            data-browser-incognito
+            className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+          >
+            <Ghost className="size-3" />
+            Incognito
+          </span>
+        </ShortcutHint>
+      )}
+
       <AuthorizationInspector />
 
       {/* Bookmark star, Chrome-style: filled means saved, click toggles.
@@ -1109,7 +1774,7 @@ export function BrowserScreen({
             aria-pressed={Boolean(currentBookmark)}
           >
             <Star
-              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-standard ${
                 currentBookmark ? "scale-110 fill-current" : "scale-100"
               }`}
             />
@@ -1129,6 +1794,16 @@ export function BrowserScreen({
             <Settings className="size-3.5" />
           </button>
         </ShortcutHint>
+      )}
+      {onOpenExtensions && onOpenUrl && !incognito && (
+        <ExtensionToolbar
+          guestId={guestId}
+          partition={partition}
+          active={toolbarActive}
+          visible={visible || toolbarActive}
+          onOpenExtensions={onOpenExtensions}
+          onOpenUrl={onOpenUrl}
+        />
       )}
       {onUnsplit && (
         <ShortcutHint label="Full width">
@@ -1150,110 +1825,146 @@ export function BrowserScreen({
       {sidebarToolbar &&
         toolbarActive &&
         navigationHost &&
-        createPortal(navigation, navigationHost)}
+        createPortal(
+          <div className="contents" data-surface-key={surfaceKey}>
+            {navigation}
+          </div>,
+          navigationHost,
+        )}
       {integratedToolbar
         ? toolbarActive && toolbarHost && createPortal(toolbar, toolbarHost)
         : toolbar}
 
-      {/* Stay on the app background until the guest actually mounts —
-          flashing white for the pre-mount frames is its own kind of jank. */}
-      <div
-        ref={pageAreaRef}
-        className={`relative min-h-0 flex-1 ${
-          ready && firstUrl ? "bg-white" : "bg-bg"
-        }`}
-      >
-        {ready && firstUrl ? (
-          <webview
-            key={webviewNonce}
-            ref={attachWebview}
-            src={firstUrl}
-            partition={partition}
-            preload={preloadPath}
-            // Chromium's built-in PDF viewer is exposed as a plugin. Local
-            // project PDFs otherwise download or render as raw bytes.
-            // Presence attribute, like allowpopups below: React otherwise
-            // sets the custom element's boolean property back to false.
-            plugins={"" as unknown as boolean}
-            // Without allowpopups the guest can't request windows at all
-            // and the main-process window-open handler (which reroutes
-            // popups into new tabs) never fires.
-            // String, not boolean: React warns on a non-boolean attribute
-            // and webview reads presence/value, not the DOM property.
-            allowpopups={"" as unknown as boolean}
-            className="absolute inset-0"
-            // Required: webview is display:inline-block by default and
-            // collapses to 0×0 inside flex/absolute layouts without this.
-            style={{
-              width: "100%",
-              height: "100%",
-              display: hiddenForGuest ? "none" : "flex",
-            }}
+      {debugging && <ExtensionDebuggingBar debugging={debugging} />}
+      <div className="flex min-h-0 flex-1">
+        {/* The theme's background until the page paints its own, as Chrome
+          does: a page loading (or a guest mounting) never flashes white. */}
+        <div
+          ref={pageAreaRef}
+          className="relative min-h-0 min-w-0 flex-1 bg-bg"
+        >
+          {ready && firstUrl && !slept ? (
+            <webview
+              key={webviewNonce}
+              ref={attachWebview}
+              src={historySource ?? firstUrl}
+              partition={partition}
+              preload={preloadPath}
+              // Chromium's built-in PDF viewer is exposed as a plugin. Local
+              // project PDFs otherwise download or render as raw bytes.
+              // Presence attribute, like allowpopups below: React otherwise
+              // sets the custom element's boolean property back to false.
+              plugins={"" as unknown as boolean}
+              // Without allowpopups the guest can't request windows at all
+              // and the main-process window-open handler (which reroutes
+              // popups into new tabs) never fires.
+              // String, not boolean: React warns on a non-boolean attribute
+              // and webview reads presence/value, not the DOM property.
+              allowpopups={"" as unknown as boolean}
+              className="absolute inset-0"
+              // Required: webview is display:inline-block by default and
+              // collapses to 0×0 inside flex/absolute layouts without this.
+              style={{
+                width: "100%",
+                height: "100%",
+                display: hiddenForGuest ? "none" : "flex",
+              }}
+            />
+          ) : firstUrl ? (
+            <div className="h-full bg-bg" />
+          ) : (
+            <div className="grid h-full place-items-center">
+              <p className="text-sm text-fg-faint">
+                Search or enter an address
+              </p>
+            </div>
+          )}
+          {swipe && (
+            <div
+              aria-hidden="true"
+              data-testid="browser-swipe-indicator"
+              data-direction={swipe.direction}
+              className={`pointer-events-none absolute top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full border shadow-lg transition-colors duration-100 ${
+                swipe.direction === "back" ? "left-3" : "right-3"
+              } ${
+                swipe.progress >= 1
+                  ? "border-accent bg-accent text-accent-fg"
+                  : "border-border bg-bg-overlay text-fg"
+              }`}
+              style={{
+                opacity: Math.min(1, 0.35 + swipe.progress * 0.65),
+                transform: `translateY(-50%) scale(${0.7 + swipe.progress * 0.3})`,
+              }}
+            >
+              {swipe.direction === "back" ? (
+                <ArrowLeft className="size-5" />
+              ) : (
+                <ArrowRight className="size-5" />
+              )}
+            </div>
+          )}
+          {/* Main-frame load failure: a way out instead of a white pane. */}
+          {loadError && (
+            <div className="absolute inset-0 grid place-items-center bg-bg">
+              <div className="max-w-sm text-center">
+                <p className="text-sm text-fg">This page didn’t load.</p>
+                <p className="mt-1 break-all font-mono text-xs text-fg-muted">
+                  {loadError.description}
+                </p>
+                <PendingButton
+                  type="button"
+                  pending={loading}
+                  onClick={() => {
+                    recoveriesRef.current = 0;
+                    remountWebview();
+                  }}
+                  className="button-primary button-sm mt-4"
+                >
+                  <RotateCw className="size-3" />
+                  Try again
+                </PendingButton>
+              </div>
+            </div>
+          )}
+          {autofill.overlay}
+          <PageMenu guest={webviewRef} visible={visible} />
+          <PageDialogLayer
+            dialogs={dialogs}
+            page={webviewRef}
+            active={active}
+            focusRequest={dialogFocus}
+            onAnswer={answerDialog}
           />
-        ) : firstUrl ? (
-          <div className="h-full bg-bg" />
-        ) : (
-          <div className="grid h-full place-items-center">
-            <p className="text-sm text-fg-faint">Search or enter an address</p>
-          </div>
-        )}
-        {swipe && (
-          <div
-            aria-hidden="true"
-            data-testid="browser-swipe-indicator"
-            data-direction={swipe.direction}
-            className={`pointer-events-none absolute top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full border shadow-lg transition-colors duration-100 ${
-              swipe.direction === "back" ? "left-3" : "right-3"
-            } ${
-              swipe.progress >= 1
-                ? "border-accent bg-accent text-accent-fg"
-                : "border-border bg-bg-overlay text-fg"
-            }`}
-            style={{
-              opacity: Math.min(1, 0.35 + swipe.progress * 0.65),
-              transform: `translateY(-50%) scale(${0.7 + swipe.progress * 0.3})`,
-            }}
-          >
-            {swipe.direction === "back" ? (
-              <ArrowLeft className="size-5" />
-            ) : (
-              <ArrowRight className="size-5" />
+          {/* The page's own cards at its top right: the find bar above a
+            password offer, never over it. */}
+          <div className="pointer-events-none absolute right-3 top-3 z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col items-end gap-2">
+            <FindBar
+              open={findOpen}
+              query={findQuery}
+              result={findResult}
+              focusRequest={findFocus}
+              onQueryChange={(query) => {
+                setFindQuery(query);
+                search(query);
+              }}
+              onStep={stepFind}
+              onClose={closeFind}
+            />
+            {passwordPrompt && (
+              <PasswordPrompt
+                state={passwordPrompt}
+                open={passwordPromptOpen}
+                onSave={savePasswordOffer}
+                onNever={neverSavePasswords}
+                onDismiss={dismissPasswordPrompt}
+                onUpdate={() => void updateSavedPassword()}
+                onExited={() => setPasswordPrompt(null)}
+              />
             )}
           </div>
-        )}
-        {/* Main-frame load failure: a way out instead of a white pane. */}
-        {loadError && (
-          <div className="absolute inset-0 grid place-items-center bg-bg">
-            <div className="max-w-sm text-center">
-              <p className="text-sm text-fg">This page didn’t load.</p>
-              <p className="mt-1 break-all font-mono text-xs text-fg-muted">
-                {loadError.description}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  recoveriesRef.current = 0;
-                  remountWebview();
-                }}
-                className="button-primary button-sm mt-4"
-              >
-                <RotateCw className="size-3" />
-                Try again
-              </button>
-            </div>
-          </div>
-        )}
-        {autofill.overlay}
-        {passwordPrompt && (
-          <PasswordPrompt
-            state={passwordPrompt}
-            open={passwordPromptOpen}
-            onSave={savePasswordOffer}
-            onNever={neverSavePasswords}
-            onDismiss={dismissPasswordPrompt}
-            onUpdate={() => void updateSavedPassword()}
-            onExited={() => setPasswordPrompt(null)}
-          />
+        </div>
+        {sidePanel && (
+          <ExtensionSidePanelView panel={sidePanel} partition={partition} />
         )}
       </div>
       {passwordDraft && (

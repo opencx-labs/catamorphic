@@ -81,7 +81,7 @@ export function materializeHostSkills(
 }
 
 const SKILLS_PREAMBLE =
-  "Skills are reusable playbooks invoked by name — when the user asks to \"use the X skill\" (the app's command palette and /commands send exactly that phrasing), or a task matches a skill's description, load the skill and follow it.";
+  "Skills are reusable playbooks invoked by name. When the user asks to \"use the X skill\" (the app's command palette sends exactly that phrasing), or a task matches a skill's description, load the skill and follow it.";
 
 /** A listing line: the name and the description's first sentence. */
 function listing(skills: Array<{ name: string; description: string }>): string {
@@ -159,7 +159,7 @@ export function composeSkillsNote(opts: SkillsNoteOpts): string | undefined {
 
   const userSkills = opts.userSkills ?? [];
   const tiers = [
-    "- Project skills: files in this project under `.catamorphic/skills/<name>/SKILL.md`.",
+    "- Project skills: files in this project under `.work/skills/<name>/SKILL.md`.",
     ...(userSkills.length > 0
       ? [`- The user's personal skills (theirs alone):\n${listing(userSkills)}`]
       : []),

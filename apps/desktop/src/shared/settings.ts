@@ -1,4 +1,9 @@
-import { type AppPrefs, CODE_THEMES, normalizePrefs } from "./app-prefs.js";
+import {
+  type AppPrefs,
+  BROWSER_TAB_SLEEP,
+  CODE_THEMES,
+  normalizePrefs,
+} from "./app-prefs.js";
 import { normalizeTerminalMacros } from "./terminal-macros.js";
 
 export type SettingsScope = "profile" | "project" | "personal";
@@ -47,18 +52,37 @@ export const SETTINGS = {
   chatWorkLive: {
     label: "While the agent works",
     description:
-      "The notes an agent writes between its steps. Earlier notes fold into the steps line when only the latest is shown.",
+      'Notes are what the agent writes between its steps (tool calls and commands). Steps list open under each note as they run. "Notes only" keeps them folded into a line you can open, a single step too, while the agent works and after. "Latest note and steps" moves earlier notes into the steps of the newest one.',
     scopes: profileScope,
-    valid: oneOf("all", "latest"),
-    options: { all: "Show every note", latest: "Show only the latest note" },
+    valid: oneOf("all", "latest", "notes"),
+    options: {
+      all: "Notes and steps",
+      latest: "Latest note and steps",
+      notes: "Notes only",
+    },
   },
   chatWorkSettled: {
     label: "Once it has answered",
     description:
-      "Folded work stays one click away, in order, under the steps line above the answer.",
+      'Steps fold into a line you can open either way (a single step stays in view unless "Notes only" is on). "Fold notes into steps" groups notes, steps and read task updates into one line before the latest answer, including automatic follow-up turns.',
     scopes: profileScope,
     valid: oneOf("keep", "collapse"),
     options: { keep: "Keep the notes", collapse: "Fold notes into steps" },
+  },
+  chatQueueMessages: {
+    label: "Queue messages sent while the agent works",
+    description:
+      "Off: the agent reads your message at its next step, and Interrupt on your message has the agent read it at once. On: your message waits until the agent finishes, and you can edit it until then.",
+    scopes: profileScope,
+    valid: boolean,
+  },
+  windowButtons: {
+    label: "Window buttons",
+    description:
+      "Close, minimize and full screen at the top left of the window. While they are hidden, the menu bar still has each of them.",
+    scopes: profileScope,
+    valid: boolean,
+    macOnly: true,
   },
   sidebarDividers: {
     label: "Sidebar dividers",
@@ -104,6 +128,8 @@ export const SETTINGS = {
   },
   tabPlacement: {
     label: "Open tabs",
+    description:
+      "In the sidebar, its Tabs section lists them; a sidebar without one keeps them in the top bar.",
     scopes: projectScopes,
     valid: oneOf("top", "sidebar"),
     options: { top: "Top bar", sidebar: "Sidebar" },
@@ -115,12 +141,6 @@ export const SETTINGS = {
     valid: oneOf("top", "sidebar"),
     options: { top: "Above content", sidebar: "In sidebar" },
   },
-  pinnedBookmarks: {
-    label: "Pinned bookmarks",
-    scopes: projectScopes,
-    valid: oneOf("tiles", "list"),
-    options: { tiles: "Icon tiles", list: "List" },
-  },
   linkOpenMode: {
     label: "Links requesting a new window",
     scopes: projectScopes,
@@ -131,6 +151,27 @@ export const SETTINGS = {
     label: "Alt-click web links to preview",
     scopes: projectScopes,
     valid: boolean,
+  },
+  switchToOpenTab: {
+    label: "Switch to a page's open tab",
+    description:
+      "Opening a page that is already open, from a link, a bookmark or another app, goes to its tab. Opening it in a new tab on purpose still does.",
+    scopes: profileScope,
+    valid: boolean,
+  },
+  browserTabSleep: {
+    label: "Sleep unused tabs",
+    description:
+      "Pages you have not looked at for a while unload to free memory and load again when you return, keeping your place. Tabs playing sound, using the camera, microphone or screen, holding typed text, or being worked by an agent stay awake.",
+    scopes: profileScope,
+    valid: oneOf(...BROWSER_TAB_SLEEP),
+    options: {
+      "15m": "After 15 minutes",
+      "30m": "After 30 minutes",
+      "1h": "After 1 hour",
+      "2h": "After 2 hours",
+      never: "Never",
+    },
   },
   notificationSounds: {
     label: "Notification sounds",
@@ -178,18 +219,6 @@ export const SETTINGS = {
     valid: oneOf("purpose", "directory", "flat"),
     options: { purpose: "Purpose", directory: "Directory", flat: "All files" },
   },
-  changesFileLayout: {
-    label: "Changed file layout",
-    scopes: profileScope,
-    valid: oneOf("tree", "flat"),
-    options: { tree: "Tree", flat: "Flat" },
-  },
-  prDefaultView: {
-    label: "Pull request list",
-    scopes: profileScope,
-    valid: oneOf("for-you", "created", "all"),
-    options: { "for-you": "For you", created: "Created", all: "All" },
-  },
   terminalAppearance: {
     label: "Terminal appearance",
     scopes: profileScope,
@@ -224,6 +253,8 @@ export const SETTINGS = {
       options?: Record<string, string>;
       range?: { min: number; max: number; step: number };
       description?: string;
+      /** Only macOS has it; Settings and the palette offer it nowhere else. */
+      macOnly?: boolean;
     }
   >
 >;

@@ -2,6 +2,7 @@ import {
   HOLE_SCHEMA_KEY,
   type McpToolKindSpec,
   type McpToolMetadata,
+  type ProjectPermissionName,
   type TriggerKindDisplay,
   type TriggerKindRuntime,
   type TriggerMode,
@@ -25,7 +26,7 @@ export interface TriggerKindDefinition<Payload, Config>
 /**
  * Defines a custom trigger kind from zod schemas. The schemas are the single
  * source of truth: they validate payloads at fire time and configs at scan
- * time, and they generate the `catamorphic-triggers.d.ts` module that
+ * time, and they generate the `work-triggers.d.ts` module that
  * project workspaces type-check `trigger()` calls against.
  */
 export function defineTriggerKind<
@@ -54,13 +55,23 @@ export function defineTriggerKind<
    * authoring time through the generated trigger types.
    */
   output?: z.ZodType;
-  /** Pure routing filter. Complex business conditions belong in workflow code. */
+  /**
+   * Pure routing filter, over config and payload in their stored form (a NUL
+   * or half an emoji as U+FFFD). Complex business conditions belong in
+   * workflow code.
+   */
   matches?: (input: {
     config: z.output<ConfigSchema>;
     payload: z.output<PayloadSchema>;
   }) => boolean;
   /** Derives an enrollment correlation key from a validated payload. */
   correlationKey?: (payload: z.output<PayloadSchema>) => string | undefined;
+  /**
+   * Project permissions a workflow must declare to bind this kind, when its
+   * events disclose what only some members may read (ADR 0210), e.g.
+   * `memberships:read` for events that name people.
+   */
+  requiredPermissions?: readonly ProjectPermissionName[];
 }): TriggerKindDefinition<z.output<PayloadSchema>, z.output<ConfigSchema>> {
   // Strict: a kind that declares no config should reject a workflow that
   // passes one — that binding is almost certainly a mistake.
@@ -89,6 +100,9 @@ export function defineTriggerKind<
     correlationKey: args.correlationKey
       ? (payload) => args.correlationKey?.(payload as z.output<PayloadSchema>)
       : undefined,
+    ...(args.requiredPermissions?.length
+      ? { requiredPermissions: args.requiredPermissions }
+      : {}),
   };
 }
 

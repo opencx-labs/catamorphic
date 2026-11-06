@@ -1,6 +1,5 @@
 import type { CapabilityRequirement } from "@catamorphic/plugins";
 import type { Identity } from "../identity.js";
-import type { RunStage } from "./secrets-service.js";
 
 /**
  * What a capability provider learns about the run it is minting values for.
@@ -11,7 +10,6 @@ export interface CapabilityContext {
   tenantId: string;
   externalUserId: string;
   projectId: string;
-  stage: RunStage;
   workflowName?: string;
 }
 
@@ -45,6 +43,10 @@ export interface CapabilityProviderRuntime {
 
 /** What a host function learns about the call it serves. */
 export interface HostCallContext {
+  /** Combined attempt deadline, execution lease, and worker shutdown signal. */
+  signal: AbortSignal;
+  /** Absolute ISO deadline shared with the boundary callback (ADR 0295). */
+  deadlineAt: string;
   /** The run's caller: tenant, user and — for viewers — their scope. */
   caller: Identity;
   projectId: string;
@@ -122,6 +124,7 @@ export class ReservedCapabilityEnvError extends Error {
  * construction; duplicate names fail at boot rather than shadowing.
  */
 export class CapabilityRegistry {
+  /** Replica memory (c): built at boot from the host's providers. */
   private readonly providers = new Map<string, CapabilityProviderRuntime>();
 
   constructor(providers: readonly CapabilityProviderRuntime[] = []) {

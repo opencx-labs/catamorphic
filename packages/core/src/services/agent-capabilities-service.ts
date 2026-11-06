@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
@@ -7,19 +8,24 @@ import {
   DiscoverCapabilitiesSchema,
   extraToolResult,
   InvokeCapabilitySchema,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
+  sandboxingAllows,
+  sandboxingRefusal,
   type TurnContextFragment,
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import {
   hasControlPlanePermission,
-  hasProjectPermission,
   type Identity,
-  identityCovers,
   identityMayUseConnection,
   identityMayUseEnvironment,
+  intersectProjectPermissions,
+  intersectScope,
+  isProjectPrincipal,
 } from "../identity.js";
-import { requireRuntimeSession } from "./agent-runtime-events-service.js";
+import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
@@ -32,7 +38,7 @@ const ResourceSchema = z.object({
   memoryMb: z.number().optional(),
   storageMb: z.number().optional(),
   gpu: z.boolean().optional(),
-  timeoutSeconds: z.number().optional(),
+  commandTimeoutSeconds: z.number().optional(),
   maxConcurrency: z.number().optional(),
 });
 const AssignmentSchema = z.object({
@@ -88,6 +94,8 @@ const ContextSchema = z.object({
   allocationId: z.string(),
   environment: z.string(),
   agentLoopHost: z.string().nullable(),
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
   execution: z.object({
     bindingId: z.string(),
     workerNodeId: z.string().nullable(),
@@ -123,6 +131,12 @@ export interface AgentCapability {
   consent?: string;
   description: string;
   effect: "read" | "write";
+  /**
+   * The narrowest sandboxing that may invoke it (ADR 0182). Default:
+   * `contained` for read effects, `propose` for writes. Publishing asks
+   * `publish`.
+   */
+  sandboxing?: Sandboxing;
   inputSchema: z.ZodType;
   outputSchema: z.ZodType;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
@@ -144,6 +158,8 @@ export function defineAgentCapability<
   consent?: string;
   description: string;
   effect: "read" | "write";
+  /** The narrowest sandboxing that may invoke it (ADR 0182). */
+  sandboxing?: Sandboxing;
   inputSchema: I;
   outputSchema: O;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
@@ -210,6 +226,7 @@ export interface AgentCapabilityOptions {
 }
 
 export class AgentCapabilitiesService {
+  /** Replica memory (c): capabilities the host registers at boot. */
   private readonly registry = new Map<string, AgentCapability>();
   constructor(
     private readonly deps: {
@@ -223,6 +240,14 @@ export class AgentCapabilitiesService {
       allocations: ExecutionAllocationsService;
       environments: ExecutionEnvironmentsService;
       options?: AgentCapabilityOptions;
+      /**
+       * The session agent's sandboxing (ADR 0182). Capabilities above it
+       * are refused with a reason the agent can read.
+       */
+      sessionSandboxing?: (args: {
+        projectId: string;
+        sessionId: string;
+      }) => Promise<Sandboxing | undefined>;
       /** The stock membership's described roles; `null` for non-members. */
       memberRoles?: (args: {
         tenantId: string;
@@ -261,16 +286,49 @@ export class AgentCapabilitiesService {
         const { query, cursor, limit } =
           DiscoverCapabilitiesSchema.parse(input);
         const context = await this.context(args);
-        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const matching = [...(await this.resolve(context, { query })).values()]
-          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-          .filter(
-            (item) =>
-              (!cursor || item.name > cursor) &&
-              words.every((word) =>
-                `${item.name} ${item.description}`.toLowerCase().includes(word),
-              ),
+        // Words of two letters or fewer ("a", "to") match nearly anything.
+        const words = query
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((word) => word.length > 2);
+        const all = [...(await this.resolve(context, { query })).values()];
+        // Ranked by how many of the query's words a capability matches, a
+        // match in its name counting double: "browser terminal" lists every
+        // browser and terminal capability. Requiring every word hid the
+        // browser's own tools behind the two that mention both.
+        const score = (item: AgentCapability) =>
+          words.reduce(
+            (total, word) =>
+              total +
+              (item.name.toLowerCase().includes(word)
+                ? 2
+                : item.description.toLowerCase().includes(word)
+                  ? 1
+                  : 0),
+            0,
           );
+        const ranked = all
+          .map((item) => ({ item, score: score(item) }))
+          .filter((entry) => words.length === 0 || entry.score > 0)
+          .sort(
+            (a, b) =>
+              b.score - a.score ||
+              (a.item.name < b.item.name
+                ? -1
+                : a.item.name > b.item.name
+                  ? 1
+                  : 0),
+          )
+          .map((entry) => entry.item);
+        // The cursor is the last name of the previous page, in this order.
+        const after = cursor
+          ? ranked.findIndex((item) => item.name === cursor)
+          : -1;
+        if (cursor && after === -1)
+          throw new Error(
+            "That cursor is not from this query's results; discover again without it.",
+          );
+        const matching = ranked.slice(after + 1);
         const visible: AgentCapability[] = [];
         for (const item of matching) {
           if (await item.authorize(context)) visible.push(item);
@@ -297,7 +355,36 @@ export class AgentCapabilitiesService {
         ).get(command.name);
         if (!capability || !(await capability.authorize(context)))
           throw new AccessDeniedError();
-        const prepared = capability.prepare(command.input);
+        const sandboxing = await this.deps.sessionSandboxing?.(args);
+        const required =
+          capability.sandboxing ??
+          (capability.effect === "read" ? "contained" : "propose");
+        if (sandboxing && !sandboxingAllows({ sandboxing, required }))
+          throw new AccessDeniedError(
+            sandboxingRefusal({ sandboxing, action: `use ${command.name}` }),
+          );
+        const requestId = command.requestId ?? randomUUID();
+        let prepared: ReturnType<AgentCapability["prepare"]>;
+        try {
+          prepared = capability.prepare(command.input);
+        } catch (error) {
+          // A model corrects its call from the fields and the schema; raw
+          // validation JSON names neither the capability nor where input goes.
+          if (!(error instanceof z.ZodError)) throw error;
+          let schema = "";
+          try {
+            schema = JSON.stringify(z.toJSONSchema(capability.inputSchema));
+          } catch {
+            // A source's schema that cannot be rendered still gets the fields.
+          }
+          throw new Error(
+            `Invalid input for ${command.name}. ${z.prettifyError(error)}\nThe capability's fields go inside "input".${
+              schema
+                ? ` Its input schema: ${schema.length > 4000 ? `${schema.slice(0, 3999)}…` : schema}`
+                : ""
+            }`,
+          );
+        }
         const approvalDefinition = (entry: AgentCapability) =>
           JSON.stringify({
             revision: entry.revision,
@@ -316,7 +403,7 @@ export class AgentCapabilitiesService {
             await this.deps.options?.onEvent?.({
               ...context,
               capability: command.name,
-              requestId: command.requestId,
+              requestId,
               type,
               progress,
             });
@@ -326,7 +413,7 @@ export class AgentCapabilitiesService {
         };
         const invocation = (): AgentCapabilityInvocation => ({
           ...context,
-          requestId: command.requestId,
+          requestId,
           signal: input.signal,
           progress: (value) => event("progress", value),
         });
@@ -440,19 +527,29 @@ export class AgentCapabilitiesService {
     allocationId?: string;
   }): Promise<AgentCapabilityContext> {
     const check = async (identity: Identity) => {
-      const { projectId } = await requireRuntimeSession({
-        db: this.deps.db,
-        identity,
-        sessionId: args.sessionId,
-        lock: false,
-        intent: "read",
-      });
-      if (projectId !== args.projectId) throw new AccessDeniedError();
       const session = await this.deps.db
         .selectFrom("agent_sessions")
-        .select(["allocation_id", "status"])
-        .where("id", "=", args.sessionId)
-        .executeTakeFirstOrThrow();
+        .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+        .select([
+          "agent_sessions.agent_id",
+          "agent_sessions.external_user_id",
+          "agent_sessions.project_id",
+          "agent_sessions.allocation_id",
+          "agent_sessions.status",
+        ])
+        .where("agent_sessions.id", "=", args.sessionId)
+        .where("projects.tenant_id", "=", identity.tenantId)
+        .executeTakeFirst();
+      if (!session || session.project_id !== args.projectId)
+        throw new AccessDeniedError();
+      assertAgentSessionAccess({
+        identity,
+        projectId: session.project_id,
+        externalUserId: session.external_user_id,
+        agentId: session.agent_id,
+        intent: "read",
+      });
+      const projectId = session.project_id;
       if (session.status !== "active" || !session.allocation_id)
         throw new AccessDeniedError();
       const allocation = await this.deps.allocations.get({
@@ -474,8 +571,13 @@ export class AgentCapabilitiesService {
     };
     const original = await check(args.identity);
     // An absent artifact scope is the host's explicit root identity (ADR 0055).
-    // Membership resolution can only refresh identities issued as members.
-    if (args.identity.scope === undefined || !this.deps.resolveMemberIdentity)
+    // Membership resolution can only refresh identities issued as members;
+    // the project principal (project chats, ADR 0156) is nobody's member.
+    if (
+      args.identity.scope === undefined ||
+      isProjectPrincipal(args.identity.externalUserId) ||
+      !this.deps.resolveMemberIdentity
+    )
       return original;
     const identity = await this.deps.resolveMemberIdentity({
       tenantId: args.identity.tenantId,
@@ -491,7 +593,7 @@ export class AgentCapabilitiesService {
     // Refresh may revoke a grant, but cannot expand a caller's narrowed token.
     return check({
       ...args.identity,
-      scope: args.identity.scope.filter((ref) => identityCovers(identity, ref)),
+      scope: intersectScope(args.identity.scope, identity),
       executionScope: (args.identity.executionScope ?? []).filter((ref) =>
         identityMayUseEnvironment(identity, ref.projectId, ref.name),
       ),
@@ -517,8 +619,9 @@ export class AgentCapabilitiesService {
           },
         ];
       }),
-      projectPermissions: (args.identity.projectPermissions ?? []).filter(
-        (ref) => hasProjectPermission(identity, ref.projectId, ref.permission),
+      projectPermissions: intersectProjectPermissions(
+        args.identity.projectPermissions ?? [],
+        identity,
       ),
       controlPlanePermissions: (
         args.identity.controlPlanePermissions ?? []
@@ -533,25 +636,34 @@ export class AgentCapabilitiesService {
     workingDirectory?: string;
     agentLoopHost?: string;
     allocationId?: string;
+    sandboxing?: Sandboxing;
   }) {
     const context = await this.context(args);
     const allocation = await this.deps.allocations.get(context);
     if (!allocation) throw new AccessDeniedError();
+    // A project chat works for the project, not for a person to look up.
+    const projectChat = isProjectPrincipal(context.identity.externalUserId);
     const profile = z
       .object({
         displayName: z.string().max(200).optional(),
         timeZone: z.string().max(100).optional(),
         roles: z.array(RoleSummarySchema).max(20).optional(),
       })
-      .parse((await this.deps.options?.currentUser?.(context)) ?? {});
+      .parse(
+        (projectChat
+          ? { displayName: "the project" }
+          : await this.deps.options?.currentUser?.(context)) ?? {},
+      );
     const access = context.identity.scope === undefined ? "full" : "member";
     const roles =
       profile.roles ??
-      (await this.deps.memberRoles?.({
-        tenantId: context.identity.tenantId,
-        projectId: context.projectId,
-        externalUserId: context.identity.externalUserId,
-      })) ??
+      (projectChat
+        ? undefined
+        : await this.deps.memberRoles?.({
+            tenantId: context.identity.tenantId,
+            projectId: context.projectId,
+            externalUserId: context.identity.externalUserId,
+          })) ??
       [];
     const project = await this.deps.db
       .selectFrom("projects")
@@ -575,6 +687,7 @@ export class AgentCapabilitiesService {
       allocationId: context.allocationId,
       environment: allocation.environmentName,
       agentLoopHost: args.agentLoopHost ?? null,
+      ...(args.sandboxing ? { sandboxing: args.sandboxing } : {}),
       execution: {
         bindingId: allocation.bindingId,
         workerNodeId,
@@ -714,6 +827,14 @@ export function formatSessionContext(
       ? `Commands and file edits run directly in the project folder${where}.`
       : `Commands and file edits run in an isolated sandbox copy of the project${where}; localhost there is the sandbox, not the person's computer.`,
   );
+  if (snapshot.sandboxing === "contained")
+    lines.push(
+      "Sandboxing: contained. Run and change anything inside your sandbox to investigate; none of it is saved, proposed, or published, and connections answer reads only. Report what you found.",
+    );
+  else if (snapshot.sandboxing === "propose")
+    lines.push(
+      "Sandboxing: propose. Your changes are saved and you may propose them; publishing and deploying are for someone else.",
+    );
   lines.push(`Now: ${snapshot.observedAt}`);
   return lines.join("\n");
 }

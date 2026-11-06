@@ -1,12 +1,5 @@
-import {
-  type AgentEvent,
-  type CodingAgentProvider,
-  type ProviderSession,
-  renderTurnContext,
-  type StartSessionOpts,
-  type TurnOptions,
-} from "@catamorphic/sandbox";
-import { describe, expect, it } from "vitest";
+import { renderTurnContext } from "@catamorphic/sandbox";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import {
   coordinationStrategyForSession,
@@ -15,35 +8,25 @@ import {
   formatProjectSessionsContext,
   formatScreen,
   isolationConflictPeerSessionIds,
-  WorkspaceContextAgent,
+  type WorkspaceContextOptions,
   workPlaybook,
+  workspaceInstructions,
+  workspaceTurnContext,
 } from "./workspace-context-agent.js";
 
-class RecordingAgent implements CodingAgentProvider {
-  readonly name = "recording";
-  lastMessage = "";
-  lastContext = "";
-  systemPrompt = "";
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    this.systemPrompt = opts.systemPrompt ?? "";
-    return {
-      providerSessionId: "provider",
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-    };
-  }
-  async *sendMessage(
-    _session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    this.lastMessage = message;
-    this.lastContext = renderTurnContext(opts?.context);
-    yield { type: "done" };
-  }
-  async dispose(): Promise<void> {}
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** The turn context one turn of chat `mine` would carry, rendered. */
+async function contextFor(options: WorkspaceContextOptions): Promise<string> {
+  return renderTurnContext(
+    await workspaceTurnContext({
+      ...options,
+      projectId: "project",
+      sessionId: "mine",
+    }),
+  );
 }
 
 describe("coordinationStrategyForSession", () => {
@@ -114,30 +97,12 @@ describe("isolationConflictPeerSessionIds", () => {
   });
 });
 
-const start = (agent: WorkspaceContextAgent) =>
-  agent.startSession({
-    sessionId: "mine",
-    projectId: "project",
-    userId: "user",
-    sandboxId: "",
-    workingDirectory: "/project",
-  });
-
-async function send(
-  agent: WorkspaceContextAgent,
-  session: ProviderSession,
-  message: string,
-) {
-  for await (const _event of agent.sendMessage(session, message)) {
-    // Drain the provider stream.
-  }
-}
-
 const bridgeWith = (overview: unknown, glance: unknown = {}): WorkspaceBridge =>
   ({
     overview: async () => overview,
     glanceBrowser: async () => glance,
     readTab: async () => ({ output: "$ bun test\n1 failing" }),
+    backgroundCommands: () => [],
   }) as unknown as WorkspaceBridge;
 
 const workSite = {
@@ -150,8 +115,7 @@ const workSite = {
 
 describe("screen context", () => {
   it("leads with what the person is looking at, with a look inside the page", async () => {
-    const inner = new RecordingAgent();
-    const agent = new WorkspaceContextAgent(inner, {
+    const context = await contextFor({
       bridge: bridgeWith(
         {
           tabs: [
@@ -165,13 +129,7 @@ describe("screen context", () => {
           text: "Work. Documents, browser, agents in one place.",
         },
       ),
-      hasTools: true,
     });
-    await send(agent, await start(agent), "What is this thing?");
-
-    // The person's words reach the harness untouched.
-    expect(inner.lastMessage).toBe("What is this thing?");
-    const context = inner.lastContext;
     expect(context.startsWith("<workspace_context>")).toBe(true);
     expect(context).toContain(
       'The person is looking at: web page "Work" (https://work.software/)',
@@ -228,66 +186,101 @@ describe("screen context", () => {
   });
 
   it("shows a focused terminal's latest output", async () => {
-    const inner = new RecordingAgent();
-    const agent = new WorkspaceContextAgent(inner, {
+    const context = await contextFor({
       bridge: bridgeWith({
         tabs: [
           { key: "terminal:t", kind: "terminal", active: true, title: "zsh" },
         ],
         chats: [{ key: "chat:c", sessionId: "mine", state: "partial" }],
       }),
-      hasTools: true,
     });
-    await send(agent, await start(agent), "why is this failing?");
-    expect(inner.lastContext).toContain("Latest output:");
-    expect(inner.lastContext).toContain("1 failing");
+    expect(context).toContain("Latest output:");
+    expect(context).toContain("1 failing");
   });
 
   it("runs without a screen when no window shows the project", async () => {
-    const inner = new RecordingAgent();
-    const agent = new WorkspaceContextAgent(inner, {
+    const context = await contextFor({
       bridge: {
         overview: async () => {
           throw new Error("No window");
         },
+        backgroundCommands: () => [],
       } as unknown as WorkspaceBridge,
-      hasTools: false,
     });
-    await send(agent, await start(agent), "Hello");
-    expect(inner.lastMessage).toBe("Hello");
-    expect(inner.lastContext).toBe("");
+    expect(context).toBe("");
+  });
+});
+
+describe("where the person is", () => {
+  it("describes the screen as the person started speaking, not as it is now", async () => {
+    // The clock stands still: the age is exact.
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
+    const context = renderTurnContext(
+      await workspaceTurnContext({
+        bridge: bridgeWith({ tabs: [{ ...workSite, title: "Changed since" }] }),
+        projectId: "project",
+        sessionId: "mine",
+        spoken: {
+          at: Date.now() - 6_000,
+          screen: Promise.resolve(
+            'The person is looking at: web page "Pull request #3419"',
+          ),
+        },
+      }),
+    );
+    expect(context).toContain(
+      "As the person started saying their latest message, 6 seconds before this turn",
+    );
+    expect(context).toContain("Pull request #3419");
+    expect(context).not.toContain("Changed since");
+  });
+
+  it("shows the assistant the window the person is in, not its chat's project", async () => {
+    const asked: string[] = [];
+    const bridge = {
+      ...bridgeWith({ tabs: [workSite] }),
+      overview: async (projectId: string) => {
+        asked.push(projectId);
+        return { tabs: [workSite] };
+      },
+    } as WorkspaceBridge;
+    const facts: string[] = [];
+    await workspaceTurnContext({
+      bridge,
+      projectId: "assistant-home",
+      personProjectId: "catamorphic",
+      sessionId: "assistant",
+      desktopFacts: (projectId) => {
+        facts.push(projectId);
+        return {};
+      },
+    });
+    expect(asked).toEqual(["catamorphic"]);
+    expect(facts).toEqual(["catamorphic"]);
   });
 });
 
 describe("desktop facts and peers", () => {
   it("adds private-file placement and settings errors as host facts, refreshed each turn", async () => {
-    const inner = new RecordingAgent();
     let errors: string[] = ["theme.json: Unexpected token"];
-    const agent = new WorkspaceContextAgent(inner, {
+    const options: WorkspaceContextOptions = {
       bridge: bridgeWith({ tabs: [] }),
-      hasTools: true,
       desktopFacts: () => ({
-        personalFilesDirectory: "/project/.catamorphic/personal/p",
+        personalFilesDirectory: "/project/.work/personal/p",
         settingsErrors: errors,
       }),
-    });
-    const session = await start(agent);
-    await send(agent, session, "Write me a memo");
-    expect(inner.lastContext).toContain("<desktop_context>");
-    expect(inner.lastContext).toContain(
-      "save them in /project/.catamorphic/personal/p",
-    );
-    expect(inner.lastContext).toContain("theme.json: Unexpected token");
+    };
+    const first = await contextFor(options);
+    expect(first).toContain("<desktop_context>");
+    expect(first).toContain("save them in /project/.work/personal/p");
+    expect(first).toContain("theme.json: Unexpected token");
     errors = [];
-    await send(agent, session, "Thanks");
-    expect(inner.lastContext).not.toContain("theme.json");
+    expect(await contextFor(options)).not.toContain("theme.json");
   });
 
   it("lists live peers as observed data and carries a checkout notice", async () => {
-    const inner = new RecordingAgent();
-    const agent = new WorkspaceContextAgent(inner, {
+    const context = await contextFor({
       bridge: bridgeWith({ tabs: [] }),
-      hasTools: true,
       coordination: {
         strategy: "isolate-on-contention",
         peers: async () => [
@@ -298,20 +291,38 @@ describe("desktop facts and peers", () => {
             running: true,
             task: "Prepare the renewal deck",
             activity: null,
-            checkout: { kind: "managed", branch: "catamorphic/peer" },
+            checkout: { kind: "managed", branch: "work/peer", available: true },
+          },
+          {
+            id: "gone",
+            title: "Palette input",
+            agentId: "csm",
+            running: false,
+            task: null,
+            activity: null,
+            checkout: {
+              kind: "external",
+              branch: "palette-input",
+              available: false,
+            },
           },
         ],
         checkoutNotice: async () => "Returned to the project folder.",
       },
     });
-    const session = await start(agent);
-    await send(agent, session, "Continue");
-    expect(inner.lastMessage).toBe("Continue");
-    expect(inner.lastContext).toContain(
-      '- "Renewal deck" (working now, in a separate worktree (catamorphic/peer)): Prepare the renewal deck',
+    expect(context).toContain(
+      '- "Renewal deck" (working now, in a separate worktree (work/peer)): Prepare the renewal deck',
     );
-    expect(inner.lastContext).toContain("Returned to the project folder.");
-    expect(inner.systemPrompt).toContain("Prefer a worktree");
+    expect(context).toContain(
+      '- "Palette input" (idle, in a separate worktree (palette-input) whose folder is unavailable)',
+    );
+    expect(context).toContain("Returned to the project folder.");
+    expect(
+      workspaceInstructions({
+        hasTools: true,
+        strategy: "isolate-on-contention",
+      }),
+    ).toContain("Prefer a worktree");
   });
 
   it("keeps peer text from escaping its block", () => {
@@ -323,7 +334,7 @@ describe("desktop facts and peers", () => {
         running: false,
         task: null,
         activity: null,
-        checkout: { kind: "primary", branch: null },
+        checkout: { kind: "primary", branch: null, available: true },
       },
     ]);
     expect(formatProjectSessionsContext([])).toBe("");
@@ -340,7 +351,41 @@ describe("Work playbook", () => {
     const playbook = workPlaybook({ hasTools: true });
     expect(playbook).toContain("what is on their screen right now");
     expect(playbook.length).toBeLessThan(2000);
-    for (const jargon of ["worktree", "checkout", ".catamorphic", "Allocation"])
+    for (const jargon of ["worktree", "checkout", ".work", "Allocation"])
       expect(playbook).not.toContain(jargon);
+  });
+
+  it("leaves the assistant's replaced chat tools out of its playbook", () => {
+    const playbook = workPlaybook({ hasTools: true, assistant: true });
+    // It starts subsessions like any agent (ADR 0271).
+    expect(playbook).toContain("spawn_subsession");
+    expect(playbook).not.toContain("reach other chats");
+    expect(playbook).toContain("discover_capabilities");
+    expect(workPlaybook({ hasTools: true })).toContain("spawn_subsession");
+  });
+
+  it("joins the playbook, the sharing rule and the skills section", () => {
+    const instructions = workspaceInstructions({
+      hasTools: false,
+      strategy: "shared-first",
+      skillsNote: "# Skills\n- notes",
+    });
+    expect(instructions).toContain("# Work");
+    expect(instructions).toContain("Other chats may be working");
+    expect(instructions.endsWith("# Skills\n- notes")).toBe(true);
+  });
+
+  it("tells every agent that a worktree it made goes once its pull request merged", () => {
+    for (const strategy of [
+      "shared-first",
+      "isolate-on-contention",
+      "isolation-required",
+    ] as const) {
+      const instructions = workspaceInstructions({ hasTools: true, strategy });
+      expect(instructions).toContain(
+        "A worktree you made with git is yours to remove",
+      );
+      expect(instructions).toContain("never one with uncommitted changes");
+    }
   });
 });

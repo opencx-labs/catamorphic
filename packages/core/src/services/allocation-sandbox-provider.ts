@@ -1,19 +1,122 @@
+import { randomUUID } from "node:crypto";
+import { ACTIVE_TURN_STATUSES } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type {
-  CreateSandboxOpts,
-  SandboxProvider,
-  SandboxResources,
+import {
+  type CreateSandboxOpts,
+  type SandboxProvider,
+  type SandboxResources,
+  sameEgress,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import {
+  holdVolumes,
+  sweepVolumeHolds,
+  volumeHoldNode,
+} from "./volume-holds.js";
+
+/**
+ * A widening of the Allocation's sandbox for its setup (ADR 0257): only to
+ * the setup egress admission fixed, compared by value, so no caller widens
+ * a sandbox beyond it.
+ */
+function allocationWidening(args: {
+  allocation: ExecutionAllocation;
+  widenEgress: NonNullable<SandboxProvider["widenEgress"]>;
+}): NonNullable<SandboxProvider["widenEgress"]> {
+  const fixed = args.allocation.policy.sandbox?.setupEgress;
+  return async (input) => {
+    if (!fixed || !sameEgress(fixed, input.egress))
+      throw new Error(
+        "A workspace's network widens only to the setup network its Allocation fixed at admission",
+      );
+    await args.widenEgress(input);
+  };
+}
+
+/**
+ * A narrowing of the Allocation's sandbox (ADR 0257), with no ownership
+ * check: returning a sandbox to its own policy is always safe, and must
+ * work after the Allocation or its machine's lease has moved on. A sandbox
+ * that cannot be narrowed is stopped, unchecked as well.
+ */
+function allocationNarrowing(
+  provider: SandboxProvider,
+): SandboxProvider["narrowEgress"] {
+  const narrowEgress = provider.narrowEgress?.bind(provider);
+  if (!narrowEgress) return undefined;
+  return async (input) => {
+    try {
+      await narrowEgress(input);
+    } catch (error) {
+      await provider.stopSandbox(input.sandboxId).catch(() => {});
+      throw error;
+    }
+  };
+}
+
+/**
+ * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
+ * 0208) on a provider that keeps its own sandbox lifecycle, such as a
+ * member's computer: the Environment decides what its sandboxes boot,
+ * wherever they run, and which networks they switch to (ADR 0257).
+ */
+export function withAllocationSandboxPolicy(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+}): SandboxProvider {
+  const { provider } = args;
+  const sandbox = args.allocation.policy.sandbox;
+  // A provider that widens is always wrapped: only admission says how far.
+  if (
+    !sandbox?.image &&
+    !sandbox?.containers &&
+    !sandbox?.egress &&
+    !sandbox?.volumes?.length &&
+    !provider.widenEgress
+  )
+    return provider;
+  const createSandbox = async (opts: CreateSandboxOpts) => {
+    const volumes = await holdVolumes({
+      db: args.db,
+      allocation: args.allocation,
+    });
+    return provider.createSandbox({
+      ...opts,
+      ...(sandbox?.image ? { image: sandbox.image } : {}),
+      ...(sandbox?.containers ? { containers: true } : {}),
+      ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
+      ...(volumes.length > 0 ? { volumes } : {}),
+    });
+  };
+  const widenEgress = provider.widenEgress?.bind(provider);
+  const widening = widenEgress
+    ? allocationWidening({ allocation: args.allocation, widenEgress })
+    : undefined;
+  const narrowing = allocationNarrowing(provider);
+  return new Proxy(provider, {
+    get(target, property) {
+      if (property === "createSandbox") return createSandbox;
+      if (property === "widenEgress") return widening;
+      if (property === "narrowEgress") return narrowing;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
 
 /** One sandbox per Allocation. Never reuse another workload's filesystem or budget. */
 export function allocationSandboxProvider(args: {
   db: Kysely<DB>;
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
-  workerLeaseToken?: string;
+  /**
+   * The lease of this process's own local node, read at each check. A
+   * remote node's provider fences its own operations (ADR 0192).
+   */
+  workerLeaseToken?: string | (() => string | undefined);
 }): SandboxProvider {
   const { db, allocation, provider } = args;
   const limits = allocation.policy.requirements.resources;
@@ -23,33 +126,15 @@ export function allocationSandboxProvider(args: {
     storageMb: limits?.storageMb,
     gpu: limits?.gpu,
   };
-  const requireActive = async (sandboxId?: string) => {
-    if (allocation.workerNodeId && args.workerLeaseToken) {
-      const live = await db
-        .selectFrom("worker_nodes")
-        .select("id")
-        .where("id", "=", allocation.workerNodeId)
-        .where("lease_token", "=", args.workerLeaseToken)
-        .where("enabled", "=", true)
-        .where("lease_expires_at", ">", sql<Date>`now()`)
-        .executeTakeFirst();
-      if (!live)
-        throw new Error("This machine no longer owns its execution lease");
-    }
-    const row = await db
-      .selectFrom("execution_allocations")
-      .selectAll()
-      .where("id", "=", allocation.id)
-      .where("status", "=", "active")
-      .where("capacity_released_at", "is", null)
-      .executeTakeFirst();
-    if (!row || (sandboxId && row.sandbox_provider_id !== sandboxId)) {
-      throw new Error(
-        "Workspace Allocation is no longer active or does not own this sandbox",
-      );
-    }
-    return row;
-  };
+  const requireActive = (sandboxId?: string) =>
+    requireActiveAllocation({
+      db,
+      allocation,
+      ...(args.workerLeaseToken
+        ? { workerLeaseToken: args.workerLeaseToken }
+        : {}),
+      ...(sandboxId ? { sandboxId } : {}),
+    });
   const create = async (opts: CreateSandboxOpts) => {
     const row = await requireActive();
     if (row.sandbox_provider_id) {
@@ -75,8 +160,20 @@ export function allocationSandboxProvider(args: {
       );
     // Keep the reservation on an uncertain create. Lease expiry does not prove
     // that the provider failed to allocate a machine.
+    // The Environment's image, containers and egress were fixed when the
+    // Allocation was admitted; no caller can widen them (ADR 0176). Its
+    // exclusive volumes are held for this sandbox on the node (ADR 0208),
+    // taken over from released workspaces there that run nothing (a chat
+    // readmitted right after it idled).
+    const sandbox = allocation.policy.sandbox;
+    await retireVolumeHolders({ db, allocation, provider });
+    const volumes = await holdVolumes({ db, allocation });
     const handle = await provider.createSandbox({
       ...opts,
+      ...(sandbox?.image ? { image: sandbox.image } : {}),
+      ...(sandbox?.containers ? { containers: true } : {}),
+      ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
+      ...(volumes.length > 0 ? { volumes } : {}),
       resources,
       labels: {
         ...opts.labels,
@@ -97,10 +194,17 @@ export function allocationSandboxProvider(args: {
     return action();
   };
   const runtime = provider.deploymentRuntime;
+  const processes = provider.processes;
+  const widenEgress = provider.widenEgress?.bind(provider);
+  const widening = widenEgress
+    ? allocationWidening({ allocation, widenEgress })
+    : undefined;
+  const narrowing = allocationNarrowing(provider);
   return {
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
     isolation: provider.isolation,
+    capabilities: provider.capabilities,
     createSandbox: create,
     startSandbox: (id) => guard(id, () => provider.startSandbox(id)),
     stopSandbox: (id) => guard(id, () => provider.stopSandbox(id)),
@@ -111,11 +215,11 @@ export function allocationSandboxProvider(args: {
       guard(id, () =>
         provider.executeCommand(id, command, {
           ...opts,
-          ...(limits?.timeoutSeconds
+          ...(limits?.commandTimeoutSeconds
             ? {
                 timeout: Math.min(
-                  opts?.timeout ?? limits.timeoutSeconds,
-                  limits.timeoutSeconds,
+                  opts?.timeout ?? limits.commandTimeoutSeconds,
+                  limits.commandTimeoutSeconds,
                 ),
               }
             : {}),
@@ -129,6 +233,31 @@ export function allocationSandboxProvider(args: {
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>
       guard(id, () => provider.gitCheckout(id, path, ref)),
+    ...(widening
+      ? {
+          widenEgress: (input: Parameters<typeof widening>[0]) =>
+            guard(input.sandboxId, () => widening(input)),
+        }
+      : {}),
+    ...(narrowing ? { narrowEgress: narrowing } : {}),
+    // Background processes live in the Allocation's sandbox and end with
+    // it; each operation proves the Allocation still owns that sandbox.
+    ...(processes
+      ? {
+          processes: {
+            startProcess: (opts) =>
+              guard(opts.sandboxId, () => processes.startProcess(opts)),
+            readProcessOutput: (opts) =>
+              guard(opts.sandboxId, () => processes.readProcessOutput(opts)),
+            signalProcess: (opts) =>
+              guard(opts.sandboxId, () => processes.signalProcess(opts)),
+            listProcesses: (opts) =>
+              guard(opts.sandboxId, () => processes.listProcesses(opts)),
+            writeProcessInput: (opts) =>
+              guard(opts.sandboxId, () => processes.writeProcessInput(opts)),
+          },
+        }
+      : {}),
     ...(runtime
       ? {
           deploymentRuntime: {
@@ -154,10 +283,221 @@ export function allocationSandboxProvider(args: {
   };
 }
 
-/** Run on the physical owner. Successful destruction is the capacity release fence. */
+/**
+ * The Allocation's row while it is active, its machine's lease (for a
+ * local node) still held, and, given `sandboxId`, its sandbox that one.
+ */
+async function requireActiveAllocation(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  workerLeaseToken?: string | (() => string | undefined);
+  sandboxId?: string;
+}) {
+  const { db, allocation } = args;
+  if (allocation.workerNodeId && args.workerLeaseToken) {
+    const leaseToken =
+      typeof args.workerLeaseToken === "function"
+        ? args.workerLeaseToken()
+        : args.workerLeaseToken;
+    if (!leaseToken)
+      throw new Error("This machine no longer owns its execution lease");
+    const live = await db
+      .selectFrom("worker_nodes")
+      .select("id")
+      .where("id", "=", allocation.workerNodeId)
+      .where("lease_token", "=", leaseToken)
+      .where("enabled", "=", true)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .executeTakeFirst();
+    if (!live)
+      throw new Error("This machine no longer owns its execution lease");
+  }
+  const row = await db
+    .selectFrom("execution_allocations")
+    .selectAll()
+    .where("id", "=", allocation.id)
+    .where("status", "=", "active")
+    .where("capacity_released_at", "is", null)
+    .executeTakeFirst();
+  if (!row || (args.sandboxId && row.sandbox_provider_id !== args.sandboxId)) {
+    throw new Error(
+      "Workspace Allocation is no longer active or does not own this sandbox",
+    );
+  }
+  return row;
+}
+
+/**
+ * Destroy an Allocation's sandbox so that its next create makes a new one
+ * in the same Allocation (ADR 0257): a setup that must run with its own
+ * network again gets a sandbox in which nothing has run. Its volumes and
+ * their holds stay. `provider` is the machine's own, whose destroy is real;
+ * a sandbox already gone counts as destroyed.
+ */
+export async function replaceAllocationSandbox(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+  sandboxId: string;
+  /** As for {@link allocationSandboxProvider}. */
+  workerLeaseToken?: string | (() => string | undefined);
+}): Promise<void> {
+  await requireActiveAllocation(args);
+  await args.provider.destroySandbox(args.sandboxId);
+  await args.db
+    .updateTable("execution_allocations")
+    .set({ sandbox_provider_id: null, sandbox_creation_started: false })
+    .where("id", "=", args.allocation.id)
+    .where("status", "=", "active")
+    .where("sandbox_provider_id", "=", args.sandboxId)
+    .execute();
+}
+
+/** A host's claim on an Allocation's maintenance (ADR 0192). */
+export interface AllocationMaintenanceClaim {
+  allocationId: string;
+  token: string;
+}
+
+const MAINTENANCE_MINUTES = 5;
+
+/**
+ * Claim an Allocation for saving or destroying its workspace (ADR 0192), so
+ * two hosts never do it at once. For an idle chat's active workspace, pass
+ * its session: the claim locks the session row and is refused while the chat
+ * has a queued, held, or running turn, and turns wait while it is held. The
+ * claim lapses on its own if the host stops midway; {@link
+ * withAllocationMaintenance} renews it while the work runs.
+ */
+export async function claimAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  allocationId: string;
+  status: "active" | "released";
+  sessionId?: string;
+}): Promise<AllocationMaintenanceClaim | undefined> {
+  const token = randomUUID();
+  return args.db.transaction().execute(async (trx) => {
+    if (args.sessionId) {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", args.sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        session?.status !== "active" ||
+        session.allocation_id !== args.allocationId
+      )
+        return undefined;
+      const busy = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", args.sessionId)
+        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+        .executeTakeFirst();
+      if (busy) return undefined;
+    }
+    const claimed = await trx
+      .updateTable("execution_allocations")
+      .set({
+        maintenance_claim: token,
+        maintenance_claimed_until: sql`now() + make_interval(mins => ${MAINTENANCE_MINUTES})`,
+      })
+      .where("id", "=", args.allocationId)
+      .where("status", "=", args.status)
+      .where("capacity_released_at", "is", null)
+      .where((eb) =>
+        eb.or([
+          eb("maintenance_claimed_until", "is", null),
+          eb("maintenance_claimed_until", "<", sql<Date>`now()`),
+        ]),
+      )
+      .returning("id")
+      .executeTakeFirst();
+    return claimed ? { allocationId: args.allocationId, token } : undefined;
+  });
+}
+
+/** Extend a claim this host still holds; false once it lapsed or moved. */
+export async function renewAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  claim: AllocationMaintenanceClaim;
+}): Promise<boolean> {
+  const renewed = await args.db
+    .updateTable("execution_allocations")
+    .set({
+      maintenance_claimed_until: sql`now() + make_interval(mins => ${MAINTENANCE_MINUTES})`,
+    })
+    .where("id", "=", args.claim.allocationId)
+    .where("maintenance_claim", "=", args.claim.token)
+    .returning("id")
+    .executeTakeFirst();
+  return Boolean(renewed);
+}
+
+/** Give a claim back; a claim another host has since taken is left alone. */
+export async function releaseAllocationMaintenance(args: {
+  db: Kysely<DB>;
+  claim: AllocationMaintenanceClaim;
+}): Promise<void> {
+  await args.db
+    .updateTable("execution_allocations")
+    .set({ maintenance_claim: null, maintenance_claimed_until: null })
+    .where("id", "=", args.claim.allocationId)
+    .where("maintenance_claim", "=", args.claim.token)
+    .execute();
+}
+
+/** This host's maintenance claim lapsed or moved: its work must stop. */
+export class AllocationMaintenanceLostError extends Error {
+  constructor() {
+    super("The workspace's maintenance claim lapsed; another host may use it");
+    this.name = "AllocationMaintenanceLostError";
+  }
+}
+
+/**
+ * Run `work` under a claim, renewing it every 30 seconds. `work` calls
+ * `held` before each step that touches the workspace: it renews the claim
+ * and throws {@link AllocationMaintenanceLostError} once the claim is gone,
+ * so a stalled host never saves or destroys a workspace a turn may already
+ * use. The claim is given back afterwards unless it was lost.
+ */
+export async function withAllocationMaintenance<T>(args: {
+  db: Kysely<DB>;
+  claim: AllocationMaintenanceClaim;
+  work: (held: () => Promise<void>) => Promise<T>;
+}): Promise<T> {
+  let lost = false;
+  const held = async () => {
+    if (!lost && !(await renewAllocationMaintenance(args))) lost = true;
+    if (lost) throw new AllocationMaintenanceLostError();
+  };
+  const timer = setInterval(() => {
+    void renewAllocationMaintenance(args)
+      .then((renewed) => {
+        if (!renewed) lost = true;
+      })
+      .catch(() => {});
+  }, 30_000);
+  timer.unref();
+  try {
+    return await args.work(held);
+  } finally {
+    clearInterval(timer);
+    if (!lost) await releaseAllocationMaintenance(args).catch(() => {});
+  }
+}
+
+/**
+ * Destroy the workspaces of a node's released Allocations. Successful
+ * destruction is the capacity release fence. A local node is cleaned only by
+ * the process holding its lease; a remote node by any host while its
+ * executor's lease is live (ADR 0192), each Allocation under a claim.
+ */
 export async function cleanupWorkerAllocations(args: {
   db: Kysely<DB>;
-  workerNode: { id: string; token: string };
+  workerNode: { id: string; token: string } | { id: string; remote: true };
   provider: SandboxProvider;
 }): Promise<number> {
   return withSpan(
@@ -167,76 +507,47 @@ export async function cleanupWorkerAllocations(args: {
       attributes: { "catamorphic.worker.id": args.workerNode.id },
     },
     async () => {
+      const node = args.workerNode;
       const live = await args.db
         .selectFrom("worker_nodes")
         .select("id")
-        .where("id", "=", args.workerNode.id)
-        .where("lease_token", "=", args.workerNode.token)
+        .where("id", "=", node.id)
         .where("lease_expires_at", ">", sql<Date>`now()`)
+        .$if("token" in node, (query) =>
+          query.where("lease_token", "=", "token" in node ? node.token : ""),
+        )
+        .$if(!("token" in node), (query) =>
+          query.where("enabled", "=", true).where("remote", "is not", null),
+        )
         .executeTakeFirst();
       if (!live) return 0;
-      const rows = await args.db
-        .selectFrom("execution_allocations")
-        .selectAll()
-        .where("worker_node_id", "=", args.workerNode.id)
-        .where("status", "=", "released")
-        .where("capacity_released_at", "is", null)
-        .where(({ not, exists, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("agent_sessions as session")
-                .innerJoin(
-                  "agent_turns as turn",
-                  "turn.session_id",
-                  "session.id",
-                )
-                .select("turn.id")
-                .whereRef(
-                  "session.allocation_id",
-                  "=",
-                  "execution_allocations.id",
-                )
-                .where("turn.status", "=", "running")
-                .where("turn.lease_expires_at", ">", sql<Date>`now()`),
-            ),
-          ),
-        )
-        .where(({ not, exists, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("workflow_runs as run")
-                .innerJoin(
-                  "execution_jobs as job",
-                  "job.workflow_run_id",
-                  "run.id",
-                )
-                .select("job.id")
-                .whereRef("run.allocation_id", "=", "execution_allocations.id")
-                .where("job.status", "=", "running")
-                .where("job.lease_expires_at", ">", sql<Date>`now()`),
-            ),
-          ),
-        )
+      const rows = await retirableAllocations({
+        db: args.db,
+        workerNodeId: node.id,
+      })
         .limit(100)
         .execute();
       let cleaned = 0;
       const failures: unknown[] = [];
       for (const row of rows) {
-        if (row.sandbox_creation_started && !row.sandbox_provider_id) continue;
         try {
-          if (row.sandbox_provider_id)
-            await args.provider.destroySandbox(row.sandbox_provider_id);
-          await args.db
-            .updateTable("execution_allocations")
-            .set({ capacity_released_at: sql`now()` })
-            .where("id", "=", row.id)
-            .where("status", "=", "released")
-            .execute();
-          cleaned++;
+          if (
+            await retireAllocation({
+              db: args.db,
+              allocation: row,
+              provider: args.provider,
+            })
+          )
+            cleaned++;
         } catch (error) {
           failures.push(error);
         }
       }
+      // Holds end with their sandboxes (migration 051's trigger); any whose
+      // Allocation is gone some other way are let go here.
+      await sweepVolumeHolds({ db: args.db, node: node.id }).catch(
+        (error: unknown) => failures.push(error),
+      );
       if (failures.length > 0)
         throw new AggregateError(
           failures,
@@ -246,4 +557,132 @@ export async function cleanupWorkerAllocations(args: {
       return cleaned;
     },
   );
+}
+
+/**
+ * A node's released Allocations whose workspace may be destroyed now:
+ * capacity not yet released, and no turn with a live lease or running job
+ * still in them.
+ */
+function retirableAllocations(args: { db: Kysely<DB>; workerNodeId: string }) {
+  return args.db
+    .selectFrom("execution_allocations")
+    .select(["id", "sandbox_creation_started", "sandbox_provider_id"])
+    .where("worker_node_id", "=", args.workerNodeId)
+    .where("status", "=", "released")
+    .where("capacity_released_at", "is", null)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("agent_sessions as session")
+            .innerJoin("agent_turns as turn", "turn.session_id", "session.id")
+            .select("turn.id")
+            .whereRef("session.allocation_id", "=", "execution_allocations.id")
+            .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
+            .where("turn.lease_expires_at", ">", sql<Date>`now()`),
+        ),
+      ),
+    )
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("workflow_runs as run")
+            .innerJoin("execution_jobs as job", "job.workflow_run_id", "run.id")
+            .select("job.id")
+            .whereRef("run.allocation_id", "=", "execution_allocations.id")
+            .where("job.status", "=", "running")
+            .where("job.lease_expires_at", ">", sql<Date>`now()`),
+        ),
+      ),
+    );
+}
+
+/**
+ * Destroy one released Allocation's workspace under a claim and release its
+ * capacity; its volume holds end with it (migration 051's trigger). False
+ * when another host holds the claim, or its sandbox's creation started and
+ * was never recorded.
+ */
+async function retireAllocation(args: {
+  db: Kysely<DB>;
+  allocation: {
+    id: string;
+    sandbox_creation_started: boolean;
+    sandbox_provider_id: string | null;
+  };
+  provider: SandboxProvider;
+}): Promise<boolean> {
+  const { allocation } = args;
+  if (allocation.sandbox_creation_started && !allocation.sandbox_provider_id)
+    return false;
+  const claim = await claimAllocationMaintenance({
+    db: args.db,
+    allocationId: allocation.id,
+    status: "released",
+  });
+  if (!claim) return false;
+  await withAllocationMaintenance({
+    db: args.db,
+    claim,
+    work: async (held) => {
+      // Destroying is idempotent: a sandbox already gone counts.
+      await held();
+      if (allocation.sandbox_provider_id)
+        await args.provider.destroySandbox(allocation.sandbox_provider_id);
+      await args.db
+        .deleteFrom("deployment_runtimes")
+        .where("binding_id", "=", allocation.id)
+        .execute();
+      await args.db
+        .updateTable("execution_allocations")
+        .set({ capacity_released_at: sql`now()` })
+        .where("id", "=", allocation.id)
+        .where("status", "=", "released")
+        .where("maintenance_claim", "=", claim.token)
+        .execute();
+    },
+  });
+  return true;
+}
+
+/**
+ * Destroy now, as their cleanup would in the background, the workspaces of
+ * released Allocations on this one's node that still hold any of its
+ * exclusive volumes and run nothing, so its sandbox takes those volumes
+ * over rather than living with empty ones (ADR 0208). Two sandboxes never
+ * mount one at once: a holder that could not be destroyed keeps it.
+ */
+async function retireVolumeHolders(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+}): Promise<void> {
+  const { allocation } = args;
+  const keys = (allocation.policy.sandbox?.volumes ?? [])
+    .filter((volume) => volume.exclusive)
+    .map((volume) => volume.key);
+  if (!allocation.workerNodeId || keys.length === 0) return;
+  const holders = await retirableAllocations({
+    db: args.db,
+    workerNodeId: allocation.workerNodeId,
+  })
+    .where("id", "in", (eb) =>
+      eb
+        .selectFrom("volume_holds")
+        .select("volume_holds.allocation_id")
+        .where("volume_holds.node", "=", volumeHoldNode(allocation))
+        .where("volume_holds.volume_key", "in", keys),
+    )
+    .execute();
+  for (const holder of holders)
+    await retireAllocation({
+      db: args.db,
+      allocation: holder,
+      provider: args.provider,
+    }).catch((error: unknown) =>
+      console.warn(
+        `[catamorphic] Released workspace ${holder.id} keeps its volumes`,
+        error,
+      ),
+    );
 }

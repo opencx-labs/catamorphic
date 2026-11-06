@@ -326,4 +326,53 @@ describe("httpDocumentsClient", () => {
       "Reading your access failed (503): Capabilities unavailable",
     );
   });
+  it("reads, replaces and removes the member's remote environment", async () => {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+    let supported = true;
+    const client = httpDocumentsClient({
+      serverUrl: base,
+      accessToken: async () => "member-token",
+      projectId,
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        calls.push({
+          method: init?.method ?? "GET",
+          path: url.pathname,
+          ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+        });
+        if (!supported)
+          return Response.json({ message: "Route not found" }, { status: 404 });
+        if ((init?.method ?? "GET") === "GET")
+          return Response.json({
+            allowed: true,
+            files: [
+              { path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" },
+              { nope: true },
+            ],
+          });
+        return new Response(null, { status: 204 });
+      },
+    });
+    await expect(client.personalEnvironment()).resolves.toEqual({
+      allowed: true,
+      files: [{ path: ".env", fingerprint: "g", bytes: 4, updatedAt: "x" }],
+      // A server that reports no personal setup (ADR 0208).
+      setup: null,
+    });
+    await client.putPersonalEnvironment({
+      files: [{ path: ".env", content: "QT0x" }],
+    });
+    await client.deletePersonalEnvironment();
+    expect(calls).toEqual([
+      { method: "GET", path: "/api/projects/p-1/personal-environment" },
+      {
+        method: "PUT",
+        path: "/api/projects/p-1/personal-environment",
+        body: { files: [{ path: ".env", content: "QT0x" }] },
+      },
+      { method: "DELETE", path: "/api/projects/p-1/personal-environment" },
+    ]);
+    supported = false;
+    await expect(client.personalEnvironment()).resolves.toBeNull();
+  });
 });

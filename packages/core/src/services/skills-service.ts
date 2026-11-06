@@ -1,27 +1,15 @@
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
+import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
+import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
-import { type Identity, isBuilder, mayUseProject } from "../identity.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  mayUseProject,
+} from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
-
-/**
- * Directory (relative to the project root) where per-project agent skills
- * live, following the Agent Skills spec layout:
- *
- * ```
- * .catamorphic/skills/<name>/SKILL.md
- * .catamorphic/skills/<name>/references/…
- * ```
- *
- * The project repo is the single source of truth for these skills — its
- * canonical storage is the project origin (e.g. Cloudflare Artifacts), so
- * skills are versioned with the workflow code and scoped per project/tenant
- * by construction. Coding agents read them from the dev sandbox checkout; no
- * separate skill store exists.
- */
-export const SKILLS_DIR = ".catamorphic/skills";
 
 export interface ProjectSkill {
   /** Directory name == declared skill name. */
@@ -33,6 +21,11 @@ export interface ProjectSkill {
    */
   title: string;
   description: string;
+  /**
+   * Frontmatter `argument-hint`: what an invocation's instructions say
+   * ("[issue-number]"), shown where they are typed. Absent for free text.
+   */
+  argumentHint?: string;
   /**
    * For project skills, the SKILL.md path relative to the project root; for
    * host skills, relative to the host-skills root (`<name>/SKILL.md`).
@@ -47,7 +40,7 @@ export interface ProjectSkill {
 }
 
 /**
- * Read-only view over a project's `.catamorphic/skills/` directory, merged with
+ * Read-only view over a project's `.work/skills/` directory, merged with
  * the calling user's personal tier (ADR 0056) and the host-tier skill set
  * (ADR 0049). Writes go through the normal project file APIs (project
  * skills are just files in the repo); host skills are config, resolved once
@@ -69,7 +62,7 @@ export class SkillsService {
   ) {}
 
   async list(identity: Identity, projectId: string): Promise<ProjectSkill[]> {
-    if (!isBuilder(identity, projectId))
+    if (!hasProjectPermission(identity, projectId, "program:read"))
       return this.listShared(identity, projectId);
     await this.requireProject(identity, projectId);
     const projectSkills = await this.withDev(identity, projectId, (repo) =>
@@ -100,7 +93,7 @@ export class SkillsService {
     projectId: string,
     name: string,
   ): Promise<{ skill: ProjectSkill; content: string } | null> {
-    if (!isBuilder(identity, projectId))
+    if (!hasProjectPermission(identity, projectId, "program:read"))
       return this.readShared(identity, projectId, name);
     await this.requireProject(identity, projectId);
     const fromProject = await this.withDev(
@@ -132,7 +125,7 @@ export class SkillsService {
    * The skills as shared (ADR 0055): the program at origin main plus the
    * host tier, read without a caller working copy — what the project MCP
    * endpoint serves to members whose only relationship to the project is
-   * using it. Callers gate access (builder or agent ref) before calling.
+   * using it. Callers gate access (`program:read` or an agent ref) before calling.
    */
   async listShared(
     identity: Identity,
@@ -145,7 +138,7 @@ export class SkillsService {
       projectId,
       (repo, ref) =>
         ref
-          ? readProgramFiles(repo, ref, `${SKILLS_DIR}/`)
+          ? readProgramFiles(repo, ref, `${PROJECT_SKILLS_DIR}/`)
           : Promise.resolve<Record<string, string>>({}),
       { publishedOnly: true },
     );
@@ -170,7 +163,7 @@ export class SkillsService {
       projectId,
       (repo, ref) =>
         ref
-          ? readProgramFiles(repo, ref, `${SKILLS_DIR}/`)
+          ? readProgramFiles(repo, ref, `${PROJECT_SKILLS_DIR}/`)
           : Promise.resolve<Record<string, string>>({}),
       { publishedOnly: true },
     );
@@ -185,10 +178,11 @@ export class SkillsService {
     return content === undefined ? null : { skill: host, content };
   }
 
-  private async listProjectSkills(repo: ProjectRepo): Promise<ProjectSkill[]> {
-    const files = await repo.listFiles({ prefix: `${SKILLS_DIR}/` });
+  private async listProjectSkills(repo: ProjectDraft): Promise<ProjectSkill[]> {
+    const files = await repo.listFiles({ prefix: `${PROJECT_SKILLS_DIR}/` });
     const skillFiles = files.filter(
-      (file) => file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
+      (file) =>
+        file.startsWith(`${PROJECT_SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     );
     const contents = await Promise.all(
       skillFiles.map(
@@ -221,13 +215,13 @@ export class SkillsService {
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {
@@ -247,42 +241,56 @@ function skillsFromTier(
   return Object.entries(files)
     .filter(([path]) => path.endsWith("/SKILL.md"))
     .map(([path, content]) => {
-      const frontmatter = parseSkillFrontmatter(content);
       const dirName = path.slice(0, path.length - "/SKILL.md".length);
-      const name = frontmatter.name ?? dirName;
-      return {
-        name,
-        title: frontmatter.title ?? humanizeSkillName(name),
-        description: frontmatter.description ?? "",
-        path,
-        source,
-      };
+      return skillFrom({ content, dirName, path, source });
     });
 }
 
-/** `.catamorphic/skills/<name>/SKILL.md` files → skills, sorted by name. */
+/** `.work/skills/<name>/SKILL.md` files → skills, sorted by name. */
 function skillsFromFiles(files: Record<string, string>): ProjectSkill[] {
   return Object.entries(files)
     .filter(
       ([file]) =>
-        file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
+        file.startsWith(`${PROJECT_SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     )
-    .map(([file, source]) => {
-      const frontmatter = parseSkillFrontmatter(source);
-      const dirName = file.slice(
-        SKILLS_DIR.length + 1,
-        file.length - "/SKILL.md".length,
-      );
-      const name = frontmatter.name ?? dirName;
-      return {
-        name,
-        title: frontmatter.title ?? humanizeSkillName(name),
-        description: frontmatter.description ?? "",
+    .map(([file, content]) =>
+      skillFrom({
+        content,
+        dirName: file.slice(
+          PROJECT_SKILLS_DIR.length + 1,
+          file.length - "/SKILL.md".length,
+        ),
         path: file,
-        source: "project" as const,
-      };
-    })
+        source: "project",
+      }),
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** One SKILL.md as a listed skill, whatever tier it comes from. */
+function skillFrom({
+  content,
+  dirName,
+  path,
+  source,
+}: {
+  content: string;
+  dirName: string;
+  path: string;
+  source: ProjectSkill["source"];
+}): ProjectSkill {
+  const frontmatter = parseSkillFrontmatter(content);
+  const name = frontmatter.name ?? dirName;
+  return {
+    name,
+    title: frontmatter.title ?? humanizeSkillName(name),
+    description: frontmatter.description ?? "",
+    ...(frontmatter.argumentHint
+      ? { argumentHint: frontmatter.argumentHint }
+      : {}),
+    path,
+    source,
+  };
 }
 
 /**
@@ -295,10 +303,16 @@ export function parseSkillFrontmatter(source: string): {
   name?: string;
   title?: string;
   description?: string;
+  argumentHint?: string;
 } {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match?.[1]) return {};
-  const result: { name?: string; title?: string; description?: string } = {};
+  const result: {
+    name?: string;
+    title?: string;
+    description?: string;
+    argumentHint?: string;
+  } = {};
   for (const line of match[1].split("\n")) {
     const colon = line.indexOf(":");
     if (colon === -1) continue;
@@ -310,6 +324,8 @@ export function parseSkillFrontmatter(source: string): {
     if (key === "name") result.name = value;
     if (key === "title") result.title = value;
     if (key === "description") result.description = value;
+    // Claude Code's spelling, so one SKILL.md reads the same in both.
+    if (key === "argument-hint") result.argumentHint = value;
   }
   return result;
 }

@@ -155,6 +155,7 @@ export async function authorizeRemoteServer(options: {
     authorize.searchParams.set("redirect_uri", callback.url);
     authorize.searchParams.set("response_type", "code");
     authorize.searchParams.set("scope", "openid profile email offline_access");
+    authorize.searchParams.set("resource", requestedResource);
     authorize.searchParams.set("state", state);
     authorize.searchParams.set("code_challenge", challenge);
     authorize.searchParams.set("code_challenge_method", "S256");

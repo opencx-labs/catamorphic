@@ -1,61 +1,106 @@
-# Catamorphic stock server
+# Work server
 
-For GitHub-backed company proposals, configure `CATAMORPHIC_GITHUB_CLIENT_ID`
-and `CATAMORPHIC_GITHUB_TOKEN` on the server. Use a service account with access
-only to the company repositories, separate from the builders who review its
-PRs. Members never receive this token. The stock host validates the account at
-boot and supplies the existing `GithubService` and proposal bot identity.
-Tokens that need rotation are replaced in the deployment environment.
+The reference process source for `@catamorphic/work-server`
+([library and deployment guide](../../packages/work-server/README.md)).
+Deployments own their entry point and image, install an exact library release,
+and add hooks for their company and use case (ADR 0294). Work does not publish
+a stock server image. Build on Bun, include git and system CA certificates,
+run unprivileged, and handle shutdown and replica lease loss. `apps/server`
+remains the development host used by the repository's orchestrator and tests.
 
-The machine-local project setup operation accepts `githubRepository` as
-`owner/repository` alongside the explicit roles and admission policy. It imports
-that repository and publishes the requested role definitions. Ongoing source
+Configuration variables use the `WORK_` prefix. The reference process keeps
+state under `/data`; mount it for a PGlite deployment. Network Postgres mode
+uses shared durable storage and explicitly supplied secrets. See
+[workflow composition](../../skills/setup-work-server/references/workflow-composition.md)
+for workflows, external services and application-owned state.
+
+GitHub is an ordinary connection (ADR 0177). An organization administrator
+connects a GitHub App installation as the `github` service connection, or the
+operator registers a new App from a manifest
+(`POST /_work/operator/github/app` on the loopback listener, then a one-time
+browser link on the public URL). Sync, proposals, and agents' GitHub actions
+use that connection with tokens minted per call; members never receive one.
+See the setup skill's
+[Connect GitHub](../../skills/setup-work-server/references/connect-github.md).
+
+The machine-local project setup operation accepts `repository` as
+`owner/repository` alongside the explicit roles and admission policy. It
+attaches that repository through the `github` service connection and
+proposes the requested role definitions when the repository has none. Ongoing source
 changes use ordinary proposals and repository review. Members can list and read
 proposals through their company sign-in only when their document scope permits
 every changed path, including the old path of renamed files.
 
 ## Machines and execution Environments
 
-The accepted managed deployment model uses multiple Catamorphic server instances
-sharing one authority and network Postgres. Operators enroll machines; project
-roles and agent policy determine which Environments members may use. The
-desktop's **This machine** option uses the member's project connection and does
-not require direct database access. PGlite remains available for standalone use.
-
-Postgres mode shares origin objects, bundles, encrypted vault records, auth,
-approvals, and worker leases. Each machine owns its runtime and local caches.
-Configure a common public origin and deployment secret before enrollment. See
-[ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md) and
-the [setup reference](../../skills/setup-catamorphic-server/references/cluster-deployment.md)
-for enrollment, session recovery, and required verification.
+One server is a complete brain. To add execution capacity, enroll workers: the
+deployment-owned worker image started as `bun apps/server/src/worker.ts`,
+holding only a machine credential exchanged once for an operator's single-use enrollment code. Workers
+dial out to the control plane over HTTPS and run agent sandboxes; workflow runs
+and every credential stay on the control plane. For availability, run
+control-plane replicas on shared Postgres with the same `WORK_SECRET`,
+`WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, public origin, and sign-in and
+gateway configuration. Replicas are disposable (ADR 0190): each start is a new
+machine, a stopped or lost replica's workflow runs and chats move to the
+others, `/readyz` answers 503 while its lease is not renewing, and
+`/healthz` answers 503 once its lease is lost for good. Workers own their
+leases (ADR 0192): any replica runs any worker's agents, so stopping a replica
+interrupts only the turns it was running itself.
+`WORK_CONTROL_PLANE_WORKLOADS=workflow` keeps agent code off the control plane.
+Each worker takes work for everyone or for named people and directory groups,
+so a person's agents run on their own machine first; machine rules give every
+member of a group a machine of their own (ADR 0167), on Hetzner Cloud, from a
+pool of machines you enrolled with `GET /api/workers/install.sh`, or through a
+provisioner hook, and keep a released machine for a few days (ADR 0205). A
+rule on demand creates machines while work waits for one, up to a limit, and
+destroys them once idle (ADR 0258), so bursty work such as pull request
+reviews gets a fresh machine without paying for idle ones.
+See [ADR 0164](../../docs/decisions/0164-control-plane-and-enrolled-workers.md)
+and the [machines reference](../../skills/setup-work-server/references/cluster-deployment.md).
 
 ## First brain
 
 For the shortest path from nothing to a running brain an MCP client can
 connect to (build, run, provision a project and a person, connect), follow
-[`../../skills/setup-catamorphic-server/references/first-brain.md`](../../skills/setup-catamorphic-server/references/first-brain.md).
+[`../../skills/setup-work-server/references/first-brain.md`](../../skills/setup-work-server/references/first-brain.md).
 
 ## Authentication setup
 
-Use [`../../skills/setup-catamorphic-server/SKILL.md`](../../skills/setup-catamorphic-server/SKILL.md)
+Company deployments sign in through Google Workspace with directory-backed
+deprovisioning (ADR 0161): only accounts in the configured Workspace domains
+sign in, suspended or departed accounts lose every session within one five
+minute sweep, access tokens last 15 minutes, refresh tokens rotate with reuse
+detection, and directory groups can grant project roles. See
+[company identity](../../skills/setup-work-server/references/company-identity.md).
+
+Password sign-in is limited per client address (three attempts every 10
+seconds), counted in the database so every replica shares the limit. Behind a
+load balancer or CDN, set `WORK_TRUSTED_PROXIES` to their addresses so the
+limit counts each person's address; see
+[sign-in limits](../../skills/setup-work-server/references/stock-server.md#sign-in-limits).
+
+Use [`../../skills/setup-work-server/SKILL.md`](../../skills/setup-work-server/SKILL.md)
 for agent-guided stock setup or custom-host embedding. The guidance first
 inspects existing auth and deployment. The stock host uses Better Auth; a
 custom host keeps its own verified session model.
 
 The built-in local fallback is provisioned through the running server, never
-by writing auth rows. A setup agent inspects the schemas in `src/setup` and
-uses the machine-local operator operations in `src/server.ts` to create the
+by writing auth rows. A setup agent inspects the schemas in
+`packages/work-server/src/setup` and uses the machine-local operator operations
+in `packages/work-server/src/server.ts` to create the
 project, commit explicit roles, configure admission, and create an ordinary
 local user when requested. There is no human setup command or first-run UI.
-The owner-only operational credential under `CATAMORPHIC_DATA_DIR` is machine
+The owner-only operational credential under `WORK_DATA_DIR` is machine
 authority, not a Catamorphic identity or super-admin account.
 
 After initial provisioning, the company brain is configured through its
-ordinary reviewed project files. `.catamorphic/roles/*.json` grants artifacts,
+ordinary reviewed project files. `.work/roles/*.json` grants artifacts,
 Environments, connection aliases, document paths, and namespaced permissions;
-`.catamorphic/agents/*` defines the project agents; `.catamorphic/sidebar.js` and
-`.catamorphic/project.json` can shape the desktop sidebar and starting actions
-from resolved builder state and permissions. There is no parallel stock-server
+`.work/agents/*` defines the project agents (the built-in agent, or Claude
+Code and Codex running in their sandbox with a model connection, ADR 0180);
+`.work/workspace.js` and
+`.work/project.json` can shape the desktop sidebar and starting actions
+from resolved permissions. There is no parallel stock-server
 bootstrap config.
 
 Invitations are credential-free project locators. Desktop, PWA, and MCP clients
@@ -72,31 +117,77 @@ enables every compatible workflow automatically.
 ## Credential vault and provider setup
 
 Standalone PGlite installs create an AES-256-GCM credential vault under
-`CATAMORPHIC_DATA_DIR/credentials`, with owner-only key and record permissions.
-Postgres installs store encrypted records in shared object storage and derive the
-vault key from `BETTER_AUTH_SECRET`. Back up the database and protect the key
-separately. Losing the key makes provider connections unrecoverable.
+`WORK_DATA_DIR/credentials`, with owner-only key and record permissions.
+Postgres installs store encrypted records in shared object storage under
+`WORK_VAULT_KEY`, a separate secret from `WORK_SECRET` (ADR 0162);
+`WORK_VAULT_PREVIOUS_KEYS` keeps older keys readable during a rotation. Back up
+the database and protect the key separately. Losing the key makes provider
+connections and project secrets unrecoverable. Project secrets are sealed in
+the same vault; their database rows hold only references.
 
-Rotate a service credential with the authenticated
-`PUT /connections/:connectionId/credential` endpoint. Rotation writes a new
-encrypted record, atomically advances the connection revision, deletes the old
-record, and wakes workflow calls parked on that connection. Keep old vault
-wrapping keys available until all stored records have been re-encrypted.
+Agents and workflows reach company systems through the connection gateway:
+`WORK_GATEWAY_CONFIG` declares MCP endpoints, HTTP APIs, Git hosts, model APIs,
+and read-only database connections. Add company guards and model routing
+policy in the hooks of your own entry point (ADRs 0183, 0294;
+reference source: [`src/index.ts`](src/index.ts);
+[your own image](../../packages/work-server/README.md#your-own-image)). See
+[secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
+
+Service connections are named and administered (ADR 0172). Organization
+administrators (made by the operator with `POST /_work/operator/users`
+`"administrator": true` or `POST /_work/operator/administrators`, then by each
+other from the app) create them with `POST /api/service-connections`,
+authorize them through the provider's own challenge with
+`POST /api/service-connections/:id/authorize` (form fields complete with
+`POST /api/connection-authorizations/complete`; OAuth returns to
+`/api/connection-authorizations/callback`), rotate them by authorizing again,
+and revoke them with `DELETE /api/connections/:id`. The loopback operator
+listener offers the same operations under `/_work/operator/service-connections`.
+Rotation writes a new encrypted record, advances the connection revision,
+closes pooled sessions of the old credential, deletes the old record, and
+wakes workflow calls parked on that connection. Keep old vault wrapping keys
+available until all stored records have been re-encrypted.
+
+Projects commit which Environment may use which named connection in
+`.work/project.json` (`environments.<name>.connections`); there is no binding
+API. Members see an Environment's aliases and authorize their own accounts at
+`/api/projects/:id/environments/:environment/connections`.
 
 Provider drivers and OAuth application details are deployment configuration.
-The stock image does not ship a shared Slack or Google OAuth identity. Register
-your own provider applications, configure their HTTPS callback URLs, and inject
-their connection providers when embedding `buildStockServer`. Service accounts
+The library does not supply a shared Slack or Google OAuth identity. Register
+your own provider applications (an `mcp` gateway entry takes a pre-registered
+`oauth.client`), configure their HTTPS callback URLs, and inject further
+connection providers with the `connectionProviders` hook. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.
+Project enablements use only project and tenant service connections.
+
+Workflows can start from webhooks: `trigger("webhook", { name })` gives each
+name a public URL under `WORK_PUBLIC_URL` (`/api/hooks/...`), shown to
+holders of `webhooks:read` in the workflow's **Automatic** view, with a replace
+control for holders of `webhooks:write`. The binding declares how senders are
+checked (`verify`: a signature scheme or shared token) and which handshakes are
+answered (`respond`); projects usually declare an integration's webhook once as
+a trigger kind in `.work/triggers/` (ADR 0171). Bodies are capped at 1 MiB per
+endpoint unless a binding asks for more, up to `WORK_WEBHOOK_MAX_BYTES`.
+
+## Sharing with customers
+
+Shares (ADR 0165) give people outside the company a sign-in link to one
+document, folder, or app. They sign in through a guest provider (for example
+your product's own accounts over OIDC) and see only what was addressed to
+their email or domain; guests never become members or receive API tokens.
+Members with `publications:write` manage shares under
+`/api/projects/:projectId/shares`. See
+[sharing outside the company](../../skills/setup-work-server/references/sharing.md).
 
 ## Remote development resources
 
-Choose `CATAMORPHIC_SANDBOX=microsandbox` for per-agent CPU/memory isolation and
+Choose `WORK_SANDBOX=microsandbox` for per-agent CPU/memory isolation and
 configure each server's workspace budget. Full servers reject new allocations;
 idle development workspaces retain their reservation until archived or closed.
-See the [capacity and recovery setup](../../skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development)
+See the [capacity and recovery setup](../../skills/setup-work-server/references/cluster-deployment.md#capacity-and-isolated-development)
 for configuration, agent requirements, machine inventory, and cleanup recovery.
 
 Agent context and deferred capabilities are documented in

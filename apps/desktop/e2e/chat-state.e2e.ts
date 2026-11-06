@@ -43,6 +43,22 @@ async function clickMessageLink(modifiers = 0) {
   }
 }
 
+/** A real press at an element's center, where the person would click. */
+async function pressCenter(selector: string) {
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    return {x:r.x+r.width/2,y:r.y+r.height/2};
+  })()`);
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+}
+
 const clickButton = (label: string) =>
   app.eval(
     `document.querySelector('button[aria-label=${JSON.stringify(label)}]').click()`,
@@ -67,8 +83,14 @@ beforeAll(async () => {
   await app.waitFor(
     "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
   );
-  await app.eval(
-    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
+  // The dock's + floats the chat over the New Tab (Cmd+N opens it there).
+  await app.waitFor(
+    `(() => { const plus = document.querySelector('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus; })()`,
+    { label: "the dock's +" },
   );
   await app.waitFor(
     "!!document.querySelector('[data-floating-chat] [data-composer-input]')",
@@ -87,6 +109,12 @@ afterAll(async () => {
 });
 
 it("settles a new chat and shows Option-click previews above the chat", async () => {
+  // A chat tab with nothing attached is a tab, not a group: no eyebrow.
+  expect(
+    await app.eval(
+      `!!document.querySelector('${chatTab}') && !document.querySelector('[data-tab-group-eyebrow]')`,
+    ),
+  ).toBe(true);
   await app.eval(`(() => { ${setReactValueJs}
     const input = document.querySelector('[data-chat-local-id] [data-composer-input]');
     setReactValue(input, ${JSON.stringify(`[Preview](${origin}/preview)`)});
@@ -152,6 +180,54 @@ it.each([
   );
 });
 
+it("gives a chat tab group one eyebrow across all its tabs", async () => {
+  const eyebrow = await app.eval<{
+    owners: string[];
+    connected: boolean;
+  }>(`(() => {
+    const marks = [...document.querySelectorAll('[data-tab-group-eyebrow]')];
+    const boxes = marks.map((mark) => mark.getBoundingClientRect());
+    return {
+      owners: marks.map((mark) =>
+        mark.closest('[data-point-key]').dataset.pointKey.split(':')[0] +
+        ':' + mark.dataset.tabGroupEyebrow),
+      connected: boxes.every((box, index) =>
+        index === 0 || Math.abs(boxes[index - 1].right - box.left) <= 1),
+    };
+  })()`);
+  expect(eyebrow.owners[0]).toBe("chat:start");
+  expect(eyebrow.owners.length).toBeGreaterThan(1);
+  expect(
+    eyebrow.owners.slice(1).every((owner) => owner.endsWith(":rest")),
+  ).toBe(true);
+  expect(eyebrow.connected).toBe(true);
+});
+
+it("wears the group's accent only while it holds the tab in front", async () => {
+  const accented = () =>
+    app.eval<boolean[]>(
+      `[...document.querySelectorAll('[data-tab-group-eyebrow]')].map((mark) => mark.classList.contains('bg-accent/50'))`,
+    );
+  expect((await accented()).every(Boolean)).toBe(true);
+  // Another tab in front: the group left behind goes quiet.
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}))`,
+  );
+  await app.waitFor(
+    `(() => { const marks = [...document.querySelectorAll('[data-tab-group-eyebrow]')]; return marks.length > 1 && marks.every((mark) => !mark.classList.contains('bg-accent/50')); })()`,
+    { label: "eyebrow quiet behind another tab" },
+  );
+  // Back in the group, it wears the accent again.
+  await app.eval(`document.querySelector('${chatTab} button').click()`);
+  await app.waitFor(
+    `(() => { const marks = [...document.querySelectorAll('[data-tab-group-eyebrow]')]; return marks.length > 1 && marks.every((mark) => mark.classList.contains('bg-accent/50')); })()`,
+    { label: "eyebrow accented in front" },
+  );
+  await app.eval(
+    `[...document.querySelectorAll('[data-point-key] button[aria-label^="Close "]')].find((button) => button.getAttribute('aria-label') === 'Close New Tab')?.click(); true`,
+  );
+});
+
 it("opens floating previews from a collapsed chat tab group", async () => {
   await clickButton("Collapse grouped tabs");
   await app.waitFor(
@@ -174,6 +250,54 @@ it("preserves floating chats, their draft, and their bubble when opening links",
   await app.waitFor(
     `!!document.querySelector('${bubble}[aria-expanded=true]')`,
   );
+  await app.waitFor(
+    "getComputedStyle(document.querySelector('[data-floating-chat]')).opacity === '1'",
+  );
+  await app.waitFor(
+    `(() => {
+      const panel = document.querySelector('[data-floating-chat]');
+      const column = panel?.querySelector('[role="log"] > div > div');
+      return !!column && ![...panel.getAnimations(), ...column.getAnimations()]
+        .some(animation => animation.playState === 'running');
+    })()`,
+    { label: "floating panel and message column finished resizing" },
+  );
+  // The scroller spans the floating panel, so its scrollbar sits at the
+  // panel's edge, while the messages keep a centered, readable column.
+  const layout = await app.eval<{
+    panel: [number, number];
+    scroller: [number, number];
+    column: [number, number];
+  }>(`(() => {
+    const panel = document.querySelector('[data-floating-chat]');
+    let scroller = panel.querySelector('[data-user-message]');
+    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY))
+      scroller = scroller.parentElement;
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return [rect.left, rect.right];
+    };
+    return {
+      panel: box(panel),
+      scroller: box(scroller),
+      column: box(scroller.firstElementChild),
+    };
+  })()`);
+  // On the Linux display the panel is wider than the column, so the old
+  // layout would fail here. (The macOS runner's smaller window leaves the
+  // panel narrower than the column, where both layouts look the same.)
+  if (process.platform === "linux")
+    expect(layout.panel[1] - layout.panel[0]).toBeGreaterThan(800);
+  expect(layout.panel[1] - layout.scroller[1]).toBeLessThanOrEqual(2);
+  expect(layout.scroller[0] - layout.panel[0]).toBeLessThanOrEqual(2);
+  expect(layout.column[1] - layout.column[0]).toBeLessThanOrEqual(768);
+  expect(
+    Math.abs(
+      layout.column[0] -
+        layout.scroller[0] -
+        (layout.scroller[1] - layout.column[1]),
+    ),
+  ).toBeLessThanOrEqual(20);
   await app.eval(`(() => { ${setReactValueJs}
     setReactValue(document.querySelector('[data-floating-chat] [data-composer-input]'), 'Keep this draft');
   })()`);
@@ -230,6 +354,39 @@ it("opens beside a full chat and does not let an old expansion undo new navigati
     "!!document.querySelector('[aria-label=\"Full width\"]') && !!document.querySelector('[data-workspace-slot=right] webview')",
   );
   await app.screenshot("/tmp/chat-link-split.png");
+  // A press inside the page reaches its guest, never the pane, yet it
+  // focuses the page's side of the split as a press on the chat does.
+  const currentTab = (kind: string) =>
+    `!!document.querySelector('[data-point-key^="${kind}:"] [aria-current]')`;
+  await pressCenter("[data-chat-local-id] [data-composer-input]");
+  await app.waitFor(currentTab("chat"), { label: "the chat's side focused" });
+  await pressCenter("[data-workspace-slot=right] webview");
+  await app.waitFor(currentTab("browser"), {
+    label: "the page's side focused by a press inside the page",
+  });
+  await pressCenter("[data-chat-local-id] [data-composer-input]");
+  await app.waitFor(currentTab("chat"), { label: "the chat's side again" });
+  // An agent's trusted input inside that page must not take the person's
+  // focused pane away. Exercise the ordinary browser tool and its control
+  // handoff, rather than a synthetic DOM event.
+  const browserKey = await app.eval<string>(
+    "document.querySelector('[data-workspace-slot=right] webview').closest('[data-surface-key]').dataset.surfaceKey",
+  );
+  const agentPress = `E2E workspace tool ${JSON.stringify({
+    name: "browser_act",
+    input: { key: browserKey, action: "click", x: 10, y: 10 },
+    serial: "split-agent-press",
+  })}`;
+  await app.eval(`(() => { ${setReactValueJs}
+    const input = document.querySelector('[data-chat-local-id] [data-composer-input]');
+    setReactValue(input, ${JSON.stringify(agentPress)});
+    input.closest('form').requestSubmit();
+  })()`);
+  await app.waitFor(
+    `document.body.innerText.includes('E2E result split-agent-press: {"ok":true}') && !document.querySelector('[data-testid="chat-stop"]')`,
+    { label: "the agent's page press completed", timeoutMs: 30_000 },
+  );
+  expect(await app.eval(currentTab("chat"))).toBe(true);
   await app.eval(`(() => { ${setReactValueJs}
     const input = document.querySelector('[data-chat-local-id] [data-composer-input]');
     setReactValue(input, 'Respond slowly while I read the page beside you');
@@ -261,5 +418,93 @@ it("opens beside a full chat and does not let an old expansion undo new navigati
       "!!document.querySelector('[data-workspace-slot=full] webview')",
     ),
   ).toBe(true);
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("lets go of the caret in a chat it minimises, keeping the draft", async () => {
+  const before = await app.eval<string[]>(
+    "[...document.querySelectorAll('[data-chat-local-id]')].map((element) => element.dataset.chatLocalId)",
+  );
+  await app.eval(
+    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
+  );
+  const chat = await app.waitFor<string>(
+    `(() => {
+      const known = ${JSON.stringify(before)};
+      const opened = [...document.querySelectorAll('[data-floating-chat]')].find(
+        (element) => !known.includes(element.dataset.chatLocalId),
+      );
+      return opened?.querySelector('[data-composer-input]') &&
+        getComputedStyle(opened).opacity === '1' && opened.dataset.chatLocalId;
+    })()`,
+    { label: "a new floating chat" },
+  );
+  const dock = `[data-chat-local-id="${chat}"]`;
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const r = document.querySelector('${dock} [data-composer-input]').getBoundingClientRect();
+    return { x: r.x + 24, y: r.y + r.height / 2 };
+  })()`);
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+  await app.cdp("Input.insertText", { text: "A draft to come back to" });
+  // The caret mid-draft, three characters from its end.
+  for (let step = 0; step < 3; step++)
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "ArrowLeft",
+        code: "ArrowLeft",
+        windowsVirtualKeyCode: 37,
+      });
+  await app.eval(
+    `document.querySelector('${dock} button[aria-label="Minimize chat to bubble"]').click()`,
+  );
+  await app.waitFor(`!document.querySelector('${dock}[data-floating-chat]')`, {
+    label: "chat minimised",
+  });
+  // A caret left in the now-inert composer would make Chromium walk every
+  // inert element before each frame (docs/performance.md). The chat stays
+  // mounted while minimised, so the check is not met by its removal.
+  expect(await app.eval(`document.querySelector('${dock}').inert`)).toBe(true);
+  // At rest it is kept but skipped by style, layout and paint, which its
+  // transcript would otherwise pay on every frame while it streams.
+  await app.waitFor(
+    `getComputedStyle(document.querySelector('${dock}')).contentVisibility === 'hidden'`,
+    { label: "minimised chat skipped by rendering" },
+  );
+  expect(
+    await app.eval(`(() => {
+      const node = getSelection().anchorNode;
+      const element = node && (node.nodeType === 1 ? node : node.parentElement);
+      return !!element?.closest('[inert]');
+    })()`),
+  ).toBe(false);
+  await app.eval(
+    `document.querySelector('[data-chat-bubble="${chat}"] button[aria-expanded]').click()`,
+  );
+  await app.waitFor(`!!document.querySelector('${dock}[data-floating-chat]')`, {
+    label: "chat restored",
+  });
+  expect(
+    await app.eval(
+      `document.querySelector('${dock} [data-composer-input]').textContent`,
+    ),
+  ).toBe("A draft to come back to");
+  // The caret comes back where it was, so typing continues there.
+  await app.waitFor(
+    `document.querySelector('${dock} [data-composer-input]').contains(document.activeElement)`,
+    { label: "composer focused" },
+  );
+  await app.cdp("Input.insertText", { text: " again," });
+  expect(
+    await app.eval(
+      `document.querySelector('${dock} [data-composer-input]').textContent`,
+    ),
+  ).toBe("A draft to come back again, to");
   expect(app.getRendererErrors()).toEqual([]);
 });

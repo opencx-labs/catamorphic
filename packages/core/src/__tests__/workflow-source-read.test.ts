@@ -24,7 +24,7 @@ it("workflow graph reads exclude large media and other repositories before loadi
   );
   try {
     await repo.writeFile(
-      ".catamorphic/workflows/main.ts",
+      ".work/workflows/main.ts",
       `import { defineWorkflow } from "@catamorphic/workflow";
       export const example = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: () => "ok" })] }));`,
     );
@@ -32,7 +32,14 @@ it("workflow graph reads exclude large media and other repositories before loadi
       "workflows/unrelated.ts",
       'import { defineWorkflow } from "@catamorphic/workflow"; export const unrelated = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: () => true })] }));',
     );
-    await repo.writeFile("nested/.git/HEAD", "ref: refs/heads/main");
+    // A nested repository on disk (the file APIs refuse .git paths).
+    await fs.mkdir(path.join(repo.repoPath, "nested/.git"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(repo.repoPath, "nested/.git/HEAD"),
+      "ref: refs/heads/main",
+    );
     await repo.writeFile(
       "nested/workflows/unrelated.ts",
       "export const unrelated = 1;",
@@ -45,7 +52,7 @@ it("workflow graph reads exclude large media and other repositories before loadi
     } as unknown as ProjectsService;
     // Read the exact working copy written above, without a database or server.
     const scopedManager = {
-      openDev: async () => repo,
+      openDraft: async () => repo,
     } as unknown as ProjectManager;
     const service = new WorkflowsService(scopedManager, projects);
     const listed = await service.list({
@@ -58,7 +65,7 @@ it("workflow graph reads exclude large media and other repositories before loadi
       projectId: "f1e2d3c4-b5a6-7890-dcba-fedcba987654",
       workflowName: "example",
     });
-    expect(detail.allFiles[".catamorphic/workflows/main.ts"]).toContain(
+    expect(detail.allFiles[".work/workflows/main.ts"]).toContain(
       "defineWorkflow",
     );
     expect(detail.allFiles["video.mp4"]).toBeUndefined();

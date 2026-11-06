@@ -23,6 +23,7 @@ import type {
   RunItemStatus,
   RunItemStep,
   RunItemsList,
+  RunSignalReceipt,
   RunsList,
   SignalRunInput,
   SubmitRunInput,
@@ -378,18 +379,18 @@ export interface UseKeyedRunMutationOptions {
   workflowName: string;
 }
 
-/** Delivers an external event to whichever run awaits a named signal for a key. */
+/** Buffer or deliver a named callback to the input's run generation. */
 export function useSignalRun({
   projectId,
   workflowName,
 }: UseKeyedRunMutationOptions): UseMutationResult<
-  Run,
+  RunSignalReceipt,
   CatamorphicError,
   SignalRunInput
 > {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  return useMutation<Run, CatamorphicError, SignalRunInput>({
+  return useMutation<RunSignalReceipt, CatamorphicError, SignalRunInput>({
     mutationFn: (input) =>
       runWithCatamorphicError(async () => {
         const url = `${apiClient.baseUrl}/api/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowName)}/signals`;
@@ -410,7 +411,12 @@ export function useSignalRun({
         }
         return response.json();
       }),
-    onSuccess: (run) => refreshRunCaches(queryClient, run),
+    onSuccess: (receipt) => {
+      void queryClient.invalidateQueries({ queryKey: runKeys.lists() });
+      void queryClient.invalidateQueries({
+        queryKey: runKeys.detail(receipt.runId),
+      });
+    },
   });
 }
 

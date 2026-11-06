@@ -1,5 +1,5 @@
-import { useRun } from "@catamorphic/react";
-import { RunDetail } from "@catamorphic/ui";
+import { useRun, useWorkflows } from "@catamorphic/react";
+import { friendlyParamName, RunDetail } from "@catamorphic/ui";
 import { ProjectAuthorityProvider } from "../components/project-authority-provider.js";
 
 export function RunScreen({
@@ -10,7 +10,7 @@ export function RunScreen({
   runId: string;
 }) {
   const local = useRun({ runId });
-  if (local.data) return <RunDetails runId={runId} />;
+  if (local.data) return <RunDetails projectId={projectId} runId={runId} />;
   if (!local.error)
     return (
       <p role="status" className="p-4 text-sm text-fg-muted">
@@ -19,12 +19,19 @@ export function RunScreen({
     );
   return (
     <ProjectAuthorityProvider projectId={projectId}>
-      <RunDetails runId={runId} />
+      <RunDetails projectId={projectId} runId={runId} />
     </ProjectAuthorityProvider>
   );
 }
-function RunDetails({ runId }: { runId: string }) {
+function RunDetails({
+  projectId,
+  runId,
+}: {
+  projectId: string;
+  runId: string;
+}) {
   const run = useRun({ runId });
+  const workflows = useWorkflows(projectId);
   if (run.error)
     return (
       <p role="alert" className="p-4 text-sm text-fg-muted">
@@ -37,12 +44,16 @@ function RunDetails({ runId }: { runId: string }) {
         Loading run…
       </p>
     );
+  const name = run.data.workflowName;
+  const title =
+    workflows.data?.find((workflow) => workflow.name === name)?.displayName ??
+    friendlyParamName(name);
   return (
     <section
       className="min-h-0 flex-1 overflow-auto p-4"
-      aria-label={`Run of ${run.data.workflowName}`}
+      aria-label={`Run of ${title}`}
     >
-      <h1 className="mb-3 text-sm font-semibold">{run.data.workflowName}</h1>
+      <h1 className="mb-3 text-sm font-semibold">{title}</h1>
       <RunDetail runId={runId} />
     </section>
   );

@@ -64,6 +64,10 @@ const waitForFixture = () =>
   );
 
 it("leaves settled chat icons without hidden animation loops or backdrop filters", async () => {
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
   await app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );
@@ -102,16 +106,26 @@ it("restores guest visibility and destroys closed browser guests across repeated
       expect(page).toMatchObject({ url: `${fixtureUrl}/` });
       // Hide through the real tab UI. The guest stays alive but its native
       // animation scheduler must stop, independent of the page cooperating.
-      const before = await app.eval<number>(
-        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
-      );
       await app.eval(
         `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),altKey:true,bubbles:true}))`,
       );
       await app.waitFor(
         `getComputedStyle(document.querySelector('webview')).display==='none'`,
       );
+      await app.waitFor(
+        `document.querySelector('webview').executeJavaScript('document.visibilityState === "hidden"')`,
+        { label: "the native guest is hidden before measuring its scheduler" },
+      );
+      const before = await app.eval<number>(
+        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
+      );
       await app.eval(`new Promise(resolve=>setTimeout(resolve,500))`);
+      const hidden = await app.eval<number>(
+        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
+      );
+      // Measure only the hidden interval. The old before-hide/after-show
+      // sample included visible handoff frames and failed on slow runners.
+      expect(hidden - before).toBeLessThan(2);
       expect(
         await app.eval(
           `document.querySelector('webview').executeJavaScript('document.querySelector("h1").textContent')`,
@@ -123,10 +137,10 @@ it("restores guest visibility and destroys closed browser guests across repeated
       await app.waitFor(
         `getComputedStyle(document.querySelector('webview')).display!=='none'`,
       );
-      const after = await app.eval<number>(
-        `document.querySelector('webview').executeJavaScript('window.framesRun')`,
+      await app.waitFor(
+        `document.querySelector('webview').executeJavaScript('window.framesRun > ${hidden}')`,
+        { label: "the restored guest resumes its native scheduler" },
       );
-      expect(after - before).toBeLessThan(15);
       if (index === 0) {
         stage = "bounded guest recovery";
         for (let recovery = 0; recovery < 2; recovery += 1) {
@@ -182,5 +196,50 @@ it("restores guest visibility and destroys closed browser guests across repeated
       `${stage}: ${String(error)}\n${app.getOutput().slice(-5000)}`,
     );
   }
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("leaves an idle chat and its sidebar alone: chat lists wait for hints, and reads never spin", async () => {
+  const chat = `document.querySelector('[data-chat-local-id]:not([inert])')`;
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
+  );
+  await app.waitFor(`!!${chat}?.querySelector('[data-composer-input]')`, {
+    label: "a new chat",
+  });
+  await app.eval(
+    `(()=>{${setReactValueJs};const input=${chat}.querySelector('[data-composer-input]');input.focus();setReactValue(input,'hello from an idle test');input.closest('form').requestSubmit()})()`,
+  );
+  await app.waitFor(
+    `${chat}?.textContent.includes('You said: hello from an idle test')`,
+    { timeoutMs: 30_000, label: "the answer" },
+  );
+  // The settled turn's own follow-up reads land first.
+  await app.eval("new Promise((resolve) => setTimeout(resolve, 3000))");
+  // Chat lists read every two seconds (three of them before ADR 0229) make
+  // at least ten reads in this window; 30 s safety polls make at most one
+  // per list.
+  const idle = await app.eval<{ reads: number; spinners: number }>(`
+    new Promise((resolve) => {
+      let reads = 0;
+      let spinners = 0;
+      const requests = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries())
+          if (/\\/agent\\/sessions(\\?|$)|\\/notifications\\/attention/.test(entry.name)) reads += 1;
+      });
+      requests.observe({ type: "resource" });
+      const sections = new MutationObserver(() => {
+        if (document.querySelector("[data-loading-for]")) spinners += 1;
+      });
+      sections.observe(document.body, { subtree: true, childList: true });
+      setTimeout(() => {
+        requests.disconnect();
+        sections.disconnect();
+        resolve({ reads, spinners });
+      }, 10_000);
+    })
+  `);
+  expect(idle.spinners).toBe(0);
+  expect(idle.reads).toBeLessThanOrEqual(4);
   expect(app.getRendererErrors()).toEqual([]);
 });

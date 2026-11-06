@@ -1,6 +1,7 @@
-import { app, ipcMain, type WebContents } from "electron";
+import { app, type WebContents } from "electron";
 import type { GitOverview, GitOverviewSubscription } from "../shared/git.js";
 import { GitOverviewMonitor } from "./git-overview-monitor.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 
 /** Every renderer owns its leases; closing/reloading it also cancels pending setup. */
 export function registerGitOverviewSubscriptions({
@@ -22,7 +23,7 @@ export function registerGitOverviewSubscriptions({
     for (const consumer of consumers?.values() ?? []) consumer.stop();
     consumers?.clear();
   };
-  app.once("before-quit", () => {
+  app.once("will-quit", () => {
     for (const sender of gitConsumers.keys()) clearGitConsumers(sender);
     gitMonitor.dispose();
   });

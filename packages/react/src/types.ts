@@ -78,6 +78,9 @@ export type SubmitRunInput =
 export type SignalRunInput =
   paths["/api/projects/{projectId}/workflows/{name}/signals"]["post"]["requestBody"]["content"]["application/json"];
 
+export type RunSignalReceipt =
+  paths["/api/projects/{projectId}/workflows/{name}/signals"]["post"]["responses"][200]["content"]["application/json"];
+
 export type CancelRunByKeyInput =
   paths["/api/projects/{projectId}/workflows/{name}/cancellations"]["post"]["requestBody"]["content"]["application/json"];
 
@@ -97,12 +100,6 @@ export type RunItemStep =
 
 export type RepoStatus =
   paths["/api/projects/{projectId}/status"]["get"]["responses"][200]["content"]["application/json"];
-
-export type BranchInfo =
-  paths["/api/projects/{projectId}/branches"]["get"]["responses"][200]["content"]["application/json"][number];
-
-export type CreatedBranch =
-  paths["/api/projects/{projectId}/branches"]["post"]["responses"][200]["content"]["application/json"];
 
 export type CommitInfo =
   paths["/api/projects/{projectId}/commits"]["get"]["responses"][200]["content"]["application/json"]["items"][number];
@@ -143,6 +140,12 @@ export type Secret =
 
 export type SecretStatus = Secret;
 
+/** One member's own value of a secret: who and when, never the value. */
+export type SecretMemberValue = Secret["members"][number];
+
+export type SecretValueChange =
+  paths["/api/projects/{projectId}/secrets/{name}/members/{member}"]["put"]["responses"][200]["content"]["application/json"];
+
 // --- Agent sessions -----------------------------------------------------
 
 export type AgentSession =
@@ -150,11 +153,6 @@ export type AgentSession =
 
 export type AgentSessionDetail =
   paths["/api/projects/{projectId}/agent/sessions/{sessionId}"]["get"]["responses"][200]["content"]["application/json"];
-
-export type AgentMessage = AgentSessionDetail["messages"][number];
-
-export type SessionDeliveryReceipt =
-  paths["/api/projects/{projectId}/agent/sessions/{sessionId}/messages"]["post"]["responses"][202]["content"]["application/json"];
 
 export type Watcher =
   paths["/api/projects/{projectId}/agent/sessions/{sessionId}/watchers"]["get"]["responses"][200]["content"]["application/json"]["items"][number];

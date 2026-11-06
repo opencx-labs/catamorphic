@@ -5,6 +5,13 @@ export type {
   BatchProgress,
   CancelRunInput,
   CatamorphicCore,
+  CodeHost,
+  CodeHostCredential,
+  CodeHostPrincipal,
+  CodeHostRepository,
+  ConnectionActionContext,
+  ConnectionActionGuard,
+  ConnectionGuardVerdict,
   ConnectionProvider,
   ConnectionRequirement,
   CreateProjectInput,
@@ -15,9 +22,6 @@ export type {
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
   GetRunInput,
-  GithubConnectionStatus,
-  GithubServiceConfig,
-  ImportGithubRepoInput,
   ListBatchItemStepsInput,
   ListBatchItemsInput,
   ListBatchItemsResult,
@@ -38,8 +42,10 @@ export type {
   RunPause,
   RunPhase,
   RunProvenance,
+  RunSignalReceipt,
   RunStatus,
   RunStep,
+  SignalRunInput,
   StepStatus,
   TenantExecutionPolicy,
   TenantRateLimitOverride,
@@ -53,18 +59,24 @@ export type {
 export {
   AccessDeniedError,
   appScaffold,
+  CodeHostNotConnectedError,
+  CodeHostUnsupportedError,
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
   createCatamorphicCore,
-  GithubNotConnectedError,
-  GithubTokenExpiredError,
   narrowIdentity,
   PluginSecretsMissingError,
   ProductionDeploymentNotFoundError,
+  ProjectAlreadyLinkedError,
   ProjectFileNotFoundError,
+  ProjectHasNoRemoteError,
+  ProjectNotDeployedError,
   ProjectNotFoundError,
-  ProjectNotLinkedToGithubError,
   RunCapabilityError,
   RunEnrollmentConflictError,
   RunNotFoundError,
+  RunSignalInvalidError,
+  RunSignalLimitError,
   RunSignalNotFoundError,
   SandboxProviderNotConfiguredError,
   SEED_SKILLS,
@@ -76,18 +88,20 @@ export {
 export type {
   DeviceCodeGrant,
   GithubAppConfig,
+  GithubAppRegistration,
   GithubRepo,
   GithubTokenSet,
-  GithubTokenStore,
   GithubUser,
-  StoredGithubConnection,
 } from "@catamorphic/github";
 export {
   buildAuthorizeUrl,
+  buildGithubAppManifest,
+  convertGithubAppManifest,
   exchangeCode,
   GithubApi,
   GithubApiError,
   GithubAuthError,
+  githubAppManifestForm,
   pollDeviceToken,
   refreshAccessToken,
   requestDeviceCode,
@@ -106,6 +120,7 @@ export type {
   CapabilityProviderRuntime,
   DocumentRef,
   Identity,
+  NodeRecoveryResult,
   ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   RunCallOutcome,
@@ -132,6 +147,7 @@ export {
   DuplicateCapabilityProviderError,
   EncryptedCredentialVault,
   EnvironmentCapacityError,
+  LOST_NODE_GRACE_MS,
   ProjectDeprovisioningError,
   ProjectProvisioningError,
   ReservedCapabilityEnvError,
@@ -140,7 +156,12 @@ export {
   TriggerModeNotAllowedError,
   TriggerPayloadInvalidError,
   UnfulfilledCapabilityError,
+  WEBHOOK_NAME_PATTERN,
+  type WebhookConfig,
+  type WebhookHandshake,
+  type WebhookVerify,
   WorkerNodesService,
+  webhookConfig,
 } from "@catamorphic/core";
 export type { DB } from "@catamorphic/db";
 export { createDatabase, migrateToLatest } from "@catamorphic/db";
@@ -161,15 +182,26 @@ export type {
   EnvironmentRuntimeBinding,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+export {
+  type ExecutorKeyPair,
+  executorPublicKey,
+  generateExecutorKeyPair,
+} from "@catamorphic/sandbox";
+export { aiToolCall, aiToolKind } from "./ai-tool-trigger-kind.js";
 export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
+  CatamorphicHostConfig,
   CreateCatamorphicConfig,
   DatabaseConfig,
   StorageConfig,
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
 export {
+  type ClientRunnerKeys,
   type ClientRunnerTransport,
+  ReceiptRefusedError,
+  ResultRejectedError,
+  RunnerSessionEndedError,
   startClientRunner,
 } from "./client-runner.js";
 export type { HostPluginDefinition } from "./define-plugin.js";
@@ -184,20 +216,52 @@ export {
   hole,
   mcpToolKind,
 } from "./define-trigger-kind.js";
+export {
+  DIRECTORY_EVENT_KINDS,
+  DIRECTORY_EVENT_SOURCE,
+  DIRECTORY_TRIGGER_KINDS,
+  type DirectoryEventKind,
+  type DirectoryMember,
+  directoryGroupsChanged,
+  directoryMemberJoined,
+  directoryMemberLeft,
+  directoryProjectEvent,
+} from "./directory-trigger-kinds.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export {
-  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
-  githubCheckRun,
-  githubCheckSuite,
-  githubPullRequest,
-  githubPullRequestReview,
-  githubWorkflowRun,
-} from "./github-trigger-kinds.js";
+  defineGitConnectionProvider,
+  type GitConnectionOptions,
+} from "./git-connection-provider.js";
+export { githubCodeHost } from "./github-code-host.js";
+export {
+  defineGithubConnectionProvider,
+  GITHUB_CONNECTION_ACTIONS,
+  type GithubConnectionOptions,
+  type GithubConnectionProvider,
+} from "./github-connection-provider.js";
+export {
+  defineHttpApiConnectionProvider,
+  type HttpApiAction,
+  type HttpApiAuth,
+  type HttpApiConnectionOptions,
+  type HttpMethod,
+} from "./http-connection-provider.js";
+export {
+  builtinModelConnectionProviders,
+  defineModelConnectionProvider,
+  type ModelConnectionOptions,
+} from "./model-connection-provider.js";
+export {
+  definePostgresConnectionProvider,
+  type PostgresConnectionLimits,
+  type PostgresConnectionOptions,
+  type PostgresConnectionProvider,
+} from "./postgres-connection-provider.js";
 export { PostgresObjectStore } from "./postgres-object-store.js";
 export { schedule } from "./schedule-trigger-kind.js";
 export type {
+  CodeHostsResource,
   FilesResource,
-  GithubResource,
   ProjectsResource,
   RunsResource,
   TriggerKindRef,
@@ -210,3 +274,4 @@ export type {
 export { ScopedClient, TenantScopedClient } from "./scoped-client.js";
 export { SESSION_TRIGGER_KINDS } from "./session-trigger-kinds.js";
 export { defineStaticEnvironments } from "./static-environments.js";
+export { webhook } from "./webhook-trigger-kind.js";

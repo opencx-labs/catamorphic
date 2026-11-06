@@ -10,6 +10,7 @@ const connection = {
   projectId: PROJECT_ID,
   providerKind: "google-workspace",
   principalKind: "member",
+  name: null,
   ownerExternalUserId: TEST_IDENTITY.externalUserId,
   label: "Ada",
   status: "ready",
@@ -90,24 +91,102 @@ describe("connection control plane routes", () => {
     });
   });
 
-  it("rejects malformed service credentials before they reach the vault", async () => {
-    const create = vi.fn();
+  it("creates named service connections and validates them first", async () => {
+    const createService = vi.fn(async () => ({
+      ...connection,
+      principalKind: "tenant_service",
+      ownerExternalUserId: null,
+      projectId: null,
+      name: "prod-replica",
+      status: "pending",
+    }));
     const app = createTestApp({
-      core: { connections: { create } } as never,
+      core: {
+        connections: {
+          createService,
+          providerCatalog: () => [
+            { kind: "prod-replica", displayName: "Production replica" },
+          ],
+        },
+      } as never,
     });
     apps.push(app);
+    const create = (payload: Record<string, unknown>) =>
+      app.inject({ method: "POST", url: "/api/service-connections", payload });
 
+    expect(
+      (
+        await create({
+          name: "Prod Replica",
+          providerKind: "prod-replica",
+          principalKind: "tenant_service",
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await create({
+          name: "prod-replica",
+          providerKind: "prod-replica",
+          principalKind: "project_service",
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await create({
+          name: "prod-replica",
+          providerKind: "unknown",
+          principalKind: "tenant_service",
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(createService).not.toHaveBeenCalled();
+    const created = await create({
+      name: "prod-replica",
+      providerKind: "prod-replica",
+      principalKind: "tenant_service",
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ name: "prod-replica" });
+    expect(createService).toHaveBeenCalledWith({
+      identity: TEST_IDENTITY,
+      name: "prod-replica",
+      providerKind: "prod-replica",
+      principalKind: "tenant_service",
+    });
+  });
+
+  it("authorizes a service connection through this server's own callback", async () => {
+    const beginServiceAuthorization = vi.fn(async () => ({
+      authorizationId: "authorization-id",
+      challenge: {
+        kind: "form" as const,
+        fields: [
+          {
+            name: "connectionString",
+            label: "Read-only connection string",
+            secret: true,
+            required: true,
+          },
+        ],
+      },
+    }));
+    const app = createTestApp({
+      core: { connections: { beginServiceAuthorization } } as never,
+    });
+    apps.push(app);
     const response = await app.inject({
       method: "POST",
-      url: `/api/projects/${PROJECT_ID}/connections`,
-      payload: {
-        providerKind: "google-workspace",
-        principalKind: "project_service",
-        label: "Directory administrator",
-        credential: "",
-      },
+      url: `/api/service-connections/${CONNECTION_ID}/authorize`,
+      headers: { host: "work.example.test" },
     });
-    expect(response.statusCode).toBe(400);
-    expect(create).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    expect(beginServiceAuthorization).toHaveBeenCalledWith({
+      identity: TEST_IDENTITY,
+      connectionId: CONNECTION_ID,
+      redirectUri:
+        "http://work.example.test/api/connection-authorizations/callback",
+    });
   });
 });

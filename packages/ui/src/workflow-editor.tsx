@@ -6,21 +6,29 @@ import {
   graphAtom,
   lastTriggerDataAtom,
   type OnParseCallback,
-  panelVisibilityAtom,
+  selectedNodeAtom,
+  selectedNodeIdAtom,
   showRunDialogAtom,
   useEditorKeyboard,
   useWorkflowGraph,
 } from "@catamorphic/react";
-import type { Run } from "@catamorphic/react/types";
+import type { Run, WorkflowNode } from "@catamorphic/react/types";
 import type { NodeTypes } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { AIBar } from "./ai-bar.js";
 import { WorkflowCanvas } from "./canvas.js";
 import { RunTriggerDialog } from "./run-trigger-dialog.js";
-import { Toolbar } from "./toolbar.js";
 import { WorkflowEditorScope } from "./workflow-editor-scope.js";
+
+/** What the corner controls can do; hosts render their own from these. */
+export interface WorkflowEditorControls {
+  /** Opens the run dialog. Absent when the host passed no `onRun`. */
+  run?: () => void;
+  running: boolean;
+  runsOpen: boolean;
+  toggleRuns: () => void;
+}
 
 export interface WorkflowEditorProps {
   code: string;
@@ -37,16 +45,25 @@ export interface WorkflowEditorProps {
    * need to replace the server-side parser entirely.
    */
   onParse?: OnParseCallback;
-  /** Host-owned inspector, including any source editor and detail actions. */
+  /**
+   * Host-owned inspector beside the canvas. It receives the selected step
+   * (null when nothing is selected) and `close`, which clears the selection.
+   * The host decides visibility: a selection-driven inspector renders only
+   * while `node` is set, and may also show views it opens itself (code).
+   */
   renderInspector?: (props: {
+    node: WorkflowNode | null;
+    close: () => void;
     code: string;
     onCodeChange: (code: string) => void;
     readOnly: boolean;
   }) => ReactNode;
+  /**
+   * Controls floating in the canvas's top-right corner. Defaults to a Runs
+   * toggle and, with `onRun`, a Run action. Return null for no controls.
+   */
+  renderControls?: (controls: WorkflowEditorControls) => ReactNode;
   nodeRenderers?: Partial<Record<WorkflowNodeType, NodeTypes[string]>>;
-  theme?: Record<string, string>;
-  aiEnabled?: boolean;
-  onAIPrompt?: (prompt: string) => Promise<string>;
   executionState?: Record<string, string>;
   showMinimap?: boolean;
   /** Starts a Run. Available for every Workflow. */
@@ -54,7 +71,6 @@ export interface WorkflowEditorProps {
   triggerParameters?: ParameterInfo[];
   renderRunsPanel?: (props: { activeRun?: Run }) => ReactNode;
   renderBanner?: () => ReactNode;
-  renderToolbarCenter?: () => ReactNode;
   /** When true, disables the code editor. */
   readOnly?: boolean;
 }
@@ -62,7 +78,7 @@ export interface WorkflowEditorProps {
 /**
  * Inner editor rendering. Assumes an ambient `<WorkflowEditorScope>` — this
  * is the entry point for hosts that want to compose the editor alongside
- * their own chrome (custom toolbars, inspectors, etc.) while still sharing
+ * their own chrome (custom controls, inspectors, etc.) while still sharing
  * the canvas state atoms.
  *
  * For the one-shot drop-in experience, mount `<WorkflowEditor>` instead,
@@ -73,28 +89,28 @@ export function WorkflowEditorChrome({
   onCodeChange,
   onParse,
   renderInspector,
+  renderControls = (controls) => <DefaultControls {...controls} />,
   nodeRenderers,
   executionState,
-  showMinimap = true,
+  showMinimap = false,
   onRun,
   triggerParameters,
-  aiEnabled = false,
-  onAIPrompt,
   renderRunsPanel,
   renderBanner,
-  renderToolbarCenter,
   readOnly = false,
 }: WorkflowEditorProps) {
   const [currentCode, setCode] = useAtom(codeAtom);
   const setExecutionState = useSetAtom(executionStateAtom);
-  const setPanelVisibility = useSetAtom(panelVisibilityAtom);
   const graph = useAtomValue(graphAtom);
+  const node = useAtomValue(selectedNodeAtom);
+  const setSelectedNodeId = useSetAtom(selectedNodeIdAtom);
   const [showDialog, setShowDialog] = useAtom(showRunDialogAtom);
   const lastTriggerData = useAtomValue(lastTriggerDataAtom);
   const setLastTriggerData = useSetAtom(lastTriggerDataAtom);
   const setReadOnly = useSetAtom(codeEditorReadOnlyAtom);
   const [isRunning, setIsRunning] = useState(false);
   const [activeRun, setActiveRun] = useState<Run>();
+  const [runsOpen, setRunsOpen] = useState(false);
 
   useEffect(() => {
     setReadOnly(readOnly);
@@ -111,15 +127,14 @@ export function WorkflowEditorChrome({
     setExecutionState(executionState ?? {});
   }, [executionState, setExecutionState]);
 
-  useEffect(() => {
-    setPanelVisibility((v) => ({
-      ...v,
-      minimap: showMinimap,
-    }));
-  }, [showMinimap, setPanelVisibility]);
-
   useWorkflowGraph({ onParse });
-  useEditorKeyboard();
+  useEditorKeyboard({
+    onEscape: () => {
+      if (!runsOpen) return false;
+      setRunsOpen(false);
+      return true;
+    },
+  });
 
   const handleCodeChange = useCallback(
     (newCode: string) => {
@@ -128,11 +143,6 @@ export function WorkflowEditorChrome({
     },
     [setCode, onCodeChange],
   );
-
-  const handleRunClick = useCallback(() => {
-    if (!onRun) return;
-    setShowDialog(true);
-  }, [onRun, setShowDialog]);
 
   const submitRun = useCallback(
     async (input: Record<string, unknown>) => {
@@ -143,54 +153,57 @@ export function WorkflowEditorChrome({
         const run = await onRun(input);
         setActiveRun(run);
         setShowDialog(false);
-        setPanelVisibility((current) => ({
-          ...current,
-          runsPanel: true,
-        }));
+        setRunsOpen(true);
       } finally {
         setIsRunning(false);
       }
     },
-    [onRun, setLastTriggerData, setPanelVisibility, setShowDialog],
+    [onRun, setLastTriggerData, setShowDialog],
   );
 
   const params = triggerParameters ?? graph?.input.parameters ?? [];
+  const controls = renderControls({
+    run: onRun ? () => setShowDialog(true) : undefined,
+    running: isRunning,
+    runsOpen,
+    toggleRuns: () => setRunsOpen((open) => !open),
+  });
 
   return (
     <div className="catamorphic-editor">
-      <Toolbar
-        showInspectorToggle={Boolean(renderInspector)}
-        onRun={onRun ? handleRunClick : undefined}
-        isRunning={isRunning}
-        centerSlot={renderToolbarCenter?.()}
-      />
       {renderBanner?.()}
       <div className="catamorphic-editor-body">
         <div className="catamorphic-editor-canvas">
-          <WorkflowCanvas nodeRenderers={nodeRenderers} />
+          <WorkflowCanvas
+            nodeRenderers={nodeRenderers}
+            showMinimap={showMinimap}
+          />
+          {controls && (
+            <div className="catamorphic-editor-controls">{controls}</div>
+          )}
         </div>
         {renderInspector?.({
+          node,
+          close: () => setSelectedNodeId(null),
           code: currentCode,
           onCodeChange: handleCodeChange,
           readOnly,
         })}
-        <RunsPanelSlot
-          activeRun={activeRun}
-          renderRunsPanel={renderRunsPanel}
-        />
+        {runsOpen && (
+          <aside className="catamorphic-runs-sidebar">
+            {renderRunsPanel ? (
+              renderRunsPanel({ activeRun })
+            ) : (
+              <div className="catamorphic-run-empty">
+                <p>Runs are not connected</p>
+                <p className="catamorphic-run-empty-hint">
+                  Provide renderRunsPanel to connect this view.
+                </p>
+              </div>
+            )}
+          </aside>
+        )}
       </div>
-      <AIBar
-        enabled={aiEnabled}
-        onAIPrompt={onAIPrompt}
-        onApplyGeneratedCode={
-          aiEnabled && onAIPrompt
-            ? (newCode) => {
-                setCode(newCode);
-                onCodeChange(newCode);
-              }
-            : undefined
-        }
-      />
       {showDialog && (
         <RunTriggerDialog
           parameters={params}
@@ -204,28 +217,33 @@ export function WorkflowEditorChrome({
   );
 }
 
-function RunsPanelSlot({
-  activeRun,
-  renderRunsPanel,
-}: {
-  activeRun?: Run;
-  renderRunsPanel?: (props: { activeRun?: Run }) => ReactNode;
-}) {
-  const panelVisibility = useAtomValue(panelVisibilityAtom);
-  if (!panelVisibility.runsPanel) return null;
+function DefaultControls({
+  run,
+  running,
+  runsOpen,
+  toggleRuns,
+}: WorkflowEditorControls) {
   return (
-    <aside className="catamorphic-runs-sidebar">
-      {renderRunsPanel ? (
-        renderRunsPanel({ activeRun })
-      ) : (
-        <div className="catamorphic-run-empty">
-          <p>Runs are not connected</p>
-          <p className="catamorphic-run-empty-hint">
-            Provide renderRunsPanel to connect this view.
-          </p>
-        </div>
+    <>
+      <button
+        type="button"
+        className="catamorphic-editor-control"
+        aria-pressed={runsOpen}
+        onClick={toggleRuns}
+      >
+        Runs
+      </button>
+      {run && (
+        <button
+          type="button"
+          className="catamorphic-editor-control catamorphic-editor-control-primary"
+          onClick={run}
+          disabled={running}
+        >
+          Run
+        </button>
       )}
-    </aside>
+    </>
   );
 }
 

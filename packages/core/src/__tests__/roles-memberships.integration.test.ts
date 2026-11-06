@@ -14,6 +14,7 @@ import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { resolveRoles } from "../services/roles-service.js";
+import { projectAdmin } from "./project-admin.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -41,11 +42,10 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
   let builder: Identity;
 
   async function commitRoles(files: Record<string, string>) {
-    const repo = await projectManager.openDev(
-      root.tenantId,
-      projectId,
-      root.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: projectId,
+    });
     try {
       for (const [file, content] of Object.entries(files)) {
         await repo.writeFile(file, content);
@@ -57,7 +57,6 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     } finally {
       await repo.dispose();
     }
-    core.roles.invalidate(projectId);
   }
 
   beforeAll(async () => {
@@ -72,18 +71,22 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       db,
       projectManager,
       environmentProvider: testEnvironmentProvider(),
-      rolesCacheTtlMs: 0,
     });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
+    // Edits and publishes the program, but holds no say over roles.
     builder = {
       ...root,
       externalUserId: "builder",
-      scope: [{ kind: "project", projectId }],
+      scope: projectAdmin(projectId).scope,
+      projectPermissions: [
+        { projectId, permission: "program:*" },
+        { projectId, permission: "roles:read" },
+      ],
     };
 
     await commitRoles({
-      ".catamorphic/roles/csm.json": JSON.stringify({
+      ".work/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
         description: "Customer success managers; not technical.",
@@ -94,19 +97,21 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
           { path: "store/customers/{customer}/**", access: "write" },
         ],
       }),
-      ".catamorphic/roles/admin.json": JSON.stringify({
+      ".work/roles/admin.json": JSON.stringify({
         version: 1,
         name: "Admin",
-        builder: true,
-        permissions: ["memberships:manage", "roles:manage"],
+        agents: ["*"],
+        workflows: ["*"],
+        apps: ["*"],
+        permissions: ["program:*", "memberships:write", "roles:write"],
         documents: ["store/**"],
       }),
-      ".catamorphic/roles/membership-manager.json": JSON.stringify({
+      ".work/roles/membership-manager.json": JSON.stringify({
         version: 1,
         name: "Membership manager",
-        permissions: ["memberships:manage"],
+        permissions: ["memberships:write"],
       }),
-      ".catamorphic/roles/broken.json": "{ nope",
+      ".work/roles/broken.json": "{ nope",
     });
     admin = await core.roles.resolve({
       tenantId: root.tenantId,
@@ -309,19 +314,18 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
 
   it("resolves one user across every current project membership", async () => {
     const second = await core.projects.create(root, { name: "second" });
-    const secondRepo = await projectManager.openDev(
-      root.tenantId,
-      second.id,
-      root.externalUserId,
-    );
+    const secondRepo = await projectManager.openEphemeral({
+      tenantId: root.tenantId,
+      projectId: second.id,
+    });
     try {
       await secondRepo.writeFile(
-        ".catamorphic/roles/viewer.json",
+        ".work/roles/viewer.json",
         JSON.stringify({
           version: 1,
           name: "Viewer",
           workflows: ["reports"],
-          environments: ["local"],
+          environments: ["default"],
         }),
       );
       await secondRepo.commit("roles", {
@@ -339,7 +343,6 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     } finally {
       await secondRepo.dispose();
     }
-    core.roles.invalidate(second.id);
 
     await core.memberships.grant({
       identity: admin,
@@ -370,7 +373,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     });
     expect(identity.executionScope).toContainEqual({
       projectId: second.id,
-      name: "local",
+      name: "default",
     });
 
     const stranger = await core.memberships.identityForUser({
@@ -391,7 +394,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       roles: ["csm"],
     });
     await commitRoles({
-      ".catamorphic/roles/csm.json": JSON.stringify({
+      ".work/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
         agents: ["csm-assistant"],
@@ -411,19 +414,14 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     expect(carol?.scope?.some((r) => r.kind === "document")).toBe(false);
   });
 
-  it("protects committed role policy from ordinary builders", async () => {
+  it("protects committed role policy from program writers without roles:write", async () => {
     await expect(
-      core.projects.writeFile(
-        builder,
-        projectId,
-        ".catamorphic/roles/new.json",
-        {
-          content: JSON.stringify({ version: 1, name: "New" }),
-        },
-      ),
+      core.projects.writeFile(builder, projectId, ".work/roles/new.json", {
+        content: JSON.stringify({ version: 1, name: "New" }),
+      }),
     ).rejects.toThrow(AccessDeniedError);
     await expect(
-      core.projects.writeFile(admin, projectId, ".catamorphic/roles/new.json", {
+      core.projects.writeFile(admin, projectId, ".work/roles/new.json", {
         content: JSON.stringify({ version: 1, name: "New" }),
       }),
     ).resolves.toContain('"name":"New"');

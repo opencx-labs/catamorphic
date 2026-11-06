@@ -1,13 +1,26 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import type { ExtraTool } from "@catamorphic/sandbox";
+import {
+  type JsonValue,
+  SESSION_PULL_REQUESTS_CONTRACT,
+  SET_SESSION_METADATA_DESCRIPTION,
+  type SessionMetadata,
+  sessionMetadataToolWrite,
+  setSessionMetadataInputSchema,
+} from "@catamorphic/agent-protocol";
+import {
+  type AgentEffort,
+  agentToolResult,
+  type ExtraTool,
+  type ExtraToolContext,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 import {
   CHAT_ICON_COLOR_IDS,
   CHAT_ICON_NAMES,
 } from "../../shared/chat-icons.js";
 import { parseSurfaceLink } from "../../shared/surface-link.js";
-import type { WorkspaceBridge } from "../agent-bridge.js";
+import type { TurnHolder, WorkspaceBridge } from "../agent-bridge.js";
 
 /**
  * The agent's workspace toolset: discovery (what tabs, chats, and sidebar
@@ -86,6 +99,17 @@ export interface GitBridge {
   ): Promise<{ url: string; number: number; branch: string }>;
 }
 
+/** How a message reaches another chat's agent (ADR 0240, ADR 0250). */
+const SESSION_MESSAGE_MODES = [
+  "steer",
+  "message_only",
+  "queue",
+  "interrupt",
+] as const;
+export type SessionMessageMode = (typeof SESSION_MESSAGE_MODES)[number];
+const sessionMessageMode = z.enum(SESSION_MESSAGE_MODES);
+const effortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+
 export interface SessionCoordinationBridge {
   list(projectId: string, sessionId: string): Promise<unknown[]>;
   read(
@@ -101,14 +125,17 @@ export interface SessionCoordinationBridge {
     ownSessionId: string,
     peerSessionId: string,
     content: string,
-    mode: "message_only" | "next_turn" | "interrupt",
+    mode: SessionMessageMode,
   ): Promise<unknown>;
   spawn(
     projectId: string,
     sessionId: string,
     input: {
-      routeId?: string;
       agentId?: string;
+      model?: string;
+      effort?: AgentEffort;
+      readOnly?: boolean;
+      delegate?: boolean;
       task: string;
       contextMode?: "fresh" | "inherit";
       title?: string;
@@ -118,7 +145,11 @@ export interface SessionCoordinationBridge {
   waitForSubsessions(
     projectId: string,
     sessionId: string,
-    input: { sessionIds?: string[]; timeoutMs?: number },
+    input: {
+      sessionIds?: string[];
+      timeoutMs?: number;
+      stopWaiting: AbortSignal;
+    },
   ): Promise<unknown[]>;
   interruptSubsession(
     projectId: string,
@@ -131,6 +162,14 @@ export interface SessionCoordinationBridge {
     sessionId: string,
     activity: string | null,
   ): Promise<void>;
+  /** Set keys of the session's metadata, null removing one (ADR 0226). */
+  setMetadata(
+    projectId: string,
+    sessionId: string,
+    values: Record<string, JsonValue>,
+  ): Promise<SessionMetadata>;
+  /** The session's metadata as it stands. */
+  readMetadata(projectId: string, sessionId: string): Promise<SessionMetadata>;
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -152,6 +191,7 @@ export interface TodoListBridge {
       title: string;
       description: string;
       status: AgentTodoStatus;
+      activeForm?: string;
     }>,
   ): Promise<AgentTodoItem[]>;
 }
@@ -172,6 +212,53 @@ export interface CheckoutBridge {
     projectId: string,
     sessionId: string,
   ): Promise<{ path: string; kind?: string; branch?: string | null }>;
+}
+
+/**
+ * What the person saw as they started saying their latest message to a
+ * chat by voice (ADR 0265): taken then, since the screen often changes
+ * while they talk and once they finish.
+ */
+export interface VoiceSight {
+  /** When they started saying it (epoch ms). */
+  at: number;
+  /** What they said. */
+  said: string;
+  /** When its words were heard and went to the chat (epoch ms). */
+  heardAt: number;
+  /**
+   * The turns that read the message, once the chat took it: those are the
+   * turns this sight describes (ADR 0265).
+   */
+  turnIds?: string[];
+  /** The project in front of the Work window they were in. */
+  projectId: string | null;
+  /** The app in front, when it was not Work (ADR 0236). */
+  app: Promise<{ app: string; window: string | null } | null>;
+  /** Work's screen as a turn's workspace context describes it. */
+  screen: Promise<string | null>;
+  /** A picture of what they saw, when Work could take one. */
+  picture: Promise<{
+    toPNG(): Buffer;
+    getSize(): { width: number; height: number };
+  } | null>;
+}
+
+/** Voice on this desktop (ADR 0216), wired once voice first starts. */
+export interface VoiceControl {
+  /** Whether the person is talking with this chat by voice now. */
+  talking(sessionId: string): boolean;
+  /**
+   * What the person saw as they started saying their latest message to
+   * this chat by voice, for a while after (ADR 0265).
+   */
+  sight(sessionId: string): VoiceSight | null;
+  /**
+   * The chat's agent stops listening: the person is no longer heard, and
+   * voice turns off once the chat's turn is over and said. False when
+   * voice is not on in that chat.
+   */
+  stopListening(sessionId: string): boolean;
 }
 
 export interface WorkspaceTool extends ExtraTool {
@@ -197,6 +284,8 @@ export interface WorkspaceToolkit {
   setTodoListBridge(bridge: TodoListBridge): void;
   setCheckoutBridge(bridge: CheckoutBridge): void;
   setSessionVisibility(visibility: SessionVisibility): void;
+  /** Late-bound: voice lives in the main process, started on demand. */
+  setVoiceControl(voice: VoiceControl): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -228,11 +317,17 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   list_project_sessions: read,
   read_project_session: read,
   send_project_session_message: write,
-  spawn_subsession: write,
-  wait_for_subsessions: read,
+  // Subsessions are the agent's subagents (ADR 0202): a model that cannot
+  // see them by name concludes it cannot delegate.
+  spawn_subsession: { ...write, eager: true },
+  wait_for_subsessions: { ...read, eager: true },
   interrupt_subsession: write,
   request_user_attention: presentation,
   set_session_activity: presentation,
+  // Recorded a few times in a chat, when something worth showing happens
+  // (a pull request opened): discovered, not on every turn (ADR 0226).
+  set_session_metadata: presentation,
+  refresh_chips: presentation,
   read_todo_list: read,
   update_todo_list: { ...presentation, eager: true },
   list_worktrees: { ...read, nativeOnly: true },
@@ -245,11 +340,22 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   workspace_overview: { ...read, eager: true },
   // What is on screen is the most common workspace question (ADR 0152).
   read_tab: { ...read, eager: true },
-  open_browser: presentation,
-  browser_snapshot: read,
-  browser_act: write,
-  run_terminal: write,
-  read_terminal: read,
+  // Driving Work's browser is a core interaction (ADR 0202): behind
+  // discovery, models concluded the browser could only read and navigate.
+  open_browser: { ...presentation, eager: true },
+  browser_snapshot: { ...read, eager: true },
+  browser_act: { ...write, eager: true },
+  // Long-running work is a core execution need for every harness (ADR 0155).
+  run_background_command: { ...write, eager: true },
+  read_background_output: { ...read, eager: true },
+  stop_background_command: { ...write, eager: true },
+  watch_command: { ...write, eager: true },
+  // A voice conversation's agent ends it when the person's own
+  // instructions say so; it must be in reach mid-conversation (ADR 0216).
+  stop_listening: { ...presentation, eager: true },
+  // What was on screen as the person spoke (ADR 0265): discovered by a
+  // chat, eager for the assistant, which is talked to by voice most.
+  screen_when_spoken: read,
   write_terminal: write,
   sync_project: write,
   create_pull_request: write,
@@ -275,6 +381,7 @@ export function buildWorkspaceToolkit(
   let todoList: TodoListBridge | null = null;
   let checkouts: CheckoutBridge | null = null;
   let sessionVisible: SessionVisibility = async () => true;
+  let voice: VoiceControl | null = null;
 
   const definitions: ExtraTool[] = [
     {
@@ -322,13 +429,11 @@ export function buildWorkspaceToolkit(
     {
       name: "send_project_session_message",
       description:
-        "Send a message to another session in this project. Use message_only for context that should not start work, next_turn to queue work, or interrupt only when the other agent must change course immediately.",
+        "Send a message to another session in this project. steer (the default) reaches the other agent at its next step while it works, or starts a turn when it is idle. message_only is context that should not start work. queue is work for after its current turn ends. interrupt stops a peer, only when it must change course at once. Messages to your working parent always reach its next step without stopping it, including message_only updates. Routine updates appear in its activity log; questions and attention requests stay visible.",
       parameters: {
         session_id: z.string().min(1).describe("Target session id"),
         message: z.string().min(1).describe("Message to send"),
-        delivery_mode: z
-          .enum(["message_only", "next_turn", "interrupt"])
-          .default("message_only"),
+        delivery_mode: sessionMessageMode.default("steer"),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -340,22 +445,48 @@ export function buildWorkspaceToolkit(
           ctx.sessionId,
           String(input.session_id),
           String(input.message),
-          input.delivery_mode as "message_only" | "next_turn" | "interrupt",
+          sessionMessageMode.parse(input.delivery_mode ?? "steer"),
         );
       },
     },
     {
       name: "spawn_subsession",
       description:
-        "Delegate one bounded task to a child session using an allowed delegation route. The child runs independently and reports its settled result back to this session.",
+        "Start a subagent: a child session that works on one bounded, self-contained task in parallel with you. Whom you may start, and the model and effort you may set, are listed in your instructions. Use it wherever you would use a subagent or Task tool (parallel research, independent reviews, exploration). Returns at once; its result arrives in this chat as a message from it, during your turn if you are still working.",
       parameters: {
-        task: z.string().min(1).describe("Concrete task for the child"),
-        route_id: z.string().min(1).optional().describe("Allowed route id"),
-        agent_id: z
+        task: z
+          .string()
+          .min(1)
+          .describe(
+            "The whole task: the child sees nothing else unless inherit",
+          ),
+        agent: z
           .string()
           .min(1)
           .optional()
-          .describe("Agent choice when the route allows it"),
+          .describe(
+            "An agent id from your instructions' list; leave out for a copy of yourself",
+          ),
+        model: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "As its harness names it, like opus; left out, a copy keeps this chat's, another agent its own",
+          ),
+        effort: effortSchema
+          .optional()
+          .describe("How hard it thinks; left out like model"),
+        read_only: z
+          .boolean()
+          .optional()
+          .describe(
+            "Runs it in its harness's read-only mode, with only Work's read-only tools",
+          ),
+        delegate: z
+          .boolean()
+          .optional()
+          .describe("false: it starts no subagents of its own"),
         context_mode: z.enum(["fresh", "inherit"]).default("fresh"),
         title: z.string().min(1).max(500).optional(),
       },
@@ -364,29 +495,42 @@ export function buildWorkspaceToolkit(
         if (!sessionCoordination) {
           throw new Error("Session coordination is not available yet.");
         }
-        return sessionCoordination.spawn(ctx.projectId, ctx.sessionId, {
-          task: String(input.task),
-          ...(input.route_id ? { routeId: String(input.route_id) } : {}),
-          ...(input.agent_id ? { agentId: String(input.agent_id) } : {}),
-          contextMode: input.context_mode as "fresh" | "inherit",
-          ...(input.title ? { title: String(input.title) } : {}),
-        });
+        const child = await sessionCoordination.spawn(
+          ctx.projectId,
+          ctx.sessionId,
+          {
+            task: String(input.task),
+            ...(input.agent ? { agentId: String(input.agent) } : {}),
+            ...(input.model ? { model: String(input.model) } : {}),
+            ...(input.effort
+              ? { effort: effortSchema.parse(input.effort) }
+              : {}),
+            ...(input.read_only === true ? { readOnly: true } : {}),
+            ...(input.delegate === false ? { delegate: false } : {}),
+            contextMode: input.context_mode as "fresh" | "inherit",
+            ...(input.title ? { title: String(input.title) } : {}),
+          },
+        );
+        return {
+          ...subsessionSummary(child),
+          note: "Running. Its result arrives in this chat as a message from it.",
+        };
       },
     },
     {
       name: "wait_for_subsessions",
       description:
-        "Wait until at least one selected child session settles, or until the timeout. Use this when your work depends on delegated results.",
+        "Wait until one of your running subsessions (or those given) finishes, or the timeout; call again to keep waiting. Each finished one's result arrives as a message in this chat.",
       parameters: {
         session_ids: z.array(z.string().min(1)).max(100).optional(),
-        timeout_ms: z.number().int().min(0).max(60_000).default(30_000),
+        timeout_ms: z.number().int().min(0).max(60_000).default(60_000),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
         if (!sessionCoordination) {
           throw new Error("Session coordination is not available yet.");
         }
-        return sessionCoordination.waitForSubsessions(
+        const children = await sessionCoordination.waitForSubsessions(
           ctx.projectId,
           ctx.sessionId,
           {
@@ -394,8 +538,15 @@ export function buildWorkspaceToolkit(
               ? { sessionIds: input.session_ids as string[] }
               : {}),
             timeoutMs: Number(input.timeout_ms),
+            stopWaiting: ctx.stopWaiting,
           },
         );
+        return children.length > 0
+          ? children.map(subsessionSummary)
+          : {
+              subsessions: [],
+              note: "None of your subsessions is running; finished ones already sent their results to this chat.",
+            };
       },
     },
     {
@@ -421,7 +572,7 @@ export function buildWorkspaceToolkit(
     {
       name: "request_user_attention",
       description:
-        "Promote this session into the user's sidebar and mark it as needing attention. Use only for a result or decision the user should see, such as a merged pull request or required input.",
+        "Promote this session into the user's chats (their list of chats, and any sidebar section listing them) and mark it as needing attention. Use only for a result or decision the user should see, such as a merged pull request or required input.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -459,6 +610,44 @@ export function buildWorkspaceToolkit(
       },
     },
     {
+      name: "set_session_metadata",
+      description: SET_SESSION_METADATA_DESCRIPTION,
+      parameters: setSessionMetadataInputSchema.shape,
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        const values = sessionMetadataToolWrite(input);
+        return {
+          metadata: values
+            ? await sessionCoordination.setMetadata(
+                ctx.projectId,
+                ctx.sessionId,
+                values,
+              )
+            : await sessionCoordination.readMetadata(
+                ctx.projectId,
+                ctx.sessionId,
+              ),
+        };
+      },
+    },
+    {
+      name: "refresh_chips",
+      description:
+        "Ask this chat's chips to refresh their state now, for example after merging a pull request. Each chip source keeps its own fetching logic. Does not change the chat's recorded metadata.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        await bridge.refreshChips({
+          projectId: ctx.projectId,
+          sessionId: ctx.sessionId,
+        });
+        return { requested: true };
+      },
+    },
+    {
       name: "read_todo_list",
       description:
         "Read this chat's current agent-owned todo list. Use this before changing an existing list when its latest item ids or state are not already in your context.",
@@ -472,19 +661,11 @@ export function buildWorkspaceToolkit(
     {
       name: "update_todo_list",
       description:
-        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an existing item's id when editing, completing, reordering, or retaining it; omit id only for a new item. Omitting an existing item removes it.",
+        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an item's id when editing, completing, reordering, or retaining it; a new item needs no id. Omitting an existing item removes it. Give the in-progress item an activeForm; the person sees it as what you are doing.",
       parameters: {
-        items: z
-          .array(
-            z.object({
-              id: z.string().uuid().optional(),
-              title: z.string().min(1).max(200),
-              description: z.string().min(1).max(4_000),
-              status: z.enum(["pending", "in_progress", "completed"]),
-            }),
-          )
-          .max(50)
-          .describe("The complete desired todo list, in display order"),
+        items: todoInputSchema.describe(
+          "The complete desired todo list, in display order",
+        ),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -564,12 +745,12 @@ export function buildWorkspaceToolkit(
     {
       name: "build_app",
       description:
-        "Build a project app preview from .catamorphic/apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
+        "Build a project app preview from .work/apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
       parameters: {
         name: z
           .string()
           .regex(/^[a-z0-9][a-z0-9-]*$/)
-          .describe("The app's directory name under .catamorphic/apps/"),
+          .describe("The app's directory name under .work/apps/"),
         publish: z
           .boolean()
           .optional()
@@ -619,10 +800,13 @@ export function buildWorkspaceToolkit(
             );
           }
         }
+        // A person talking with this chat by voice asked to be shown, even
+        // with the chat itself out of sight (ADR 0216).
         const result = await bridge.openTarget(
           ctx.projectId,
           ctx.sessionId ?? "",
           target,
+          { voice: Boolean(ctx.sessionId && voice?.talking(ctx.sessionId)) },
         );
         return result;
       },
@@ -630,13 +814,13 @@ export function buildWorkspaceToolkit(
     {
       name: "point_at",
       description:
-        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Pass target: null to clear highlighting.",
+        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<chip id>' (glows that chip on your own chat: a tab's key such as 'chip:terminal:<id>', a pull request's address, or an attached chip's id; chips folded behind 'N more' unfold for it, and a chip inside a group is reached by its group, e.g. 'chip:group:terminal'). Pass target: null to clear highlighting.",
       parameters: {
         target: z
           .string()
           .nullable()
           .describe(
-            "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<surface key>'",
+            "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<chip id>'",
           ),
         uid: z
           .string()
@@ -710,13 +894,15 @@ export function buildWorkspaceToolkit(
     {
       name: "read_tab",
       description:
-        "Expand one workspace tab by key (from workspace_overview): browser tabs return the page's visible text, terminals their recent output, chats their conversation transcript, editors the open file's path plus the user's current text selection (text and line range) when that editor is focused — so 'this paragraph' or 'the selected code' resolves without asking. Use it to look into anything the user can see, or anything running in the background.",
+        "Expand one workspace tab by key (from workspace_overview): a browser page's visible text, a terminal's recent output, a chat's transcript, or an editor's file path plus the user's focused selection (text and line range), so 'this paragraph' or 'the selected code' resolves without asking. Key 'window' returns a screenshot of Work itself. Use it to look at anything the user can see or that runs in the background.",
       parameters: {
         key: z
           .string()
           .describe("Tab key from workspace_overview, e.g. 'browser:<id>'"),
       },
       execute: async (input, ctx) => {
+        if (input.key === "window")
+          return bridge.screenshotWindow(ctx.projectId);
         const result = await bridge.readTab(ctx.projectId, String(input.key));
         // Chat tabs resolve to a session pointer; the transcript itself
         // lives in the chat store, not behind the bridge.
@@ -762,26 +948,26 @@ export function buildWorkspaceToolkit(
     {
       name: "open_browser",
       description:
-        "Open a new browser tab in the user's workspace and take control of it. The tab is visible to the user (marked as agent-driven; they can watch you work live) and appears as a chip on your chat. Returns the tab key. Call browser_snapshot next to see the page's interactive elements. Prefer this over web fetching whenever a task needs logins, clicks, forms, or the user's own browser profile.",
+        "Open a tab in Work's browser, signed in as the person, and drive it with browser_snapshot and browser_act. Prefer it to fetching whenever a task needs their sign-ins, clicks, forms or uploads; open your own tab rather than driving one of theirs unless asked. They can watch and take over. Returns the tab key.",
       parameters: {
         url: z.string().describe("The http(s) URL to open"),
       },
       execute: async (input, ctx) => {
         const result = await bridge.openBrowser(
           ctx.projectId,
-          ctx.sessionId ?? "",
+          turnHolder(ctx),
           String(input.url),
         );
         return {
           ...result,
-          note: "Tab opened under your control. Take a browser_snapshot to see the page; release it with surface_control when you're done.",
+          note: "Tab opened under your control until this turn ends, when it goes back to the person. Take a browser_snapshot to see the page; discover surface_control to close it if it was only scaffolding.",
         };
       },
     },
     {
       name: "browser_snapshot",
       description:
-        "List a browser tab's interactive elements (links, buttons, inputs …) as opaque uids plus the page url/title. Use format=image for a screenshot (including canvas and embedded frames); coordinates use CSS viewport pixels. Snapshot before acting, and take a fresh snapshot after anything that changes the page (navigation, submit, dynamic content): uids go stale.",
+        "A browser tab's interactive elements (links, buttons, inputs) with uids for browser_act, plus its url and title; any tab key from the workspace context works. format image is a screenshot (canvas, embedded frames) whose coordinates are CSS viewport pixels. A uid stays valid while its element stays in the page; snapshot again after the page changes.",
       parameters: {
         key: z.string().describe("Browser tab key, e.g. 'browser:<id>'"),
         format: z.enum(["dom", "image"]).optional(),
@@ -789,6 +975,7 @@ export function buildWorkspaceToolkit(
       execute: (input, ctx) =>
         bridge.browserSnapshot(
           ctx.projectId,
+          turnHolder(ctx),
           String(input.key),
           input.format === "image" ? "image" : "dom",
         ),
@@ -796,9 +983,9 @@ export function buildWorkspaceToolkit(
     {
       name: "browser_act",
       description:
-        "Act on a browser tab: 'click'/'hover' an element by uid or x/y CSS coordinates, 'drag' from x/y to toX/toY, 'fill' text or 'select' an option value by uid (from browser_snapshot), 'press' a key (e.g. Enter) on the focused element, 'navigate' to a url, 'scroll' up/down, 'read' the page's visible text, or 'wait_for' text to appear. Use point_at with a uid to highlight an element for the user. Fails if the user has taken over the tab. Respect that and continue without it, or reclaim with surface_control only if your task requires the tab.",
+        "Act on a browser tab with real input: click or hover (uid, or x and y), drag (x, y to toX, toY), fill (uid, text), select (uid, option value as text), press (press_key, e.g. Enter, Meta+a), navigate (url), scroll (direction), read (visible text), wait_for (text), upload (uid of a file input or the button that opens one, files as absolute paths; never hidden files or ~/Library). Inspect with evaluate (expression: JavaScript run in the page, its value returned), console and network (what the page logged and requested since the tab was last read), and downloads (files this tab saved, with paths; timeoutMs waits for them). Fails while the person has taken the tab over; respect that.",
       parameters: {
-        key: z.string().describe("Browser tab key"),
+        key: z.string().describe("Browser tab key, 'browser:<id>'"),
         action: z.enum([
           "click",
           "hover",
@@ -810,11 +997,16 @@ export function buildWorkspaceToolkit(
           "scroll",
           "read",
           "wait_for",
+          "upload",
+          "evaluate",
+          "console",
+          "network",
+          "downloads",
         ]),
         uid: z
           .string()
           .optional()
-          .describe("Element reference (click, hover, fill, select)"),
+          .describe("Element uid from browser_snapshot"),
         x: z.number().nonnegative().optional(),
         y: z.number().nonnegative().optional(),
         toX: z.number().nonnegative().optional(),
@@ -829,98 +1021,234 @@ export function buildWorkspaceToolkit(
           .describe("Key for 'press', e.g. 'Enter', 'Escape', 'Tab'"),
         url: z.string().optional().describe("Target url (navigate)"),
         direction: z.enum(["up", "down"]).optional().describe("scroll only"),
-        timeoutMs: z.number().int().positive().max(10000).optional(),
+        files: z.array(z.string()).optional().describe("upload only"),
+        expression: z.string().optional().describe("evaluate only"),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
       },
-      execute: (input, ctx) =>
-        bridge.browserAct(
+      execute: (input, ctx) => {
+        const key = String(input.key);
+        if (!key.startsWith("browser:"))
+          throw new Error(
+            `key names the browser tab ('browser:<id>'), not ${JSON.stringify(key)}; a keyboard key goes in press_key.`,
+          );
+        const action = parseBrowserAction(input);
+        return bridge.browserAct(
           ctx.projectId,
-          String(input.key),
-          parseBrowserAction(input),
-        ),
+          turnHolder(ctx),
+          key,
+          action.type === "upload" && ctx.workingDirectory
+            ? { ...action, workingDirectory: ctx.workingDirectory }
+            : action,
+          ctx.stopWaiting,
+        );
+      },
     },
     {
-      name: "run_terminal",
+      name: "run_background_command",
       description:
-        "Run a shell command in a real terminal in the user's workspace (project directory, user's login shell). By default a NEW terminal opens in the background: it appears as a chip on your chat, not as a tab — the user's view doesn't move. Show it to them with open_surface (the returned key) when the output is worth their attention. Pass terminalId to reuse a terminal (a terminal you opened earlier, or any terminal from workspace_overview; running in the user's own terminal marks it agent-controlled until you release it). Prefer reusing one terminal for routine sequential commands — shell state (cwd, env vars) persists there. Multi-line commands are safe (sent as one block). Waits for the command to finish (default 2 minutes; set timeoutMs up to 600000 for longer builds) and returns its output plus exitCode (0 = success) when available. Commands that outlast the wait return commandRunning: true — follow them with read_terminal (waitForIdleMs + sinceOffset with the returned offset), don't re-run them. Close scaffolding terminals with surface_control.",
+        "Start a long-running command (a dev server, a watcher, a slow build or test run, anything you would otherwise wait on) in its own background terminal and keep working. It keeps running after this turn, shows as a chip on your chat the person can open to watch, and wakes this chat with a message when it finishes, so never poll with sleep. Its terminal ends with it; read_background_output still returns its last output. Use your own shell for quick commands. Returns the command's id, its status, and its first output (a quick failure shows up here). Set wake_on_output to also be woken when a line matches, e.g. 'ready on|listening|error'.",
       parameters: {
         command: z.string().describe("The shell command to run"),
-        terminalId: z
+        description: z
+          .string()
+          .describe(
+            "What it does in 3-8 plain words, e.g. 'Start the dev server'. Shown to the person.",
+          ),
+        wake_on_exit: z
+          .boolean()
+          .optional()
+          .describe("Wake this chat when it finishes (default true)"),
+        wake_on_output: z
           .string()
           .optional()
           .describe(
-            "Existing terminal to run in (from workspace_overview or a previous run_terminal); omit for a new terminal",
-          ),
-        timeoutMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            "How long to wait for the command to finish, in ms (default 120000, max 600000)",
+            "A regular expression; wake this chat when an output line matches (at most every 15 seconds; a line already reported wakes it again only after 5 minutes, so use read_background_output with wait_for to wait for one again)",
           ),
       },
-      execute: (input, ctx) =>
-        bridge.runTerminal(
-          ctx.projectId,
-          ctx.sessionId ?? "",
-          String(input.command),
-          typeof input.terminalId === "string" && input.terminalId
-            ? input.terminalId
-            : undefined,
-          typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
-          ctx.workingDirectory,
-        ),
+      execute: (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("Background commands need a chat.");
+        return bridge.startBackgroundCommand({
+          projectId: ctx.projectId,
+          sessionId: ctx.sessionId,
+          command: String(input.command),
+          description: String(input.description ?? ""),
+          ...(ctx.workingDirectory
+            ? { workingDirectory: ctx.workingDirectory }
+            : {}),
+          ...(typeof input.wake_on_exit === "boolean"
+            ? { wakeOnExit: input.wake_on_exit }
+            : {}),
+          ...(typeof input.wake_on_output === "string" && input.wake_on_output
+            ? { wakeOnOutput: input.wake_on_output }
+            : {}),
+        });
+      },
     },
     {
-      name: "read_terminal",
+      name: "read_background_output",
       description:
-        "Read a terminal's output, whether its shell is alive (running), and whether a command is executing right now (busy). Works on any terminal from workspace_overview. To follow a long-running command, pass waitForIdleMs (blocks until the command finishes or the deadline, up to 600000) and sinceOffset (the offset a previous run_terminal/read_terminal returned) to get only the new output — that's one call, not a poll loop. lastExitCode is the most recently finished command's exit code when known.",
+        "Read a background command's output since your last read, or a watch's latest check, with its status (running, finished, stopped) and exit code. wait_seconds blocks until something new or the end; with wait_for, until a line matches.",
       parameters: {
-        terminalId: z.string().describe("Terminal id from run_terminal"),
-        sinceOffset: z
+        id: z
+          .string()
+          .describe("The id run_background_command or watch_command returned"),
+        wait_seconds: z
           .number()
           .int()
-          .nonnegative()
+          .min(0)
+          .max(600)
           .optional()
+          .describe("Seconds to wait"),
+        wait_for: z.string().optional().describe("Regex of a line to wait for"),
+      },
+      execute: (input, ctx) => {
+        const read = {
+          sessionId: ctx.sessionId ?? "",
+          id: String(input.id),
+          stopWaiting: ctx.stopWaiting,
+          ...(typeof input.wait_seconds === "number"
+            ? { waitMs: input.wait_seconds * 1000 }
+            : {}),
+          ...(typeof input.wait_for === "string" && input.wait_for
+            ? { waitFor: input.wait_for }
+            : {}),
+        };
+        return read.id.startsWith("watch-")
+          ? bridge.readCommandWatch(read)
+          : bridge.readBackgroundCommand(read);
+      },
+    },
+    {
+      name: "stop_background_command",
+      description:
+        "Stop a background command (Ctrl+C, then close its terminal) and return its last output, or stop a watch.",
+      parameters: {
+        id: z
+          .string()
+          .describe("The id run_background_command or watch_command returned"),
+      },
+      execute: (input, ctx) =>
+        String(input.id).startsWith("watch-")
+          ? bridge.stopCommandWatch({
+              sessionId: ctx.sessionId ?? "",
+              id: String(input.id),
+            })
+          : bridge.stopBackgroundCommand({
+              sessionId: ctx.sessionId ?? "",
+              id: String(input.id),
+            }),
+    },
+    {
+      name: "watch_command",
+      description:
+        "Wait for something without polling: re-run a quick check command here every few seconds and wake this chat when it matters, across turns and app restarts. until 'success' wakes once when the check exits 0 (curl -fsS <url>/health; test -f out.pdf), then ends. until 'change' wakes whenever its output or exit status changes, until stopped. Print only what matters (jq, grep) so timestamps are not changes. Checks missed during sleep collapse into one. The first check runs now; its result is returned. Stop with stop_background_command.",
+      parameters: {
+        command: z
+          .string()
+          .describe("A quick read-only check; it runs many times"),
+        description: z
+          .string()
           .describe(
-            "Return only output after this buffer offset (from a previous call's `offset`)",
+            "What you wait for in 3-8 plain words, shown to the person",
           ),
-        waitForIdleMs: z
+        until: z
+          .enum(["success", "change"])
+          .describe(
+            "'success': wake once when it exits 0. 'change': wake on every change.",
+          ),
+        every_seconds: z
+          .number()
+          .int()
+          .min(5)
+          .max(86_400)
+          .optional()
+          .describe("Seconds between checks (default 30)"),
+        expires_in_seconds: z
           .number()
           .int()
           .positive()
           .optional()
-          .describe(
-            "Block until the foreground command finishes, up to this many ms",
-          ),
+          .describe("Give up after this long (and say so)"),
       },
-      execute: async (input, ctx) => {
-        const state = await bridge.readTerminal(
-          ctx.projectId,
-          String(input.terminalId),
-          {
-            ...(typeof input.sinceOffset === "number"
-              ? { sinceOffset: input.sinceOffset }
-              : {}),
-            ...(typeof input.waitForIdleMs === "number"
-              ? { waitForIdleMs: input.waitForIdleMs }
-              : {}),
-          },
-        );
-        if (!state) {
-          throw new Error(
-            "No such terminal (closed?). Check workspace_overview.",
-          );
-        }
-        return state;
+      execute: (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("Watches need a chat.");
+        return bridge.startCommandWatch({
+          projectId: ctx.projectId,
+          sessionId: ctx.sessionId,
+          command: String(input.command),
+          description: String(input.description ?? ""),
+          until: input.until === "change" ? "change" : "success",
+          ...(ctx.workingDirectory
+            ? { workingDirectory: ctx.workingDirectory }
+            : {}),
+          ...(typeof input.every_seconds === "number"
+            ? { everySeconds: input.every_seconds }
+            : {}),
+          ...(typeof input.expires_in_seconds === "number"
+            ? { expiresInSeconds: input.expires_in_seconds }
+            : {}),
+        });
+      },
+    },
+    {
+      // Says what it does, never when: that is the person's to teach.
+      name: "stop_listening",
+      description:
+        "Stop listening: turn voice off once this turn's replies are read aloud.",
+      parameters: {},
+      execute: async (_input, ctx) =>
+        ctx.sessionId && voice?.stopListening(ctx.sessionId)
+          ? "Stopped listening. Voice turns off once this turn's replies are read aloud."
+          : "Voice is not on in this chat.",
+    },
+    {
+      name: "screen_when_spoken",
+      description:
+        "What was on the person's screen as they started saying their latest message by voice: a picture, and where they were. It has likely changed since.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        const sight = ctx.sessionId ? voice?.sight(ctx.sessionId) : null;
+        if (!sight)
+          return "The person has not said anything to this chat by voice lately.";
+        const [app, picture] = await Promise.all([sight.app, sight.picture]);
+        const facts = {
+          said: sight.said,
+          seconds_ago: Math.round((Date.now() - sight.at) / 1000),
+          in: app ? `${app.app}${app.window ? `: ${app.window}` : ""}` : "Work",
+          ...(picture
+            ? {}
+            : {
+                picture: app
+                  ? "None: Work can picture another app only once the person allows Work to record the screen (System Settings, Privacy & Security, Screen & System Audio Recording)."
+                  : "None could be taken.",
+              }),
+        };
+        return agentToolResult({
+          content: [
+            { type: "text", text: JSON.stringify(facts) },
+            ...(picture
+              ? [
+                  {
+                    type: "image" as const,
+                    mimeType: "image/png" as const,
+                    data: picture.toPNG().toString("base64"),
+                  },
+                ]
+              : []),
+          ],
+        });
       },
     },
     {
       name: "write_terminal",
       description:
-        "Send raw input to a terminal you control: answer a prompt, drive an interactive command (REPLs, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
+        "Type raw input into a terminal: answer a prompt, drive an interactive command (REPLs, ssh, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
       parameters: {
-        terminalId: z.string().describe("Terminal id from run_terminal"),
+        terminalId: z
+          .string()
+          .describe(
+            "A terminal id: a background command's id, or one from workspace_overview",
+          ),
         data: z
           .string()
           .describe("Raw input, e.g. 'y\\r' or '\\u0003' for Ctrl+C"),
@@ -942,7 +1270,7 @@ export function buildWorkspaceToolkit(
     {
       name: "sync_project",
       description:
-        "Sync this project with its linked remote repository now. On the primary checkout this applies the safe pull/push policy. An isolated worktree never pushes main implicitly; use create_pull_request to share that branch. Call this when the user asks to sync, push, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
+        "Sync this project with its linked remote repository now. On the primary checkout this fetches and fast-forwards over a clean tree. Work pushes only to a repository it created; in a repository that existed before Work, local commits are never pushed, the result reports `ahead` or `diverged`, and you share them with create_pull_request. An isolated worktree is never synced; use create_pull_request to share that branch. Call this when the user asks to sync, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -952,8 +1280,7 @@ export function buildWorkspaceToolkit(
     },
     {
       name: "create_pull_request",
-      description:
-        "Propose the project's current changes for review: commits any pending edits, pushes them to a new branch on the linked remote (e.g. GitHub), and opens a pull request. Use this instead of syncing straight to the main branch when the change is risky, collaborators are active on this project, or the user asks for review. Returns the PR URL — share it with the user (open_surface can open it).",
+      description: `Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports \`ahead\` or \`diverged\`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it). It is not recorded on the chat until you add it with set_session_metadata: ${SESSION_PULL_REQUESTS_CONTRACT}`,
       parameters: {
         title: z
           .string()
@@ -1014,7 +1341,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_skill",
       description:
-        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .catamorphic/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
+        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .work/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
       parameters: {
         name: z
           .string()
@@ -1035,7 +1362,7 @@ export function buildWorkspaceToolkit(
     {
       name: "desktop_settings",
       description:
-        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, sidebar) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves.",
+        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, workspace.js for sidebars and palette modes, and browser bookmarks) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves, or to bookmark a page.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!host.desktopSettings)
@@ -1046,7 +1373,7 @@ export function buildWorkspaceToolkit(
     {
       name: "surface_control",
       description:
-        "Manage a browser tab or terminal you control: 'release' hands it to the user once you're done driving it (do this whenever you finish a page or an interactive command; the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding; release ones the user will want.",
+        "Manage a browser tab or terminal you control. Browser tabs you opened go back to the user by themselves when your turn ends; 'release' hands one back sooner, and you may drive it again later. 'release' on a terminal hands it over once you're done with an interactive command, until you reclaim it. 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding.",
       parameters: {
         key: z.string().describe("Surface key, e.g. 'browser:<id>'"),
         action: z.enum(["release", "reclaim", "close"]),
@@ -1055,10 +1382,10 @@ export function buildWorkspaceToolkit(
         const key = String(input.key);
         switch (input.action) {
           case "release":
-            await bridge.setControl(ctx.projectId, key, false);
+            await bridge.setControl(ctx.projectId, turnHolder(ctx), key, false);
             return { ok: true, note: "The user can now use this surface." };
           case "reclaim":
-            await bridge.setControl(ctx.projectId, key, true);
+            await bridge.setControl(ctx.projectId, turnHolder(ctx), key, true);
             return { ok: true, note: "You are driving this surface again." };
           case "close":
             await bridge.closeSurface(ctx.projectId, key);
@@ -1106,6 +1433,9 @@ export function buildWorkspaceToolkit(
     setSessionVisibility(visibility) {
       sessionVisible = visibility;
     },
+    setVoiceControl(control) {
+      voice = control;
+    },
   };
 }
 
@@ -1116,6 +1446,13 @@ const todoInputSchema = z
       title: z.string().min(1).max(200),
       description: z.string().min(1).max(4_000),
       status: z.enum(["pending", "in_progress", "completed"]),
+      activeForm: z
+        .string()
+        .max(80)
+        .optional()
+        .describe(
+          "Present continuous, shown to the person while this is in progress, e.g. 'Reviewing database migrations'",
+        ),
     }),
   )
   .max(50);
@@ -1158,6 +1495,34 @@ async function filterWorkspaceOverview(
   };
 }
 
+/** A child as its parent reads it: what runs it, and how (ADR 0271). */
+function subsessionSummary(child: unknown): Record<string, unknown> {
+  const parsed = z
+    .object({
+      status: z.string(),
+      session: z.object({
+        id: z.string(),
+        title: z.string().nullable(),
+        agentId: z.string().nullable().optional(),
+        model: z.string().nullable().optional(),
+        modelEffort: z.string().nullable().optional(),
+        readOnly: z.boolean().optional(),
+      }),
+    })
+    .safeParse(child);
+  if (!parsed.success) return { subsession: child };
+  const { session } = parsed.data;
+  return {
+    sessionId: session.id,
+    title: session.title,
+    status: parsed.data.status,
+    ...(session.agentId ? { agent: session.agentId } : {}),
+    ...(session.model ? { model: session.model } : {}),
+    ...(session.modelEffort ? { effort: session.modelEffort } : {}),
+    ...(session.readOnly ? { readOnly: true } : {}),
+  };
+}
+
 function boundedTranscript(transcript: {
   title: string | null;
   messages: Array<{ role: string; content: string }>;
@@ -1192,7 +1557,7 @@ function checkoutResult(result: unknown): unknown {
 
 function parseBrowserAction(
   input: Record<string, unknown>,
-): Parameters<WorkspaceBridge["browserAct"]>[2] {
+): Parameters<WorkspaceBridge["browserAct"]>[3] {
   const action = String(input.action);
   const uid = typeof input.uid === "string" ? input.uid : undefined;
   const text = typeof input.text === "string" ? input.text : undefined;
@@ -1221,7 +1586,7 @@ function parseBrowserAction(
     case "fill":
     case "select":
       if (uid === undefined || text === undefined) {
-        throw new Error("fill needs a uid and text");
+        throw new Error(`${action} needs a uid and text`);
       }
       return { type: action, uid, text };
     case "press":
@@ -1247,7 +1612,34 @@ function parseBrowserAction(
         timeoutMs:
           typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
       };
+    case "upload": {
+      const files = z.array(z.string()).safeParse(input.files);
+      if (uid === undefined || !files.success || files.data.length === 0)
+        throw new Error("upload needs a uid and files (absolute paths)");
+      return { type: "upload", uid, files: files.data };
+    }
+    case "evaluate":
+      if (typeof input.expression !== "string" || !input.expression.trim())
+        throw new Error("evaluate needs an expression");
+      return { type: "evaluate", expression: input.expression };
+    case "console":
+    case "network":
+      return { type: action };
+    case "downloads":
+      return {
+        type: "downloads",
+        timeoutMs:
+          typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
+      };
     default:
       throw new Error(`Unknown browser action: ${action}`);
   }
+}
+
+/** The turn a browser tool call holds its tab for (agent-bridge). */
+function turnHolder(ctx: ExtraToolContext): TurnHolder {
+  return {
+    sessionId: ctx.sessionId ?? "",
+    ...(ctx.turnId ? { turnId: ctx.turnId } : {}),
+  };
 }

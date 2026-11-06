@@ -11,6 +11,10 @@ GitHub Releases is the canonical binary source. The Homebrew casks install the
 same notarized DMG, and the tap carries the small metadata files packaged apps
 use to discover updates.
 
+The npm libraries use this same release and version
+([ADR 0285](../../docs/decisions/0285-one-version-for-work-and-the-framework.md)).
+There is no separate library release or package version bump.
+
 ## One-time setup
 
 1. Join the Apple Developer Program and create a Developer ID Application
@@ -45,17 +49,33 @@ Never commit certificates, keys, passwords, or encoded credentials.
 
 ## Dry run
 
-Run the `Desktop release` workflow manually from the intended commit. A
+Run the `Desktop release` workflow manually from the intended commit on `main`. A
 manual dispatch verifies Homebrew tap write access, builds, signs, notarizes,
 and verifies the app, then retains the DMG, ZIP, blockmaps, update metadata,
 and checksum file as workflow artifacts. It does not create a GitHub release
 or change the Homebrew tap.
 
+The disposable signing runner blocks UDP port 443 so Apple's ticket lookup uses
+HTTPS over TCP. This works around the hosted-runner
+[HTTP/3 connection failure](https://github.com/actions/runner-images/issues/14924);
+notarization, Gatekeeper assessment, and stapled-ticket validation remain required.
+
+A manual dispatch from a feature branch verifies only npm packages. Signing
+remains restricted to `main` and release tags by the desktop environment.
+
+The signing job also launches the actual packaged app on its isolated macOS
+runner, with fresh and seeded legacy profiles. It requires a visible native
+window, a successful embedded-server boot, and a normal quit. It verifies
+old file-origin values remain separate and untouched, and a second launch keeps
+newer drafts. These checks run with the distributed fuses and without a remote
+debugging port. They do not replace the manual first-use checks below.
+
 Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
 
 - Gatekeeper opens Work without an override.
-- Applications shows the Work icon and bundle identity.
+- Applications shows the Work icon and bundle identity: the Dock and
+  Finder draw the flat orange W, on macOS 26 and on an earlier macOS.
 - A `work://connect` invitation opens the installed app.
 - A local project can be created, reopened, and edited.
 - Claude Code and Codex each perform their one-time verified component
@@ -71,36 +91,138 @@ account. Verify:
 
 ## Publish a release
 
-1. Set `apps/desktop/package.json` to the intended version: `x.y.z` for Stable
-   or `x.y.z-alpha.n` for Preview.
+1. Run `bun run release:version --version <version>`: `x.y.z` for Stable
+   or `x.y.z-alpha.n` for Preview. This updates every workspace manifest and
+   `bun.lock`; `apps/desktop/package.json` remains the version source. Do not
+   edit just the desktop version. `bun run release:verify` and the merge gate
+   reject drift.
 2. Merge the release change to `main` and wait for CI to pass.
 3. Create and push an annotated `desktop-v<version>` tag at that exact commit.
 
 The tag workflow rejects unsupported prerelease names and any tag that does
 not match the desktop package version. It then:
 
-1. Builds the repository on an Apple silicon GitHub runner.
-2. Signs the app with Developer ID and submits it to Apple's notary service.
-3. Verifies the signature, Gatekeeper assessment, stapled ticket, bundle id,
-   URL scheme, DMG, and ZIP.
-4. Rewrites generated update metadata to the tagged GitHub asset URLs.
-5. Creates or updates the GitHub release and uploads the DMG, ZIP, blockmaps,
+1. Builds and packs every public library on Linux, checks the actual archives,
+   installs them into an independent consumer with their declared host peers,
+   imports their JavaScript entries with Node and Bun, checks their declarations,
+   and boots a new Work server from the installed packages. The exact archives
+   and SHA-512 inventory are retained as `npm-packages-<version>`.
+2. Builds the repository on an Apple silicon GitHub runner, with the
+   runner's newest Xcode 26 selected: only its `actool` compiles the Icon
+   Composer app icon (`build/icon.icon`), so packaging elsewhere needs Xcode
+   26 too.
+3. Signs the app with Developer ID and submits it to Apple's notary service.
+4. Verifies the signature, hardened Electron fuses in the packaged framework,
+   Gatekeeper assessment, stapled ticket, bundle id,
+   URL scheme, the icon's asset catalog, DMG, and ZIP.
+5. Rewrites generated update metadata to the tagged GitHub asset URLs.
+6. Creates or updates the GitHub release and uploads the DMG, ZIP, blockmaps,
    update metadata, and SHA-256 checksums. Preview builds are prereleases;
    Stable builds are the latest full release.
-6. Generates the applicable Homebrew casks from the released DMG checksum,
+7. Generates the applicable Homebrew casks from the released DMG checksum,
    validates their Ruby syntax and style, then advances the casks and channel
    feeds together in the Homebrew tap. Stable releases advance both channels
    so Preview users converge on the vetted build.
+8. Publishes those verified library tarballs to the public npm registry, in
+   dependency order, using GitHub OIDC. Preview versions use `alpha`; Stable
+   versions use `latest`. This adds no package approval or token prompt to a
+   release. The existing desktop environment review remains unchanged.
 
 The publication steps are rerunnable. Existing release assets are replaced,
 and an unchanged cask and feed produce no tap commit. GitHub assets are always
 published before the feed points clients to them.
+
+Release workflow runs are serialized across tags and dry runs. A tag run checks
+existing npm channels before desktop publication and again before npm writes;
+an older release cannot move either managed channel backward.
+
+For npm, every archive is checked against the source version and full package
+inventory before publication. A rerun skips versions with the same SHA-512
+integrity and rejects conflicting immutable versions before writing any package.
+After publication, it checks every version, integrity and channel tag. If npm
+publication partly succeeds, retain the published packages and recover the
+workflow; never unpublish or move the release tag. A release is unfinished until
+the desktop and all npm libraries have been verified.
+
+When npm replaces a new package's `0.0.0-stage` placeholder, it can also assign
+the first real alpha to `latest` despite `--tag alpha`. The publisher removes
+that accidental tag only if no stable version exists. It preserves a valid
+stable `latest` and refuses to guess a previous stable version.
+
+To recover this channel-only failure on an immutable older tag, dispatch
+`Desktop release` from `main` with `repair_npm_run` set to the original tag run
+ID. This mode skips preparation, signing and publication. It binds the original
+repository, workflow, tag commit and successful preparation/desktop jobs, then
+downloads the retained original npm artifact. Every archive and all published
+integrities must match before any tag is removed. Missing/expired artifacts,
+newer channels and ambiguous stable versions fail without rebuilding packages.
+After repair, rerun only the original failed npm job; it skips identical
+published versions and verifies the complete release. Ordinary dispatch with
+the input empty still only builds and tests.
 
 The packaged app includes the audited Claude Code and Codex TypeScript
 adapters but excludes their large platform packages. If either dependency is
 updated, update the matching platform version, tarball URL, and SHA-512 pins in
 `src/main/harness-components.ts` for every supported platform, run its focused
 tests, and repeat the clean-account first-use checks above.
+
+`electron-builder.yml` disables Electron's RunAsNode, Node environment options,
+Node inspector and extra `file:` privileges. It enables cookie encryption,
+embedded ASAR integrity validation and loading application code only from ASAR.
+`scripts/desktop-signature.ts` reads the actual signed Electron framework's fuse
+wire and rejects missing or incorrect settings, including each architecture in
+a universal binary. Packaged startup also rejects Chromium remote debugging
+launch flags. Development builds retain their local debugging tools. Cookie
+encryption is a one-way migration; keep it enabled in later releases.
+
+## One-time npm setup
+
+The npm account must own or have publish access to the `@catamorphic` scope.
+Public scoped packages can use npm's free organization plan. First publication
+requires that account's authentication; GitHub authentication alone cannot
+create the initial npm packages.
+
+Before the first release, use an authenticated npm owner to reserve each new
+package name with [staged publishing](https://docs.npmjs.com/staged-publishing/).
+Stage a minimal package at `0.0.0` with public access and record its stage id.
+npm creates a public `0.0.0-stage` placeholder for a new name. Do not stage the
+intended release version: staged and published versions share npm's uniqueness
+constraint. The staged `0.0.0` package is never approved or released.
+
+Register trusted publishing with `bun run release:trust`, then reject those
+temporary stages by id with `npm stage reject`. The public name reservations
+remain, so the tag workflow can publish the verified first release using OIDC.
+The helper runs the pinned npm client's `npm trust github` command for all
+public libraries; npm may request the owner's two-factor verification.
+Registration does not remove or replace an existing trust configuration. For
+each package, the trusted publisher is:
+
+- Repository: `opencx-labs/catamorphic`
+- Workflow filename: `desktop-prerelease.yml`
+- Environment: unset (the npm job already follows the protected desktop job)
+- Permissions: direct publication and **Allow npm dist-tag**
+
+Dist-tag management is a separate trusted-publisher permission, disabled by
+default. Enable **Allow npm dist-tag** for the same repository/workflow in each
+package's npm settings. The pinned CLI's `release:trust` registration does not
+grant it. This is one-time owner setup so routine releases and channel recovery
+can use OIDC without package-by-package approval. See
+[npm's dist-tag permission](https://docs.npmjs.com/trusted-publishers/#managing-dist-tags-with-trusted-publishing).
+
+Verify the first OIDC publication before calling setup complete. npm requires a
+new trust configuration's first successful publication within two days; an
+unvalidated configuration expires. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
+Routine releases need no npm token or package-by-package intervention. New
+libraries need one-time ownership and trust registration before their first
+automatic release too. The root and application manifests, including the
+deployed Cloudflare Worker, remain private; all importable framework libraries
+publish with public access.
+
+## Work server deployments
+
+Releases publish `@catamorphic/work-server` with the other libraries.
+Deployments pin it and build their own server and worker images (ADR 0294).
+There is no stock server image publication or image release gate.
 
 ## User install and upgrade
 
@@ -112,10 +234,17 @@ tests, and repeat the clean-account first-use checks above.
 Installed builds default to Stable for stable versions and Preview for alpha
 versions. The persisted machine-wide choice is available under **Help > Update
 Channel**. Switching channels never installs an older version. The app checks
-the selected feed shortly after launch, every six hours, and after wake. It
-asks before downloading and again before restarting, and never restarts while
-an agent or terminal is active. DMG users can still install a newer Work
-app over the existing copy in Applications.
+the selected feed shortly after launch, every six hours of wall-clock time
+(sleep counts), a minute after wake, and 15 minutes after a failed check. A
+check that does not answer within two minutes is abandoned. Update activity
+is logged to `~/Library/Logs/Work/updates.log`. It
+asks before downloading a release and again before restarting. A release
+downloaded before Work last quit is verified again from its cache (or, if
+the cache lost it, downloaded again) without asking, and the next prompt
+offers Restart. A restart never waits on work:
+working agents are handed back and continue after the relaunch, and
+terminals end (ADR 0246). DMG users can still install a newer Work app over
+the existing copy in Applications.
 
 Before a packaged version first opens an existing PGlite database, it creates
 a copy under `data/migration-backups` in the Work application-support

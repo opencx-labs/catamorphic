@@ -1,97 +1,126 @@
-import type { ProjectSummary } from "@catamorphic/react/types";
-import { Check, Folder, MoreHorizontal, Star } from "lucide-react";
-import type { Profile, ProfilesData } from "../lib/desktop-api";
+import { Settings } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  desktopApi,
+  type Profile,
+  type ProfileConnection,
+  type ProfilesData,
+} from "../lib/desktop-api";
+import { ConnectorIcon } from "./connector-icon";
+import { ProfileAvatar } from "./profile-avatar";
 
+/** Connections listed before the rest collapse into a count. */
+const CONNECTIONS_SHOWN = 6;
+
+/**
+ * A profile's preview card: who it is (avatar, name, whether the app opens
+ * with it) and what it connects to, with a way into its settings.
+ */
 export function ProfileInspector({
   profile,
   data,
-  projects,
-  current,
   onOpenSettings,
 }: {
   profile: Profile;
   data: ProfilesData;
-  projects: ProjectSummary[];
-  current: boolean;
   onOpenSettings: () => void;
 }) {
-  const ownedProjects = projects.filter((project) =>
-    profile.projectIds.includes(project.id),
-  );
-  const defaultProject = ownedProjects.find(
-    (project) => project.id === profile.defaultProjectId,
-  );
+  const connections = useProfileConnections(profile.id);
   const isDefault = profile.id === data.defaultProfileId;
   return (
     <div className="text-[12px] text-fg-muted" data-testid="profile-inspector">
-      <header className="flex items-start gap-2 border-b border-border pb-2.5">
-        <span
-          className="mt-1 size-3 shrink-0 rounded-full"
-          style={{ backgroundColor: profile.color }}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <h2 className="truncate text-[13px] font-semibold text-fg">
-              {profile.name}
-            </h2>
-            {current && (
-              <Check
-                className="size-3.5 text-accent"
-                aria-label="Current profile"
-              />
-            )}
-          </div>
-          <p className="mt-0.5 text-[10px] text-fg-faint">{profile.id}</p>
+      <header className="flex items-center gap-2.5 pb-2.5">
+        <ProfileAvatar profile={profile} size="lg" />
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <h2 className="truncate text-[13px] font-semibold text-fg">
+            {profile.name}
+          </h2>
+          {isDefault && (
+            <span className="shrink-0 rounded bg-bg-raised px-1.5 py-px text-[10px] font-medium text-fg-muted">
+              Default
+            </span>
+          )}
         </div>
         <button
           type="button"
           onClick={onOpenSettings}
           aria-label={`Open settings for ${profile.name}`}
-          className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-raised hover:text-fg"
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-raised hover:text-fg"
         >
-          <MoreHorizontal className="size-4" />
+          <Settings className="size-3.5" />
         </button>
       </header>
-      <dl className="space-y-2 py-2.5">
-        <div className="flex items-center gap-2">
-          <Star
-            className={`size-3.5 ${isDefault ? "fill-current text-accent" : "text-fg-faint"}`}
-          />
-          <dt className="flex-1">App opens with</dt>
-          <dd className="text-fg">
-            {isDefault ? "This profile" : "Another profile"}
-          </dd>
-        </div>
-        <div className="flex items-center gap-2">
-          <Folder className="size-3.5 text-fg-faint" />
-          <dt className="flex-1">Projects</dt>
-          <dd className="text-fg">{ownedProjects.length}</dd>
-        </div>
-        <div className="flex items-center gap-2">
-          <Folder className="size-3.5 text-fg-faint" />
-          <dt className="flex-1">Default project</dt>
-          <dd className="max-w-40 truncate text-fg">
-            {defaultProject?.name ?? "None"}
-          </dd>
-        </div>
-      </dl>
-      {ownedProjects.length > 0 && (
-        <div className="border-t border-border pt-2">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
-            Project membership
-          </p>
-          <div className="flex flex-wrap gap-1">
-            {ownedProjects.map((project) => (
-              <span
-                key={project.id}
-                className="max-w-full truncate rounded bg-bg-raised px-1.5 py-0.5 text-[10px] text-fg-muted"
-              >
-                {project.name}
+
+      <section className="border-t border-border pt-2">
+        <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
+          Connections
+        </h3>
+        {connections === "loading" ? (
+          <ul aria-busy>
+            <li className="flex h-7 items-center gap-2">
+              <span className="size-5 animate-pulse rounded bg-bg-raised" />
+              <span className="h-3 w-24 animate-pulse rounded bg-bg-raised">
+                <span className="sr-only">Loading</span>
               </span>
-            ))}
-          </div>
-        </div>
-      )}
+            </li>
+          </ul>
+        ) : connections === "failed" ? (
+          <p className="text-fg-faint">Unavailable</p>
+        ) : connections.length === 0 ? (
+          <p className="text-fg-faint">None yet</p>
+        ) : (
+          <>
+            <ul>
+              {connections.slice(0, CONNECTIONS_SHOWN).map((connection) => (
+                <li
+                  key={connection.name}
+                  className="flex h-7 items-center gap-2 text-fg"
+                >
+                  <ConnectorIcon
+                    iconUrl={connection.iconUrl}
+                    url={connection.url}
+                    name={connection.name}
+                    size="sm"
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    {connection.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {connections.length > CONNECTIONS_SHOWN && (
+              <p className="pt-0.5 text-[11px] text-fg-faint">
+                {connections.length - CONNECTIONS_SHOWN} more
+              </p>
+            )}
+          </>
+        )}
+      </section>
     </div>
   );
+}
+
+/** Loads on inspection: the card mounts only when it opens. */
+function useProfileConnections(
+  profileId: string,
+): ProfileConnection[] | "loading" | "failed" {
+  const [connections, setConnections] = useState<
+    ProfileConnection[] | "loading" | "failed"
+  >("loading");
+  useEffect(() => {
+    let current = true;
+    setConnections("loading");
+    desktopApi.profileConnections(profileId).then(
+      (loaded) => {
+        if (current) setConnections(loaded);
+      },
+      () => {
+        if (current) setConnections("failed");
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [profileId]);
+  return connections;
 }

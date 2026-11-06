@@ -3,6 +3,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { modelLabel, modelSearchText } from "../lib/agent-default-model.js";
 import { desktopApi, type OpenRouterCatalog } from "../lib/desktop-api.js";
 
 interface OpenRouterRow {
@@ -10,7 +11,8 @@ interface OpenRouterRow {
   /** "" selects the synthetic automatic entry (resolved dynamically). */
   modelId: string;
   title: string;
-  detail: string;
+  /** The model's id under its name; none when the id is the title. */
+  detail?: string;
 }
 
 /**
@@ -67,21 +69,12 @@ export function OpenRouterModelField({
             ]
           : []),
         ...catalog.models
-          .filter(
-            (m) =>
-              m.id.toLowerCase().includes(query) ||
-              m.name.toLowerCase().includes(query),
-          )
+          .filter((m) => modelSearchText(m).toLowerCase().includes(query))
           .sort(
             (a, b) => Number(b.free) - Number(a.free) || b.created - a.created,
           )
           .slice(0, 50)
-          .map((m) => ({
-            key: m.id,
-            modelId: m.id,
-            title: m.name,
-            detail: m.id,
-          })),
+          .map((m) => ({ key: m.id, modelId: m.id, ...modelLabel(m) })),
       ]
     : [];
   const activeIndex = Math.min(active, Math.max(0, rows.length - 1));
@@ -182,9 +175,11 @@ export function OpenRouterModelField({
                     <span className="block truncate text-[13px] text-fg">
                       {row.title}
                     </span>
-                    <span className="block truncate font-mono text-[11px] text-fg-faint">
-                      {row.detail}
-                    </span>
+                    {row.detail && (
+                      <span className="block truncate font-mono text-[11px] text-fg-faint">
+                        {row.detail}
+                      </span>
+                    )}
                   </span>
                 </button>
               ))

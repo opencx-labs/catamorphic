@@ -58,7 +58,7 @@ export class PluginNotAttachedError extends Error {
 export class UndeclaredSecretError extends Error {
   constructor(readonly secretName: string) {
     super(
-      `Secret '${secretName}' is not declared by any attached plugin's manifest.`,
+      `Secret '${secretName}' is not declared. Declare it with defineSecrets, under "secrets" in .work/project.json, or by an attached plugin.`,
     );
     this.name = "UndeclaredSecretError";
   }
@@ -75,6 +75,7 @@ export class PluginsService {
     /**
      * Names of the host's registered capability providers (ADR 0046).
      * Attach validates plugin `requires` against this set, fail-closed.
+     * Replica memory (c): capabilities the host registers at boot.
      */
     private readonly registeredCapabilities: ReadonlySet<string> = new Set(),
   ) {}
@@ -249,8 +250,9 @@ export class PluginsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("stage", "=", "production")
       .where("name", "in", names)
+      // The value runs receive: the shared one (ADR 0206).
+      .where("member_external_user_id", "is", null)
       .select(["name"])
       .execute();
     const present = new Set(rows.map((r) => r.name));

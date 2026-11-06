@@ -5,31 +5,58 @@ import {
 import { normalizePrefs } from "../../shared/app-prefs.js";
 import { SETTING_KEYS, SETTINGS } from "../../shared/settings.js";
 import { THEME_TOKENS } from "../../shared/theme-tokens.js";
-import { SIDEBAR_AUTHORING_GUIDE } from "../sidebar-authoring.js";
 import { THEME_PRESETS } from "../theme.js";
+import { WORKSPACE_AUTHORING_GUIDE } from "../workspace-authoring.js";
+
+/** Text as one Markdown table cell. */
+const tableCell = (text: string) => text.replaceAll("|", "\\|");
 
 /** Delivered through the host skill tier, including existing user projects. */
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, tabs, notifications or terminal macros, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebars, the chips above chats and command palette modes (workspace.js, including source modules that sort, filter or group Work's lists such as tabs, chats and a chat's chips, or show any data), tabs, window buttons, notifications, terminal macros or browser bookmarks, including project overrides and reset.
 ---
 
 # Configure the desktop
 
-Call the desktop_settings tool (discover it if it is not loaded) for this
-project's owning profile, exact host file paths, access mode and current
-validation errors. Use those paths, not the foreground profile, a guessed home
-directory, a sandbox path, or a session worktree's .catamorphic folder. Read the relevant files first;
+Call the desktop_settings tool for this project's owning profile, exact host
+file paths, access mode and current validation errors. When it is not loaded,
+discover_capabilities({ query: "desktop settings" }) finds it as
+workspace.desktop_settings; call it with invoke_capability. Use those paths, not the foreground profile, a guessed home
+directory, a sandbox path, or a session worktree's .work folder. Read the relevant files first;
 a missing file is an empty object inheriting defaults. Read this skill for the file
 schema. Edit with ordinary file or shell facilities, preserving unrelated keys.
 Prefer writing a complete JSON object to a temporary sibling and renaming it over
 the original. Read back your change and report its actual scope.
 
-Paths are metadata, not permission grants. A read-only agent may inspect but must
-not edit. Native harness filesystem permissions still apply outside the checkout.
+Scopes name layers, not folders: "personal" means files.*.personal from
+desktop_settings (outside the repository), never the project's personal
+documents directory (.work/personal), which holds documents, not settings.
+A configuration file anywhere else is not read.
+
+Profiles can share settings (ADR 0272). When desktop_settings lists
+sharedSettings, those parts (appearance, workspace, macros, shortcuts,
+notifications) use another profile's files: the theme, shortcuts and workspace
+profile paths it returns then lie in that profile's folder, and
+files.preferences.synced lists the preference keys kept in that profile's
+prefs.json. Edit those keys there, not in the own profile file, and tell the
+person the change also applies to the profiles named. Never link or unlink
+profiles by editing profiles.json or copying files between profile folders;
+the person does that in Profile settings, "Settings from another profile".
+
+Paths are metadata, not permission grants. An agent whose sandboxing is
+contained may inspect but must not edit. Native harness filesystem permissions still apply outside the checkout.
 If host access is unavailable, explain that limitation. A file created inside a
 sandbox does not configure the desktop; do not introduce a mirror directory.
+
+## macOS Dock icon
+
+For a custom macOS Dock icon, direct the person to Settings > Appearance > Dock icon.
+Choose a PNG or JPEG up to 10 MB and 16 megapixels, or Reset to restore Work's default. This is one
+local app-wide choice for all profiles while Work runs, independent of profile
+Appearance syncing. It is not a prefs.json key or project override. The installed
+app name, Dock label and app switcher name stay Work.
 
 ## Preferences: JSON objects, per-key inheritance
 
@@ -41,33 +68,45 @@ copy today's default. Deleting a file resets that whole layer.
 
 Use profile for app-wide requests, personal for 'just this project for me', and
 project for an explicitly shared team default. The shared settings file lives in
-the primary project folder's .catamorphic/settings.json and may enter git. Personal
+the primary project folder's .work/settings.json and may enter git. Personal
 overrides live outside the repository. Higher layers can mask profile edits; read
 all relevant layers before claiming the effective value changed. Runtime keys in
 prefs.json (sidebar pose, last project, window/session state) are not preferences;
 preserve them, and do not copy them into project overrides.
 
-| Key | Value | Editable scopes | App default |
-|---|---|---|---|
+Each row gives the setting's label in Settings and, where Settings has one, its
+description; option values carry their Settings labels. Tell the person what a
+change does from these words, not from a key's name. When no value does what they
+asked, say so and change nothing unless they choose the closest one.
+
+| Key | In Settings | Value | Editable scopes | App default |
+|---|---|---|---|---|
 ${SETTING_KEYS.map((key) => {
   const definition = SETTINGS[key];
   const value =
     "range" in definition
       ? `number (${definition.range.min} through ${definition.range.max})`
       : "options" in definition
-        ? Object.keys(definition.options)
-            .map((option) => JSON.stringify(option))
+        ? Object.entries(definition.options)
+            .map(([option, label]) => `${JSON.stringify(option)} (${label})`)
             .join(" or ")
         : key === "terminalMacros"
           ? "array of macros (below)"
           : "boolean";
-  return `| ${key} | ${value} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
+  const meaning = `${
+    "description" in definition
+      ? `${definition.label}: ${definition.description}`
+      : definition.label
+  }${"macOnly" in definition ? " Only on macOS; elsewhere it changes nothing." : ""}`;
+  return `| ${key} | ${tableCell(meaning)} | ${tableCell(value)} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
 }).join("\n")}
 
 Example: {"tabPlacement":"top","contentFrame":false} chooses regular top tabs
 with content flush against the sidebars; contentFrame true insets it as a
 rounded, bordered window sized by contentPadding and contentRadius. headerPlacement applies to the sidebar tab layout. Terminal
-appearance changes apply to newly opened terminals.
+appearance changes apply to newly opened terminals. App-themed terminals follow
+the resolved project theme, including its personal and shared overrides and
+monospace font; Ghostty is an explicit profile-wide alternative.
 
 terminalMacros is a replacement array. Preserve unrelated entries. Each macro has
 unique nonempty id, nonempty name and command strings, and a shortcut string.
@@ -91,6 +130,13 @@ Use hex, rgb/rgba, hsl/hsla or oklch colors. Example:
 {"selection":"system","overrides":{"accent":"#ff5500"}}.
 fonts accepts sans and mono CSS font-stack strings, e.g. {"mono":"'JetBrains Mono', monospace"}.
 Use installed font names and generic fallbacks; do not use url() or CSS declarations.
+backgrounds puts a picture behind the left or right sidebar or the chat:
+{"backgrounds":{"left":{"image":"https://example.com/a.png","position":"bottom","opacity":0.35,"blur":2,"pixelate":3}}}.
+image must be an https address. position (top, center or bottom, default bottom) is
+where the picture stays visible; it fades into the surface's color away from it, so
+keep sidebars at bottom to leave their top readable. opacity is 0 through 1 (default
+0.35), blur 0 through 24 pixels (default 0), pixelate a block size of 1 (none) through
+32. Each surface is replaced whole by a higher scope; delete it to inherit.
 Delete just the affected token or font key to restore its inherited value. Preserve
 unrelated preference keys when editing a project settings file.
 
@@ -104,7 +150,25 @@ An empty string disables an action; delete its key to restore the default. Keep
 bindings unique. Defaults and supported action ids:
 ${KEYBINDING_ACTIONS.map((action) => `- ${action}: ${JSON.stringify(DEFAULT_KEYBINDINGS[action])}`).join("\n")}
 
-${SIDEBAR_AUTHORING_GUIDE}
+## Bookmarks: one JSON file
+
+files.bookmarks from desktop_settings holds every bookmark. byProject[projectId]
+is this project's tree (the sidebar's Bookmarks section, work:bookmarks) and
+pinnedByProfile[profileId] the bookmarks that follow the profile across projects
+(Pin across projects); use the projectId and profileId desktop_settings returns.
+libraryByProfile holds imported browser bookmarks: leave it to the import flow.
+Each tree is { "folders": [...], "bookmarks": [...] }. A bookmark is
+{ "id", "label", "url", "folderId"? }, a folder { "id", "label", "parentId"? };
+ids are any unique string and folderId/parentId name a folder of the same tree.
+To bookmark the page the person is looking at, take its URL and title from the
+turn context or read_tab and append it; omit position to place it last. Keep
+every other key and tree as it is, write the whole file to a temporary sibling
+and rename it over the original. Valid edits show in the sidebar at once, and
+the app's own changes build on them. An invalid file (not JSON, or a tree of the
+wrong shape) keeps the last valid bookmarks, is named in Settings, and blocks
+bookmark changes in the app until it is fixed.
+
+${WORKSPACE_AUTHORING_GUIDE}
 
 ## Validation and boundaries
 
@@ -119,4 +183,10 @@ setup flows. Never edit credential stores or invent scalar preference keys for
 those flows. Committed agent behavior follows the project's agent-authoring guide.
 The palette searches settings normally; type settings then Space or Tab to search
 only settings. Enter opens and highlights the target without changing its value.
+The palette ranks by match, kind and use: open tabs first, then commands, app
+surfaces and the items the sidebars list, then bookmarks, then pages; frequently
+used destinations first, and rows the user picked for a query earlier. Type tabs
+then Space to list only open tabs. A source a sidebar section shows lifts its rows,
+so adding or removing a section in workspace.js changes their rank; otherwise the
+palette learns from use on its own. Do not try to tune ranking any other way.
 `;

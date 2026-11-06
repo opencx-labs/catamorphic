@@ -1,13 +1,71 @@
+import type { KeyObject } from "node:crypto";
 import {
-  type ClientRunnerOperation,
-  ClientRunnerOperationSchema,
+  OPERATION_NOT_OPENED_ERROR,
+  openRemoteOperation,
+  type RemoteOperation,
 } from "@catamorphic/core";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import {
+  redactUrlCredentials,
+  type SandboxProvider,
+  SealedOperationOpenError,
+} from "@catamorphic/sandbox";
 
+/**
+ * The control plane ended this runner's session: its lease moved on, its
+ * access was revoked, or it was refused. Retrying the call cannot help; the
+ * runner stops and its owner connects again or gives up.
+ */
+export class RunnerSessionEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunnerSessionEndedError";
+  }
+}
+
+/**
+ * The control plane refused one receipt: the operation already settled or
+ * its controller stopped waiting. The runner drops that receipt.
+ */
+export class ReceiptRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReceiptRefusedError";
+  }
+}
+
+/**
+ * The control plane cannot take this result (too large to accept). The
+ * runner reports the operation as failed instead.
+ */
+export class ResultRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResultRejectedError";
+  }
+}
+
+/**
+ * How a runner reaches the control plane (ADR 0187). A transport throws
+ * {@link RunnerSessionEndedError}, {@link ReceiptRefusedError}, or
+ * {@link ResultRejectedError} for the control plane's definite answers.
+ * Anything else (a network error, a timeout, a 5xx from a load balancer or
+ * a restarting instance) is transient: the runner retries the same call.
+ */
 export interface ClientRunnerTransport {
   renew(): Promise<void>;
-  poll(): Promise<{ id: string; operation: unknown } | null>;
-  complete(args: {
+  /**
+   * Take up to `max` operations, long-polling, each still sealed to this
+   * runner's key (ADR 0207). A retry repeats `pollId`, and the control plane
+   * answers it with what that poll took, so an operation is never lost with
+   * a response.
+   */
+  poll(args: {
+    pollId: string;
+    max: number;
+    signal: AbortSignal;
+  }): Promise<Array<{ id: string; operation: unknown }>>;
+  /** Idempotent: a receipt retried after its response was lost succeeds. */
+  complete(receipt: {
     jobId: string;
     response?: unknown;
     error?: string;
@@ -15,107 +73,318 @@ export interface ClientRunnerTransport {
   disconnect(): Promise<void>;
 }
 
-/** Runs only operations admitted by the remote authority for this member. */
+/** Transient failures retry with jittered backoff up to this delay. */
+const MAX_RETRY_DELAY_MS = 5_000;
+
+/**
+ * A receipt undelivered this long finds no controller waiting: the longest
+ * an operation's controller waits (a Dockerfile build) has passed.
+ */
+const RECEIPT_GIVE_UP_MS = 36 * 60_000;
+
+function definite(error: unknown): boolean {
+  return (
+    error instanceof RunnerSessionEndedError ||
+    error instanceof ReceiptRefusedError ||
+    error instanceof ResultRejectedError
+  );
+}
+
+/** The runner stopped while a call waited to be retried. */
+class RunnerStoppedError extends Error {}
+
+/**
+ * How a runner opens what it receives (ADR 0207): its address in the queue
+ * (`node:<id>` for a worker, `client:<id>` for a member's runner) and its
+ * private keys, the current one first. A worker that rotated keeps its
+ * previous key, since operations sealed before the rotation may still
+ * arrive. Read for every operation.
+ */
+export interface ClientRunnerKeys {
+  executor: string;
+  privateKeys(): readonly (string | KeyObject)[];
+}
+
+/**
+ * Runs only operations the remote authority admitted for this runner. A
+ * member's desktop runner stops its sandboxes when the connection ends; a
+ * remote worker (ADR 0164) passes `sandboxes` to keep ownership across
+ * control-plane reconnects and `keepSandboxes` so relocation stays possible.
+ *
+ * A session ends only on the control plane's definite answer. Transient
+ * failures retry the same call in place while the lease lasts, so a load
+ * balancer's 502 or an instance restarting never costs running work its
+ * executor (ADR 0187). An operation runs at most once; only its receipt is
+ * ever retried. Every operation arrives sealed to this runner's key, and one
+ * that does not open with `keys` fails without running (ADR 0207).
+ */
 export function startClientRunner(args: {
   provider: SandboxProvider;
   transport: ClientRunnerTransport;
+  keys: ClientRunnerKeys;
+  /** The session ended: {@link RunnerSessionEndedError} or a fault. */
   onError?: (error: unknown) => void;
+  /** A transient failure the runner is riding out. */
+  onRetry?: (error: unknown) => void;
+  sandboxes?: Set<string>;
+  keepSandboxes?: boolean;
+  /** Most sandboxes this runner may hold at once. */
+  maxSandboxes?: number;
+  /** Operations run at once; 4 by default. */
+  concurrency?: number;
+  /**
+   * Return this machine to its pool (ADR 0205): destroy every sandbox it
+   * holds and delete members' volumes and sign-ins. Only a pooled worker
+   * supplies it; a runner without it refuses the operation.
+   */
+  resetMachine?: () => Promise<void>;
+  /**
+   * A member's Codex sign-in on this machine (ADR 0213). Only a worker
+   * supplies it; a runner without it refuses the operation.
+   */
+  codexSignIn?: (
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"],
+  ) => Promise<unknown>;
 }) {
-  let stopped = false;
-  let renewing = false;
-  const ownedSandboxes = new Set<string>();
+  const stopping = new AbortController();
+  const stopped = () => stopping.signal.aborted;
+  let ended: { error: unknown } | undefined;
+  const end = (error: unknown) => {
+    if (ended || stopped()) return;
+    ended = { error };
+    stopping.abort();
+  };
+  const ownedSandboxes = args.sandboxes ?? new Set<string>();
   const stopSandboxes = async () => {
+    if (args.keepSandboxes) return;
     await Promise.allSettled(
       [...ownedSandboxes].map((id) => args.provider.stopSandbox(id)),
     );
   };
+  const pause = (ms: number) =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(done, ms);
+      function done() {
+        clearTimeout(timer);
+        stopping.signal.removeEventListener("abort", done);
+        resolve();
+      }
+      stopping.signal.addEventListener("abort", done, { once: true });
+    });
+  /**
+   * Retry one idempotent call until it gets a definite answer, or until
+   * `giveUpAt` for a call that stops mattering.
+   */
+  const retrying = async <T>(
+    call: () => Promise<T>,
+    giveUpAt = Number.POSITIVE_INFINITY,
+  ): Promise<T> => {
+    for (let attempt = 0; ; attempt++) {
+      if (stopped()) throw new RunnerStoppedError();
+      try {
+        return await call();
+      } catch (error) {
+        if (definite(error) || Date.now() >= giveUpAt) throw error;
+        if (stopped()) throw new RunnerStoppedError();
+        args.onRetry?.(error);
+        const ceiling = Math.min(MAX_RETRY_DELAY_MS, 250 * 2 ** attempt);
+        await pause(ceiling / 2 + Math.random() * (ceiling / 2));
+      }
+    }
+  };
+  let renewing = false;
   const heartbeat = setInterval(() => {
-    if (renewing || stopped) return;
+    if (renewing || stopped()) return;
     renewing = true;
+    // A transient failure waits for the next beat; polls renew too.
     void args.transport
       .renew()
-      .catch(async (error) => {
-        stopped = true;
-        await stopSandboxes();
-        args.onError?.(error);
+      .catch((error: unknown) => {
+        if (error instanceof RunnerSessionEndedError) end(error);
+        else args.onRetry?.(error);
       })
       .finally(() => {
         renewing = false;
       });
   }, 10000);
   heartbeat.unref();
+  let creating = 0;
+  /**
+   * Deliver a receipt. A refused one is dropped, a rejected result fails
+   * the operation, and one nobody can take any more is given up.
+   */
+  const deliver = async (receipt: {
+    jobId: string;
+    response?: unknown;
+    error?: string;
+  }): Promise<void> => {
+    try {
+      await retrying(
+        () => args.transport.complete(receipt),
+        Date.now() + RECEIPT_GIVE_UP_MS,
+      );
+    } catch (error) {
+      if (error instanceof ReceiptRefusedError) return;
+      if (!definite(error) && !(error instanceof RunnerStoppedError)) {
+        args.onRetry?.(error);
+        return;
+      }
+      if (error instanceof ResultRejectedError && receipt.error === undefined) {
+        await deliver({
+          jobId: receipt.jobId,
+          error: receiptError(
+            `The result could not be delivered: ${error.message}`,
+          ),
+        });
+        return;
+      }
+      throw error;
+    }
+  };
+  /** Run one admitted operation and deliver its receipt. */
+  const run = async (job: { id: string; operation: unknown }) => {
+    let receipt: { jobId: string; response?: unknown; error?: string };
+    let reserved = false;
+    try {
+      const operation = openOperationFor({ job, keys: args.keys });
+      // A server may only address sandboxes created for this connection.
+      // Destroying one that is already gone succeeds, so a cleanup whose
+      // receipt was lost can be retried.
+      const owned =
+        !("sandboxId" in operation) || ownedSandboxes.has(operation.sandboxId);
+      // A destroy of another connection's sandbox counts as done, and a
+      // narrowing runs for any sandbox of this machine (ADR 0257): it is
+      // always safe, and a widening must end after its connection did.
+      const unguarded =
+        operation.kind === "destroy" || operation.kind === "egress.narrow";
+      if (!owned && !unguarded)
+        throw new Error("Sandbox does not belong to this runner connection");
+      if (operation.kind === "create") {
+        if (
+          args.maxSandboxes !== undefined &&
+          ownedSandboxes.size + creating >= args.maxSandboxes
+        )
+          throw new Error("This worker has no free workspace");
+        creating++;
+        reserved = true;
+      }
+      const response =
+        owned || operation.kind === "egress.narrow"
+          ? await executeClientOperation({
+              provider: args.provider,
+              operation,
+              ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
+              ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
+            })
+          : null;
+      if (operation.kind === "create") {
+        const handle = response;
+        if (
+          handle &&
+          typeof handle === "object" &&
+          "providerId" in handle &&
+          typeof handle.providerId === "string"
+        )
+          ownedSandboxes.add(handle.providerId);
+      }
+      if (operation.kind === "destroy")
+        ownedSandboxes.delete(operation.sandboxId);
+      receipt = { jobId: job.id, response: response ?? null };
+    } catch (error) {
+      receipt = {
+        jobId: job.id,
+        error: receiptError(
+          error instanceof Error ? error.message : "Client operation failed",
+        ),
+      };
+    } finally {
+      if (reserved) creating--;
+    }
+    await deliver(receipt);
+  };
+  const concurrency = Math.max(1, args.concurrency ?? 4);
+  const running = new Set<Promise<void>>();
   const work = (async () => {
-    while (!stopped) {
-      const job = await args.transport.poll();
-      if (stopped) break;
-      if (!job) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+    while (!stopped()) {
+      // A long read (a process's output, up to 20 seconds) or command
+      // holds one slot; writes and other operations take the others.
+      const free = concurrency - running.size;
+      if (free <= 0) {
+        await Promise.race(running);
         continue;
       }
-      let receipt: { jobId: string; response?: unknown; error?: string };
-      try {
-        const operation = ClientRunnerOperationSchema.parse(job.operation);
-        // A server may only address sandboxes created for this connection.
-        if (
-          "sandboxId" in operation &&
-          !ownedSandboxes.has(operation.sandboxId)
-        )
-          throw new Error("Sandbox does not belong to this runner connection");
-        const response = await executeClientOperation({
-          provider: args.provider,
-          operation,
-        });
-        if (operation.kind === "create") {
-          const handle = response;
-          if (
-            handle &&
-            typeof handle === "object" &&
-            "providerId" in handle &&
-            typeof handle.providerId === "string"
-          )
-            ownedSandboxes.add(handle.providerId);
-        }
-        if (operation.kind === "destroy")
-          ownedSandboxes.delete(operation.sandboxId);
-        receipt = { jobId: job.id, response: response ?? null };
-      } catch (error) {
-        receipt = {
-          jobId: job.id,
-          error:
-            error instanceof Error ? error.message : "Client operation failed",
-        };
+      const pollId = crypto.randomUUID();
+      const jobs = await retrying(() =>
+        args.transport.poll({ pollId, max: free, signal: stopping.signal }),
+      );
+      for (const job of jobs) {
+        const task: Promise<void> = run(job)
+          .catch((error: unknown) => {
+            if (!(error instanceof RunnerStoppedError)) end(error);
+          })
+          .finally(() => running.delete(task));
+        running.add(task);
       }
-      // Retry only the idempotent receipt, never the operation.
-      await args.transport.complete(receipt).catch(async () => {
-        await args.transport.complete(receipt);
-      });
     }
   })()
-    .catch((error) => {
-      stopped = true;
-      args.onError?.(error);
+    .catch((error: unknown) => {
+      if (!(error instanceof RunnerStoppedError)) end(error);
     })
     .finally(async () => {
       clearInterval(heartbeat);
+      // Operations still running are not waited for: their receipts would
+      // be refused. A member's runner stops their sandboxes, which ends
+      // them; a worker keeps its sandboxes for its next session.
       await stopSandboxes();
+      if (ended) args.onError?.(ended.error);
     });
   return {
     stop: async () => {
-      stopped = true;
-      clearInterval(heartbeat);
-      await stopSandboxes();
+      stopping.abort();
       await work;
       await args.transport.disconnect().catch(() => {});
     },
   };
 }
 
+/** One received operation, opened with this runner's keys. */
+function openOperationFor(args: {
+  job: { id: string; operation: unknown };
+  keys: ClientRunnerKeys;
+}): RemoteOperation {
+  try {
+    return openRemoteOperation({
+      operationId: args.job.id,
+      executor: args.keys.executor,
+      envelope: args.job.operation,
+      privateKeys: args.keys.privateKeys(),
+    });
+  } catch (error) {
+    // Its controller seals it again to this machine's current key.
+    if (error instanceof SealedOperationOpenError)
+      throw new Error(OPERATION_NOT_OPENED_ERROR);
+    throw error;
+  }
+}
+
 async function executeClientOperation({
   provider,
   operation,
+  resetMachine,
+  codexSignIn,
 }: {
   provider: SandboxProvider;
-  operation: ClientRunnerOperation;
+  operation: RemoteOperation;
+  resetMachine?: () => Promise<void>;
+  codexSignIn?: (
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"],
+  ) => Promise<unknown>;
 }): Promise<unknown> {
   switch (operation.kind) {
     case "create":
@@ -155,5 +424,71 @@ async function executeClientOperation({
         operation.path,
         operation.ref,
       );
+    case "egress.widen": {
+      if (!provider.widenEgress)
+        throw new Error("This machine cannot widen a sandbox's network");
+      const { kind: _, ...args } = operation;
+      await provider.widenEgress(args);
+      return null;
+    }
+    case "egress.narrow": {
+      if (!provider.narrowEgress)
+        throw new Error("This machine cannot narrow a sandbox's network");
+      const { kind: _, ...args } = operation;
+      await provider.narrowEgress(args);
+      return null;
+    }
+    case "process.start": {
+      const { kind: _, ...args } = operation;
+      return processesOf(provider).startProcess(args);
+    }
+    case "process.read": {
+      const { kind: _, ...args } = operation;
+      return processesOf(provider).readProcessOutput(args);
+    }
+    case "process.signal": {
+      const { kind: _, ...args } = operation;
+      return processesOf(provider).signalProcess(args);
+    }
+    case "process.write": {
+      const { kind: _, ...args } = operation;
+      await processesOf(provider).writeProcessInput(args);
+      return null;
+    }
+    case "process.list":
+      return processesOf(provider).listProcesses({
+        sandboxId: operation.sandboxId,
+      });
+    case "machine.reset":
+      if (!resetMachine) throw new Error("This runner does not reset machines");
+      await resetMachine();
+      return null;
+    case "machine.codexSignIn":
+      if (!codexSignIn)
+        throw new Error("This runner does not sign members in to Codex");
+      return codexSignIn(operation.request);
   }
+}
+
+/** Receipt routes cap an error's length; its start says what went wrong. */
+const RECEIPT_ERROR_MAX = 4000;
+
+/**
+ * A receipt's error as it may leave this machine: a provider's message can
+ * repeat what the operation carried, such as a URL with credentials, so
+ * those are removed before it is capped (ADR 0207).
+ */
+function receiptError(message: string): string {
+  const redacted = redactUrlCredentials(message);
+  return redacted.length > RECEIPT_ERROR_MAX
+    ? `${redacted.slice(0, RECEIPT_ERROR_MAX - 1)}…`
+    : redacted;
+}
+
+function processesOf(provider: SandboxProvider) {
+  if (!provider.processes)
+    throw new Error(
+      "This machine's sandbox provider cannot run background processes",
+    );
+  return provider.processes;
 }

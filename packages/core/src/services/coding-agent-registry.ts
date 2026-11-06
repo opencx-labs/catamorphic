@@ -1,7 +1,18 @@
+import type { JsonObject, TurnError } from "@catamorphic/agent-protocol";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import type {
+  AgentEffort,
   AgentExecutionTopology,
-  CodingAgentProvider,
-  TurnOptions,
+  AgentMcpServerConfig,
+  AgentPluginConfig,
+  ExtraTool,
+  ExtraToolContext,
+  HarnessPermissions,
+  McpToolPolicyLayers,
+  Sandboxing,
+  SignInHarness,
+  ToolPolicyAnnotations,
+  TurnContextFragment,
 } from "@catamorphic/sandbox";
 import type {
   AgentDelegationPolicy,
@@ -10,36 +21,160 @@ import type {
 } from "./agent-definitions-service.js";
 import type { ConnectionRequirement } from "./connection-types.js";
 
+/** What a host hook knows about the turn it serves (no call to stop waiting). */
+export interface AgentTurnContext
+  extends Omit<ExtraToolContext, "stopWaiting"> {
+  /** The turn the hook serves. */
+  turnId: string;
+  /**
+   * The chat runs read-only (ADR 0271): the host mounts nothing for it
+   * that writes past the harness's read-only mode.
+   */
+  readOnly?: boolean;
+}
+
+/**
+ * The harness an agent runs on and where its runner runs (ADR 0198).
+ * `host`: an adapter in this process, beside a checkout on this machine or
+ * driving a sandbox through its tools (the desktop's harnesses, the
+ * built-in agent). `sandbox`: the runner bundle inside the session's
+ * sandbox, where the harness's CLI is.
+ */
+export type AgentHarness =
+  | {
+      placement: "host";
+      adapter: HarnessAdapter;
+      /** Host objects the adapter needs (never serialized). */
+      local?: (context: AgentTurnContext) => Record<string, unknown>;
+      /** Environment of the harness process: the host's own settings (CLAUDE_CONFIG_DIR). */
+      env?: Record<string, string>;
+      /** Tools this host serves the agent beside Work's capability tools. */
+      hostTools?: readonly ExtraTool[];
+      /** MCP servers this host adds, read at every turn so rotated tokens apply. */
+      mcpServers?: (
+        context: AgentTurnContext,
+      ) => Record<string, AgentMcpServerConfig>;
+      /** The host's own policy layers per server, read live (ADR 0054). */
+      toolPolicies?: () => Record<string, McpToolPolicyLayers>;
+      toolAnnotations?: () => Record<
+        string,
+        Record<string, ToolPolicyAnnotations>
+      >;
+      plugins?: readonly AgentPluginConfig[];
+      /** Facts for this turn, beside the person's message (ADR 0152). */
+      context?: (context: AgentTurnContext) => Promise<TurnContextFragment[]>;
+      /** Standing instructions this host adds (a playbook, a persona). */
+      instructions?: string;
+    }
+  | {
+      placement: "sandbox";
+      /** The bundled adapter, e.g. `claude-code`, `codex`. */
+      id: string;
+    };
+
+/** One more attempt a host asks for after a passing failure (ADR 0228). */
+export interface AgentRetry {
+  /** How long the turn waits before the attempt starts: a minute at most. */
+  afterMs: number;
+  /** The turn's activity line meanwhile ("Reconnecting to Claude…"). */
+  activity: string;
+}
+
 export interface RegisteredCodingAgent {
   /** Stable registry key persisted on sessions (`agent_sessions.agent_id`). */
   id: string;
-  provider: CodingAgentProvider;
+  /** How pickers name a host agent; its id when absent. */
+  name?: string;
+  /** One line for pickers. */
+  description?: string;
+  harness: AgentHarness;
+  /**
+   * `native`: the agent works in a checkout on this machine (the desktop).
+   * `controller`: it works in the session's sandbox.
+   */
   topology: AgentExecutionTopology;
-  /** Coarse execution ceiling used to prevent wildcard privilege escalation. */
-  privilege?: "read-only" | "edit" | "full-access";
+  /** Settings handed to the harness on every attempt (`AttemptStart.options`). */
+  options?: JsonObject;
+  /**
+   * What may leave the agent's sandbox (ADR 0176, named in ADR 0182),
+   * enforced by core at every boundary.
+   */
+  sandboxing?: Sandboxing;
+  /**
+   * The agent's own tool-policy narrowing by server key (ADR 0054 agent
+   * scope), layered with the caller's role policies on every turn.
+   */
+  toolPolicies?: Readonly<Record<string, McpToolPolicyLayers>>;
   /** Additional compatibility requirements for profile-defined agents. */
   environment?: AgentEnvironmentPolicy;
   /** Brokered connection aliases required before this agent can start. */
   connectionRequirements?: readonly (string | ConnectionRequirement)[];
+  /**
+   * The Environment alias of the model connection a sandbox harness
+   * reaches through the gateway (ADR 0180).
+   */
+  modelConnection?: string;
+  /**
+   * The harness runs on the chat owner's own sign-in, made on the machine
+   * that runs it (ADR 0199). Placement takes only machines that report it.
+   */
+  signIn?: SignInHarness;
   /** Per-turn defaults applied when the session carries no override. */
-  defaults?: TurnOptions;
+  defaults?: {
+    model?: string;
+    effort?: AgentEffort;
+    harnessPermissions?: HarnessPermissions;
+  };
   /** Committed persona instructions supplied by a project harness factory. */
   systemPrompt?: string;
   /** Explicit source-to-target grants for first-class subsessions. */
   delegation?: AgentDelegationPolicy;
+  /**
+   * What a turn whose machine stopped does (ADR 0198): `continue` queues a
+   * continuation when the native thread can resume exactly; `stop` leaves
+   * it interrupted. Default `continue`. A turn its harness had not begun
+   * is prepared again with its input either way: none of it ran (ADR 0246).
+   */
+  recovery?: "continue" | "stop";
+  /**
+   * Why the agent cannot run now (a definition to fix, an approval to
+   * give). Its turns fail with this reason before binding a native
+   * thread (ADR 0276).
+   */
+  unavailable?: string;
+  /**
+   * A failure nothing ran in (`retrySafe`) that core does not retry by
+   * itself: whether it is passing and worth one more attempt, from what
+   * the host knows and the error cannot say, such as a sign-in the harness
+   * could not refresh in time though it still can be (ADR 0228). Asked at
+   * most once per turn; undefined lets the turn fail.
+   */
+  retryFailure?(input: {
+    error: TurnError;
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+  }): Promise<AgentRetry | undefined>;
+}
+
+/** The harness id an agent runs on. */
+export function harnessIdOf(
+  agent: Pick<RegisteredCodingAgent, "harness">,
+): string {
+  return agent.harness.placement === "host"
+    ? agent.harness.adapter.id
+    : agent.harness.id;
 }
 
 /**
  * The host app's roster of configured coding agents. Implementations may be
- * dynamic — the desktop app resolves agents from per-profile config files, so
+ * dynamic: the desktop app resolves agents from per-profile config files, so
  * an agent added in Settings is usable without a server restart.
  */
 export interface CodingAgentRegistry {
   /**
    * Registry key of the agent used when a session does not name one.
-   * Layered when the host supports it (ADR 0056): with a `projectId` the
-   * host may answer with the caller's per-project choice or the project's
-   * own committed default before falling back to the global default.
+   * Layered when the host supports it (ADR 0056).
    */
   defaultAgentId(projectId?: string): string | undefined;
   get(id: string): RegisteredCodingAgent | undefined;
@@ -52,20 +187,31 @@ export interface CodingAgentRegistry {
     | Promise<RegisteredCodingAgent | undefined>
     | RegisteredCodingAgent
     | undefined;
+  /**
+   * The models an agent's harness offers, as its model picker shows them.
+   * Core checks a subsession's requested model and effort against it (ADR
+   * 0271); without it, the harness checks them at the child's first turn.
+   */
+  models?(args: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined>;
 }
 
-/**
- * Wrap one sandbox-execution provider as a one-entry registry — the shape
- * hosts with a single flagship agent (playground, tests) pass to core.
- */
+/** One model a harness offers, and the efforts it takes. */
+export interface AgentModelChoice {
+  id: string;
+  /** The versioned model an alias (`opus`) resolves to. */
+  resolvedId?: string;
+  /** False when the model takes no effort setting. */
+  supportsEffort?: boolean;
+  supportedEffortLevels?: readonly AgentEffort[];
+}
+
+/** Wrap one agent as a one-entry registry: hosts with a single agent, and tests. */
 export function singleAgentRegistry(
-  provider: CodingAgentProvider,
+  agent: RegisteredCodingAgent,
 ): CodingAgentRegistry {
-  const agent: RegisteredCodingAgent = {
-    id: provider.name,
-    provider,
-    topology: "controller",
-  };
   return {
     defaultAgentId: () => agent.id,
     get: (id) => (id === agent.id ? agent : undefined),
@@ -74,7 +220,7 @@ export function singleAgentRegistry(
 }
 
 export function isCodingAgentRegistry(
-  value: CodingAgentProvider | CodingAgentRegistry,
+  value: RegisteredCodingAgent | CodingAgentRegistry,
 ): value is CodingAgentRegistry {
   return typeof (value as CodingAgentRegistry).defaultAgentId === "function";
 }

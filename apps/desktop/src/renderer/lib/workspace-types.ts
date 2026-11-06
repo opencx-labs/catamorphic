@@ -1,17 +1,22 @@
 export type { ChatDockEntry, ChatMode } from "../../shared/chat.js";
 
+import type { McpAppContext } from "../../shared/chat.js";
 import type { GitDiffMode } from "../../shared/git.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
+import type { SidebarActivity } from "../../shared/sidebar.js";
 
 /**
  * Live activity signals mirrored onto a tab's icon — the same vocabulary
- * as the chat bubbles (chat-signals.tsx): spinner while working, dot for
- * unread, pencil for a draft (chat composer text, editor unsaved changes),
- * pulsing "?" for a waiting agent question.
+ * as the chat bubbles (chat-signals.tsx): below, a spinner while working or
+ * what it waits on; above, a dot for unread, a pencil for a draft (chat
+ * composer text, editor unsaved changes), a pulsing "?" for a waiting agent
+ * question.
  */
 interface TabIndicators {
-  /** Agent working → the icon cross-fades to a spinner. */
+  /** A turn runs: the agent works, or waits within it. */
   working?: boolean;
+  /** What the icon's lower corner says: working, or what it waits on. */
+  activity?: SidebarActivity | null;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;
   /** A workflow requested user attention → pulsing dot on the icon. */
@@ -72,12 +77,20 @@ export type WorkspaceTab = (
       chatIcon?: string | null;
       /** The chat is a fork of another conversation. */
       fork?: boolean;
+      /** Its conversation, once the first message created one. */
+      sessionId?: string;
     }
   | {
       kind: "browser";
       name: string;
       label?: string;
       faviconUrl?: string | null;
+      /** The page is unloaded to save memory until the tab is shown. */
+      asleep?: boolean;
+      /** The page waits on its dialog (ADR 0227). */
+      pageDialog?: boolean;
+      /** The page is in the profile's incognito session (ADR 0303). */
+      incognito?: boolean;
     }
   | {
       kind: "settings";
@@ -90,8 +103,19 @@ export type WorkspaceTab = (
   | { kind: "sites"; name: string; label?: string }
   | { kind: "passwords"; name: string; label?: string }
   | { kind: "downloads"; name: string; label?: string }
+  | { kind: "extensions"; name: string; label?: string }
   | { kind: "usage"; name: string; label?: string }
-  | { kind: "palette"; name: string; label?: string }
+  | {
+      /** A New Tab: the palette as a page (Cmd+T). */
+      kind: "palette";
+      name: string;
+      label?: string;
+      /**
+       * Something is typed in its input. An untyped New Tab closes once
+       * something else is shown in its place (reconcileWorkspace).
+       */
+      typed?: boolean;
+    }
   | { kind: "onboarding"; name: string; label?: string; step?: number }
   | { kind: "agent-setup"; name: string; label?: string; purpose?: "theme" }
   | { kind: "terminal"; name: string; label?: string }
@@ -110,6 +134,8 @@ export type WorkspaceTab = (
       name: string;
       label?: string;
       toolKey: string;
+      /** Absent on old saved tabs, which must be reopened from their chat. */
+      context?: McpAppContext;
       toolInput?: unknown;
       toolResult?: unknown;
     }

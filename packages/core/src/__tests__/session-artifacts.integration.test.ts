@@ -12,7 +12,11 @@ import {
 } from "@catamorphic/git";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SessionArtifactsService } from "../services/session-artifacts-service.js";
+import {
+  RECLAIM_RETRY_SECONDS,
+  RECLAIMED_REVISIT_SECONDS,
+  SessionArtifactsService,
+} from "../services/session-artifacts-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const suite = connectionString ? describe : describe.skip;
@@ -64,7 +68,6 @@ suite("session artifact source lifecycle", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
       })
       .execute();
     directory = await fs.mkdtemp(
@@ -95,11 +98,11 @@ suite("session artifact source lifecycle", () => {
   });
 
   it("creates isolated app source without editing or staging the user's files", async () => {
-    const repo = await manager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await manager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       await repo.writeFile("unrelated.txt", "Do not capture");
       const head = await repo.resolveRef("HEAD");
@@ -114,7 +117,7 @@ suite("session artifact source lifecycle", () => {
       expect(artifact.appName).toBe(`session-${artifact.id}`);
       expect(await repo.resolveRef("HEAD")).toBe(head);
       expect(await repo.listFiles()).not.toContain(
-        ".catamorphic/apps/review/src/App.tsx",
+        ".work/apps/review/src/App.tsx",
       );
       const files = await artifacts.files({
         identity,
@@ -123,7 +126,7 @@ suite("session artifact source lifecycle", () => {
       });
       expect(files[artifact.sourcePath]).toBe(source);
       expect(files["unrelated.txt"]).toBeUndefined();
-      expect(files[".catamorphic/contracts/package.json"]).toContain(
+      expect(files[".work/contracts/package.json"]).toContain(
         "@project/contracts",
       );
     } finally {
@@ -184,7 +187,7 @@ suite("session artifact source lifecycle", () => {
     });
     const remote = manager.remoteBackend;
     if (!remote) throw new Error("Missing origin");
-    const originalBranch = `catamorphic/artifacts/${artifact.id}`;
+    const originalBranch = `work/artifacts/${artifact.id}`;
     await remote.withOrigin(identity.tenantId, projectId, async (origin) => {
       await origin.updateRef({
         ref: `refs/heads/${originalBranch}`,
@@ -364,7 +367,7 @@ suite("session artifact source lifecycle", () => {
         projectId,
         async (origin) => {
           await origin.updateRef({
-            ref: `refs/heads/catamorphic/artifacts/${artifact.id}-late`,
+            ref: `refs/heads/work/artifacts/${artifact.id}-late`,
             sha: artifact.commitSha,
           });
         },
@@ -384,9 +387,25 @@ suite("session artifact source lifecycle", () => {
           projectId,
           (origin) => origin.listRefs("refs/heads/"),
         );
-      const prefix = `refs/heads/catamorphic/artifacts/${artifact.id}`;
+      const prefix = `refs/heads/work/artifacts/${artifact.id}`;
       const before = await inventory();
-      expect(before.some(({ ref }) => ref === `${prefix}-late`)).toBe(true);
+      // The late writer's own candidate went when it found the discard.
+      expect(
+        before
+          .filter(({ ref }) => ref.startsWith(prefix))
+          .map(({ ref }) => ref),
+      ).toEqual([`${prefix}-late`]);
+      // A reclaimed artifact is not looked at again on every sweep...
+      await artifacts.cleanup();
+      expect(await inventory()).toEqual(before);
+      // ...but once its revisit is due.
+      await db
+        .updateTable("session_artifacts")
+        .set({
+          ref_deleted_at: sql<Date>`now() - make_interval(secs => ${RECLAIMED_REVISIT_SECONDS + 1})`,
+        })
+        .where("id", "=", artifact.id)
+        .execute();
       await artifacts.cleanup();
       const refs = await inventory();
       expect(refs.filter(({ ref }) => ref.startsWith(prefix))).toEqual([]);
@@ -394,6 +413,63 @@ suite("session artifact source lifecycle", () => {
     } finally {
       afterPublication = undefined;
     }
+  });
+
+  it("tries a failed reclaim again after a pause, not on every sweep", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "unreclaimable",
+      source,
+    });
+    // An app's bundles go with it, and this host has no bundle store.
+    const app = await db
+      .insertInto("apps")
+      .values({
+        project_id: projectId,
+        name: `session-${artifact.id}`,
+        session_artifact_id: artifact.id,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await artifacts.discard({ identity, projectId, artifactId: artifact.id });
+    const state = () =>
+      db
+        .selectFrom("session_artifacts")
+        .select(["ref_deleted_at", "last_error", "updated_at"])
+        .where("id", "=", artifact.id)
+        .executeTakeFirstOrThrow();
+    const due = () =>
+      db
+        .updateTable("session_artifacts")
+        .set({
+          updated_at: sql<Date>`now() - make_interval(secs => ${RECLAIM_RETRY_SECONDS + 1})`,
+        })
+        .where("id", "=", artifact.id)
+        .execute();
+    await artifacts.cleanup();
+    const failed = await state();
+    expect(failed.ref_deleted_at).toBeNull();
+    expect(failed.last_error).toBe("App bundle storage is unavailable");
+    // The next sweeps leave it alone...
+    await artifacts.cleanup();
+    expect(await state()).toEqual(failed);
+    // ...until its retry is due.
+    await due();
+    await artifacts.cleanup();
+    const retried = await state();
+    expect(retried.last_error).toBe("App bundle storage is unavailable");
+    expect(retried.updated_at.getTime()).toBeGreaterThan(
+      Date.now() - RECLAIM_RETRY_SECONDS * 1_000,
+    );
+    await db.deleteFrom("apps").where("id", "=", app.id).execute();
+    await due();
+    await artifacts.cleanup();
+    const reclaimed = await state();
+    expect(reclaimed.ref_deleted_at).not.toBeNull();
+    expect(reclaimed.last_error).toBeNull();
   });
 
   it("uses the same lifecycle for workflows and keeps closed-session results readable", async () => {
@@ -506,8 +582,8 @@ suite("session artifact source lifecycle", () => {
         name: "ambiguous",
         source,
         files: {
-          ".catamorphic/workflows/src/first.ts": helper,
-          ".catamorphic/workflows/src/second.ts": helper,
+          ".work/workflows/src/first.ts": helper,
+          ".work/workflows/src/second.ts": helper,
         },
       }),
     ).rejects.toThrow("Workflow export helper is ambiguous");
@@ -546,23 +622,21 @@ suite("session artifact source lifecycle", () => {
       name: "cleanup",
       source,
       files: {
-        ".catamorphic/apps/cleanup/src/unused.ts": "export const old = true",
+        ".work/apps/cleanup/src/unused.ts": "export const old = true",
       },
     });
     const address = { identity, projectId, artifactId: artifact.id };
     await artifacts.update({
       ...address,
       revision: 1,
-      files: { ".catamorphic/apps/cleanup/src/unused.ts": null },
+      files: { ".work/apps/cleanup/src/unused.ts": null },
     });
     expect(
-      (await artifacts.files(address))[
-        ".catamorphic/apps/cleanup/src/unused.ts"
-      ],
+      (await artifacts.files(address))[".work/apps/cleanup/src/unused.ts"],
     ).toBeUndefined();
     expect(
       (await artifacts.files({ ...address, commitSha: artifact.commitSha }))[
-        ".catamorphic/apps/cleanup/src/unused.ts"
+        ".work/apps/cleanup/src/unused.ts"
       ],
     ).toContain("old");
   });

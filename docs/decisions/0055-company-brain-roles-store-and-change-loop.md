@@ -2,7 +2,7 @@
 
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`. Logical `store/...` document addresses remain unchanged; local files live under `.catamorphic/app-data/store/`.
 
-- **Status:** Accepted
+- **Status:** Accepted (the `builder` flag and project ref superseded by [0158](0158-project-permissions.md))
 - **Date:** 2026-08-18
 - **Extended by:** 0065 (member and service connections)
 - **Builds on:** 0044 (checkpoints, remote sync), 0050 (project agents),

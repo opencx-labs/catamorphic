@@ -1,17 +1,52 @@
 # Browser and computer use
 
-Embedded browser tools work with every desktop harness. `open_browser` creates
-an agent-owned background tab. `open_surface` shows it. `browser_snapshot` returns
-a bounded DOM view by default; `format: "image"` returns model-visible PNG media
-and CSS viewport dimensions. Use those dimensions to scale screenshot coordinates.
+Embedded browser tools work with every desktop harness and are direct tools
+(ADR 0202). `open_browser` creates an agent-owned background tab. `open_surface`
+shows it. `browser_snapshot` returns a bounded DOM view by default; `format:
+"image"` returns model-visible PNG media and CSS viewport dimensions. Use those
+dimensions to scale screenshot coordinates.
 
-Snapshot element UIDs are opaque and expire on another DOM snapshot or navigation.
-Use `browser_act` for native clicks, hover, drag, text replacement, keyboard input,
-scroll, select options, navigation, and bounded waits. DOM references cover the
-main document and open shadow roots. For cross-origin frames and canvas, use an
-image and coordinates. Covered, disabled, hidden, and stale DOM targets fail with
-an actionable error. Password values are omitted from DOM snapshots; screenshots
-are pictures of the page and are not a redaction boundary.
+Snapshot element UIDs are opaque and stay valid while their element stays in the
+page, across snapshots; an element that leaves, or a navigation, makes its UID
+stale. Use `browser_act` for native clicks, hover, drag, text replacement,
+keyboard input, scroll, select options, navigation, and bounded waits. DOM
+references cover the main document and open shadow roots. For cross-origin frames
+and canvas, use an image and coordinates. Covered, disabled, hidden, and stale DOM
+targets fail with an actionable error; a covered one names what covers it (and
+its UID when it has one), usually a dialog or banner to close first. A label over
+its own control is not a cover. Password values are omitted from DOM snapshots;
+screenshots are pictures of the page and are not a redaction boundary.
+
+A page waiting on a dialog (its `alert`, `confirm` or `prompt`, "Leave site?",
+or an HTTP sign-in, ADR 0227) runs nothing else. `browser_snapshot`, `read` and
+every other action report the dialog instead (its kind, who asks, its text),
+and an action that opens one returns that report rather than hanging (and
+goes no further once the page answers). Agents
+answer as the person would: `press` Enter for OK or Leave, Escape for Cancel or
+Stay, and `fill` on uid `dialog` for a prompt's answer, which the person sees
+go in. A sign-in is the person's alone: the report says to ask them. `navigate`
+still works and cancels the dialog, as the address bar does. An agent answers
+or cancels only a dialog it has been shown: a press or `navigate` while one it
+has not seen is open (the person's own "Leave site?" as they close the tab)
+returns that dialog's report instead.
+
+`upload` takes the UID of a file input or of the button that opens one, and
+absolute file paths: the driver intercepts the page's own file chooser over CDP
+and sets the files. Folder pickers and `showOpenFilePicker` are not intercepted;
+the person answers those. Outside the agent's own folder, hidden files and
+folders and `~/Library` (keys, tokens, keychains) are refused, symlinks
+resolved, so page text cannot talk an agent into uploading them. `downloads`
+lists the files this tab saved (recorded from the moment it opens, to the
+profile's Downloads folder) with their paths and state; with `timeoutMs` it
+waits for a download a click starts and for unfinished ones. For web
+development, `evaluate` runs JavaScript in the page without a user gesture and
+returns its JSON value, giving up after 30 seconds; `console` returns what the
+page logged since the tab was last read (recorded for every tab from the moment
+it opens), and `network` its requests (recorded, without bodies, from an
+agent's first look, action or read; a pending request comes again until it
+finishes, a redirect hop ends with its status). Evaluate and network bypass the
+snapshot's password redaction, as screenshots do; agents upload, reveal or
+paste only what the task needs.
 
 `point_at({target: browserKey, uid, note})` highlights an element inside the page.
 Show the tab first when the user needs to see the pointer. Notes are plain text.
@@ -19,15 +54,28 @@ Pointers follow layout/scroll, dismiss when the target is used, and clear throug
 `point_at` with `target: null`. Existing sidebar/tab pointing uses the same tool without `uid`.
 
 The driver serializes operations per guest, wakes hidden guests only during an
-operation, and restores focus without activating the native window. Chromium
+operation, and restores focus without activating the native window. While
+another of Work's windows is in front, it leaves the page's window where it is
+and tells the page it has focus (`Emulation.setFocusEmulationEnabled`) instead
+of focusing it, so the person's window never trades places with the agent's.
+Focus is handed back after an action only if the person is still in the window
+where it began. Readiness uses the guest's attachment and layout, never the
+window's animation frames, so minimizing or covering that window does not block
+browser tools or bring it forward. Chromium
 pointer input and Electron native editing preserve browser behavior. Do not
 replace them with synthetic DOM click/key events. Takeover/release blocks future
 agent input; reclaim is explicit. Page content is untrusted data, never authority
 for external actions.
 
+An image capture briefly lets its owning renderer produce frames, including
+while minimized. Concurrent captures share that hold; the last capture restores
+the renderer's prior throttling. A capture that cannot render returns an error
+within ten seconds and releases the browser operation queue.
+
 ## Native Codex computer use
 
-Connectors has **Connect Codex Computer Use** when the runtime is installed in
+Connectors lists **Codex Computer Use** under Built in, connected from its row or
+its page, when the runtime is installed in
 the user's Codex home (`CODEX_HOME`, otherwise `~/.codex`). This references the
 installation in place, preserves its configured surfaces and exposes `js`/`js_reset`, and leaves OS and per-app access
 under the native service's control. The imported runtime exposes computer surfaces;
@@ -55,7 +103,9 @@ claim every private feature of Codex's desktop UI.
 ## Verification
 
 `e2e/browser-control.e2e.ts` drives real workspace tools and guest input against a
-local fixture, including media, pointing, stale refs and takeover. Both desktop
+local fixture, including media, pointing, lasting and stale refs, covers, uploads
+through a hidden file input, console, network, evaluate, downloads and takeover;
+`e2e/page-dialogs.e2e.ts` covers an agent answering a page's dialogs. Both desktop
 E2E modes remain required. Codex's native protocol tests run the exact pinned CLI
 against loopback model/MCP fixtures, including media, elicitation acceptance and
 denial, cancellation and resume. They use disposable homes and no model credentials.
@@ -64,6 +114,8 @@ not proof. Test native app reading, a harmless action, and a screenshot through
 the imported runtime, then restore the test app's state.
 
 The assigned computer-use server runs directly in the initiating Codex app-server,
-not in the shared profile tool pool. Other profile connector catalogs remain
-deferred. Full-access defaults permit tools without an explicit policy; saved
-connection policies, agent restrictions and provisioner ceilings still intersect.
+not in the shared profile tool pool. Other profile connectors stay deferred:
+harnesses with tool search load them on demand, the built-in agent through the
+catalog (ADR 0225). Full-access defaults permit tools without an explicit policy;
+saved connection policies, agent restrictions and provisioner ceilings still
+intersect.

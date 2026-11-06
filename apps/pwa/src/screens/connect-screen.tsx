@@ -124,7 +124,7 @@ export function ConnectScreen({
           </span>
           <p className="max-w-xs text-sm leading-6 text-fg-muted">
             Paste the invite link you were given. It connects this profile to
-            one project on a Catamorphic server.
+            one project on a Work server.
           </p>
         </div>
         {hostedServerUrl && (

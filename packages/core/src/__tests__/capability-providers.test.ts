@@ -10,7 +10,6 @@ const context = {
   tenantId: "t1",
   externalUserId: "alice",
   projectId: "p1",
-  stage: "production" as const,
   workflowName: "welcome",
 };
 

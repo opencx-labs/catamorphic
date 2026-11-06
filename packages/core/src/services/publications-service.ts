@@ -3,13 +3,14 @@ import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import {
   type DocumentRef,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   documentAccessAllowed,
+  isStorePath,
   normalizeDocumentPath,
 } from "./documents-service.js";
 import { requireTenantProject } from "./projects-service.js";
@@ -22,7 +23,7 @@ import { requireTenantProject } from "./projects-service.js";
  * is a *pointer*: the document keeps living in the program or the store,
  * so a later write is what readers see, and revoking is a timestamp.
  *
- * Who may publish: builders (anything they may read), and members for
+ * Who may publish: `program:publish` for program paths, and anyone for
  * store documents they may write — a CSM shares their own deck, not the
  * handbook. Hosts narrow further through roles (no write, no publish).
  */
@@ -76,13 +77,13 @@ export class PublicationsService {
     const { identity, projectId } = input;
     await this.requireProject(identity, projectId);
     const path = normalizeDocumentPath(input.path);
-    // Builders publish what they may read (the program; store paths their
-    // document refs cover). Members publish what they may WRITE — their own
-    // store documents — never the program.
+    // Program paths go public only for those who may publish the program;
+    // store documents for those who may write them.
     const mayPublish =
       documentAccessAllowed(identity, projectId, path, "read") &&
-      (isBuilder(identity, projectId) ||
-        documentAccessAllowed(identity, projectId, path, "write"));
+      (isStorePath(path)
+        ? documentAccessAllowed(identity, projectId, path, "write")
+        : hasProjectPermission(identity, projectId, "program:publish"));
     if (!mayPublish) throw new AccessDeniedError();
     const slug = input.slug ?? randomSlug();
     if (!SLUG_PATTERN.test(slug)) {
@@ -109,7 +110,7 @@ export class PublicationsService {
     }
   }
 
-  /** Builders see every publication; members their own. */
+  /** `publications:read` sees every publication; members their own. */
   async list(input: {
     identity: Identity;
     projectId: string;
@@ -118,7 +119,13 @@ export class PublicationsService {
     let query = this.db
       .selectFrom("publications")
       .where("project_id", "=", input.projectId);
-    if (!isBuilder(input.identity, input.projectId)) {
+    if (
+      !hasProjectPermission(
+        input.identity,
+        input.projectId,
+        "publications:read",
+      )
+    ) {
       query = query.where("created_by", "=", input.identity.externalUserId);
     }
     const rows = await query
@@ -128,7 +135,7 @@ export class PublicationsService {
     return rows.map(mapPublication);
   }
 
-  /** The publisher or a builder may revoke. */
+  /** The publisher, or anyone with `publications:write`, may revoke. */
   async revoke(input: {
     identity: Identity;
     projectId: string;
@@ -143,7 +150,11 @@ export class PublicationsService {
       .executeTakeFirst();
     if (!row) throw new PublicationNotFoundError(input.slug);
     if (
-      !isBuilder(input.identity, input.projectId) &&
+      !hasProjectPermission(
+        input.identity,
+        input.projectId,
+        "publications:write",
+      ) &&
       row.created_by !== input.identity.externalUserId
     ) {
       throw new AccessDeniedError();

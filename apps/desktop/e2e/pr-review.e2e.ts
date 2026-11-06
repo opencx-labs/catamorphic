@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { configureReviewSidebar } from "./fixtures/sidebar-config.js";
+import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
 import {
   type AppHandle,
   type FrameHandle,
@@ -11,6 +12,7 @@ import {
 } from "./harness.js";
 
 let app: AppHandle;
+let projectId: string;
 const helper = `${setReactValueJs}; ${workspaceDomHelpersJs} const button = text => $$('button').find(b => b.textContent.trim() === text);`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string) =>
@@ -85,7 +87,7 @@ async function verifyReviewTheme(frame: FrameHandle) {
     // Another embedder can supply a larger type scale and denser/taller rows.
     await app.eval(`(async () => {
       const theme = await window.catamorphicDesktop.getTheme();
-      document.querySelector('iframe[src*="/apps/session-"]').contentWindow.postMessage({
+      document.querySelector('iframe[src^="work-guest://p-"]').contentWindow.postMessage({
         catamorphicApp: ${APP_PROTOCOL_VERSION}, kind: "theme",
         theme: { appearance: theme.appearance, colors: theme.colors, fonts: theme.fonts, baseFontSize: "17px", rowHeight: "36px" },
       }, '*');
@@ -119,7 +121,6 @@ async function verifyReviewTheme(frame: FrameHandle) {
 }
 beforeAll(async () => {
   app = await launchApp({ env: { CATAMORPHIC_E2E_REVIEW: "1" } });
-  await configureReviewSidebar(app);
   await openProjectSwitcher(app);
   await wait("return !!button('New project');");
   await run("button('New project').click();");
@@ -129,13 +130,52 @@ beforeAll(async () => {
   );
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
+  projectId = await app.waitFor<string>(
+    `(async()=>{
+    const {url}=await window.catamorphicDesktop.getServerState();
+    const data=await fetch(url+'/api/projects').then(response=>response.json());
+    return data.items.find(project=>project.name==='Review fixture')?.id;
+  })()`,
+    { label: "review fixture project created" },
+  );
   // The fixture stands in for a connected GitHub; the section only asks
   // for pull requests while the connection preference is on.
   await app.eval(
     "window.catamorphicDesktop.setPrefs({ githubCliEnabled: true })",
   );
+  // Work's right sidebar starts empty (ADR 0234): the person lists the
+  // project's pull requests (work:prs) where they want them.
+  fs.writeFileSync(
+    await app.eval<string>("window.catamorphicDesktop.workspaceConfigFile()"),
+    `module.exports = ${JSON.stringify({
+      sidebars: {
+        left: DEFAULT_WORKSPACE_CONFIG.sidebars.left,
+        right: [
+          {
+            id: "companion",
+            title: "Activity",
+            icon: "Activity",
+            sections: [{ id: "activity", source: "work:activity" }],
+          },
+          {
+            id: "reviews",
+            title: "Proposals",
+            icon: "GitPullRequest",
+            sections: [{ id: "prs", source: "work:prs" }],
+          },
+        ],
+      },
+    })};\n`,
+  );
   await wait(
     "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]');",
+  );
+  // It started empty, so closed: open it.
+  await run(
+    "[...document.querySelectorAll('[aria-label=\"Expand right sidebar\"]')].find(b => !b.closest('[inert]'))?.click();",
+  );
+  await wait(
+    "return $('[data-sidebar=right]')?.getAttribute('aria-hidden') === 'false';",
   );
   await run(
     "$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]').click();",
@@ -147,6 +187,14 @@ beforeAll(async () => {
     "$$('[data-sidebar=right] button').find(b=>b.textContent.includes('Validate input before processing')).click();",
   );
   await wait("return !!$('[aria-label=\"Pull request details\"]');");
+  // The review gets the window's width back, as with the sidebar closed by
+  // default.
+  await run(
+    "[...document.querySelectorAll('[data-sidebar=right] [aria-label=\"Collapse right sidebar\"]')].find(b => !b.closest('[inert]'))?.click();",
+  );
+  await wait(
+    "return $('[data-sidebar=right]')?.dataset.motion === 'closed' && $('[data-sidebar=right]')?.dataset.settled === 'true';",
+  );
 });
 afterAll(async () => {
   const errors = app?.getRendererErrors() ?? [];
@@ -212,7 +260,7 @@ it("generates an ordinary review app, follows evidence and retains the result", 
   }
   await run("button('Open review').click();");
   await wait(
-    `return !!document.querySelector('iframe[src*="/apps/session-"]');`,
+    `return !!document.querySelector('iframe[src^="work-guest://p-"]');`,
   );
   // Creation through discovery must set the icon without a second mutation.
   await wait(`return !!document.querySelector('[data-app-icon="review"]');`);
@@ -220,8 +268,11 @@ it("generates an ordinary review app, follows evidence and retains the result", 
     title: string;
     icon: string;
   }>(`(async () => {
-    const guest = new URL(document.querySelector('iframe[src*="/apps/session-"]').src);
-    const response = await fetch(guest.origin + guest.pathname.replace(/\\/guest$/, "/presentation"), {
+    const {url}=await window.catamorphicDesktop.getServerState();
+    const frame=document.querySelector('iframe[src^="work-guest://p-"][title^="app-session-"]');
+    if(!(frame instanceof HTMLIFrameElement)) throw new Error('The retained review app was not mounted');
+    const appName=frame.title.slice('app-'.length);
+    const response = await fetch(url+'/api/projects/'+${JSON.stringify(projectId)}+'/apps/'+encodeURIComponent(appName)+'/presentation', {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Input guard review", icon: "review" }),
     });
@@ -235,9 +286,10 @@ it("generates an ordinary review app, follows evidence and retains the result", 
   await wait(
     `return !!document.querySelector('[data-app-icon="review"]') && document.body.textContent.includes("Input guard review");`,
   );
-  const frame = await app.connectToFrame("/apps/session-", {
-    timeoutMs: 60000,
-  });
+  const guestUrl = await app.eval<string>(
+    `document.querySelector('iframe[src^="work-guest://p-"]').src`,
+  );
+  const frame = await app.connectToFrame(guestUrl, { timeoutMs: 60000 });
   try {
     await frame.waitFor(
       'document.querySelector(".cat-review-finding")?.textContent.includes("Check the boundary")',
@@ -382,4 +434,49 @@ it("keeps review context reachable and avoids horizontal overflow in a narrow wi
   await run("$('[aria-label=\"Changed file tree\"] [aria-current]').click();");
   await wait("return !$('[aria-label=\"Changed file tree\"]');");
   await app.screenshot("/tmp/catamorphic-review-narrow-e2e.png");
+});
+
+it("keeps the proposals on screen while the right sidebar slides in and away", async () => {
+  // Every frame of one slide: where the panel is, and whether it still
+  // lists the proposals or shows placeholders in their place.
+  const slide = (toggle: string, rest: "open" | "closed") =>
+    run<Array<{ motion: string; listed: boolean }>>(`
+      const aside = $('[data-workspace-visible="true"] [data-sidebar=right]');
+      const samples = [];
+      return new Promise((resolve) => {
+        const tick = () => {
+          const panel = aside.querySelector('.sidebar-tab-panel:not([hidden])');
+          samples.push({
+            motion: aside.dataset.motion,
+            listed: (panel?.textContent ?? '').includes('Validate input before processing'),
+          });
+          if (samples.length > 1 && aside.dataset.motion === ${JSON.stringify(rest)}) resolve(samples);
+          else requestAnimationFrame(tick);
+        };
+        [...document.querySelectorAll(${JSON.stringify(toggle)})].find((el) => !el.closest('[inert]')).click();
+        requestAnimationFrame(tick);
+      });
+    `);
+  await wait(
+    `return !![...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Expand right sidebar"]')].find((el) => !el.closest('[inert]'));`,
+  );
+  const opening = await slide(
+    '[data-workspace-visible="true"] [aria-label="Expand right sidebar"]',
+    "open",
+  );
+  expect(opening.some((sample) => sample.motion === "opening")).toBe(true);
+  expect(
+    opening.filter((sample) => sample.motion !== "closed" && !sample.listed),
+  ).toEqual([]);
+  await wait(
+    `return $('[data-workspace-visible="true"] [data-sidebar=right]').dataset.settled === 'true';`,
+  );
+  const closing = await slide(
+    '[data-workspace-visible="true"] [data-sidebar=right] [aria-label="Collapse right sidebar"]',
+    "closed",
+  );
+  expect(closing.some((sample) => sample.motion === "closing")).toBe(true);
+  expect(
+    closing.filter((sample) => sample.motion === "closing" && !sample.listed),
+  ).toEqual([]);
 });

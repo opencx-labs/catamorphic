@@ -1,3 +1,5 @@
+import type { BrowserHistory } from "../../shared/browser-history.js";
+import type { TerminalChat } from "../../shared/terminal.js";
 import { resolveWorkspaceLayout, type SplitView } from "./workspace-layout.js";
 import type { ChatDockEntry } from "./workspace-types.js";
 import { tabKey, type WorkspaceTab } from "./workspace-types.js";
@@ -10,12 +12,19 @@ export interface BrowserEntry {
   url: string;
   title: string;
   faviconUrl: string | null;
-  /** Chat this tab is attached to (its surfaces rail), if any. */
+  /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
   /** An agent is driving this page; user interaction waits on Take over. */
   agentControlled?: boolean;
   /** Attached surface kept alive as a chip without occupying a tab. */
   background?: boolean;
+  /** Back and forward list, so a reopened or restored tab can go back. */
+  history?: BrowserHistory;
+  /**
+   * The page lives in the profile's incognito session (ADR 0303): it
+   * records no history and does not outlive the app.
+   */
+  incognito?: boolean;
 }
 
 export interface TerminalEntry {
@@ -25,10 +34,14 @@ export interface TerminalEntry {
   initialCommand?: string;
   /** Shell title (OSC 0/2) — feeds the tab label. */
   title: string;
-  /** Chat this tab is attached to (its surfaces rail), if any. */
+  /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
   /** Attached to an agent-owned PTY session instead of spawning one. */
   attachSessionId?: string;
+  /**
+   * The chat whose workspace a new or reopened shell uses.
+   */
+  chat?: TerminalChat;
   /** PTY session backing this tab (agents read terminals through it). */
   ptySessionId?: string;
   /**
@@ -36,18 +49,29 @@ export interface TerminalEntry {
    * replays above the fresh shell.
    */
   restoreSessionId?: string;
+  /**
+   * A shell still running that this tab takes over: its project moved here
+   * from another window (lib/project-move.ts). One that ended meanwhile
+   * starts fresh beneath its output instead.
+   */
+  adoptSessionId?: string;
   /** A foreground command is running right now (chip spinner). */
   busy?: boolean;
   /** The agent is driving this terminal; input waits on Take over. */
   agentControlled?: boolean;
-  /** Agent terminals: process still running (activity indicator). */
+  /**
+   * The process behind it still runs. An agent terminal lives as long as
+   * its command (ADR 0223): once it ended, a tab keeps its final output
+   * until closed, and nothing brings it back.
+   */
   running?: boolean;
   /**
    * Agent terminal without a workspace tab: the PTY runs and the chip
-   * rides the chat's surfaces rail, but no tab appears and focus stays
+   * rides the chat's chips, but no tab appears and focus stays
    * put. Cleared when the user clicks the chip or the agent shows the
-   * terminal via open_surface; closing an agent-controlled terminal tab
-   * sets it back instead of killing the shell.
+   * terminal via open_surface; closing the tab of a terminal attached to
+   * a chat sets it back while its process runs. A background agent
+   * terminal leaves the chat when its command ends.
    */
   background?: boolean;
 }
@@ -61,7 +85,7 @@ export interface EditorEntry {
   filePath: string | null;
   /** Unsaved draft in the tab — a dot on the tab icon. */
   dirty: boolean;
-  /** Chat this tab is attached to (its surfaces rail), if any. */
+  /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
   /** Attached surface kept as a chip without occupying a tab. */
   background?: boolean;
@@ -76,12 +100,17 @@ export type ClosedTab = (
       faviconUrl: string | null;
       profileId: string;
       chatLocalId?: string;
+      history?: BrowserHistory;
+      incognito?: boolean;
     }
   | {
       kind: "terminal";
       chatLocalId?: string;
       /** Dead PTY whose scrollback the reopened tab replays. */
       ptySessionId?: string;
+      /** Reopening resolves this chat's current local or remote workspace. */
+      chat?: TerminalChat;
+      title?: string;
     }
   | { kind: "editor"; filePath: string | null; chatLocalId?: string }
   | { kind: "chat"; sessionId?: string; incognito?: boolean }
@@ -111,17 +140,24 @@ export interface Workspace {
    * mutations write it.
    */
   tabOrder: string[];
+  /**
+   * Open tabs the person left, newest last: when the tab in front closes,
+   * the newest one still open comes back to the front.
+   */
+  recentTabKeys: string[];
   /** Recently closed tabs, newest last (Cmd+Shift+T restores). */
   closedTabs: ClosedTab[];
 }
 
 export const newChatEntry = (
   mode: ChatDockEntry["mode"],
-  opts?: { incognito?: boolean },
+  opts?: { incognito?: boolean; worktree?: boolean; agentId?: string },
 ): ChatDockEntry => ({
   localId: crypto.randomUUID(),
   mode,
   ...(opts?.incognito ? { incognito: true } : {}),
+  ...(opts?.worktree ? { worktree: true } : {}),
+  ...(opts?.agentId ? { agentId: opts.agentId } : {}),
 });
 
 // A fresh project workspace greets the user with a palette "New Tab" —
@@ -141,6 +177,7 @@ export const emptyWorkspace = (): Workspace => {
     editors: [],
     split: null,
     tabOrder: [],
+    recentTabKeys: [],
     closedTabs: [],
   };
 };
@@ -158,6 +195,7 @@ export const emptyUtilityWorkspace = (): Workspace => ({
   editors: [],
   split: null,
   tabOrder: [],
+  recentTabKeys: [],
   closedTabs: [],
 });
 
@@ -172,29 +210,49 @@ export const editorTabKey = (localId: string) => `editor:${localId}`;
  * Dropped because they cannot survive: terminals (the PTY dies with the
  * app), sessionless chats (nothing to reopen), unsent composer state,
  * agent-setup tabs (they re-open themselves), and mcpapp tabs (their tool
- * results are runtime data). Editor tabs lose unsaved buffers; browser
+ * results are runtime data), and incognito pages (ADR 0303: they end with
+ * the app). Editor tabs lose unsaved buffers; browser
  * tabs reopen on their last URL. Workflow tabs retain their draft source and
  * baseline so returning to a project can detect external conflicts.
+ *
+ * `moving`: the project is moving to a window of its own while the app runs
+ * (lib/project-move.ts), so what lives on in the main process goes with it:
+ * its shells (taken over there, `adoptSessionId`) and its chats not sent
+ * yet (their drafts wait in the main process).
  */
-export const serializeWorkspace = (ws: Workspace): Workspace => {
+export const serializeWorkspace = (
+  ws: Workspace,
+  { moving = false }: { moving?: boolean } = {},
+): Workspace => {
   const chats = ws.chats
-    .filter((chat) => chat.sessionId)
+    .filter((chat) => moving || chat.sessionId)
     .map(
-      ({ pendingMessage: _pending, focusMessageId: _focus, ...chat }) => chat,
+      ({
+        pendingMessage: _pending,
+        draftMessage: _draft,
+        focusMessageId: _focus,
+        ...chat
+      }) => chat,
     );
   const chatIds = new Set(chats.map((chat) => chat.localId));
   const chatRef = (id: string | undefined) =>
     id && chatIds.has(id) ? { chatLocalId: id } : {};
-  const browsers = ws.browsers.map((browser) => ({
-    localId: browser.localId,
-    profileId: browser.profileId,
-    initialUrl: browser.url || browser.initialUrl,
-    url: browser.url,
-    title: browser.title,
-    faviconUrl: browser.faviconUrl,
-    ...chatRef(browser.chatLocalId),
-    ...(browser.background ? { background: true } : {}),
-  }));
+  // Incognito pages go with a moving project: the app, and their
+  // session, are still running.
+  const browsers = ws.browsers
+    .filter((browser) => moving || !browser.incognito)
+    .map((browser) => ({
+      localId: browser.localId,
+      profileId: browser.profileId,
+      initialUrl: browser.url || browser.initialUrl,
+      url: browser.url,
+      title: browser.title,
+      faviconUrl: browser.faviconUrl,
+      ...chatRef(browser.chatLocalId),
+      ...(browser.background ? { background: true } : {}),
+      ...(browser.history ? { history: browser.history } : {}),
+      ...(browser.incognito ? { incognito: true } : {}),
+    }));
   const editors = ws.editors.map((editor) => ({
     localId: editor.localId,
     filePath: editor.filePath,
@@ -202,9 +260,48 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
     ...chatRef(editor.chatLocalId),
     ...(editor.background ? { background: true } : {}),
   }));
-  const tabs = ws.tabs.filter(
-    (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
-  );
+  // An agent's terminal is shared by every window; a shell on a remote
+  // chat's server opens again there; a shell here is taken over.
+  const terminals: TerminalEntry[] = moving
+    ? ws.terminals.flatMap((terminal) => {
+        const kept = terminal.attachSessionId
+          ? { attachSessionId: terminal.attachSessionId }
+          : terminal.chat?.remote
+            ? {
+                // Its shell ends with the old window; what it printed
+                // shows above the new one.
+                ...(terminal.ptySessionId
+                  ? { restoreSessionId: terminal.ptySessionId }
+                  : {}),
+              }
+            : terminal.ptySessionId
+              ? {
+                  adoptSessionId: terminal.ptySessionId,
+                  // Closing the tab before it is taken over ends it.
+                  ptySessionId: terminal.ptySessionId,
+                }
+              : null;
+        if (!kept) return [];
+        return [
+          {
+            localId: terminal.localId,
+            title: terminal.title,
+            ...chatRef(terminal.chatLocalId),
+            ...(terminal.chat ? { chat: terminal.chat } : {}),
+            ...kept,
+            ...(terminal.background ? { background: true } : {}),
+          },
+        ];
+      })
+    : [];
+  const tabs = ws.tabs
+    .filter((tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp")
+    // A New Tab's input is not restored, so neither is its typed mark.
+    .map((tab) =>
+      tab.kind === "palette"
+        ? { kind: tab.kind, name: tab.name, label: tab.label }
+        : tab,
+    );
   const keys = new Set([
     ...tabs.map(tabKey),
     ...chats
@@ -216,6 +313,9 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
     ...editors
       .filter((editor) => !editor.background)
       .map((editor) => editorTabKey(editor.localId)),
+    ...terminals
+      .filter((terminal) => !terminal.background)
+      .map((terminal) => terminalTabKey(terminal.localId)),
   ]);
   return {
     tabs,
@@ -230,19 +330,31 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
       ? { activeChatId: ws.activeChatId }
       : {}),
     browsers,
-    terminals: [],
+    terminals,
     editors,
     split:
       ws.split && keys.has(ws.split.leftKey) && keys.has(ws.split.rightKey)
         ? ws.split
         : null,
     tabOrder: ws.tabOrder.filter((key) => keys.has(key)),
-    closedTabs: ws.closedTabs.filter((record) => record.kind !== "terminal"),
+    recentTabKeys: ws.recentTabKeys.filter((key) => keys.has(key)),
+    closedTabs: ws.closedTabs.filter(
+      (record) =>
+        record.kind !== "terminal" &&
+        (moving || record.kind !== "browser" || !record.incognito),
+    ),
   };
 };
 
-/** Rebuild a Workspace from a persisted snapshot; null = start fresh. */
-export const hydrateWorkspace = (raw: unknown): Workspace | null => {
+/**
+ * Rebuild a Workspace from a persisted snapshot; null = start fresh.
+ * `moved`: the snapshot is a project's old window handing it over
+ * (serializeWorkspace's `moving`), the only kind that brings shells.
+ */
+export const hydrateWorkspace = (
+  raw: unknown,
+  { moved = false }: { moved?: boolean } = {},
+): Workspace | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const snapshot = raw as Partial<Workspace>;
   const ws: Workspace = {
@@ -252,12 +364,30 @@ export const hydrateWorkspace = (raw: unknown): Workspace | null => {
         )
       : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
-    browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
-    terminals: [],
+    // Only a moving project brings its incognito pages along.
+    browsers: Array.isArray(snapshot.browsers)
+      ? snapshot.browsers.filter((browser) => moved || !browser.incognito)
+      : [],
+    terminals:
+      moved && Array.isArray(snapshot.terminals)
+        ? snapshot.terminals.filter(
+            (terminal) =>
+              terminal.adoptSessionId ||
+              terminal.attachSessionId ||
+              terminal.chat?.remote,
+          )
+        : [],
     editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
     split: snapshot.split ?? null,
     tabOrder: Array.isArray(snapshot.tabOrder) ? snapshot.tabOrder : [],
-    closedTabs: Array.isArray(snapshot.closedTabs) ? snapshot.closedTabs : [],
+    recentTabKeys: Array.isArray(snapshot.recentTabKeys)
+      ? snapshot.recentTabKeys
+      : [],
+    closedTabs: Array.isArray(snapshot.closedTabs)
+      ? snapshot.closedTabs.filter(
+          (record) => moved || record.kind !== "browser" || !record.incognito,
+        )
+      : [],
     ...(typeof snapshot.activeTabKey === "string"
       ? { activeTabKey: snapshot.activeTabKey }
       : {}),
@@ -272,6 +402,7 @@ export const hydrateWorkspace = (raw: unknown): Workspace | null => {
     ws.tabs.length > 0 ||
     ws.chats.length > 0 ||
     ws.browsers.length > 0 ||
+    ws.terminals.length > 0 ||
     ws.editors.length > 0;
   if (!anything) return null;
   if (!ws.activeTabKey && ws.tabs[0]) ws.activeTabKey = tabKey(ws.tabs[0]);
@@ -317,6 +448,58 @@ export const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
     .map((editor) => editorTabKey(editor.localId)),
 ];
 
+/** Closing a folded chat group includes every tab hidden behind its header. */
+export function closingTabKeys(ws: Workspace, key: string): string[] {
+  const chat = key.startsWith("chat:")
+    ? ws.chats.find((chat) => chatTabKey(chat.localId) === key)
+    : undefined;
+  return chat?.mode === "tab" && chat.surfacesCollapsed
+    ? [...attachedTabKeys(ws, chat.localId), key]
+    : [key];
+}
+
+/**
+ * Why a tab cannot move into a tab chat (or, with null, out of its chat),
+ * in a sentence; undefined when it can. What an agent is using stays with
+ * its chat.
+ */
+export const attachBlocker = (
+  ws: Workspace,
+  key: string,
+  chatLocalId: string | null,
+): string | undefined => {
+  if (key.startsWith("chat:")) return "A chat can't go inside another chat.";
+  if (
+    chatLocalId &&
+    !ws.chats.some(
+      (chat) => chat.localId === chatLocalId && chat.mode === "tab",
+    )
+  )
+    return "Only a chat open as a tab holds tabs.";
+  const localId = key.slice(key.indexOf(":") + 1);
+  if (key.startsWith("browser:")) {
+    const browser = ws.browsers.find((entry) => entry.localId === localId);
+    if (!browser) return "That tab is closed.";
+    if (browser.agentControlled)
+      return "An agent is using this page. Take it over first.";
+    return undefined;
+  }
+  if (key.startsWith("terminal:")) {
+    const terminal = ws.terminals.find((entry) => entry.localId === localId);
+    if (!terminal) return "That tab is closed.";
+    if (terminal.attachSessionId || terminal.chat?.remote)
+      return "This terminal belongs to its chat.";
+    return undefined;
+  }
+  if (key.startsWith("editor:"))
+    return ws.editors.some((entry) => entry.localId === localId)
+      ? undefined
+      : "That tab is closed.";
+  return ws.tabs.some((tab) => tabKey(tab) === key)
+    ? undefined
+    : "That tab is closed.";
+};
+
 /**
  * Tab-strip order, the single source for the strip AND keyboard cycling:
  * `tabOrder` (drag-arranged) first, unknown keys appended in per-kind
@@ -359,6 +542,10 @@ export const orderedTabKeys = (
   return result;
 };
 
+/**
+ * The tab in front once `closedKey` leaves: its split partner, else the
+ * newest tab the person left that is still shown, else the strip's last.
+ */
 export const nextActiveTabKey = (
   ws: Workspace,
   closedKey: string,
@@ -381,6 +568,13 @@ export const nextActiveTabKey = (
         ? ws.split.leftKey
         : undefined;
   if (partner && keys.includes(partner)) return partner;
+  // Otherwise back to the tab the person was on before this one, unless a
+  // folded group hides it now.
+  const shown = new Set(orderedTabKeys({ ...ws, chats }));
+  for (let index = ws.recentTabKeys.length - 1; index >= 0; index -= 1) {
+    const recent = ws.recentTabKeys[index];
+    if (recent && keys.includes(recent) && shown.has(recent)) return recent;
+  }
   return keys.at(-1);
 };
 
@@ -393,10 +587,34 @@ export type WorkspaceEvent =
   | { type: "float"; key: string; previous?: string }
   | { type: "toggle-chat"; localId: string }
   | { type: "reveal-chat"; localId: string }
-  | { type: "cycle-chat"; direction: -1 | 1 }
+  | { type: "cycle-chat"; direction: -1 | 1; exclude?: readonly string[] }
   | { type: "reorder"; key: string; beforeKey: string | null }
+  /** A tab joins a tab chat's group (or, with null, leaves its chat). */
+  | {
+      type: "attach";
+      key: string;
+      chatLocalId: string | null;
+      beforeKey: string | null;
+    }
   | { type: "finish-expansion"; key: string; split: SplitView }
-  | { type: "dismiss-floating"; key?: string };
+  | { type: "dismiss-floating"; key?: string }
+  /** The person takes this attachment's keys, or starts anew after it ended. */
+  | {
+      type: "terminal-take-control";
+      localId: string;
+      sessionId: string;
+      running: boolean;
+    }
+  | TerminalEvent;
+
+/** News from the PTY behind a terminal: a command runs in it, or it ended. */
+export type TerminalEvent =
+  | { type: "terminal-busy"; sessionId: string; busy: boolean }
+  | { type: "terminal-ended"; sessionId: string };
+
+/** The workspace's terminals backed by this PTY session. */
+const backedBy = (terminal: TerminalEntry, sessionId: string) =>
+  terminal.attachSessionId === sessionId || terminal.ptySessionId === sessionId;
 
 /** A retained agent chip becomes a view without creating a second native resource. */
 function materializeSurface(ws: Workspace, key: string): Workspace {
@@ -432,12 +650,81 @@ function materializeSurface(ws: Workspace, key: string): Workspace {
   return ws;
 }
 
+/**
+ * An untyped New Tab is a way to somewhere, not a place: once something else
+ * is shown in its place, it closes, so empty New Tabs do not pile up. One
+ * still on screen (the other side of a split took focus) stays, and so does
+ * one holding typed input.
+ */
+function closeLeftNewTabs(previous: Workspace, updated: Workspace): Workspace {
+  const before = workspaceLayout(previous).viewSlots;
+  const after = workspaceLayout(updated).viewSlots;
+  const left = new Set(
+    updated.tabs
+      .filter(
+        (tab) =>
+          tab.kind === "palette" &&
+          !tab.typed &&
+          before[tabKey(tab)] &&
+          !after[tabKey(tab)],
+      )
+      .map(tabKey),
+  );
+  if (left.size === 0) return updated;
+  return {
+    ...updated,
+    tabs: updated.tabs.filter((tab) => !left.has(tabKey(tab))),
+    tabOrder: updated.tabOrder.filter((key) => !left.has(key)),
+  };
+}
+
+/**
+ * The New Tab in front of `ws`, if that is what the person is looking at:
+ * not behind a floating surface.
+ */
+export const newTabInFront = (ws: Workspace): WorkspaceTab | undefined =>
+  ws.floatingKey
+    ? undefined
+    : ws.tabs.find(
+        (tab) => tab.kind === "palette" && tabKey(tab) === ws.activeTabKey,
+      );
+
+/**
+ * A chat asked for while a New Tab is in front opens in that tab: it takes
+ * the New Tab's place in the strip and in a split, and the New Tab closes,
+ * typed or not, since it was the way to the chat. `ws` already holds the
+ * chat (`chatKey`); `previous` is the workspace it was asked for from.
+ */
+export function openChatInNewTab(
+  previous: Workspace,
+  ws: Workspace,
+  chatKey: string,
+): Workspace {
+  const newTab = newTabInFront(previous);
+  if (!newTab) return ws;
+  const key = tabKey(newTab);
+  const replace = (candidate: string) =>
+    candidate === key ? chatKey : candidate;
+  return {
+    ...ws,
+    tabs: ws.tabs.filter((tab) => tabKey(tab) !== key),
+    tabOrder: orderedTabKeys(previous, { includeCollapsed: true }).map(replace),
+    split: ws.split && {
+      ...ws.split,
+      leftKey: replace(ws.split.leftKey),
+      rightKey: replace(ws.split.rightKey),
+    },
+    activeTabKey: chatKey,
+  };
+}
+
 /** All workspace mutations pass this boundary, including resource creation/close. */
 export function reconcileWorkspace(
   previous: Workspace,
-  updated: Workspace,
+  changed: Workspace,
 ): Workspace {
-  if (previous === updated) return previous;
+  if (previous === changed) return previous;
+  const updated = closeLeftNewTabs(previous, changed);
   const keys = orderedTabKeys(updated, { includeCollapsed: true });
   const floatingKey =
     updated.floatingKey &&
@@ -458,11 +745,42 @@ export function reconcileWorkspace(
     updated.activeTabKey && keys.includes(updated.activeTabKey)
       ? updated.activeTabKey
       : undefined;
+  const recentTabKeys = leftTabs(previous, updated, activeTabKey, keys);
   return floatingKey === updated.floatingKey &&
     layout.split === updated.split &&
-    activeTabKey === updated.activeTabKey
+    activeTabKey === updated.activeTabKey &&
+    recentTabKeys === updated.recentTabKeys
     ? updated
-    : { ...updated, floatingKey, split: layout.split, activeTabKey };
+    : {
+        ...updated,
+        floatingKey,
+        split: layout.split,
+        activeTabKey,
+        recentTabKeys,
+      };
+}
+
+/**
+ * The tab that was in front, once another takes its place, becomes the
+ * newest tab left; tabs since closed, and the one in front, drop out.
+ */
+function leftTabs(
+  previous: Workspace,
+  updated: Workspace,
+  activeTabKey: string | undefined,
+  keys: readonly string[],
+): string[] {
+  const left = previous.activeTabKey;
+  const visited =
+    left && left !== activeTabKey
+      ? [...updated.recentTabKeys.filter((key) => key !== left), left]
+      : updated.recentTabKeys;
+  const open = new Set(keys);
+  const kept = visited.filter((key) => key !== activeTabKey && open.has(key));
+  return kept.length === updated.recentTabKeys.length &&
+    kept.every((key, index) => key === updated.recentTabKeys[index])
+    ? updated.recentTabKeys
+    : kept;
 }
 
 /** Pure navigation. IO, permission prompts and motion scheduling stay in the host. */
@@ -471,6 +789,17 @@ export function transitionWorkspace(
   event: WorkspaceEvent,
 ): Workspace {
   return reconcileWorkspace(ws, applyWorkspaceEvent(ws, event));
+}
+
+/** The strip's order with a tab moved before another (null: to the end). */
+function tabOrderWith(ws: Workspace, key: string, beforeKey: string | null) {
+  const order = orderedTabKeys(ws, { includeCollapsed: true }).filter(
+    (candidate) => candidate !== key,
+  );
+  const at = beforeKey ? order.indexOf(beforeKey) : -1;
+  if (at === -1) order.push(key);
+  else order.splice(at, 0, key);
+  return order;
 }
 
 function applyWorkspaceEvent(
@@ -485,6 +814,17 @@ function applyWorkspaceEvent(
     case "close": {
       const { key, force, discardDraft } = event;
       const opts = { force, discardDraft };
+      const group = closingTabKeys(ws, key);
+      if (group.length > 1) {
+        const children = group
+          .slice(0, -1)
+          .reduce(
+            (current, key) =>
+              applyWorkspaceEvent(current, { ...event, key, force: true }),
+            ws,
+          );
+        return applyWorkspaceEvent(children, event);
+      }
 
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
       // split context so a reopened pane re-tiles with its partner.
@@ -536,6 +876,8 @@ function applyWorkspaceEvent(
                   faviconUrl: closing.faviconUrl,
                   profileId: closing.profileId,
                   chatLocalId: closing.chatLocalId,
+                  ...(closing.history ? { history: closing.history } : {}),
+                  ...(closing.incognito ? { incognito: true } : {}),
                   ...splitContext,
                 }
               : null,
@@ -555,8 +897,10 @@ function applyWorkspaceEvent(
         );
         // Any terminal attached to a chat returns to the background instead
         // of dying. Taking control changes who may type, not who owns its
-        // durable chip. Explicit chip/agent removal (`force`) is final.
-        if (closing?.chatLocalId && !opts?.force) {
+        // durable chip. Explicit chip/agent removal (`force`) is final, and
+        // so is closing an agent terminal whose command ended (ADR 0223).
+        const ended = Boolean(closing?.attachSessionId) && !closing?.running;
+        if (closing?.chatLocalId && !opts?.force && !ended) {
           const terminals = ws.terminals.map((terminal) =>
             terminal.localId === localId
               ? { ...terminal, background: true }
@@ -578,15 +922,20 @@ function applyWorkspaceEvent(
           ...ws,
           terminals,
           closedTabs: remember(
-            closing
+            // User terminals only: an agent terminal's process is gone,
+            // so there is nothing to reopen.
+            closing && !closing.attachSessionId
               ? {
                   kind: "terminal",
                   chatLocalId: closing.chatLocalId,
-                  // User terminals only: reopening replays the dead
-                  // shell's scrollback (agent sessions aren't buried).
-                  ptySessionId: closing.attachSessionId
-                    ? undefined
-                    : closing.ptySessionId,
+                  // Reopening replays the dead shell's scrollback.
+                  ptySessionId: closing.ptySessionId,
+                  ...(closing.chat
+                    ? {
+                        chat: closing.chat,
+                        title: closing.title,
+                      }
+                    : {}),
                   ...splitContext,
                 }
               : null,
@@ -649,7 +998,7 @@ function applyWorkspaceEvent(
           ...ws,
           chats,
           closedTabs: remember(
-            closing
+            closing?.sessionId
               ? {
                   kind: "chat",
                   sessionId: closing.sessionId,
@@ -708,6 +1057,8 @@ function applyWorkspaceEvent(
             title: record.title,
             faviconUrl: record.faviconUrl,
             chatLocalId: record.chatLocalId,
+            ...(record.history ? { history: record.history } : {}),
+            ...(record.incognito ? { incognito: true } : {}),
           };
           key = browserTabKey(entry.localId);
           patch = { browsers: [...ws.browsers, entry] };
@@ -716,9 +1067,10 @@ function applyWorkspaceEvent(
         case "terminal": {
           const entry: TerminalEntry = {
             localId: event.localId,
-            title: "",
+            title: record.title ?? "",
             chatLocalId: record.chatLocalId,
             restoreSessionId: record.ptySessionId,
+            ...(record.chat ? { chat: record.chat } : {}),
           };
           key = terminalTabKey(entry.localId);
           patch = { terminals: [...ws.terminals, entry] };
@@ -777,6 +1129,83 @@ function applyWorkspaceEvent(
       return event.key && ws.floatingKey !== event.key
         ? ws
         : { ...ws, floatingKey: undefined };
+    case "terminal-busy": {
+      const { sessionId, busy } = event;
+      if (
+        !ws.terminals.some(
+          (terminal) =>
+            backedBy(terminal, sessionId) && Boolean(terminal.busy) !== busy,
+        )
+      )
+        return ws;
+      return {
+        ...ws,
+        terminals: ws.terminals.map((terminal) =>
+          backedBy(terminal, sessionId) ? { ...terminal, busy } : terminal,
+        ),
+      };
+    }
+    case "terminal-take-control": {
+      const terminal = ws.terminals.find(
+        (entry) =>
+          entry.localId === event.localId &&
+          entry.attachSessionId === event.sessionId,
+      );
+      // The buffer lookup may outlive a closed tab or a new shell already
+      // opened in its place. Only the attachment it looked up may change.
+      if (!terminal) return ws;
+      const running = event.running && terminal.running !== false;
+      if (running && !terminal.agentControlled) return ws;
+      const {
+        attachSessionId: _attachment,
+        ptySessionId: _pty,
+        adoptSessionId: _adopt,
+        initialCommand: _command,
+        ...kept
+      } = terminal;
+      const replacement: TerminalEntry = running
+        ? { ...terminal, agentControlled: false }
+        : {
+            ...kept,
+            restoreSessionId: event.sessionId,
+            agentControlled: false,
+            running: true,
+            busy: false,
+          };
+      return {
+        ...ws,
+        terminals: ws.terminals.map((entry) =>
+          entry === terminal ? replacement : entry,
+        ),
+      };
+    }
+    // Its process ended (ADR 0223): nothing runs in it any more. An agent
+    // terminal that only rode its chat as a chip leaves with its command;
+    // one open as a tab keeps its final output until the person closes it.
+    case "terminal-ended": {
+      const { sessionId } = event;
+      const terminals = ws.terminals.flatMap((terminal) =>
+        !backedBy(terminal, sessionId) ||
+        (!terminal.busy &&
+          terminal.running === false &&
+          !terminal.agentControlled)
+          ? [terminal]
+          : terminal.attachSessionId && terminal.background
+            ? []
+            : [
+                {
+                  ...terminal,
+                  busy: false,
+                  running: false,
+                  agentControlled: false,
+                },
+              ],
+      );
+      return terminals.length === ws.terminals.length &&
+        terminals.every((terminal, index) => terminal === ws.terminals[index])
+        ? ws
+        : { ...ws, terminals };
+    }
     case "finish-expansion":
       return ws.split === event.split && ws.activeTabKey === event.key
         ? { ...ws, split: null }
@@ -899,7 +1328,12 @@ function applyWorkspaceEvent(
     }
     case "cycle-chat": {
       const { direction } = event;
-      const cycle = ws.chats.filter((chat) => chat.mode !== "tab");
+      const cycle = ws.chats.filter(
+        (chat) =>
+          chat.mode !== "tab" &&
+          !chat.parentLocalId &&
+          !event.exclude?.includes(chat.localId),
+      );
       if (cycle.length === 0) return ws;
       const index = cycle.findIndex(
         (chat) => chat.localId === ws.activeChatId && chat.mode === "partial",
@@ -924,15 +1358,43 @@ function applyWorkspaceEvent(
         ),
       };
     }
-    case "reorder": {
-      const { key, beforeKey } = event;
-      const order = orderedTabKeys(ws, { includeCollapsed: true }).filter(
-        (candidate) => candidate !== key,
-      );
-      const at = beforeKey ? order.indexOf(beforeKey) : -1;
-      if (at === -1) order.push(key);
-      else order.splice(at, 0, key);
-      return { ...ws, tabOrder: order };
+    case "reorder":
+      return {
+        ...ws,
+        tabOrder: tabOrderWith(ws, event.key, event.beforeKey),
+      };
+    case "attach": {
+      const { key, chatLocalId, beforeKey } = event;
+      if (attachBlocker(ws, key, chatLocalId)) return original;
+      const owner = chatLocalId ?? undefined;
+      const attached: Workspace = {
+        ...ws,
+        tabs: ws.tabs.map((tab) =>
+          tabKey(tab) === key ? { ...tab, chatLocalId: owner } : tab,
+        ),
+        browsers: ws.browsers.map((browser) =>
+          browserTabKey(browser.localId) === key
+            ? { ...browser, chatLocalId: owner }
+            : browser,
+        ),
+        terminals: ws.terminals.map((terminal) =>
+          terminalTabKey(terminal.localId) === key
+            ? { ...terminal, chatLocalId: owner }
+            : terminal,
+        ),
+        editors: ws.editors.map((editor) =>
+          editorTabKey(editor.localId) === key
+            ? { ...editor, chatLocalId: owner }
+            : editor,
+        ),
+        // A folded group opens, so the tab it takes stays in sight.
+        chats: ws.chats.map((chat) =>
+          chat.localId === chatLocalId && chat.surfacesCollapsed
+            ? { ...chat, surfacesCollapsed: false }
+            : chat,
+        ),
+      };
+      return { ...attached, tabOrder: tabOrderWith(attached, key, beforeKey) };
     }
     case "float": {
       const { key } = event;
@@ -977,4 +1439,53 @@ function applyWorkspaceEvent(
       };
     }
   }
+}
+
+/**
+ * Whether an agent's open shows in front: only in the workspace Work shows,
+ * in a window on screen, and only while the person watches the asking chat,
+ * talks with it by voice (ADR 0216) or already looks at the target. A
+ * session with no chat here (a subsession, an automation's chat, a closed
+ * chat) is nobody's view to take; an open no session asked for (the
+ * terminal `open` hook) shows in front, as a person's own command would.
+ */
+export function agentOpenInFront({
+  shown,
+  voice,
+  chat,
+  targetInFront,
+}: {
+  shown: boolean;
+  voice: boolean;
+  /** The asking chat: on screen, off it, not here, or none named. */
+  chat: "visible" | "hidden" | "absent" | "unnamed";
+  targetInFront: boolean;
+}): boolean {
+  if (!shown) return false;
+  return targetInFront || voice || chat === "visible" || chat === "unnamed";
+}
+
+/**
+ * Which side a tab arrives from when the tab in front changes from `from`
+ * to `to`: where `to` sits in the strip now against where `from` stood
+ * (`from` itself, or the nearest tab left of it that is still there, when
+ * it closed or left the strip). New tabs land in their kind's place, not
+ * always at the end. Undefined when `to` isn't in the strip.
+ */
+export function stripTravel(
+  before: readonly string[],
+  after: readonly string[],
+  from: string,
+  to: string,
+): "left" | "right" | undefined {
+  const toIndex = after.indexOf(to);
+  if (toIndex === -1) return undefined;
+  let anchor = after.indexOf(from);
+  if (anchor === -1) {
+    for (let index = before.indexOf(from) - 1; index >= 0; index--) {
+      anchor = after.indexOf(before[index] ?? "");
+      if (anchor !== -1) break;
+    }
+  }
+  return toIndex > anchor ? "right" : "left";
 }

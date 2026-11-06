@@ -15,7 +15,7 @@ and component libraries take precedence over these defaults.
 - For an app, call action create with kind app, a lowercase name, a clear title,
   icon (review, dashboard, report, tracker, form, calculator or default),
   and source containing a React component with a default export. The host creates
-  the ordinary .catamorphic/apps/<name> scaffold and builds it. A static app needs no workflow
+  the ordinary .work/apps/<name> scaffold and builds it. A static app needs no workflow
   contract. Do not create a second HTML renderer or inject UI into host chrome.
 - Supply additional explicit workspace files in files. They can include CSS,
   data snapshots, project-local component libraries, helpers and package
@@ -63,9 +63,9 @@ entire temporary source revision into the project.
 
 Follow the project's review library and review-authoring skill when present.
 If suitable components are not already installed, follow the registry location or
-component-pack instructions supplied by the user/project. Otherwise use discover_capabilities with query components, then invoke_capability
-with name components.read when the host offers it. An empty input lists available
-items; input { name: "code-review" } fetches the review pack. The returned
+component-pack instructions supplied by the user/project. Otherwise invoke the
+registry.read capability: an empty input lists the host's packs, and
+input { name: "code-review" } fetches the review pack. The returned
 registry item contains editable source files, npm dependencies and usage guidance.
 Read that guidance, install the files together, then adapt the local components.
 Do not import a review runtime package or recreate the pack from memory.

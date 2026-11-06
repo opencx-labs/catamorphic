@@ -1,16 +1,28 @@
 import {
   AccessDeniedError,
-  ClientRunnerOperationSchema,
-  ClientRunnerResultSchema,
+  RemoteExecutorLeaseLostError,
+  RemoteOperationResultSchema,
+  RemoteReceiptRefusedError,
+  SealedRemoteOperationSchema,
 } from "@catamorphic/core";
+import { ExecutorPublicKeySchema } from "@catamorphic/sandbox";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
+import { hungUp } from "../hung-up.js";
 import { ErrorSchema, ProjectIdParamsSchema } from "../schemas.js";
 
 const Lease = z.object({ id: z.string().uuid(), token: z.string().uuid() });
+
+/**
+ * A member's This machine runner (ADRs 0098, 0187). It registers the public
+ * key its operations are sealed to, and poll hands them out sealed (ADR
+ * 0207). Poll long-polls; a 409 from poll or renew means the lease moved on
+ * and the runner registers again, a 409 from complete refuses only that
+ * receipt, and a 403 means the member may no longer serve this Environment.
+ */
 export function registerClientRunnerRoutes(
   app: FastifyInstance,
   ctx: RouteContext,
@@ -30,9 +42,31 @@ export function registerClientRunnerRoutes(
             .array(z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]))
             .optional(),
           isolation: z.enum(["none", "process", "sandbox"]).optional(),
+          /** The runner's provider runs background processes (ADR 0174). */
+          processes: z.boolean().optional(),
+          /** What its sandboxes can be given (ADRs 0176, 0208). */
+          capabilities: z
+            .array(
+              z.enum([
+                "images",
+                "images.build",
+                "containers",
+                "network.policy",
+                "network.setup",
+                "volumes",
+              ]),
+            )
+            .optional(),
+          /**
+           * The runner's X25519 public key, raw and base64: its operations
+           * are sealed to it (ADR 0207). A runner without one receives
+           * nothing.
+           */
+          publicKey: ExecutorPublicKeySchema.optional(),
         }),
         response: {
           200: Lease,
+          400: ErrorSchema,
           403: ErrorSchema,
           409: ErrorSchema,
           503: ErrorSchema,
@@ -44,10 +78,17 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
+      const { publicKey, ...body } = request.body;
+      if (!publicKey)
+        return reply.status(400).send({
+          error:
+            "This version of Work cannot receive operations from this server. Update Work on this computer.",
+        });
       try {
         return reply.send(
           await ctx.core.clientRunners.register({
-            ...request.body,
+            ...body,
+            publicKey,
             projectId: request.params.projectId,
             identity: resolveIdentity(request),
           }),
@@ -68,15 +109,22 @@ export function registerClientRunnerRoutes(
     "/client-runners/poll",
     {
       schema: {
-        body: Lease,
+        // A retried poll repeats its id and receives what that poll took;
+        // `max` is the runner's free slots.
+        body: Lease.extend({
+          pollId: z.string().uuid(),
+          max: z.number().int().min(1).max(64).optional(),
+        }),
         response: {
-          200: z
-            .object({
+          // Each operation sealed to the runner's key (ADR 0207).
+          200: z.array(
+            z.object({
               id: z.string().uuid(),
-              operation: ClientRunnerOperationSchema,
-            })
-            .nullable(),
+              operation: SealedRemoteOperationSchema,
+            }),
+          ),
           403: ErrorSchema,
+          409: ErrorSchema,
           503: ErrorSchema,
         },
       },
@@ -86,12 +134,19 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
-      return reply.send(
-        await ctx.core.clientRunners.poll({
-          ...request.body,
-          identity: resolveIdentity(request),
-        }),
-      );
+      try {
+        return reply.send(
+          await ctx.core.clientRunners.poll({
+            ...request.body,
+            identity: resolveIdentity(request),
+            signal: hungUp(reply),
+          }),
+        );
+      } catch (error) {
+        if (error instanceof RemoteExecutorLeaseLostError)
+          return reply.status(409).send({ error: error.message });
+        throw error;
+      }
     },
   );
   typed.post(
@@ -102,6 +157,7 @@ export function registerClientRunnerRoutes(
         response: {
           200: z.object({ ok: z.boolean() }),
           403: ErrorSchema,
+          409: ErrorSchema,
           503: ErrorSchema,
         },
       },
@@ -111,20 +167,29 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
-      await ctx.core.clientRunners.renew({
-        ...request.body,
-        identity: resolveIdentity(request),
-      });
+      try {
+        await ctx.core.clientRunners.renew({
+          ...request.body,
+          identity: resolveIdentity(request),
+        });
+      } catch (error) {
+        if (error instanceof RemoteExecutorLeaseLostError)
+          return reply.status(409).send({ error: error.message });
+        throw error;
+      }
       return { ok: true };
     },
   );
   typed.post(
     "/client-runners/complete",
     {
+      // A receipt carries a whole result: a 1 MiB process read or a
+      // downloaded file, escaped as JSON. Same bound as worker receipts.
+      bodyLimit: 64 * 1024 * 1024,
       schema: {
         body: Lease.extend({
           jobId: z.string().uuid(),
-          response: ClientRunnerResultSchema.optional(),
+          response: RemoteOperationResultSchema.optional(),
           error: z.string().max(4000).optional(),
         }),
         response: {
@@ -140,12 +205,23 @@ export function registerClientRunnerRoutes(
         return reply
           .status(503)
           .send({ error: "Client execution is not enabled by this host" });
-      return reply.send(
-        await ctx.core.clientRunners.complete({
-          ...request.body,
-          identity: resolveIdentity(request),
-        }),
-      );
+      try {
+        return reply.send(
+          await ctx.core.clientRunners.complete({
+            ...request.body,
+            identity: resolveIdentity(request),
+          }),
+        );
+      } catch (error) {
+        // The operation settled or was abandoned, or the lease moved on:
+        // the runner drops this receipt.
+        if (
+          error instanceof RemoteReceiptRefusedError ||
+          error instanceof RemoteExecutorLeaseLostError
+        )
+          return reply.status(409).send({ error: error.message });
+        throw error;
+      }
     },
   );
   typed.post(

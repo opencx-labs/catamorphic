@@ -19,6 +19,7 @@ export interface GitWorktree {
   path: string;
   branch: string | null;
   isMain: boolean;
+  /** The project folder itself, not another checkout of its repository. */
   isCurrent: boolean;
   changes: GitChangedFile[];
   branchChanges: GitChangedFile[];

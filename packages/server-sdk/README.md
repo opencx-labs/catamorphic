@@ -2,7 +2,7 @@
 
 The core SDK for embedding Catamorphic inside a host application's Node/Bun backend.
 
-The host hands it a Postgres connection (or `pg.Pool`) and a storage location; Catamorphic manages its own tables inside a dedicated schema (default `catamorphic`) and exposes projects, files, git, agents, apps, workflows, connections, and execution. Identity is bound per request via `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope? })`; no sidecar HTTP server is required.
+The host hands it a Postgres connection (or `pg.Pool`) and a storage location; Catamorphic manages its own tables inside a dedicated schema (default `catamorphic`) and exposes projects, files, git, agents, apps, workflows, connections, and execution. Identity is bound per request via `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope?, projectPermissions? })`; no sidecar HTTP server is required.
 
 ## Usage
 
@@ -42,7 +42,8 @@ export const catamorphic = createCatamorphic({
   //   { db: kyselyInstance }                    — advanced, pre-built Kysely
   database: { connectionString: process.env.DATABASE_URL! },
 
-  // Filesystem git storage (per-user working copies + bare origin remotes),
+  // Filesystem git storage (session copies + bare origin remotes, which
+  // also hold members' draft refs),
   // or { projectManager } for custom backends (e.g. ArtifactsRemoteBackend
   // from @catamorphic/cloudflare for Cloudflare Artifacts).
   storage: {
@@ -50,8 +51,9 @@ export const catamorphic = createCatamorphic({
     remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
   },
 
-  // Backends are vendor plugin packages: @catamorphic/cloudflare (default)
-  // or @catamorphic/daytona. Omit for read-only embeds.
+  // Backends are packages the host constructs: @catamorphic/cloudflare,
+  // @catamorphic/microsandbox, @catamorphic/container, or
+  // @catamorphic/local-process. Omit for read-only embeds.
   sandboxProvider,
   environmentProvider,
 });
@@ -70,16 +72,20 @@ await executionWorker.stop();
 await catamorphic.close();
 ```
 
-`codingAgent` accepts either one `CodingAgentProvider` or a dynamic
+`codingAgent` accepts either one `RegisteredCodingAgent` or a dynamic
 `CodingAgentRegistry`. Agent sessions require `hostId` and `sandboxProvider`;
 registry entries with `topology: "native"` also require
 `nativeAgentCheckout`. Keep provider behavior behind the registry so project
-agents, per-session selection, delegation routes, and provider replacement use
-one orchestration path.
+agents, per-session selection, delegation grants, and provider replacement use
+one orchestration path. Implement the registry's optional `models()` to let
+core check a subsession's model and effort against the agent's harness catalog
+(ADR 0271).
 
-`environmentProvider` is always explicit. The `local` binding above matches
-the default project environment; hosts with schedulers or multiple execution
-pools can provide a dynamic `EnvironmentProvider` instead.
+`environmentProvider` is always explicit. The project's `default` Environment
+selects no pool, so the static binding above takes it; label bindings
+(`descriptor.labels`) for Environments that select a `pool`. Hosts with
+schedulers or several people's machines provide a dynamic
+`EnvironmentProvider` that places work by its owner (ADR 0167).
 
 The static binding is not machine enrollment. Managed multi-instance deployments
 must implement shared authority, storage access, and fenced execution placement
@@ -189,10 +195,12 @@ Plugins, secrets, and git ops (deploy/pull/diff) remain available through `catam
 
 - `tenantId` = host's org id. Auto-upserts `catamorphic.tenants(id)` on first project create, so hosts never need to pre-register orgs.
 - `externalUserId` = host's stable user id. Catamorphic stores it where durable ownership, membership, or audit attribution requires it, but never references the host's user table.
-- Omitting `scope` creates a host-root identity across the tenant. Ordinary
-  builders receive `{ kind: "project", projectId }`; members receive exact
-  artifact refs plus separate Environment, connection, and project-permission
-  grants. Do not use root as a builder shortcut.
+- Omitting `scope` creates a host-root identity across the tenant. Everyone
+  else is scoped: `forUser({ externalUserId, scope, projectPermissions })`
+  with artifact refs (`name: "*"` for every app, workflow or agent) plus
+  separate Environment, connection, and project-permission grants such as
+  `program:write` (ADR 0158). Do not use root as a shortcut for people who
+  edit the program.
 
 Host can safely `JOIN host.orgs.id = catamorphic.projects.tenant_id` from its own side. Catamorphic never references host tables.
 

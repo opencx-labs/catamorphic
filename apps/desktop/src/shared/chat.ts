@@ -1,5 +1,7 @@
-import type { AgentChatTextAttachment } from "@catamorphic/react";
+import type { AgentChatAttachment } from "@catamorphic/react";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
+import type { SidebarActivity } from "./sidebar.js";
+import type { SidebarSourceItem } from "./sidebar-source.js";
 
 /**
  * A first message sent on the user's behalf. The text is what the user
@@ -8,71 +10,36 @@ import type { OpenMode, OpenModifiers } from "./open-mode.js";
  */
 export interface PendingChatMessage {
   text: string;
-  attachments?: AgentChatTextAttachment[];
+  attachments?: AgentChatAttachment[];
 }
 
+/** What a chat left running and waits on: a watch, subagents, a command. */
+export type ChatWaiting = Exclude<SidebarActivity, "working">;
+
 export interface ChatSignals {
+  /** A turn runs (an agent working or waiting within it). */
   working?: boolean;
   unread?: boolean;
   draft?: boolean;
   awaitingInput?: boolean;
+  /**
+   * What its icon's lower corner says: working, or what it waits on (within
+   * a turn or left running beside it); null for nothing.
+   */
+  activity?: SidebarActivity | null;
 }
+
+/** What a chat reports of itself whenever it changes. */
+export type ChatLiveSignals = Required<
+  Pick<ChatSignals, "working" | "draft" | "awaitingInput" | "activity">
+>;
 
 export type ChatMode = "min" | "partial" | "tab";
 
-/**
- * A workspace tab attached to this chat — the agent's working surfaces
- * (browser pages it linked, terminals for its project, files it changed) —
- * or a live activity the chat itself tracks (subagents at work, background
- * processes the agent started or left running).
- */
-/**
- * A workspace tab attached to this chat — the agent's working surfaces
- * (browser pages it linked, terminals for its project, files it changed) —
- * or a live activity the chat itself tracks (subagents at work, background
- * processes the agent started or left running).
- */
-export interface ChatSurface {
-  appIcon?: string | null;
-  /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
-  key: string;
-  kind:
-    | "browser"
-    | "terminal"
-    | "editor"
-    | "chat"
-    | "subagent"
-    | "watcher"
-    | "app"
-    | "workflow"
-    | "mcpapp";
-  label: string;
-  faviconUrl?: string | null;
-  /** Host-resolved destinations for lazy, read-only hover previews. */
-  filePath?: string;
-  terminalSessionId?: string;
-  url?: string;
-  description?: string;
-  /** The agent is actively working here (spinner on the chip). */
-  active?: boolean;
-  /**
-   * The agent opened this surface in the BACKGROUND (open_surface while
-   * the user was on another tab): the chip carries an accent dot with
-   * the waiting-state pulse (the question badge's sanctioned loop —
-   * indeterminate until the user answers) until the user opens the
-   * surface. Dismissal-by-interaction, like point_at's glow.
-   */
-  attention?: boolean;
-  /**
-   * Detail lines opened in an upward popover on click. Chips with `info`
-   * aren't workspace tabs — the popover IS their surface (a subagent's
-   * activity feed, a watcher's command).
-   */
-  info?: string[];
-  /** MCP app chips: the view to open when clicked. */
-  mcpApp?: McpAppRef;
-  /** The chip owns a workspace resource that can be explicitly disposed. */
-  removable?: boolean;
+/** The conversation whose live permissions govern an MCP app view. */
+export interface McpAppContext {
+  projectId: string;
+  sessionId: string;
 }
 
 /** An MCP Apps view reachable from a chat's tool call. */
@@ -93,18 +60,40 @@ export interface ChatDockEntry {
   /** Local-only session (ADR 0062): never mirrored to a linked remote. */
   incognito?: boolean;
   /**
+   * Chosen before the chat's first message: that message gives it its own
+   * worktree (ADR 0215), recorded before anything is sent, and again before
+   * a resend if recording failed. Once the session exists, its checkout is
+   * what the chat shows.
+   */
+  worktree?: boolean;
+  /**
    * The chat this one was forked from, when the parent is (or was) open
-   * in this workspace — puts the fork on the parent's surfaces rail.
+   * in this workspace: puts the fork among the parent's chips.
    */
   parentLocalId?: string;
   /** Auto-sent as the first message on mount (palette "Send to agent"). */
   pendingMessage?: PendingChatMessage;
   /**
+   * Placed in the composer on mount, for the person to finish or send
+   * ("Customize chips"); consumed like `pendingMessage`.
+   */
+  draftMessage?: PendingChatMessage;
+  /**
+   * Started from the surface behind the dock (a workflow change request):
+   * the dock opens folded without taking focus, so that surface stays in
+   * view while the agent works. Consumed on mount.
+   */
+  watchBackdrop?: boolean;
+  /**
    * Agent picked for this chat before its session exists (palette "Switch
-   * agent" on a fresh chat). Once a session is live, the session row owns
-   * the choice.
+   * agent" on a fresh chat). Once a session is live, the session owns the
+   * choice and the entry follows it.
    */
   agentId?: string;
+  /**
+   * The harness used by the latest bound turn, as the dock last saw it.
+   */
+  harness?: string;
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /**
@@ -125,6 +114,8 @@ export interface ChatDockProps {
   tabActive: boolean;
   /** Keep this visible chat fresh when another client writes while it is idle. */
   refreshWhileIdle?: boolean;
+  /** Latest requested attention from the host's session list, if still unseen. */
+  attentionRevision?: number;
   /**
    * Where the tab sits in the content view: the full area, or one half
    * of a split. Floating/minimized modes ignore it.
@@ -155,8 +146,20 @@ export interface ChatDockProps {
    * dock's border so the command visibly points at it before Enter.
    */
   paletteTargeted?: boolean;
-  /** Tabs attached to this chat, rendered as the surfaces rail. */
-  surfaces?: ChatSurface[];
+  /**
+   * What the chat holds in this workspace, as chips (ADR 0239): its forks
+   * and subagents, the tabs it opened. The dock adds what it knows itself
+   * (recorded pull requests, chips its agent attached, its turns' subagents
+   * and app views) to make Work's chips.
+   */
+  chips?: SidebarSourceItem[];
+  /**
+   * The project's chips module (`chips.source` in workspace.js), when it
+   * has one and may run it here: the dock draws what it returns instead.
+   */
+  chipsModule?: string;
+  /** Open a chat that helps the person customize their chips. */
+  onCustomizeChips?: () => void;
   /**
    * Open an attached surface: "tab" focuses it as a full tab, "split"
    * tiles it to the right of the current view.
@@ -174,6 +177,8 @@ export interface ChatDockProps {
    * editor selection as if it had just come to the front.
    */
   pullSelectionNonce?: number;
+  /** An agent asked this chat's chips to read their state again. */
+  chipsRefreshNonce?: number;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /**
@@ -195,10 +200,14 @@ export interface ChatDockProps {
   inspectRequestNonce?: number;
   /** Set on forked chats: reveal the parent conversation. */
   onOpenParent?: () => void;
+  /** Open the agent picker for this chat (agents it may switch to). */
+  onEditAgent?: () => void;
   /** Open the harness-backed picker for this session's model override. */
   onEditModel?: () => void;
   /** Open the session reasoning-effort picker. */
   onEditEffort?: () => void;
+  /** Open the permission-mode picker for this chat's agent (ADR 0182). */
+  onEditPermissionMode?: () => void;
   runtimeSettingsError?: string | null;
   onEntryChange: (entry: ChatDockEntry) => void;
   /** Records the tab → floating Escape handoff for an immediate Cmd+W. */
@@ -218,19 +227,50 @@ export interface ChatDockProps {
    */
   registerMinimize?: (minimize: () => void) => void;
   /**
-   * Hands the host this chat's live sender (palette skill rows, post-auth
-   * continuations). Sends queue behind an in-flight turn like composer
-   * sends do.
+   * The chat starts leaving: its minimize or close plays its exit, however
+   * it was asked for (Escape, its own controls, its bubble, a shortcut).
+   * The bubble strip folds while it leaves instead of after.
+   */
+  onLeaveStarted?: () => void;
+  /**
+   * Hands the host a way to focus this chat's first chip (the focus-chips
+   * shortcut), unfolding them; it says false when there is none.
+   */
+  registerFocusChips?: (focus: () => boolean) => void;
+  registerMessageNavigation?: (
+    navigation: {
+      previous: (repeat?: boolean) => void;
+      next: (repeat?: boolean) => void;
+    } | null,
+  ) => void;
+  /**
+   * Hands the host this chat's live sender (post-auth continuations).
+   * Sends queue behind an in-flight turn like composer sends do.
    */
   registerSend?: (send: (message: string) => void) => void;
+  /**
+   * Hands the host this chat's skill sender (ADR 0270): it sends like
+   * `registerSend`, and takes the composer's attachments along when the
+   * composer holds nothing else.
+   */
+  registerSkill?: (apply: (message: string) => void) => void;
+  /** Hands the host a way to give this chat's composer the keys. */
+  registerComposerFocus?: (focus: () => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
-   * The chat's live signals changed: the agent started/stopped working,
-   * the composer gained/lost an unsent draft, or a question is waiting.
-   * Drives every indicator surface (bubbles, tabs, notifications).
+   * The agent the chat's session runs on and the harness its latest turn used,
+   * recorded on its entry so pickers target them. Never activates the chat
+   * or changes how it shows.
    */
-  onSignalsChange: (
+  onSessionAgent?: (
     localId: string,
-    signals: Required<Pick<ChatSignals, "working" | "draft" | "awaitingInput">>,
+    session: { agentId: string; harness?: string },
   ) => void;
+  /**
+   * The chat's live signals changed: the agent started/stopped working,
+   * the composer gained/lost an unsent draft, a question is waiting, or
+   * what it left running changed. Drives every indicator surface
+   * (bubbles, tabs, notifications).
+   */
+  onSignalsChange: (localId: string, signals: ChatLiveSignals) => void;
 }

@@ -6,12 +6,18 @@ export {
 } from "@catamorphic/runtime";
 export * from "./agent-capabilities.js";
 export { HttpAgentCapabilityGateway } from "./capability-client.js";
-export { capabilityEventPresenter } from "./capability-events.js";
 export * from "./capability-mcp.js";
 export {
-  AgentEventBuffer,
-  type AgentEventBufferOptions,
-} from "./coding-agent/event-buffer.js";
+  CLAUDE_CODE_PERMISSION_MODES,
+  type ClaudeCodePermissionMode,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  type CodexApprovalPolicy,
+  type CodexSandboxMode,
+  type HarnessPermissions,
+  harnessPermissionIssues,
+  readOnlyPermissions,
+} from "./coding-agent/harness-permissions.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
@@ -22,40 +28,9 @@ export {
   agentQuestionDescription,
   agentQuestionInputSchema,
   agentQuestionJsonSchema,
+  closeQuestionsDescription,
+  closeQuestionsInputSchema,
 } from "./coding-agent/questions.js";
-export {
-  type AgentRuntimeProvider,
-  AgentRuntimeUnsupportedError,
-} from "./coding-agent/runtime-provider.js";
-export type {
-  AgentApprovalRequest,
-  AgentElicitationRequest,
-  AgentEventCursor,
-  AgentLoopPlacement,
-  AgentQuestionRequest,
-  AgentRuntimeCapabilities,
-  AgentRuntimeDescriptor,
-  AgentRuntimeEvent,
-  AgentRuntimeEventType,
-  AgentRuntimeMessage,
-  AgentRuntimeOperationSupport,
-  AgentRuntimeRequest,
-  AgentRuntimeRequestResponse,
-  AgentRuntimeSession,
-  AgentTask,
-  AgentTaskStatus,
-  AgentTurnHandle,
-  ControlAgentTask,
-  InterruptAgentTurn,
-  ListAgentTasks,
-  RespondToAgentRequest,
-  ResumeAgentRuntimeSession,
-  RetryAgentTurn,
-  StartAgentRuntimeSession,
-  StartAgentTurn,
-  StopAgentRuntimeSession,
-  SubscribeToAgentEvents,
-} from "./coding-agent/runtime-types.js";
 export {
   ATTACHMENT_MARKER,
   describeTextSource,
@@ -63,8 +38,10 @@ export {
   isMediaAttachment,
   isTextAttachment,
   messageWithAttachmentNames,
+  renderQuestionAnswer,
   renderTextAttachments,
   renderUserMessage,
+  withMarkerCount,
 } from "./coding-agent/text-attachments.js";
 export {
   type McpToolPolicy,
@@ -100,22 +77,39 @@ export type {
   AgentTextAttachment,
   AgentTextSource,
   AttachedPluginForAgent,
-  CodingAgentProvider,
   ExtraTool,
   ExtraToolContext,
   McpServersSource,
-  ProviderSession,
-  SessionCaller,
-  StartSessionOpts,
-  TurnOptions,
+  SandboxModelGateway,
 } from "./coding-agent/types.js";
 export {
   AGENT_EFFORT_LEVELS,
   resolveMcpServers,
 } from "./coding-agent/types.js";
+export {
+  STOPPED_WAITING_NOTE,
+  type WaitOutcome,
+  waitUntil,
+} from "./coding-agent/wait.js";
+export {
+  type WarmSession,
+  WarmSessions,
+  type WarmSessionsOptions,
+} from "./coding-agent/warm-sessions.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
+  CONNECTION_GRANT_READER,
+  MODEL_GRANT_READER,
+  readConnectionGrant,
+} from "./connection-grants.js";
+export {
+  gitCloneFailure,
+  gitCloneUrl,
+  redactUrlCredentials,
+} from "./credential-redaction.js";
+export {
   type AgentExecutionTopology,
+  accessTier,
   type EnvironmentBinding,
   type EnvironmentCompatibility,
   type EnvironmentIsolation,
@@ -125,15 +119,102 @@ export {
   type EnvironmentRuntimeBinding,
   type EnvironmentTrust,
   environmentSatisfies,
+  harnessCapability,
+  MACHINE_CAPABILITIES,
+  type MachineCapability,
+  type NodeAccess,
+  placementOrder,
+  poolMatches,
   type WorkloadKind,
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
 export {
+  type ExecutorKeyPair,
+  ExecutorPublicKeySchema,
+  executorPublicKey,
+  generateExecutorKeyPair,
+  openOperation,
+  type SealedOperation,
+  SealedOperationOpenError,
+  SealedOperationSchema,
+  sealOperation,
+} from "./operation-sealing.js";
+export {
   type PluginPayload,
   uploadPluginPayloads,
 } from "./plugin-upload.js";
+export {
+  assertProcessId,
+  assertWriteSize,
+  decodeProcessChunk,
+  decodeUtf8Prefix,
+  type FollowProcessResult,
+  followProcess,
+  newProcessId,
+  OutputWindow,
+  PROCESS_READ_DEFAULT_BYTES,
+  PROCESS_READ_MAX_BYTES,
+  PROCESS_READ_MAX_WAIT_MS,
+  PROCESS_READ_MIN_BYTES,
+  PROCESS_SIGNALS,
+  PROCESS_WRITE_MAX_BYTES,
+  type ProcessOutput,
+  type ProcessSignal,
+  processReadBounds,
+  type ReadProcessOutputArgs,
+  type SandboxProcess,
+  type SandboxProcessProvider,
+  type SandboxProcessStatus,
+  type SignalProcessArgs,
+  type StartProcessArgs,
+  shellSandboxProcesses,
+  type WriteProcessInputArgs,
+} from "./processes.js";
+export {
+  dockerfileDigest,
+  dockerfileImageReference,
+  type EnvironmentNetworkPolicy,
+  gatewayHostOf,
+  isEgressPattern,
+  resolveEgress,
+  resolveSetupEgress,
+  SANDBOX_CAPABILITIES,
+  SANDBOXING_LEVELS,
+  type SandboxCapability,
+  type SandboxEgress,
+  type SandboxImage,
+  type Sandboxing,
+  sameEgress,
+  sandboxingAllows,
+  sandboxingRefusal,
+} from "./sandbox-environment.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
+export {
+  type SandboxStdioProcess,
+  type SandboxStdioSpawnArgs,
+  sandboxCommandLine,
+  shellWord,
+  spawnInSandbox,
+  splitUtf8,
+} from "./sandbox-stdio.js";
+export {
+  assertSandboxVolumes,
+  imageUserHome,
+  VolumeUsageLog,
+  volumeMountPath,
+} from "./sandbox-volumes.js";
+export {
+  machineSignInHome,
+  parseSandboxPaths,
+  parseSignInCapability,
+  refuseSignIns,
+  remapPaths,
+  SANDBOX_PATHS_ENV,
+  type SandboxPathMap,
+  signInMemberDirectory,
+  signInMemberOf,
+} from "./sign-ins.js";
 export type {
   StdioSupervisorTransport,
   SupervisorProcessHandle,
@@ -141,14 +222,11 @@ export type {
 export { StdioDeploymentRuntimeProvider } from "./stdio-deployment-runtime.js";
 export type {
   AgentErrorKind,
-  AgentEvent,
   AgentQuestion,
   AgentQuestionOption,
-  AgentSession,
   AgentTurnUsage,
   CancelRuntimeInvocationArgs,
   CloneSource,
-  CodingAgent,
   CreateSandboxOpts,
   DeploymentRuntime,
   DeploymentRuntimeProvider,
@@ -177,7 +255,8 @@ export type {
   SandboxResources,
   SandboxStatus,
   SandboxType,
-  SessionInfo,
+  SandboxVolume,
+  SandboxVolumeProvider,
   StepEntry,
 } from "./types.js";
 export {
@@ -185,6 +264,13 @@ export {
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,
+  SIGN_IN_HARNESSES,
+  type SignInHarness,
+  signInCapability,
+  signInHomePath,
+  VOLUME_KEY_PATTERN,
+  VOLUME_NAME_PATTERN,
+  volumeKey,
 } from "./types.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {

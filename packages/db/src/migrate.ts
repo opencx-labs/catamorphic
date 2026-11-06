@@ -9,7 +9,6 @@ import {
   resolveSchema,
 } from "./config.js";
 import { createDatabase } from "./database.js";
-import { isExecutedDirectly } from "./is-main.js";
 import { getMigrationsDir } from "./migrations-dir.js";
 import { splitSqlStatements } from "./split-sql.js";
 
@@ -109,8 +108,4 @@ export async function runMigrate() {
 
   console.log(`All migrations applied in schema "${schema}".`);
   await db.destroy();
-}
-
-if (isExecutedDirectly(import.meta.url)) {
-  await runMigrate();
 }

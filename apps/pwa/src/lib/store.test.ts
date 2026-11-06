@@ -63,7 +63,7 @@ describe("PWA state on a local HTTP origin", () => {
         accessToken: "access-token",
         refreshToken: "refresh-token",
         accessTokenExpiresAt: "2026-08-26T12:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid offline_access",
       },
     });

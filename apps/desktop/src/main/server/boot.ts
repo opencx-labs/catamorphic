@@ -1,92 +1,155 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  orderedTurns,
+  sessionStateFromSnapshot,
+} from "@catamorphic/agent-protocol";
+import { ClaudeCodeTranscriptReader } from "@catamorphic/claude-code";
+import { CodexRolloutReader } from "@catamorphic/codex";
+import {
   type ConnectionProvider,
   projectDataDirectory,
+  startEventDispatcher,
   startProjectEventMonitorWorker,
-  startWatcherDispatcher,
-  ToolPermissionBroker,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
 import {
+  apiErrorResponse,
+  apiNotFoundResponse,
   catamorphicPlugin,
+  errorLogFields,
   instrumentHttpServer,
+  requestLogFields,
 } from "@catamorphic/fastify-plugin";
-import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
+import {
+  dockerImageBuilder,
+  MicrosandboxSandboxProvider,
+} from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
   defineStaticEnvironments,
   FsBundleStore,
+  type GithubConnectionProvider,
+  githubCodeHost,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
-import { BrowserWindow } from "electron";
+import { BrowserWindow, app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
+import { rosterAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
+import { readAgentCredentials } from "../agent-credentials.js";
+import {
+  accessTokenFresh,
+  signInRefreshable,
+  signInUsable,
+} from "../auth-health.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
-import type { IncognitoSessionsStore } from "../incognito-sessions.js";
-import { localPerson } from "../local-person.js";
 import {
-  type McpAppsService,
-  mcpAppViewCsp,
-  mcpAppViewDocument,
-} from "../mcp-apps.js";
+  ExternalSessionImporter,
+  externalSessionHomes,
+} from "../external-sessions.js";
+import { mcpAppViewUrl } from "../guest-documents.js";
+import {
+  findImageBuilderCommand,
+  imageBuilderEnvironment,
+} from "../image-builder-command.js";
+import type { IncognitoSessionsStore } from "../incognito-sessions.js";
+import { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
+import { localPerson } from "../local-person.js";
+import { McpAppViews } from "../mcp-app-view-authorization.js";
+import type { McpAppsService } from "../mcp-apps.js";
+import { desktopPersonalEnvironment } from "../personal-environment-host.js";
+import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
-import { forwardRemoteApi } from "../remote-api.js";
+import { forwardRemoteApi, remoteTerminalRequest } from "../remote-api.js";
 import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
+import { RemotePreviewOrigins } from "../remote-previews.js";
+import type { RemoteTerminalRequest } from "../remote-terminal.js";
+import {
+  changesChatLists,
+  startSessionChangeHints,
+} from "../session-change-hints.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
-import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
+import {
+  profileMcpConnectionBindings,
+  syncProfileMcpWorkflowConnections,
+} from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
-import { componentRegistryCapability } from "./component-registry.js";
+import { type AssistantAccess, assistantTools } from "./assistant-tools.js";
+import {
+  connectorMcpPath,
+  connectorMcpTokens,
+  registerConnectorMcpRoute,
+} from "./connector-mcp.js";
 import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
-import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
+import { desktopGithubProvider } from "./github.js";
+import { githubPollingEventSource } from "./github-events.js";
 import {
   type HostSkillsRuntime,
   materializeHostSkills,
 } from "./host-skills.js";
+import { localApiRefusal, newDesktopApiToken } from "./local-api-guard.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
-import { SessionCheckouts } from "./session-checkouts.js";
+import { registryCapability } from "./registry.js";
+import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
+import { SessionCheckouts, usableCheckout } from "./session-checkouts.js";
+import { SessionNotes } from "./session-notes.js";
+import { mayRunAgain, SignInRecovery } from "./sign-in-recovery.js";
+import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
   DESKTOP_TRIGGER_KINDS,
   DesktopTriggers,
 } from "./triggers.js";
 import {
-  effectiveSessionAgentId,
   isolationConflictPeerSessionIds,
   type ProjectSessionContext,
 } from "./workspace-context-agent.js";
-import {
-  registerWorkspaceMcpRoute,
-  workspaceMcpAuthorizationMatches,
-  workspaceMcpCapability,
-} from "./workspace-mcp.js";
 import { DESKTOP_WORKSPACE_SKILL } from "./workspace-skill.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
 export const DESKTOP_USER_ID = "desktop-user";
+/**
+ * How often the embedded server's idle pollers look for work no write in
+ * this process announced (ADR 0229): scheduled retries and timers carry
+ * their own due time, so this bounds only what nothing hinted.
+ */
+const DESKTOP_IDLE_POLL_MS = 5_000;
 
 export interface EmbeddedServer {
   url: string;
+  /**
+   * What the desktop's own windows send in {@link DESKTOP_API_TOKEN_HEADER}
+   * so the API tells them from web pages; the main process adds it.
+   */
+  apiToken: string;
+  mcpAppViews?: McpAppViews;
+  mcpAppViewUrl: typeof mcpAppViewUrl;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
+  /**
+   * The person's GitHub connection provider (ADR 0177): device-flow sign-in
+   * and the `gh` CLI credential become their personal `github` connection.
+   */
+  github: GithubConnectionProvider;
   projectRoots: ProjectRootsStore;
   /** Desktop-local checkout assignment and Git worktree lifecycle. */
   sessionCheckouts: SessionCheckouts;
@@ -98,6 +161,8 @@ export interface EmbeddedServer {
   workspaceStates: WorkspaceStateStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
   agentRegistry: DesktopAgentRegistry;
+  /** Runs chats failed on a sign-in again once it works (ADR 0228). */
+  signInRecovery: SignInRecovery;
   /** Desktop trigger kinds: firing helpers for chat/terminal event sources. */
   triggers: DesktopTriggers;
   hasCodingAgent: boolean;
@@ -114,6 +179,13 @@ export interface EmbeddedServer {
   resumeExecution: () => void;
   /** Poll linked remote hosts for messages addressed to local sessions. */
   syncSessionMailboxes: () => void;
+  /** The member's remote environment per linked project (ADR 0184). */
+  personalEnvironment: PersonalEnvironmentSync;
+  /**
+   * Hear when this server's chats may have changed (ADR 0229): it logged
+   * session events or served a change to a project. Bursts arrive as one.
+   */
+  onSessionsChanged: (listener: () => void) => () => void;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -122,6 +194,22 @@ export interface EmbeddedServer {
     projectId: string,
     sessionId: string,
   ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
+  /**
+   * Requests to a remote chat's terminals on its project's server, as the
+   * member (ADR 0209); undefined when the project has no server.
+   */
+  remoteTerminalRequest: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => RemoteTerminalRequest | undefined;
+  /** A remote chat's preview on its own loopback origin (ADR 0209). */
+  openRemotePreview: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }) => Promise<string>;
+  /** An agent's "Sync chats from" switch may have changed (ADR 0233). */
+  refreshExternalSessions: () => void;
   shutdown: () => Promise<void>;
 }
 
@@ -134,6 +222,7 @@ export async function startEmbeddedServer(
   mcpApps?: McpAppsService,
   incognitoSessions?: IncognitoSessionsStore,
   connectionProviders?: readonly ConnectionProvider[],
+  ownerProfile: (ownerId: number) => string | undefined = () => undefined,
 ): Promise<EmbeddedServer> {
   validateDatabaseFiles(paths.db);
   fs.mkdirSync(paths.db, { recursive: true });
@@ -157,10 +246,21 @@ export async function startEmbeddedServer(
     const root = projectRoots.getSync(projectId);
     return root ? projectDataDirectory({ root }) : undefined;
   };
+  const imageBuilderCommand = findImageBuilderCommand();
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider(resolveProjectData)
     : new MicrosandboxSandboxProvider({
         projectDataDirectory: resolveProjectData,
+        // Environments that name a Dockerfile run here when Docker or
+        // Podman is installed (ADR 0176).
+        ...(imageBuilderCommand
+          ? {
+              imageBuilder: dockerImageBuilder({
+                command: imageBuilderCommand,
+                env: imageBuilderEnvironment({ command: imageBuilderCommand }),
+              }),
+            }
+          : {}),
         // Development only: builds fetch @catamorphic/* from the local
         // registry, which a sandbox can only reach through the host network.
         ...(process.env.CATAMORPHIC_SANDBOX_HOST_NETWORK === "1"
@@ -199,6 +299,13 @@ export async function startEmbeddedServer(
     pglite,
     worktreesDirectory: path.join(paths.root, "worktrees"),
     projectRoot: (projectId) => projectRoots.getSync(projectId),
+    // Read once the server is up: only the person's actions and resting
+    // chats ask (ADR 0215).
+    sessionRunning: async ({ projectId, sessionId }) =>
+      (await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, projectId, sessionId)
+        .then((session) => session.running)
+        .catch(() => false)) ?? false,
   });
   await sessionCheckouts.init();
   const workspaceStates = new WorkspaceStateStore(pglite);
@@ -211,10 +318,6 @@ export async function startEmbeddedServer(
   // Known only after listen(); the resolver reads it lazily, and sessions
   // can only start once the server is up.
   let apiBaseUrl: string | undefined;
-  // Derive a distinct capability for each spawned Codex task. The loopback
-  // server also serves browser-visible HTTP, and an exposed task token must
-  // not authorize another task's terminal or checkout tools.
-  const workspaceMcpSecret = randomBytes(32);
   // Core's SecretsService only exists once createCatamorphic returns; the
   // registry reads it through this late-bound seam (same pattern as
   // apiBaseUrl above) for secret-credentialed project agents (ADR 0050).
@@ -230,6 +333,9 @@ export async function startEmbeddedServer(
         sessionId: string,
       ) => Promise<ProjectSessionContext[]>)
     | undefined;
+  let projectNameResolver:
+    | ((projectId: string) => Promise<string | undefined>)
+    | undefined;
   let requiresIsolatedCheckout: (
     projectId: string,
     sessionId: string,
@@ -242,10 +348,6 @@ export async function startEmbeddedServer(
   let syncWorkflowConnections: (profileId?: string) => Promise<void> =
     async () => {};
   let workflowConnectionSync = Promise.resolve();
-  // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
-  // (the companion app) can list and answer them over HTTP; the registry
-  // races it against the desktop's own consent modal — first answer wins.
-  const toolPermissions = new ToolPermissionBroker();
   // Session mirroring to ADR 0055 remote links (late-bound: reads core
   // through the closure after createCatamorphic returns).
   const sessionMirror = new RemoteSessionMirror({
@@ -260,15 +362,19 @@ export async function startEmbeddedServer(
     // Desktop-local privacy flag (ADR 0062): never crosses core.
     isIncognito: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
     markIncognito: (sessionId) => incognitoSessions?.set(sessionId, true),
-    sessionEvents: (projectId, sessionId) =>
-      catamorphic.core.agentSessions?.exportEvents({
-        identity: {
-          tenantId: DESKTOP_TENANT_ID,
-          externalUserId: DESKTOP_USER_ID,
-        },
-        projectId,
-        sessionId,
-      }) ?? Promise.resolve([]),
+    // The log after the remote's watermark (ADR 0197), or a base snapshot.
+    exportMirror: ({ projectId, sessionId, after }) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.mirrorExport({
+            identity: {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+            after,
+          })
+        : Promise.reject(new Error("agent sessions unavailable")),
     sessionDetail: (projectId, sessionId) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.get(
@@ -348,39 +454,46 @@ export async function startEmbeddedServer(
           )
         : Promise.reject(new Error("agent sessions unavailable")),
   });
+  // Where agents' own harness sign-ins live on this machine (ADR 0199).
+  const credentialPlaces = {
+    homeDir: electronApp.getPath("home"),
+    agentHomesDir: paths.agentHomesDir,
+  };
+  const connectorTokens = connectorMcpTokens();
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
-    sandboxProvider,
     agentHomesDir: paths.agentHomesDir,
     harnessComponentsDir: paths.harnessComponentsDir,
+    attachmentsDir: paths.attachmentsDir,
+    ...(e2eFakeAgent
+      ? {}
+      : { installedClaudeCode: new InstalledClaudeCodeFinder() }),
     e2eFake: e2eFakeAgent,
     workspaceBridge,
-    toolPermissions,
     connectors,
-    workspaceMcpServer: (projectId, sessionId, agentId) =>
-      apiBaseUrl
-        ? {
-            transport: "http",
-            url: `${apiBaseUrl}/desktop/workspace-mcp/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(agentId)}`,
-            // This endpoint is already capability-bound to the exact
-            // agent, project, and session. Codex has no interactive MCP
-            // approval bridge, so authorize these host-owned tools at the
-            // server boundary instead of letting the CLI cancel them.
-            defaultToolsApprovalMode: "approve",
-            headers: {
-              Authorization: `Bearer ${workspaceMcpCapability({
-                secret: workspaceMcpSecret,
-                projectId,
-                sessionId,
-                agentId,
-              })}`,
-            },
-          }
-        : undefined,
+    // A harness that searches its tools reaches each profile connector as
+    // an MCP server of its own, served from the host's pool (ADR 0225).
+    ...(mcpApps
+      ? {
+          connectorMcp: {
+            url: (input: {
+              projectId: string;
+              sessionId: string;
+              server: string;
+            }) =>
+              apiBaseUrl
+                ? `${apiBaseUrl}${connectorMcpPath(input)}`
+                : undefined,
+            token: connectorTokens.token,
+          },
+        }
+      : {}),
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
     // read from the project's folder; secrets resolve through core.
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
+    projectName: (projectId) =>
+      projectNameResolver?.(projectId) ?? Promise.resolve(undefined),
     projectSecret: (projectId, name) =>
       projectSecretResolver?.(projectId, name) ?? Promise.resolve(undefined),
     hostSkills: () => hostSkillsRuntime,
@@ -389,23 +502,89 @@ export async function startEmbeddedServer(
       userSkillInfos(profileConfig.userSkillsDir(profileId)),
     sessionPeers: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
+    // Where the chat works, when it is not the project folder (ADR 0215).
+    checkoutNotice: (projectId, sessionId) =>
+      sessionCheckouts.notice({ projectId, sessionId }),
+    // A turn turned away on a sign-in that can still refresh retries once
+    // (ADR 0228); its CLI writes a debug log under Work's logs.
+    signInRefreshable: async (signIn) =>
+      signInRefreshable({
+        harness: signIn.harness,
+        raw: (await readAgentCredentials(signIn, credentialPlaces)).raw,
+        now: Date.now(),
+      }),
+    logsDir: electronApp.getPath("logs"),
+  });
+  // A chat that failed on its agent's sign-in runs again once the sign-in
+  // works, however it came back (ADR 0228).
+  const signInRecovery = new SignInRecovery({
+    credentialAgentId: rosterAgentId,
+    signInFor: (agentId) => agentRegistry.signInFor(agentId),
+    readSignIn: async (signIn) => {
+      const credentials = await readAgentCredentials(signIn, credentialPlaces);
+      const read = {
+        harness: signIn.harness,
+        raw: credentials.raw,
+        now: Date.now(),
+      };
+      return {
+        fingerprint: credentials.fingerprint,
+        usable: signInUsable(read),
+        fresh: accessTokenFresh(read),
+      };
+    },
+    mayRunAgain: async ({ projectId, sessionId, turnId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) return false;
+      const detail = await service.get(desktopIdentity, projectId, sessionId);
+      const state = sessionStateFromSnapshot(detail.snapshot);
+      return mayRunAgain({
+        turnId,
+        session: detail,
+        turns: orderedTurns(state),
+        items: state.items,
+      });
+    },
+    retry: async ({ projectId, sessionId, turnId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) return;
+      // A message the person sent since comes first: the retry is refused.
+      const receipt = await service.command(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        { type: "retry", commandId: randomUUID(), turnId },
+        { ifLatestTurnId: turnId },
+      );
+      if (receipt.status === "rejected" && receipt.error?.code !== "not_latest")
+        console.warn(
+          `[desktop] A chat's turn did not run again after its agent signed in: ${receipt.error?.message ?? "rejected"}`,
+        );
+    },
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
-    if (agents.list().length === 0) {
+    if (agents.listMetadata().length === 0) {
       agents.create({ name: "Fake Agent", harness: "ai-sdk" });
       agents.create({ name: "Other Fake", harness: "ai-sdk" });
     }
   }
 
+  // GitHub is an ordinary connection (ADR 0177): the person signs in once
+  // and it backs import, sync, pull requests, and the event poller.
+  const github = desktopGithubProvider();
   const catamorphic = createCatamorphic({
+    // Every write to this database is this process's own, and each one
+    // wakes the poller it concerns at once, so idle pollers look rarely
+    // (ADR 0229).
+    idlePollMs: DESKTOP_IDLE_POLL_MS,
     hostSkills: (defaults) => ({
       ...defaults,
       "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
       "desktop-workspace/SKILL.md": DESKTOP_WORKSPACE_SKILL,
+      "remote-environment/SKILL.md": REMOTE_ENVIRONMENT_SKILL,
     }),
     hostId,
-    toolPermissions,
     database: { db },
     storage: {
       localCheckouts: true,
@@ -419,47 +598,45 @@ export async function startEmbeddedServer(
     credentialVault: new DesktopCredentialVault(
       path.join(paths.root, "credentials.json"),
     ),
-    connectionProviders,
+    resolveMemberIdentity: async ({ tenantId, externalUserId }) =>
+      tenantId === DESKTOP_TENANT_ID && externalUserId === DESKTOP_USER_ID
+        ? { tenantId, externalUserId }
+        : null,
+    connectionProviders: [...(connectionProviders ?? []), github],
+    codeHosts: [githubCodeHost(github)],
+    // No public webhook URL here: watchers poll GitHub instead, recording
+    // the events the project's `github` webhook would have received.
+    projectEventSources: [
+      githubPollingEventSource({
+        core: () => catamorphic.core,
+        provider: github,
+      }),
+    ],
+    connectionBindings: async ({ projectId, environment }) =>
+      profileMcpConnectionBindings({
+        profiles,
+        profileConfig,
+        projectId,
+        environment,
+      }),
     connectionMcpUrl: () =>
       apiBaseUrl ? `${apiBaseUrl}/api/connection-mcp` : undefined,
+    // Sandboxes on this machine reach the Git gateway on loopback (ADR 0175).
+    gatewayUrl: () => (apiBaseUrl ? `${apiBaseUrl}/api/gateway` : undefined),
     codingAgent: agentRegistry,
     // Native agents (Claude Code, Codex) run in the project's user-visible
     // WorkerNode folder.
     nativeAgentCheckout: {
-      resolve: async (input) => {
-        const current = await sessionCheckouts.describe(input);
-        if (
-          await requiresIsolatedCheckout(
-            input.projectId,
-            input.sessionId,
-            current.path,
-          )
-        ) {
-          if (current.kind !== "primary") {
-            throw new Error(
-              "Isolation policy prevents sharing this assigned worktree with another running session. Choose another worktree or wait for that session to finish.",
-            );
-          }
-          const created = await sessionCheckouts.createManaged({
-            ...input,
-            ensureAvailable: async (checkoutPath) => {
-              if (
-                await requiresIsolatedCheckout(
-                  input.projectId,
-                  input.sessionId,
-                  checkoutPath,
-                )
-              ) {
-                throw new Error(
-                  "Isolation policy prevents sharing the new worktree with another running session.",
-                );
-              }
-            },
-          });
-          return created.path;
-        }
-        return current.path;
-      },
+      resolve: (input) =>
+        sessionCheckouts.resolveForAgent({
+          ...input,
+          requiresIsolation: (checkoutPath) =>
+            requiresIsolatedCheckout(
+              input.projectId,
+              input.sessionId,
+              checkoutPath,
+            ),
+        }),
       checkpoint: async (input) => {
         const checkout = await sessionCheckouts.describe(input);
         if (
@@ -470,6 +647,17 @@ export async function startEmbeddedServer(
           return null;
         return sessionCheckouts.checkpoint(input);
       },
+      // Rollback (ADR 0197): each turn records the commit it started from;
+      // only a checkout the chat owns, or one nothing else changed, moves.
+      head: (input) => sessionCheckouts.head(input),
+      restore: (input) => sessionCheckouts.restore(input),
+      // A chat's own worktree is set up like a new workspace and put away
+      // with the chat (ADR 0215).
+      setup: (input) => sessionCheckouts.setup(input),
+      release: async (input) => {
+        await sessionCheckouts.putAway(input);
+        broadcastGitChanged(input.projectId);
+      },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
     pushNotifications: createPushTransport({ dataDir: paths.root }),
@@ -479,10 +667,6 @@ export async function startEmbeddedServer(
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
     storeSyncAroundTurns: false,
-    github: {
-      app: GITHUB_APP,
-      tokenStore: new FileGithubTokenStore(paths.githubFile),
-    },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     agentCapabilities: {
@@ -494,7 +678,7 @@ export async function startEmbeddedServer(
           .remoteProjects.get(projectId)?.capabilities?.roles;
         return { ...localPerson(), ...(roles ? { roles } : {}) };
       },
-      capabilities: [componentRegistryCapability],
+      capabilities: [registryCapability],
       sources: [
         desktopCapabilitySource({
           core: () => catamorphic.core,
@@ -519,7 +703,17 @@ export async function startEmbeddedServer(
       ),
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
+    onToolAlwaysAllowed: (event) => agentRegistry.rememberToolAllowed(event),
     onAgentTurnSettled: (event) => {
+      signInRecovery.settled(event);
+      // The browser tabs the turn drove go back to the person.
+      void workspaceBridge
+        ?.releaseTurn(event.projectId, {
+          sessionId: event.sessionId,
+          ...(event.turnId ? { turnId: event.turnId } : {}),
+          ...(event.retrying ? { retrying: true } : {}),
+        })
+        .catch(() => {});
       triggers.onAgentTurnSettled(
         event,
         projectRoots.checkpointsEnabled(event.projectId),
@@ -544,12 +738,7 @@ export async function startEmbeddedServer(
       // The turn checkpoint just moved git state; a sidebar waiting on
       // its 15s poll would show stale rows (and stale rows diff against
       // a HEAD that already contains them — two identical panes).
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (window.isDestroyed()) continue;
-        window.webContents.send("catamorphic:git-changed", {
-          projectId: event.projectId,
-        });
-      }
+      broadcastGitChanged(event.projectId);
     },
   });
   const triggers = new DesktopTriggers(catamorphic);
@@ -564,17 +753,8 @@ export async function startEmbeddedServer(
       tenantId: DESKTOP_TENANT_ID,
       externalUserId: DESKTOP_USER_ID,
     };
-    for (const stage of ["production", "test"] as const) {
-      const { values } = await secrets.loadForRun({
-        identity,
-        projectId,
-        stage,
-      });
-      if (values[name] !== undefined && values[name] !== "") {
-        return values[name];
-      }
-    }
-    return undefined;
+    const { values } = await secrets.loadForRun({ identity, projectId });
+    return values[name] || undefined;
   };
 
   const { applied } = await catamorphic.migrate();
@@ -586,6 +766,34 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  const mcpAppViews = mcpApps
+    ? new McpAppViews({
+        core: () => catamorphic.core,
+        agents: agentRegistry,
+        identity: desktopIdentity,
+        mcpApps,
+        ownerProfile,
+      })
+    : undefined;
+  // A background command or a watch tells its chat's agent how it went
+  // (ADR 0155): a task notification (ADR 0217) that reaches the agent's
+  // turn while it works, or wakes it, and opens to its terminal.
+  workspaceBridge?.setBackgroundNotifier(async (input) => {
+    await catamorphic.core.agentSessions?.notify(
+      desktopIdentity,
+      input.projectId,
+      input.sessionId,
+      {
+        task: input.task,
+        summary: input.summary,
+        detail: input.detail,
+        source: input.surfaceKey
+          ? { kind: "surface", key: input.surfaceKey }
+          : null,
+        idempotencyKey: input.idempotencyKey,
+      },
+    );
+  });
   catamorphic.core.agentSessions?.setArchiveResourcesHandler({
     impact: async ({ projectId, sessionIds }) => ({
       activeProcessCount: workspaceBridge
@@ -602,6 +810,30 @@ export async function startEmbeddedServer(
       }
     },
   });
+  // Chats archived while a turn could not stop, and worktrees an agent
+  // left, are put away once the server is up (ADR 0215).
+  void sessionCheckouts
+    .sweep({
+      resting: async ({ projectId, sessionId }) => {
+        const session = await catamorphic.core.agentSessions?.get(
+          desktopIdentity,
+          projectId,
+          sessionId,
+        );
+        return Boolean(
+          session &&
+            !session.running &&
+            (session.archivedAt !== null || session.status === "closed"),
+        );
+      },
+    })
+    .catch((error) =>
+      console.warn(
+        `[desktop] putting away resting worktrees failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
   syncWorkflowConnections = (profileId?: string) => {
     // OAuth discovery, registration, token exchange, and tool probing can
     // each update the profile store. Serialize their projections so two
@@ -662,6 +894,8 @@ export async function startEmbeddedServer(
       peerSessionIds,
     });
   };
+  projectNameResolver = async (projectId) =>
+    (await catamorphic.core.projects.get(desktopIdentity, projectId)).name;
   sessionPeersResolver = async (projectId, sessionId) => {
     const peers =
       (await catamorphic.core.agentSessions?.listPeers(
@@ -669,8 +903,25 @@ export async function startEmbeddedServer(
         projectId,
         sessionId,
       )) ?? [];
+    // A private chat stays out of reach, except to the sessions it started:
+    // the assistant's sessions report back to its chat (ADR 0216).
+    const ancestors = new Set<string>();
+    let parent = (
+      await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, projectId, sessionId)
+        .catch(() => null)
+    )?.parentSessionId;
+    while (parent && !ancestors.has(parent) && ancestors.size < 16) {
+      ancestors.add(parent);
+      parent = (
+        await catamorphic.core.agentSessions
+          ?.get(desktopIdentity, projectId, parent)
+          .catch(() => null)
+      )?.parentSessionId;
+    }
     const visible = peers.filter(
-      (peer) => !(incognitoSessions?.has(peer.id) ?? false),
+      (peer) =>
+        !(incognitoSessions?.has(peer.id) ?? false) || ancestors.has(peer.id),
     );
     return Promise.all(
       visible.map(async (peer) => {
@@ -680,31 +931,173 @@ export async function startEmbeddedServer(
         });
         return {
           ...peer,
-          checkout: { kind: checkout.kind, branch: checkout.branch },
+          checkout: {
+            kind: checkout.kind,
+            branch: checkout.branch,
+            available: checkout.available,
+          },
         };
       }),
     );
   };
 
+  /** A chat as people read it (ADR 0197), for read_tab and peer reads. */
+  const readTranscript = async (projectId: string, sessionId: string) => {
+    const service = catamorphic.core.agentSessions;
+    if (!service) return null;
+    const [detail, messages] = await Promise.all([
+      service.get(desktopIdentity, projectId, sessionId),
+      service.transcript(desktopIdentity, projectId, sessionId),
+    ]);
+    return {
+      title: detail.title,
+      messages: messages.map(({ role, content }) => ({ role, content })),
+    };
+  };
+  // Sessions following others' notes (ADR 0216): the assistant hears the
+  // sessions it starts, and chats it is asked to follow, as they work.
+  const sessionNotes = new SessionNotes({
+    sequence: async ({ projectId, sessionId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return (await service.get(desktopIdentity, projectId, sessionId)).snapshot
+        .sequence;
+    },
+    subscribe: async ({ projectId, sessionId }, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.subscribe(desktopIdentity, projectId, sessionId, input);
+    },
+    deliver: async (follower, input) =>
+      catamorphic.core.agentSessions?.notify(
+        desktopIdentity,
+        follower.projectId,
+        follower.sessionId,
+        {
+          task: {
+            type: "followed_session",
+            id: input.followed.sessionId,
+            title: input.followed.title,
+            status: input.status,
+          },
+          summary: input.summary,
+          detail: input.detail,
+          source: {
+            kind: "session",
+            sessionId: input.followed.sessionId,
+            ...(input.followed.projectId === follower.projectId
+              ? {}
+              : { projectId: input.followed.projectId }),
+          },
+          idempotencyKey: input.idempotencyKey,
+        },
+      ),
+  });
+  // The assistant manages the person's chats in every project of the
+  // profile, as the person (ADR 0216).
+  const assistantAccess: AssistantAccess = {
+    projects: async (projectId) => {
+      const owned = profiles.profileForProject(projectId).projectIds;
+      const projects = await Promise.all(
+        owned.map((id) =>
+          catamorphic.core.projects
+            .get(desktopIdentity, id)
+            .then((project) => ({ id, name: project.name }))
+            .catch(() => null),
+        ),
+      );
+      return projects.filter((project) => project !== null);
+    },
+    list: async (projectId) =>
+      (
+        await catamorphic.core.agentSessions?.list(desktopIdentity, projectId, {
+          limit: 50,
+        })
+      )?.items ?? [],
+    get: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.get(desktopIdentity, projectId, sessionId);
+    },
+    // The assistant's chat may live in another project: its causation
+    // comes from there.
+    deliver: async (projectId, sessionId, { authorProjectId, ...input }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      const causation =
+        input.author.kind === "agent"
+          ? await service.causalContext({
+              identity: desktopIdentity,
+              projectId: authorProjectId,
+              sessionId: input.author.sessionId,
+            })
+          : [];
+      return service.deliver(desktopIdentity, projectId, sessionId, {
+        ...input,
+        // Named with its project, so the chat it came from opens.
+        author:
+          input.author.kind === "agent" && authorProjectId !== projectId
+            ? { ...input.author, projectId: authorProjectId }
+            : input.author,
+        causation,
+      });
+    },
+    interrupt: async (projectId, sessionId) =>
+      catamorphic.core.agentSessions?.interrupt(
+        desktopIdentity,
+        projectId,
+        sessionId,
+      ),
+    // As the person: the assistant passes on what they told it.
+    answer: async (projectId, sessionId, { requestId, answers }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      const receipt = await service.command(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        {
+          type: "respond",
+          commandId: randomUUID(),
+          requestId,
+          response: { kind: "question", answers },
+        },
+      );
+      if (receipt.status === "rejected")
+        throw new Error(
+          receipt.error?.message ?? "The chat did not take the answer.",
+        );
+    },
+    follow: async ({ follower, followed, title, on }) => {
+      if (!on) {
+        sessionNotes.unfollow(followed.sessionId);
+        return;
+      }
+      // A session the assistant started reports its own result.
+      const detail = await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, followed.projectId, followed.sessionId)
+        .catch(() => null);
+      await sessionNotes.follow({
+        follower,
+        followed,
+        title,
+        reportsResults: detail?.parentSessionId !== follower.sessionId,
+      });
+    },
+    hidden: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
+  };
+  agentRegistry.setAssistant({
+    tools: assistantTools(assistantAccess),
+    // It follows the sessions it starts (ADR 0216).
+    follow: (input) => assistantAccess.follow({ ...input, on: true }),
+  });
   agentRegistry.workspaceToolkit?.setSessionCoordinationBridge({
     list: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
     read: async (projectId, ownSessionId, peerSessionId) => {
       const peers = await sessionPeersResolver?.(projectId, ownSessionId);
       if (!peers?.some((peer) => peer.id === peerSessionId)) return null;
-      const detail = await catamorphic.core.agentSessions?.get(
-        desktopIdentity,
-        projectId,
-        peerSessionId,
-      );
-      if (!detail) return null;
-      return {
-        title: detail.title,
-        messages: detail.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      };
+      return readTranscript(projectId, peerSessionId);
     },
     send: async (projectId, ownSessionId, peerSessionId, content, mode) => {
       const service = catamorphic.core.agentSessions;
@@ -775,6 +1168,25 @@ export async function startEmbeddedServer(
         sessionId,
         activity,
       );
+    },
+    setMetadata: async (projectId, sessionId, values) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.setMetadata({
+        identity: desktopIdentity,
+        projectId,
+        sessionId,
+        values,
+      });
+    },
+    readMetadata: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.metadata({
+        identity: desktopIdentity,
+        projectId,
+        sessionId,
+      });
     },
   });
   agentRegistry.workspaceToolkit?.setTodoListBridge({
@@ -863,19 +1275,7 @@ export async function startEmbeddedServer(
   agentRegistry.workspaceToolkit?.setChatTranscriptReader(
     async (projectId, sessionId) => {
       if (incognitoSessions?.has(sessionId)) return null;
-      const detail = await catamorphic.core.agentSessions?.get(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-        projectId,
-        sessionId,
-      );
-      if (!detail) return null;
-      return {
-        title: detail.title ?? null,
-        messages: detail.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      };
+      return readTranscript(projectId, sessionId);
     },
   );
 
@@ -937,10 +1337,9 @@ export async function startEmbeddedServer(
   // project's linked remote, through the provider-agnostic core service.
   agentRegistry.workspaceToolkit?.setGitBridge({
     sync: async (projectId, sessionId) => {
-      const checkout = await sessionCheckouts.describe({
-        projectId,
-        sessionId,
-      });
+      const checkout = usableCheckout(
+        await sessionCheckouts.describe({ projectId, sessionId }),
+      );
       if (checkout.kind !== "primary") {
         return {
           status: "isolated",
@@ -948,16 +1347,14 @@ export async function startEmbeddedServer(
           note: "This session is isolated, so main was not synced. Use create_pull_request to share this worktree's changes.",
         };
       }
-      const outcome = await catamorphic.core.remoteSync.sync(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-        projectId,
+      // Core decides by the project's remote ownership (ADR 0170): an
+      // attached repository is only fetched and fast-forwarded.
+      return syncReport(
+        await catamorphic.core.remoteSync.sync(
+          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+          projectId,
+        ),
       );
-      return {
-        status: outcome.status,
-        ...("rescueBranch" in outcome && outcome.rescueBranch
-          ? { rescueBranch: outcome.rescueBranch }
-          : {}),
-      };
     },
     createPullRequest: async (projectId, sessionId, input) => {
       const checkout = await sessionCheckouts.describe({
@@ -1017,12 +1414,17 @@ export async function startEmbeddedServer(
   // media attachments are ~10MB each (base64 4/3), the composer caps the
   // total it sends well below this.
   const app: FastifyInstance = Fastify({
-    logger: { level: "warn" },
+    logger: {
+      level: "warn",
+      serializers: { req: requestLogFields, err: errorLogFields },
+    },
     bodyLimit: 96 * 1024 * 1024,
     // Windows are already closed at shutdown. Remaining Chromium requests
     // must not keep HTTP close (and therefore the database flush) waiting.
     forceCloseConnections: true,
   });
+  app.setErrorHandler(apiErrorResponse);
+  app.setNotFoundHandler(apiNotFoundResponse);
   // A linked project is a remote authority. Never execute its API operations
   // under the desktop's loopback root identity.
   app.addHook("preHandler", async (request, reply) => {
@@ -1057,6 +1459,81 @@ export async function startEmbeddedServer(
           .send({ error: "Project has no remote authority" });
     },
   });
+  // Chat lists in the app's windows refresh on these hints rather than on
+  // a short poll (ADR 0229).
+  const sessionsListeners = new Set<() => void>();
+  const sessionHints = startSessionChangeHints({
+    wakeups: catamorphic.core.wakeups,
+    send: () => {
+      for (const listener of sessionsListeners) listener();
+    },
+  });
+  // Chats Claude Code and Codex ran outside Work, imported beside its own
+  // (ADR 0233); off until an agent's "Sync chats from" switch turns it on.
+  const externalSessions = new ExternalSessionImporter({
+    homes: externalSessionHomes(),
+    stateFile: path.join(paths.root, "external-session-imports.json"),
+    profiles: () =>
+      profiles.list().profiles.map((profile) => {
+        const config = profileConfig.forProfile(profile.id);
+        const agents = config.agents.listMetadata();
+        const remoteLinks = config.remoteProjects.list();
+        // The first agent of each tool whose "Sync chats from" switch is on.
+        const importer = (harness: "claude-code" | "codex") =>
+          agents.find(
+            (agent) => agent.harness === harness && agent.syncSessions,
+          )?.id;
+        const claude = importer("claude-code");
+        const codex = importer("codex");
+        return {
+          id: profile.id,
+          importers: {
+            ...(claude ? { "claude-code": claude } : {}),
+            ...(codex ? { codex } : {}),
+          },
+          // Every project with a folder this profile owns, those it
+          // has not claimed yet included. A connected project's chats live
+          // on its server (ADR 0098): it imports none.
+          projectIds: projectRoots
+            .projectIds()
+            .filter(
+              (projectId) =>
+                profiles.profileForProject(projectId).id === profile.id &&
+                !remoteLinks[projectId],
+            ),
+        };
+      }),
+    projectRoot: (projectId) => projectRoots.getSync(projectId),
+    readers: {
+      "claude-code": ({ nativeSessionId }) =>
+        new ClaudeCodeTranscriptReader({ sessionId: nativeSessionId }),
+      codex: () => new CodexRolloutReader(),
+    },
+    importTranscript: async ({ projectId, agentId, ...input }) => {
+      const sessions = catamorphic.core.agentSessions;
+      if (!sessions) throw new Error("agent sessions unavailable");
+      return sessions.importTranscript(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+        { ...input, agentId, source: "desktop" },
+      );
+    },
+    changed: () => sessionHints.hint(),
+    log: (message, error) => console.warn(`[desktop] ${message}`, error),
+  });
+  externalSessions.refresh();
+  app.addHook("onResponse", (request, _reply, done) => {
+    // A request that changes chats (from any window, tool or client) hints
+    // beside core's own hints; other project requests never do.
+    if (
+      changesChatLists({
+        method: request.method,
+        route: request.routeOptions.url,
+      })
+    )
+      sessionHints.hint();
+    done();
+  });
   app.addHook("onSend", (request, reply, payload, done) => {
     if (
       request.method === "GET" &&
@@ -1077,54 +1554,26 @@ export async function startEmbeddedServer(
     } else done(null, payload);
   });
   instrumentHttpServer(app);
-  registerWorkspaceMcpRoute(
-    app,
-    async ({ projectId, sessionId, agentId, authorization }) => {
-      if (
-        !workspaceMcpAuthorizationMatches({
-          secret: workspaceMcpSecret,
-          projectId,
-          sessionId,
-          agentId,
-          authorization,
-        })
-      ) {
-        return null;
-      }
-      const detail = await catamorphic.core.agentSessions?.get(
-        desktopIdentity,
-        projectId,
-        sessionId,
-      );
-      if (
-        !detail ||
-        effectiveSessionAgentId({
-          projectId,
-          agentId: detail.agentId,
-          defaultAgentId: (id) => agentRegistry.defaultAgentId(id),
-        }) !== agentId
-      ) {
-        return null;
-      }
-      const tools = agentRegistry.workspaceToolsForAgent(agentId);
-      if (!tools) return null;
-      const workingDirectory = await sessionCheckouts.resolve({
-        projectId,
-        sessionId,
-      });
-      return {
-        tools,
-        context: {
-          projectId,
-          sessionId,
-          ...(workingDirectory ? { workingDirectory } : {}),
-          caller: desktopIdentity,
-        },
-      };
-    },
-  );
+  // The API answers as the person at this computer: web pages in any
+  // browser on it must not reach it (local-api-guard.ts).
+  const apiToken = newDesktopApiToken();
+  app.addHook("onRequest", async (request, reply) => {
+    const refusal = localApiRefusal({
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      port: request.socket.localPort ?? 0,
+      token: apiToken,
+    });
+    if (refusal) return reply.status(403).send({ error: refusal });
+  });
   await app.register(cors, {
-    origin: true,
+    origin: [
+      "work-internal://shell",
+      ...(!electronApp.isPackaged && process.env.ELECTRON_RENDERER_URL
+        ? [new URL(process.env.ELECTRON_RENDERER_URL).origin]
+        : []),
+    ],
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
   // The desktop is a single-user host: every request is the one local user,
@@ -1142,20 +1591,15 @@ export async function startEmbeddedServer(
   // MCP Apps view documents, served (not srcdoc'd) so each carries its own
   // CSP instead of inheriting the shell's, which would block inline scripts.
   if (mcpApps) {
-    app.get("/desktop/mcp-app-view", async (request, reply) => {
-      const { profileId, toolKey } = request.query as {
-        profileId?: string;
-        toolKey?: string;
-      };
-      if (!profileId || !toolKey) {
-        return reply.status(400).send({ error: "Missing profileId/toolKey" });
-      }
-      const view = await mcpApps.view(profileId, toolKey);
-      return reply
-        .header("content-type", "text/html; charset=utf-8")
-        .header("content-security-policy", mcpAppViewCsp(view))
-        .header("cache-control", "no-store")
-        .send(mcpAppViewDocument(view));
+    registerConnectorMcpRoute(app, {
+      core: () => catamorphic.core,
+      agents: agentRegistry,
+      mcpApps,
+      identity: {
+        tenantId: DESKTOP_TENANT_ID,
+        externalUserId: DESKTOP_USER_ID,
+      },
+      tokens: connectorTokens,
     });
   }
 
@@ -1167,6 +1611,17 @@ export async function startEmbeddedServer(
   const url = `http://127.0.0.1:${address.port}`;
   apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
+  // Remote chats' previews, each on its own loopback origin; restored tabs
+  // find theirs again (ADR 0209).
+  const remotePreviews = new RemotePreviewOrigins({
+    file: path.join(paths.root, "remote-previews.json"),
+    profiles: profileConfig,
+  });
+  void remotePreviews
+    .restore()
+    .catch((error) =>
+      console.warn("[desktop] Previews could not listen again", error),
+    );
 
   let shutdownDone: Promise<void> | undefined;
 
@@ -1201,10 +1656,10 @@ export async function startEmbeddedServer(
     monitors: catamorphic.core.projectEventMonitors,
     providers: catamorphic.core.projectEventSources,
     placement: "local",
+    idlePollMs: DESKTOP_IDLE_POLL_MS,
+    wakeups: catamorphic.core.wakeups,
   });
-  const watcherDispatcher = catamorphic.core.watchers
-    ? startWatcherDispatcher({ watchers: catamorphic.core.watchers })
-    : null;
+  const eventDispatcher = startEventDispatcher({ core: catamorphic.core });
   const suspendExecution = async () => {
     await clientRunners.stop();
     const current = worker;
@@ -1212,12 +1667,14 @@ export async function startEmbeddedServer(
     await current?.stop().catch(() => {});
   };
   const resumeExecution = () => {
-    if (shutdownDone || worker) return;
+    if (shutdownDone) return;
+    clientRunners.resume();
+    if (worker) return;
     worker = startWorker();
   };
 
   // Project workspaces type-check `trigger()` against a generated
-  // catamorphic-triggers.d.ts; refresh it everywhere in the background so
+  // work-triggers.d.ts; refresh it everywhere in the background so
   // the coding agent always sees the host's current kinds.
   void triggers
     .syncAllProjectTypes((projectId) =>
@@ -1279,6 +1736,15 @@ export async function startEmbeddedServer(
     () => sessionMirror.syncMailboxesInBackground(),
     5_000,
   );
+  // Remote environments (ADR 0184): the member's chosen files, sent to each
+  // linked server whose Environments allow them. Sign-ins stay on the
+  // machine they were made on (ADR 0199).
+  const personalEnvironment = desktopPersonalEnvironment({
+    profiles,
+    profileConfig,
+    projectRoot: (projectId) => projectRoots.get(projectId),
+  });
+  personalEnvironment.start();
   sessionMirror.syncMirrorsInBackground();
   const sessionMirrorTimer = setInterval(
     () => sessionMirror.syncMirrorsInBackground(),
@@ -1287,14 +1753,23 @@ export async function startEmbeddedServer(
 
   const shutdown = () => {
     shutdownDone ??= (async () => {
+      mcpAppViews?.dispose();
       await clientRunners.stop();
+      personalEnvironment.stop();
       clearInterval(remoteSyncTimer);
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
+      const sessionImports = externalSessions.dispose();
+      sessionHints.dispose();
+      sessionsListeners.clear();
       clearInterval(scheduleTimer);
+      sessionNotes.dispose();
+      signInRecovery.dispose();
       await shutdownDesktopServices({
         steps: [
+          // A read in flight stops before the services it imports into.
+          { name: "session imports", dispose: () => sessionImports },
           { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },
           {
             name: "notifications",
@@ -1305,12 +1780,14 @@ export async function startEmbeddedServer(
           { name: "project events", dispose: () => projectEventWorker.stop() },
           {
             name: "watcher dispatch",
-            dispose: () => watcherDispatcher?.stop(),
+            dispose: () => eventDispatcher.stop(),
           },
           { name: "workflow execution", dispose: suspendExecution },
+          { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
-          { name: "agent clients", dispose: () => agentRegistry.dispose() },
+          // After the turns stopped: the harnesses kept warm for their chats.
+          { name: "warm harnesses", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report
           // a failure instead of silently treating an unsafe shutdown as clean.
           { name: "database", dispose: () => db.destroy() },
@@ -1322,13 +1799,18 @@ export async function startEmbeddedServer(
 
   return {
     url,
+    apiToken,
+    mcpAppViews,
+    mcpAppViewUrl,
     clientRunners,
     catamorphic,
+    github,
     projectRoots,
     sessionCheckouts,
     returnSessionToProjectFolder,
     workspaceStates,
     agentRegistry,
+    signInRecovery,
     triggers,
     get hasCodingAgent() {
       return agentRegistry.hasAgents();
@@ -1336,10 +1818,19 @@ export async function startEmbeddedServer(
     suspendExecution,
     resumeExecution,
     syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
+    personalEnvironment,
+    onSessionsChanged: (listener) => {
+      sessionsListeners.add(listener);
+      return () => sessionsListeners.delete(listener);
+    },
     sessionMoveEligibility: (projectId, sessionId) =>
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>
       sessionMirror.moveToServer(projectId, sessionId),
+    remoteTerminalRequest: ({ projectId, sessionId }) =>
+      remoteTerminalRequest({ profiles: profileConfig, projectId, sessionId }),
+    openRemotePreview: (address) => remotePreviews.open(address),
+    refreshExternalSessions: () => externalSessions.refresh(),
     shutdown,
   };
 }
@@ -1355,4 +1846,12 @@ function loadOrCreateHostId(file: string): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
   return hostId;
+}
+
+/** Tell every window a project's files moved under it. */
+function broadcastGitChanged(projectId: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("catamorphic:git-changed", { projectId });
+  }
 }

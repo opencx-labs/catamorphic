@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+/** The same status data, with its access path for the desktop's refresh budget. */
+export interface PullRequestStatusRead {
+  status: PullRequestStatus | null;
+  source: "connection" | "github-cli" | "public" | null;
+}
+
 const person = z.object({
   login: z.string().optional(),
   name: z.string().optional(),
@@ -95,3 +101,30 @@ export const postedCommentSchema = z.object({
   diff_hunk: z.string().optional(),
   side: z.enum(["LEFT", "RIGHT"]).optional(),
 });
+
+/**
+ * Where a pull request stands (ADR 0239), as main reads it for the chip of
+ * the chat that recorded it: core's `PullRequestStatus`, the shape the
+ * window draws.
+ */
+export interface PullRequestStatus {
+  number: number;
+  title: string;
+  url: string;
+  repository: string;
+  author: string;
+  head: string;
+  base: string;
+  state: "open" | "draft" | "merged" | "closed";
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  comments: number;
+  checks?: {
+    state: "pending" | "success" | "failure";
+    passed: number;
+    failed: number;
+    pending: number;
+  };
+  updatedAt: string;
+}

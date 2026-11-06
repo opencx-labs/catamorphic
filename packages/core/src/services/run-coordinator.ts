@@ -1,17 +1,32 @@
 import { createHash } from "node:crypto";
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, jsonbText } from "@catamorphic/db";
 import type {
   WorkflowCapabilities,
   WorkflowExecutionDescriptor,
   WorkflowExecutionUnitDescriptor,
 } from "@catamorphic/parser";
-import { type Kysely, sql, type Transaction } from "kysely";
-import type { Identity } from "../identity.js";
+import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import {
+  type Identity,
+  intersectProjectPermissions,
+  type ProjectPermissionRef,
+} from "../identity.js";
+import { DeploymentPreparationError } from "./deployment-runtime-service.js";
 import type {
   ExecutionJob,
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
 import { ExecutionJobDeferredError } from "./execution-worker-service.js";
+import {
+  RUN_SIGNAL_MAX_PENDING,
+  RUN_SIGNAL_MAX_RECEIPTS,
+  RunSignalLimitError,
+  RunSignalNotFoundError,
+  type RunSignalReceipt,
+  type SignalRunInput,
+  signalPayload,
+} from "./run-signals.js";
 
 const ACTIVE_RUN_STATUSES = ["pending", "running", "waiting"] as const;
 const TERMINAL_RUN_STATUSES = ["completed", "failed", "canceled"] as const;
@@ -96,25 +111,57 @@ export class RunCoordinator {
     });
   }
 
-  async invokeRuntime<T>(args: {
+  async invokeRuntime(args: {
     job: ExecutionJob;
     invocationId: string;
-    invoke: () => Promise<T>;
-  }): Promise<T> {
+    invoke: () => Promise<RuntimeInvocationReceipt>;
+  }): Promise<RuntimeInvocationReceipt> {
     if (!(await this.registerInvocation(args))) {
       throw new RuntimeInvocationFencedError(args.invocationId);
     }
-    let result: T;
+    let result: RuntimeInvocationReceipt;
     try {
       result = await args.invoke();
     } catch (error) {
       const owned = await this.unregisterInvocation(args);
       if (!owned) throw new RuntimeInvocationFencedError(args.invocationId);
+      // A deployment that cannot be prepared is the invocation's outcome,
+      // not a worker hiccup: report it like any failed invocation instead
+      // of requeueing the job onto yet another sandbox.
+      if (error instanceof DeploymentPreparationError) {
+        return {
+          runtimeId: "",
+          invocationId: args.invocationId,
+          events: [],
+          terminal: { status: "failed", error: error.message, steps: [] },
+        };
+      }
       throw error;
     }
     const owned = await this.unregisterInvocation(args);
     if (!owned) throw new RuntimeInvocationFencedError(args.invocationId);
     return result;
+  }
+
+  /** The original attempt clock survives execution-job redelivery (ADR 0295). */
+  async boundaryDeadline(args: { job: ExecutionJob }): Promise<string | null> {
+    const workflowStepAttemptId = args.job.workflowStepAttemptId;
+    if (!workflowStepAttemptId) return null;
+    return this.db.transaction().execute(async (trx) => {
+      const context = await this.lockActiveAttempt({
+        trx,
+        workflowStepAttemptId,
+      });
+      if (
+        context?.attempt.status !== "running" ||
+        !context.attempt.started_at ||
+        !(await ownsJob({ trx, job: args.job }))
+      )
+        return null;
+      return new Date(
+        context.attempt.started_at.getTime() + 300_000,
+      ).toISOString();
+    });
   }
 
   /**
@@ -298,20 +345,25 @@ export class RunCoordinator {
         typeof args.transition.timeout === "string"
           ? parseDuration(args.transition.timeout)
           : undefined;
-      const timeoutAt = timeout ? new Date(now.getTime() + timeout) : null;
+      const timeoutAt =
+        timeout !== undefined ? new Date(now.getTime() + timeout) : null;
       const pauseId = crypto.randomUUID();
-      await trx
+      const pause = await trx
         .insertInto("workflow_pauses")
         .values({
           id: pauseId,
           run_id: context.attempt.run_id,
           workflow_step_attempt_id: context.attempt.id,
           state_present: args.transition.statePresent === true,
-          state: jsonColumn(toJson(args.transition.state)),
+          state:
+            args.transition.statePresent === true
+              ? jsonColumn(toJson(args.transition.state))
+              : null,
           timeout_at: timeoutAt,
           signal_name: stringValue(args.transition.signal) ?? null,
         })
-        .execute();
+        .returningAll()
+        .executeTakeFirstOrThrow();
       await trx
         .updateTable("workflow_step_attempts")
         .set({ status: "waiting", updated_at: now })
@@ -323,6 +375,7 @@ export class RunCoordinator {
         .where("id", "=", context.attempt.run_id)
         .where("status", "in", [...ACTIVE_RUN_STATUSES])
         .execute();
+      if (await this.resolveNamedPause({ trx, pause, now })) return;
       if (timeoutAt) {
         await this.jobs.enqueue({
           trx,
@@ -337,6 +390,154 @@ export class RunCoordinator {
         });
       }
     });
+  }
+
+  /** The run row orders sends against pause creation, timeout and termination. */
+  async signalByKey(args: SignalRunInput): Promise<RunSignalReceipt> {
+    const payload = signalPayload(args);
+    return this.db.transaction().execute(async (trx) => {
+      const run = await trx
+        .selectFrom("workflow_runs")
+        .innerJoin("projects", "projects.id", "workflow_runs.project_id")
+        .where("workflow_runs.id", "=", args.runId)
+        .where("projects.tenant_id", "=", args.identity.tenantId)
+        .where("workflow_runs.project_id", "=", args.projectId)
+        .where("workflow_runs.workflow_name", "=", args.workflowName)
+        .where("workflow_runs.correlation_key", "=", args.correlationKey)
+        .selectAll("workflow_runs")
+        .forUpdate("workflow_runs")
+        .executeTakeFirst();
+      if (!run) {
+        throw new RunSignalNotFoundError(
+          args.workflowName,
+          args.correlationKey,
+          args.signal,
+        );
+      }
+      const existing = await trx
+        .selectFrom("workflow_signals")
+        .where("run_id", "=", run.id)
+        .where("idempotency_key", "=", args.idempotencyKey)
+        .selectAll()
+        .executeTakeFirst();
+      if (existing) {
+        if (
+          existing.signal_name !== payload.name ||
+          existing.payload_hash !== payload.payloadHash
+        )
+          throw new RunResumeConflictError(
+            "Signal idempotency key was used with different content",
+          );
+        return signalReceipt(existing);
+      }
+      if (!isActiveRunStatus(run.status))
+        throw new RunResumeConflictError("Run generation is not active");
+      const counts = await trx
+        .selectFrom("workflow_signals")
+        .where("run_id", "=", run.id)
+        .select((eb) => [
+          eb.fn.countAll().as("total"),
+          eb.fn.countAll().filterWhere("status", "=", "buffered").as("pending"),
+        ])
+        .executeTakeFirstOrThrow();
+      if (Number(counts.total) >= RUN_SIGNAL_MAX_RECEIPTS)
+        throw new RunSignalLimitError(
+          "Run has reached its 1024 signal receipt limit",
+        );
+      if (Number(counts.pending) >= RUN_SIGNAL_MAX_PENDING)
+        throw new RunSignalLimitError(
+          "Run has reached its 256 pending signal limit",
+        );
+      const signal = await trx
+        .insertInto("workflow_signals")
+        .values({
+          run_id: run.id,
+          signal_name: payload.name,
+          idempotency_key: args.idempotencyKey,
+          payload_hash: payload.payloadHash,
+          value: jsonColumn(args.value),
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      const pause = await trx
+        .selectFrom("workflow_pauses")
+        .where("run_id", "=", run.id)
+        .where("signal_name", "=", payload.name)
+        .where("status", "=", "open")
+        .selectAll()
+        .forUpdate()
+        .executeTakeFirst();
+      if (pause)
+        await this.resolveNamedPause({
+          trx,
+          pause,
+          now: await databaseNow(trx),
+        });
+      return signalReceipt(
+        await trx
+          .selectFrom("workflow_signals")
+          .where("id", "=", signal.id)
+          .selectAll()
+          .executeTakeFirstOrThrow(),
+      );
+    });
+  }
+
+  /** Called with the run locked; continuation and consumption commit together. */
+  private async resolveNamedPause(args: {
+    trx: Transaction<DB>;
+    pause: Selectable<DB["workflow_pauses"]>;
+    now: Date;
+  }): Promise<boolean> {
+    if (args.pause.timeout_at && args.pause.timeout_at <= args.now) {
+      await args.trx
+        .updateTable("workflow_pauses")
+        .set({ status: "timed_out", resolved_at: args.now })
+        .where("id", "=", args.pause.id)
+        .execute();
+      await this.resolvePause({ ...args, reason: "timed_out" });
+      return true;
+    }
+    if (!args.pause.signal_name) return false;
+    const signal = await args.trx
+      .selectFrom("workflow_signals")
+      .where("run_id", "=", args.pause.run_id)
+      .where("signal_name", "=", args.pause.signal_name)
+      .where("status", "=", "buffered")
+      .orderBy("sequence")
+      .selectAll()
+      .forUpdate()
+      .executeTakeFirst();
+    if (!signal) return false;
+    await args.trx
+      .updateTable("workflow_signals")
+      .set({
+        status: "resumed",
+        pause_id: args.pause.id,
+        value: null,
+        resolved_at: args.now,
+      })
+      .where("id", "=", signal.id)
+      .execute();
+    await args.trx
+      .updateTable("workflow_pauses")
+      .set({
+        status: "resumed",
+        resume_value: jsonColumn(signal.value),
+        resume_idempotency_key: signal.idempotency_key,
+        resume_payload_hash: createHash("sha256")
+          .update(JSON.stringify(signal.value))
+          .digest("hex"),
+        resolved_at: args.now,
+      })
+      .where("id", "=", args.pause.id)
+      .execute();
+    await this.resolvePause({
+      trx: args.trx,
+      pause: { ...args.pause, resume_value: signal.value },
+      reason: "resumed",
+    });
+    return true;
   }
 
   async resumePause(args: {
@@ -446,8 +647,17 @@ export class RunCoordinator {
       workflowName: string;
       capabilities: WorkflowCapabilities;
       execution: WorkflowExecutionDescriptor;
+      /** The child's declared permissions; it gets what the parent run holds of them. */
+      permissions: readonly string[];
+      /** The child's own display name, never the parent's. */
+      displayName?: string;
       input: Json;
     };
+    /**
+     * State the call carried (ADR 0260): held on the waiting step until the
+     * child ends, then handed to the next step beside the child's result.
+     */
+    state?: { value: Json };
   }): Promise<string | null> {
     return this.db.transaction().execute(async (trx) => {
       const context = await this.lockActiveAttempt({
@@ -482,6 +692,7 @@ export class RunCoordinator {
           provenance: jsonColumn(
             toJson({
               ...jsonRecord(parent.provenance),
+              displayName: args.child.displayName,
               capabilities: args.child.capabilities,
             }),
           ),
@@ -500,6 +711,18 @@ export class RunCoordinator {
             parent.caller_connection_scope === null
               ? null
               : jsonColumn(parent.caller_connection_scope),
+          caller_project_permissions:
+            parent.caller_scope === null
+              ? null
+              : jsonColumn(
+                  toJson(
+                    childPermissions({
+                      projectId: parent.project_id,
+                      held: parent.caller_project_permissions,
+                      declared: args.child.permissions,
+                    }),
+                  ),
+                ),
           status: "pending",
           phase: phaseFor(firstStep),
           input: jsonColumn(args.child.input),
@@ -509,7 +732,16 @@ export class RunCoordinator {
         .execute();
       await trx
         .updateTable("workflow_step_attempts")
-        .set({ status: "waiting", updated_at: now })
+        .set({
+          status: "waiting",
+          updated_at: now,
+          ...(args.state
+            ? {
+                call_state_present: true,
+                call_state: jsonColumn(args.state.value),
+              }
+            : {}),
+        })
         .where("id", "=", context.attempt.id)
         .execute();
       await trx
@@ -657,14 +889,13 @@ export class RunCoordinator {
         .execute();
       // Jobs deferred while this run was paused are parked an hour out rather
       // than polling for it. Pull them forward in the same transaction, so a
-      // resume that commits always leaves its work runnable.
-      await trx
-        .updateTable("execution_jobs")
-        .set({ available_at: now, updated_at: now })
-        .where("workflow_run_id", "=", args.runId)
-        .where("status", "=", "pending")
-        .where("available_at", ">", now)
-        .execute();
+      // resume that commits always leaves its work runnable, and wake this
+      // process's workers (ADR 0229).
+      await this.jobs.makeRunAvailable({
+        runId: args.runId,
+        availableAt: now,
+        trx,
+      });
       return "resumed";
     });
   }
@@ -673,8 +904,10 @@ export class RunCoordinator {
     identity: Identity;
     runId: string;
     reason?: string;
+    /** Reuse the caller transaction for atomic enrollment replacement. */
+    trx?: Transaction<DB>;
   }): Promise<Array<{ artifactId: string; invocationId: string }>> {
-    const outcome = await this.db.transaction().execute(async (trx) => {
+    const cancelInTransaction = async (trx: Transaction<DB>) => {
       await requireOwnedRun({
         trx,
         identity: args.identity,
@@ -790,16 +1023,57 @@ export class RunCoordinator {
             ? root.id
             : null,
       };
-    });
+    };
+    const outcome = args.trx
+      ? await cancelInTransaction(args.trx)
+      : await this.db.transaction().execute(cancelInTransaction);
     if (outcome.reconcileChildRunId) {
-      await this.db.transaction().execute((trx) =>
+      const reconcile = (trx: Transaction<DB>) =>
         this.reconcileParentFromTerminalChild({
           trx,
           childRunId: outcome.reconcileChildRunId ?? "",
-        }),
-      );
+        });
+      if (args.trx) await reconcile(args.trx);
+      else await this.db.transaction().execute(reconcile);
     }
     return outcome.invocations;
+  }
+
+  /**
+   * Fail a run and every active run in its tree with one error: the tree
+   * can no longer execute anywhere, such as when its machine was lost and
+   * its Environment cannot place it again (ADR 0190). Releases the root's
+   * Allocation. A run already terminal is left as it is.
+   */
+  async failRunTree(args: {
+    runId: string;
+    error: string;
+    /** Run inside the caller's transaction, which holds its own locks. */
+    trx?: Transaction<DB>;
+  }): Promise<void> {
+    if (!args.trx)
+      return this.db
+        .transaction()
+        .execute((trx) => this.failRunTree({ ...args, trx }));
+    const trx = args.trx;
+    {
+      const root = await lockRun({ trx, runId: args.runId });
+      if (!root) return;
+      const runs = await lockRunHierarchy({ trx, root });
+      const now = await databaseNow(trx);
+      // An operator-paused run cannot resume anywhere either.
+      const statuses = [...ACTIVE_RUN_STATUSES, "paused"] as const;
+      for (const run of runs) {
+        if (!statuses.some((status) => status === run.status)) continue;
+        await this.failRun({
+          trx,
+          runId: run.id,
+          error: args.error,
+          now,
+          statuses,
+        });
+      }
+    }
   }
 
   async handleExhaustedJob(args: {
@@ -984,6 +1258,8 @@ export class RunCoordinator {
     error: string;
     now: Date;
     excludeJobId?: string;
+    /** The statuses a run may fail from; active ones unless named. */
+    statuses?: readonly string[];
   }): Promise<void> {
     await this.cleanupRunScope(args);
     const failed = await args.trx
@@ -995,7 +1271,7 @@ export class RunCoordinator {
         updated_at: args.now,
       })
       .where("id", "=", args.runId)
-      .where("status", "in", [...ACTIVE_RUN_STATUSES])
+      .where("status", "in", [...(args.statuses ?? ACTIVE_RUN_STATUSES)])
       .returning(["id", "parent_run_id", "allocation_id"])
       .executeTakeFirst();
     if (failed) {
@@ -1084,7 +1360,12 @@ export class RunCoordinator {
       return;
     }
     const now = await databaseNow(args.trx);
-    const output = args.output ?? null;
+    const output = context.attempt.call_state_present
+      ? toJson({
+          result: args.output ?? null,
+          state: context.attempt.call_state ?? null,
+        })
+      : (args.output ?? null);
     await args.trx
       .updateTable("workflow_step_attempts")
       .set({
@@ -1459,8 +1740,28 @@ export function toJson(value: unknown): Json {
   return JSON.parse(JSON.stringify(value ?? null)) as Json;
 }
 
+/**
+ * A result from a machine as jsonb can hold it: Postgres refuses U+0000 in
+ * jsonb (and text), which process output and command results may carry, so
+ * it arrives as U+FFFD.
+ */
+export function storableJson(value: unknown): Json {
+  return toJson(
+    JSON.parse(
+      JSON.stringify(value ?? null, (_key, item: unknown) =>
+        typeof item === "string" ? withoutNul(item) : item,
+      ),
+    ),
+  );
+}
+
+/** Text Postgres can store: U+0000 becomes U+FFFD. */
+export function withoutNul(text: string): string {
+  return text.replaceAll("\u0000", "\uFFFD");
+}
+
 export function jsonColumn(value: Json) {
-  return sql<Json>`${JSON.stringify(value)}::jsonb`;
+  return sql<Json>`${jsonbText(value)}::jsonb`;
 }
 
 export function jsonRecord(value: unknown): Record<string, unknown> {
@@ -1665,6 +1966,17 @@ async function releaseAllocation(args: {
   now: Date;
 }): Promise<void> {
   await args.trx
+    .deleteFrom("placement_waits")
+    .where(
+      "root_workload_id",
+      "in",
+      args.trx
+        .selectFrom("execution_allocations")
+        .select("root_workload_id")
+        .where("id", "=", args.allocationId),
+    )
+    .execute();
+  await args.trx
     .updateTable("connection_capability_grants")
     .set({ revoked_at: args.now })
     .where("allocation_id", "=", args.allocationId)
@@ -1716,4 +2028,39 @@ function isTerminalRunStatus(status: string): boolean {
   return TERMINAL_RUN_STATUSES.includes(
     status as (typeof TERMINAL_RUN_STATUSES)[number],
   );
+}
+
+/** A child run's permissions: what the parent run holds of the child's declared set. */
+function childPermissions(input: {
+  projectId: string;
+  held: Json | null;
+  declared: readonly string[];
+}): ProjectPermissionRef[] {
+  const held = (Array.isArray(input.held) ? input.held : []).flatMap(
+    (entry): ProjectPermissionRef[] => {
+      const ref = jsonRecord(entry);
+      return typeof ref.projectId === "string" &&
+        typeof ref.permission === "string"
+        ? [{ projectId: ref.projectId, permission: ref.permission }]
+        : [];
+    },
+  );
+  return intersectProjectPermissions(
+    input.declared.map((permission) => ({
+      projectId: input.projectId,
+      permission,
+    })),
+    { tenantId: "", externalUserId: "", scope: [], projectPermissions: held },
+  );
+}
+
+function signalReceipt(
+  signal: Selectable<DB["workflow_signals"]>,
+): RunSignalReceipt {
+  const base = { id: signal.id, runId: signal.run_id };
+  if (signal.status === "resumed" && signal.pause_id)
+    return { ...base, status: "resumed", pauseId: signal.pause_id };
+  if (signal.status === "buffered" || signal.status === "discarded")
+    return { ...base, status: signal.status, pauseId: null };
+  throw new Error("Invalid workflow signal receipt");
 }

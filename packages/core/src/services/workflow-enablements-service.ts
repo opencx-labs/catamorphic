@@ -3,7 +3,11 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { WorkflowGraph } from "@catamorphic/parser";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
-import { hasControlPlanePermission } from "../identity.js";
+import {
+  hasProjectPermission,
+  mayUseProject,
+  projectPrincipalIdentity,
+} from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ResolvedConnectionBinding } from "./connection-types.js";
@@ -13,7 +17,10 @@ import {
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { DeploymentArtifact } from "./deployment-artifacts-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  EnvironmentPolicyInvalidError,
+  type ExecutionEnvironmentsService,
+} from "./execution-environments-service.js";
 import { toJson } from "./run-coordinator.js";
 import { workflowEnablementConsentDigest } from "./workflow-enablement-consent.js";
 import type {
@@ -32,6 +39,7 @@ const tracer = getTracer("@catamorphic/core");
 interface WorkflowTarget {
   artifact: DeploymentArtifact;
   requirements: WorkflowGraph["connections"];
+  permissions: WorkflowGraph["permissions"];
 }
 
 interface WorkflowEnablementsDeps {
@@ -121,13 +129,25 @@ export class WorkflowEnablementsService {
     ) {
       throw new AccessDeniedError();
     }
-    this.assertMayManage(input.identity, owner);
+    this.assertMayManage(input.identity, input.projectId, owner);
     await this.deps.assertWorkflowAccess({
       identity: input.identity,
       projectId: input.projectId,
       workflowName: input.workflowName,
     });
     const target = await this.deps.resolveTarget(input);
+    // Only someone who holds a permission can hand it to a workflow: a
+    // member's runs keep it only while they do; a project automation's
+    // runs keep what was consented to (ADR 0158).
+    const missing = target.permissions.filter(
+      (permission) =>
+        !hasProjectPermission(input.identity, input.projectId, permission),
+    );
+    if (missing.length > 0) {
+      throw new AccessDeniedError(
+        `This workflow needs permissions you do not have: ${missing.join(", ")}`,
+      );
+    }
     const admission = await this.deps.executionEnvironments.admit({
       identity: input.identity,
       projectId: input.projectId,
@@ -143,7 +163,7 @@ export class WorkflowEnablementsService {
           projectId: input.projectId,
           environment: admission.environmentName,
           requirements: target.requirements,
-          unattended: owner.type === "service",
+          unattended: owner.type === "project",
         })
       : [];
     for (const connection of resolved) {
@@ -155,16 +175,6 @@ export class WorkflowEnablementsService {
           selected,
         );
       }
-    }
-    if (
-      owner.type === "service" &&
-      !resolved.some(
-        (connection) =>
-          connection.connectionId === owner.connectionId &&
-          connection.principalKind === owner.principalKind,
-      )
-    ) {
-      throw new ConnectionPermissionDeniedError();
     }
     const connections = resolved.map(mapResolvedConnection);
     const capabilities = [
@@ -181,6 +191,7 @@ export class WorkflowEnablementsService {
       owner,
       connections,
       capabilities,
+      permissions: [...target.permissions],
       consentDigest: "",
       triggerCount: 0,
     };
@@ -192,13 +203,19 @@ export class WorkflowEnablementsService {
       remoteBranch: preview.remoteBranch,
       environment: preview.environment,
     });
-    const triggers = await this.db
-      .selectFrom("trigger_definitions")
-      .select(["trigger_kind as kind", "config"])
-      .where("project_id", "=", input.projectId)
-      .where("commit_sha", "=", preview.commitSha)
-      .where("workflow_name", "=", input.workflowName)
-      .execute();
+    const triggers = (
+      await this.db
+        .selectFrom("trigger_definitions")
+        .select(["trigger_kind as kind", "config", "project_kind"])
+        .where("project_id", "=", input.projectId)
+        .where("commit_sha", "=", preview.commitSha)
+        .where("workflow_name", "=", input.workflowName)
+        .orderBy("binding_index")
+        .execute()
+    ).map(({ project_kind, ...trigger }) => ({
+      ...trigger,
+      ...(project_kind ? { projectKind: project_kind } : {}),
+    }));
     const labels = connections.length
       ? await this.db
           .selectFrom("connections")
@@ -270,16 +287,9 @@ export class WorkflowEnablementsService {
                   preview.owner.type === "member"
                     ? preview.owner.externalUserId
                     : null,
-                owner_connection_id:
-                  preview.owner.type === "service"
-                    ? preview.owner.connectionId
-                    : null,
-                owner_principal_kind:
-                  preview.owner.type === "service"
-                    ? preview.owner.principalKind
-                    : null,
                 owner_identity: toJson(input.identity),
                 capabilities: toJson(preview.capabilities),
+                permissions: toJson(preview.permissions),
                 consent_digest: preview.consentDigest,
                 temporary: input.temporary ?? false,
                 expires_at: input.expiresAt ?? null,
@@ -294,7 +304,6 @@ export class WorkflowEnablementsService {
                   preview.connections.map((connection) => ({
                     enablement_id: row.id,
                     alias: connection.alias,
-                    binding_id: connection.bindingId,
                     connection_id: connection.connectionId,
                     provider_kind: connection.providerKind,
                     principal_kind: connection.principalKind,
@@ -354,12 +363,15 @@ export class WorkflowEnablementsService {
     }
     if (
       !input.includeAll ||
-      !hasControlPlanePermission(input.identity, "connections:manage_service")
+      !hasProjectPermission(input.identity, input.projectId, "automations:read")
     ) {
+      // Everyone in the project sees its project automations; of members'
+      // automations, only their own.
+      const seesProject = mayUseProject(input.identity, input.projectId);
       query = query.where((eb) =>
         eb.or([
+          ...(seesProject ? [eb("owner_kind", "=", "project")] : []),
           eb("owner_external_user_id", "=", input.identity.externalUserId),
-          eb("created_by_external_user_id", "=", input.identity.externalUserId),
         ]),
       );
     }
@@ -378,11 +390,19 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    this.assertMayManage(input.identity, ownerFromRow(row));
+    // The project's automations are visible to everyone in it; anyone's to
+    // `automations:read`; a member's own to them.
+    const readable =
+      (row.owner_kind === "project" &&
+        mayUseProject(input.identity, row.project_id)) ||
+      row.owner_external_user_id === input.identity.externalUserId ||
+      hasProjectPermission(input.identity, row.project_id, "automations:read");
+    if (!readable) throw new AccessDeniedError();
     return this.hydrate(row);
   }
 
   async disable(input: {
+    signal?: AbortSignal;
     identity: Identity;
     enablementId: string;
   }): Promise<WorkflowEnablement> {
@@ -397,7 +417,7 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    this.assertMayManage(input.identity, ownerFromRow(row));
+    this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
     await this.revalidate({
       identity: input.identity,
       enablementId: input.enablementId,
@@ -438,6 +458,7 @@ export class WorkflowEnablementsService {
           remote_branch: preview.remoteBranch,
           consent_digest: preview.consentDigest,
           capabilities: toJson(preview.capabilities),
+          permissions: toJson(preview.permissions),
           update_available: false,
           status: "active",
           suspension_reason: null,
@@ -461,7 +482,6 @@ export class WorkflowEnablementsService {
             preview.connections.map((connection) => ({
               enablement_id: input.enablementId,
               alias: connection.alias,
-              binding_id: connection.bindingId,
               connection_id: connection.connectionId,
               provider_kind: connection.providerKind,
               principal_kind: connection.principalKind,
@@ -532,18 +552,39 @@ export class WorkflowEnablementsService {
       return this.failRevalidation(row, input.identity, "expired");
     }
     const storedIdentity = row.owner_identity as unknown as Identity;
+    const connections = await this.connectionRows(row.id);
+    const permissions = stringArray(row.permissions);
+    // A project automation never runs as the person who enabled it: it
+    // runs as the project principal, allowed exactly what was consented to.
     const ownerIdentity =
-      row.owner_kind === "member" &&
-      storedIdentity.scope !== undefined &&
-      this.deps.resolveMemberIdentity
-        ? await this.deps.resolveMemberIdentity({
+      row.owner_kind === "project"
+        ? projectPrincipalIdentity({
             tenantId: row.tenant_id,
             projectId: row.project_id,
-            externalUserId: row.owner_external_user_id!,
+            environment: row.environment_name,
+            workflowName: row.workflow_name,
+            connections,
+            permissions,
           })
-        : storedIdentity;
+        : storedIdentity.scope !== undefined && this.deps.resolveMemberIdentity
+          ? await this.deps.resolveMemberIdentity({
+              tenantId: row.tenant_id,
+              projectId: row.project_id,
+              externalUserId: row.owner_external_user_id!,
+            })
+          : storedIdentity;
     if (!ownerIdentity) {
       return this.failRevalidation(row, input.identity, "member_removed");
+    }
+    // A member's automation runs with their declared permissions only while
+    // the member still holds every one.
+    if (
+      permissions.some(
+        (permission) =>
+          !hasProjectPermission(ownerIdentity, row.project_id, permission),
+      )
+    ) {
+      return this.failRevalidation(row, input.identity, "permission_revoked");
     }
     try {
       await this.deps.assertWorkflowAccess({
@@ -561,10 +602,17 @@ export class WorkflowEnablementsService {
         environment: row.environment_name,
         requirements: { workload: "workflow" },
       });
-    } catch {
-      return this.failRevalidation(row, input.identity, "environment_denied");
+    } catch (error) {
+      // A broken project policy stops every automation; it is not the
+      // owner losing access.
+      return this.failRevalidation(
+        row,
+        input.identity,
+        error instanceof EnvironmentPolicyInvalidError
+          ? "environment_policy_invalid"
+          : "environment_denied",
+      );
     }
-    const connections = await this.connectionRows(row.id);
     if (connections.length > 0 && !this.deps.connectionAdmission) {
       return this.failRevalidation(
         row,
@@ -700,7 +748,7 @@ export class WorkflowEnablementsService {
   }
 
   private async setStatus(
-    input: { identity: Identity; enablementId: string },
+    input: { identity: Identity; enablementId: string; signal?: AbortSignal },
     status: WorkflowEnablementStatus,
     reason: string | null,
     eventType: string,
@@ -709,7 +757,8 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    this.assertMayManage(input.identity, ownerFromRow(row));
+    this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+    input.signal?.throwIfAborted();
     await this.db.transaction().execute(async (trx) => {
       await trx
         .updateTable("workflow_enablements")
@@ -728,12 +777,30 @@ export class WorkflowEnablementsService {
         eventType,
         reason,
       );
+      input.signal?.throwIfAborted();
     });
     return this.get(input);
   }
 
+  /**
+   * Whether this identity may turn project automations on, pause and update
+   * them, and pause anyone's (`automations:write`, ADR 0158).
+   */
+  mayManageProjectAutomations(input: {
+    identity: Identity;
+    projectId: string;
+  }): boolean {
+    return hasProjectPermission(
+      input.identity,
+      input.projectId,
+      "automations:write",
+    );
+  }
+
+  /** A member manages their own; everything else takes `automations:write`. */
   private assertMayManage(
     identity: Identity,
+    projectId: string,
     owner: WorkflowEnablementOwner,
   ): void {
     if (
@@ -742,9 +809,7 @@ export class WorkflowEnablementsService {
     ) {
       return;
     }
-    if (hasControlPlanePermission(identity, "connections:manage_service")) {
-      return;
-    }
+    if (this.mayManageProjectAutomations({ identity, projectId })) return;
     throw new AccessDeniedError();
   }
 
@@ -770,7 +835,6 @@ export class WorkflowEnablementsService {
         .orderBy("alias")
         .execute()
     ).map((row) => ({
-      bindingId: row.binding_id,
       connectionId: row.connection_id,
       alias: row.alias,
       providerKind: row.provider_kind,
@@ -798,9 +862,10 @@ export class WorkflowEnablementsService {
           "activation.status",
           "definition.trigger_kind",
           "definition.config",
+          "definition.project_kind",
         ])
         .where("activation.enablement_id", "=", row.id)
-        .orderBy("definition.trigger_kind")
+        .orderBy("definition.binding_index")
         .execute(),
     ]);
     return {
@@ -814,6 +879,7 @@ export class WorkflowEnablementsService {
       owner: ownerFromRow(row),
       connections: connections.map(mapResolvedConnection),
       capabilities: stringArray(row.capabilities),
+      permissions: stringArray(row.permissions),
       consentDigest: row.consent_digest,
       status: row.status as WorkflowEnablementStatus,
       suspensionReason: row.suspension_reason,
@@ -827,6 +893,9 @@ export class WorkflowEnablementsService {
           definitionId: trigger.trigger_definition_id,
           kind: trigger.trigger_kind,
           config: trigger.config,
+          ...(trigger.project_kind
+            ? { projectKind: trigger.project_kind }
+            : {}),
           status: trigger.status as "active" | "paused",
         }),
       ),
@@ -860,13 +929,7 @@ function ownerFromRow(
 ): WorkflowEnablementOwner {
   return row.owner_kind === "member"
     ? { type: "member", externalUserId: row.owner_external_user_id! }
-    : {
-        type: "service",
-        principalKind: row.owner_principal_kind as
-          | "project_service"
-          | "tenant_service",
-        connectionId: row.owner_connection_id!,
-      };
+    : { type: "project" };
 }
 
 function mapResolvedConnection(

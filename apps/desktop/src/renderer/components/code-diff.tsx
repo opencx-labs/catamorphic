@@ -24,7 +24,7 @@ export function CodeDiff(props: CodeDiffProps) {
         </p>
       )}
       <DiffView
-        findShortcut={formatBinding(bindings["search-diff"]) || "Unbound"}
+        findShortcut={formatBinding(bindings.find) || "Unbound"}
         {...props}
         options={{
           theme: resolveCodeTheme(prefs.codeTheme, light),

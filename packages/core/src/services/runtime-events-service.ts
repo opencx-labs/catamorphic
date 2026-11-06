@@ -1,4 +1,4 @@
-import type { DB, Json, JsonValue } from "@catamorphic/db";
+import { type DB, type Json, type JsonValue, jsonbText } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type {
   RuntimeInvocationEvent,
@@ -515,12 +515,11 @@ function validateEvent(event: RuntimeInvocationEvent): void {
 }
 
 /**
- * jsonb parameters must be sent as JSON text: node-postgres serializes JS
- * arrays as Postgres array literals, so a bare-array value (a step returning
- * an array) fails with "invalid input syntax for type json".
+ * A value as jsonb, sent as JSON text: a step may return a bare string,
+ * which both drivers would send as raw text.
  */
 function jsonbColumn(value: Json) {
-  return sql<Json>`${JSON.stringify(value)}::jsonb`;
+  return sql<Json>`${jsonbText(value)}::jsonb`;
 }
 
 function toJson(value: unknown): Json {

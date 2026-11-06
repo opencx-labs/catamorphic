@@ -5,23 +5,7 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./elicitation-modal.js";
-import {
-  type PendingToolPermission,
-  ToolPermissionModal,
-} from "./tool-permission-modal.js";
 
-const permissionSchema = z.object({
-  server: z.string(),
-  tool: z.string(),
-  description: z.string().optional(),
-  input: z.record(z.string(), z.unknown()),
-  annotations: z
-    .object({
-      readOnlyHint: z.boolean().optional(),
-      destructiveHint: z.boolean().optional(),
-    })
-    .optional(),
-});
 const elicitationSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("url"), message: z.string(), url: z.string() }),
   z.object({
@@ -45,13 +29,12 @@ const elicitationSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
-/** Native presentation participates in the same one-recipient consent routing. */
+/** A connector's native sign-in or form request, in the detached dock. */
 export function DockDialogs({
   onOpenChange,
 }: {
   onOpenChange: (open: boolean) => void;
 }) {
-  const [permissions, setPermissions] = useState<PendingToolPermission[]>([]);
   const [elicitation, setElicitation] = useState<PendingElicitation | null>(
     null,
   );
@@ -60,35 +43,6 @@ export function DockDialogs({
       desktopApi.onBridgeRequest(({ id, method, params }) => {
         const label =
           typeof params.label === "string" ? params.label : undefined;
-        if (method === "toolPermissionCancel") {
-          setPermissions((items) =>
-            items.filter((item) => item.askId !== params.askId),
-          );
-          return;
-        }
-        if (method === "toolPermission") {
-          const parsed = permissionSchema.safeParse(params.request);
-          if (!parsed.success) {
-            desktopApi.bridgeRespond({ id, result: { decision: "deny" } });
-            return;
-          }
-          setPermissions((items) => [
-            ...items,
-            {
-              id: String(id),
-              askId: id,
-              label,
-              request: parsed.data,
-              resolve: (result) => {
-                setPermissions((items) =>
-                  items.filter((item) => item.askId !== id),
-                );
-                desktopApi.bridgeRespond({ id, result });
-              },
-            },
-          ]);
-          return;
-        }
         if (method === "elicit") {
           const parsed = elicitationSchema.safeParse(params.request);
           if (!parsed.success) {
@@ -111,14 +65,10 @@ export function DockDialogs({
     [],
   );
   useEffect(() => {
-    onOpenChange(Boolean(permissions.length || elicitation));
-  }, [permissions.length, elicitation, onOpenChange]);
+    onOpenChange(Boolean(elicitation));
+  }, [elicitation, onOpenChange]);
   return (
     <div className="pointer-events-auto">
-      <ToolPermissionModal
-        pending={permissions[0] ?? null}
-        queued={Math.max(0, permissions.length - 1)}
-      />
       <ElicitationModal
         pending={elicitation}
         onOpenUrl={(url) => {

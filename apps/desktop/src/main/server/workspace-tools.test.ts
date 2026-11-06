@@ -1,11 +1,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SET_SESSION_METADATA_DESCRIPTION } from "@catamorphic/agent-protocol";
 import {
   agentCapabilityTools,
   type ExtraToolContext,
 } from "@catamorphic/sandbox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { workPlaybook } from "./workspace-context-agent.js";
@@ -14,12 +15,39 @@ import {
   WORKSPACE_TOOL_POLICY,
 } from "./workspace-tools.js";
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 const context: ExtraToolContext = {
   projectId: "project",
   sessionId: "session",
+  stopWaiting: new AbortController().signal,
 };
 
 describe("workspace coordination tools", () => {
+  it("defers chip refresh and binds it only to the calling chat", async () => {
+    const refreshChips = vi
+      .fn<WorkspaceBridge["refreshChips"]>()
+      .mockResolvedValue(undefined);
+    const bridge = {} as WorkspaceBridge;
+    bridge.refreshChips = refreshChips;
+    const toolkit = buildWorkspaceToolkit(bridge);
+    const tool = toolkit.tools.find((entry) => entry.name === "refresh_chips");
+    if (!tool) throw new Error("Missing refresh_chips");
+    expect(tool.parameters).toEqual({});
+    expect(tool.eager).toBe(false);
+    expect(tool.readOnly).toBe(true);
+    expect(await tool.execute({}, context)).toEqual({ requested: true });
+    expect(refreshChips).toHaveBeenCalledExactlyOnceWith({
+      projectId: "project",
+      sessionId: "session",
+    });
+    await expect(
+      tool.execute({}, { ...context, sessionId: undefined }),
+    ).rejects.toThrow("no chat session");
+    expect(refreshChips).toHaveBeenCalledTimes(1);
+  });
   it("keeps the eager surface explicit, complete, and small", () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     expect(toolkit.tools.map((tool) => tool.name).sort()).toEqual(
@@ -31,9 +59,19 @@ describe("workspace coordination tools", () => {
         .map((tool) => tool.name)
         .sort(),
     ).toEqual([
+      "browser_act",
+      "browser_snapshot",
+      "open_browser",
       "open_surface",
+      "read_background_output",
       "read_tab",
+      "run_background_command",
+      "spawn_subsession",
+      "stop_background_command",
+      "stop_listening",
       "update_todo_list",
+      "wait_for_subsessions",
+      "watch_command",
       "workspace_overview",
     ]);
     expect(workPlaybook({ hasTools: true }).length).toBeLessThan(2000);
@@ -53,7 +91,11 @@ describe("workspace coordination tools", () => {
         ),
       ),
     }));
-    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(6000);
+    // Background execution and watches are core needs for every harness
+    // (ADR 0155, 0156); so are driving Work's browser and delegating to
+    // subagents (ADR 0202), with the model and effort a subagent runs on
+    // (ADR 0271).
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(14_000);
     expect(
       toolkit.tools.every(
         (tool) =>
@@ -85,6 +127,37 @@ describe("workspace coordination tools", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("tells the workspace when the person is talking with the chat by voice", async () => {
+    const asked: Array<{ session: string; voice?: boolean }> = [];
+    const toolkit = buildWorkspaceToolkit({
+      openTarget: async (_project, session, target, options) => {
+        asked.push({ session, voice: options?.voice });
+        return { key: target, opened: "focused" };
+      },
+    } as WorkspaceBridge);
+    const open = toolkit.tools.find((tool) => tool.name === "open_surface");
+    const target = { target: "https://example.com/" };
+    // Before voice ever starts, nobody is talking.
+    await open?.execute(target, context);
+    toolkit.setVoiceControl({
+      talking: (sessionId) => sessionId === "session",
+      sight: () => null,
+      stopListening: () => false,
+    });
+    await open?.execute(target, context);
+    await open?.execute(target, { ...context, sessionId: "other" });
+    await open?.execute(target, {
+      projectId: "project",
+      stopWaiting: context.stopWaiting,
+    });
+    expect(asked).toEqual([
+      { session: "session", voice: false },
+      { session: "session", voice: true },
+      { session: "other", voice: false },
+      { session: "", voice: false },
+    ]);
   });
 
   it("previews apps by default and publishes only on an explicit request", async () => {
@@ -172,6 +245,8 @@ describe("workspace coordination tools", () => {
       interruptSubsession: async () => {},
       requestAttention: async () => ({}),
       setActivity: async () => {},
+      setMetadata: async () => ({}),
+      readMetadata: async () => ({}),
     });
     const list = toolkit.tools.find(
       (tool) => tool.name === "list_project_sessions",
@@ -199,7 +274,18 @@ describe("workspace coordination tools", () => {
       },
       spawn: async (...args) => {
         calls.push(["spawn", ...args]);
-        return { delegationId: "delegation", session: { id: "child" } };
+        return {
+          delegationId: "delegation",
+          status: "running",
+          session: {
+            id: "child",
+            title: "API review",
+            agentId: "agent-small",
+            model: "opus",
+            modelEffort: "high",
+            readOnly: true,
+          },
+        };
       },
       listSubsessions: async (...args) => {
         calls.push(["list", ...args]);
@@ -217,6 +303,8 @@ describe("workspace coordination tools", () => {
         return { attentionRequired: true };
       },
       setActivity: async () => {},
+      setMetadata: async () => ({}),
+      readMetadata: async () => ({}),
     });
 
     const execute = (name: string, input: Record<string, unknown> = {}) =>
@@ -226,12 +314,31 @@ describe("workspace coordination tools", () => {
       message: "Context",
       delivery_mode: "message_only",
     });
-    await execute("spawn_subsession", {
-      task: "Review the API",
-      route_id: "reviewer",
-      agent_id: "agent-small",
-      context_mode: "fresh",
-      title: "API review",
+    // Without a mode, a message reaches the other agent at its next step
+    // (ADR 0250).
+    await execute("send_project_session_message", {
+      session_id: "parent",
+      message: "Option A or B?",
+    });
+    // The parent reads what it started: whom, on what, and how.
+    expect(
+      await execute("spawn_subsession", {
+        task: "Review the API",
+        agent: "agent-small",
+        model: "opus",
+        effort: "high",
+        read_only: true,
+        delegate: false,
+        context_mode: "fresh",
+        title: "API review",
+      }),
+    ).toMatchObject({
+      sessionId: "child",
+      status: "running",
+      agent: "agent-small",
+      model: "opus",
+      effort: "high",
+      readOnly: true,
     });
     await execute("list_project_sessions", { children_only: true });
     await execute("wait_for_subsessions", {
@@ -243,47 +350,211 @@ describe("workspace coordination tools", () => {
 
     expect(calls).toEqual([
       ["send", "project", "session", "peer", "Context", "message_only"],
+      ["send", "project", "session", "parent", "Option A or B?", "steer"],
       [
         "spawn",
         "project",
         "session",
         {
           task: "Review the API",
-          routeId: "reviewer",
           agentId: "agent-small",
+          model: "opus",
+          effort: "high",
+          readOnly: true,
+          delegate: false,
           contextMode: "fresh",
           title: "API review",
         },
       ],
       ["list", "project", "session"],
-      ["wait", "project", "session", { sessionIds: ["child"], timeoutMs: 25 }],
+      [
+        "wait",
+        "project",
+        "session",
+        {
+          sessionIds: ["child"],
+          timeoutMs: 25,
+          // The turn's own: what reaches the agent ends the wait (ADR 0264).
+          stopWaiting: context.stopWaiting,
+        },
+      ],
       ["interrupt", "project", "session", "child"],
       ["attention", "project", "session"],
     ]);
   });
 
+  it("reads and sets one key of this chat's metadata through the coordination bridge (ADR 0226)", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const tool = toolkit.tools.find(
+      (entry) => entry.name === "set_session_metadata",
+    );
+    if (!tool) throw new Error("Missing set_session_metadata");
+    // Infrequent: discovered, never on every turn's surface (ADR 0133).
+    expect(tool).toMatchObject({ eager: false, effect: "write" });
+    const calls: unknown[] = [];
+    toolkit.setSessionCoordinationBridge({
+      list: async () => [],
+      read: async () => null,
+      send: async () => ({}),
+      spawn: async () => ({}),
+      listSubsessions: async () => [],
+      waitForSubsessions: async () => [],
+      interruptSubsession: async () => {},
+      requestAttention: async () => ({}),
+      setActivity: async () => {},
+      setMetadata: async (...args) => {
+        calls.push(args);
+        return { pull_requests: [{ url: "https://x/pull/1", number: 1 }] };
+      },
+      readMetadata: async (...args) => {
+        calls.push(["read", ...args]);
+        return { note: "kept" };
+      },
+    });
+    const pullRequests = [{ url: "https://x/pull/1", number: 1 }];
+    expect(
+      await tool.execute(
+        { key: "pull_requests", value: pullRequests },
+        context,
+      ),
+    ).toEqual({ metadata: { pull_requests: pullRequests } });
+    await tool.execute({ key: "note", remove: true }, context);
+    // No value reads: an agent keeps what a list already holds.
+    expect(await tool.execute({ key: "pull_requests" }, context)).toEqual({
+      metadata: { note: "kept" },
+    });
+    // A null value is refused, never taken as a removal.
+    await expect(
+      tool.execute({ key: "pull_requests", value: null }, context),
+    ).rejects.toThrow(/remove: true/);
+    expect(calls).toEqual([
+      ["project", "session", { pull_requests: pullRequests }],
+      ["project", "session", { note: null }],
+      ["read", "project", "session"],
+    ]);
+    // One contract wherever the tool is offered.
+    expect(tool.description).toBe(SET_SESSION_METADATA_DESCRIPTION);
+    // The schema the agent sees refuses keys outside the convention.
+    const schema = z.object(
+      z.record(z.string(), z.instanceof(z.ZodType)).parse(tool.parameters),
+    );
+    expect(schema.safeParse({ key: "Pull Requests", value: 1 }).success).toBe(
+      false,
+    );
+    expect(schema.safeParse({ key: "deploy.preview", value: 1 }).success).toBe(
+      true,
+    );
+    await expect(
+      tool.execute(
+        { key: "pull_requests", value: [] },
+        { ...context, sessionId: undefined },
+      ),
+    ).rejects.toThrow("no chat session");
+  });
+
+  it("shows what was on screen as the person started saying their latest message", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const screen = toolkit.tools.find(
+      (tool) => tool.name === "screen_when_spoken",
+    );
+    expect(await screen?.execute({}, context)).toBe(
+      "The person has not said anything to this chat by voice lately.",
+    );
+    // The clock stands still: seconds_ago is exact.
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
+    const at = Date.now() - 4_000;
+    toolkit.setVoiceControl({
+      talking: () => false,
+      sight: (sessionId) =>
+        sessionId === "session"
+          ? {
+              at,
+              said: "why is this PR not merged",
+              heardAt: Date.now(),
+              projectId: "project",
+              app: Promise.resolve(null),
+              screen: Promise.resolve(null),
+              picture: Promise.resolve({
+                toPNG: () => Buffer.from("png"),
+                getSize: () => ({ width: 1600, height: 1000 }),
+              }),
+            }
+          : {
+              at,
+              said: "fix this sentence",
+              heardAt: Date.now(),
+              projectId: null,
+              app: Promise.resolve({ app: "Mail", window: "Draft" }),
+              screen: Promise.resolve(null),
+              picture: Promise.resolve(null),
+            },
+      stopListening: () => false,
+    });
+    const seen = (await screen?.execute({}, context)) as {
+      content: { type: string; text?: string; data?: string }[];
+    };
+    expect(JSON.parse(seen.content[0]?.text ?? "{}")).toEqual({
+      said: "why is this PR not merged",
+      seconds_ago: 4,
+      in: "Work",
+    });
+    expect(seen.content[1]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("png").toString("base64"),
+    });
+    // Out of Work with no leave to record the screen: names, no picture.
+    const elsewhere = (await screen?.execute(
+      {},
+      { ...context, sessionId: "other" },
+    )) as { content: { type: string; text?: string }[] };
+    expect(elsewhere.content).toHaveLength(1);
+    expect(JSON.parse(elsewhere.content[0]?.text ?? "{}")).toMatchObject({
+      in: "Mail: Draft",
+      picture: expect.stringContaining("record the screen"),
+    });
+  });
+
+  it("stops listening only in the chat the person is talking with by voice", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const stopListening = toolkit.tools.find(
+      (tool) => tool.name === "stop_listening",
+    );
+    expect(await stopListening?.execute({}, context)).toBe(
+      "Voice is not on in this chat.",
+    );
+    const stopped: string[] = [];
+    toolkit.setVoiceControl({
+      talking: (sessionId) => sessionId === "session",
+      sight: () => null,
+      stopListening: (sessionId) => {
+        stopped.push(sessionId);
+        return sessionId === "session";
+      },
+    });
+    expect(await stopListening?.execute({}, context)).toBe(
+      "Stopped listening. Voice turns off once this turn's replies are read aloud.",
+    );
+    expect(
+      await stopListening?.execute({}, { ...context, sessionId: "other" }),
+    ).toBe("Voice is not on in this chat.");
+    expect(stopped).toEqual(["session", "other"]);
+  });
+
   it("changes checkout only through explicit tools", async () => {
     const terminalDirectories: Array<string | undefined> = [];
     const toolkit = buildWorkspaceToolkit({
-      runTerminal: async (
-        _projectId,
-        _sessionId,
-        _command,
-        _terminalId,
-        _timeoutMs,
-        workingDirectory,
-      ) => {
+      startBackgroundCommand: async ({ workingDirectory }) => {
         terminalDirectories.push(workingDirectory);
         return {
+          id: "test",
           key: "terminal:test",
-          terminalId: "test",
-          output: "",
-          commandRunning: false,
+          status: "finished",
           exitCode: 0,
-          offset: 0,
+          output: "",
         };
       },
-    } as WorkspaceBridge);
+    } as Partial<WorkspaceBridge> as WorkspaceBridge);
     const checkoutContext: ExtraToolContext = {
       ...context,
       workingDirectory: "/primary",
@@ -311,8 +582,8 @@ describe("workspace coordination tools", () => {
         ?.execute({}, checkoutContext),
     ).toMatchObject({ kind: "managed", path: "/managed" });
     await toolkit.tools
-      .find((tool) => tool.name === "run_terminal")
-      ?.execute({ command: "pwd" }, checkoutContext);
+      .find((tool) => tool.name === "run_background_command")
+      ?.execute({ command: "pwd", description: "Print it" }, checkoutContext);
     expect(terminalDirectories).toEqual(["/managed"]);
     expect(
       await toolkit.tools
@@ -320,8 +591,8 @@ describe("workspace coordination tools", () => {
         ?.execute({ path: "/external" }, checkoutContext),
     ).toMatchObject({ kind: "external", path: "/external" });
     await toolkit.tools
-      .find((tool) => tool.name === "run_terminal")
-      ?.execute({ command: "pwd" }, checkoutContext);
+      .find((tool) => tool.name === "run_background_command")
+      ?.execute({ command: "pwd", description: "Print it" }, checkoutContext);
     expect(terminalDirectories).toEqual(["/managed", "/external"]);
     expect(
       await toolkit.tools
@@ -329,8 +600,8 @@ describe("workspace coordination tools", () => {
         ?.execute({ path: null }, checkoutContext),
     ).toMatchObject({ kind: "primary" });
     await toolkit.tools
-      .find((tool) => tool.name === "run_terminal")
-      ?.execute({ command: "pwd" }, checkoutContext);
+      .find((tool) => tool.name === "run_background_command")
+      ?.execute({ command: "pwd", description: "Print it" }, checkoutContext);
     expect(terminalDirectories).toEqual(["/managed", "/external", "/primary"]);
   });
 

@@ -7,27 +7,45 @@ import {
   Star,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { displayCommand, HERMES, runsHermes } from "../../shared/acp-agents.js";
+import {
+  permissionModeLabel,
+  SANDBOXING_OPTIONS,
+  sandboxingLabel,
+} from "../../shared/agent-permissions.js";
+import { VOICES, type VoiceId, voiceIdOf } from "../../shared/voice.js";
+import { EFFORT_LEVELS } from "../lib/agent-effort.js";
 import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
   type AgentCoordinationStrategy,
+  type AgentDelegationGrant,
   type AgentDelegationPolicy,
   type AgentEffort,
   type AgentHarness,
   type AgentInfo,
-  type AgentMode,
   type AgentSkillsSetting,
   type AgentsData,
   type ConnectionInfo,
   desktopApi,
+  type HarnessPermissions,
   type McpToolPolicy,
   type ProjectAgentInfo,
   type ProjectAgentsData,
+  type Sandboxing,
   type UpdateAgentInput,
 } from "../lib/desktop-api.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
+import {
+  PermissionModeFields,
+  SettingSelect,
+  samePermissions,
+} from "./agent-permission-fields.js";
 import { AgentSkillsField } from "./agent-skills-field.js";
 import { AgentToolPolicyField } from "./agent-tool-policy-field.js";
+import { ClaudeCodeInstall } from "./claude-code-install.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
+import { HarnessModelField } from "./harness-model-field.js";
 import { Modal } from "./modal.js";
 import { AnimatedHeight, ModalTab } from "./modal-tabs.js";
 import { OpenRouterModelField } from "./openrouter-model-field.js";
@@ -37,43 +55,15 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  acp: "ACP",
 };
 
 const MODEL_PLACEHOLDERS: Record<AgentHarness, string> = {
   "ai-sdk": "claude-sonnet-4-5",
   "claude-code": "claude-sonnet-4-5",
   codex: "gpt-5.3-codex",
+  acp: "",
 };
-
-const EFFORT_OPTIONS: Array<{ value: AgentEffort; label: string }> = [
-  { value: "low", label: "Low — fast, direct" },
-  { value: "medium", label: "Medium — balanced" },
-  { value: "high", label: "High — thorough" },
-  { value: "xhigh", label: "Extra high — extended reasoning" },
-  { value: "max", label: "Max — deepest reasoning" },
-];
-
-const MODE_OPTIONS: Array<{
-  value: AgentMode;
-  label: string;
-  detail: string;
-}> = [
-  {
-    value: "read-only",
-    label: "Read-only",
-    detail: "Explore and answer; no edits, no commands.",
-  },
-  {
-    value: "edit",
-    label: "Edit",
-    detail: "Limit file writes to the project folder.",
-  },
-  {
-    value: "full-access",
-    label: "Full access",
-    detail: "Run commands and edit local files freely (the local default).",
-  },
-];
 
 const COORDINATION_OPTIONS: Array<{
   value: AgentCoordinationStrategy;
@@ -268,7 +258,7 @@ function DefaultRows({
           row(
             "Project default (everyone)",
             isProjectDefault
-              ? "Committed in .catamorphic/project.json — click to clear it."
+              ? "Committed in .work/project.json. Click to clear it."
               : "Commit as the project's default for every collaborator.",
             isProjectDefault,
             () =>
@@ -297,17 +287,23 @@ function ProfileAgentBody({
   onClose: () => void;
 }) {
   const harness = agent.harness;
+  // What an ACP agent runs (ADR 0241); Hermes' own commands say the rest.
+  const command = agent.acp?.command ?? [];
+  const hermes = runsHermes(command);
   const [tab, setTab] = useState<Tab>("general");
   const [name, setName] = useState(agent.name);
   const [provider, setProvider] = useState(agent.provider ?? "anthropic");
   const [model, setModel] = useState(agent.model);
   const [effort, setEffort] = useState<AgentEffort>(agent.effort);
-  const [mode, setMode] = useState<AgentMode>(agent.mode);
+  const [sandboxing, setSandboxing] = useState<Sandboxing>(agent.sandboxing);
+  const [harnessPermissions, setHarnessPermissions] =
+    useState<HarnessPermissions>(agent.harnessPermissions);
   const [coordination, setCoordination] = useState<AgentCoordinationStrategy>(
     agent.coordination,
   );
   const [instructions, setInstructions] = useState(agent.instructions);
   const [memory, setMemory] = useState(agent.memory);
+  const [syncSessions, setSyncSessions] = useState(agent.syncSessions);
   const [auth, setAuth] = useState<AgentAuthMode>(agent.auth);
   const [apiKey, setApiKey] = useState("");
   const [clearKey, setClearKey] = useState(false);
@@ -326,6 +322,11 @@ function ProfileAgentBody({
   >([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The agent's voice (ADR 0216) is a profile pref: "" is the default
+  // voice, null untouched.
+  const { prefs } = useAppPreferences();
+  const [voice, setVoice] = useState<VoiceId | "" | null>(null);
+  const shownVoice = voice ?? prefs.agentVoices[agent.id] ?? "";
 
   useEffect(() => {
     void desktopApi
@@ -361,9 +362,15 @@ function ProfileAgentBody({
         name: name.trim() || undefined,
         model: model.trim(),
         effort,
-        mode,
+        ...(sandboxing !== agent.sandboxing ? { sandboxing } : {}),
+        ...(samePermissions(harnessPermissions, agent.harnessPermissions)
+          ? {}
+          : { harnessPermissions }),
         coordination,
         memory,
+        ...(harness === "claude-code" || harness === "codex"
+          ? { syncSessions }
+          : {}),
         instructions,
         auth: effectiveAuth,
         connections,
@@ -375,6 +382,12 @@ function ProfileAgentBody({
       if (clearKey) patch.apiKey = null;
       else if (apiKey.trim()) patch.apiKey = apiKey.trim();
       await desktopApi.agentsUpdate(agent.id, patch);
+      if (voice !== null) {
+        const { [agent.id]: _previous, ...others } = prefs.agentVoices;
+        await desktopApi.setPrefs({
+          agentVoices: voice ? { ...others, [agent.id]: voice } : others,
+        });
+      }
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -465,8 +478,40 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              {harness === "ai-sdk" && provider === "openrouter" ? (
+              {harness === "acp" ? (
+                // An ACP agent keeps its model in its own configuration.
+                <p
+                  className="text-xs text-fg-faint"
+                  data-testid="agent-acp-model"
+                >
+                  Work runs{" "}
+                  <code className="font-mono">{displayCommand(command)}</code>,
+                  on the model its own configuration names.{" "}
+                  {hermes ? (
+                    <>
+                      Run <code className="font-mono">{HERMES.model}</code> in a
+                      terminal to change it.
+                    </>
+                  ) : (
+                    "Change it in the agent itself."
+                  )}
+                </p>
+              ) : harness === "ai-sdk" && provider === "openrouter" ? (
                 <OpenRouterModelField value={model} onChange={setModel} />
+              ) : provider === (agent.provider ?? "anthropic") ? (
+                // The catalog is the saved agent's: a provider changed here
+                // and not saved yet types its model.
+                <HarnessModelField
+                  agent={agent}
+                  value={model}
+                  onChange={setModel}
+                  placeholder={MODEL_PLACEHOLDERS[harness]}
+                  hint={
+                    harness === "ai-sdk"
+                      ? "Any model id your API key can access."
+                      : "Default uses the harness default."
+                  }
+                />
               ) : (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
                   Model
@@ -485,61 +530,104 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              <label className="flex flex-col gap-1 text-xs text-fg-muted">
-                Effort
-                <select
-                  value={effort}
-                  onChange={(event) =>
-                    setEffort(event.target.value as AgentEffort)
-                  }
-                  className="field h-8 px-2 text-[13px] text-fg"
-                  data-testid="agent-effort"
-                >
-                  {EFFORT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                {harness === "codex" &&
-                  (effort === "max" || effort === "xhigh") && (
-                    <span className="text-fg-faint">
-                      Codex tops out at extra high; max runs there.
-                    </span>
-                  )}
-              </label>
-
-              {harness !== "ai-sdk" && (
+              {harness !== "acp" && (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
-                  Mode
+                  Effort
                   <select
-                    value={mode}
+                    value={effort}
                     onChange={(event) =>
-                      setMode(event.target.value as AgentMode)
+                      setEffort(event.target.value as AgentEffort)
                     }
                     className="field h-8 px-2 text-[13px] text-fg"
-                    data-testid="agent-mode"
+                    data-testid="agent-effort"
                   >
-                    {MODE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
+                    {EFFORT_LEVELS.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
                       </option>
                     ))}
                   </select>
-                  <span className="text-fg-faint">
-                    {
-                      MODE_OPTIONS.find((option) => option.value === mode)
-                        ?.detail
-                    }
-                  </span>
+                  {harness === "codex" &&
+                    (effort === "max" || effort === "xhigh") && (
+                      <span className="text-fg-faint">
+                        Codex tops out at xhigh; max runs there.
+                      </span>
+                    )}
                 </label>
               )}
+
+              <label className="flex flex-col gap-1 text-xs text-fg-muted">
+                Voice
+                <select
+                  value={shownVoice}
+                  onChange={(event) =>
+                    setVoice(
+                      event.target.value ? voiceIdOf(event.target.value) : "",
+                    )
+                  }
+                  className="field h-8 px-2 text-[13px] text-fg"
+                  data-testid="agent-voice"
+                >
+                  <option value="">
+                    Default voice (
+                    {VOICES.find((each) => each.id === prefs.voiceId)?.name})
+                  </option>
+                  {VOICES.map((each) => (
+                    <option key={each.id} value={each.id}>
+                      {each.name} ({each.description})
+                    </option>
+                  ))}
+                </select>
+                <span className="text-fg-faint">
+                  How it sounds when you talk with it by voice.
+                </span>
+              </label>
+
+              <PermissionModeFields
+                harness={harness}
+                value={harnessPermissions}
+                onChange={setHarnessPermissions}
+              />
+
+              <SettingSelect
+                label="Sandboxing"
+                options={SANDBOXING_OPTIONS}
+                value={sandboxing}
+                onChange={setSandboxing}
+                testId="agent-sandboxing"
+              />
 
               <DefaultRows
                 agentId={agent.id}
                 data={data}
                 projectId={projectId}
               />
+              {(harness === "claude-code" || harness === "codex") && (
+                <label className="flex cursor-pointer items-start justify-between gap-3 text-xs text-fg-muted">
+                  <span>
+                    <span className="block text-[12px] text-fg">
+                      Sync chats from {HARNESS_LABELS[harness]}
+                    </span>
+                    <span className="block text-[11px] text-fg-faint">
+                      Chats you start in {HARNESS_LABELS[harness]} outside Work
+                      appear in their project's chat list, and you can continue
+                      them here with this agent, one {HARNESS_LABELS[harness]}{" "}
+                      agent at a time. Only chats started after you turn this
+                      on, and they stay on this computer.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-checked={syncSessions}
+                    checked={syncSessions}
+                    onChange={(event) => setSyncSessions(event.target.checked)}
+                    className="mt-0.5 shrink-0"
+                    data-testid="agent-sync-sessions"
+                  />
+                </label>
+              )}
+              {harness === "claude-code" && <ClaudeCodeInstall />}
             </>
           )}
 
@@ -559,7 +647,7 @@ function ProfileAgentBody({
                 <span className="text-fg-faint">
                   The agent's own main prompt. It leads every session — the
                   app's playbooks follow it — like a project agent's
-                  .catamorphic/agents/&lt;slug&gt;.md persona.
+                  .work/agents/&lt;slug&gt;.md persona.
                 </span>
               </label>
 
@@ -607,8 +695,8 @@ function ProfileAgentBody({
                   <span>
                     <span className="block text-fg">Allow subsessions</span>
                     <span className="block text-[11px] text-fg-faint">
-                      This agent may delegate work only through the routes
-                      below.
+                      This agent may start the agents below, with the model and
+                      effort choices set for each.
                     </span>
                   </span>
                 </label>
@@ -633,79 +721,147 @@ function ProfileAgentBody({
                         className="field h-8 w-20 px-2 text-[13px] text-fg"
                       />
                     </label>
-                    <p className="text-[11px] text-fg-faint">
-                      Allowed agents. Onward delegation is controlled per route.
-                    </p>
                     {[
-                      { id: "same-agent", target: "self", name: "Same agent" },
+                      { agent: "self", name: "Copies of itself" },
                       ...(data?.agents ?? [])
                         .filter((candidate) => candidate.id !== agent.id)
                         .map((candidate) => ({
-                          id: `agent:${candidate.id}`,
-                          target: candidate.id,
+                          agent: candidate.id,
                           name: candidate.name,
                         })),
-                      {
-                        id: "any-agent",
-                        target: "*",
-                        name: "Any configured agent",
-                      },
+                      { agent: "*", name: "Any configured agent" },
                     ].map((choice) => {
-                      const route = delegation.routes.find(
-                        (candidate) => candidate.id === choice.id,
+                      // The first grant naming an agent decides for it.
+                      const index = delegation.agents.findIndex(
+                        (candidate) => candidate.agent === choice.agent,
                       );
+                      const grant = delegation.agents[index];
+                      const copies = choice.agent === "self";
+                      const change = (patch: Partial<AgentDelegationGrant>) =>
+                        setDelegation((current) => ({
+                          ...current,
+                          agents: current.agents.map((candidate, at) =>
+                            at === index
+                              ? { ...candidate, ...patch }
+                              : candidate,
+                          ),
+                        }));
                       return (
                         <div
-                          key={choice.id}
-                          className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5"
+                          key={choice.agent}
+                          className="flex flex-col gap-1.5 rounded-md border border-border px-2.5 py-1.5"
                         >
-                          <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-fg-muted">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(route)}
-                              onChange={(event) =>
-                                setDelegation((current) => ({
-                                  ...current,
-                                  routes: event.target.checked
-                                    ? [
-                                        ...current.routes,
-                                        {
-                                          id: choice.id,
-                                          target: choice.target,
-                                          allowFurtherDelegation: true,
-                                        },
-                                      ]
-                                    : current.routes.filter(
-                                        (candidate) =>
-                                          candidate.id !== choice.id,
-                                      ),
-                                }))
-                              }
-                            />
-                            <span className="truncate">{choice.name}</span>
-                          </label>
-                          {route ? (
-                            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-faint">
+                          <div className="flex items-center gap-2">
+                            <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-fg-muted">
                               <input
                                 type="checkbox"
-                                checked={route.allowFurtherDelegation}
+                                checked={Boolean(grant)}
                                 onChange={(event) =>
                                   setDelegation((current) => ({
                                     ...current,
-                                    routes: current.routes.map((candidate) =>
-                                      candidate.id === choice.id
-                                        ? {
-                                            ...candidate,
-                                            allowFurtherDelegation:
-                                              event.target.checked,
-                                          }
-                                        : candidate,
-                                    ),
+                                    agents: event.target.checked
+                                      ? [
+                                          ...current.agents,
+                                          {
+                                            agent: choice.agent,
+                                            model: "any",
+                                            effort: "any",
+                                            delegate: true,
+                                          },
+                                        ]
+                                      : current.agents.filter(
+                                          (candidate) =>
+                                            candidate.agent !== choice.agent,
+                                        ),
                                   }))
                                 }
                               />
-                              Can delegate
+                              <span className="truncate">{choice.name}</span>
                             </label>
+                            {grant ? (
+                              <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-faint">
+                                <input
+                                  type="checkbox"
+                                  checked={grant.delegate}
+                                  onChange={(event) =>
+                                    change({ delegate: event.target.checked })
+                                  }
+                                />
+                                Can delegate
+                              </label>
+                            ) : null}
+                          </div>
+                          {grant ? (
+                            <div className="flex gap-2 pl-5">
+                              <select
+                                aria-label={`${choice.name} model`}
+                                value={
+                                  Array.isArray(grant.model)
+                                    ? "list"
+                                    : grant.model
+                                }
+                                onChange={(event) =>
+                                  change({
+                                    model:
+                                      event.target.value === "fixed"
+                                        ? "fixed"
+                                        : event.target.value === "list" &&
+                                            Array.isArray(grant.model)
+                                          ? grant.model
+                                          : "any",
+                                  })
+                                }
+                                className="field h-7 min-w-0 flex-1 px-1.5 text-[12px] text-fg"
+                              >
+                                <option value="any">Any model</option>
+                                <option value="fixed">
+                                  {copies
+                                    ? "The parent's model"
+                                    : "Its own model"}
+                                </option>
+                                {Array.isArray(grant.model) ? (
+                                  <option value="list">
+                                    {grant.model.join(", ")}
+                                  </option>
+                                ) : null}
+                              </select>
+                              <select
+                                aria-label={`${choice.name} effort`}
+                                value={
+                                  Array.isArray(grant.effort)
+                                    ? "list"
+                                    : grant.effort
+                                }
+                                onChange={(event) =>
+                                  change({
+                                    effort:
+                                      event.target.value === "fixed" ||
+                                      event.target.value === "at-most-parent"
+                                        ? event.target.value
+                                        : event.target.value === "list" &&
+                                            Array.isArray(grant.effort)
+                                          ? grant.effort
+                                          : "any",
+                                  })
+                                }
+                                className="field h-7 min-w-0 flex-1 px-1.5 text-[12px] text-fg"
+                              >
+                                <option value="any">Any effort</option>
+                                <option value="at-most-parent">
+                                  Up to the parent's
+                                </option>
+                                <option value="fixed">
+                                  {copies
+                                    ? "The parent's effort"
+                                    : "Its own effort"}
+                                </option>
+                                {Array.isArray(grant.effort) ? (
+                                  <option value="list">
+                                    {grant.effort.join(", ")}
+                                  </option>
+                                ) : null}
+                              </select>
+                            </div>
                           ) : null}
                         </div>
                       );
@@ -752,7 +908,7 @@ function ProfileAgentBody({
                 projectId={projectId}
               />
               <AgentToolPolicyField
-                mode={mode}
+                sandboxing={sandboxing}
                 value={toolPolicies}
                 onChange={setToolPolicies}
                 connections={profileConnections}
@@ -763,7 +919,21 @@ function ProfileAgentBody({
             </>
           )}
 
-          {tab === "auth" && (
+          {tab === "auth" && harness === "acp" && (
+            <p className="text-xs text-fg-muted" data-testid="agent-acp-auth">
+              This agent signs in on its own, on this machine.{" "}
+              {hermes ? (
+                <>
+                  Run <code className="font-mono">{HERMES.setup}</code> in a
+                  terminal to change its provider or sign-in.
+                </>
+              ) : (
+                "Change its provider or sign-in in the agent itself."
+              )}
+            </p>
+          )}
+
+          {tab === "auth" && harness !== "acp" && (
             <>
               {(harness !== "ai-sdk" || provider === "openrouter") && (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
@@ -850,8 +1020,10 @@ function ProfileAgentBody({
         >
           Cancel
         </button>
-        {error ? (
-          <p className="min-w-0 flex-1 truncate text-xs text-danger">{error}</p>
+        {error || agent.credentialError ? (
+          <p role="alert" className="min-w-0 flex-1 text-xs text-danger">
+            {error ?? agent.credentialError}
+          </p>
         ) : effectiveAuth === "api-key" && !hasSavedKey && !apiKey.trim() ? (
           // The disable spans tabs; say why from any of them.
           <p className="min-w-0 flex-1 truncate text-[11px] text-fg-faint">
@@ -866,7 +1038,7 @@ function ProfileAgentBody({
 /**
  * A committed project agent is code: the modal shows what the definition
  * says, its consent state, and the default-agent actions — editing means
- * editing `.catamorphic/agents/<slug>.json` (and the `<slug>.md` persona) in the repo.
+ * editing `.work/agents/<slug>.json` (and the `<slug>.md` persona) in the repo.
  */
 function ProjectAgentBody({
   agent,
@@ -890,10 +1062,12 @@ function ProjectAgentBody({
     const result = await desktopApi.projectAgentApprove(
       agent.projectId,
       agent.slug,
+      agent.definitionHash ?? "",
     );
     setApproving(false);
     if (!result.ok) setError(result.error ?? "Approval failed.");
-    else onRefresh();
+    // Approved, or changed under review: show the definition as it is now.
+    onRefresh();
   };
 
   const fact = (label: string, value: string | null) =>
@@ -921,9 +1095,39 @@ function ProjectAgentBody({
       ) : (
         <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-inset/60 p-3">
           {fact("Harness", agent.kind)}
-          {fact("Model", agent.model ?? "harness default")}
-          {fact("Effort", agent.effort ?? "medium")}
-          {fact("Mode", agent.mode ?? "full-access")}
+          {agent.command && (
+            // Approving an ACP agent runs this on this machine (ADR 0241).
+            <div className="flex items-baseline gap-2 text-[12px]">
+              <span className="w-24 shrink-0 text-fg-faint">Runs</span>
+              <code
+                className="min-w-0 flex-1 break-all font-mono text-fg"
+                data-testid="project-agent-command"
+              >
+                {displayCommand(agent.command)}
+              </code>
+            </div>
+          )}
+          {fact(
+            "Model",
+            agent.kind === "acp"
+              ? "its own"
+              : (agent.model ?? "harness default"),
+          )}
+          {fact(
+            "Effort",
+            agent.kind === "acp" ? null : (agent.effort ?? "medium"),
+          )}
+          {fact(
+            "Permission mode",
+            permissionModeLabel({
+              harness:
+                agent.kind === "claude-code" || agent.kind === "codex"
+                  ? agent.kind
+                  : "ai-sdk",
+              permissions: agent.harnessPermissions,
+            }),
+          )}
+          {fact("Sandboxing", sandboxingLabel(agent.sandboxing ?? "publish"))}
           {fact("Concurrent work", agent.coordination ?? "shared-first")}
           {fact(
             "Memory",
@@ -931,11 +1135,15 @@ function ProjectAgentBody({
           )}
           {fact(
             "Credentials",
-            agent.credentialsSource === "secret"
-              ? `project secret ${agent.secretName ?? ""}`
-              : agent.credentialsSource === "local"
-                ? "this machine's login"
-                : "your profile credentials",
+            agent.kind === "acp"
+              ? "its own configuration and sign-in"
+              : agent.credentialsSource === "secret"
+                ? `project secret ${agent.secretName ?? ""}`
+                : agent.credentialsSource === "local"
+                  ? "this machine's login"
+                  : agent.credentialsSource === "connection"
+                    ? "a Work server's model connection"
+                    : "your profile credentials",
           )}
           {fact(
             "Connections",
@@ -946,9 +1154,9 @@ function ProjectAgentBody({
             "Delegation",
             agent.delegation
               ? agent.delegation.enabled
-                ? `${agent.delegation.maxConcurrentChildren} max, ${agent.delegation.routes.length} routes`
+                ? `${agent.delegation.maxConcurrentChildren} max, ${agent.delegation.agents.length} ${agent.delegation.agents.length === 1 ? "agent" : "agents"}`
                 : "disabled"
-              : "10 max, same agent",
+              : "10 max, copies of itself",
           )}
           {agent.promptPreview && (
             <div className="mt-1 border-t border-border pt-2">
@@ -975,7 +1183,9 @@ function ProjectAgentBody({
           <p className="min-w-0 flex-1 text-[11px] text-fg-faint">
             {agent.consent === "stale"
               ? "The definition changed since you approved it."
-              : "Needed before it runs on your credentials."}
+              : agent.kind === "acp"
+                ? "Needed before it runs its command on this machine."
+                : "Needed before it runs on your credentials."}
           </p>
         </div>
       ) : null}
@@ -991,12 +1201,11 @@ function ProjectAgentBody({
       />
 
       <p className="text-[11px] text-fg-faint">
-        This agent is defined by{" "}
-        <code>.catamorphic/agents/{agent.slug}.json</code>
+        This agent is defined by <code>.work/agents/{agent.slug}.json</code>
         {agent.promptPreview ? (
           <>
             {" "}
-            and <code>.catamorphic/agents/{agent.slug}.md</code>
+            and <code>.work/agents/{agent.slug}.md</code>
           </>
         ) : null}{" "}
         in the project — edit those files (or ask a chat to) to change it.

@@ -166,9 +166,10 @@ export interface ShellReadyProbe {
  * the transcript showed every command twice: a bare command line, then
  * the prompt+command redraw (reproduced against a real zsh PTY).
  *
- * Ready means: the first OSC 133 prompt marker arrived (shim shells,
- * exact), or — for shells without markers — output has flowed and then
- * stayed quiet for `idleMs` (the prompt is out, nothing more is coming).
+ * A prompt marker or output must arrive, then stay quiet for `idleMs`.
+ * A shim's precmd marker precedes prompt rendering and ZLE initialization;
+ * returning on that marker alone can still write into the tty's startup
+ * input queue. The same quiet-output wait also serves shells without markers.
  * The timeout keeps a pathological shell from stalling run_terminal;
  * writing late is merely cosmetic, so give up gracefully.
  */
@@ -184,12 +185,14 @@ export async function waitForShellReady(
   let lastChange = Date.now();
   while (Date.now() < deadline) {
     if (!probe.running()) return;
-    if (probe.prompts() >= 1) return;
     const length = probe.bufferLength();
     if (length !== lastLength) {
       lastLength = length;
       lastChange = Date.now();
-    } else if (length > 0 && Date.now() - lastChange >= idleMs) {
+    } else if (
+      (probe.prompts() >= 1 || length > 0) &&
+      Date.now() - lastChange >= idleMs
+    ) {
       return;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, pollMs));

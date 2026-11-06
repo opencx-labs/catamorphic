@@ -2,11 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
-import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { spawn as spawnPty } from "@lydell/node-pty";
+import { BrowserWindow, type WebContents } from "electron";
+import { z } from "zod";
+import type { TerminalCreateInput } from "../shared/terminal.js";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
-import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
+import { registerProcessOwner } from "./process-owners.js";
+import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
+import { shellBinShimDir, shellIntegration } from "./shell-integration.js";
+import { shellIpcMain as ipcMain, shellSurfaceFor } from "./shell-ipc.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { TerminalLifecycle } from "./terminal-lifecycle.js";
 
@@ -18,8 +23,8 @@ import { TerminalLifecycle } from "./terminal-lifecycle.js";
  * Two owners exist: user sessions are bound to the window that created
  * them (output streams only there; the window closing reaps them), and
  * agent sessions belong to a project (output broadcasts to every window
- * so any renderer can attach a live view; they outlive windows and die
- * with the app or by agent request).
+ * so any renderer can attach a live view; they outlive windows and live
+ * as long as their command, ADR 0223).
  *
  * Every session keeps a rolling output buffer so agents can read what a
  * terminal shows and renderers can replay history when attaching.
@@ -27,11 +32,17 @@ import { TerminalLifecycle } from "./terminal-lifecycle.js";
 
 const BUFFER_CAP = 200_000;
 
+/** How long a shell whose project moved waits for its new window. */
+const HANDOFF_MS = 30_000;
+
 interface TerminalSession {
-  pty: IPty;
+  /** A local PTY, or a shell in a remote chat's workspace (ADR 0209). */
+  pty: TerminalBackend;
   releaseSender?: () => void;
   /** User sessions stream to their window; agent sessions broadcast. */
   sender: WebContents | null;
+  /** Profile authority captured when a user shell is created. */
+  profileId?: string;
   /**
    * Rolling output, kept as chunks: appending must not copy the whole
    * cap on every PTY data event (a chatty build produces thousands of
@@ -40,7 +51,15 @@ interface TerminalSession {
    */
   chunks: string[];
   chunksLength: number;
+  /**
+   * Characters shed from the head of the buffer so far: offsets handed to
+   * agents count every character ever written, so "output since" reads
+   * stay exact however much a chatty process prints.
+   */
+  shed: number;
   running: boolean;
+  /** The shell's own exit code once it ended by itself (not killed). */
+  exitCode?: number;
   /** The shell binary's name — the idle foreground process. */
   shellName: string;
   /** A foreground command is running (chip spinners, agent waits). */
@@ -49,6 +68,11 @@ interface TerminalSession {
   projectId?: string;
   /** Set for agent-owned sessions. */
   agent?: { projectId: string; sessionId: string };
+  /**
+   * Its project moved to another window: the shell waits there to be taken
+   * over (`catamorphic:terminal-adopt`) and ends if it is not, in time.
+   */
+  transit?: ReturnType<typeof setTimeout>;
   /**
    * OSC 133 semantic-prompt state (agent sessions spawn with shell
    * integration; see shell-integration.ts). Once markers are `seen`,
@@ -105,13 +129,18 @@ export interface AgentTerminals {
    * terminal agent-controlled.
    */
   writeAny(sessionId: string, data: string): boolean;
-  /** Rolling buffer tail (most recent `maxChars`). */
+  /** Rolling buffer tail (most recent `maxChars`), or an ended one's last. */
   read(sessionId: string, maxChars?: number): string | null;
-  /** Total buffered length — baseline for "output since" reads. */
+  /** Characters written so far (absolute) — baseline for "output since" reads. */
   bufferLength(sessionId: string): number | null;
   /** Buffer content from `offset`, capped to `maxChars`. */
   readFrom(sessionId: string, offset: number, maxChars?: number): string;
   isRunning(sessionId: string): boolean;
+  /**
+   * The exit code of a shell that ended by itself (a command ran `exit`);
+   * undefined while it runs, or once its terminal was closed or killed.
+   */
+  exitCode(sessionId: string): number | undefined;
   /** A foreground command is running (vs. the shell idling). */
   isBusy(sessionId: string): boolean;
   /**
@@ -126,8 +155,11 @@ export interface AgentTerminals {
   kill(sessionId: string): boolean;
 }
 
-/** Closed-session scrollback kept for Cmd+Shift+T restores. */
-const MORGUE_CAP = 10;
+/**
+ * Ended sessions' scrollback: Cmd+Shift+T restores a user terminal with it,
+ * and a tab still open on an ended agent terminal keeps showing it.
+ */
+const MORGUE_CAP = 20;
 
 export function registerTerminalSupport(
   state: ServerState,
@@ -139,10 +171,21 @@ export function registerTerminalSupport(
   agentEnv?: (
     projectId: string,
   ) => Record<string, string> | Promise<Record<string, string>>,
+  /** Whether `sender`'s window is the one `projectId` lives in now. */
+  ownsProject?: (projectId: string, sender: WebContents) => boolean,
+  ipcPolicy?: {
+    canAccessProject: (projectId: string, sender: WebContents) => boolean;
+    profileFor: (sender: WebContents) => string;
+  },
 ): {
   dispose(): Promise<void>;
   hasActiveWork(): boolean;
   agentTerminals: AgentTerminals;
+  /**
+   * `projectId` left `from` for a window of its own: its shells there
+   * wait to be taken over, and end if nothing does within a while.
+   */
+  handOff(projectId: string, from: WebContents): void;
 } {
   const sessions = new Map<string, TerminalSession>();
   const lifecycle = new TerminalLifecycle();
@@ -158,9 +201,11 @@ export function registerTerminalSupport(
     ) {
       const head = session.chunks.shift();
       session.chunksLength -= head?.length ?? 0;
+      session.shed += head?.length ?? 0;
     }
     const only = session.chunks[0];
     if (session.chunks.length === 1 && only && only.length > BUFFER_CAP) {
+      session.shed += only.length - BUFFER_CAP;
       session.chunks[0] = only.slice(-BUFFER_CAP);
       session.chunksLength = session.chunks[0].length;
     }
@@ -176,14 +221,29 @@ export function registerTerminalSupport(
     return session.chunks[0] ?? "";
   };
 
-  // When a user session ends (shell exit, tab close), its buffer moves
-  // here so a reopened tab can replay the scrollback above its fresh
-  // shell. Insertion-ordered; oldest entries fall off past the cap.
-  const morgue = new Map<string, string>();
+  // When a session ends (shell exit, tab close, its command over), its
+  // buffer moves here: a reopened user tab replays the scrollback above
+  // its fresh shell, and a view of an ended agent terminal (a tab that
+  // remounts, or mounted late) still shows what it printed.
+  // Insertion-ordered; oldest entries fall off past the cap.
+  const morgue = new Map<
+    string,
+    {
+      buffer: string;
+      sender: WebContents | null;
+      projectId?: string;
+      profileId?: string;
+    }
+  >();
   const bury = (sessionId: string, session: TerminalSession) => {
-    if (session.agent || session.chunksLength === 0) return;
+    if (session.chunksLength === 0) return;
     morgue.delete(sessionId);
-    morgue.set(sessionId, bufferText(session));
+    morgue.set(sessionId, {
+      buffer: bufferText(session),
+      sender: session.sender,
+      projectId: session.projectId,
+      profileId: session.profileId,
+    });
     while (morgue.size > MORGUE_CAP) {
       const oldest = morgue.keys().next().value;
       if (oldest === undefined) break;
@@ -191,9 +251,21 @@ export function registerTerminalSupport(
     }
   };
 
-  const broadcast = (channel: string, payload: unknown) => {
+  const broadcast = (
+    projectId: string | undefined,
+    channel: string,
+    payload: unknown,
+  ) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) window.webContents.send(channel, payload);
+      if (
+        !window.isDestroyed() &&
+        // Auxiliary Work documents (including voice's profileless audio
+        // page) are trusted shells, but never terminal subscribers.
+        shellSurfaceFor(window.webContents) === "workspace" &&
+        projectId &&
+        ipcPolicy?.canAccessProject(projectId, window.webContents)
+      )
+        window.webContents.send(channel, payload);
     }
   };
 
@@ -203,51 +275,145 @@ export function registerTerminalSupport(
     payload: unknown,
   ) => {
     if (session.sender) {
-      if (!session.sender.isDestroyed()) session.sender.send(channel, payload);
+      if (
+        !session.sender.isDestroyed() &&
+        session.profileId === ipcPolicy?.profileFor(session.sender)
+      )
+        session.sender.send(channel, payload);
     } else {
-      broadcast(channel, payload);
+      broadcast(session.projectId, channel, payload);
     }
+  };
+
+  /**
+   * Every way a session ends says so here (ADR 0223): no command runs in a
+   * shell that is gone, so its chip stops spinning first, then its views
+   * hear that it ended.
+   */
+  const announceEnd = (
+    sessionId: string,
+    session: TerminalSession,
+    exit: { exitCode: number; message?: string },
+  ) => {
+    if (session.busy) {
+      session.busy = false;
+      emit(session, "catamorphic:terminal-busy", { sessionId, busy: false });
+    }
+    emit(session, "catamorphic:terminal-exit", { sessionId, ...exit });
+  };
+
+  /**
+   * End a session for good: closed, killed, its window, its chat archived,
+   * or its command over. The pty exit callback skips deleted sessions, so
+   * a shell still running is announced here; one that exited by itself
+   * was announced then.
+   */
+  const end = (sessionId: string, session: TerminalSession) => {
+    clearTimeout(session.transit);
+    session.transit = undefined;
+    bury(sessionId, session);
+    sessions.delete(sessionId);
+    session.releaseSender?.();
+    if (!session.running) return;
+    session.pty.kill();
+    announceEnd(sessionId, session, { exitCode: 0 });
   };
 
   const reapFor = (sender: WebContents) => {
     for (const [id, session] of sessions) {
-      if (session.sender === sender) {
-        sessions.delete(id);
-        session.releaseSender?.();
-        session.pty.kill();
-      }
+      if (session.sender === sender) end(id, session);
     }
   };
 
-  const spawnSession = async (input: {
-    projectId?: string;
-    workingDirectory?: string;
+  /**
+   * A terminal in a remote chat's workspace (ADR 0209): the shell runs
+   * there, so it has no local folder or shell integration.
+   */
+  const openRemoteSession = async (input: {
+    projectId: string;
+    chatSessionId: string;
     cols?: number;
     rows?: number;
-    sender: WebContents | null;
-    agent?: { projectId: string; sessionId: string };
-  }): Promise<{ sessionId: string; cwd: string }> => {
+    sender: WebContents;
+  }): Promise<TerminalBackend> => {
+    const request = state.current?.remoteTerminalRequest({
+      projectId: input.projectId,
+      sessionId: input.chatSessionId,
+    });
+    if (!request)
+      throw new Error("This project has no server to open a terminal on");
+    if (lifecycle.disposed)
+      throw new Error("Terminal support is shutting down");
+    return openRemoteTerminal({
+      request,
+      cols: input.cols ?? 80,
+      rows: input.rows ?? 24,
+    }).catch((error: unknown) => {
+      // The tab writes the reason: a plain Error crosses IPC as its
+      // words alone, without a class name in front.
+      throw new Error(error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  const spawnSession = async (
+    input: TerminalCreateInput & {
+      workingDirectory?: string;
+      sender: WebContents | null;
+      ownerProfileId?: string;
+      agent?: { projectId: string; sessionId: string };
+    },
+  ): Promise<{ sessionId: string; cwd: string }> => {
+    if (input.chat?.remote) {
+      if (!input.projectId || !input.sender)
+        throw new Error("A remote terminal belongs to a project's window");
+      const backend = await openRemoteSession({
+        projectId: input.projectId,
+        chatSessionId: input.chat.sessionId,
+        cols: input.cols,
+        rows: input.rows,
+        sender: input.sender,
+      });
+      // No project: this desktop's terminal triggers are about its own
+      // shells, not ones on the server.
+      return {
+        sessionId: track({
+          pty: backend,
+          shellName: "",
+          sender: input.sender,
+          ownerProfileId: input.ownerProfileId,
+        }),
+        cwd: "",
+      };
+    }
     const rootPath = input.projectId
       ? await state.current?.projectRoots.get(input.projectId)
       : null;
+    // Resolve the assignment when opening, never a renderer-supplied path or
+    // a cached copy. A missing checkout must not silently open the project root.
+    const chatDirectory = input.chat
+      ? await state.current?.sessionCheckouts.resolve({
+          projectId: input.projectId ?? "",
+          sessionId: input.chat.sessionId,
+        })
+      : undefined;
+    if (input.chat && !chatDirectory)
+      throw new Error("This chat's working folder is unavailable.");
     const requestedDirectory = input.workingDirectory
       ? await fs.access(input.workingDirectory).then(
           () => input.workingDirectory,
           () => undefined,
         )
       : undefined;
-    const cwd = requestedDirectory ?? rootPath ?? os.homedir();
+    const cwd = chatDirectory ?? requestedDirectory ?? rootPath ?? os.homedir();
     const shell = defaultShell();
     // Agent terminals spawn with OSC 133 shell integration for exact
     // busy/exit tracking; user terminals stay exactly as the user's
     // dotfiles configure them (their sessions fall back to the
     // foreground-process heuristic when an agent borrows one).
-    const integrationEnv = input.agent
-      ? await shellIntegrationEnv(shell)
-      : null;
+    const integration = input.agent ? await shellIntegration(shell) : null;
     // The `open` shim (URLs land as in-app tabs) rides the same
-    // agent-only integration: the zsh hooks put CATAMORPHIC_BIN first on
-    // PATH after the user's profiles ran.
+    // agent-only integration: the zsh and bash hooks put CATAMORPHIC_BIN
+    // first on PATH after the user's profiles ran.
     const shimBin = input.agent ? await shellBinShimDir() : null;
     const agentExtraEnv = input.agent
       ? ((await agentEnv?.(input.agent.projectId)) ?? {})
@@ -258,7 +424,9 @@ export function registerTerminalSupport(
       shell,
       // A login shell, like Terminal.app — the user's PATH and prompt
       // come from their profile, not from how Electron was launched.
-      process.platform === "win32" ? [] : ["-l"],
+      // An integrated shell starts as its shim says (it reads the same
+      // profile files).
+      integration?.args ?? (process.platform === "win32" ? [] : ["-l"]),
       {
         name: "xterm-256color",
         cols: input.cols ?? 80,
@@ -268,23 +436,48 @@ export function registerTerminalSupport(
           ...process.env,
           TERM: "xterm-256color",
           COLORTERM: "truecolor",
-          ...integrationEnv,
+          ...integration?.env,
           ...(shimBin ? { CATAMORPHIC_BIN: shimBin } : {}),
           ...agentExtraEnv,
         },
       },
     );
+    return {
+      sessionId: track({
+        pty,
+        shellName: path.basename(shell),
+        projectId: input.projectId ?? input.agent?.projectId,
+        agent: input.agent,
+        sender: input.sender,
+        ownerProfileId: input.ownerProfileId,
+      }),
+      cwd,
+    };
+  };
+
+  /** Follow a started terminal: buffer, markers, exit, its window. */
+  const track = (input: {
+    pty: TerminalBackend;
+    shellName: string;
+    projectId?: string;
+    agent?: { projectId: string; sessionId: string };
+    sender: WebContents | null;
+    ownerProfileId?: string;
+  }): string => {
+    const { pty } = input;
     lifecycle.track(pty);
     const sessionId = crypto.randomUUID();
     const session: TerminalSession = {
       pty,
       sender: input.sender,
+      profileId: input.ownerProfileId,
       chunks: [],
       chunksLength: 0,
+      shed: 0,
       running: true,
-      shellName: path.basename(shell),
+      shellName: input.shellName,
       busy: false,
-      projectId: input.projectId ?? input.agent?.projectId,
+      projectId: input.projectId,
       agent: input.agent,
       integration: {
         seen: false,
@@ -296,6 +489,18 @@ export function registerTerminalSupport(
       },
     };
     sessions.set(sessionId, session);
+    // Resources credits the shell and what runs in it (ADR 0266): an
+    // agent's terminal to its chat.
+    const unregister = registerProcessOwner(
+      pty.pid,
+      input.agent
+        ? {
+            kind: "chat",
+            sessionId: input.agent.sessionId,
+            projectId: input.agent.projectId,
+          }
+        : { kind: "terminal", terminalId: sessionId, title: input.shellName },
+    );
 
     pty.onData((data) => {
       appendBuffer(session, data);
@@ -321,72 +526,161 @@ export function registerTerminalSupport(
       });
       emit(session, "catamorphic:terminal-data", { sessionId, data });
     });
-    pty.onExit(({ exitCode }) => {
+    pty.onExit(({ exitCode, message }) => {
+      unregister();
       session.running = false;
+      session.exitCode = exitCode;
       session.releaseSender?.();
       if (!sessions.has(sessionId)) return;
-      emit(session, "catamorphic:terminal-exit", { sessionId, exitCode });
-      // Agent sessions stay readable (buffer) until explicitly killed or
-      // the app quits; user sessions are done once their tab reacts —
-      // their scrollback moves to the morgue for Cmd+Shift+T.
+      announceEnd(sessionId, session, {
+        exitCode,
+        ...(message ? { message } : {}),
+      });
+      // An agent session stays until its background command reads the
+      // exit code and ends it; user sessions are done once their tab
+      // reacts — their scrollback moves to the morgue for Cmd+Shift+T.
       if (!session.agent) {
         bury(sessionId, session);
         sessions.delete(sessionId);
       }
     });
-    if (input.sender) {
-      // A closed window can't kill its tabs' sessions itself.
-      const sender = input.sender;
-      const onDestroyed = () => reapFor(sender);
-      sender.once("destroyed", onDestroyed);
-      session.releaseSender = () => {
-        sender.removeListener("destroyed", onDestroyed);
-        session.releaseSender = undefined;
-      };
-    }
-    return { sessionId, cwd };
+    if (input.sender) streamTo(session, input.sender);
+    return sessionId;
+  };
+
+  /** A user session streams to its window, and ends should it close. */
+  const streamTo = (session: TerminalSession, sender: WebContents) => {
+    session.releaseSender?.();
+    session.sender = sender;
+    // A closed window can't kill its tabs' sessions itself.
+    const onDestroyed = () => reapFor(sender);
+    sender.once("destroyed", onDestroyed);
+    session.releaseSender = () => {
+      sender.removeListener("destroyed", onDestroyed);
+      session.releaseSender = undefined;
+    };
   };
 
   ipcMain.handle("catamorphic:terminal-ghostty-appearance", () =>
     readGhosttyAppearance(),
   );
 
-  ipcMain.handle(
-    "catamorphic:terminal-create",
-    (event, input: { projectId?: string; cols?: number; rows?: number }) =>
-      spawnSession({ ...input, sender: event.sender }),
-  );
+  const sessionIdInput = z.string().min(1).max(256);
+  const dimensionInput = z.number().int().min(1).max(1000);
+  const createInput = z.object({
+    projectId: z.string().min(1).max(256).optional(),
+    cols: dimensionInput.optional(),
+    rows: dimensionInput.optional(),
+    chat: z
+      .object({ sessionId: z.string().min(1).max(256), remote: z.boolean() })
+      .optional(),
+  });
+  const allowed = (
+    sender: WebContents,
+    session: {
+      sender: WebContents | null;
+      projectId?: string;
+      profileId?: string;
+    },
+  ) => {
+    if (!ipcPolicy) return false;
+    if (
+      session.profileId !== undefined &&
+      session.profileId !== ipcPolicy.profileFor(sender)
+    )
+      return false;
+    if (session.sender !== null) return session.sender === sender;
+    return (
+      !!session.projectId &&
+      ipcPolicy.canAccessProject(session.projectId, sender)
+    );
+  };
+  const ownedSession = (sender: WebContents, raw: unknown) => {
+    const session = sessions.get(sessionIdInput.parse(raw));
+    if (session && !allowed(sender, session))
+      throw new Error("This terminal belongs to another Work window.");
+    return session;
+  };
+  ipcMain.handle("catamorphic:terminal-create", (event, raw: unknown) => {
+    const input: TerminalCreateInput = createInput.parse(raw);
+    if (
+      !ipcPolicy ||
+      (input.projectId &&
+        !ipcPolicy.canAccessProject(input.projectId, event.sender))
+    )
+      throw new Error("This project belongs to another profile.");
+    return spawnSession({
+      ownerProfileId: ipcPolicy.profileFor(event.sender),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.cols ? { cols: input.cols } : {}),
+      ...(input.rows ? { rows: input.rows } : {}),
+      ...(typeof input.chat?.sessionId === "string"
+        ? {
+            chat: {
+              sessionId: input.chat.sessionId,
+              remote: input.chat.remote === true,
+            },
+          }
+        : {}),
+      sender: event.sender,
+    });
+  });
 
   ipcMain.handle(
     "catamorphic:terminal-write",
-    (_event, sessionId: string, data: string) => {
-      const session = sessions.get(sessionId);
+    (event, sessionId: unknown, raw: unknown) => {
+      const data = z.string().max(1_000_000).parse(raw);
+      const session = ownedSession(event.sender, sessionId);
       if (session?.running) session.pty.write(data);
     },
   );
 
   ipcMain.handle(
     "catamorphic:terminal-resize",
-    (_event, sessionId: string, cols: number, rows: number) => {
-      const session = sessions.get(sessionId);
+    (event, sessionId: unknown, rawCols: unknown, rawRows: unknown) => {
+      const cols = dimensionInput.parse(rawCols);
+      const rows = dimensionInput.parse(rawRows);
+      const session = ownedSession(event.sender, sessionId);
       if (session?.running && cols > 0 && rows > 0) {
         session.pty.resize(cols, rows);
       }
     },
   );
 
-  ipcMain.handle("catamorphic:terminal-kill", (_event, sessionId: string) => {
-    const session = sessions.get(sessionId);
-    if (!session) return;
-    bury(sessionId, session);
-    sessions.delete(sessionId);
-    session.releaseSender?.();
-    if (session.running) session.pty.kill();
-    // The pty exit callback skips deleted sessions — announce the death
-    // ourselves so a kill triggered by a live tab (Cmd+D) still closes
-    // it. Unmount-triggered kills unsubscribed already; this is a no-op
-    // for them.
-    emit(session, "catamorphic:terminal-exit", { sessionId, exitCode: 0 });
+  /**
+   * A project moving to a window of its own takes its shells with it: the
+   * new window's tab takes over a running one (renderer/lib/project-move.ts)
+   * and gets what it printed so far. Only a shell handed off with its
+   * project, and only by the window that project lives in now.
+   */
+  ipcMain.handle(
+    "catamorphic:terminal-adopt",
+    (event, sessionId: unknown, projectId: unknown) => {
+      if (typeof sessionId !== "string" || typeof projectId !== "string")
+        return null;
+      const session = sessions.get(sessionId);
+      if (
+        !session?.running ||
+        !session.transit ||
+        session.projectId !== projectId ||
+        !ipcPolicy?.canAccessProject(projectId, event.sender) ||
+        session.profileId !== ipcPolicy.profileFor(event.sender) ||
+        !ownsProject?.(projectId, event.sender)
+      )
+        return null;
+      clearTimeout(session.transit);
+      session.transit = undefined;
+      streamTo(session, event.sender);
+      return { buffer: bufferText(session) };
+    },
+  );
+
+  ipcMain.handle("catamorphic:terminal-kill", (event, raw: unknown) => {
+    // A kill from a live tab (Cmd+D) closes it through the exit event.
+    // Unmount-triggered kills unsubscribed already; it is a no-op for them.
+    const sessionId = sessionIdInput.parse(raw);
+    const session = ownedSession(event.sender, sessionId);
+    if (session) end(sessionId, session);
   });
 
   /**
@@ -396,17 +690,26 @@ export function registerTerminalSupport(
    */
   ipcMain.handle(
     "catamorphic:terminal-restore-buffer",
-    (_event, sessionId: string) => {
-      const buffer = morgue.get(sessionId);
-      return buffer !== undefined ? { buffer } : null;
+    (event, raw: unknown) => {
+      const record = morgue.get(sessionIdInput.parse(raw));
+      return record && allowed(event.sender, record)
+        ? { buffer: record.buffer }
+        : null;
     },
   );
 
-  /** Replay history when a renderer attaches to a live (agent) session. */
-  ipcMain.handle("catamorphic:terminal-buffer", (_event, sessionId: string) => {
-    const session = sessions.get(sessionId);
-    return session
-      ? { buffer: bufferText(session), running: session.running }
+  /**
+   * Replay history when a renderer attaches to an agent session: a live
+   * one, or one that ended (its view keeps the final output).
+   */
+  ipcMain.handle("catamorphic:terminal-buffer", (event, raw: unknown) => {
+    const sessionId = sessionIdInput.parse(raw);
+    const session = ownedSession(event.sender, sessionId);
+    if (session)
+      return { buffer: bufferText(session), running: session.running };
+    const record = morgue.get(sessionId);
+    return record && allowed(event.sender, record)
+      ? { buffer: record.buffer, running: false }
       : null;
   });
 
@@ -473,22 +776,27 @@ export function registerTerminalSupport(
     },
     read: (sessionId, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
-      return session ? bufferText(session).slice(-maxChars) : null;
+      // An ended terminal's tab still shows its last output: so does this.
+      const text = session
+        ? bufferText(session)
+        : morgue.get(sessionId)?.buffer;
+      return text === undefined ? null : text.slice(-maxChars);
     },
     bufferLength: (sessionId) => {
       const session = sessions.get(sessionId);
-      return session ? session.chunksLength : null;
+      return session ? session.shed + session.chunksLength : null;
     },
     readFrom: (sessionId, offset, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
       if (!session) return "";
       const text = bufferText(session);
-      // The rolling buffer may have shed its head since the offset was
-      // taken; clamp into range, newest content wins.
-      const start = Math.max(0, Math.min(offset, text.length));
+      // Offsets are absolute; output shed since the offset was taken is
+      // gone, so reading resumes at the oldest retained character.
+      const start = Math.max(0, Math.min(offset - session.shed, text.length));
       return text.slice(start).slice(-maxChars);
     },
     isRunning: (sessionId) => sessions.get(sessionId)?.running ?? false,
+    exitCode: (sessionId) => sessions.get(sessionId)?.exitCode,
     isBusy: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session) return false;
@@ -523,29 +831,33 @@ export function registerTerminalSupport(
           session.agent?.projectId === projectId &&
           owners.has(session.agent.sessionId),
       );
-      for (const [sessionId, session] of matches) {
-        sessions.delete(sessionId);
-        if (session.running) session.pty.kill();
-        broadcast("catamorphic:terminal-exit", { sessionId, exitCode: 0 });
-      }
+      for (const [sessionId, session] of matches) end(sessionId, session);
       return matches.length;
     },
     kill: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session?.agent) return false;
-      sessions.delete(sessionId);
-      if (session.running) session.pty.kill();
-      broadcast("catamorphic:terminal-exit", { sessionId, exitCode: 0 });
+      end(sessionId, session);
       return true;
     },
   };
 
   return {
-    hasActiveWork: () =>
-      [...sessions.values()].some(
-        (session) =>
-          session.running && (Boolean(session.agent) || computeBusy(session)),
-      ),
+    // Work is a command running in a terminal, not a shell idling there.
+    hasActiveWork: () => [...sessions.values()].some(computeBusy),
+    handOff(projectId, from) {
+      for (const [sessionId, session] of sessions) {
+        if (
+          session.agent ||
+          !session.running ||
+          session.projectId !== projectId ||
+          session.sender !== from
+        )
+          continue;
+        clearTimeout(session.transit);
+        session.transit = setTimeout(() => end(sessionId, session), HANDOFF_MS);
+      }
+    },
     dispose() {
       clearInterval(busyPoll);
       for (const session of sessions.values()) session.releaseSender?.();

@@ -5,8 +5,6 @@ import { prettyCondition } from "../display-utils.js";
 export function BranchNode({ data }: NodeProps) {
   const node = data as unknown as WorkflowNode & { depth?: number };
   const nestLevel = Math.min(node.depth ?? 0, 3);
-
-  const borderOpacity = 0.3 + nestLevel * 0.12;
   const isElse = !node.condition;
   const branchType =
     (node.metadata?.branchType as string) ?? (isElse ? "else" : "if");
@@ -17,10 +15,8 @@ export function BranchNode({ data }: NodeProps) {
       style={{
         width: "100%",
         height: "100%",
-        borderColor: isElse
-          ? `rgba(161, 161, 170, ${borderOpacity})`
-          : `rgba(168, 85, 247, ${borderOpacity})`,
       }}
+      data-depth={nestLevel}
     >
       <Handle type="target" position={Position.Top} />
       <div className="catamorphic-branch-header">

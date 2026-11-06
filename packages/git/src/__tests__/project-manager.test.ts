@@ -30,21 +30,18 @@ describe("ProjectManager", () => {
     });
 
     const files = await repo.listFiles();
-    expect(files).toContain(".catamorphic/project.json");
+    expect(files).toContain(".work/project.json");
     // No eager workspace scaffold: the workflow workspace arrives on demand.
     expect(files).not.toContain("package.json");
     expect(files).not.toContain("contracts/package.json");
     expect(files).not.toContain("workflows/package.json");
 
-    const manifest = JSON.parse(
-      await repo.readFile(".catamorphic/project.json"),
-    );
+    const manifest = JSON.parse(await repo.readFile(".work/project.json"));
     expect(manifest.name).toBe("test-project");
-    expect(manifest.defaultEnvironment).toBe("local");
+    expect(manifest.defaultEnvironment).toBe("default");
     expect(manifest.environments).toEqual({
-      local: {
-        binding: "local",
-        description: "Run on this machine",
+      default: {
+        description: "Run where this host places work",
         workloads: ["agent", "workflow"],
       },
     });
@@ -114,7 +111,7 @@ describe("ProjectManager", () => {
 
     const files = await repo.listFiles();
     expect(files).toContain("notes.md");
-    expect(files).not.toContain(".catamorphic/project.json");
+    expect(files).not.toContain(".work/project.json");
     expect(await repo.readFile("notes.md")).toBe("# Notes\n");
 
     await repo.dispose();
@@ -140,7 +137,7 @@ describe("ProjectManager", () => {
 
     const opened = await manager.open(TENANT, PROJECT);
     const files = await opened.listFiles();
-    expect(files).toContain(".catamorphic/project.json");
+    expect(files).toContain(".work/project.json");
 
     await opened.dispose();
   });

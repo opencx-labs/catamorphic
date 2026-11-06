@@ -1,3 +1,9 @@
+export { microsandboxEgressPolicy } from "./egress-policy.js";
+export {
+  cachedImageBuilder,
+  dockerImageBuilder,
+  type ImageBuilder,
+} from "./image-builder.js";
 export {
   type MicrosandboxProviderConfig,
   MicrosandboxSandboxProvider,
@@ -6,3 +12,4 @@ export {
   type MsbStdioTransportOptions,
   msbStdioRuntimeProvider,
 } from "./stdio-runtime-provider.js";
+export { type MicrosandboxSupport, microsandboxSupport } from "./support.js";

@@ -1,28 +1,49 @@
+import { sessionPullRequests } from "@catamorphic/agent-protocol";
 import {
+  type AgentAttachment,
   type AgentChatAttachment,
-  type AgentChatTextAttachment,
+  type AgentTextAttachment,
+  ATTACHMENT_MARKER,
+  type InputSource,
+  type Item,
+  type JsonObject,
   messageWithAttachmentNames,
+  QUESTIONS_DISMISSED_MESSAGE,
+  type RuntimeRequestResponse,
+  type SessionState,
+  type UserMessageItem,
   useAcknowledgeAgentSessionAttention,
   useAgentCatalog,
   useAgentChat,
-  useAnswerAgentQuestion,
   useEnvironments,
+  useSetAgentSessionMetadata,
   useWatchers,
 } from "@catamorphic/react";
 import { AgentEnvironmentControl } from "@catamorphic/ui";
+import { PROJECT_APPS_DIR } from "@catamorphic/workflow/project-layout";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Archive,
   ArrowUp,
   Bot,
+  Box,
+  CircleDot,
   Columns2,
+  Cpu,
+  Gauge,
   Ghost,
-  Globe,
+  GitFork,
+  Hourglass,
+  Laptop,
   LoaderCircle,
   Maximize2,
   Minus,
   Paperclip,
   PictureInPicture2,
-  Radio,
+  Server,
+  ShieldCheck,
+  Sparkles,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -31,73 +52,133 @@ import {
   type KeyboardEvent,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import type { AgentCommandsResult } from "../../shared/agent-commands.js";
-import type {
-  ChatDockProps,
-  ChatSurface,
-  McpAppRef,
-} from "../../shared/chat.js";
-import { modifiersForMode } from "../../shared/open-mode.js";
+import { normalizePrefs } from "../../shared/app-prefs.js";
+import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
+import type { ChatDockProps, McpAppRef } from "../../shared/chat.js";
+import {
+  modifiersForMode,
+  type OpenMode,
+  type OpenModifiers,
+} from "../../shared/open-mode.js";
+import { paletteCountsVisit } from "../../shared/palette.js";
+import { rosterAgentId } from "../../shared/voice.js";
+import {
+  defaultModelLabel,
+  modelId,
+  sameModel,
+  useAgentDefaultModel,
+} from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
+import { agentPermissionView } from "../lib/agent-permissions.js";
+import {
+  appIsMovingFocus,
+  moveFocusAsApp,
+  onPagePress,
+} from "../lib/app-focus.js";
+import { chipBoard } from "../lib/chip-board.js";
+import {
+  type Chip,
+  chipKind,
+  isAttachedChipId,
+  workChips,
+} from "../lib/chips.js";
+import { CLOSING_MS, useClosingItems } from "../lib/closing-items.js";
+import { normalizeCommandQuery } from "../lib/command-score.js";
+import {
+  type ChatCommand,
+  type ComposerMenuRow,
+  firstPickable,
+  NO_MENU_ROWS,
+  skillMention,
+  stepPickable,
+  useMentionRows,
+  useSlashRows,
+} from "../lib/composer-menu-rows.js";
+import {
+  filesFrom,
+  isComposerTransfer,
+  readComposerPaste,
+  tabPillFromDrag,
+} from "../lib/composer-paste";
+import {
+  type ComposerTrigger,
+  sameTrigger,
+  triggerAtCaret,
+  triggerRange,
+} from "../lib/composer-trigger.js";
 import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
-  type SessionCheckoutInfo,
 } from "../lib/desktop-api";
 import { focusMovedByPerson, pointerLeft } from "../lib/dock-attention.js";
+import { readEditorSelection } from "../lib/editor-selection";
 import {
-  readEditorSelection,
-  selectionFromClipboard,
-} from "../lib/editor-selection";
-import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
-import {
-  matchSlashEntries,
-  resolveSlashMessage,
-  type SlashEntry,
-  slashEntries,
-} from "../lib/slash-commands";
-import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
-import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+  formatBinding,
+  matchesBinding,
+  useKeybindings,
+} from "../lib/keybindings.js";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
+import { usePullRequestStatuses } from "../lib/pr-status.js";
+import { ipcErrorText } from "../lib/remote-workspace.js";
+import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
+import { parseSkillInvocation } from "../lib/skill-entries.js";
+import { selectionName, textPill } from "../lib/text-pills";
+import { ThemeBackdrop } from "../lib/theme.js";
+import { untrustedHost, useTrustedHosts } from "../lib/trusted-hosts.js";
+import { useBackgroundCommands } from "../lib/use-background-commands";
+import { useChips } from "../lib/use-chips.js";
+import { useComposerDraft } from "../lib/use-composer-draft.js";
+import { MAX_ATTACHMENTS, useComposerFiles } from "../lib/use-composer-files";
+import { useQueueMessages } from "../lib/use-queue-messages.js";
+import { useSessionCheckout } from "../lib/use-session-checkout.js";
+import { useVoiceReading } from "../lib/use-voice-reading.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
+import { windowImage } from "../lib/window-images.js";
 import type { ChatMode } from "../lib/workspace-types.js";
+import { isOpenAction } from "../sources/run.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
-import { ChatDeliveryRecovery } from "./catamorphic/agent-chat.js";
 import {
-  attachmentsFromMetadata,
+  ActivityText,
+  transitionPlaying,
+} from "./catamorphic/activity-text.js";
+import { ApprovalCard } from "./catamorphic/approval-card.js";
+import { stepToolName } from "./catamorphic/chat-steps.js";
+import {
+  answerSentHere,
+  type ChatMessageNavigation,
   ChatTimeline,
-  QUESTIONS_DISMISSED_MESSAGE,
-  toTimeline,
+  type ChatTimelineProps,
 } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
-import { ChatGlyph } from "./chat-icon";
-import { SurfacesRail } from "./chat-surface-rail.js";
+import { ChatFolder } from "./chat-folder.js";
+import { ChipRail, type ChipRailHandle } from "./chip-rail.js";
+import { ClosingCollapsible } from "./closing-collapsible.js";
+import { ContextPill, PILL_SURFACE } from "./context-pill";
 import { FilePreviewProjectContext } from "./file-preview";
+import { HarnessIcon } from "./harness-icon.js";
 import { renderResponseLink } from "./response-link";
-import { SlashMenu } from "./slash-menu";
 
 export type {
   ChatDockEntry,
   ChatDockProps,
   ChatMode,
-  ChatSurface,
   McpAppRef,
 } from "../../shared/chat.js";
 
-import {
-  type ComposerAttachment,
-  ComposerInput,
-  type ComposerInputHandle,
-} from "./composer-input";
-import { ContextMeter, latestReportedModel } from "./context-meter.js";
+import { currentWait } from "../lib/chat-activity.js";
+import { chatActivity, firstWaiting } from "./chat-signals.js";
+import { ComposerInput, type ComposerInputHandle } from "./composer-input";
+import { ComposerMenu } from "./composer-menu.js";
 import { EnvironmentConnections } from "./environment-connections.js";
+import { LinkTrustDialog } from "./link-trust-dialog.js";
 import { Modal } from "./modal.js";
 import { ResourceLinkBoundary } from "./open-resource-button.js";
 import { PendingButton } from "./pending-button.js";
@@ -105,9 +186,17 @@ import {
   ProjectAuthorityProvider,
   useRemoteAuthority,
 } from "./project-authority-provider.js";
+import { RemoteImage } from "./remote-image.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
+import { latestReportedModel } from "./reported-model.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
+import { VoiceButton } from "./voice-button.js";
+
+/** Images in replies wait for the person to show them (ADR 0277). */
+const renderImage = (props: { src: string; alt: string }) => (
+  <RemoteImage {...props} />
+);
 
 const EMPTY_CHAT_PROMPTS = [
   { empty: "Ready when you are.", composer: "Give me the first move…" },
@@ -127,303 +216,185 @@ const EMPTY_CHAT_PROMPTS = [
   { empty: "Let's build.", composer: "What comes first?…" },
 ] as const;
 
-/** Document types the composer accepts as pasted/attached files. */
-const DOCUMENT_TYPES = new Set([
-  "application/pdf",
-  "application/json",
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-]);
+/** One empty list, so what depends on the chips settles. */
+const NO_CHIPS: Chip[] = [];
 
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const APP_SOURCE_PATTERN = new RegExp(
+  `(?:^|/)${PROJECT_APPS_DIR.replaceAll(".", "\\.")}/([a-z0-9][a-z0-9-]*)/`,
+);
 
-/**
- * Total decoded media budget per message: keeps the request body far below
- * the server's limit. Files past it still attach — as path pills.
- */
-const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
-
-/** Server-side attachment cap, mirrored so the composer can refuse early. */
-const MAX_ATTACHMENTS = 32;
-
-/** A workspace tab dropped on the chat becomes a tab pill. */
-function tabPillFromDrag(
-  data: DataTransfer | null,
-): AgentChatTextAttachment | null {
-  const raw = data?.getData(TAB_DRAG_TYPE);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<
-      Record<keyof TabDragPayload, unknown>
-    >;
-    if (typeof parsed.key !== "string" || typeof parsed.kind !== "string") {
-      return null;
-    }
-    const title =
-      typeof parsed.title === "string" && parsed.title
-        ? parsed.title
-        : parsed.kind;
-    const detail =
-      typeof parsed.detail === "string" ? parsed.detail : undefined;
-    const source: AgentChatTextAttachment["source"] = {
-      type: "tab",
-      key: parsed.key,
-      kind: parsed.kind,
-      title,
-      ...(parsed.kind === "browser" && detail ? { url: detail } : {}),
-      ...(parsed.kind === "editor" && detail ? { filePath: detail } : {}),
-    };
-    // What the model reads without a tool call: title + address/path.
-    const text = detail ? `${title} — ${detail}` : title;
-    return textPill(text, source, title);
-  } catch {
-    return null;
-  }
-}
-
-/** Whether a drag carries something the composer can attach. */
-function isComposerTransfer(data: DataTransfer | null): boolean {
-  const types = [...(data?.types ?? [])];
-  return types.includes("Files") || types.includes(TAB_DRAG_TYPE);
-}
-
-/** The media kind a file would ship as, or null for unsupported types. */
-function mediaKindOf(file: File): "image" | "document" | null {
-  return file.type.startsWith("image/")
-    ? "image"
-    : DOCUMENT_TYPES.has(file.type)
-      ? "document"
-      : null;
-}
-
-async function encodeFile(
-  file: File,
-  kind: "image" | "document",
-): Promise<ComposerAttachment> {
-  const buffer = await file.arrayBuffer();
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return {
-    id: crypto.randomUUID(),
-    kind,
-    name: file.name || (kind === "image" ? "pasted-image.png" : "pasted-file"),
-    mediaType: file.type,
-    dataBase64: btoa(binary),
-  };
-}
-
-/** A file that can't ship as media still reaches the agent as a path. */
-function pathPillFor(file: File): ComposerAttachment | null {
-  // e2e seam: synthetic Files have no OS path, so tests inject one.
-  const lookup =
-    (window as { __e2ePathForFile?: (file: File) => string })
-      .__e2ePathForFile ?? desktopApi.pathForFile;
-  const path = lookup(file);
-  if (!path) return null;
-  const name = file.name || path.split(/[\\/]/).at(-1) || path;
-  return {
-    id: crypto.randomUUID(),
-    ...textPill(path, { type: "path", path }, name),
-  };
+/** A sent attachment reads as the composer's pill, with its preview. */
+function sentPill(attachment: AgentAttachment) {
+  return <ContextPill view={attachment} animateIn={false} testId="sent-pill" />;
 }
 
 /**
- * Files from a DataTransfer, robust across sources: `files` covers
- * screenshots and copied images; the `items` fallback covers sources
- * that only populate the item list.
+ * A skill the person ran (ADR 0270) leads its message as a chip, as the
+ * palette named it, before the instructions and pills sent with it.
  */
-function filesFrom(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const files = [...data.files];
-  if (files.length > 0) return files;
-  return [...data.items]
-    .filter((item) => item.kind === "file")
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
+function presentSkillMessage(text: string) {
+  const invocation = parseSkillInvocation(text);
+  if (!invocation) return undefined;
+  return {
+    lead: (
+      <span
+        data-testid="sent-skill"
+        className={`mr-1 inline-flex items-center gap-1 px-1.5 py-px align-baseline ${PILL_SURFACE}`}
+      >
+        <Sparkles className="size-3 shrink-0" aria-hidden="true" />
+        {invocation.name}
+      </span>
+    ),
+    text: invocation.rest,
+  };
 }
 
-/** Structural view of one persisted turn event (metadata.events entries). */
-interface TurnEvent {
-  type?: string;
-  content?: string;
-  status?: string;
-  subagentId?: string;
-  subagentType?: string;
-  backgroundId?: string;
-  toolName?: string;
-  toolInput?: unknown;
-  toolResult?: unknown;
-  toolUseId?: string;
-  filePath?: string;
-}
-
-/** Project-app name from a file path under .catamorphic/apps/<name>/, if any. */
+/** Project-app name from a file path under .work/apps/<name>/, if any. */
 const appNameFromPath = (filePath: string | undefined): string | undefined =>
-  filePath?.match(/(?:^|\/)\.catamorphic\/apps\/([a-z0-9][a-z0-9-]*)\//)?.[1];
+  filePath?.match(APP_SOURCE_PATTERN)?.[1];
 
 const firstLine = (value: string | undefined): string =>
   (value ?? "").split("\n", 1)[0]?.trim() ?? "";
 
-const activityLine = (event: TurnEvent): string => {
-  if (event.type === "command") return `$ ${firstLine(event.content)}`;
-  if (event.type === "file_edit") return `Edited ${event.filePath ?? "a file"}`;
-  if (event.type === "tool_call") return `Used ${event.toolName ?? "a tool"}`;
-  return firstLine(event.content);
+/** One thing a subagent did, as a row inside its chip. */
+const activityRow = (
+  item: Item,
+): { label: string; icon: string } | undefined => {
+  if (item.kind === "command")
+    return {
+      label: firstLine(item.command) || "Command",
+      icon: "SquareTerminal",
+    };
+  if (item.kind === "file_change")
+    return { label: `Edited ${item.path || "a file"}`, icon: "FilePen" };
+  if (item.kind === "tool_call")
+    return { label: `Used ${stepToolName(item)}`, icon: "Wrench" };
+  return undefined;
 };
 
 /**
- * Chips derived from the chat's own turn events (not workspace tabs):
- * subagents from the latest turn that delegated work — spinning while the
- * turn runs, inspectable after — and background watchers (processes the
- * agent started in the background or demonstrably left running), which
- * persist across turns until an event ends them.
+ * Chips the chat's own work makes (not workspace tabs): subagents from the
+ * latest turn that delegated work, spinning while they run, their steps
+ * inside them; apps the agent worked on; MCP Apps views its tool calls
+ * opened (with the views, which open by their `mcpapp:` address).
+ * Background commands are terminals, whose chips come with the tabs.
  */
 function activityChips(
-  messages: Array<{ role: string; metadata?: unknown }>,
-  working: boolean,
+  state: SessionState | null,
+  activeTurnId: string | null,
   uiTools: Record<string, string>,
-): ChatSurface[] {
-  let lastSubagentEvents: TurnEvent[] | undefined;
-  let currentTurnEvents: TurnEvent[] = [];
-  let currentTurnHasSubagents = false;
-  const watchers = new Map<string, { label: string; ended: boolean }>();
-  // Apps the agent worked on (file edits under .catamorphic/apps/<name>/); active while
-  // the CURRENT turn touches them.
+): { chips: Chip[]; views: ReadonlyMap<string, McpAppRef> } {
+  const views = new Map<string, McpAppRef>();
+  if (!state) return { chips: [], views };
+  const turns = Object.values(state.turns);
+  const ordinalOf = new Map(turns.map((turn) => [turn.id, turn.ordinal]));
+  let latestDelegation: string | undefined;
+  for (const item of state.items) {
+    if (item.kind !== "subagent" || !item.turnId) continue;
+    const ordinal = ordinalOf.get(item.turnId) ?? 0;
+    const current = latestDelegation
+      ? (ordinalOf.get(latestDelegation) ?? 0)
+      : -1;
+    if (ordinal >= current) latestDelegation = item.turnId;
+  }
+  // Apps the agent worked on (file changes under .work/apps/<name>/);
+  // active while the running turn touches them.
   const apps = new Map<string, { active: boolean }>();
-  // Tool calls whose tool declares an MCP Apps view; later events with the
-  // same toolUseId merge in the result.
   const mcpApps = new Map<string, McpAppRef>();
-  for (const message of messages) {
-    if (message.role === "user") {
-      currentTurnEvents = [];
-      currentTurnHasSubagents = false;
+  const subagents = new Map<
+    string,
+    {
+      label: string;
+      ended: boolean;
+      steps: { label: string; icon: string }[];
     }
-    if (message.role !== "assistant") continue;
-    const metadata = message.metadata as {
-      events?: TurnEvent[];
-      status?: string;
-    } | null;
-    const events = metadata?.events;
-    if (!Array.isArray(events)) continue;
-    const inProgress = metadata?.status === "in_progress";
-    currentTurnEvents.push(...events);
-    if (events.some((event) => event.type === "subagent")) {
-      currentTurnHasSubagents = true;
-    }
-    // Preambles split a turn into several persisted assistant messages.
-    // Keep the start, nested activity, and end together across those segments.
-    if (currentTurnHasSubagents) lastSubagentEvents = [...currentTurnEvents];
-    for (const event of events) {
-      if (event.type === "file_edit") {
-        const appName = appNameFromPath(event.filePath);
-        if (appName) apps.set(appName, { active: inProgress && working });
-        continue;
-      }
-      if (
-        event.type === "tool_call" &&
-        event.toolUseId &&
-        event.toolName &&
-        uiTools[event.toolName] !== undefined
-      ) {
-        const existing = mcpApps.get(event.toolUseId);
-        mcpApps.set(event.toolUseId, {
-          toolKey: event.toolName,
-          toolUseId: event.toolUseId,
-          title: event.toolName.split("/").pop() ?? event.toolName,
-          toolInput: event.toolInput ?? existing?.toolInput,
-          toolResult:
-            event.toolResult !== undefined
-              ? event.toolResult
-              : existing?.toolResult,
+  >();
+  for (const item of state.items) {
+    const live = item.turnId !== null && item.turnId === activeTurnId;
+    if (item.kind === "file_change") {
+      const appName = appNameFromPath(item.path);
+      if (appName)
+        apps.set(appName, {
+          active: (apps.get(appName)?.active ?? false) || live,
         });
-        continue;
-      }
-      if (event.type !== "background" || !event.backgroundId) continue;
-      if (event.status === "ended") {
-        const watcher = watchers.get(event.backgroundId);
-        if (watcher) watcher.ended = true;
-      } else {
-        watchers.set(event.backgroundId, {
-          label: firstLine(event.content) || "background process",
-          ended: false,
+    }
+    if (item.kind === "tool_call") {
+      const toolKey = stepToolName(item);
+      if (uiTools[toolKey] !== undefined)
+        mcpApps.set(item.id, {
+          toolKey,
+          toolUseId: item.id,
+          title: toolKey.split("/").pop() ?? toolKey,
+          toolInput: item.input ?? undefined,
+          toolResult: item.result ?? undefined,
         });
-      }
     }
-  }
-
-  const chips: ChatSurface[] = [];
-  if (lastSubagentEvents) {
-    const subagents = new Map<
-      string,
-      { label: string; ended: boolean; info: string[] }
-    >();
-    for (const event of lastSubagentEvents) {
-      if (!event.subagentId) continue;
-      if (event.type === "subagent") {
-        const entry = subagents.get(event.subagentId) ?? {
-          label: "subagent",
-          ended: false,
-          info: [],
-        };
-        if (event.status === "ended") entry.ended = true;
-        else {
-          entry.label =
-            firstLine(event.content) || event.subagentType || "subagent";
-        }
-        subagents.set(event.subagentId, entry);
-      } else {
-        const line = activityLine(event);
-        if (line) subagents.get(event.subagentId)?.info.push(line);
-      }
-    }
-    for (const [id, entry] of subagents) {
-      chips.push({
-        key: `subagent:${id}`,
-        kind: "subagent",
-        label: entry.label,
-        active: !entry.ended && working && currentTurnHasSubagents,
-        info:
-          entry.info.length > 0
-            ? entry.info.slice(-20)
-            : ["No visible activity yet."],
+    if (!latestDelegation || item.turnId !== latestDelegation) continue;
+    if (item.kind === "subagent") {
+      subagents.set(item.id, {
+        label: firstLine(item.title) || item.agentType || "subagent",
+        ended: item.status !== "in_progress",
+        steps: subagents.get(item.id)?.steps ?? [],
       });
+    } else if (item.parentItemId) {
+      const step = activityRow(item);
+      const entry = subagents.get(item.parentItemId);
+      if (step && entry) entry.steps.push(step);
     }
   }
-  for (const [id, watcher] of watchers) {
-    if (watcher.ended) continue;
+  const chips: Chip[] = [];
+  const delegatedTurn = latestDelegation
+    ? state.turns[latestDelegation]
+    : undefined;
+  const harness = delegatedTurn?.providerThreadId
+    ? state.providerThreads[delegatedTurn.providerThreadId]?.harness
+    : undefined;
+  for (const [id, entry] of subagents) {
+    const chipId = `subagent:${id}`;
+    const working = !entry.ended && latestDelegation === activeTurnId;
     chips.push({
-      key: `watcher:${id}`,
-      kind: "watcher",
-      label: watcher.label,
-      info: [
-        watcher.label,
-        "Running in the background — read the terminals, or ask the agent to stop it.",
-      ],
+      id: chipId,
+      label: entry.label,
+      icon: "Bot",
+      parentId: null,
+      hasChildren: true,
+      ...(working ? { signal: "working" as const } : {}),
+      data: { kind: "subagent", ...(harness ? { harness } : {}) },
+    });
+    entry.steps.slice(-20).forEach((step, index) => {
+      chips.push({
+        id: `${chipId}/${index}`,
+        parentId: chipId,
+        label: step.label,
+        icon: step.icon,
+        preview: false,
+        data: { kind: "step" },
+      });
     });
   }
   for (const [name, app] of apps) {
     chips.push({
-      key: `app:${name}`,
-      kind: "app",
+      id: `app:${name}`,
       label: name,
-      active: app.active,
+      icon: "LayoutGrid",
+      url: `app:${name}`,
+      ...(app.active ? { signal: "working" as const } : {}),
+      data: { kind: "app", name },
     });
   }
   // Newest app views first; older ones age off the rail.
   for (const ref of [...mcpApps.values()].slice(-4)) {
+    const url = `mcpapp:${ref.toolUseId}`;
+    views.set(url, ref);
     chips.push({
-      key: `mcpapp:${ref.toolUseId}`,
-      kind: "mcpapp",
+      id: url,
       label: ref.title,
-      mcpApp: ref,
+      icon: "AppWindow",
+      url,
+      data: { kind: "mcpapp" },
     });
   }
-  return chips;
+  return { chips, views };
 }
 
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
@@ -443,6 +414,10 @@ const emptyChatPromptFor = (localId: string) => {
  * so queued sends and drafts survive; the panel morphs between a floating
  * partial dock and a full workspace tab (the bubble hides while tabbed).
  */
+/** A chat on screen, floating or in its settled tab pose. */
+const EXPANDED_POSE =
+  "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow]";
+
 export function ChatDock(props: ChatDockProps) {
   return (
     <ProjectAuthorityProvider
@@ -464,6 +439,7 @@ function ChatDockContent({
   placeholder,
   tabActive,
   refreshWhileIdle = false,
+  attentionRevision,
   slot = "full",
   splitRatio = 0.5,
   splitResizing = false,
@@ -472,14 +448,17 @@ function ChatDockContent({
   nativeWindow = false,
   defaultAgentId,
   paletteTargeted,
-  surfaces = [],
+  chips: heldChips = NO_CHIPS,
+  chipsModule,
+  onCustomizeChips,
   onOpenSurface,
   onRemoveSurface,
   onOpenMcpApp,
   onFocusRequest,
   pullSelectionNonce = 0,
+  chipsRefreshNonce = 0,
   onUnsplit,
-  onLinkClick,
+  onLinkClick: openLinkDirectly,
   onFileClick,
   onFork,
   onForkCurrent,
@@ -487,24 +466,46 @@ function ChatDockContent({
   archived = false,
   inspectRequestNonce,
   onOpenParent,
+  onEditAgent,
   onEditModel,
   onEditEffort,
+  onEditPermissionMode,
   runtimeSettingsError,
   onEntryChange,
   onEscapeToFloating,
   onClose,
   onCloseStarted,
+  onLeaveStarted,
   registerClose,
   registerMinimize,
   registerSend,
+  registerSkill,
+  registerComposerFocus,
+  registerFocusChips,
+  registerMessageNavigation,
   onSessionCreated,
+  onSessionAgent,
   onSignalsChange,
 }: ChatDockProps) {
+  // A web link the chat opens to a host it does not trust asks first: the
+  // address may carry what the agent read (ADR 0277). Work's own links,
+  // and links to trusted hosts, open as they always have.
+  const trustedHosts = useTrustedHosts(projectId);
+  const [linkAsk, setLinkAsk] = useState<{
+    url: string;
+    host: string;
+    modifiers: OpenModifiers | OpenMode;
+  } | null>(null);
+  const onLinkClick = useCallback(
+    (url: string, modifiers: OpenModifiers | OpenMode) => {
+      const host = untrustedHost(trustedHosts, url);
+      if (host) setLinkAsk({ url, host, modifiers });
+      else openLinkDirectly?.(url, modifiers);
+    },
+    [trustedHosts, openLinkDirectly],
+  );
   const authority = useRemoteAuthority();
   const catalog = useAgentCatalog(authority ? projectId : undefined);
-  const [transferError, setTransferError] = useState<string>();
-  const [pendingTransfers, setPendingTransfers] = useState(0);
-  const pendingTransfersRef = useRef(0);
   const [localRunnerError, setLocalRunnerError] = useState<string>();
   const [connectingRunner, setConnectingRunner] = useState(false);
   const [remoteAgentId, setRemoteAgentId] = useState<string>();
@@ -538,6 +539,15 @@ function ChatDockContent({
         compatibleEnvironments[0]?.name,
     );
   }, [compatibleEnvironments, environmentQuery.data, selectedEnvironment]);
+  /**
+   * The first message is recording the worktree chosen before it (ADR
+   * 0215), or recording it failed and the next send tries again.
+   */
+  const [recordingWorktree, setRecordingWorktree] = useState(false);
+  const [worktreeUnrecorded, setWorktreeUnrecorded] = useState(false);
+  // Sent while the agent works, a message reaches it at its next step
+  // unless the person chose to queue (ADR 0240).
+  const queueMessages = useQueueMessages();
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
@@ -545,8 +555,10 @@ function ChatDockContent({
     effort: entry.effort,
     environment: selectedEnvironment,
     source: "desktop",
-    idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
-    onSessionCreated: (sessionId) => {
+    // Only a chat on screen streams; minimized ones poll while they work,
+    // so a window of chats never runs out of connections.
+    live: entry.mode === "partial" || (entry.mode === "tab" && tabActive),
+    onSessionCreated: async (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle
       // (and thus before the mirror could ever consider pushing it).
@@ -554,6 +566,19 @@ function ChatDockContent({
         void desktopApi.sessionSetIncognito(sessionId, true);
       }
       onSessionCreated(entry.localId, sessionId);
+      // Chosen before the first message (ADR 0215): recorded before that
+      // message is sent, so its turn checks out the chat's own worktree.
+      if (!entry.worktree) return;
+      setRecordingWorktree(true);
+      try {
+        await desktopApi.sessionUseOwnWorktree({ projectId, sessionId });
+        setWorktreeUnrecorded(false);
+      } catch (cause) {
+        setWorktreeUnrecorded(true);
+        throw new Error(ipcErrorText(cause));
+      } finally {
+        setRecordingWorktree(false);
+      }
     },
   });
   const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
@@ -561,17 +586,23 @@ function ChatDockContent({
   useEffect(() => {
     const acknowledge = () => {
       const session = chat.session;
+      // An idle transcript can be cached while the host's session list
+      // has already received a new attention request for this chat.
+      const revision =
+        attentionRevision ??
+        (session?.attentionRequired ? session.attentionRevision : undefined);
       if (
         !refreshWhileIdle ||
         !document.hasFocus() ||
-        !session?.attentionRequired
+        !session ||
+        revision === undefined
       )
         return;
-      const key = `${session.id}:${session.attentionRevision}`;
+      const key = `${session.id}:${revision}`;
       if (acknowledgingAttention.current === key) return;
       acknowledgingAttention.current = key;
       acknowledgeAttention.mutate(
-        { sessionId: session.id, observedRevision: session.attentionRevision },
+        { sessionId: session.id, observedRevision: revision },
         {
           onError: () => {
             acknowledgingAttention.current = undefined;
@@ -582,13 +613,84 @@ function ChatDockContent({
     acknowledge();
     window.addEventListener("focus", acknowledge);
     return () => window.removeEventListener("focus", acknowledge);
-  }, [refreshWhileIdle, chat.session, acknowledgeAttention]);
+  }, [refreshWhileIdle, attentionRevision, chat.session, acknowledgeAttention]);
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
-    { refetchInterval: refreshWhileIdle || chat.isSending ? 5_000 : false },
+    {
+      // This computer's chats follow its hints (ADR 0229).
+      refetchInterval:
+        refreshWhileIdle || chat.isSending
+          ? authority
+            ? 5_000
+            : LOCAL_CHATS_POLL_MS
+          : false,
+    },
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
+  const watchersBody = useRef<HTMLDivElement>(null);
+  const shownWatchers = useClosingItems(visibleWatchers, CLOSING_MS, (id) => {
+    const box = watchersBody.current
+      ?.querySelector(`[data-watcher-id="${CSS.escape(id)}"]`)
+      ?.closest("[data-collapsible]");
+    return (
+      box?.getAttribute("data-collapsible") === "open" ||
+      transitionPlaying(box, "height")
+    );
+  });
+  const watcherPositions = useRef(
+    new Map<string, { left: number; top: number }>(),
+  );
+  const watcherOrder = shownWatchers
+    .map(({ item, present }) => `${item.id}:${present}`)
+    .join("|");
+  // Match the chip rail's layout motion when a removed token releases its
+  // width: surviving watches slide into place, including across wrapped rows.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: presence changes release layout; text updates do not
+  useLayoutEffect(() => {
+    const body = watchersBody.current;
+    if (!body) return;
+    const measure = (animate: boolean) => {
+      const origin = body.getBoundingClientRect();
+      const next = new Map<string, { left: number; top: number }>();
+      for (const token of body.querySelectorAll<HTMLElement>(
+        "[data-watcher-id]",
+      )) {
+        const id = token.dataset.watcherId;
+        const node = token.closest<HTMLElement>("[data-collapsible]");
+        if (!id || !node) continue;
+        const transform = new DOMMatrixReadOnly(
+          getComputedStyle(node).transform,
+        );
+        const rect = node.getBoundingClientRect();
+        const position = {
+          left: rect.left - origin.left - transform.m41,
+          top: rect.top - origin.top - transform.m42,
+        };
+        next.set(id, position);
+        const before = watcherPositions.current.get(id);
+        const duration = motionMs(200);
+        if (!animate || !before || !duration) continue;
+        const dx = before.left - position.left + transform.m41;
+        const dy = before.top - position.top + transform.m42;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+        for (const animation of node.getAnimations())
+          if (animation.id === "watcher-move") animation.cancel();
+        node.animate(
+          [
+            { transform: `translate(${dx}px, ${dy}px)` },
+            { transform: "translate(0,0)" },
+          ],
+          { duration, easing: EASE_STANDARD, id: "watcher-move" },
+        );
+      }
+      watcherPositions.current = next;
+    };
+    measure(true);
+    const observer = new ResizeObserver(() => measure(false));
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, [watcherOrder]);
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
   const activeEnvironmentItem = environmentQuery.data?.items.find(
     (item) => item.name === activeEnvironment,
@@ -597,6 +699,10 @@ function ChatDockContent({
     authority && !activeEnvironmentItem?.clientRequired
       ? `Company server (${activeEnvironmentItem?.label ?? activeEnvironment ?? "default"})`
       : (activeEnvironmentItem?.label ?? activeEnvironment ?? "This device");
+  // Where the work runs, for its icon: this computer (the desktop's own
+  // environments, or a member's machine) or a company server.
+  const onThisMachine =
+    !authority || activeEnvironmentItem?.clientRequired === true;
   const isIncognito = Boolean(entry.incognito);
   const [remoteCheckNonce, setRemoteCheckNonce] = useState(0);
   const wasSendingRef = useRef(chat.isSending);
@@ -606,8 +712,25 @@ function ChatDockContent({
     }
     wasSendingRef.current = chat.isSending;
   }, [chat.isSending]);
-  const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
   const activeSessionId = chat.sessionId ?? entry.sessionId;
+  // Where the chat works (ADR 0215): its own worktree, or the project
+  // folder. Until the first message records a worktree chosen before it,
+  // the choice is what the chat shows.
+  const worktreeDraft =
+    Boolean(entry.worktree) &&
+    (!activeSessionId || recordingWorktree || worktreeUnrecorded);
+  const checkout = useSessionCheckout(projectId, activeSessionId, {
+    enabled: !authority && !recordingWorktree,
+  }).data;
+  const inWorktree = worktreeDraft || checkout?.kind === "managed";
+  const backgroundCommands = useBackgroundCommands(activeSessionId);
+  // A reply read aloud from its button, voice on or off (ADR 0268).
+  const readingAloud = useVoiceReading();
+  const readAloud = useCallback(
+    (input: { itemId: string; text: string; agentId: string | null }) =>
+      void desktopApi.voiceReadAloud(input),
+    [],
+  );
   const [moveState, setMoveState] = useState<{
     canMove: boolean;
     reason: string | null;
@@ -617,7 +740,6 @@ function ChatDockContent({
     reason: "Start the session before moving it",
     moving: false,
   });
-  const [localInspectorNonce, setLocalInspectorNonce] = useState(0);
   const [moveCheckNonce, setMoveCheckNonce] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: inspector opening refreshes remote eligibility
   useEffect(() => {
@@ -664,71 +786,45 @@ function ChatDockContent({
       cancelled = true;
     };
   }, [activeSessionId, authority, chat.isSending, projectId, moveCheckNonce]);
-  useEffect(() => {
-    const load = () => {
-      if (authority || !entry.sessionId) {
-        setCheckout(null);
-        return;
-      }
-      void desktopApi.sessionCheckouts(projectId).then((checkouts) => {
-        setCheckout(
-          checkouts.find(
-            (candidate) => candidate.sessionId === entry.sessionId,
-          ) ?? null,
-        );
-      });
-    };
-    load();
-    return desktopApi.onGitChanged((event) => {
-      if (event.projectId === projectId) load();
-    });
-  }, [authority, entry.sessionId, projectId]);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
-  // (slash menu, recall gate, emptiness) and how many pills are live.
-  const [draft, setDraft] = useState("");
+  // (recall gate, emptiness, the "/" that opens skills) and how many
+  // pills are live.
+  const draftRef = useRef("");
+  const [hasText, setHasText] = useState(false);
   const [pillCount, setPillCount] = useState(0);
   const composerRef = useRef<ComposerInputHandle>(null);
-  const restoringDraft = useRef(false);
-  const draftLoaded = useRef(false);
-  const draftSerial = useRef("");
-  useEffect(() => {
-    let live = true;
-    const restore = (
-      next: import("../../shared/desktop-workspace.js").ChatDraft,
-    ) => {
-      const serial = JSON.stringify(next);
-      if (serial === draftSerial.current) return;
-      draftSerial.current = serial;
-      restoringDraft.current = true;
-      composerRef.current?.restore(next);
-      restoringDraft.current = false;
-    };
-    void desktopApi.dockDraftGet(entry.localId).then((next) => {
-      if (!live) return;
-      if (next) restore(next);
-      draftLoaded.current = true;
-    });
-    const stop = desktopApi.onDockDraft((update) => {
-      if (update.localId === entry.localId) restore(update.draft);
-    });
-    return () => {
-      live = false;
-      stop();
-    };
-  }, [entry.localId]);
-  const publishDraft = () => {
-    if (restoringDraft.current || !draftLoaded.current) return;
-    const next = composerRef.current?.snapshot();
-    if (!next) return;
-    const serial = JSON.stringify(next);
-    if (serial === draftSerial.current) return;
-    draftSerial.current = serial;
-    void desktopApi.dockDraftSet(entry.localId, next);
-  };
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
-  // Set while the dock itself rewrites the prose (recall, slash-complete)
+  const publishDraft = useComposerDraft({
+    localId: entry.localId,
+    composer: composerRef,
+    onLoaded: ({ saved, superseded }) => {
+      // A chat opened with words waiting ("Customize chips"): consume the
+      // seed even if the person already started typing, which takes priority.
+      const seeded = entryRef.current.draftMessage;
+      if (!seeded) return;
+      onEntryChangeRef.current({
+        ...entryRef.current,
+        draftMessage: undefined,
+      });
+      if (superseded || saved?.message || saved?.attachments.length) return;
+      const attachments = seeded.attachments ?? [];
+      composerRef.current?.restore({
+        message: `${seeded.text}${attachments.length ? " " : ""}${ATTACHMENT_MARKER.repeat(attachments.length)}`,
+        attachments,
+      });
+      // The caret waits after the words, for the person to go on.
+      const root = composerRef.current?.element();
+      composerRef.current?.focus();
+      if (root) {
+        const range = document.createRange();
+        range.selectNodeContents(root);
+        range.collapse(false);
+        document.getSelection()?.removeAllRanges();
+        document.getSelection()?.addRange(range);
+      }
+    },
+  });
+  // Set while the dock itself rewrites the prose (history recall)
   // so the change handler can tell "the user typed" from "we swapped".
   const rewritingRef = useRef(false);
   const rewriteText = (text: string) => {
@@ -741,29 +837,61 @@ function ChatDockContent({
   };
 
   const isTab = entry.mode === "tab";
+  /** Outside a tab, the column the messages and the composer share. */
+  const floatingColumn = isTab ? "" : "mx-auto w-full max-w-3xl";
   const frontSurface = entry.mode === "partial" || (isTab && tabActive);
-  const slashing = draft.startsWith("/");
-  const catalogActive = slashing && frontSurface;
-  const [commandsRefresh, setCommandsRefresh] = useState(0);
-  const skillCatalog = useProjectSkillCatalog(
-    projectId,
-    catalogActive,
-    commandsRefresh,
+  // Coming forward (a tab switch, an opening), the chat shows settled: for
+  // that render and two frames after it, what follows the bubble strip as
+  // it folds and a split pane's geometry jump there instead of easing,
+  // which would re-lay out the transcript every frame.
+  const [arriving, setArriving] = useState(false);
+  const [wasFront, setWasFront] = useState(frontSurface);
+  // A floating card enters from its bubble. A tab is a settled page, and
+  // returning from it to a floating pose morphs an already visible card.
+  const [dockEntrance, setDockEntrance] = useState(entry.mode === "partial");
+  if (wasFront !== frontSurface) {
+    setWasFront(frontSurface);
+    setArriving(frontSurface);
+    setDockEntrance(frontSurface && !isTab);
+  } else if (isTab && dockEntrance) {
+    setDockEntrance(false);
+  }
+  useEffect(() => {
+    if (!arriving) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setArriving(false));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [arriving]);
+  // Questions, approvals and elicitations waiting on this person; any
+  // client answers them, and the chat survives a restart around them.
+  const questionRequests = chat.requests.filter(
+    (request) => request.kind === "question" && request.questions,
   );
-  const slashListId = useId();
-  const composerFormRef = useRef<HTMLFormElement>(null);
-  const slashToken = /^\/(\S*)$/.exec(draft)?.[1];
-  const [slashDismissed, setSlashDismissed] = useState(false);
-  const [slashSelection, setSlashSelection] = useState<string>();
-  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
-  const pendingQuestion =
-    chat.session?.questions?.find((entry) => entry.blocking !== false) ??
-    chat.session?.questions?.[0];
-  const { messages, activity, questions } = toTimeline(
-    chat.messages,
-    chat.optimisticMessages,
-    chat.activity,
+  const shownQuestions = useClosingItems(questionRequests);
+  const otherRequests = chat.requests.filter(
+    (request) => request.kind !== "question",
   );
+  // The requests whose answer is on its way: each card waits on its own,
+  // so answering one leaves the others ready.
+  const [responding, setResponding] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const respond = (requestId: string, response: RuntimeRequestResponse) => {
+    setResponding((current) => new Set(current).add(requestId));
+    void chat.respond(requestId, response).finally(() =>
+      setResponding((current) => {
+        const next = new Set(current);
+        next.delete(requestId);
+        return next;
+      }),
+    );
+  };
+  const activity = chat.activity;
 
   // Which connection tools carry an MCP Apps view — chips for those tool
   // calls open the embedded app.
@@ -783,13 +911,17 @@ function ChatDockContent({
   useEffect(() => {
     void desktopApi
       .connectionsList()
-      .then((connections) => {
+      .then(async (connections) => {
+        // As data from main: the window fetches no icon itself (ADR 0277).
         const icons = new Map<string, string>();
-        for (const connection of connections) {
-          if (connection.iconUrl) {
-            icons.set(connection.serverKey, connection.iconUrl);
-          }
-        }
+        await Promise.all(
+          connections.map(async (connection) => {
+            const icon = connection.iconUrl
+              ? await windowImage({ url: connection.iconUrl })
+              : null;
+            if (icon) icons.set(connection.serverKey, icon);
+          }),
+        );
         setConnectorIcons(icons);
       })
       .catch(() => {});
@@ -803,39 +935,217 @@ function ChatDockContent({
     [connectorIcons],
   );
 
-  // Subagent, watcher, worked-on-app, and MCP-app-view chips come from
-  // the chat's own turn events (every harness reports them through the
-  // common event model); workspace-tab chips arrive via the surfaces
-  // prop. One rail, all of them.
-  const chatActivityChips = useMemo(
+  // Work's chips for this chat (ADR 0239): the pull requests it recorded
+  // and the chips its agent attached (its session's metadata), what it
+  // holds in the workspace (the chips prop), and what its turns made
+  // (subagents, apps it edited, app views), from the common event model.
+  const activeTurnId = chat.activeTurn?.id ?? null;
+  const turnChips = useMemo(
     () =>
       activityChips(
-        chat.messages,
-        chat.isWorking && !chat.connectionLost,
+        chat.state,
+        chat.connectionLost ? null : activeTurnId,
         uiTools,
       ),
-    [chat.messages, chat.isWorking, chat.connectionLost, uiTools],
+    [chat.state, activeTurnId, chat.connectionLost, uiTools],
   );
-  const railSurfaces = useMemo(() => {
-    // One chip per key: a surface known to both the host and the turn
-    // events (an app tab prepared by open_surface AND touched by this
-    // turn's file edits) merges — activity animates it, host state
-    // (attention) rides along.
-    const activityByKey = new Map(
-      chatActivityChips.map((chip) => [chip.key, chip]),
+  const sessionFields = chat.state?.session;
+  const metadata = sessionFields?.metadata;
+  const pullRequests = useMemo(() => sessionPullRequests(metadata), [metadata]);
+  const pullRequestUrls = useMemo(
+    () => pullRequests.map((pr) => pr.url),
+    [pullRequests],
+  );
+  const pullRequestStatuses = usePullRequestStatuses({
+    urls: pullRequestUrls,
+    enabled: frontSurface,
+    refreshNonce: chipsRefreshNonce,
+  });
+  const builtChips = useMemo(() => {
+    // One chip per id: an app tab the workspace holds that this turn also
+    // edits is one chip, spinning with the edit, keeping the workspace's
+    // attention.
+    const own = new Map(
+      turnChips.chips
+        .filter((chip) => !chip.parentId)
+        .map((chip) => [chip.id, chip]),
     );
-    const merged = surfaces.map((surface) => {
-      const activity = activityByKey.get(surface.key);
-      if (!activity) return surface;
-      activityByKey.delete(surface.key);
-      return {
-        ...activity,
-        ...surface,
-        active: surface.active || activity.active,
-      };
+    const held = heldChips.map((chip) => {
+      const mine = own.get(chip.id);
+      if (!mine) return chip;
+      own.delete(chip.id);
+      const signal = chip.signal ?? mine.signal;
+      return { ...mine, ...chip, ...(signal ? { signal } : {}) };
     });
-    return [...merged, ...activityByKey.values()];
-  }, [surfaces, chatActivityChips]);
+    return workChips({
+      pullRequests,
+      statuses: pullRequestStatuses,
+      metadata,
+      held: [
+        ...held,
+        ...turnChips.chips.filter((chip) => chip.parentId || own.has(chip.id)),
+      ],
+    });
+  }, [turnChips, heldChips, metadata, pullRequests, pullRequestStatuses]);
+  // The same chips stay the same value while a turn streams, so the rail
+  // and a chips module only hear of a change that is one.
+  const builtSignature = JSON.stringify(builtChips);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature is what changes them
+  const defaultChips = useMemo(() => builtChips, [builtSignature]);
+  // A chip opens as the chat opens what it holds: an app view as itself,
+  // the chat's own tabs as its tabs, anything else as a link of the chat's.
+  const openChip = useCallback(
+    (url: string, mode: OpenMode) => {
+      const view = turnChips.views.get(url);
+      if (view) onOpenMcpApp?.(view, mode);
+      else if (
+        heldChips.some((chip) => chip.url === url) ||
+        turnChips.chips.some((chip) => chip.url === url)
+      )
+        onOpenSurface?.(url, mode);
+      else onLinkClick?.(url, mode);
+    },
+    [turnChips, heldChips, onOpenMcpApp, onOpenSurface, onLinkClick],
+  );
+  const setSessionMetadata = useSetAgentSessionMetadata(projectId);
+  // A chip's ✕: an attached chip or a recorded pull request leaves the
+  // chat's metadata (its list is written without it), a tab of the chat's
+  // closes. Decided by where the chip came from, never by the kind its
+  // data claims: an attached id is a short name, a pull request's its URL.
+  const removeChip = async (itemId: string) => {
+    const chip = defaultChips.find((candidate) => candidate.id === itemId);
+    if (!chip) throw new Error("This chip is no longer here.");
+    const without = (key: string, matches: (entry: JsonObject) => boolean) => {
+      const listed = metadata?.[key];
+      const kept = (Array.isArray(listed) ? listed : []).filter(
+        (entry) =>
+          !(
+            typeof entry === "object" &&
+            entry !== null &&
+            !Array.isArray(entry) &&
+            matches(entry)
+          ),
+      );
+      return kept.length ? kept : null;
+    };
+    const attached = isAttachedChipId(itemId);
+    if (attached || pullRequests.some((pr) => pr.url === itemId)) {
+      if (!activeSessionId) throw new Error("This chat has not started yet.");
+      await setSessionMetadata.mutateAsync({
+        sessionId: activeSessionId,
+        metadata: attached
+          ? {
+              chips: without(
+                "chips",
+                (entry) =>
+                  typeof entry.id === "string" && entry.id.trim() === itemId,
+              ),
+            }
+          : {
+              pull_requests: without(
+                "pull_requests",
+                (entry) =>
+                  typeof entry.url === "string" && entry.url.trim() === itemId,
+              ),
+            },
+      });
+      return;
+    }
+    const kind = chipKind(chip);
+    if (kind === "browser" || kind === "terminal" || kind === "editor") {
+      onRemoveSurface?.(itemId);
+      return;
+    }
+    throw new Error("This chip cannot be removed.");
+  };
+  const chipActions = useRef({ removeChip, openChip });
+  chipActions.current = { removeChip, openChip };
+  // The rail keeps one callback while a turn streams (it redraws only
+  // when its chips change).
+  const openChipFromRail = useCallback(
+    (url: string, mode: OpenMode) => chipActions.current.openChip(url, mode),
+    [],
+  );
+  // Published for Work's chips list here: what a chips module reads and
+  // acts on, in this window.
+  const boardOwner = useMemo(
+    () => ({ localId: entry.localId }),
+    [entry.localId],
+  );
+  useEffect(() => {
+    if (!activeSessionId) return;
+    chipBoard.publish({
+      sessionId: activeSessionId,
+      owner: boardOwner,
+      chips: {
+        rows: defaultChips,
+        act: async ({ itemId, action }) => {
+          // A chip of Work's without an address (a subagent's step) opens
+          // nothing; any other verb of Work's ran before it got here.
+          if (isOpenAction(action)) return undefined;
+          if (action !== "remove")
+            throw new Error("Work's chips do not do that.");
+          await chipActions.current.removeChip(itemId);
+          return undefined;
+        },
+        open: (url, mode) => chipActions.current.openChip(url, mode),
+      },
+    });
+  }, [activeSessionId, boardOwner, defaultChips]);
+  useEffect(() => {
+    if (!activeSessionId) return;
+    return () =>
+      chipBoard.retract({ sessionId: activeSessionId, owner: boardOwner });
+  }, [activeSessionId, boardOwner]);
+  const chipSession = useMemo(
+    () =>
+      activeSessionId
+        ? {
+            id: activeSessionId,
+            title: sessionFields?.title ?? null,
+            metadata: metadata ?? {},
+          }
+        : undefined,
+    [activeSessionId, sessionFields?.title, metadata],
+  );
+  // The project's chips module reads while the chat is in view, and its
+  // chips stay while it is not, so a chat reopening shows them at once.
+  const chipView = useChips({
+    projectId,
+    module: chipsModule,
+    enabled: frontSurface,
+    session: chipSession,
+    defaults: defaultChips,
+    refreshNonce: chipsRefreshNonce,
+  });
+  const chipRailRef = useRef<ChipRailHandle | null>(null);
+  const registerChipRail = useCallback((handle: ChipRailHandle) => {
+    chipRailRef.current = handle;
+  }, []);
+  const customizeChips = useCallback(() => onCustomizeChipsRef.current?.(), []);
+  const leaveChips = useCallback(() => composerRef.current?.focus(), []);
+  const onCustomizeChipsRef = useRef(onCustomizeChips);
+  onCustomizeChipsRef.current = onCustomizeChips;
+  // A lurking dock folds its chips inert: the shortcut engages the dock
+  // first, then focuses the first chip once they are back. A chat out of
+  // view (the workspace brings it back) focuses it as it opens.
+  const lurkingRef = useRef(false);
+  const expandedRef = useRef(false);
+  const chipsOnExpandRef = useRef(Number.NEGATIVE_INFINITY);
+  useEffect(() => {
+    registerFocusChips?.(() => {
+      if (!expandedRef.current) {
+        chipsOnExpandRef.current = performance.now();
+        return true;
+      }
+      if (!lurkingRef.current) return chipRailRef.current?.focus() ?? false;
+      setDockEngaged(true);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => chipRailRef.current?.focus()),
+      );
+      return true;
+    });
+  }, [registerFocusChips]);
 
   // ↑/↓ in the composer recall previously sent messages, shell-history
   // style: ↑ from an empty (or recalled) draft steps back through what
@@ -843,23 +1153,18 @@ function ChatDockContent({
   // Typing anything exits recall mode.
   // Recalled text names its pills — "fix [sel.md · 3–10]" — since the
   // pills themselves belong to the message that was sent.
-  const sentHistory = messages
+  const sentHistory = (chat.state?.items ?? [])
     .filter(
-      (message) =>
-        message.role === "user" &&
-        message.content !== QUESTIONS_DISMISSED_MESSAGE &&
-        message.content.trim() !== "",
+      (item) =>
+        item.kind === "user_message" &&
+        item.text !== QUESTIONS_DISMISSED_MESSAGE &&
+        !item.answer &&
+        item.text.trim() !== "",
     )
-    .map((message) =>
-      messageWithAttachmentNames(
-        message.content,
-        message.attachments ??
-          attachmentsFromMetadata(
-            typeof message.metadata === "object" && message.metadata !== null
-              ? (message.metadata as Record<string, unknown>)
-              : undefined,
-          ),
-      ),
+    .map((item) =>
+      item.kind === "user_message"
+        ? messageWithAttachmentNames(item.text, item.attachments)
+        : "",
     );
   const [recall, setRecall] = useState<{ index: number; stash: string } | null>(
     null,
@@ -891,8 +1196,8 @@ function ChatDockContent({
   const recallUp = (): boolean => {
     if (sentHistory.length === 0) return false;
     if (recall === null) {
-      if (draft.trim() !== "") return false;
-      applyRecall(sentHistory.length - 1, draft, "up");
+      if (draftRef.current.trim() !== "") return false;
+      applyRecall(sentHistory.length - 1, draftRef.current, "up");
       return true;
     }
     if (recall.index === 0) return true; // at the oldest — swallow the key
@@ -911,16 +1216,26 @@ function ChatDockContent({
     return true;
   };
 
-  // PageUp jumps the timeline to your previous message (same action as
-  // the timeline's ↑ button); the timeline registers the scroll here.
-  const jumpToPreviousRef = useRef<(() => void) | null>(null);
+  const keybindings = useKeybindings();
+  const messageNavigation = useRef<ChatMessageNavigation | null>(null);
+  const navigationHost = useRef(registerMessageNavigation);
+  navigationHost.current = registerMessageNavigation;
+  const registerNavigation = useCallback(
+    (navigation: ChatMessageNavigation | null) => {
+      messageNavigation.current = navigation;
+      navigationHost.current?.(navigation);
+    },
+    [],
+  );
 
   // The agent roster drives composer capabilities (what media this agent
   // accepts), marker names, and the auth-error re-connect action.
   const [roster, setRoster] = useState<{
     agents: AgentInfo[];
     defaultAgentId: string | null;
-  }>({ agents: [], defaultAgentId: null });
+    /** Committed agents whose definition fails: listed, never picked. */
+    invalidIds: string[];
+  }>({ agents: [], defaultAgentId: null, invalidIds: [] });
   // Refetched when the session's agent changes (a switch may involve an
   // agent created after this dock mounted) and on agents-changed
   // broadcasts (a new default agent must reach already-open docks).
@@ -945,6 +1260,9 @@ function ChatDockContent({
         setRoster({
           agents: [...data.agents, ...project.agents.map(projectAgentAsInfo)],
           defaultAgentId: data.defaultAgentId,
+          invalidIds: project.agents
+            .filter((agent) => agent.invalid)
+            .map((agent) => agent.id),
         });
       })
       .catch(() => {});
@@ -952,19 +1270,97 @@ function ChatDockContent({
       cancelled = true;
     };
   }, [sessionAgentId, projectId, rosterNonce]);
+  // The timeline's rows are memoized: what they render through stays
+  // stable until what it reads changes.
+  const resolveAgentName = useCallback(
+    (agentId: string) =>
+      roster.agents.find((agent) => agent.id === rosterAgentId(agentId))?.name,
+    [roster.agents],
+  );
+  const renderAgentIcon = useCallback(
+    (agentId: string | null) => {
+      const agent = roster.agents.find(
+        (candidate) => candidate.id === rosterAgentId(agentId ?? ""),
+      );
+      return agent ? (
+        <HarnessIcon
+          harness={agent.harness}
+          provider={agent.provider}
+          className="size-3.5 text-fg-faint"
+        />
+      ) : undefined;
+    },
+    [roster.agents],
+  );
+  // Response links preview what the chat holds as its chips do.
+  const chipsShown = chipView.chips;
+  const renderLink = useCallback(
+    (props: Parameters<NonNullable<ChatTimelineProps["renderLink"]>>[0]) =>
+      renderResponseLink({ ...props, chips: chipsShown }),
+    [chipsShown],
+  );
+  // A chat in another project (the assistant's) opens by its bookmark
+  // address; the rest by the timeline's own links.
+  const sourceHref = useCallback(
+    (source: InputSource) =>
+      source.kind === "session" &&
+      source.projectId &&
+      source.projectId !== projectId
+        ? chatBookmarkUrl({
+            projectId: source.projectId,
+            sessionId: source.sessionId,
+          })
+        : undefined,
+    [projectId],
+  );
   const activeAgent = authority
     ? undefined
     : roster.agents.find(
         (agent) =>
           agent.id ===
-          (chat.session?.agentId ??
-            entry.agentId ??
-            defaultAgentId ??
-            roster.defaultAgentId),
+          rosterAgentId(
+            chat.session?.agentId ??
+              entry.agentId ??
+              defaultAgentId ??
+              roster.defaultAgentId ??
+              "",
+          ),
       );
+  // Any available agent can continue this chat, with context handed to
+  // its harness. Connected projects use their server's agent catalog.
+  const otherAgents = authority
+    ? 0
+    : roster.agents.filter(
+        (agent) =>
+          agent.id !== activeAgent?.id && !roster.invalidIds.includes(agent.id),
+      ).length;
+  // The agent's permission mode (the harness's own) and sandboxing (Work's),
+  // shown apart in the inspector (ADR 0182). Profile agents change here;
+  // committed and server definitions change in their files.
+  const remoteAgent = authority
+    ? catalog.data?.items.find(
+        (agent) => agent.id === (chat.session?.agentId ?? selectedAgentId),
+      )
+    : undefined;
+  const agentPermissions = agentPermissionView({
+    agent: activeAgent,
+    remote: authority
+      ? {
+          sandboxing: remoteAgent?.sandboxing,
+          harnessPermissions: remoteAgent?.harnessPermissions,
+        }
+      : undefined,
+  });
   // Unknown roster (fetch pending/failed): stay permissive; the server
   // answers with a friendly error if the harness really can't take it.
   const accepts = activeAgent?.accepts ?? ["image", "document"];
+  const {
+    addFilesTo,
+    transferError,
+    setTransferError,
+    pendingTransfers,
+    pendingTransfersRef,
+  } = useComposerFiles({ projectId, accepts, owner: composerRef });
   const [inspected, setInspected] = useState(false);
   const modelCatalog = useQuery({
     queryKey: ["desktop", "agent-models", activeAgent?.id],
@@ -977,29 +1373,51 @@ function ChatDockContent({
   });
   const selectedModel =
     (chat.session ? chat.session.model : entry.model) || activeAgent?.model;
-  const reportedModel = latestReportedModel(chat.messages);
+  const reportedModel = latestReportedModel(chat.timeline);
+  // Nothing pinned: the harness runs its own default. Ask it which one, for
+  // a new chat right away (that is when the question matters) and for any
+  // other chat once its inspector opens.
+  const harnessDefault = useAgentDefaultModel({
+    projectId,
+    agent: activeAgent,
+    sessionId: chat.sessionId,
+    enabled: !authority && !selectedModel && (inspected || !chat.sessionId),
+  });
+  const runningModel =
+    selectedModel || harnessDefault.data?.model?.id || reportedModel;
   const effortModel = modelCatalog.data?.models.find(
-    (model) =>
-      model.id === (selectedModel || reportedModel) ||
-      model.resolvedId === (selectedModel || reportedModel),
+    (model) => model.id === runningModel || model.resolvedId === runningModel,
   );
   // Auth failures offer a one-click re-login only for account-auth agents
   // (OpenRouter PKCE, Claude Code / Codex logins); API-key agents are
-  // pointed at Settings by the error text itself. A successful reconnect
-  // retries the failed turn on its own — the user already said what they
-  // wanted; fixing the credentials shouldn't cost them a re-send.
-  const awaitingReauthRef = useRef<string | null>(null);
-  const retryRef = useRef(chat.retry);
-  retryRef.current = chat.retry;
-  useEffect(
-    () =>
-      desktopApi.onAgentLoginFinished((result) => {
-        if (result.agentId !== awaitingReauthRef.current) return;
-        awaitingReauthRef.current = null;
-        if (result.ok) void retryRef.current();
-      }),
-    [],
-  );
+  // pointed at Settings by the error text itself. Main runs the failed
+  // turn again once the sign-in works, however it came back (a re-login
+  // here, `/login` in a terminal, a new key): the person already said what
+  // they wanted (ADR 0228). It hears of a failure shown here too (one from
+  // before this run, or one it has forgotten), and again on a re-login.
+  const latestTurn = chat.timeline.at(-1)?.turn;
+  const authFailure =
+    !authority &&
+    latestTurn?.status === "failed" &&
+    latestTurn.error?.kind === "auth"
+      ? latestTurn.id
+      : undefined;
+  const authFailureAgentId = sessionAgentId ?? activeAgent?.id;
+  const authFailureSessionId = chat.sessionId;
+  const reportAuthFailure = useCallback(() => {
+    if (!authFailure || !authFailureSessionId || !authFailureAgentId) return;
+    void desktopApi
+      .agentAuthFailureShown({
+        projectId,
+        sessionId: authFailureSessionId,
+        turnId: authFailure,
+        agentId: authFailureAgentId,
+      })
+      .catch(() => {});
+  }, [authFailure, authFailureSessionId, authFailureAgentId, projectId]);
+  useEffect(() => {
+    reportAuthFailure();
+  }, [reportAuthFailure]);
 
   // Lurk mode: while the agent works and a tab is visible behind the
   // floating dock, the dock shrinks VERTICALLY to a strip — header, the
@@ -1010,8 +1428,9 @@ function ChatDockContent({
   // the turn expand it for good.
   const sectionRef = useRef<HTMLElement>(null);
   const [dockHovered, setDockHovered] = useState(false);
-  // Starts true: the dock claims focus when it opens.
-  const [dockEngaged, setDockEngaged] = useState(true);
+  // Starts true: the dock claims focus when it opens, unless it was started
+  // to watch the surface behind it.
+  const [dockEngaged, setDockEngaged] = useState(!entry.watchBackdrop);
   // The detached window has no tab behind it; the rest of the screen plays
   // that role. Clicking into another app blurs the window, which lurks the
   // chat while the agent works; clicking the dock brings it back.
@@ -1031,10 +1450,14 @@ function ChatDockContent({
   }, [nativeWindow]);
   const nativeBackdrop = nativeWindow && !windowFocused;
   // Deferred focus may run much later in a hidden/throttled window. Explicit
-  // input and external focus changes after it was scheduled own focus. Only
-  // this dock's known autofocus calls are excluded from that authority.
+  // input and external focus changes after it was scheduled own focus. The
+  // app's own focus moves (this composer's autofocus, a New Tab greeting
+  // its user) are excluded from that authority (lib/app-focus).
   const userInteractionRef = useRef(0);
-  const internalAutofocusDepthRef = useRef(0);
+  // A watching dock leaves focus where it is until the person interacts.
+  const watchBackdropInteractionRef = useRef(
+    entry.watchBackdrop ? userInteractionRef.current : null,
+  );
   // When the person last pressed or typed, and last moved the pointer:
   // only signals that follow real input may fold the dock (lurk). Layout
   // moving under a parked pointer, or a row claiming focus as it lands,
@@ -1044,11 +1467,14 @@ function ChatDockContent({
   useLayoutEffect(() => {
     if (!frontSurface) return;
     const inDock = (target: EventTarget | null) =>
-      target instanceof Node && sectionRef.current?.contains(target) === true;
+      target instanceof Node &&
+      (sectionRef.current?.contains(target) === true ||
+        chipRailRef.current?.contains(target) === true);
     const onFocusIn = (event: FocusEvent) => {
-      if (internalAutofocusDepthRef.current === 0) {
-        userInteractionRef.current += 1;
-      }
+      // The app's own moves (this composer's autofocus, a New Tab greeting
+      // its user) do not stand in for the person: a pending autofocus still
+      // lands. Engagement still follows where focus went.
+      if (!appIsMovingFocus()) userInteractionRef.current += 1;
       const inside = inDock(event.target);
       if (inside) {
         setDockEngaged(true);
@@ -1057,17 +1483,18 @@ function ChatDockContent({
       if (!focusMovedByPerson(performance.now() - lastInputAtRef.current))
         return;
       setDockEngaged(false);
-      setSlashDismissed(true);
     };
-    // Clicks on unfocusable chrome (a webview, blank pane space) never
-    // fire focusin — the pointer decides too.
-    const onPointerDown = (event: PointerEvent) => {
+    // Clicks on unfocusable chrome (blank pane space) never fire focusin,
+    // and a click inside a page moves focus with no input this window
+    // sees: the press decides too.
+    const pressed = (inside: boolean) => {
       userInteractionRef.current += 1;
       lastInputAtRef.current = performance.now();
-      const inside = inDock(event.target);
       setDockEngaged(inside);
-      if (!inside) setSlashDismissed(true);
     };
+    const onPointerDown = (event: PointerEvent) =>
+      pressed(inDock(event.target));
+    const stopPagePress = onPagePress(() => pressed(false));
     const onKeyDown = () => {
       userInteractionRef.current += 1;
       lastInputAtRef.current = performance.now();
@@ -1083,7 +1510,12 @@ function ChatDockContent({
         box,
         msSinceMove: 0,
       });
-      setDockHovered((hovered) => (hovered && outside ? false : hovered));
+      // A webview or a changing overlay can miss the enter event. A real
+      // move over the card recovers hover, including slow entry from above.
+      const inside =
+        inDock(event.target) ||
+        inDock(document.elementFromPoint(event.clientX, event.clientY));
+      setDockHovered((hovered) => !outside && (inside || hovered));
     };
     // Paste and drop can be the first interaction when invoked through a
     // context menu, accessibility tooling, or automation, so there is no
@@ -1100,6 +1532,7 @@ function ChatDockContent({
     window.addEventListener("paste", onTransfer, true);
     window.addEventListener("drop", onTransfer, true);
     return () => {
+      stopPagePress();
       window.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown, true);
@@ -1163,114 +1596,6 @@ function ChatDockContent({
     };
   }, [frontSurface, sessionAuthAgent, activeAgent]);
 
-  // Fresh native commands belong to the selected agent and session checkout.
-  // A late response from an earlier agent never reaches the active composer.
-  const commandsAgentId = activeAgent?.id ?? null;
-  const commandsKey = JSON.stringify([
-    projectId,
-    activeAgent,
-    chat.sessionId,
-    checkout?.path,
-  ]);
-  const commandsRequest = useMemo(
-    () => ({
-      key: commandsKey,
-      active: catalogActive,
-      refresh: commandsRefresh,
-    }),
-    [commandsKey, catalogActive, commandsRefresh],
-  );
-  const [nativeCatalog, setNativeCatalog] = useState<
-    AgentCommandsResult & {
-      request?: typeof commandsRequest;
-      loading: boolean;
-    }
-  >({ commands: [], loading: true });
-  useEffect(() => {
-    if (!commandsRequest.active || commandsAgentId === null) return;
-    let cancelled = false;
-    setNativeCatalog({ request: commandsRequest, commands: [], loading: true });
-    void desktopApi
-      .agentCommands({
-        projectId,
-        agentId: commandsAgentId,
-        ...(chat.sessionId ? { sessionId: chat.sessionId } : {}),
-      })
-      .then((result) => {
-        if (!cancelled)
-          setNativeCatalog({
-            ...result,
-            request: commandsRequest,
-            loading: false,
-          });
-      })
-      .catch(() => {
-        if (!cancelled)
-          setNativeCatalog({
-            request: commandsRequest,
-            commands: [],
-            loading: false,
-            error: "Could not load agent commands. Retry to refresh the list.",
-          });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [commandsRequest, commandsAgentId, projectId, chat.sessionId]);
-  const nativeCurrent = nativeCatalog.request === commandsRequest;
-  const commandsLoading =
-    catalogActive &&
-    (skillCatalog.loading ||
-      (commandsAgentId !== null && (!nativeCurrent || nativeCatalog.loading)));
-  const commandsError =
-    skillCatalog.error ?? (nativeCurrent ? nativeCatalog.error : undefined);
-  const entries = useMemo(
-    () =>
-      slashEntries({
-        skills: skillsForAgent(skillCatalog.skills, activeAgent?.skills),
-        commands: nativeCurrent ? nativeCatalog.commands : [],
-        harnessLabel:
-          activeAgent?.harness === "codex" ? "Codex skill" : "Claude Code",
-      }),
-    [
-      skillCatalog.skills,
-      activeAgent?.skills,
-      activeAgent?.harness,
-      nativeCurrent,
-      nativeCatalog.commands,
-    ],
-  );
-  const slashMatches = useMemo(
-    () =>
-      slashToken === undefined ? [] : matchSlashEntries(entries, slashToken),
-    [entries, slashToken],
-  );
-  const slashMenuOpen =
-    frontSurface && slashToken !== undefined && !slashDismissed;
-  // Known entries remain usable while the other catalog is still loading.
-  // Only unresolved slash text waits, so a failed probe never sends it by accident.
-  const resolutionBlocked = (text: string, command?: SlashEntry) =>
-    text.startsWith("/") &&
-    !command &&
-    !entries.some(
-      (entry) => entry.name === /^\/([^\s\uFFFC]+)/.exec(text)?.[1],
-    ) &&
-    (!catalogActive || commandsLoading || !!commandsError);
-  const slashSelected = Math.max(
-    0,
-    slashMatches.findIndex((entry) => entry.name === slashSelection),
-  );
-  const commandResolutionBlocked = resolutionBlocked(
-    draft,
-    slashMenuOpen ? slashMatches[slashSelected] : undefined,
-  );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: typing or changing agents resets navigation
-  useEffect(() => {
-    setSlashSelection(undefined);
-  }, [slashToken, commandsKey]);
-
-  const runSlash = (entry: SlashEntry) => sendDraft(false, entry);
-
   // Whether a one-click re-login exists is main's verdict (the auth-health
   // probe reports it); the dock only supplies the label and the launcher.
   const reauth =
@@ -1281,11 +1606,10 @@ function ChatDockContent({
               ? "Reconnect OpenRouter"
               : `Re-login ${activeAgent.name}`,
           run: () => {
-            awaitingReauthRef.current = activeAgent.id;
-            void desktopApi.agentLogin(activeAgent.id).then((result) => {
-              // Login never started (e.g. key-auth agent): stop waiting.
-              if (!result.started) awaitingReauthRef.current = null;
-            });
+            // Main forgets a failure after a while: the one shown here
+            // runs again once this re-login finishes, however old it is.
+            reportAuthFailure();
+            void desktopApi.agentLogin(activeAgent.id);
           },
         }
       : undefined;
@@ -1299,17 +1623,56 @@ function ChatDockContent({
   // chat that no longer exists. The unmount cleanup is a separate effect:
   // a combined effect's cleanup would fire on every dep change, flapping
   // working false→true and producing phantom "finished" notifications.
-  const hasDraft = draft.trim().length > 0 || pillCount > 0;
-  const awaitingInput =
-    Boolean(pendingQuestion && pendingQuestion.blocking !== false) ||
-    (Boolean(questions) && !chat.isWorking);
+  const hasDraft = hasText || pillCount > 0;
+  const awaitingInput = chat.requests.some(
+    (request) => request.blocking && request.answerable,
+  );
+  // What the chat left running, for its icon to say while it rests: a
+  // watch, subagents still at work, a background command.
+  const leftRunning = firstWaiting([
+    backgroundCommands.some(
+      (command) => command.kind === "watch" && command.status === "running",
+    )
+      ? "watch"
+      : null,
+    heldChips.some(
+      (chip) => chip.data?.kind === "subagent" && chip.signal === "working",
+    )
+      ? "subagent"
+      : null,
+    backgroundCommands.some(
+      (command) => command.kind === "command" && command.status === "running",
+    )
+      ? "command"
+      : null,
+  ]);
+  // A turn whose every running step only waits shows what it waits on:
+  // the agent is doing nothing but wait.
+  const waitingNow = useMemo(
+    () => (chat.isWorking ? currentWait(chat.state, activeTurnId) : null),
+    [chat.isWorking, chat.state, activeTurnId],
+  );
+  const iconActivity = chatActivity({
+    working: chat.isWorking,
+    awaitingInput,
+    waitingNow,
+    leftRunning,
+  });
   useEffect(() => {
     onSignalsChange(entry.localId, {
       working: chat.isWorking,
       draft: hasDraft,
       awaitingInput,
+      activity: iconActivity,
     });
-  }, [chat.isWorking, hasDraft, awaitingInput, entry.localId, onSignalsChange]);
+  }, [
+    chat.isWorking,
+    hasDraft,
+    awaitingInput,
+    iconActivity,
+    entry.localId,
+    onSignalsChange,
+  ]);
   const onSignalsChangeRef = useRef(onSignalsChange);
   onSignalsChangeRef.current = onSignalsChange;
   useEffect(
@@ -1318,6 +1681,7 @@ function ChatDockContent({
         working: false,
         draft: false,
         awaitingInput: false,
+        activity: null,
       }),
     [entry.localId],
   );
@@ -1330,10 +1694,54 @@ function ChatDockContent({
   const onEscapeToFloatingRef = useRef(onEscapeToFloating);
   onEscapeToFloatingRef.current = onEscapeToFloating;
 
+  // A started chat's entry names the agent its session runs on and the
+  // harness it is bound to, so the palette's pickers target them, even for
+  // a chat older than the project's session list (which they read
+  // otherwise). A connected project's agents are the server's, never a
+  // local entry's.
+  const onSessionAgentRef = useRef(onSessionAgent);
+  onSessionAgentRef.current = onSessionAgent;
+  const boundHarness = chat.session?.harness ?? undefined;
+  useEffect(() => {
+    if (
+      authority ||
+      !sessionAgentId ||
+      (sessionAgentId === entry.agentId &&
+        (!boundHarness || boundHarness === entry.harness))
+    )
+      return;
+    onSessionAgentRef.current?.(entry.localId, {
+      agentId: sessionAgentId,
+      ...(boundHarness ? { harness: boundHarness } : {}),
+    });
+  }, [
+    authority,
+    sessionAgentId,
+    boundHarness,
+    entry.agentId,
+    entry.harness,
+    entry.localId,
+  ]);
+
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
-  const sendRef = useRef(chat.send);
-  sendRef.current = chat.send;
+  // Sent from elsewhere (the palette), it reaches a working agent the way
+  // a message typed here does. Read as it sends: it can come as the chat
+  // mounts, before the preference has loaded.
+  const sendFromElsewhere = async (
+    text: string,
+    attachments?: AgentChatAttachment[],
+  ) => {
+    const queue = await desktopApi
+      .getPrefs()
+      .then((prefs) => normalizePrefs(prefs).chatQueueMessages)
+      .catch(() => false);
+    return chat.send(text, attachments, {
+      dispatch: queue ? "queue" : "steer",
+    });
+  };
+  const sendRef = useRef(sendFromElsewhere);
+  sendRef.current = sendFromElsewhere;
   const pendingSentRef = useRef(false);
   useEffect(() => {
     const pending = entryRef.current.pendingMessage;
@@ -1343,6 +1751,7 @@ function ChatDockContent({
     onEntryChangeRef.current({
       ...entryRef.current,
       pendingMessage: undefined,
+      watchBackdrop: undefined,
     });
   }, []);
 
@@ -1372,6 +1781,7 @@ function ChatDockContent({
     if (minimizingRef.current) return;
     minimizingRef.current = true;
     setMinimizing(true);
+    onLeaveStarted?.();
   };
 
   // The mode flip travels through the entry owner and lands a frame or
@@ -1395,10 +1805,11 @@ function ChatDockContent({
   // or the minimize button) closes it instead of parking an empty bubble.
   // A typed-but-unsent draft counts as worth keeping.
   const isEmpty =
-    messages.length === 0 &&
+    chat.timeline.length === 0 &&
+    chat.pending.length === 0 &&
     !chat.isSending &&
-    chat.queuedMessageCount === 0 &&
-    draft.trim() === "" &&
+    chat.queue.length === 0 &&
+    draftRef.current.trim() === "" &&
     pillCount === 0;
   const isEmptyRef = useRef(isEmpty);
   isEmptyRef.current = isEmpty;
@@ -1407,8 +1818,15 @@ function ChatDockContent({
 
   const animatedClose = () => {
     if (closingRef.current) return;
+    // A folded group closes several tabs. Its host checks their drafts and
+    // page leave guards first; a cancelled close must leave this chat visible.
+    if (entryRef.current.mode === "tab" && entryRef.current.surfacesCollapsed) {
+      onCloseRef.current(entryRef.current.localId);
+      return;
+    }
     closingRef.current = true;
     onCloseStarted?.();
+    onLeaveStarted?.();
     setClosing(true);
   };
   const finishClose = () => {
@@ -1432,6 +1850,263 @@ function ChatDockContent({
   useEffect(() => {
     registerSend?.((message) => void sendRef.current(message));
   }, [registerSend]);
+  // A skill from the palette (ADR 0270). With no prose in the composer, the
+  // attachments there are what it is for, and go with it; a message being
+  // written stays.
+  const applySkill = (message: string) => {
+    const current = composerRef.current?.read({ trim: false });
+    const composed =
+      current?.text.trim() === "" && current.attachments.length > 0
+        ? takeComposer()
+        : null;
+    void sendRef.current(
+      composed ? `${message}\n${composed.message}` : message,
+      composed?.files,
+    );
+  };
+  const applySkillRef = useRef(applySkill);
+  applySkillRef.current = applySkill;
+  useEffect(() => {
+    registerSkill?.((message) => applySkillRef.current(message));
+  }, [registerSkill]);
+  useEffect(() => {
+    registerComposerFocus?.(() => composerRef.current?.focusToType());
+  }, [registerComposerFocus]);
+
+  // The composer's "/" and "@" menus (ADR 0274): open while the caret ends
+  // a word starting with either, anywhere in the message. Escape closes the
+  // menu for that word; the next word opens it again.
+  const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
+  const [dismissedTrigger, setDismissedTrigger] =
+    useState<ComposerTrigger | null>(null);
+  // Every opening reads the catalogs fresh: skills are files that change.
+  // Counted as the word starts, so the first read already asks for them.
+  const [menuOpenings, setMenuOpenings] = useState(0);
+  const openedCharRef = useRef<string | null>(null);
+  const readTrigger = useCallback(() => {
+    const root = composerRef.current?.element();
+    const next =
+      root && root.ownerDocument.activeElement === root
+        ? triggerAtCaret(root)
+        : null;
+    if (next && next.char !== openedCharRef.current)
+      setMenuOpenings((count) => count + 1);
+    openedCharRef.current = next?.char ?? null;
+    if (!next) setDismissedTrigger(null);
+    setTrigger((current) =>
+      current &&
+      next &&
+      sameTrigger(current, next) &&
+      current.query === next.query &&
+      current.end === next.end
+        ? current
+        : next,
+    );
+  }, []);
+  // The caret moving (arrows, a click) and focus leaving count as the word
+  // changing, not only typing.
+  useEffect(() => {
+    const onFocusOut = (event: FocusEvent) => {
+      if (event.target !== composerRef.current?.element()) return;
+      openedCharRef.current = null;
+      setTrigger(null);
+    };
+    document.addEventListener("selectionchange", readTrigger);
+    document.addEventListener("focusout", onFocusOut);
+    return () => {
+      document.removeEventListener("selectionchange", readTrigger);
+      document.removeEventListener("focusout", onFocusOut);
+    };
+  }, [readTrigger]);
+  const menuKind =
+    trigger && !sameTrigger(trigger, dismissedTrigger) ? trigger.char : null;
+  const [skillsRetry, setSkillsRetry] = useState(0);
+  const menuQuery = trigger?.query ?? "";
+  // "/" starting a message that holds nothing else: the agent's own
+  // commands apply, sent as written.
+  const slashAlone =
+    menuKind === "/" &&
+    pillCount === 0 &&
+    draftRef.current.trim() === `/${menuQuery}`;
+  // "/" starting the message, before any words (pills may come first).
+  const slashLeads =
+    menuKind === "/" &&
+    draftRef.current.trimStart().startsWith(`/${menuQuery}`);
+  // The chat's own commands, offered when the inspector offers them.
+  const turnBusy = Boolean(chat.isSending || chat.session?.running);
+  const editAgent = turnBusy || otherAgents === 0 ? undefined : onEditAgent;
+  const editModel = turnBusy || !activeAgent ? undefined : onEditModel;
+  const editEffort =
+    turnBusy || supportedEfforts(activeAgent, effortModel).length === 0
+      ? undefined
+      : onEditEffort;
+  const editPermissionMode =
+    agentPermissions.editable && !turnBusy ? onEditPermissionMode : undefined;
+  const forkCurrent = activeSessionId ? onForkCurrent : undefined;
+  const archiveChat = activeSessionId && !archived ? onArchive : undefined;
+  // Status opens this chat's inspector, as the palette's Status does.
+  const [ownInspectRequests, setOwnInspectRequests] = useState(0);
+  const hasSession = Boolean(chat.session);
+  // Hosts hand new callbacks every render; the rows change only when what
+  // is offered does, and run whatever the host gave last.
+  const commandRunsRef = useRef({
+    editAgent,
+    editModel,
+    editEffort,
+    editPermissionMode,
+    forkCurrent,
+    archiveChat,
+  });
+  commandRunsRef.current = {
+    editAgent,
+    editModel,
+    editEffort,
+    editPermissionMode,
+    forkCurrent,
+    archiveChat,
+  };
+  const offered = {
+    agent: Boolean(editAgent),
+    model: Boolean(editModel),
+    effort: Boolean(editEffort),
+    permissions: Boolean(editPermissionMode),
+    fork: Boolean(forkCurrent),
+    archive: Boolean(archiveChat),
+  };
+  const chatCommands = useMemo(() => {
+    const runs = commandRunsRef;
+    const commands: ChatCommand[] = [];
+    if (hasSession)
+      commands.push({
+        id: "session-status",
+        label: "Status",
+        detail: "Session details and actions",
+        icon: CircleDot,
+        keywords: ["session", "details", "inspector"],
+        run: () => setOwnInspectRequests((count) => count + 1),
+      });
+    if (offered.agent)
+      commands.push({
+        id: "switch-agent",
+        label: "Agent",
+        detail: "Switch this chat's agent",
+        icon: Bot,
+        keywords: ["switch agent"],
+        opens: true,
+        run: () => runs.current.editAgent?.(),
+      });
+    if (offered.model)
+      commands.push({
+        id: "switch-model",
+        label: "Model",
+        detail: "Change the model",
+        icon: Cpu,
+        keywords: ["change model"],
+        opens: true,
+        run: () => runs.current.editModel?.(),
+      });
+    if (offered.effort)
+      commands.push({
+        id: "change-effort",
+        label: "Effort",
+        detail: "Change how much the model reasons",
+        icon: Gauge,
+        keywords: ["reasoning", "thinking", "change effort"],
+        opens: true,
+        run: () => runs.current.editEffort?.(),
+      });
+    if (offered.permissions)
+      commands.push({
+        id: "change-permission-mode",
+        label: "Permissions",
+        detail: "Change what the agent does without asking",
+        icon: ShieldCheck,
+        keywords: ["permission mode", "approvals"],
+        opens: true,
+        run: () => runs.current.editPermissionMode?.(),
+      });
+    if (offered.fork)
+      commands.push({
+        id: "fork-chat",
+        label: "Fork chat",
+        detail: "Continue in a copy of this chat",
+        icon: GitFork,
+        keywords: ["fork", "copy", "branch"],
+        run: () => runs.current.forkCurrent?.(),
+      });
+    if (offered.archive)
+      commands.push({
+        id: "archive-chat",
+        label: "Archive chat",
+        detail: "Put this chat away, keeping its transcript",
+        icon: Archive,
+        keywords: ["archive", "hide"],
+        run: () => runs.current.archiveChat?.(),
+      });
+    return commands;
+  }, [
+    hasSession,
+    offered.agent,
+    offered.model,
+    offered.effort,
+    offered.permissions,
+    offered.fork,
+    offered.archive,
+  ]);
+  const slashRows = useSlashRows({
+    active: menuKind === "/",
+    refresh: menuOpenings + skillsRetry,
+    projectId,
+    agent: activeAgent,
+    sessionId: activeSessionId ?? null,
+    query: menuQuery,
+    alone: slashAlone,
+    leads: slashLeads,
+    commands: chatCommands,
+  });
+  // "@" searches where the chat works: its own worktree, or the project.
+  const mentionRows = useMentionRows({
+    active: menuKind === "@",
+    refresh: menuOpenings,
+    projectId,
+    selfTabKey: `chat:${entry.localId}`,
+    selfSessionId: activeSessionId ?? null,
+    worktreePath:
+      checkout && checkout.kind !== "primary" && checkout.present
+        ? checkout.path
+        : undefined,
+    query: menuQuery,
+  });
+  const menuRows =
+    menuKind === "/"
+      ? slashRows
+      : menuKind === "@"
+        ? mentionRows
+        : NO_MENU_ROWS;
+  const menuOpen = menuRows.length > 0;
+  // A new word, or another query, highlights its first row.
+  const [menuSelection, setMenuSelection] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the word and its query are the reset signal
+  useEffect(() => setMenuSelection(0), [menuKind, menuQuery]);
+  const menuSelected = firstPickable(
+    menuRows,
+    Math.min(menuSelection, menuRows.length - 1),
+  );
+  const composerFormRef = useRef<HTMLFormElement>(null);
+  const menuId = `composer-menu-${entry.localId}`;
+  // The composer keeps the keyboard and names the highlighted row.
+  useEffect(() => {
+    const root = composerRef.current?.element();
+    if (!root) return;
+    root.setAttribute("aria-autocomplete", "list");
+    if (menuOpen && menuSelected >= 0) {
+      root.setAttribute("aria-controls", menuId);
+      root.setAttribute("aria-activedescendant", `${menuId}-${menuSelected}`);
+    } else {
+      root.removeAttribute("aria-controls");
+      root.removeAttribute("aria-activedescendant");
+    }
+  }, [menuOpen, menuSelected, menuId]);
 
   // Complete the mode change from the animation event instead of starting
   // an unmount timer before React has committed the exit pose. The fallback
@@ -1464,99 +2139,132 @@ function ChatDockContent({
     return { message, files };
   };
 
-  const sendDraft = (now: boolean, selected?: SlashEntry) => {
-    if (pendingTransfersRef.current > 0) return;
-    const current = composerRef.current?.read({ trim: false });
-    if (!current) return;
-    // Input and submit can arrive before React paints the new draft. Never
-    // apply a highlighted row from an earlier token to the user's live text.
-    const menuCurrent = slashMenuOpen && current.text === draft;
-    if (selected && !menuCurrent) return;
-    const command = menuCurrent
-      ? (selected ?? slashMatches[slashSelected])
-      : undefined;
-    if (command?.kind === "status" || current.text.trim() === "/status") {
-      rewriteText("");
-      setRecall(null);
-      setLocalInspectorNonce((value) => value + 1);
-      return;
-    }
-    if (resolutionBlocked(current.text, command)) return;
-    if (command) rewriteText(`/${command.name}`);
+  const sendDraft = (now: boolean) => {
     const composed = takeComposer();
     if (!composed) return;
-    const message = resolveSlashMessage(composed.message, entries);
-    if (now) void chat.sendNow(message, composed.files);
-    else void chat.send(message, composed.files);
+    if (now) void chat.sendNow(composed.message, composed.files);
+    else
+      void chat.send(composed.message, composed.files, {
+        dispatch: queueMessages ? "queue" : "steer",
+      });
   };
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     sendDraft(false);
   };
-  /** ⌘↵ interrupts the running turn and sends through the same resolver. */
+  /** ⌘↵ interrupts the running turn and sends the same way. */
   const submitNow = () => sendDraft(true);
+
+  /** Swap the menu's word for text, or remove it, as typing would (undoable). */
+  const replaceWord = (range: Range, text: string) => {
+    const root = composerRef.current?.element();
+    if (!root) return;
+    root.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.execCommand(text ? "insertText" : "delete", false, text);
+  };
+  /** What a pick teaches the palette's ranking: the same keys it learns. */
+  const recordPick = (row: ComposerMenuRow) => {
+    if (!row.usage) return;
+    const typed = normalizeCommandQuery(menuQuery).trim();
+    void desktopApi
+      .paletteRecord({
+        key: row.usage,
+        ...(typed ? { query: typed } : {}),
+        visit: paletteCountsVisit(row.usage),
+        projectId,
+      })
+      .catch(() => {});
+  };
+  /**
+   * A row picked: a skill or a mention becomes a pill where the word was,
+   * the chat's commands run and take the word away, and an agent's own
+   * command is sent as written (Tab keeps it for its arguments).
+   */
+  const pickMenuRow = (
+    row: ComposerMenuRow | undefined,
+    how: "enter" | "tab" | "click",
+  ) => {
+    if (!row || row.disabled || !trigger) return;
+    const range = triggerRange(trigger);
+    if (!range) return;
+    const { pick } = row;
+    if (pick.kind === "retry") {
+      setSkillsRetry((count) => count + 1);
+      return;
+    }
+    recordPick(row);
+    if (pick.kind === "action") {
+      replaceWord(range, "");
+      pick.run();
+      return;
+    }
+    if (pick.kind === "command") {
+      const command = `/${pick.entry.name}`;
+      if (how === "tab") {
+        replaceWord(range, `${command} `);
+        return;
+      }
+      replaceWord(range, command);
+      sendDraft(false);
+      return;
+    }
+    const attachment =
+      pick.kind === "skill" ? skillMention(pick.entry) : pick.attachment;
+    composerRef.current?.insertPills(
+      [{ ...attachment, id: crypto.randomUUID() }],
+      { range },
+    );
+  };
+  /** The menu's keys, before recall and sending: it leads while it is open. */
+  const menuKeyDown = (event: KeyboardEvent<HTMLDivElement>): boolean => {
+    if (!menuOpen || !trigger) return false;
+    const plain =
+      !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setMenuSelection(stepPickable(menuRows, menuSelected, step));
+      return true;
+    }
+    // Nothing to pick yet (a catalog still loading): the keys do as usual.
+    if (plain && (event.key === "Enter" || event.key === "Tab")) {
+      if (menuSelected < 0) return false;
+      pickMenuRow(
+        menuRows[menuSelected],
+        event.key === "Tab" ? "tab" : "enter",
+      );
+      return true;
+    }
+    if (event.key === "Escape") {
+      setDismissedTrigger(trigger);
+      return true;
+    }
+    // "/review the auth change" typed without looking: Space after a
+    // skill's whole name puts it in the message.
+    if (plain && event.key === " " && trigger.char === "/" && menuQuery) {
+      const typed = menuQuery.toLowerCase();
+      const exact = menuRows.find(
+        (row) =>
+          row.pick.kind === "skill" &&
+          row.pick.entry.name.toLowerCase() === typed,
+      );
+      if (exact) {
+        pickMenuRow(exact, "enter");
+        return true;
+      }
+    }
+    return false;
+  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
     const primaryModifier = /Mac/.test(navigator.platform)
       ? event.metaKey
       : event.ctrlKey;
-    // The slash menu owns navigation keys while open (before recall's
-    // ArrowUp/Down claim below). Escape closes it and stays in the
-    // composer — preventDefault keeps the window listener from stepping
-    // the whole chat down.
-    if (
-      slashMenuOpen &&
-      composerRef.current?.read({ trim: false }).text === draft
-    ) {
-      if (
-        !event.altKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.shiftKey &&
-        slashMatches.length > 0 &&
-        (event.key === "ArrowDown" || event.key === "ArrowUp")
-      ) {
-        event.preventDefault();
-        setSlashSelection((current) => {
-          const at = Math.max(
-            0,
-            slashMatches.findIndex((entry) => entry.name === current),
-          );
-          const next =
-            event.key === "ArrowDown"
-              ? Math.min(at + 1, slashMatches.length - 1)
-              : Math.max(at - 1, 0);
-          return slashMatches[next]?.name;
-        });
-        return;
-      }
-      if (event.key === "Tab" && !event.shiftKey && slashMatches.length > 0) {
-        // Complete the name, keep typing arguments.
-        event.preventDefault();
-        const entry = slashMatches[slashSelected];
-        if (entry) {
-          rewriteText(`/${entry.name} `);
-          setRecall(null);
-        }
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSlashDismissed(true);
-        return;
-      }
-      if (event.key === "Enter" && !event.shiftKey && !primaryModifier) {
-        event.preventDefault();
-        const entry = slashMatches[slashSelected];
-        if (entry) runSlash(entry);
-        else if (!commandsLoading) submit();
-        return;
-      }
-    }
-    if (event.key === "PageUp") {
+    if (menuKeyDown(event)) {
       event.preventDefault();
-      jumpToPreviousRef.current?.();
       return;
     }
     if (
@@ -1585,7 +2293,7 @@ function ChatDockContent({
     // still under the caret, and that break must win over the pill.
     if (
       event.key === "Backspace" &&
-      draft.trim().length === 0 &&
+      draftRef.current.trim().length === 0 &&
       composerRef.current?.emptyButPills() &&
       !event.metaKey &&
       !event.altKey
@@ -1610,7 +2318,7 @@ function ChatDockContent({
    * (or where it was dropped); capped like the server.
    */
   const addTextPill = (
-    pill: AgentChatTextAttachment,
+    pill: AgentTextAttachment,
     at?: { x: number; y: number },
   ) => {
     const composer = composerRef.current;
@@ -1644,118 +2352,8 @@ function ChatDockContent({
   const addTextPillRef = useRef(addTextPill);
   addTextPillRef.current = addTextPill;
 
-  /** Serialize transfers so budgets, caret position and send stay coherent. */
-  const addFilesQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const addFiles = (files: File[], at?: { x: number; y: number }) => {
-    const composer = composerRef.current;
-    const root = composer?.element();
-    if (files.length === 0 || !composer || !root) return;
-    const selection = window.getSelection();
-    const currentRange = at
-      ? document.caretRangeFromPoint(at.x, at.y)
-      : selection?.rangeCount
-        ? selection.getRangeAt(0)
-        : null;
-    const range =
-      currentRange && root.contains(currentRange.commonAncestorContainer)
-        ? currentRange.cloneRange()
-        : document.createRange();
-    if (!currentRange || !root.contains(currentRange.commonAncestorContainer)) {
-      range.selectNodeContents(root);
-      range.collapse(false);
-    }
-    pendingTransfersRef.current += 1;
-    setPendingTransfers(pendingTransfersRef.current);
-    setTransferError(undefined);
-    addFilesQueueRef.current = addFilesQueueRef.current
-      .then(async () => {
-        // A closed/replaced composer must never receive another chat's files.
-        if (composerRef.current !== composer || !root.isConnected) return;
-        const current = composer.read().attachments;
-        let budget =
-          MAX_TOTAL_MEDIA_BYTES -
-          current.reduce(
-            (total, attachment) =>
-              attachment.kind === "text"
-                ? total
-                : total + Math.round((attachment.dataBase64.length * 3) / 4),
-            0,
-          );
-        const pills: ComposerAttachment[] = [];
-        const failures: string[] = [];
-        for (const file of files) {
-          if (current.length + pills.length >= MAX_ATTACHMENTS) {
-            failures.push(
-              `${file.name || "File"}: a message can hold ${MAX_ATTACHMENTS} attachments. Send these first, then paste the remaining files.`,
-            );
-            continue;
-          }
-          try {
-            const kind = mediaKindOf(file);
-            if (
-              kind &&
-              accepts.includes(kind) &&
-              file.size > 0 &&
-              file.size <= MAX_ATTACHMENT_BYTES &&
-              file.size <= budget
-            ) {
-              pills.push(await encodeFile(file, kind));
-              budget -= file.size;
-            } else {
-              const existing = pathPillFor(file);
-              if (existing) pills.push(existing);
-              else {
-                if (file.size > 128 * 1024 * 1024)
-                  throw new Error(
-                    "Save this file to disk, then attach it from there (clipboard limit: 128 MB).",
-                  );
-                const saved = await desktopApi.composerFileSave({
-                  projectId,
-                  name: file.name || "clipboard-file",
-                  bytes: new Uint8Array(await file.arrayBuffer()),
-                });
-                pills.push({
-                  id: crypto.randomUUID(),
-                  ...textPill(
-                    saved.path,
-                    { type: "path", path: saved.path },
-                    saved.name,
-                  ),
-                });
-              }
-            }
-          } catch (error) {
-            failures.push(
-              `${file.name || "File"}: ${error instanceof Error ? error.message : "Could not attach this file. Paste it again or attach it from disk."}`,
-            );
-          }
-        }
-        if (composerRef.current !== composer || !root.isConnected) return;
-        // Text pills can arrive while a file is being read; report overflow.
-        const room = Math.max(
-          0,
-          MAX_ATTACHMENTS - composer.read().attachments.length,
-        );
-        if (pills.length > room)
-          failures.push(
-            "Some files could not fit. Send these attachments first, then paste the remaining files.",
-          );
-        composer.insertPills(pills.slice(0, room), { range });
-        if (failures.length > 0) setTransferError(failures.join("\n"));
-      })
-      .catch((error: unknown) => {
-        setTransferError(
-          error instanceof Error
-            ? error.message
-            : "Could not attach files. Try pasting again.",
-        );
-      })
-      .finally(() => {
-        pendingTransfersRef.current -= 1;
-        setPendingTransfers(pendingTransfersRef.current);
-      });
-  };
-
+  const addFiles = (files: File[], at?: { x: number; y: number }) =>
+    addFilesTo(composerRef.current, files, at);
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
 
@@ -1772,58 +2370,17 @@ function ChatDockContent({
     data: DataTransfer | null,
     opts: { intoComposer: boolean },
   ): boolean => {
-    const files = filesFrom(data);
-    if (files.length > 0) {
-      addFilesRef.current(files);
+    const paste = readComposerPaste(data);
+    if (paste.kind === "files") {
+      addFilesRef.current(paste.files);
       return true;
     }
-    const fromEditor = selectionFromClipboard(data);
-    if (fromEditor) {
-      addTextPillRef.current(
-        textPill(
-          fromEditor.text.replace(/\r\n?/g, "\n"),
-          {
-            type: "selection",
-            filePath: fromEditor.filePath,
-            ...(fromEditor.startLine !== undefined
-              ? { startLine: fromEditor.startLine }
-              : {}),
-            ...(fromEditor.endLine !== undefined
-              ? { endLine: fromEditor.endLine }
-              : {}),
-          },
-          selectionName(fromEditor),
-        ),
-      );
+    if (paste.kind === "pill") {
+      addTextPillRef.current(paste.pill);
       return true;
     }
-    let text = data?.getData("text/plain") ?? "";
-    if (!text) {
-      // Copy buttons that write only a text/html flavor (ClipboardItem)
-      // must still paste something: take the markup's text. Without this,
-      // the unconditional preventDefault would swallow the paste whole.
-      const html = data?.getData("text/html") ?? "";
-      if (html) {
-        text =
-          new DOMParser().parseFromString(html, "text/html").body.textContent ??
-          "";
-      }
-    }
-    const classified = classifyPastedText(text);
-    if (classified.kind === "pill") {
-      addTextPillRef.current(
-        textPill(
-          text.replace(/\r\n?/g, "\n"),
-          classified.source,
-          classified.name,
-        ),
-      );
-      return true;
-    }
-    if (!opts.intoComposer || !text) return false;
-    // Rich clipboards (HTML from a page) land as plain text — the composer
-    // is prose, not a document.
-    composerRef.current?.insertText(text.replace(/\r\n?/g, "\n"));
+    if (!opts.intoComposer || paste.kind === "nothing") return false;
+    composerRef.current?.insertText(paste.text);
     return true;
   };
   const consumePasteRef = useRef(consumePaste);
@@ -1904,17 +2461,43 @@ function ChatDockContent({
   // The composer's attach button opens this hidden picker.
   const fileInputRef = useRef<HTMLInputElement>(null);
   const focusComposerInternally = useCallback(() => {
-    internalAutofocusDepthRef.current += 1;
-    try {
-      composerRef.current?.focus();
-    } finally {
-      internalAutofocusDepthRef.current -= 1;
-    }
+    moveFocusAsApp(() => composerRef.current?.focus());
   }, []);
+  // Restore to here (ADR 0197): undo the turn and every later one, files
+  // included, then hand the person their words back in the composer so
+  // they can say it differently straight away.
+  const rollback = async (
+    turnId: string,
+    item: UserMessageItem,
+  ): Promise<boolean> => {
+    const done = await chat.rollback(turnId);
+    if (!done) return false;
+    const current = composerRef.current?.read({ trim: false });
+    if (
+      current &&
+      current.text.trim() === "" &&
+      current.attachments.length === 0
+    ) {
+      rewriteText(messageWithAttachmentNames(item.text, item.attachments));
+      setRecall(null);
+    }
+    focusComposerInternally();
+    return true;
+  };
+  expandedRef.current = expanded;
   useEffect(() => {
     if (!expanded) return;
+    // The focus-chips shortcut opened it: its first chip, not the composer.
+    const chipsFirst = performance.now() - chipsOnExpandRef.current < 1000;
+    chipsOnExpandRef.current = Number.NEGATIVE_INFINITY;
+    if (
+      !chipsFirst &&
+      watchBackdropInteractionRef.current === userInteractionRef.current
+    )
+      return;
     const userInteraction = userInteractionRef.current;
     const frame = requestAnimationFrame(() => {
+      if (chipsFirst && chipRailRef.current?.focus()) return;
       if (userInteractionRef.current === userInteraction) {
         focusComposerInternally();
       }
@@ -1928,16 +2511,28 @@ function ChatDockContent({
   // The surfacing tab may mount (and focus) a couple of frames later,
   // after its pane-in animation — so claim focus now, next frame, and
   // once more after that animation window (tab-in is 200ms).
+  // Stepping up from floating into a tab (Cmd+N over a New Tab, expanding)
+  // lands the person in the chat too, even when its autofocus never ran:
+  // a key pressed before that frame cancels it (as the move's own Cmd+N
+  // does on a slow machine), and the move itself focuses nothing.
   const previousModeRef = useRef(entry.mode);
   useEffect(() => {
     const previous = previousModeRef.current;
     previousModeRef.current = entry.mode;
-    if (!(previous === "tab" && entry.mode === "partial")) return;
+    const steppedDown = previous === "tab" && entry.mode === "partial";
+    const steppedUp = previous === "partial" && entry.mode === "tab";
+    if (!steppedDown && !steppedUp) return;
     const userInteraction = userInteractionRef.current;
     const focus = () => {
-      if (userInteractionRef.current === userInteraction) {
-        focusComposerInternally();
-      }
+      if (userInteractionRef.current !== userInteraction) return;
+      // Stepping up keeps a focus already in the chat (a question's answer).
+      if (
+        steppedUp &&
+        sectionRef.current?.contains(document.activeElement) &&
+        document.activeElement !== sectionRef.current
+      )
+        return;
+      focusComposerInternally();
     };
     focus();
     const frame = requestAnimationFrame(focus);
@@ -1989,17 +2584,20 @@ function ChatDockContent({
     expanded &&
     (backdropTab || nativeBackdrop) &&
     chat.isWorking &&
-    !questions &&
+    !awaitingInput &&
     !dockHovered &&
     (!dockEngaged || nativeBackdrop) &&
     !dropActive;
+  lurkingRef.current = lurking;
   return (
     <div
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
-        splitResizing
-          ? "transition-[padding]"
-          : "transition-[padding,left,right]"
-      } duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        arriving
+          ? "transition-none"
+          : splitResizing
+            ? "transition-[padding] duration-250 ease-standard"
+            : "transition-[padding,left,right] duration-250 ease-standard"
+      } ${
         splitPane && slot === "left"
           ? "inset-y-0 left-0 border-r border-border p-0"
           : splitPane && slot === "right"
@@ -2018,6 +2616,50 @@ function ChatDockContent({
     >
       <section
         ref={sectionRef}
+        onClick={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.altKey ||
+            event.shiftKey ||
+            !(event.target instanceof HTMLElement) ||
+            event.target.closest(
+              'a, button, input, textarea, select, label, [contenteditable], [role="button"], [role="dialog"], [role="menu"], pre, code',
+            ) ||
+            !window.getSelection()?.isCollapsed ||
+            [...event.target.childNodes].some(
+              (node) =>
+                node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+            )
+          )
+            return;
+          focusComposerInternally();
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.nativeEvent.isComposing ||
+            (event.target instanceof Element &&
+              event.target.closest(
+                '[role="dialog"], [role="menu"], [role="listbox"]',
+              ))
+          )
+            return;
+          const navigation = messageNavigation.current;
+          const move = matchesBinding(
+            event,
+            keybindings["chat-previous-message"],
+          )
+            ? navigation?.previous
+            : matchesBinding(event, keybindings["chat-next-message"])
+              ? navigation?.next
+              : undefined;
+          if (!move) return;
+          event.preventDefault();
+          move(event.repeat);
+        }}
         onMouseEnter={() => setDockHovered(true)}
         onMouseLeave={(event) => {
           // Only a pointer that actually went elsewhere ends the hover;
@@ -2052,9 +2694,12 @@ function ChatDockContent({
           // state only paints the cue and may not have committed yet when a
           // quick dragenter → drop sequence completes in one browser turn.
           if (!isComposerTransfer(event.dataTransfer)) return;
+          // A question's answer box took the drop for itself.
+          const claimed = event.isDefaultPrevented();
           event.preventDefault();
           dragDepthRef.current = 0;
           setDropActive(false);
+          if (claimed) return;
           // Dropped onto the composer itself: the pill lands where the
           // pointer let go; anywhere else on the chat: at the caret/end.
           const overComposer =
@@ -2072,6 +2717,10 @@ function ChatDockContent({
         }}
         data-palette-target={(paletteTargeted && !isTab) || undefined}
         data-floating-chat={entry.mode === "partial" || undefined}
+        data-chat-tab={(presentsAsTab && tabActive) || undefined}
+        // Which half of a split it fills: its side by the divider stays
+        // square when it takes the frame's corners (styles.css).
+        data-split-slot={splitPane ? slot : undefined}
         data-lurking={lurking || undefined}
         data-chat-local-id={entry.localId}
         data-chat-project={projectId}
@@ -2085,9 +2734,12 @@ function ChatDockContent({
           if (closing) finishCloseRef.current();
           else if (minimizing) finishMinimizeRef.current();
         }}
-        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        // Growing into a tab, its card's edge (border, corners, shadow) and
+        // colour ease into the tab's along with its size: nothing switches
+        // off in the first frame.
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden duration-250 ease-standard ${
           presentsAsTab
-            ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
+            ? "h-full max-w-full rounded-none border border-bg bg-bg"
             : `${
                 lurking ? "h-44" : "h-[min(560px,100%)]"
               } max-w-3xl rounded-2xl border bg-bg-raised shadow-2xl ${
@@ -2095,17 +2747,33 @@ function ChatDockContent({
               }`
         } ${
           closing || minimizing
-            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 animate-dock-out"
+            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow] animate-dock-out"
             : expanded
-              ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
-              : "pointer-events-none translate-y-4 scale-[0.985] opacity-0"
+              ? `${EXPANDED_POSE} ${dockEntrance ? "animate-dock-in" : ""}`
+              : presentsAsTab
+                ? // Behind another tab: hidden at once, as a page is, in its
+                  // own settled pose. Nothing about its box changes, so
+                  // bringing it forward shows it in the same frame. Preserve its
+                  // laid-out transcript too: resuming
+                  // a skipped long Markdown tree can stall the return frame.
+                  `${EXPANDED_POSE} invisible pointer-events-none`
+                : // Minimized: kept (drafts, scroll,
+                  // queued sends) but skipped by style, layout and paint,
+                  // which a long transcript otherwise pays on every frame
+                  // while it streams (docs/performance.md). The skip is a
+                  // discrete step after the fade, so content stays drawn
+                  // through it, whichever exit led here. Only this
+                  // state transitions it: coming back, a transition's first
+                  // frame would still skip the chat as it focuses its
+                  // composer.
+                  "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,box-shadow,content-visibility] transition-discrete [content-visibility:hidden]"
         }`}
         aria-label={title}
         aria-hidden={!expanded}
         inert={!expanded ? true : undefined}
       >
         <span className="sr-only" aria-live="polite">
-          {activity ?? messages.at(-1)?.content}
+          {activity ?? lastReplyText(chat.timeline)}
         </span>
         {/* Drop cue: an accent dashed veil while files hover the chat. */}
         {dropActive && (
@@ -2119,22 +2787,14 @@ function ChatDockContent({
           and its controls float over the timeline's top-right corner. */}
         <div
           data-testid="chat-status-chrome"
-          className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
+          className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-standard ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
         >
           <header
-            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold ${presentsAsTab ? "invisible" : ""}`}
+            // Fades with the header's collapse rather than vanishing first.
+            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold transition-[opacity,visibility] duration-150 ease-standard ${presentsAsTab ? "invisible opacity-0" : ""}`}
             aria-hidden={presentsAsTab}
           >
-            {/* Icon on the left, centered against the two text lines; the
-              project sits under the title, never under the icon. */}
             <span className="flex min-w-0 items-center gap-2">
-              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
-                {chat.session?.icon ? (
-                  <ChatGlyph icon={chat.session.icon} className="size-3.5" />
-                ) : (
-                  <Bot className="size-3.5" />
-                )}
-              </span>
               <span className="flex min-w-0 flex-col leading-tight">
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="truncate">{title}</span>
@@ -2147,6 +2807,17 @@ function ChatDockContent({
                       <Ghost className="size-3" />
                       Incognito
                     </span>
+                  )}
+                  {chat.session?.owner === "project" && (
+                    <ShortcutHint label="Project chat: everyone in the project can see and continue it">
+                      <span
+                        className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                        data-testid="chat-project-badge"
+                      >
+                        <Box className="size-3" />
+                        Project
+                      </span>
+                    </ShortcutHint>
                   )}
                 </span>
                 {projectName && (
@@ -2161,9 +2832,13 @@ function ChatDockContent({
           both stay above timeline content scrolled beneath them. */}
           <div
             data-testid="chat-status-controls"
+            data-chat-controls=""
             className={`z-10 flex shrink-0 items-center gap-1 ${presentsAsTab ? "absolute right-2 top-2" : "relative"}`}
           >
-            <TodoProgress todos={chat.session?.todos ?? []} />
+            <TodoProgress
+              todos={chat.session?.todos ?? []}
+              useDismiss={usePopoverDismiss}
+            />
             <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
               <SessionInspector
                 projectId={projectId}
@@ -2171,8 +2846,9 @@ function ChatDockContent({
                 awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
-                harness={activeAgent?.harness ?? chat.session?.provider}
+                harness={activeAgent?.harness ?? boundHarness}
                 provider={activeAgent?.provider}
+                environmentLabel={activeEnvironmentLabel}
                 environmentControl={
                   authority &&
                   chat.sessionId &&
@@ -2192,7 +2868,11 @@ function ChatDockContent({
                       className="flex min-w-0 items-center gap-1.5 text-fg"
                       data-testid="chat-environment-badge"
                     >
-                      <Globe className="size-3" />
+                      {onThisMachine ? (
+                        <Laptop className="size-3" />
+                      ) : (
+                        <Server className="size-3" />
+                      )}
                       <span className="truncate">{activeEnvironmentLabel}</span>
                     </span>
                   ) : authority || compatibleEnvironments.length > 1 ? (
@@ -2236,10 +2916,23 @@ function ChatDockContent({
                           agent.id ===
                           (chat.session?.agentId ?? selectedAgentId),
                       )?.name ?? "Project agent")
-                    : (activeAgent?.name ?? "Default agent")
+                    : (activeAgent?.name ?? "Unknown agent")
                 }
-                model={selectedModel || "Automatic"}
-                reportedModel={reportedModel}
+                model={
+                  (selectedModel &&
+                    modelId(selectedModel, modelCatalog.data?.models)) ||
+                  (harnessDefault.data?.model
+                    ? defaultModelLabel(activeAgent, harnessDefault.data.model)
+                    : reportedModel ||
+                      defaultModelLabel(activeAgent, undefined))
+                }
+                modelIsDefault={
+                  !selectedModel &&
+                  Boolean(harnessDefault.data?.model || reportedModel)
+                }
+                reportedModel={
+                  sameModel(reportedModel, runningModel) ? null : reportedModel
+                }
                 onInspect={() => {
                   setInspected(true);
                   setMoveCheckNonce((value) => value + 1);
@@ -2247,27 +2940,34 @@ function ChatDockContent({
                 effort={
                   effectiveEffort(
                     activeAgent,
-                    chat.session?.modelEffort ??
-                      entry.effort ??
+                    (chat.session ? chat.session.modelEffort : entry.effort) ??
                       activeAgent?.effort,
                     effortModel,
                   ) ?? "Unavailable"
                 }
-                onEditModel={
-                  chat.isSending || chat.session?.running || !activeAgent
-                    ? undefined
-                    : onEditModel
+                onEditAgent={editAgent}
+                agentDisabledReason={
+                  otherAgents > 0 && (chat.isSending || chat.session?.running)
+                    ? "Agent can be changed after the current turn finishes."
+                    : undefined
                 }
-                onEditEffort={
-                  chat.isSending ||
-                  chat.session?.running ||
-                  supportedEfforts(activeAgent, effortModel).length === 0
+                onEditModel={editModel}
+                onEditEffort={editEffort}
+                permissionMode={agentPermissions.permissionMode}
+                sandboxing={agentPermissions.sandboxing}
+                onEditPermissionMode={editPermissionMode}
+                permissionModeDisabledReason={
+                  !agentPermissions.permissionMode
                     ? undefined
-                    : onEditEffort
+                    : !agentPermissions.editable
+                      ? agentPermissions.readOnlyReason
+                      : chat.isSending || chat.session?.running
+                        ? "The permission mode can be changed after the current turn finishes."
+                        : undefined
                 }
                 modelDisabledReason={
                   chat.isSending || chat.session?.running
-                    ? "Model can be changed after the current turn finishes."
+                    ? "Finish the current turn to change the model."
                     : !activeAgent
                       ? "Choose an agent to select a model."
                       : undefined
@@ -2279,20 +2979,25 @@ function ChatDockContent({
                       ? "This model does not offer a reasoning setting."
                       : undefined
                 }
-                checkout={checkout}
-                onUseProjectFolder={
-                  checkout && activeSessionId && !authority
-                    ? async () => {
-                        await desktopApi.sessionUseProjectFolder({
-                          projectId,
-                          sessionId: activeSessionId,
-                        });
-                        setCheckout(null);
+                worktree={!authority && inWorktree}
+                folder={
+                  authority ? undefined : (
+                    <ChatFolder
+                      projectId={projectId}
+                      sessionId={activeSessionId}
+                      busy={Boolean(chat.isSending || chat.session?.running)}
+                      draftWorktree={worktreeDraft}
+                      onDraftWorktreeChange={(worktree) =>
+                        onEntryChange({
+                          ...entry,
+                          worktree: worktree || undefined,
+                        })
                       }
-                    : undefined
+                    />
+                  )
                 }
                 incognito={isIncognito}
-                openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
+                openRequest={(inspectRequestNonce ?? 0) + ownInspectRequests}
                 moving={moveState.moving}
                 moveError={moveState.canMove ? moveState.reason : undefined}
                 moveDisabledReason={
@@ -2301,7 +3006,9 @@ function ChatDockContent({
                     : (moveState.reason ?? "Session cannot move to a server")
                 }
                 onMove={
-                  activeSessionId
+                  // A connected project's chats already live on its server;
+                  // moving them is the Environment control (ADR 0098).
+                  activeSessionId && !authority
                     ? () => {
                         if (!moveState.canMove || moveState.moving) return;
                         setMoveState((current) => ({
@@ -2330,13 +3037,16 @@ function ChatDockContent({
                       }
                     : undefined
                 }
-                onFork={activeSessionId ? onForkCurrent : undefined}
+                onFork={forkCurrent}
                 onArchive={activeSessionId ? onArchive : undefined}
                 archived={archived}
                 onOpenParent={onOpenParent}
               />
               {isTab && onUnsplit && (
-                <ShortcutHint label="Full width">
+                <ShortcutHint
+                  label="Full width"
+                  shortcut={formatBinding(keybindings["split-view"])}
+                >
                   <button
                     type="button"
                     className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
@@ -2349,6 +3059,9 @@ function ChatDockContent({
               )}
               <ShortcutHint
                 label={isTab ? "Pop out to floating chat" : "Open as tab"}
+                shortcut={
+                  isTab ? "Esc" : formatBinding(keybindings["chat-to-tab"])
+                }
               >
                 <button
                   type="button"
@@ -2367,6 +3080,9 @@ function ChatDockContent({
               </ShortcutHint>
               <ShortcutHint
                 label={isEmpty ? "Close chat" : "Minimize to bubble"}
+                shortcut={formatBinding(
+                  keybindings[isEmpty ? "close-tab" : "toggle-chat-minimized"],
+                )}
               >
                 <button
                   type="button"
@@ -2382,136 +3098,160 @@ function ChatDockContent({
             </span>
           </div>
         </div>
-        {/* In tab mode the scroller spans the full tab (scrollbar at the
-          edge) while the content column stays centered and readable. */}
-        <div
-          className={`flex min-h-0 w-full flex-1 flex-col ${
-            isTab ? "" : "mx-auto max-w-3xl"
-          }`}
-        >
-          {visibleWatchers.length > 0 && (
+        {/* The scroller spans the whole surface, so its scrollbar sits at
+          the edge of the tab or the floating panel (which the dock host
+          widens past the column, styles.css), while everything else keeps
+          a centered, readable column. */}
+        <div className="relative isolate flex min-h-0 w-full flex-1 flex-col">
+          <ThemeBackdrop surface="chat" />
+          <ClosingCollapsible open={visibleWatchers.length > 0}>
             <div
-              className={`flex shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
-                isTab ? "mx-auto w-full max-w-4xl" : ""
+              ref={watchersBody}
+              className={`mx-auto flex w-full shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
+                isTab ? "max-w-4xl" : "max-w-3xl"
               }`}
               data-testid="chat-watchers"
             >
-              {visibleWatchers.map((watcher) => (
-                <span
-                  key={watcher.id}
-                  className="inline-flex min-w-0 items-center gap-1.5 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted"
-                  title={`${watcher.triggerKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
-                >
-                  <Radio
-                    className={`size-3 shrink-0 ${
-                      watcher.status === "active"
-                        ? "text-accent"
-                        : "text-fg-faint"
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    className="max-w-48 truncate rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                    onClick={() =>
-                      onLinkClick?.(`artifact:${watcher.id}`, "tab")
-                    }
-                  >
-                    {watcher.workflowName}
-                  </button>
+              {shownWatchers.map(({ item: watcher, present }) => (
+                <ClosingCollapsible key={watcher.id} open={present}>
                   <span
-                    className="text-fg-faint"
-                    title={
-                      watcher.expiresAt
-                        ? `Expires ${new Date(watcher.expiresAt).toLocaleString()}`
-                        : undefined
-                    }
+                    data-watcher-id={watcher.id}
+                    className="inline-flex min-w-0 items-center gap-1.5 rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted"
+                    title={`${watcher.triggerKinds.join(", ")} · ${watcher.environment ?? "Default environment"}`}
                   >
-                    {watcher.status}
-                  </span>
-                  {watcher.nextRunAt && (
-                    <span>
-                      Next: {new Date(watcher.nextRunAt).toLocaleString()}
-                    </span>
-                  )}
-                  {watcher.lastRun && (
+                    <Hourglass
+                      className={`size-3 shrink-0 ${
+                        watcher.status === "active"
+                          ? "text-accent"
+                          : "text-fg-faint"
+                      }`}
+                    />
                     <button
                       type="button"
-                      className={`rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                      className="max-w-48 truncate rounded hover:underline"
                       onClick={() =>
-                        onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
+                        onLinkClick?.(`artifact:${watcher.id}`, "tab")
                       }
                     >
-                      Last run: {watcher.lastRun.status}
+                      {watcher.workflowName}
                     </button>
-                  )}
-                  {watcher.lastError && (
                     <span
-                      className="max-w-64 truncate text-danger"
-                      title={watcher.lastError}
+                      className="text-fg-faint"
+                      title={
+                        watcher.expiresAt
+                          ? `Expires ${new Date(watcher.expiresAt).toLocaleString()}`
+                          : undefined
+                      }
                     >
-                      {watcher.lastError}
+                      {watcher.status}
                     </span>
-                  )}
-                  {(watcher.status === "active" ||
-                    watcher.status === "paused") && (
-                    <button
-                      type="button"
-                      className="ml-0.5 grid size-4 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-muted hover:text-fg"
-                      aria-label={`Stop watcher ${watcher.workflowName}`}
-                      disabled={watcherQuery.stop.isPending}
-                      data-disabled-reason="Stopping this watcher"
-                      onClick={() => watcherQuery.stop.mutate(watcher.id)}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  )}
-                </span>
+                    {watcher.nextRunAt && (
+                      <span>
+                        Next · {new Date(watcher.nextRunAt).toLocaleString()}
+                      </span>
+                    )}
+                    {watcher.lastRun && (
+                      <button
+                        type="button"
+                        className={`rounded hover:underline ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                        onClick={() =>
+                          onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
+                        }
+                      >
+                        Last run · {watcher.lastRun.status}
+                      </button>
+                    )}
+                    {watcher.lastError && (
+                      <span
+                        className="max-w-64 truncate text-danger"
+                        title={watcher.lastError}
+                      >
+                        {watcher.lastError}
+                      </span>
+                    )}
+                    {(watcher.status === "active" ||
+                      watcher.status === "paused") && (
+                      <button
+                        type="button"
+                        className="ml-0.5 grid size-4 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-muted hover:text-fg"
+                        aria-label={`Stop watcher ${watcher.workflowName}`}
+                        disabled={watcherQuery.stop.isPending}
+                        data-disabled-reason="Stopping this watcher"
+                        onClick={() => watcherQuery.stop.mutate(watcher.id)}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
+                  </span>
+                </ClosingCollapsible>
               ))}
             </div>
-          )}
+          </ClosingCollapsible>
           {watcherQuery.stop.error && (
-            <p role="alert" className="px-3 py-2 text-xs text-danger">
+            <p
+              role="alert"
+              className={`px-3 py-2 text-xs text-danger ${floatingColumn}`}
+            >
               {watcherQuery.stop.error.message}
             </p>
           )}
           <ResourceLinkBoundary
+            projectId={projectId}
             onOpen={(url, mode) => onLinkClick?.(url, mode)}
           >
             <ChatTimeline
+              visible={expanded && !lurking}
               focusMessageId={entry.focusMessageId}
+              backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}
-              contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
-              messages={messages}
+              contentClassName={`transition-[max-width,padding-top] duration-250 ease-standard ${
+                isTab
+                  ? "mx-auto w-full max-w-4xl pt-12"
+                  : "mx-auto w-full max-w-3xl"
+              }`}
+              timeline={chat.timeline}
+              isLoading={chat.isLoading}
+              isReconnecting={chat.connectionLost}
+              requests={chat.state?.requests}
+              pending={chat.pending}
+              activeTurnId={activeTurnId}
               activity={
                 chat.connectionLost || awaitingInput ? undefined : activity
               }
-              working={chat.isWorking}
               workDisplay={workDisplay}
               queue={chat.queue}
-              onUpdateQueued={chat.updateQueued}
-              onRemoveQueued={chat.removeQueued}
+              onEditQueued={chat.editQueued}
+              onCancelQueued={chat.cancelQueued}
               onSendQueuedNow={chat.sendQueuedNow}
+              onSteerNow={chat.steerNow}
               onHoldQueued={chat.holdQueued}
-              onRetry={() => void chat.retry()}
+              onRetry={(turnId) => void chat.retry(turnId)}
+              onInterrupt={(turnId) => void chat.interrupt(turnId)}
+              onRollback={rollback}
+              onResendFailed={(commandId) => void chat.resendFailed(commandId)}
+              onDismissFailed={chat.dismissFailed}
+              hasOlder={chat.hasOlder}
+              isLoadingOlder={chat.isLoadingOlder}
+              onLoadOlder={chat.loadOlder}
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
-              resolveAgentName={(agentId) =>
-                roster.agents.find((agent) => agent.id === agentId)?.name
-              }
-              error={
-                chat.connectionLost
-                  ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
-                  : (chat.error?.message ?? null)
-              }
+              resolveAgentName={resolveAgentName}
+              renderAgentIcon={renderAgentIcon}
+              sourceHref={sourceHref}
+              renderAttachment={sentPill}
+              presentUserMessage={presentSkillMessage}
+              Hint={ShortcutHint}
+              error={chat.error?.message ?? null}
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
-              renderLink={(props) => renderResponseLink({ ...props, surfaces })}
+              renderLink={renderLink}
+              renderImage={renderImage}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}
-              registerJumpToPreviousUserMessage={(jump) => {
-                jumpToPreviousRef.current = jump;
-              }}
+              onReadAloud={readAloud}
+              readingAloud={readingAloud}
+              registerMessageNavigation={registerNavigation}
             />
           </ResourceLinkBoundary>
           {/* The strip has room for one line: what the agent is doing now
@@ -2520,30 +3260,29 @@ function ChatDockContent({
           {lurking && (
             <div
               data-testid="lurk-status"
-              className="flex min-h-0 flex-1 items-center gap-2 px-4 text-xs text-fg-muted"
+              className={`flex min-h-0 flex-1 items-center gap-2 px-4 text-xs text-fg-muted ${floatingColumn}`}
             >
               <LoaderCircle
                 className="size-4 shrink-0 animate-spin"
                 aria-hidden="true"
               />
-              <span className="truncate animate-pulse">
-                {activity ?? "Working…"}
-              </span>
+              <ActivityText text={activity ?? "Working…"} />
             </div>
           )}
-          <ChatDeliveryRecovery chat={chat} />
           {runtimeSettingsError ? (
-            <p
-              role="alert"
-              className="mx-4 mb-2 rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
-            >
-              Could not update chat settings: {runtimeSettingsError}
-            </p>
+            <div className={floatingColumn}>
+              <p
+                role="alert"
+                className="mx-4 mb-2 rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
+              >
+                Could not update chat settings: {runtimeSettingsError}
+              </p>
+            </div>
           ) : null}
           {/* Keep the composer clear of the bubble UI: bottom padding for
             the expanded strip, side padding for the corner bubble. */}
           <div
-            className={`flex w-full flex-col transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`flex w-full flex-col ${arriving ? "" : "transition-[max-width,padding] duration-250 ease-standard"} ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"
@@ -2552,32 +3291,40 @@ function ChatDockContent({
                         ? "px-16"
                         : ""
                   }`
-                : ""
+                : "mx-auto max-w-3xl"
             }`}
           >
-            {/* The surfaces rail: the agent's working tabs (linked pages,
-              terminals, changed files) live with the chat. Click opens
-              the tab; the split button (or Cmd+click) tiles it to the
-              right of the current view. Only real surfaces earn a chip —
-              the new-terminal affordance lives with the header controls. */}
-            {/* The rail yields while lurking — the strip's few rows
-              belong to the latest activity, not to chips. CSS-collapsed
-              (not unmounted) so chip motion state survives the lurk. */}
-            {railSurfaces.length > 0 && onOpenSurface && (
+            {/* The chips (ADR 0239): what the chat holds, recorded and
+              made, above its composer. They yield while the dock lurks (its
+              few rows belong to the latest activity), CSS-folded rather
+              than unmounted so their motion state survives the lurk. */}
+            {chipSession && (
+              // One column no wider than the composer: an auto column
+              // would grow to a wide chip's whole title and spill past it.
               <div
-                className={`shrink-0 transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                className={`grid shrink-0 grid-cols-1 transition-[grid-template-rows,opacity] duration-250 ease-standard ${
                   lurking
-                    ? "max-h-0 overflow-hidden opacity-0"
-                    : "max-h-12 overflow-visible opacity-100"
+                    ? "grid-rows-[0fr] opacity-0"
+                    : "grid-rows-[1fr] opacity-100"
                 }`}
                 inert={lurking ? true : undefined}
               >
-                <SurfacesRail
-                  surfaces={railSurfaces}
-                  onOpenSurface={onOpenSurface}
-                  onRemoveSurface={onRemoveSurface}
-                  onOpenMcpApp={onOpenMcpApp}
-                />
+                <div
+                  className={`min-h-0 min-w-0 ${lurking ? "overflow-hidden" : ""}`}
+                >
+                  <ChipRail
+                    chips={chipView.chips}
+                    visible={expanded && frontSurface && !lurking}
+                    source={chipView.source}
+                    session={chipView.session}
+                    failure={chipView.failure}
+                    {...(chipView.access ? { access: chipView.access } : {})}
+                    onOpen={openChipFromRail}
+                    onCustomize={customizeChips}
+                    onLeave={leaveChips}
+                    register={registerChipRail}
+                  />
+                </div>
               </div>
             )}
             {authority &&
@@ -2589,7 +3336,7 @@ function ChatDockContent({
                   className="mx-3 mb-2 rounded border border-border px-3 py-2 text-left text-xs hover:bg-bg-overlay"
                   onClick={() => {
                     setRemoteAgentId(action.agentId);
-                    setDraft(action.prompt);
+                    rewriteText(action.prompt);
                   }}
                 >
                   {action.label}
@@ -2644,6 +3391,7 @@ function ChatDockContent({
                   <p>No assistant is ready for this project.</p>
                   {catalog.data.items.map((agent) => (
                     <p key={agent.id} className="mt-1">
+                      {catalog.data.items.length > 1 ? `${agent.name}: ` : ""}
                       {agent.reason ??
                         (agent.environments.items.some((item) => item.allowed)
                           ? "An allowed place to run is unavailable. Connect this device below if offered, or ask the project builder to check execution settings."
@@ -2674,53 +3422,61 @@ function ChatDockContent({
                   (item) =>
                     item.clientRequired && item.allowed && !item.available,
                 )
-                .map((item) => (
-                  <div
-                    key={item.name}
-                    className="mx-3 mb-2 text-xs text-fg-muted"
-                  >
-                    <PendingButton
-                      type="button"
-                      pending={connectingRunner}
-                      onClick={() => {
-                        setConnectingRunner(true);
-                        setLocalRunnerError(undefined);
-                        void desktopApi
-                          .remoteEnableLocalExecution({
-                            projectId,
-                            environment: item.name,
-                          })
-                          .then(async () => {
-                            await Promise.all([
-                              catalog.refetch(),
-                              environmentQuery.refetch(),
-                            ]);
-                            setSelectedEnvironment(item.name);
-                          })
-                          .catch((error) =>
-                            setLocalRunnerError(
-                              error instanceof Error
-                                ? error.message
-                                : "Could not connect local execution",
-                            ),
-                          )
-                          .finally(() => setConnectingRunner(false));
-                      }}
-                      className="rounded border border-border px-2 py-1"
+                .map((item) =>
+                  // Connected but still unavailable: say why, rather than
+                  // offering to connect again.
+                  item.machineOnline ? (
+                    <p
+                      key={item.name}
+                      role="status"
+                      className="mx-3 mb-2 text-xs text-fg-muted"
                     >
-                      Connect this device
-                    </PendingButton>
-                    <p className="mt-1">
-                      Let the assistant work on this device. Project permissions
-                      and conversation history stay on the company server.
+                      {item.label}: {item.reasons.join(" ")}
                     </p>
-                  </div>
-                ))}
-            {pendingTransfers > 0 && (
-              <p role="status" className="mx-3 text-xs text-muted">
-                Preparing attachments…
-              </p>
-            )}
+                  ) : (
+                    <div
+                      key={item.name}
+                      className="mx-3 mb-2 text-xs text-fg-muted"
+                    >
+                      <PendingButton
+                        type="button"
+                        pending={connectingRunner}
+                        onClick={() => {
+                          setConnectingRunner(true);
+                          setLocalRunnerError(undefined);
+                          void desktopApi
+                            .remoteEnableLocalExecution({
+                              projectId,
+                              environment: item.name,
+                            })
+                            .then(async () => {
+                              await Promise.all([
+                                catalog.refetch(),
+                                environmentQuery.refetch(),
+                              ]);
+                              setSelectedEnvironment(item.name);
+                            })
+                            .catch((error) =>
+                              setLocalRunnerError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not connect local execution",
+                              ),
+                            )
+                            .finally(() => setConnectingRunner(false));
+                        }}
+                        className="rounded border border-border px-2 py-1"
+                      >
+                        Connect this device
+                      </PendingButton>
+                      <p className="mt-1">
+                        Let the assistant work on this device. Project
+                        permissions and conversation history stay on the company
+                        server.
+                      </p>
+                    </div>
+                  ),
+                )}
             {transferError && (
               <div
                 role="alert"
@@ -2790,108 +3546,95 @@ function ChatDockContent({
               />
             ))}
             <div className="max-h-[50vh] overflow-y-auto">
-              {chat.session?.questions?.map(
-                (request) =>
+              {otherRequests.map((request) => (
+                <ApprovalCard
+                  key={request.id}
+                  request={request}
+                  viewerId={authority?.externalUserId}
+                  busy={!expanded || responding.has(request.id)}
+                  onRespond={(response) => respond(request.id, response)}
+                  onOpenUrl={(url) => onLinkClick?.(url, "tab")}
+                />
+              ))}
+              {/* Answered (or dismissed), a question reads as answered at
+                  once: its panel closes as it was while the answer takes
+                  its place in the conversation, and one whose answer is
+                  refused opens again. */}
+              {shownQuestions.map(
+                ({ item: request, present }) =>
                   request.questions && (
-                    <AgentQuestionPanel
-                      key={request.requestId}
-                      questions={request.questions}
-                      blocking={request.blocking !== false}
-                      onSubmit={(answer) =>
-                        answerQuestion.mutate({
-                          requestId: request.requestId,
-                          answer,
-                        })
-                      }
-                      onDismiss={() =>
-                        answerQuestion.mutate({
-                          requestId: request.requestId,
-                          answer: QUESTIONS_DISMISSED_MESSAGE,
-                        })
-                      }
-                      disabled={!expanded || answerQuestion.isPending}
-                    />
+                    <ClosingCollapsible key={request.id} open={present}>
+                      <AgentQuestionPanel
+                        questions={request.questions}
+                        blocking={request.blocking}
+                        onSubmit={(response) => {
+                          answerSentHere(request.id);
+                          respond(request.id, response);
+                        }}
+                        onAnswerFiles={addFilesTo}
+                        onDismiss={() =>
+                          respond(request.id, {
+                            kind: "question",
+                            answers: [QUESTIONS_DISMISSED_MESSAGE],
+                          })
+                        }
+                        // A file still attaching to an answer goes with it.
+                        // A closing panel is inert, not dimmed.
+                        disabled={!expanded || pendingTransfers > 0}
+                      />
+                    </ClosingCollapsible>
                   ),
               )}
             </div>
-            {answerQuestion.error && (
-              <p role="alert" className="mx-3 text-xs text-danger">
-                {answerQuestion.error.message}
-              </p>
-            )}
-            {!pendingQuestion && questions && !chat.isSending && (
-              <AgentQuestionPanel
-                questions={questions}
-                onSubmit={(answer) => void chat.send(answer)}
-                onDismiss={() => void chat.send(QUESTIONS_DISMISSED_MESSAGE)}
-                disabled={!expanded}
-              />
-            )}
             <form
               ref={composerFormRef}
-              className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
+              // The buttons inside share the composer's corners: their
+              // radius is the composer's minus its inset (DESIGN.md).
+              className="field relative m-3 mt-1 flex shrink-0 flex-col bg-bg-raised [--composer-inset:6px] [--composer-radius:12px] rounded-(--composer-radius) p-(--composer-inset)"
               onSubmit={submit}
             >
-              {/* "/" command menu: skills (ADR 0052) merged with the
-                harness's own commands. Rows commit on mousedown like
-                the palette, so the composer never loses focus; the
-                panel pops in/out and rows glide as the filter types. */}
-              {!slashMenuOpen &&
-                slashing &&
-                (commandsLoading || commandsError) && (
-                  <div
-                    role="status"
-                    className="mb-2 flex items-center gap-2 px-3 text-xs text-fg-muted"
-                  >
-                    <span>
-                      {commandsLoading ? "Loading commands…" : commandsError}
-                    </span>
-                    {commandsError && (
-                      <button
-                        type="button"
-                        className="rounded px-2 py-1 text-fg hover:bg-bg-overlay"
-                        onClick={() => setCommandsRefresh((value) => value + 1)}
-                      >
-                        Retry
-                      </button>
-                    )}
-                  </div>
-                )}
-              <SlashMenu
-                open={slashMenuOpen}
-                id={slashListId}
+              <ComposerMenu
+                id={menuId}
+                open={menuOpen}
+                label={menuKind === "@" ? "Mention" : "Skills and commands"}
                 anchorRef={composerFormRef}
-                loading={commandsLoading}
-                error={commandsError}
-                onRetry={() => {
-                  setCommandsRefresh((value) => value + 1);
-                  composerRef.current?.focus();
-                }}
-                matches={slashMatches}
-                selected={slashSelected}
-                onHover={(index) =>
-                  setSlashSelection(slashMatches[index]?.name)
-                }
-                onCommit={runSlash}
-                onDismiss={() => {
-                  setSlashDismissed(true);
-                  composerRef.current?.focus();
-                }}
+                rows={menuRows}
+                selected={menuSelected}
+                onHover={setMenuSelection}
+                onPick={(row) => pickMenuRow(row, "click")}
               />
               <div className="flex items-center gap-2">
                 {/* Any file attaches — as media when the agent takes it,
                   as a path pill otherwise — so the picker never filters
                   and never hides. */}
-                <ShortcutHint label="Attach files">
+                {/* Preparation shows in place on the attach button: a
+                  status row above the composer shifted the whole dock
+                  (and an open question) up and back for every paste. */}
+                <ShortcutHint
+                  label={
+                    pendingTransfers > 0
+                      ? "Preparing attachments…"
+                      : "Attach files"
+                  }
+                >
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                    className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-[calc(var(--composer-radius)-var(--composer-inset))] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
                     aria-label="Attach files"
                   >
-                    <Paperclip className="size-4" />
+                    {pendingTransfers > 0 ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <Paperclip className="size-4" />
+                    )}
                   </button>
                 </ShortcutHint>
+                {pendingTransfers > 0 && (
+                  <span role="status" className="sr-only">
+                    Preparing attachments…
+                  </span>
+                )}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -2907,16 +3650,6 @@ function ChatDockContent({
                   dropped, enter with pill-in and leave with pill-out. */}
                 <ComposerInput
                   ref={composerRef}
-                  suggestions={
-                    slashMenuOpen
-                      ? {
-                          listId: slashListId,
-                          activeId: slashMatches.length
-                            ? `${slashListId}-${slashSelected}`
-                            : undefined,
-                        }
-                      : undefined
-                  }
                   onAnimationEnd={(event) => {
                     if (event.animationName.startsWith("input-recall-")) {
                       setRecallMotion((current) =>
@@ -2935,19 +3668,20 @@ function ChatDockContent({
                       : ""
                   }`}
                   onChange={(state) => {
+                    const previous = draftRef.current;
+                    draftRef.current = state.text;
                     publishDraft();
                     setPillCount(state.pillCount);
-                    setDraft(state.text);
-                    // Typing (or pasting) exits history-recall mode and
-                    // revives a dismissed slash menu; the dock's own
-                    // rewrites (recall itself) don't count.
+                    setHasText(state.text.trim() !== "");
+                    readTrigger();
+                    // Typing (or pasting) exits history-recall mode; the
+                    // dock's own rewrites (recall itself) don't count.
                     if (
+                      recall !== null &&
                       !rewritingRef.current &&
-                      state.text !== draftRef.current
-                    ) {
+                      state.text !== previous
+                    )
                       setRecall(null);
-                      setSlashDismissed(false);
-                    }
                   }}
                   onKeyDown={onKeyDown}
                   onPaste={onComposerPaste}
@@ -2964,37 +3698,77 @@ function ChatDockContent({
                   }
                   maxPills={MAX_ATTACHMENTS}
                   placeholder={
-                    accepts.length > 0
-                      ? composerPlaceholder
-                      : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
+                    // An open question takes free-text answers here too,
+                    // beside each question's Other answer (ADR 0195, 0244).
+                    // A permission request is no question: typing declines it.
+                    questionRequests.length > 0
+                      ? "Answer in your own words…"
+                      : accepts.length > 0
+                        ? composerPlaceholder
+                        : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
                   }
                   ariaLabel="Message the assistant"
                 />
-                {/* Context ring (ADR 0057): quiet until a harness reports
-                  occupancy and window size; danger red past 90%. */}
-                <ContextMeter messages={chat.messages} />
-                <ShortcutHint
-                  label={
-                    chat.isWorking
-                      ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
-                      : "Send"
-                  }
-                  shortcut="↵"
-                >
-                  <button
-                    type="submit"
-                    className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                    disabled={
-                      pendingTransfers > 0 ||
-                      commandResolutionBlocked ||
-                      (!draft.trim() && pillCount === 0)
+                {/* Voice in this chat (ADR 0216): talk to its agent, then
+                  carry on typing. Company chats live on the server. */}
+                {!authority && (
+                  <VoiceButton
+                    projectId={projectId}
+                    nativeMenus={nativeWindow}
+                    chat={{
+                      sessionId: chat.sessionId,
+                      agentId: chat.session?.agentId ?? selectedAgentId ?? null,
+                      agentName: activeAgent?.name ?? null,
+                      ensureSession: chat.ensureSession,
+                      focusComposer: () => composerRef.current?.focusToType(),
+                    }}
+                  />
+                )}
+                {/* Nothing to send while the agent works: the button stops
+                  the running turn instead. */}
+                {chat.isWorking &&
+                !awaitingInput &&
+                !draftRef.current.trim() &&
+                pillCount === 0 ? (
+                  <ShortcutHint label="Stop">
+                    {/* The send button's place and colour: the theme's
+                        accent, only its glyph changing while the agent works. */}
+                    <button
+                      type="button"
+                      className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0"
+                      onClick={() => void chat.interrupt()}
+                      aria-label="Stop the agent"
+                      data-testid="chat-stop"
+                    >
+                      <Square className="size-3 fill-current" />
+                    </button>
+                  </ShortcutHint>
+                ) : (
+                  <ShortcutHint
+                    label={
+                      // A message during a blocking question reaches the
+                      // agent at once (ADR 0195); otherwise it reaches it
+                      // at its next step, or queues (ADR 0240).
+                      chat.isWorking && !awaitingInput
+                        ? `${queueMessages ? "Queue" : "Send"} (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} ${queueMessages ? "sends now" : "stops and sends"})`
+                        : "Send"
                     }
-                    data-disabled-reason="Write a message or attach a file first"
-                    aria-label="Send message"
+                    shortcut="↵"
                   >
-                    <ArrowUp className="size-4" />
-                  </button>
-                </ShortcutHint>
+                    <button
+                      type="submit"
+                      className="button-primary size-8 rounded-[calc(var(--composer-radius)-var(--composer-inset))] p-0 disabled:opacity-35"
+                      disabled={
+                        pendingTransfers > 0 ||
+                        (!draftRef.current.trim() && pillCount === 0)
+                      }
+                      data-disabled-reason="Write a message or attach a file first"
+                      aria-label="Send message"
+                    >
+                      <ArrowUp className="size-4" />
+                    </button>
+                  </ShortcutHint>
+                )}
               </div>
             </form>
           </div>
@@ -3035,6 +3809,35 @@ function ChatDockContent({
           />
         )}
       </Modal>
+      <LinkTrustDialog
+        ask={linkAsk}
+        onClose={() => setLinkAsk(null)}
+        onOpen={() => {
+          setLinkAsk(null);
+          if (linkAsk) openLinkDirectly?.(linkAsk.url, linkAsk.modifiers);
+        }}
+        onTrust={async () => {
+          if (!linkAsk) return;
+          await desktopApi.trustHost(linkAsk.host);
+          setLinkAsk(null);
+          openLinkDirectly?.(linkAsk.url, linkAsk.modifiers);
+        }}
+      />
     </div>
   );
+}
+
+/** The latest thing the agent wrote, for the screen reader's live line. */
+function lastReplyText(
+  turns: ReturnType<typeof useAgentChat>["timeline"],
+): string | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const entries = turns[index]?.entries ?? [];
+    for (let at = entries.length - 1; at >= 0; at -= 1) {
+      const entry = entries[at];
+      if (entry?.kind === "reply" && entry.item.text.trim())
+        return entry.item.text;
+    }
+  }
+  return undefined;
 }

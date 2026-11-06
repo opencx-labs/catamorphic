@@ -55,14 +55,24 @@ export function Modal({
   }, [mounted, animateSize]);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
-  useEffect(() => {
-    if (!open || !mounted) return;
-    const previousFocus =
+  // Where focus was as the dialog opened, read before a field inside it
+  // takes focus on mount (autoFocus), so closing returns there.
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current)
+    previousFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    panelRef.current?.focus({ preventScroll: true });
+  wasOpenRef.current = open;
+
+  useEffect(() => {
+    if (!open || !mounted) return;
+    const previousFocus = previousFocusRef.current;
+    // A field the dialog focused as it mounted (autoFocus) keeps focus;
+    // otherwise the panel takes it, so keys reach the dialog.
+    if (!panelRef.current?.contains(document.activeElement))
+      panelRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       // A dialog stacked on top of this one (a confirm inside a settings
       // modal) owns the keys; only the topmost open dialog reacts.
@@ -135,7 +145,7 @@ export function Modal({
     <div
       data-theme={theme?.appearance}
       style={themeStyle(theme)}
-      className={`theme-colors fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-0 ${
+      className={`theme-colors fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-standard motion-reduce:duration-0 ${
         open
           ? "pointer-events-auto animate-fade-in"
           : "pointer-events-none animate-fade-out"
@@ -169,7 +179,7 @@ export function Modal({
           maxWidth: "calc(100vw - 48px)",
           height: animateSize ? height : undefined,
         }}
-        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none motion-reduce:animate-none ${animateSize ? "transition-[height] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${
+        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none motion-reduce:animate-none ${animateSize ? "transition-[height] duration-200 ease-standard motion-reduce:transition-none" : ""} ${
           open ? "animate-modal-in" : "animate-modal-out"
         }`}
       >

@@ -512,10 +512,14 @@ describe("context pills", () => {
     await runWait(`return pills().length === ${before + 1};`, {
       label: "clipboard binary saved",
     });
-    const root = await app.eval<string>(
-      `(async()=>{ const {url}=await window.catamorphicDesktop.getServerState(); const projects=await fetch(url+'/api/projects').then(r=>r.json()); return window.catamorphicDesktop.projectRoot(projects.items.find(p=>p.name==='pills-e2e').id); })()`,
+    const project = await app.eval<{ id: string; root: string }>(
+      `(async()=>{ const {url}=await window.catamorphicDesktop.getServerState(); const projects=await fetch(url+'/api/projects').then(r=>r.json()); const id=projects.items.find(p=>p.name==='pills-e2e').id; return { id, root: await window.catamorphicDesktop.projectRoot(id) }; })()`,
     );
-    const directory = path.join(root, ".catamorphic", "attachments");
+    // Pastes live in host storage, never in the project folder.
+    expect(fs.existsSync(path.join(project.root, ".work", "attachments"))).toBe(
+      false,
+    );
+    const directory = path.join(app.userDataDir, "attachments", project.id);
     const saved = fs
       .readdirSync(directory)
       .find((name) => name.endsWith("-mystery.bin"));
@@ -556,10 +560,9 @@ describe("context pills", () => {
     await runWait(
       `return timelineText().includes('Received 1 attachment: delayed.bin');`,
     );
-    await runWait(
-      `return timelineText().includes('.catamorphic/attachments/');`,
-      { label: "agent streamed the saved attachment path" },
-    );
+    await runWait(`return timelineText().includes('/attachments/');`, {
+      label: "agent streamed the saved attachment path",
+    });
     await run(`
       File.prototype.arrayBuffer=function(){return Promise.reject(new Error('Clipboard read failed'))};
       const data=new DataTransfer();data.items.add(new File(['bad'],'failed.bin'));
@@ -621,7 +624,7 @@ describe("context pills", () => {
     // Minimize the chat and find the file through the shared palette.
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",
@@ -744,15 +747,32 @@ describe("context pills", () => {
     await run(
       `setReactValue(composer(), 'What does this say?'); composerKey('Enter'); return true;`,
     );
-    // The reply streams in; wait for the whole sentence, not its prefix.
-    // It is rendered as markdown in the timeline, so the pill's **bold**
-    // shows as bold text; assert the visible sentence.
-    await runWait(
-      `return timelineText().includes('[text-pill selection sel.md:5-5] Second paragraph with bold words.');`,
+    // The message carries both selection pills (line 5 from Cmd+N, line 3
+    // from the paste), and the fake echoes each as its own text. Every echo
+    // but the last settles as a note folded into the turn's steps, whose row
+    // shows the raw markdown; only the answer renders it. Which pill lands
+    // where depends on their order, and the rendered note is visible only
+    // for a moment mid-turn, so open the steps like a reader would and
+    // compare the settled turn with the markdown emphasis set aside.
+    const echoed = await runWait<string>(
+      `const log = frontDock()?.querySelector('[role="log"]');
+       if (!log) return false;
+       // A lone step is its own row, with no line to open.
+       const toggle = log.querySelector('[data-testid="chat-turn-steps-toggle"]');
+       if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       const text = log.textContent.replaceAll('**', '');
+       return text.includes('[text-pill selection sel.md:5-5]') &&
+         text.includes('[text-pill selection sel.md:3-3]') ? text : false;`,
       {
         timeoutMs: 30_000,
-        label: "agent echoed selection pill",
+        label: "agent echoed both selection pills",
       },
+    );
+    expect(echoed).toContain(
+      "[text-pill selection sel.md:5-5] Second paragraph with bold words.",
+    );
+    expect(echoed).toContain(
+      "[text-pill selection sel.md:3-3] First paragraph here.",
     );
   }, 60_000);
 
@@ -826,8 +846,114 @@ describe("context pills", () => {
     await runWait(
       `return timelineText().includes('Received 1 attachment: Screenshot.png');`,
     );
-    expect(await run(`return timelineText();`)).not.toContain(
-      ".catamorphic/attachments/",
+    expect(await run(`return timelineText();`)).not.toContain("/attachments/");
+  });
+  it("does not pull a hidden editor's old selection into a new chat", async () => {
+    // The native-image test selects a local Codex agent. This regression
+    // needs an editable composer, independent of that agent's sign-in probe.
+    await app.eval(`(async () => {
+      const { agents } = await window.catamorphicDesktop.agentsList();
+      const fake = agents.find((agent) => agent.name === 'Fake Agent');
+      await window.catamorphicDesktop.agentsSetDefault(fake.id);
+    })()`);
+    await run(`pressKey('m', { metaKey: true }); return true;`);
+    await runWait(`return !frontDock();`, { label: "selection chat parked" });
+    // Keep a real selection in the retained document, then leave it.
+    expect(
+      await run(`
+      const h = window.__catMarkdownEditor;
+      h.editor.commands.focus();
+      h.editor.commands.setTextSelection({ from: 1, to: 6 });
+      return !h.editor.state.selection.empty;
+    `),
+    ).toBe(true);
+    // A retained project's opacity is zero while its DOM stays laid out.
+    // Exercise that browser visibility state as well as display:none tabs.
+    await run(`
+      window.__selectionPane = window.__catMarkdownEditor.editor.view.dom.closest('[data-project-runtime]').querySelector('[data-editor-toolbar]').parentElement;
+      window.__selectionPane.style.opacity = '0';
+      pressKey('n', { metaKey: true }); return true;
+    `);
+    await runWait(`return !!frontDock() && composer()?.isContentEditable;`, {
+      label: "chat over a transparent editor",
+    });
+    // The synthetic opacity change leaves the retained editor's native focus
+    // intact. Wait for the chat's selection-pull effect, not that focus state.
+    await run(`return settleFrames();`);
+    expect(
+      await run(`return pills().filter(p => p.source === 'selection').length;`),
+    ).toBe(0);
+    // Synthetic opacity can retain native focus in the transparent editor.
+    // Cmd+W would target that editor, so close this empty chat by
+    // its own control and keep the selected document for the next case.
+    const close = await runWait<{ x: number; y: number }>(
+      `const dock = frontDock();
+       if (!dock || dock.parentElement.getAnimations({subtree:true}).some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)) return false;
+       const button = dock.querySelector('button[aria-label="Close chat"]');
+       if (!button) return false;
+       const rect = button.getBoundingClientRect();
+       const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+       return rect.width > 0 && rect.height > 0 && button.contains(document.elementFromPoint(point.x, point.y)) ? point : false;`,
+      { label: "transparent-editor chat close control at rest" },
     );
+    await app.clickPointer(close);
+    await runWait(`return !frontDock();`, {
+      label: "transparent-editor chat closed",
+    });
+    // The private desktop's pointer survives this app. Leave no hover for
+    // the next suite's window to inherit at this control's coordinates.
+    await app.movePointer({ x: 1, y: 1 });
+    expect(
+      await run(`
+        const editor = window.__catMarkdownEditor.editor;
+        return editor.view.dom.isConnected && !editor.state.selection.empty;
+      `),
+    ).toBe(true);
+    await run(
+      `window.__selectionPane.style.opacity = ''; delete window.__selectionPane; pressKey('t', { metaKey: true }); return true;`,
+    );
+    await runWait(
+      `return !!document.querySelector('[data-palette="tab"] textarea:focus');`,
+      {
+        label: "new tab in front of the selected editor",
+      },
+    );
+    // Reading visibility on the retained editor flushes styles across all
+    // chat transcripts. A pane outside the workspace's slots needs no
+    // browser visibility read, even while its model keeps a selection.
+    await run(`
+      const pane = window.__catMarkdownEditor.editor.view.dom.closest('[data-project-runtime]').querySelector('[data-editor-toolbar]').parentElement;
+      const original = pane.checkVisibility;
+      window.__hiddenSelectionVisibilityReads = 0;
+      pane.checkVisibility = function(...args) {
+        window.__hiddenSelectionVisibilityReads++;
+        return original.apply(this, args);
+      };
+      window.__restoreSelectionVisibility = () => {
+        delete pane.checkVisibility;
+        delete window.__hiddenSelectionVisibilityReads;
+        delete window.__restoreSelectionVisibility;
+      };
+      return true;
+    `);
+    try {
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(
+        `return !!frontDock() && composer() === document.activeElement;`,
+        {
+          label: "new chat in the New Tab",
+        },
+      );
+      expect(
+        await run(
+          `return pills().filter(p => p.source === 'selection').length;`,
+        ),
+      ).toBe(0);
+      expect(await run(`return window.__hiddenSelectionVisibilityReads;`)).toBe(
+        0,
+      );
+    } finally {
+      await run(`window.__restoreSelectionVisibility(); return true;`);
+    }
   });
 });

@@ -5,6 +5,7 @@ import type {
   CapabilityProviderRuntime,
   CatamorphicCore,
   CatamorphicCoreConfig,
+  CodeHost,
   CodingAgentRegistry,
   ConnectionProvider,
   CredentialVault,
@@ -13,13 +14,13 @@ import type {
   DeploymentRuntimeRetirementResult,
   ExecutionWorkerHandle,
   ExecutionWorkerOptions,
-  GithubServiceConfig,
   Identity,
   McpToolKindSpec,
   NativeAgentCheckout,
   ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   PushNotificationTransport,
+  RegisteredCodingAgent,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -42,7 +43,6 @@ import {
 } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
-  CodingAgentProvider,
   EnvironmentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
@@ -96,12 +96,35 @@ export type StorageConfig =
   /** Custom `ProjectManager` wiring (e.g. Artifacts remote backend). */
   | { projectManager: ProjectManager };
 
-export interface CreateCatamorphicConfig {
+/**
+ * Everything `createCatamorphic` takes. A coding agent needs a stable host
+ * identity for the sessions it runs, so `hostId` is required with
+ * `codingAgent`.
+ */
+export type CreateCatamorphicConfig = CatamorphicHostConfig &
+  (
+    | {
+        /**
+         * Pluggable coding agent(s) for AI-assisted editing: a single
+         * `RegisteredCodingAgent` (its `harness` an in-process adapter such as
+         * `createAiSdkAdapter` from `@catamorphic/ai-sdk`, or a sandbox runner
+         * bundle id such as `claude-code`; ADR 0198) or a `CodingAgentRegistry`
+         * when the host offers several agents. Requires `sandboxProvider`;
+         * enables the agent-session APIs.
+         */
+        codingAgent: RegisteredCodingAgent | CodingAgentRegistry;
+        /** Stable host identity the agent sessions belong to. */
+        hostId: string;
+      }
+    | { codingAgent?: undefined; hostId?: string }
+  );
+
+export interface CatamorphicHostConfig {
   agentCapabilities?: AgentCapabilityOptions;
-  /** Stable host identity. Required when `codingAgent` enables sessions. */
-  hostId?: string;
   /** Optional leased execution instance. The host owns registration/heartbeat. */
   workerNode?: CatamorphicCoreConfig["workerNode"];
+  /** How often idle pollers look for work (ADR 0229); see the core option. */
+  idlePollMs?: CatamorphicCoreConfig["idlePollMs"];
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -115,23 +138,34 @@ export interface CreateCatamorphicConfig {
   clientExecution?: boolean;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
+  /** Review every brokered connection action (ADR 0162). */
+  connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
+  /** How long one guard may take before its action escalates (ADR 0183). */
+  connectionGuardTimeoutMs?: CatamorphicCoreConfig["connectionGuardTimeoutMs"];
+  /** Rewrite model request bodies before the gateway's policy (ADR 0256). */
+  modelRequestRewrites?: CatamorphicCoreConfig["modelRequestRewrites"];
+  /**
+   * Connection aliases the host offers beside those committed in each
+   * Environment of `.work/project.json` (ADR 0172).
+   */
+  connectionBindings?: CatamorphicCoreConfig["connectionBindings"];
   /** Re-resolve current member authority before unattended dispatch. */
   resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
+  /** Name members by email in workflows' host calls (ADR 0210). */
+  memberIdForEmail?: CatamorphicCoreConfig["memberIdForEmail"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
   connectionMcpUrl?: (args: {
     projectId: string;
     sessionId: string;
     alias: string;
   }) => string | undefined;
+  /**
+   * The plugin's gateway routes (`<api>/gateway`) as sandboxes reach them
+   * (ADR 0175); enables Git through the gateway for Git-capable aliases.
+   */
+  gatewayUrl?: CatamorphicCoreConfig["gatewayUrl"];
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
-  /**
-   * Pluggable coding agent(s) for AI-assisted editing: a single provider
-   * (e.g. `AiSdkCodingAgent` from `@catamorphic/ai-sdk`) or a
-   * `CodingAgentRegistry` when the host offers several agents. Requires
-   * `sandboxProvider`; enables the agent-session APIs.
-   */
-  codingAgent?: CodingAgentProvider | CodingAgentRegistry;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `topology: "native"` (Claude Code, Codex).
@@ -161,12 +195,13 @@ export interface CreateCatamorphicConfig {
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
   /**
-   * GitHub App registration enabling repo import + push-back. Embedders
-   * register their own GitHub App and pass its client id (and, when using the
-   * server-side web OAuth flow, its client secret). Omit to leave the GitHub
-   * surfaces disabled.
+   * Code hosts over connections (ADR 0177), e.g. `githubCodeHost(github)`
+   * beside `defineGithubConnectionProvider` in `connectionProviders`. Sync,
+   * pull requests, proposals, repository import, and publishing act through
+   * the caller's own connection to the host's provider, else the service
+   * connection named like the provider.
    */
-  github?: GithubServiceConfig;
+  codeHosts?: readonly CodeHost[];
   /**
    * The host's custom trigger kinds, built with `defineTriggerKind`.
    * Workflows subscribe with `triggers: [trigger("kind", config)]`; firing a
@@ -182,10 +217,18 @@ export interface CreateCatamorphicConfig {
    */
   mcpToolKinds?: readonly McpToolKindSpec[];
   /**
+   * Project webhook intake: `maxBodyBytes` is the largest body any endpoint
+   * may accept (default 1 MiB, at most 64 MiB). A binding's
+   * `trigger("webhook", { maxBodyBytes })` may ask for up to it.
+   */
+  webhooks?: { maxBodyBytes?: number };
+  /**
    * Fires after a coding-agent chat turn settles — a natural place to fire
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
+  onToolAlwaysAllowed?: CatamorphicCoreConfig["onToolAlwaysAllowed"];
   /** Optional host-owned delivery transport for durable user notifications. */
   pushNotifications?: PushNotificationTransport;
   /**
@@ -219,7 +262,7 @@ export interface CreateCatamorphicConfig {
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills: playbooks the host ships,
-   * listed alongside a project's own `.catamorphic/skills/` without being
+   * listed alongside a project's own `.work/skills/` without being
    * written into the project repo. Same contract as `projectSeeds`
    * (ADR 0049); a project skill with the same name shadows a host skill.
    */
@@ -241,23 +284,17 @@ export interface CreateCatamorphicConfig {
    */
   standingAgentPrompt?: string | false;
   /**
-   * ADR 0055 knobs, passed through to core: where store bytes live, the
-   * roles cache, the identity whose GitHub connection opens members'
-   * proposals as pull requests, and whether agents' `store/` writes ship
-   * around turns (default on; a host whose folders are the truth sets
-   * false).
+   * ADR 0055 knobs, passed through to core: where store bytes live, and
+   * whether agents' `store/` writes ship around turns
+   * (default on; a host whose folders are the truth sets false).
    */
   documentBlobStore?: CatamorphicCoreConfig["documentBlobStore"];
-  rolesCacheTtlMs?: number;
-  proposalBot?: CatamorphicCoreConfig["proposalBot"];
   storeSyncAroundTurns?: boolean;
   /**
-   * The HTTP answer surface for tool-permission asks (ADR 0054): harnesses
-   * park asks here and remote clients list/answer them over the plugin's
-   * permissions routes. Hosts with their own consent UI can omit it — or
-   * register one anyway and race the two.
+   * Hosts and ports (`work.acme.com:443`) sandboxes reach this control plane
+   * at; restricted egress always allows them (ADR 0176).
    */
-  toolPermissions?: CatamorphicCoreConfig["toolPermissions"];
+  gatewayHosts?: CatamorphicCoreConfig["gatewayHosts"];
 }
 
 function resolveDatabase(config: DatabaseConfig): {
@@ -331,6 +368,7 @@ export class Catamorphic {
       hostId: config.hostId,
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
+      idlePollMs: config.idlePollMs,
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,
@@ -338,8 +376,24 @@ export class Catamorphic {
       clientExecution: config.clientExecution,
       credentialVault: config.credentialVault,
       connectionProviders: contributions.connectionProviders,
+      ...(config.connectionGuards
+        ? { connectionGuards: config.connectionGuards }
+        : {}),
+      ...(config.connectionGuardTimeoutMs
+        ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }
+        : {}),
+      ...(config.modelRequestRewrites
+        ? { modelRequestRewrites: config.modelRequestRewrites }
+        : {}),
+      ...(config.connectionBindings
+        ? { connectionBindings: config.connectionBindings }
+        : {}),
       resolveMemberIdentity: config.resolveMemberIdentity,
+      ...(config.memberIdForEmail
+        ? { memberIdForEmail: config.memberIdForEmail }
+        : {}),
       connectionMcpUrl: config.connectionMcpUrl,
+      ...(config.gatewayUrl ? { gatewayUrl: config.gatewayUrl } : {}),
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
       nativeAgentCheckout: config.nativeAgentCheckout,
@@ -351,11 +405,15 @@ export class Catamorphic {
         : { deploymentRuntime: config.deploymentRuntime }),
       appBundleStore: config.appBundleStore,
       maxAppBundleBytes: config.maxAppBundleBytes,
-      github: config.github,
+      ...(config.codeHosts ? { codeHosts: config.codeHosts } : {}),
       triggerKinds: contributions.triggerKinds,
       projectEventSources: config.projectEventSources,
       mcpToolKinds: contributions.mcpToolKinds,
+      ...(config.webhooks ? { webhooks: config.webhooks } : {}),
       onAgentTurnSettled: config.onAgentTurnSettled,
+      ...(config.onToolAlwaysAllowed
+        ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
+        : {}),
       pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
@@ -364,10 +422,8 @@ export class Catamorphic {
       userSkills: config.userSkills,
       standingAgentPrompt: config.standingAgentPrompt,
       documentBlobStore: config.documentBlobStore,
-      rolesCacheTtlMs: config.rolesCacheTtlMs,
-      proposalBot: config.proposalBot,
       storeSyncAroundTurns: config.storeSyncAroundTurns,
-      toolPermissions: config.toolPermissions,
+      gatewayHosts: config.gatewayHosts,
     });
   }
 
@@ -501,6 +557,21 @@ export class Catamorphic {
   }
 
   /**
+   * Hand every turn this process runs back for the next process to take,
+   * instead of interrupting it (ADR 0246). For a host that starts again
+   * on the same database, such as a desktop app restarting to update: a
+   * runner that outlives this process is reattached, and a turn whose
+   * runner goes with it continues where it left off, as after a crash
+   * (ADR 0198). This process claims no more turns; `close()` follows.
+   */
+  async handBackTurns(): Promise<void> {
+    await Promise.allSettled(
+      [...this.agentWorkerHandles].map((handle) => handle.stop()),
+    );
+    await this.core.agentSessions?.stopLocalTurns({ handBack: "all" });
+  }
+
+  /**
    * Release resources catamorphic created itself (currently: the pg pool when
    * booted from a connection string). Host-owned pools and Kysely instances
    * are left untouched.
@@ -509,6 +580,14 @@ export class Catamorphic {
     await Promise.allSettled(
       [...this.agentWorkerHandles].map((handle) => handle.stop()),
     );
+    // Turns running here are interrupted at once and settle before the
+    // database goes; a sandbox runner is handed back for another replica
+    // to reattach (ADR 0198).
+    await this.core.agentSessions
+      ?.stopLocalTurns({ timeoutMs: 3_000 })
+      .catch((error: unknown) =>
+        console.warn("[catamorphic] Could not stop local turns", error),
+      );
     await Promise.allSettled(
       [...this.workerHandles].map((handle) => handle.stop()),
     );

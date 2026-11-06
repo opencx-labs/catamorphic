@@ -1,0 +1,104 @@
+name: Google sign-in
+
+# Google's sign-in turns away browsers it takes for embedded or disguised
+# ones ("This browser or app may not be secure"), and changes that gate
+# without notice (ADR 0235). Every day, and on pull requests that change
+# what pages see of Work or how this check runs, a Work tab takes the
+# sign-in's first step with a made-up address and must get past the gate.
+# Real Chrome on the runner takes it too; its answer explains a failure and
+# never excuses one. A failed daily run opens (or adds to) an issue.
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/google-sign-in.yml
+      - .github/actions/test-setup/**
+      - apps/desktop/e2e/google-sign-in.e2e.ts
+      - apps/desktop/e2e/harness.ts
+      - apps/desktop/e2e/harness-args.ts
+      - apps/desktop/electron.vite.config.ts
+      - apps/desktop/package.json
+      - apps/desktop/src/main/browser.ts
+      - apps/desktop/src/main/extensions/brand.ts
+      - apps/desktop/src/main/extensions/host.ts
+      - apps/desktop/src/main/index.ts
+      - apps/desktop/src/preload/**
+      - apps/desktop/src/shared/chrome-brands.ts
+      - scripts/desktop-test.ts
+      - scripts/desktop-test-environment.ts
+      - turbo.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: google-sign-in-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sign-in:
+    name: A Work tab gets past Google's gate
+    # The platform Work ships on; hosted macOS images carry Google Chrome for
+    # the comparison run.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: google-sign-in
+          electron: "true"
+      - name: Sign in to Google in a Work tab
+        env:
+          CATAMORPHIC_EXTERNAL_INTEGRATIONS: "1"
+        run: bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --force --output-logs=new-only -- e2e/google-sign-in.e2e.ts
+      # A check that skipped for want of authority, or never reached Google,
+      # leaves no verdict; that fails here instead of passing quietly.
+      - name: Require a verdict
+        if: always()
+        run: |
+          verdicts=$(find test-results -name google-sign-in.json -print -quit 2>/dev/null || true)
+          if [ -z "$verdicts" ]; then
+            echo "::error::The live check left no verdict: it was skipped, or never reached Google"
+            exit 1
+          fi
+          jq . "$verdicts"
+          {
+            echo "### Google sign-in"
+            echo
+            echo "- Work: $(jq -r '.work.verdict' "$verdicts")"
+            echo "- Real Chrome on this runner ($(jq -r '.control.browser // "none"' "$verdicts")): $(jq -r '.control.verdict // "not run"' "$verdicts")"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: google-sign-in
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    name: Report a failure
+    needs: sign-in
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or add to the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="The daily Google sign-in check failed"
+          body="Run: $RUN_URL. Its google-sign-in artifact has the verdicts (google-sign-in.json) and the page Work got; a failure before the test (setup, build) leaves none. ADR 0235 records what Google's gate has looked for so far."
+          number=$(gh issue list --state open --search "in:title \"$title\"" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

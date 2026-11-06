@@ -17,7 +17,7 @@ export type { ParseWorkflowRequest, ParseWorkflowResponse };
 /**
  * Mutation for live-parsing draft workflow code. The `@catamorphic/parser`
  * package depends on `ts-morph` (→ `node:fs`) and cannot run in a browser, so
- * the server exposes `POST /api/playground/parse` as a pure CPU wrapper over
+ * the server exposes `POST /api/workflows/parse` as a pure CPU wrapper over
  * the parser. Hosts that build their own WorkflowEditor-style UI use this
  * hook's `mutateAsync` as the `onParse` callback.
  */
@@ -35,7 +35,7 @@ export function useParseWorkflow(): UseMutationResult<
     mutationFn: (input) =>
       runWithCatamorphicError(async () => {
         const { data, error, response } = await apiClient.POST(
-          "/api/playground/parse",
+          "/api/workflows/parse",
           { body: input },
         );
         if (error) {

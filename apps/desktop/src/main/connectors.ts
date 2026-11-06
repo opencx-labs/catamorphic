@@ -22,6 +22,7 @@ import type {
   PublicMcpConnection,
 } from "./connections-store.js";
 import { toAgentMcpServer, toPublicConnection } from "./connections-store.js";
+import { CredentialStorageError } from "./credential-encryption.js";
 
 /**
  * Connectors: the user-facing install layer over two open ecosystems —
@@ -81,8 +82,16 @@ export interface ConnectorSearchResult {
   >;
   plugins: Array<{
     name: string;
+    /** The catalog's display name, e.g. "HubSpot Sales". */
+    displayName?: string;
     description: string;
     version?: string;
+    /** Who publishes it, e.g. "Anthropic". */
+    author?: string;
+    /** The marketplace's grouping, lowercase, e.g. "productivity". */
+    category?: string;
+    /** The plugin's or its vendor's web page. */
+    homepage?: string;
     marketplace: string;
     installed: boolean;
     /** From Anthropic's own curated marketplace (the one trusted repo). */
@@ -107,13 +116,49 @@ export class ConnectorsService {
     { entries: McpRegistryEntry[]; at: number }
   >();
 
+  /** Ends catalog requests still in flight when the app quits. */
+  private readonly quitting = new AbortController();
+
   constructor(
     private readonly deps: {
       /** Directory holding installed plugin dirs for a profile. */
       connectorsDirFor(profileId: string): string;
       connectionsFor(profileId: string): ConnectionsStore;
+      /**
+       * How the public catalogs (the MCP registry, plugin marketplaces)
+       * are fetched; E2E runs answer them offline.
+       */
+      catalogFetch?: typeof fetch;
+      /**
+       * The window shows remote images only through main (ADR 0277): a
+       * catalog's icons are listed as they arrive, and an installed
+       * connection keeps its icon as data, so its file names no address.
+       */
+      images?: {
+        list(url: string): void;
+        inline(url: string): Promise<string | null>;
+      };
     },
   ) {}
+
+  /**
+   * A catalog request, cancelled at quit: one still resolving its host
+   * when Electron tears Node down holds the app's exit.
+   */
+  private readonly fetchCatalog = (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> =>
+    (this.deps.catalogFetch ?? fetch)(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, this.quitting.signal])
+        : this.quitting.signal,
+    });
+
+  dispose(): void {
+    this.quitting.abort();
+  }
 
   private file(profileId: string): string {
     return path.join(this.deps.connectorsDirFor(profileId), "connectors.json");
@@ -188,14 +233,20 @@ export class ConnectorsService {
     const registry =
       cached && Date.now() - cached.at < REGISTRY_CACHE_MS
         ? cached.entries
-        : await searchMcpRegistry(query, { limit: 20 })
+        : await searchMcpRegistry(query, {
+            limit: 20,
+            fetchImpl: this.fetchCatalog,
+          })
             .then((entries) => {
               this.registryQueryCache.set(key, { entries, at: Date.now() });
               trimCatalogCache(this.registryQueryCache, 64);
               return entries;
             })
             .catch(() => cached?.entries ?? []);
-    for (const entry of registry) this.registryEntries.set(entry.name, entry);
+    for (const entry of registry) {
+      this.registryEntries.set(entry.name, entry);
+      if (entry.iconUrl) this.deps.images?.list(entry.iconUrl);
+    }
     trimCatalogCache(this.registryEntries, 512);
     return registry.map((entry) => ({
       ...entry,
@@ -224,8 +275,12 @@ export class ConnectorsService {
     trimCatalogCache(this.pluginEntries, 512);
     return plugins.map((entry) => ({
       name: entry.name,
+      displayName: entry.displayName,
       description: entry.description,
       version: entry.version,
+      author: entry.author,
+      category: entry.category,
+      homepage: entry.homepage,
       marketplace: entry.marketplace,
       installed: installed.has(entry.name),
       official: entry.marketplace === OFFICIAL_MARKETPLACE,
@@ -244,7 +299,7 @@ export class ConnectorsService {
     if (cached && Date.now() - cached.at < MARKETPLACE_CACHE_MS) {
       return cached.entries;
     }
-    const entries = fetchMarketplace(ref)
+    const entries = fetchMarketplace(ref, { fetchImpl: this.fetchCatalog })
       .catch(() => [] as MarketplacePluginEntry[])
       .then((list) => {
         // Failures aren't cached for long — the next search retries.
@@ -271,12 +326,15 @@ export class ConnectorsService {
       this.marketplaces(profileId).map((ref) => this.marketplaceEntries(ref)),
     );
     const entries = lists.flat();
-    if (!needle) return entries.slice(0, 20);
+    // No query browses: the whole catalog, which Connectors groups by
+    // category. Each list is already bounded (a marketplace over 1 MB is
+    // never cached).
+    if (!needle) return entries;
     return entries
-      .filter(
-        (entry) =>
-          entry.name.toLowerCase().includes(needle) ||
-          entry.description.toLowerCase().includes(needle),
+      .filter((entry) =>
+        [entry.name, entry.displayName, entry.author, entry.description].some(
+          (field) => field?.toLowerCase().includes(needle),
+        ),
       )
       .slice(0, 20);
   }
@@ -308,13 +366,16 @@ export class ConnectorsService {
         config.env = { ...config.env, [input.name]: value };
       }
     }
+    const iconUrl = entry.iconUrl
+      ? await this.deps.images?.inline(entry.iconUrl)
+      : null;
     const connection = this.deps.connectionsFor(profileId).create({
       name: entry.displayName,
       transport: config.transport,
       ...(config.transport === "stdio"
         ? { command: config.command, args: config.args, env: config.env }
         : { url: config.url, headers: config.headers }),
-      ...(entry.iconUrl ? { iconUrl: entry.iconUrl } : {}),
+      ...(iconUrl ? { iconUrl } : {}),
       source: { kind: "registry", registryName },
     });
     return toPublicConnection(connection);
@@ -326,11 +387,17 @@ export class ConnectorsService {
     marketplace: string,
     pluginName: string,
   ): Promise<InstalledConnector> {
-    const entry = this.pluginEntries.get(`${marketplace}#${pluginName}`);
+    // Browsing holds more of the catalog than the entry cache keeps, so a
+    // miss reads the plugin from its (cached) marketplace list instead.
+    const entry =
+      this.pluginEntries.get(`${marketplace}#${pluginName}`) ??
+      (this.marketplaces(profileId).includes(marketplace)
+        ? (await this.marketplaceEntries(marketplace)).find(
+            (candidate) => candidate.name === pluginName,
+          )
+        : undefined);
     if (!entry) {
-      throw new Error(
-        `Plugin ${pluginName} is not in the last search results — search again.`,
-      );
+      throw new Error(`${pluginName} is not in the ${marketplace} catalog.`);
     }
     const targetDir = path.join(
       this.deps.connectorsDirFor(profileId),
@@ -504,10 +571,31 @@ export class ConnectorsService {
     const store = this.deps.connectionsFor(profileId);
     const connection = store.get(connectionId);
     if (!connection) return { ok: false, error: "Connection not found" };
+    if (connection.credentialError)
+      return {
+        ok: false,
+        error: connection.credentialError,
+        ...(connection.oauthRecoveryRequired &&
+        connection.transport !== "stdio" &&
+        connection.url
+          ? { needsAuth: true }
+          : {}),
+      };
     // Tokens near expiry get refreshed first, so a probe never fails on a
     // token the refresher would have renewed a minute later.
     await this.refreshConnectionTokens(store, connection).catch(() => {});
-    const config = toAgentMcpServer(store.get(connectionId) ?? connection);
+    const current = store.get(connectionId);
+    if (current?.credentialError)
+      return {
+        ok: false,
+        error: current.credentialError,
+        ...(current.oauthRecoveryRequired &&
+        current.transport !== "stdio" &&
+        current.url
+          ? { needsAuth: true }
+          : {}),
+      };
+    const config = current ? toAgentMcpServer(current) : undefined;
     if (!config) return { ok: false, error: "Connection is incomplete" };
     const probe = await probeMcpServer(config);
     // A successful probe refreshes the cached roster the permission editor
@@ -544,37 +632,28 @@ export class ConnectorsService {
     },
   ): Promise<{ toolCount: number }> {
     const store = this.deps.connectionsFor(profileId);
-    const connection = store.get(connectionId);
+    const connection = store.getForAuthorization(connectionId);
     if (!connection) throw new Error("Connection not found");
+    if (connection.credentialError)
+      throw new CredentialStorageError(connection.credentialError);
     if (connection.transport === "stdio" || !connection.url) {
       throw new Error("Only remote connections can be authorized");
     }
+    const oauthStore = oauthStoreFor(store, connectionId);
+    if (connection.oauthRecoveryRequired) oauthStore.save({});
     const config: AgentMcpServerConfig = {
       transport: connection.transport,
       url: connection.url,
       ...(connection.headers ? { headers: connection.headers } : {}),
     };
-    // Connections lifted from a plugin before it declared (or before we
-    // read) an `oauth` block: consult the installed plugin directly.
-    let client = connection.oauthClient;
-    if (!client && connection.source.kind === "plugin") {
-      const plugin = this.listInstalled(profileId).find(
-        (entry) =>
-          connection.source.kind === "plugin" &&
-          entry.name === connection.source.plugin,
-      );
-      if (plugin) {
-        client = await readInstalledPlugin(plugin.path)
-          .then((info) => info.mcpOAuth[connection.name])
-          .catch(() => undefined);
-      }
-    }
+    const client = connection.oauthClient;
     const result = await authorizeMcpServer(config, {
-      store: oauthStoreFor(store, connectionId),
+      store: oauthStore,
       openUrl: opts.openUrl,
       onCallbackServed: opts.onCallbackServed,
       ...(client ? { client } : {}),
     });
+    oauthStore.load();
     return { toolCount: result.toolCount };
   }
 
@@ -583,6 +662,8 @@ export class ConnectorsService {
     store: ConnectionsStore,
     connection: McpConnection,
   ): Promise<void> {
+    if (connection.credentialError)
+      throw new CredentialStorageError(connection.credentialError);
     if (!connection.oauth?.tokens || !connection.url) return;
     if (connection.transport === "stdio") return;
     await refreshMcpTokens(
@@ -591,7 +672,7 @@ export class ConnectorsService {
         url: connection.url,
         ...(connection.headers ? { headers: connection.headers } : {}),
       },
-      oauthStoreFor(store, connection.id),
+      oauthStoreFor(store, connection.id, { refresh: true }),
     );
   }
 
@@ -629,10 +710,39 @@ export type ConnectionProbeResult = McpConnectionProbe & {
 function oauthStoreFor(
   store: ConnectionsStore,
   connectionId: string,
+  options: { refresh?: boolean } = {},
 ): McpOAuthStore {
+  let revision = store.securityRevision(connectionId);
+  const assertCurrent = () => {
+    if (store.securityRevision(connectionId) !== revision)
+      throw new Error(
+        options.refresh
+          ? "The connection authorization changed during token renewal"
+          : "The connection authorization changed during authorization",
+      );
+  };
   return {
-    load: () => store.get(connectionId)?.oauth ?? {},
-    save: (state) => store.setOAuth(connectionId, state),
+    load: () => {
+      assertCurrent();
+      const connection = store.get(connectionId);
+      if (connection?.credentialError)
+        throw new CredentialStorageError(connection.credentialError);
+      return connection?.oauth ?? {};
+    },
+    save: (state) => {
+      assertCurrent();
+      const writtenRevision = store.setOAuth(
+        connectionId,
+        state,
+        options.refresh
+          ? { refresh: true, securityRevision: revision }
+          : { securityRevision: revision },
+      );
+      if (writtenRevision === undefined)
+        throw new Error("Connection not found");
+      revision = writtenRevision;
+      assertCurrent();
+    },
   };
 }
 

@@ -1,29 +1,135 @@
 # Chat state and embedding
 
 `packages/react` owns reusable delivery orchestration. Core owns durable execution,
-transcripts and the inbox. Desktop owns surfaces, focus, bubbles, file persistence
+the session event log and the turn queue (ADR 0197). Desktop owns surfaces, focus, bubbles, file persistence
 and native clipboard access. Registry components compose the hook and callbacks;
 they must not import Electron or assume a desktop workspace.
 
+## Message navigation and activity
+
+Message navigation belongs to the host's customizable shortcuts. A quick
+PageUp/PageDown press moves one message. The first repeat of a held key requests
+the top or bottom directly, without visiting intermediate message anchors;
+further repeats leave that move alone. A top request loads earlier pages before
+making its endpoint move and yields to pointer or wheel input. A failed history
+load stops that request. Reduced motion
+uses immediate scrolling. Finding a nearby message measures a bounded set of
+ordered row boxes, leaving offscreen message layout contained.
+Adjacent messages and a move to the end use the same browser glide. Following
+resumes from that glide, so a delayed upward-scroll handler cannot cancel a new
+request for the latest response, and new words keep following as they arrive.
+Layout that carries the view past its saved endpoint also counts as arrival.
+
+With "Fold notes into steps" enabled, completed notes, steps and read task
+notifications share one disclosure before the latest answer to the person's
+message. Automatic task wakeups can span execution turns; they do not create
+new reading sections. Expanding retains their original order, output and source
+links. A person's next message, an answered question, unread or required attention,
+and an unfinished or failed turn remain boundaries. Failed command results can
+fold once the agent has read them; a task needing input or a failed child result
+stays visible (ADR 0305).
+
+Running background commands remain visible outside the folded steps list and
+align with the main conversation column, without a nested border or indentation.
+When background work finishes, its row becomes inert and collapses before joining
+folded history. It never appears in both places during that handoff.
+
+Folded step lists release their rows after the closing transition. Closed step
+payloads release their Markdown and other detail DOM the same way. Expanded
+detail choices belong to the step list and survive folding and reopening it;
+manual reopening does not replay every historical row's entrance. Long expanded
+lists mount nearby headers in the conversation's existing scroller, with measured
+space for distant headers. Opened details, focused controls, selection and an
+active pointer press remain mounted. Tab and Shift+Tab materialize the next
+logical row across skipped ranges; this remains a document log, not a tree with
+roving focus. Notification targets mount before message navigation looks them up.
+Scrolling an existing row back into view never replays its arrival animation.
+
+The dock entrance belongs to initial or restored floating chats. Tab chats use a
+settled pose even if the first opening was interrupted by a fast tab switch.
+Moving an already visible tab back to floating morphs its geometry without a
+fresh entrance fade.
+
+The chat's watcher strip retains each stopped watch through its actual height
+transition, with a bounded fallback for hidden or stalled renderers. Surviving
+watchers move into their new positions, including across wrapped lines. Exiting
+chips fade outside the rail's shrinking viewport, clipped to the viewport that
+was visible when they left. Scrolling updates that exit position. Leaving
+controls are inert immediately, and script-driven motion honors reduced motion.
+
 ## Three independent facts
 
-- Delivery: local session creation and message acknowledgement. `isSending` ends
-  when those operations settle; mutation-observer pending flags are not authority.
-- Execution: the server execution record determines `isWorking` and agent activity.
-- Connectivity: a failed status request means the client cannot confirm progress;
-  it does not prove the agent stopped or is still working.
+Opening a local chat reads the embedded server even when Chromium reports no
+internet. The desktop's local query and mutation cache uses `networkMode: "always"`;
+remote authority caches retain `online` mode. While the initial history loads,
+`ChatTimeline.isLoading` replaces the empty prompt with a centered, accessible
+spinner. A failed load shows its error without the empty prompt; a background
+refresh keeps the loaded conversation visible. A reconnecting stream shows
+"Waiting for connection. Reconnecting…" independently of agent activity. Thinking
+keeps its normal activity and elapsed clock; time since the last update never
+creates a warning or implies a network problem.
+
+- Delivery: local session creation and command receipts. `isSending` ends when
+  those operations settle; mutation-observer pending flags are not authority.
+- Execution: the session's turns determine `isWorking` (a turn preparing,
+  running, waiting or finalizing) and the activity line (`turn.activity`).
+- Connectivity: a dropped event stream means the client cannot confirm
+  progress; it resumes from its last applied sequence and does not prove the
+  agent stopped or is still working.
 
 The delivery reducer scopes events to their initiating conversation. Switching
 projects/sessions resets local state. Late results cannot adopt a session or modify
 the new conversation. Adopting the hook's own lazily created id is the same chat.
-Overlapping sends settle independently. Failed messages retain content, attachments
-and the original idempotency key for Send again. Registry `ChatDeliveryRecovery`
-provides the optional presentation; hosts may supply their own.
+Overlapping sends settle independently. A sent message shows at once and is
+replaced by its item when the stream delivers it. Failed messages retain content,
+attachments and their `commandId` for Send again, so a resend cannot deliver
+twice; timelines show them as unsent bubbles with Send again and Dismiss.
 
-The server inbox is the only queue authority. Queue mutations are serialized and
-bounded; errors remain visible, and failed edits do not discard the held message.
+A message sent while the agent works steers into its turn (ADR 0240): it
+shows in the conversation at once, unread (`in_progress`) until the agent
+takes it in at its next step, and its Interrupt (`steer_now`) has the agent
+stop that step and read it now. The profile's "Queue messages sent while the
+agent works" (`chatQueueMessages`, off by default) sends `queue` instead, and
+⌘↵ sends `interrupt` either way.
+
+The server's turn queue is the only queue authority. Queue commands
+(`edit_queued`, `cancel_queued`, `send_now`) carry their own command ids; a
+refused command shows its receipt's message, and failed edits do not discard
+the held message.
 Retrying a failed execution is distinct from retrying delivery. Do not reconstruct
 execution from a pending fetch or optimistic transcript entries.
+
+## Who wrote an input
+
+Only a person's message is a `user_message` (ADR 0217). Another agent's,
+the person's assistant's and a workflow's words are `inbound_message` items
+with a `from`; Work's reports on tasks an agent started (background
+commands, watches, subsessions, followed chats) are `task_notification`
+items with the task, a `summary`, the `detail` the agent read and a `source`.
+Routine agent messages and successful subagent results read as activity,
+grouped into one expandable status per source chat. Full reports, harness
+icons and source links remain available inside it. Failures, questions and
+attention requests stay visible in the conversation. Other inbound inputs
+and notifications use the shared `session-input` rows. Hosts map sources they own
+(a chat in another project) with `sourceHref` and fall back to the default
+`session:`, `run:` and surface keys. Queues edit only `user_message` turns.
+Never key behavior meant for the person (undo, recall, edits) on anything
+but `user_message`; a chat's provisional title comes from a person's or an
+inbound message, never a notification.
+
+A direct child's reports join its parent's working turn through steer even
+when sent as context-only or interrupt. Existing harness acknowledgements
+mark them read automatically; the parent does not fetch a transcript to
+receive them. With no working parent, context-only reports remain context.
+Peer delivery retains its requested mode and all owner checks still apply
+(ADR 0278). Unconsumed steered inputs say "Waiting for agent"; only deferred
+context says "For the next turn".
+
+Context-only peer reports that render next to each other share one activity
+block, even when a running turn's commands separate them in the stored log.
+Reopening the chat keeps that grouping. The reports remain unread until the
+agent takes them in; grouping never crosses another turn, a person's message,
+or an item that needs attention.
 
 ## Composer and resource integration
 
@@ -32,6 +138,14 @@ Files that cannot be passed as model media still reach the agent as paths. The
 host persists pathless clipboard bytes under the current project. Preserve text,
 caret insertion, selection pills, undo and draft contents while preparation runs.
 Resource links use the [workspace opening contract](workspace-interactions.md).
+
+The palette's Ask agent mode uses the same `ComposerInput`, clipboard classifier,
+and serialized `useComposerFiles` preparation as chat and question answers. It
+prepares attachments for the resolved profile or project agent, keeps inline
+markers and previews, and waits for file preparation before sending. Other palette
+modes retain their search textarea.
+Shift+Enter inserts a new line with either the main Return key or keypad Enter.
+Keypad line breaks use the same undo-aware contenteditable editing path.
 
 ## Attachment and response previews
 
@@ -60,11 +174,35 @@ preview UI after URL sanitization; desktop filesystem access stays in desktop.
 
 ## Registry maintenance
 
-Edit `packages/registry/src` first, then update installed consumers by adapting only
-imports and deliberate host integration. The desktop copy lives in
-`src/renderer/components/catamorphic`. Registry build emits the installable JSON;
-source edits alone do not update that output. Build the React package first because
-consumers resolve its declarations and implementation from `dist`.
+The registry is the one implementation of the chat timeline, its steps, queue
+and input rows (ADR 0218). Edit `packages/registry/src` first, then rewrite the
+installed copies with `bun scripts/registry-copies.ts --sync desktop` (and
+`--sync pwa`). The desktop copy lives in `src/renderer/components/catamorphic`.
+A copy differs from the registry only in import specifiers;
+`bun scripts/registry-copies.ts` (and `bun run test:scripts`) fails on any other
+difference, a partly installed item, or a copy that imports a desktop module.
+Pre-existing differences are listed in its `KNOWN_DRIFT` with a reason, and
+that list only shrinks.
+
+Desktop behavior enters through the timeline's host surface, never an edit to
+the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
+(`ShortcutHint`), `renderLink` and `onLinkClick`,
+`sourceHref`, `resolveToolIcon`, `onReauth`, `backgroundCommands`,
+`workDisplay` and `presentUserMessage` (a sent skill leads its message as a
+chip, `presentSkillMessage`). Rows are memoized: keep render-affecting slots stable
+(`useCallback` or module-level functions); action callbacks may change every
+render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
+`cat-step-in`, `cat-gap-in`, `cat-swap-*`, `cat-reveal` with its
+`data-entering` and `data-moving`, `cat-grow`), its scroll pinning (`cat-scroll-anchor` with
+`data-pinned`, set only while the chat follows and nothing in it is pressed
+or selected) and row containment (`cat-row`, with `cat-uncontained` for current
+work and folding notes) live in `@catamorphic/ui/styles.css`, which the renderer
+stylesheet imports. The timeline's press and key listeners on
+the document are listed in the desktop's design lint.
+
+Registry build emits the installable JSON; source edits alone do not update that
+output. Build the React package first because consumers resolve its declarations
+and implementation from `dist`.
 
 `packages/registry/src/examples/embedding.tsx` is a typechecked host example.
 Use hook tests for concurrency and scope changes, and native Electron tests for
@@ -75,16 +213,46 @@ Queue mutations resolve to `true` only after server confirmation. A `false` resu
 ## Agent questions
 
 Question batches are durable session requests with a `blocking` flag (default true).
-Use `useAnswerAgentQuestion` and the request id to submit an answer. Non-blocking
+Answer with `useAgentChat().respond(requestId, { kind: "question", answers, attachments })`,
+one answer per question; an answer in the person's own words may hold
+attachment markers, and `attachments` holds each answer's pills in marker
+order (ADR 0244). Core gives the asking agent text answers with the text pills
+rendered in; their images and documents follow as a steered message carrying
+the answer (its card takes the pills from the request).
+Non-blocking
 questions stay answerable while work continues and after the turn finishes.
 Collapsing a question preserves its draft. The existing inbox delivers answers to
 the current harness or starts a continuation if the turn has already ended.
 See ADR 0122 and the question schemas in `@catamorphic/sandbox`.
 
+A message sent while a blocking question waits reaches the agent in the same
+turn, attachments included, and the question stays open as "Answer when ready"
+(ADR 0195). A permission request is withdrawn instead. Each question also has
+an Other answer (ADR 0244), which the desktop types in the composer's own input
+(`components/answer-input.tsx`): it glides, takes pills, and attaches pasted
+files through the dock's own attaching. The composer still takes free text,
+and its placeholder says so while a question is open. The waiting status sits
+in the panel header. Answers render in history as the questions and what was
+picked or written, pills in place: from the resolved request, or a later
+answer message's `answer`. Agents close questions a reply settled with `close_questions`.
+
+A response shows the moment it is sent, as a sent message does:
+`useAgentChat` reads its request as answered with it until the session's own
+request moves on, and a refused one asks again. The answer takes the
+question's place in the conversation in the same frame, and enters once
+(the answer message that may follow is the same card). The desktop keeps the
+answered panel as it was, inert at once, while it closes
+(`components/closing-collapsible.tsx`), starting two frames on so the
+frame that swapped the answer in never shows its close as a jump.
+
+Attachment preparation shows on the composer's attach button. Never add a row
+above the composer for transient state: it moves the dock and any open question.
+
 ## Consent belongs to the conversation
 
-Session tool approvals and native app-access consent are durable blocking agent
-questions, with concise action, reason and explicit allow/deny choices. Do not
+Session tool approvals and native app-access consent are durable blocking
+session requests (`approval` and `elicitation`), shown in the chat with the tool
+and what it sends and explicit Allow once, Always allow and Deny choices. Do not
 surface them as global alert dialogs or store their only copy in a mounted tab.
 Navigation, minimizing, project switching and renderer reload must preserve the
 request and its waiting indicator. Answer delivery is keyed to its initiating
@@ -115,7 +283,7 @@ registry source and installed desktop/PWA copies aligned.
 
 Use `ResourceInspector` for hover/focus behavior and `InspectorPortal` for every
 rich preview's shell, positioning, motion and dismissal. Composer attachments,
-surface chips (including expanded group members), response links and sidebar
+chips (including expanded group members), response links and sidebar
 previews use these primitives. Do not add per-surface hover timers or standalone
 preview modals. A preview opens on keyboard focus, stays open while the pointer
 moves into it, and dismisses on Escape without opening the resource.
@@ -124,15 +292,15 @@ Use the installable `ResourcePreviewContent` for bounded file/Markdown/media and
 resource summaries. Keep Markdown's default URL sanitization and raw HTML disabled;
 embedded images and links in previews are inert so hovering never navigates or
 loads remote content. Preserve filenames, locations, truncation and retry states.
-Surface chips carry host-resolved file paths/URLs when available, so they preview
+Work's chips carry host-resolved file paths/URLs in their data when available, so they preview
 the same content as a response link to that resource. Terminal previews read a
 bounded recent-output snapshot through the existing terminal buffer API and the
 shared terminal-text sanitizer. Workflow and app previews use catalog metadata;
 hovering never executes a workflow or mounts an app.
 
-Crowded surface groups use the plural type as the label: Terminals, Apps,
-Workflows, Files, Pages, Chats, Subagents, Watchers, or App views. Show the count
-separately. Clicking the group discloses every member; each member retains its
+Past three chips of one kind, Work's chips fold into a group labelled with the
+plural type: Terminals, Apps, Workflows, Files, Pages, Chats, Subagents or App
+views (ADR 0239). Show the count separately. Clicking the group discloses every member; each member retains its
 preview and normal open/remove actions. Never label a group with one member's
 name or silently hide members behind a count.
 
@@ -145,3 +313,54 @@ Native session ownership conflicts must explain which client to close and retain
 manual retry. Do not automatically fork history, steal a writer lock, or present
 this as an authentication failure. Local-auth Codex sessions can also be opened
 by the Codex desktop app, which then owns the native writer lock.
+
+After machine loss, a local runner releases its outstanding calls and ends its
+harness process before the native thread is resumed. A surviving remote runner
+keeps its attempt and cursor while its machine is disconnected, then reattaches
+when it returns. A lost continuation can continue again after a later machine
+stop; each lost turn queues at most one continuation, and Stop or newer input
+still takes precedence. Codex's temporary workspace routing discovery failure
+uses the existing durable retry backoff when no work began.
+
+## Switching agents
+
+Choosing an agent updates the same session even when its harness differs
+(ADR 0276). Core checks access and Environment admission and holds the idle
+session lock. The next turn resumes or creates that harness's native thread;
+a recorded bounded context handoff carries the turns it missed. Returning to
+another harness resumes its thread with the intervening turns. Imported and
+forked sessions follow the same rule. Model and effort overrides reset with
+an agent change, including on unsent drafts. Rename opens with the complete
+current name selected; typing replaces it without first clearing the input.
+
+Subsession chips carry the child agent's harness/provider identity and use the
+shared HarnessIcon, including the generic fallback. A custom chip icon retains
+precedence. Disabled model values use the shared disabled-control hint to explain
+why they cannot change, while idle model selection continues through the palette.
+
+
+Only visible editors contribute a live selection when a chat opens or regains
+focus. A hidden tab or another project's retained editor cannot attach its old
+selection to a new conversation. Copying a selection still carries its provenance
+when it is explicitly pasted.
+
+Chats have no scroll-arrow buttons. The regular configurable actions Previous
+message in chat and Next message in chat default to PageUp and PageDown. They
+step through the person's messages while focus is in the chat; holding either
+key continues to the oldest message or latest response. Repeated keys advance
+from the preceding destination while scrolling is still in motion. A wheel,
+touch gesture or scrollbar press takes over. These keys stay with browser pages
+and other surfaces outside chat. Incoming agent messages use the sender's harness
+mark through the timeline's optional `renderAgentIcon` host slot.
+
+Navigation skips a message whose clamped destination is already reached, using
+the article's actual geometry after the coarse row search. Fractional scroll
+settlement and short final messages cannot consume repeated taps.
+
+The composer DOM owns draft text and native editing history. The dock mirrors
+the latest text in a ref and renders on emptiness, attachment, menu and recall
+changes, rather than rendering the conversation for every character. An initial
+saved-draft read loses to edits or broadcasts that arrived while it waited;
+persistence never acknowledges a local edit by replacing the editable DOM.
+`e2e/chat-input-navigation.e2e.ts` exercises native character input and paging;
+`use-composer-draft.test.tsx` covers deferred reads and caret preservation.

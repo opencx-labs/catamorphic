@@ -83,10 +83,10 @@ it("relocates only projects inside the copied development profile", async () => 
     const reopened = new ProjectRootsStore(database);
     await reopened.init({
       from: "/tmp/old/desktop",
-      to: "/Users/test/.catamorphic/dev/desktop",
+      to: "/Users/test/.work/dev/desktop",
     });
     expect(reopened.getSync(internal)).toBe(
-      "/Users/test/.catamorphic/dev/desktop/Work/project",
+      "/Users/test/.work/dev/desktop/Work/project",
     );
     expect(reopened.getSync(external)).toBe("/Users/test/my-project");
     expect(reopened.getSync(neighbor)).toBe("/tmp/old/desktop-other/project");
@@ -123,6 +123,37 @@ it("deduplicates plain-folder aliases without conflating different unversioned f
     expect(other).not.toBe(first);
     expect(store.checkpointsEnabled(first)).toBe(false);
     expect(await fs.readdir(root)).toEqual([]);
+  } finally {
+    await database.close();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
+it("takes back a failed new project's folder so the same place can be retried", async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "project-roots-"));
+  const database = new PGlite();
+  try {
+    const store = new ProjectRootsStore(database);
+    await store.init();
+    const fresh = path.join(temporary, "fresh");
+    const chosen = path.join(temporary, "chosen");
+    await fs.mkdir(chosen);
+    for (const root of [fresh, chosen]) {
+      await expect(
+        store.register({
+          rootPath: root,
+          existing: false,
+          create: async (_id, canonical) => {
+            await fs.mkdir(path.join(canonical, ".git"), { recursive: true });
+            throw new Error("sign-in failed");
+          },
+          reopen: async (id) => id,
+        }),
+      ).rejects.toThrow("sign-in failed");
+    }
+    // A folder the attempt made is gone; a folder the person chose is empty.
+    await expect(fs.access(fresh)).rejects.toThrow();
+    expect(await fs.readdir(chosen)).toEqual([]);
   } finally {
     await database.close();
     await fs.rm(temporary, { recursive: true, force: true });

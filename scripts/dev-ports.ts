@@ -31,14 +31,24 @@ export function devListenerPorts(input: {
   return [...desktop, ...server];
 }
 
+/**
+ * Reserve distinct loopback ports. `preferred` carries the instance's ports
+ * from its previous run, so links to its dev server survive restarts; a
+ * preferred port is reused only while it is free.
+ */
 export async function reserveDevPorts(input: {
-  reservePort(): Promise<number>;
+  reservePort(preferred?: number): Promise<number>;
   excludedPorts?: ReadonlySet<number>;
+  preferred?: Partial<DevPorts>;
 }): Promise<DevPorts> {
   const used = new Set(input.excludedPorts);
-  const next = async (): Promise<number> => {
+  const next = async (preferred?: number): Promise<number> => {
     for (let attempt = 0; attempt < PORT_ALLOCATION_LIMIT; attempt += 1) {
-      const port = await input.reservePort();
+      const port = await input.reservePort(
+        attempt === 0 && preferred !== undefined && !used.has(preferred)
+          ? preferred
+          : undefined,
+      );
       if (!Number.isInteger(port) || port < 1 || port > 65_535) {
         throw new Error(`Invalid reserved development port: ${port}`);
       }
@@ -49,14 +59,14 @@ export async function reserveDevPorts(input: {
     throw new Error("Could not reserve a distinct development port");
   };
   return {
-    desktopCdp: await next(),
-    desktopVite: await next(),
-    server: await next(),
-    operator: await next(),
+    desktopCdp: await next(input.preferred?.desktopCdp),
+    desktopVite: await next(input.preferred?.desktopVite),
+    server: await next(input.preferred?.server),
+    operator: await next(input.preferred?.operator),
   };
 }
 
-function loopbackPortIsListening(port: number): Promise<boolean> {
+export function loopbackPortIsListening(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
     const settle = (listening: boolean): void => {

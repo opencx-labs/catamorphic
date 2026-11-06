@@ -13,16 +13,17 @@ export interface SessionSyncIntent {
   sessionId: string;
   destinationKey: string;
   authorityRevision: number;
-  messageCount: number;
+  /** The session log's sequence the destination should reach. */
+  sequence: number;
   attemptCount: number;
 }
 
 export interface SessionSyncStatus {
   state: "pending" | "leased" | "acknowledged" | "diverged";
   desiredAuthorityRevision: number;
-  desiredMessageCount: number;
+  desiredSequence: number;
   acknowledgedAuthorityRevision: number | null;
-  acknowledgedMessageCount: number | null;
+  acknowledgedSequence: number | null;
   attemptCount: number;
   lastError: string | null;
   updatedAt: string;
@@ -73,25 +74,14 @@ export class SessionSyncService {
         );
         const snapshot = await this.db
           .selectFrom("agent_sessions")
-          .leftJoin(
-            "agent_messages",
-            "agent_messages.session_id",
-            "agent_sessions.id",
-          )
           .select([
-            "agent_sessions.external_user_id",
-            "agent_sessions.agent_id",
-            "agent_sessions.authority_revision",
-            this.db.fn.count("agent_messages.id").as("message_count"),
+            "external_user_id",
+            "agent_id",
+            "authority_revision",
+            "event_sequence",
           ])
-          .where("agent_sessions.id", "=", args.sessionId)
-          .where("agent_sessions.project_id", "=", args.projectId)
-          .groupBy([
-            "agent_sessions.id",
-            "agent_sessions.external_user_id",
-            "agent_sessions.agent_id",
-            "agent_sessions.authority_revision",
-          ])
+          .where("id", "=", args.sessionId)
+          .where("project_id", "=", args.projectId)
           .executeTakeFirst();
         if (!snapshot)
           throw new Error(`Agent session '${args.sessionId}' not found`);
@@ -110,12 +100,12 @@ export class SessionSyncService {
             session_id: args.sessionId,
             destination_key: args.destinationKey,
             desired_authority_revision: snapshot.authority_revision,
-            desired_message_count: Number(snapshot.message_count),
+            desired_sequence: snapshot.event_sequence,
           })
           .onConflict((conflict) =>
             conflict.columns(["session_id", "destination_key"]).doUpdateSet({
               desired_authority_revision: snapshot.authority_revision,
-              desired_message_count: Number(snapshot.message_count),
+              desired_sequence: snapshot.event_sequence,
               status: "pending",
               next_attempt_at: now,
               lease_owner: null,
@@ -184,7 +174,7 @@ export class SessionSyncService {
     intentId: string;
     workerId: string;
     authorityRevision: number;
-    messageCount: number;
+    sequence: number;
   }): Promise<void> {
     const row = await this.db
       .selectFrom("session_sync_intents")
@@ -196,7 +186,7 @@ export class SessionSyncService {
     }
     if (
       Number(row.desired_authority_revision) !== args.authorityRevision ||
-      row.desired_message_count !== args.messageCount
+      Number(row.desired_sequence) !== args.sequence
     ) {
       throw new SessionSyncWatermarkError(args.intentId);
     }
@@ -205,7 +195,7 @@ export class SessionSyncService {
       .set({
         status: "acknowledged",
         acknowledged_authority_revision: args.authorityRevision,
-        acknowledged_message_count: args.messageCount,
+        acknowledged_sequence: args.sequence,
         lease_owner: null,
         lease_expires_at: null,
         last_error: null,
@@ -307,7 +297,7 @@ function mapIntent(row: SyncIntentRow): SessionSyncIntent {
     sessionId: row.session_id,
     destinationKey: row.destination_key,
     authorityRevision: Number(row.desired_authority_revision),
-    messageCount: row.desired_message_count,
+    sequence: Number(row.desired_sequence),
     attemptCount: row.attempt_count,
   };
 }
@@ -316,12 +306,15 @@ function mapStatus(row: SyncIntentRow): SessionSyncStatus {
   return {
     state: parseState(row.status),
     desiredAuthorityRevision: Number(row.desired_authority_revision),
-    desiredMessageCount: row.desired_message_count,
+    desiredSequence: Number(row.desired_sequence),
     acknowledgedAuthorityRevision:
       row.acknowledged_authority_revision === null
         ? null
         : Number(row.acknowledged_authority_revision),
-    acknowledgedMessageCount: row.acknowledged_message_count,
+    acknowledgedSequence:
+      row.acknowledged_sequence === null
+        ? null
+        : Number(row.acknowledged_sequence),
     attemptCount: row.attempt_count,
     lastError: row.last_error,
     updatedAt: row.updated_at.toISOString(),

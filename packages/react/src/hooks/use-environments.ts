@@ -15,6 +15,8 @@ export interface EnvironmentList {
     description?: string;
     available: boolean;
     clientRequired?: boolean;
+    /** False when no machine for it is online (e.g. a member's computer is not connected). */
+    machineOnline: boolean;
     compatible: boolean;
     preferred: boolean;
     allowed: boolean;

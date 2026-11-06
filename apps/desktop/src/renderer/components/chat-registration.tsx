@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ChatDockProps } from "../../shared/chat.js";
-import type { ChatEvent, DockData } from "../../shared/desktop-workspace.js";
+import type {
+  ChatEvent,
+  DockAction,
+  DockData,
+} from "../../shared/desktop-workspace.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useTheme } from "../lib/theme.js";
@@ -40,6 +44,7 @@ export function ChatRegistration(
       fork: props.fork,
       unread: props.unread,
       attention: props.attention,
+      attentionRevision: props.attentionRevision,
       menu: props.menu,
       archived: props.archived,
       inspectRequestNonce: props.inspectRequestNonce,
@@ -55,8 +60,10 @@ export function ChatRegistration(
       backdropTab: props.backdropTab,
       defaultAgentId: props.defaultAgentId,
       paletteTargeted: props.paletteTargeted,
-      surfaces: props.surfaces,
+      chips: props.chips,
+      chipsModule: props.chipsModule,
       pullSelectionNonce: props.pullSelectionNonce,
+      chipsRefreshNonce: props.chipsRefreshNonce,
     };
     const serialized = JSON.stringify(data);
     if (last.current === serialized) return;
@@ -65,7 +72,7 @@ export function ChatRegistration(
     void desktopApi.dockPublish(data);
   });
   useEffect(() => {
-    const send = (action: "close" | "minimize" | "send", message?: string) => {
+    const send = (action: DockAction, message?: string) => {
       void desktopApi.dockAction(localId, action, message);
     };
     current.current.registerClose?.(() => {
@@ -74,6 +81,12 @@ export function ChatRegistration(
     });
     current.current.registerMinimize?.(() => send("minimize"));
     current.current.registerSend?.((message) => send("send", message));
+    current.current.registerSkill?.((message) => send("skill", message));
+    current.current.registerComposerFocus?.(() => send("focusComposer"));
+    current.current.registerFocusChips?.(() => {
+      send("focusChips");
+      return true;
+    });
     const invoke = (event: ChatEvent) => {
       const p = current.current;
       switch (event.kind) {
@@ -92,6 +105,12 @@ export function ChatRegistration(
         case "session":
           p.onSessionCreated(localId, event.sessionId);
           break;
+        case "sessionAgent":
+          p.onSessionAgent?.(localId, {
+            agentId: event.agentId,
+            ...(event.harness ? { harness: event.harness } : {}),
+          });
+          break;
         case "signals":
           p.onSignalsChange(localId, event.signals);
           break;
@@ -100,6 +119,9 @@ export function ChatRegistration(
           break;
         case "removeSurface":
           p.onRemoveSurface?.(event.key);
+          break;
+        case "customizeChips":
+          p.onCustomizeChips?.();
           break;
         case "mcpApp":
           p.onOpenMcpApp?.(event.view, event.mode);
@@ -119,11 +141,17 @@ export function ChatRegistration(
         case "forkCurrent":
           p.onForkCurrent?.();
           break;
+        case "editAgent":
+          p.onEditAgent?.();
+          break;
         case "editModel":
           p.onEditModel?.();
           break;
         case "editEffort":
           p.onEditEffort?.();
+          break;
+        case "editPermissionMode":
+          p.onEditPermissionMode?.();
           break;
         case "fork":
           p.onFork?.(event.messageId);

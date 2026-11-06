@@ -1,13 +1,17 @@
-import type {
-  EnvironmentProvider,
-  EnvironmentRuntimeBinding,
+import {
+  type EnvironmentProvider,
+  type EnvironmentRuntimeBinding,
+  environmentSatisfies,
+  poolMatches,
 } from "@catamorphic/sandbox";
 
 const BINDING_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
- * A deterministic Environment provider for one-node hosts. The same logical
- * contract can later be backed by a scheduler without changing project files.
+ * A deterministic Environment provider for one-person hosts: the first
+ * binding whose labels match the Environment's pool and that meets its
+ * requirements (ADR 0167). Every binding takes the host's one person's work,
+ * so there is no access to check.
  */
 export function defineStaticEnvironments(
   bindings: readonly EnvironmentRuntimeBinding[],
@@ -26,11 +30,22 @@ export function defineStaticEnvironments(
     }
     byId.set(id, normalize(binding));
   }
+  const ordered = [...byId.values()];
   return {
-    get: ({ bindingId }) => {
-      const binding = byId.get(bindingId);
-      return binding;
-    },
+    get: ({ allocationBindingId, pool, requirements }) =>
+      allocationBindingId
+        ? [byId.get(allocationBindingId)].find(
+            (binding) =>
+              binding !== undefined &&
+              poolMatches(binding.descriptor.labels, pool),
+          )
+        : ordered.find(
+            (binding) =>
+              poolMatches(binding.descriptor.labels, pool) &&
+              (!requirements ||
+                environmentSatisfies(binding.descriptor, requirements)
+                  .compatible),
+          ),
   };
 }
 
@@ -46,6 +61,7 @@ function normalize(
       runtime.descriptor.resourceLimits ??
       runtime.sandboxProvider?.resourceLimits,
     resources: Object.freeze({ ...runtime.descriptor.resources }),
+    labels: Object.freeze({ ...runtime.descriptor.labels }),
   });
   return Object.freeze({
     descriptor,

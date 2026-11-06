@@ -61,6 +61,35 @@ export interface GithubRepo {
   pushedAt: string | null;
 }
 
+/**
+ * Where a pull request stands, for a glance beside the chat that opened
+ * it: its lifecycle, its size and what its checks say.
+ */
+export interface GithubPullRequestStatus {
+  number: number;
+  title: string;
+  url: string;
+  /** `owner/name`. */
+  repository: string;
+  author: string;
+  head: string;
+  base: string;
+  state: "open" | "draft" | "merged" | "closed";
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  /** Conversation and review comments together. */
+  comments: number;
+  /** Absent when the head has no checks, or they could not be read. */
+  checks?: {
+    state: "pending" | "success" | "failure";
+    passed: number;
+    failed: number;
+    pending: number;
+  };
+  updatedAt: string;
+}
+
 export interface GithubPullRequest {
   body?: string;
   headSha?: string;
@@ -93,6 +122,122 @@ export interface GithubPullRequestFile {
   previousPath?: string;
 }
 
+export type GithubReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+
+/**
+ * An inline review comment. `line` is the line in the diff's file (on the
+ * `side` given, `RIGHT` for the new version by default); `startLine` makes
+ * it a multi-line comment.
+ */
+export interface GithubReviewComment {
+  path: string;
+  body: string;
+  line?: number;
+  side?: "LEFT" | "RIGHT";
+  startLine?: number;
+  startSide?: "LEFT" | "RIGHT";
+}
+
+/**
+ * Who wrote a review, comment, or thread. `login` is the REST form: a GitHub
+ * App's bot is `<app-slug>[bot]` with `type` `Bot`. `id` is the account's
+ * database id when GitHub reports it (not for bots over GraphQL).
+ */
+export interface GithubActor {
+  login: string;
+  type: string;
+  id: number | null;
+}
+
+export interface GithubReviewThreadComment {
+  /** The comment's database id, for REST replies. */
+  id: number;
+  author: GithubActor | null;
+  body: string;
+  url: string;
+  createdAt: string;
+}
+
+/** A pull request review thread (GraphQL `PullRequestReviewThread`). */
+export interface GithubReviewThread {
+  /** Node id, for `resolveReviewThread`. */
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  line: number | null;
+  startLine: number | null;
+  side: "LEFT" | "RIGHT" | null;
+  /** Oldest first: the first comment opened the thread. */
+  comments: GithubReviewThreadComment[];
+}
+
+export interface GithubPullRequestReview {
+  id: number;
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED or PENDING. */
+  state: string;
+  author: GithubActor | null;
+  body: string;
+  commitId: string | null;
+  submittedAt: string | null;
+  url: string;
+  /** The pull request the review belongs to. */
+  number: number | null;
+}
+
+/** A pull request review comment or an issue comment, as REST reads one. */
+export interface GithubComment {
+  id: number;
+  author: GithubActor | null;
+  body: string;
+  url: string;
+  /** The pull request (or issue) the comment is on. */
+  number: number | null;
+  /** For a reply in a review thread, the comment it replies to. */
+  inReplyTo?: number;
+}
+
+export interface GithubCheckRunAnnotation {
+  path: string;
+  startLine: number;
+  endLine: number;
+  level: "notice" | "warning" | "failure";
+  message: string;
+  title?: string;
+}
+
+/** Fields shared by creating and updating a check run. */
+export interface GithubCheckRunFields {
+  status?: "queued" | "in_progress" | "completed";
+  conclusion?:
+    | "action_required"
+    | "cancelled"
+    | "failure"
+    | "neutral"
+    | "success"
+    | "skipped"
+    | "timed_out";
+  detailsUrl?: string;
+  externalId?: string;
+  /** ISO timestamps. */
+  startedAt?: string;
+  completedAt?: string;
+  output?: {
+    title: string;
+    summary: string;
+    text?: string;
+    /** At most 50 per request (GitHub's limit). */
+    annotations?: readonly GithubCheckRunAnnotation[];
+  };
+}
+
+export interface GithubCheckRun {
+  id: number;
+  url: string | null;
+  status: string;
+  conclusion: string | null;
+}
+
 export interface GithubRepositoryEvent {
   id: string;
   /** GitHub's event class, for example PullRequestEvent. */
@@ -104,35 +249,71 @@ export interface GithubRepositoryEvent {
 }
 
 /**
- * A stored connection: the token set plus the GitHub identity it belongs to.
- * The login is denormalized so hosts can render "connected as X" without an
- * API round-trip.
+ * Server-side credentials of a GitHub App: what signs app JWTs. Distinct from
+ * {@link GithubAppConfig}, which only identifies the app's OAuth client.
  */
-export interface StoredGithubConnection {
-  tokens: GithubTokenSet;
-  githubLogin: string;
-  githubUserId: number;
+export interface GithubAppCredentials {
+  /** Numeric app ID, or the app's client ID; GitHub accepts both as issuer. */
+  appId: string;
+  /** PEM private key from the app's settings page (PKCS#1 or PKCS#8). */
+  privateKey: string;
+}
+
+export type GithubPermissionLevel = "read" | "write" | "admin";
+
+/** GitHub App permission names (`contents`, `pull_requests`, ...) to levels. */
+export type GithubPermissions = Readonly<Record<string, GithubPermissionLevel>>;
+
+/**
+ * A short-lived installation access token (one hour). `repositories` lists
+ * the full names it is limited to when the installation or the request
+ * selected repositories; absent means every repository of the installation.
+ */
+export interface GithubInstallationToken {
+  token: string;
+  /** Epoch ms when the token stops working. */
+  expiresAt: number;
+  permissions: Record<string, string>;
+  repositorySelection: "all" | "selected";
+  repositories?: string[];
+}
+
+export interface GithubInstallation {
+  id: number;
+  /** The user or organization the app is installed on. */
+  account: { login: string; id: number; type: string } | null;
+  repositorySelection: "all" | "selected";
+  permissions: Record<string, string>;
+  events: string[];
+  appSlug: string;
+  suspendedAt: string | null;
 }
 
 /**
- * Host-owned persistence for GitHub connections. Catamorphic never stores
- * tokens itself — token custody follows the same rule as identity: the host
- * owns auth. Encryption at rest is the implementation's concern. Server
- * embedders typically back this with their own user table or secret manager;
- * the desktop app uses its OS-keychain-encrypted settings file.
+ * The app GitHub created at the end of the manifest flow. `privateKey`,
+ * `clientSecret`, and `webhookSecret` are returned exactly once: store them
+ * in the host's vault immediately.
  */
-export interface GithubTokenStore {
-  get(
-    tenantId: string,
-    externalUserId: string,
-  ): Promise<StoredGithubConnection | null>;
-  set(
-    tenantId: string,
-    externalUserId: string,
-    connection: StoredGithubConnection,
-  ): Promise<void>;
-  delete(tenantId: string, externalUserId: string): Promise<void>;
+export interface GithubAppRegistration {
+  appId: string;
+  slug: string;
+  name: string;
+  owner: string | null;
+  htmlUrl: string;
+  clientId: string;
+  clientSecret: string;
+  webhookSecret: string | null;
+  privateKey: string;
 }
+
+/** Any JSON value; structurally identical to hosts' JSON column types. */
+export type GithubJson =
+  | null
+  | boolean
+  | number
+  | string
+  | GithubJson[]
+  | { [key: string]: GithubJson };
 
 export class GithubAuthError extends Error {
   constructor(
@@ -151,6 +332,23 @@ export class GithubApiError extends Error {
   ) {
     super(message);
     this.name = "GithubApiError";
+  }
+}
+
+/**
+ * GraphQL answered, with errors (HTTP 200 and an `errors` list). `type` is
+ * GitHub's error class, such as `NOT_FOUND` or `FORBIDDEN`.
+ */
+export class GithubGraphqlError extends GithubApiError {
+  constructor(
+    readonly errors: ReadonlyArray<{ message: string; type?: string }>,
+    status = 200,
+  ) {
+    super(
+      status,
+      `GitHub GraphQL: ${errors.map((error) => error.message).join("; ") || "unknown error"}`,
+    );
+    this.name = "GithubGraphqlError";
   }
 }
 

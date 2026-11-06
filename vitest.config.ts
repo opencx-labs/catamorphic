@@ -17,7 +17,6 @@ const externalTestVariables = [
   "CLOUDFLARE_ARTIFACTS_NAMESPACE",
   "CLOUDFLARE_SANDBOX_API_KEY",
   "CLOUDFLARE_SANDBOX_API_URL",
-  "DAYTONA_API_KEY",
   "S3_ACCESS_KEY_ID",
   "S3_BUCKET",
   "S3_ENDPOINT",
@@ -55,6 +54,8 @@ export default defineConfig({
     passWithNoTests: true,
     exclude: [...configDefaults.exclude, "**/.claude/worktrees/**"],
     env: loadDotEnv(),
+    // apps/desktop's tests run with --pool=forks: in worker threads, Node
+    // 24's V8 crashed freeing their WebAssembly code (UnregisterWasmAllocation).
     pool: "threads",
     fileParallelism: true,
     maxWorkers: 2,

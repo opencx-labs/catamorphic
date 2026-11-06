@@ -118,7 +118,8 @@ local command speaking ACP over stdio, or a remote endpoint (the
 remote-Catamorphic-server agent story rides this). The kind validates
 today and resolves to a clear "not built yet" registry entry, so
 definitions authored now stay valid when the harness lands (TODO: "ACP
-harness").
+harness"). Built for local commands by ADR 0241; the endpoint stays
+reserved.
 
 ## Consequences
 

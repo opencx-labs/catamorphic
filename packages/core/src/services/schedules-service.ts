@@ -30,6 +30,7 @@ interface ScheduleTriggerDispatcher {
     mode?: "async" | "sync";
     workflows?: readonly string[];
     enablementIds?: readonly string[];
+    activationIds?: readonly string[];
     correlationKey?: string;
     onConflict?: "ignore" | "error" | "restart";
   }): Promise<TriggerFireResult>;
@@ -243,6 +244,7 @@ export class SchedulesService {
           mode: "async",
           workflows: [occurrence.workflowName],
           enablementIds: [occurrence.enablementId],
+          activationIds: [occurrence.activationId],
           environment: occurrence.environment,
           correlationKey,
           onConflict: "ignore",

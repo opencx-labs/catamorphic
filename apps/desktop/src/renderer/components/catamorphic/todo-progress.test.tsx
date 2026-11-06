@@ -3,6 +3,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { notePagePress } from "../../lib/app-focus.js";
+import { usePopoverDismiss } from "../../lib/popover-dismiss.js";
 import { TodoProgress } from "./todo-progress";
 
 const todos = [
@@ -109,5 +111,57 @@ describe("TodoProgress", () => {
       bar?.dispatchEvent(event);
     });
     expect(container.querySelector('[data-testid="todo-progress"]')).toBeNull();
+  });
+  it("closes through the desktop's popover dismissal, on a press inside a page", async () => {
+    await act(async () =>
+      root.render(
+        <TodoProgress todos={todos} useDismiss={usePopoverDismiss} />,
+      ),
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[data-testid="todo-progress-trigger"]',
+    );
+    const popover = () =>
+      container.querySelector<HTMLElement>(
+        '[data-testid="todo-progress-popover"]',
+      );
+    await act(async () => trigger?.click());
+    await act(settlePresence);
+    expect(popover()?.className).toContain("opacity-100");
+    // Pages run in their own process; the window never sees their presses.
+    await act(async () => notePagePress());
+    expect(popover()?.className).toContain("opacity-0");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    // The window losing focus closes it too.
+    await act(async () => trigger?.click());
+    await act(settlePresence);
+    await act(async () => window.dispatchEvent(new Event("blur")));
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("closes on its own outside presses, Escape and blur by default", async () => {
+    await act(async () => root.render(<TodoProgress todos={todos} />));
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[data-testid="todo-progress-trigger"]',
+    );
+    const open = async () => {
+      await act(async () => trigger?.click());
+      expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    };
+    await open();
+    await act(async () =>
+      document.body.dispatchEvent(
+        new MouseEvent("pointerdown", { bubbles: true }),
+      ),
+    );
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    await open();
+    await act(async () =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+    );
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    await open();
+    await act(async () => window.dispatchEvent(new Event("blur")));
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 });

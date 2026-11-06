@@ -7,7 +7,11 @@ export type ModelCatalogAgent = Pick<
 
 export interface HarnessModel {
   id: string;
-  name: string;
+  /**
+   * The display name the harness or provider gives the model; absent when
+   * it gives none (OpenAI's catalog), never made up from the id.
+   */
+  name?: string;
   description?: string;
   /** Versioned model id an alias resolves to (claude-code aliases only). */
   resolvedId?: string;
@@ -34,6 +38,9 @@ export async function listAgentModels(
     ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
+  // An ACP agent keeps its model in its own configuration (ADR 0241),
+  // under e2e too: it is never the fake agent.
+  if (config.harness === "acp") return [];
   // E2E: deterministic stub, no CLIs or network.
   if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
     return [
@@ -109,6 +116,9 @@ async function fetchModels(
     }
     case "codex":
       return codexModels(config, deps);
+    // An ACP agent keeps its model in its own configuration (ADR 0241).
+    case "acp":
+      return [];
     case "ai-sdk":
       if (config.provider === "anthropic") return anthropicModels(config);
       if (config.provider === "openai") return openaiModels(config);
@@ -160,7 +170,7 @@ async function anthropicModels(
   };
   return payload.data.map((model) => ({
     id: model.id,
-    name: model.display_name ?? model.id,
+    ...(model.display_name ? { name: model.display_name } : {}),
   }));
 }
 
@@ -176,7 +186,8 @@ async function openaiModels(
   return (
     payload.data
       // The listing includes embeddings/audio/etc — keep chat-capable families.
+      // OpenAI names no model: the id is all there is.
       .filter((model) => /^(gpt-|o\d|chatgpt)/.test(model.id))
-      .map((model) => ({ id: model.id, name: model.id }))
+      .map((model) => ({ id: model.id }))
   );
 }

@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, realpath } from "node:fs/promises";
+import { constants, tmpdir } from "node:os";
 import path from "node:path";
 import { writeCliError } from "./cli-error.js";
 import {
@@ -10,7 +10,12 @@ import {
   dockerTestPostgresDriver,
   withDisposablePostgres,
 } from "./test-postgres.js";
-import { toolRuntime } from "./tool-runtime.js";
+import {
+  removeTestDirectory,
+  settleTestProcesses,
+  withTestProcessCleanup,
+} from "./test-processes.js";
+import { repositoryNodePath, toolRuntime } from "./tool-runtime.js";
 
 const TURBO_CONCURRENCY = 2;
 const PROCESS_GROUP_GRACE_MS = 5_000;
@@ -54,17 +59,6 @@ function processGroupTarget(processGroupId: number): number {
   return process.platform === "win32" ? processGroupId : -processGroupId;
 }
 
-function processGroupIsLive(processGroupId: number): boolean {
-  try {
-    process.kill(processGroupTarget(processGroupId), 0);
-    return true;
-  } catch (error) {
-    if (errorCode(error) === "ESRCH") return false;
-    if (errorCode(error) === "EPERM") return true;
-    throw error;
-  }
-}
-
 function signalProcessGroup(
   processGroupId: number,
   signal: NodeJS.Signals,
@@ -72,37 +66,13 @@ function signalProcessGroup(
   try {
     process.kill(processGroupTarget(processGroupId), signal);
   } catch (error) {
-    if (errorCode(error) !== "ESRCH") throw error;
+    // ESRCH: the group is gone. EPERM: on macOS a group whose members are
+    // all exiting (zombies not yet reaped) refuses signals; it is on its
+    // way out; bounded cleanup verifies that no live members remain.
+    const code = errorCode(error);
+    const exiting = code === "EPERM" && process.platform === "darwin";
+    if (code !== "ESRCH" && !exiting) throw error;
   }
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function settleProcessGroup(input: {
-  processGroupId: number;
-  signal: NodeJS.Signals;
-}): Promise<void> {
-  if (!processGroupIsLive(input.processGroupId)) return;
-  signalProcessGroup(input.processGroupId, input.signal);
-  const deadline = Date.now() + PROCESS_GROUP_GRACE_MS;
-  while (processGroupIsLive(input.processGroupId) && Date.now() < deadline) {
-    await delay(20);
-  }
-  if (!processGroupIsLive(input.processGroupId)) return;
-  signalProcessGroup(input.processGroupId, "SIGKILL");
-  const killDeadline = Date.now() + PROCESS_GROUP_GRACE_MS;
-  while (
-    processGroupIsLive(input.processGroupId) &&
-    Date.now() < killDeadline
-  ) {
-    await delay(20);
-  }
-  if (processGroupIsLive(input.processGroupId))
-    throw new Error(
-      `Test process group ${input.processGroupId} did not exit after SIGKILL`,
-    );
 }
 
 export class TestSignalController {
@@ -111,8 +81,13 @@ export class TestSignalController {
   private readonly source: TestSignalSource;
   private readonly onSigint = () => this.forward("SIGINT");
   private readonly onSigterm = () => this.forward("SIGTERM");
+  readonly interrupted: Promise<NodeJS.Signals>;
+  private resolveInterrupted!: (signal: NodeJS.Signals) => void;
 
   constructor(input: { source?: TestSignalSource } = {}) {
+    this.interrupted = new Promise((resolve) => {
+      this.resolveInterrupted = resolve;
+    });
     this.source = input.source ?? process;
     this.source.on("SIGINT", this.onSigint);
     this.source.on("SIGTERM", this.onSigterm);
@@ -144,6 +119,7 @@ export class TestSignalController {
   private forward(signal: NodeJS.Signals): void {
     if (this.forwardedSignal) return;
     this.forwardedSignal = signal;
+    this.resolveInterrupted(signal);
     if (this.activeProcessGroupId) {
       signalProcessGroup(this.activeProcessGroupId, signal);
     }
@@ -217,6 +193,8 @@ export async function runLoggedProcess(input: {
   env: NodeJS.ProcessEnv;
   logPath: string;
   signals: TestSignalController;
+  /** This invocation's private temporary directory, never the OS temp root. */
+  temporaryRoot?: string;
 }): Promise<ProcessResult> {
   if (input.signals.signal) {
     return {
@@ -224,6 +202,9 @@ export async function runLoggedProcess(input: {
       signal: input.signals.signal,
     };
   }
+  const temporaryRoot = input.temporaryRoot
+    ? await realpath(input.temporaryRoot)
+    : undefined;
   const log = createWriteStream(input.logPath, { flags: "wx", mode: 0o600 });
   log.write(`$ ${input.command} ${input.args.join(" ")}\n`);
   const child = spawn(input.command, [...input.args], {
@@ -260,12 +241,16 @@ export async function runLoggedProcess(input: {
   let cleanupError: unknown;
   try {
     if (processGroupId) input.signals.activate(processGroupId);
-    outcome = await exitCompletion;
+    outcome = await Promise.race([
+      exitCompletion,
+      input.signals.interrupted.then(() => undefined),
+    ]);
   } finally {
     if (processGroupId) {
       try {
-        await settleProcessGroup({
+        await settleTestProcesses({
           processGroupId,
+          temporaryRoot,
           signal: input.signals.signal ?? "SIGTERM",
         });
       } catch (error) {
@@ -273,6 +258,22 @@ export async function runLoggedProcess(input: {
       } finally {
         input.signals.clear(processGroupId);
       }
+    }
+    if (!outcome) {
+      outcome = await new Promise((resolve) => {
+        const timeout = setTimeout(
+          () =>
+            resolve({
+              success: false,
+              error: new Error("Test phase did not exit after cleanup"),
+            }),
+          PROCESS_GROUP_GRACE_MS,
+        );
+        void exitCompletion.then((result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        });
+      });
     }
     const closed = await new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => resolve(false), PROCESS_GROUP_GRACE_MS);
@@ -295,11 +296,31 @@ export async function runLoggedProcess(input: {
     }
   }
   if (!outcome) throw new Error("Test subprocess did not settle");
-  if (!outcome.success) throw outcome.error;
-  if (cleanupError !== undefined) throw cleanupError;
+  if (!outcome.success) {
+    if (cleanupError !== undefined)
+      throw new AggregateError(
+        [outcome.error, cleanupError],
+        "Test phase and process cleanup failed",
+      );
+    throw outcome.error;
+  }
+  if (cleanupError !== undefined) {
+    if (outcome.result.code !== 0 || outcome.result.signal)
+      throw new AggregateError(
+        [
+          new Error(
+            `Test phase exited with ${outcome.result.signal ?? outcome.result.code}`,
+          ),
+          cleanupError,
+        ],
+        "Test phase and process cleanup failed",
+      );
+    throw cleanupError;
+  }
   const signal = input.signals.signal ?? outcome.result.signal;
   return {
-    code: outcome.result.code ?? (signal === "SIGINT" ? 130 : 143),
+    code:
+      outcome.result.code ?? 128 + (signal ? constants.signals[signal] : 15),
     signal,
   };
 }
@@ -327,13 +348,7 @@ export function testRunCommands(input: {
   rootPath: string;
   cliArguments: readonly string[];
 }): TestRunCommand[] {
-  const nodePath = path.join(
-    input.rootPath,
-    "node_modules",
-    "node",
-    "bin",
-    "node",
-  );
+  const nodePath = repositoryNodePath({ rootPath: input.rootPath });
   return [
     {
       label: "root orchestration tests",
@@ -381,38 +396,43 @@ async function main(): Promise<void> {
       driver: dockerTestPostgresDriver(),
       pid: process.pid,
       nonce,
-      task: async (databaseUrl) => {
-        const env = testRunEnvironment({
-          source: deterministicTestEnvironment(runtime.env, databaseUrl),
-          resources,
-        });
-        for (const [index, command] of commands.entries()) {
-          console.log(
-            `\n[test ${index + 1}/${commands.length}] ${command.label}`,
-          );
-          const result = await runLoggedProcess({
-            command: command.command,
-            args: command.args,
-            cwd: repositoryRoot,
-            env,
-            logPath: path.join(resources.logsPath, command.logFileName),
-            signals,
+      task: async (databaseUrl) =>
+        withTestProcessCleanup(resources.tempPath, async () => {
+          const env = testRunEnvironment({
+            source: deterministicTestEnvironment(runtime.env, databaseUrl),
+            resources,
           });
-          exitCode = result.code;
-          if (result.code !== 0) {
-            throw new Error(`${command.label} exited with code ${result.code}`);
+          for (const [index, command] of commands.entries()) {
+            console.log(
+              `\n[test ${index + 1}/${commands.length}] ${command.label}`,
+            );
+            const result = await runLoggedProcess({
+              command: command.command,
+              args: command.args,
+              cwd: repositoryRoot,
+              env,
+              logPath: path.join(resources.logsPath, command.logFileName),
+              signals,
+              temporaryRoot: resources.tempPath,
+            });
+            exitCode = result.code;
+            if (result.code !== 0) {
+              throw new Error(
+                `${command.label} exited with code ${result.code}`,
+              );
+            }
           }
-        }
-      },
+        }),
     });
     succeeded = true;
     exitCode = 0;
   } catch (error) {
+    exitCode = exitCode || 1;
     writeCliError(error);
   } finally {
     signals.close();
     if (succeeded) {
-      await rm(resources.rootPath, { recursive: true, force: true });
+      await removeTestDirectory(resources.rootPath);
     } else {
       console.error(`Test diagnostics preserved at ${resources.rootPath}`);
     }

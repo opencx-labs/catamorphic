@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "pull-request-reviews-opencode",
+  "type": "registry:item",
+  "title": "Pull request reviews on an open model",
+  "description": "The pull request reviewer as OpenCode on an open-weight model through a model connection such as OpenRouter: its image and reviewer, replacing the pull-request-reviews pack's.",
+  "registryDependencies": ["pull-request-reviews"],
+  "files": [
+    {
+      "path": ".work/images/review.Dockerfile",
+      "type": "registry:file",
+      "target": ".work/images/review.Dockerfile"
+    },
+    {
+      "path": ".work/agents/reviewer.json",
+      "type": "registry:file",
+      "target": ".work/agents/reviewer.json"
+    }
+  ],
+  "docs": "Install after `pull-request-reviews`: its image and reviewer replace that pack's, and everything else stays. The reviewer is OpenCode, run by Work as an ACP agent in the review sandbox, on a model connection; the image configures OpenCode for the Work gateway and ignores the pull request's own OpenCode settings.\n\n1. Copy both files over the review pack's.\n2. Bind the model connection in the `review` Environment's `connections`, with the exact model ids it serves:\n\n```json\n\"model\": {\n  \"provider\": \"openrouter\",\n  \"principal\": \"service\",\n  \"service\": \"openrouter\",\n  \"model\": { \"allow\": [\"deepseek/deepseek-v4.1-flash\"] }\n}\n```\n\n3. To use another model, change it in three places together: the image's OpenCode configuration (`models` and `model`), the reviewer's `model`, and the binding's `model.allow`.\n\nThe connection is the server's, and so is the routing: which providers an aggregator such as OpenRouter may send the prompts to is a rewrite in the server's own image (the Work server guide's \"Harnesses on the server\")."
+}

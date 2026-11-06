@@ -3,7 +3,7 @@ import claude from "../assets/harnesses/claude.svg";
 import openai from "../assets/harnesses/openai.svg";
 import openrouter from "../assets/harnesses/openrouter.svg";
 
-/** Native harness brands; the built-in AI SDK keeps the generic agent mark. */
+/** Recognized harness/provider brands; unknown backends keep the agent mark. */
 export function HarnessIcon({
   harness,
   provider,
@@ -14,9 +14,9 @@ export function HarnessIcon({
   className?: string;
 }) {
   const brand =
-    harness === "codex"
+    harness === "codex" || provider === "openai"
       ? "openai"
-      : harness === "claude-code"
+      : harness === "claude-code" || provider === "anthropic"
         ? "claude"
         : provider === "openrouter"
           ? "openrouter"
@@ -43,4 +43,9 @@ export function HarnessIcon({
       }}
     />
   );
+}
+
+/** The tool an imported chat came from, as people name it (ADR 0233). */
+export function importedHarnessLabel(harness: "claude-code" | "codex"): string {
+  return harness === "codex" ? "Codex" : "Claude Code";
 }

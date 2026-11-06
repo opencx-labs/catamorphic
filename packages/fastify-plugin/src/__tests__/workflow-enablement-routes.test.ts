@@ -1,6 +1,9 @@
 import {
   AuthenticationRequiredError,
   type CatamorphicCore,
+  EnvironmentAccessDeniedError,
+  EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp, TEST_IDENTITY } from "./test-app.js";
@@ -16,12 +19,13 @@ const enablement = {
   deploymentArtifactId: "c1b2c3d4-e5f6-4890-abcd-ef1234567890",
   commitSha: "a".repeat(40),
   remoteBranch: "main",
-  environment: "local",
+  environment: "default",
   owner: {
     type: "member" as const,
     externalUserId: TEST_IDENTITY.externalUserId,
   },
   connections: [],
+  permissions: [],
   capabilities: [],
   consentDigest: "d".repeat(64),
   status: "active" as const,
@@ -42,7 +46,7 @@ afterEach(async () => {
 describe("workflow enablement routes", () => {
   it("returns typed authentication requirements from preview", async () => {
     const preview = vi.fn(async () => {
-      throw new AuthenticationRequiredError("local", [
+      throw new AuthenticationRequiredError("default", [
         {
           alias: "mail",
           providerKind: "mcp-mail",
@@ -58,15 +62,40 @@ describe("workflow enablement routes", () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/projects/${PROJECT_ID}/workflow-enablement-preview`,
-      payload: { workflowName: "watchInbox", environment: "local" },
+      payload: { workflowName: "watchInbox", environment: "default" },
     });
 
     expect(response.statusCode).toBe(428);
     expect(response.json()).toMatchObject({
       code: "authentication_required",
-      environment: "local",
+      environment: "default",
       requirements: [{ alias: "mail", providerKind: "mcp-mail" }],
     });
+  });
+
+  it("answers an Environment the caller may not use, or that is not declared, as a refusal", async () => {
+    for (const [error, status] of [
+      [new EnvironmentAccessDeniedError("github-poster"), 403],
+      [new EnvironmentNotFoundError("github-poster"), 409],
+      [new EnvironmentPolicyInvalidError("bad manifest"), 409],
+    ] as const) {
+      const preview = vi.fn(async () => {
+        throw error;
+      });
+      const app = createTestApp({
+        core: {
+          workflowEnablements: { preview },
+        } as unknown as CatamorphicCore,
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/workflow-enablement-preview`,
+        payload: { workflowName: "postReviews", environment: "github-poster" },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toEqual({ error: error.message });
+    }
   });
 
   it("passes exact consent to creation and returns the pinned enablement", async () => {
@@ -81,7 +110,7 @@ describe("workflow enablement routes", () => {
       url: `/api/projects/${PROJECT_ID}/workflow-enablements`,
       payload: {
         workflowName: "watchInbox",
-        environment: "local",
+        environment: "default",
         connectionSelections: {
           mail: "d1b2c3d4-e5f6-4890-abcd-ef1234567890",
         },
@@ -95,7 +124,7 @@ describe("workflow enablement routes", () => {
       identity: TEST_IDENTITY,
       projectId: PROJECT_ID,
       workflowName: "watchInbox",
-      environment: "local",
+      environment: "default",
       connectionSelections: {
         mail: "d1b2c3d4-e5f6-4890-abcd-ef1234567890",
       },

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { stat as fileStat, open } from "node:fs/promises";
+import { stat as fileStat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { ResourcePreview } from "@catamorphic/react";
 
@@ -44,6 +44,53 @@ const DOCUMENTS = new Set([
   "tif",
   "tiff",
 ]);
+
+const IMAGES = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "bmp",
+  "svg",
+  "ico",
+]);
+
+/**
+ * An image inside a project, as a data URL, for a document showing it.
+ * Null when it is missing, not an image, over the preview limit, or
+ * outside the project, a link leading out included: a document can show
+ * only the project's own images.
+ */
+export async function readProjectImage({
+  root,
+  filePath,
+}: {
+  root: string;
+  /** Relative to the project. */
+  filePath: string;
+}): Promise<string | null> {
+  if (filePath.includes("\0") || path.isAbsolute(filePath)) return null;
+  // The project's folder may be gone (moved or deleted while open).
+  const projectRoot = await realpath(root).catch(() => null);
+  if (!projectRoot) return null;
+  const target = await realpath(path.resolve(projectRoot, filePath)).catch(
+    () => null,
+  );
+  if (!target) return null;
+  const inside = path.relative(projectRoot, target);
+  if (
+    inside === "" ||
+    inside === ".." ||
+    inside.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(inside)
+  )
+    return null;
+  if (!IMAGES.has(path.extname(target).slice(1).toLowerCase())) return null;
+  const preview = await readFilePreview({ filePath: target }).catch(() => null);
+  return preview?.content.kind === "image" ? preview.content.src : null;
+}
 
 /** Reads only a bounded prefix/media payload, never executes or renders documents. */
 export async function readFilePreview({

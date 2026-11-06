@@ -1,3 +1,5 @@
+import packageJson from "../package.json" with { type: "json" };
+
 export {
   appApiTypesPath,
   appWorkspaceNames,
@@ -34,10 +36,17 @@ export {
   parseWorkflow,
   parseWorkflowFromProject,
 } from "./parser.js";
+export { resolveTriggerBinding } from "./project-triggers.js";
 export {
   jsonSchemaFromType,
   WORKFLOW_STUB_DTS,
 } from "./schema-extract.js";
+export { triggerPermissionError } from "./trigger-permissions.js";
+export {
+  matchesAllWhere,
+  matchesWhere,
+  whereErrors,
+} from "./trigger-where.js";
 export { typeFromJsonSchema } from "./type-render.js";
 export type {
   AppApiEntry,
@@ -54,6 +63,8 @@ export type {
   PhysicalBatchStepDescriptor,
   PhysicalBatchStepPolicyDescriptor,
   ProjectParseResult,
+  ProjectTriggerKind,
+  ResolvedTriggerBinding,
   SourceRange,
   StepArgument,
   StepArgumentSource,
@@ -72,14 +83,15 @@ export type {
 export {
   APP_API_SOURCE_PATH,
   APP_RUNTIME_PACKAGE,
-  APP_SOURCE_ROOT,
-  CONTRACTS_SOURCE_ROOT,
   executionFiles,
-  PROJECT_PACKAGE_PATH,
   PROJECT_TOOLING_PACKAGE,
-  PROJECT_WORKSPACE_ROOT,
   SANDBOX_STRIPPED_PACKAGES,
-  WORKFLOW_SOURCE_ROOT,
 } from "./types.js";
+export {
+  type WebhookSettingsIssue,
+  webhookSettingsConflicts,
+  webhookSettingsIssues,
+  webhookSettingsKey,
+} from "./webhook-settings.js";
 
-export const PARSER_PACKAGE_VERSION = "0.0.2";
+export const PARSER_PACKAGE_VERSION = packageJson.version;

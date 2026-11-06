@@ -3,6 +3,7 @@
  * Do not make direct changes to the file.
  */
 
+import type { JsonValue } from "@catamorphic/agent-protocol";
 export interface paths {
     "/api/me": {
         parameters: {
@@ -32,10 +33,11 @@ export interface paths {
                             identity: {
                                 externalUserId: string;
                                 root: boolean;
+                                controlPlanePermissions: ("connections:read" | "connections:write")[];
                             };
                             projects: {
                                 projectId: string;
-                                builder: boolean;
+                                name: string;
                                 source: {
                                     remoteUrl: string;
                                     defaultBranch: string;
@@ -61,6 +63,12 @@ export interface paths {
                                 mcp: boolean;
                                 agentSessions: boolean;
                                 storeUploadMaxBytes: number;
+                            };
+                            agentProtocol: {
+                                /** @enum {number} */
+                                session: 3;
+                                /** @enum {number} */
+                                runner: 3;
                             };
                         };
                     };
@@ -108,6 +116,10 @@ export interface paths {
                                 /** @enum {string} */
                                 storageType: "managed" | "remote";
                                 remoteUrl: string | null;
+                                /** @enum {string|null} */
+                                remoteOwnership: "owned" | "attached" | null;
+                                /** Format: date-time */
+                                remoteDivergedAt: string | null;
                                 defaultBranch: string;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -149,6 +161,10 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -218,6 +234,10 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -236,6 +256,7 @@ export interface paths {
                                 triggers: {
                                     kind: string;
                                     config: unknown;
+                                    where?: unknown;
                                     sourceRange: {
                                         start: number;
                                         end: number;
@@ -356,6 +377,10 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -755,197 +780,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/branches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            name: string;
-                            commit: string;
-                            isCurrent: boolean;
-                            createdAt: number | null;
-                        }[];
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        name?: string;
-                        fromRef?: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            branch: string;
-                            created: boolean;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/checkout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        ref: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            branch: string;
-                            dirty: boolean;
-                            modifiedFiles: string[];
-                            ahead: number;
-                            behind: number;
-                            baseCommit: string | null;
-                            remoteHead: string | null;
-                            remoteHeadTimestamp: number | null;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/projects/{projectId}/workdir": {
         parameters: {
             query?: never;
@@ -1104,6 +938,7 @@ export interface paths {
                         files?: {
                             [key: string]: string;
                         };
+                        base?: string;
                     };
                 };
             };
@@ -1124,6 +959,7 @@ export interface paths {
                                 base: string | null;
                                 ours: string | null;
                                 theirs: string | null;
+                                binary?: boolean;
                             }[];
                         };
                     };
@@ -1201,6 +1037,7 @@ export interface paths {
                                 base: string | null;
                                 ours: string | null;
                                 theirs: string | null;
+                                binary?: boolean;
                             }[];
                         };
                     };
@@ -1528,9 +1365,13 @@ export interface paths {
                                 description?: string;
                                 available: boolean;
                                 clientRequired?: boolean;
+                                /** @description False when no machine for it is online and open to this work, such as a member's computer that is not connected */
+                                machineOnline: boolean;
                                 compatible: boolean;
                                 preferred: boolean;
                                 allowed: boolean;
+                                /** @description Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their files and may run on their own sign-in */
+                                personalCredentials?: boolean;
                                 reasons: string[];
                                 binding?: {
                                     /** @enum {string} */
@@ -1585,6 +1426,241 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/personal-environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Some Environment of the project gives the caller's own chats their personal files */
+                            allowed: boolean;
+                            files: {
+                                path: string;
+                                fingerprint: string;
+                                bytes: number;
+                                updatedAt: string;
+                            }[];
+                            /** @description The caller's own setup command, when they sent one */
+                            setup: {
+                                command: string;
+                                updatedAt: string;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            /** @description The caller's personal files and setup for this project; replaces what the server holds */
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @default [] */
+                        files?: {
+                            /** @description Repository-relative path, / separated */
+                            path: string;
+                            /** @description The file's bytes, base64 */
+                            content: string;
+                        }[];
+                        /** @description The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none */
+                        setup?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Some Environment of the project gives the caller's own chats their personal files */
+                            allowed: boolean;
+                            files: {
+                                path: string;
+                                fingerprint: string;
+                                bytes: number;
+                                updatedAt: string;
+                            }[];
+                            /** @description The caller's own setup command, when they sent one */
+                            setup: {
+                                command: string;
+                                updatedAt: string;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "personal_environment_invalid";
+                            issues: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -1671,6 +1747,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -1702,24 +1779,105 @@ export interface paths {
             };
         };
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    projectId?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string | null;
+                            providerKind: string;
+                            /** @enum {string} */
+                            principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
+                            ownerExternalUserId: string | null;
+                            label: string;
+                            /** @enum {string} */
+                            status: "pending" | "ready" | "expired" | "revoked";
+                            account: unknown;
+                            scopes: string[];
+                            capabilities: string[];
+                            /** Format: date-time */
+                            expiresAt: string | null;
+                            revision: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
         post: {
             parameters: {
                 query?: never;
                 header?: never;
-                path: {
-                    projectId: string;
-                };
+                path?: never;
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
+                        name: string;
                         providerKind: string;
                         /** @enum {string} */
-                        principalKind: "project_service" | "tenant_service";
-                        label: string;
-                        credential: string;
-                        capabilities?: string[];
+                        principalKind: "tenant_service" | "project_service";
+                        /** Format: uuid */
+                        projectId?: string;
+                        label?: string;
                     };
                 };
             };
@@ -1738,6 +1896,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -1756,7 +1915,136 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-connections/{connectionId}/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    connectionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            authorizationId: string;
+                            challenge: {
+                                /** @enum {string} */
+                                kind: "url";
+                                /** Format: uri */
+                                url: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "device";
+                                /** Format: uri */
+                                verificationUrl: string;
+                                userCode: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "form";
+                                fields: {
+                                    name: string;
+                                    label: string;
+                                    secret: boolean;
+                                    required: boolean;
+                                    multiline?: boolean;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1841,115 +2129,6 @@ export interface paths {
                 };
             };
         };
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/connections/{connectionId}/credential": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    connectionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        credential: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string | null;
-                            providerKind: string;
-                            /** @enum {string} */
-                            principalKind: "member" | "project_service" | "tenant_service";
-                            ownerExternalUserId: string | null;
-                            label: string;
-                            /** @enum {string} */
-                            status: "pending" | "ready" | "expired" | "revoked";
-                            account: unknown;
-                            scopes: string[];
-                            capabilities: string[];
-                            /** Format: date-time */
-                            expiresAt: string | null;
-                            revision: number;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2058,17 +2237,13 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string;
                             environment: string;
                             alias: string;
-                            providerKind: string;
-                            principalKinds: ("member" | "project_service" | "tenant_service")[];
-                            /** Format: uuid */
-                            serviceConnectionId: string | null;
-                            capabilities: string[];
+                            provider: string;
+                            /** @enum {string} */
+                            principal: "member" | "service" | "either";
+                            service: string | null;
+                            capabilities: string[] | null;
                             memberConnection: {
                                 /** Format: uuid */
                                 connectionId: string | null;
@@ -2091,10 +2266,6 @@ export interface paths {
                                 account: unknown;
                                 scopes: string[];
                             } | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
                         }[];
                     };
                 };
@@ -2123,115 +2294,6 @@ export interface paths {
             };
         };
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/environments/{environment}/connections/{alias}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    environment: string;
-                    alias: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        providerKind: string;
-                        principalKinds: ("member" | "project_service" | "tenant_service")[];
-                        /** Format: uuid */
-                        serviceConnectionId?: string;
-                        capabilities?: string[];
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string;
-                            environment: string;
-                            alias: string;
-                            providerKind: string;
-                            principalKinds: ("member" | "project_service" | "tenant_service")[];
-                            /** Format: uuid */
-                            serviceConnectionId: string | null;
-                            capabilities: string[];
-                            memberConnection: {
-                                /** Format: uuid */
-                                connectionId: string | null;
-                                /** @enum {string} */
-                                principalKind: "member" | "project_service" | "tenant_service";
-                                label: string;
-                                /** @enum {string} */
-                                status: "pending" | "ready" | "expired" | "revoked";
-                                account: unknown;
-                                scopes: string[];
-                            } | null;
-                            serviceConnection: {
-                                /** Format: uuid */
-                                connectionId: string | null;
-                                /** @enum {string} */
-                                principalKind: "member" | "project_service" | "tenant_service";
-                                label: string;
-                                /** @enum {string} */
-                                status: "pending" | "ready" | "expired" | "revoked";
-                                account: unknown;
-                                scopes: string[];
-                            } | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
         post?: never;
         delete?: never;
         options?: never;
@@ -2297,6 +2359,7 @@ export interface paths {
                                     label: string;
                                     secret: boolean;
                                     required: boolean;
+                                    multiline?: boolean;
                                 }[];
                             };
                         };
@@ -2384,6 +2447,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -2543,6 +2607,7 @@ export interface paths {
                             providerKind: string;
                             /** @enum {string} */
                             principalKind: "member" | "project_service" | "tenant_service";
+                            name: string | null;
                             ownerExternalUserId: string | null;
                             label: string;
                             /** @enum {string} */
@@ -2669,7 +2734,24 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         put?: never;
         post: {
             parameters: {
@@ -2689,7 +2771,24 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -2734,6 +2833,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                where?: unknown;
                                 sourceRange: {
                                     start: number;
                                     end: number;
@@ -2836,6 +2936,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                where?: unknown;
                                 sourceRange: {
                                     start: number;
                                     end: number;
@@ -2853,11 +2954,12 @@ export interface paths {
                                 capabilities?: string[];
                                 optional?: boolean;
                             }[];
+                            permissions: string[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
                                 /** @enum {string} */
-                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
+                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "return";
                                 label: string;
                                 description?: string;
                                 sourceRange: {
@@ -2905,6 +3007,7 @@ export interface paths {
                                 triggerBindings?: {
                                     kind: string;
                                     config: unknown;
+                                    where?: unknown;
                                     display?: {
                                         label?: string;
                                         icon?: string;
@@ -2918,7 +3021,7 @@ export interface paths {
                                 target: string;
                                 label?: string;
                                 /** @enum {string} */
-                                type: "branch-false" | "branch-true" | "parallel" | "sequential";
+                                type: "branch-false" | "branch-true" | "sequential";
                             }[];
                             sourceCode: string;
                             projectFiles: string[];
@@ -3054,6 +3157,7 @@ export interface paths {
                                 }[];
                                 provenance: {
                                     commitSha?: string;
+                                    displayName?: string;
                                 };
                                 artifact?: {
                                     /** Format: uuid */
@@ -3195,6 +3299,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -3504,6 +3609,8 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** Format: uuid */
+                        runId: string;
                         correlationKey: string;
                         signal: string;
                         idempotencyKey: string;
@@ -3522,85 +3629,40 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
-                            projectId: string;
-                            workflowName: string;
-                            correlationKey: string | null;
-                            environment: string | null;
-                            /** Format: uuid */
-                            allocationId: string | null;
-                            capabilities: {
-                                cancel: boolean;
-                                pauseProcessing: boolean;
-                                resumeProcessing: boolean;
-                                submitInput: boolean;
-                                inspectItems: boolean;
-                            };
+                            runId: string;
                             /** @enum {string} */
-                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
-                            /** @enum {string} */
-                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
-                            currentStepIndex: number | null;
-                            activePause: {
-                                /** Format: uuid */
-                                id: string;
-                                /** @enum {string} */
-                                status: "open" | "resumed" | "timed_out" | "canceled";
-                                state: unknown;
-                                /** Format: date-time */
-                                timeoutAt: string | null;
-                                /** Format: date-time */
-                                createdAt: string;
-                                /** Format: date-time */
-                                resolvedAt: string | null;
-                            } | null;
-                            connectionActionRequired: {
-                                /** Format: uuid */
-                                id: string;
-                                environment: string;
-                                alias: string;
-                                /** @enum {string} */
-                                status: "pending";
-                                /** Format: date-time */
-                                createdAt: string;
-                            } | null;
-                            batchScopes: {
-                                /** Format: uuid */
-                                workflowStepAttemptId: string;
-                                stepIndex: number;
-                                nodeId: string;
-                                attempt: number;
-                                /** @enum {string} */
-                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
-                                estimated: number | null;
-                                discovered: number;
-                                succeeded: number;
-                                failed: number;
-                                skipped: number;
-                                sinkCompletedChunks: number;
-                                sinkTotalChunks: number;
-                                artifact: unknown;
-                            }[];
-                            provenance: {
-                                commitSha?: string;
-                            };
-                            artifact?: {
-                                /** Format: uuid */
-                                deploymentArtifactId: string;
-                            };
-                            initiatedBy: string | null;
-                            input: unknown;
-                            result: unknown;
-                            error: string | null;
+                            status: "buffered";
+                            /** @enum {string|null} */
+                            pauseId: null;
+                        } | {
                             /** Format: uuid */
-                            parentRunId: string | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                            /** Format: date-time */
-                            startedAt: string | null;
-                            /** Format: date-time */
-                            completedAt: string | null;
+                            id: string;
+                            /** Format: uuid */
+                            runId: string;
+                            /** @enum {string} */
+                            status: "resumed";
+                            /** Format: uuid */
+                            pauseId: string;
+                        } | {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            runId: string;
+                            /** @enum {string} */
+                            status: "discarded";
+                            /** @enum {string|null} */
+                            pauseId: null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -3617,6 +3679,17 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -3743,6 +3816,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -3831,64 +3905,63 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            projectId: string;
-                            workflowName: string;
-                            /** Format: uuid */
-                            deploymentArtifactId: string;
-                            commitSha: string;
-                            remoteBranch: string;
-                            environment: string;
-                            owner: {
-                                /** @enum {string} */
-                                type: "member";
-                                externalUserId: string;
-                            } | {
-                                /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
+                            items: {
                                 /** Format: uuid */
-                                connectionId: string;
-                            };
-                            connections: {
-                                alias: string;
+                                projectId: string;
+                                workflowName: string;
                                 /** Format: uuid */
-                                bindingId: string;
-                                /** Format: uuid */
-                                connectionId: string;
-                                providerKind: string;
-                                /** @enum {string} */
-                                principalKind: "member" | "project_service" | "tenant_service";
+                                deploymentArtifactId: string;
+                                commitSha: string;
+                                remoteBranch: string;
+                                environment: string;
+                                owner: {
+                                    /** @enum {string} */
+                                    type: "member";
+                                    externalUserId: string;
+                                } | {
+                                    /** @enum {string} */
+                                    type: "project";
+                                };
+                                connections: {
+                                    alias: string;
+                                    /** Format: uuid */
+                                    connectionId: string;
+                                    providerKind: string;
+                                    /** @enum {string} */
+                                    principalKind: "member" | "project_service" | "tenant_service";
+                                    capabilities: string[];
+                                }[];
                                 capabilities: string[];
-                            }[];
-                            capabilities: string[];
-                            consentDigest: string;
-                            /** Format: uuid */
-                            id: string;
-                            /** @enum {string} */
-                            status: "active" | "suspended" | "disabled";
-                            suspensionReason: string | null;
-                            updateAvailable: boolean;
-                            temporary: boolean;
-                            /** Format: date-time */
-                            expiresAt: string | null;
-                            revision: number;
-                            triggers: {
+                                permissions: string[];
+                                consentDigest: string;
                                 /** Format: uuid */
                                 id: string;
-                                /** Format: uuid */
-                                definitionId: string;
-                                kind: string;
-                                config: unknown;
                                 /** @enum {string} */
-                                status: "active" | "paused";
+                                status: "active" | "suspended" | "disabled";
+                                suspensionReason: string | null;
+                                updateAvailable: boolean;
+                                temporary: boolean;
+                                /** Format: date-time */
+                                expiresAt: string | null;
+                                revision: number;
+                                triggers: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    definitionId: string;
+                                    kind: string;
+                                    config: unknown;
+                                    projectKind?: string;
+                                    /** @enum {string} */
+                                    status: "active" | "paused";
+                                }[];
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
                             }[];
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        }[];
+                            canManageProjectAutomations: boolean;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -3925,11 +3998,7 @@ export interface paths {
                             externalUserId: string;
                         } | {
                             /** @enum {string} */
-                            type: "service";
-                            /** @enum {string} */
-                            principalKind: "project_service" | "tenant_service";
-                            /** Format: uuid */
-                            connectionId: string;
+                            type: "project";
                         };
                         connectionSelections?: {
                             [key: string]: string;
@@ -3960,16 +4029,10 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -3978,6 +4041,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -3996,6 +4060,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4024,6 +4089,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4095,11 +4164,7 @@ export interface paths {
                             externalUserId: string;
                         } | {
                             /** @enum {string} */
-                            type: "service";
-                            /** @enum {string} */
-                            principalKind: "project_service" | "tenant_service";
-                            /** Format: uuid */
-                            connectionId: string;
+                            type: "project";
                         };
                         connectionSelections?: {
                             [key: string]: string;
@@ -4129,16 +4194,10 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4147,12 +4206,14 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             deploymentArtifactDigest: string;
                             triggerCount: number;
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                             }[];
                             connectionLabels: {
                                 [key: string]: string;
@@ -4178,6 +4239,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4260,16 +4325,10 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4278,6 +4337,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4296,6 +4356,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4380,16 +4441,10 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4398,6 +4453,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4416,6 +4472,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4455,6 +4512,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4509,16 +4570,10 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4527,6 +4582,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4545,6 +4601,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4584,6 +4641,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4644,16 +4705,10 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
-                                /** Format: uuid */
-                                bindingId: string;
                                 /** Format: uuid */
                                 connectionId: string;
                                 providerKind: string;
@@ -4662,6 +4717,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4680,6 +4736,7 @@ export interface paths {
                                 definitionId: string;
                                 kind: string;
                                 config: unknown;
+                                projectKind?: string;
                                 /** @enum {string} */
                                 status: "active" | "paused";
                             }[];
@@ -4719,6 +4776,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4784,6 +4845,7 @@ export interface paths {
                             payloadJsonSchema: unknown;
                             configJsonSchema: unknown;
                             outputJsonSchema?: unknown;
+                            requiredPermissions?: string[];
                         }[];
                     };
                 };
@@ -4838,6 +4900,8 @@ export interface paths {
                             workflowName: string;
                             kind: string;
                             config: unknown;
+                            where: unknown[];
+                            projectKind?: string;
                             canSuspend: boolean;
                             inputParameters: {
                                 name: string;
@@ -5187,6 +5251,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5376,6 +5441,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5529,6 +5595,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5682,6 +5749,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5843,6 +5911,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -6095,92 +6164,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/questions/{requestId}/answer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                    requestId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        answer: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            messageId: string;
-                            /** Format: uuid */
-                            turnId: string | null;
-                            /** @enum {string} */
-                            mode: "message_only" | "next_turn" | "interrupt";
-                            created: boolean;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/projects/{projectId}/agent/sessions": {
         parameters: {
             query?: never;
@@ -6196,6 +6179,7 @@ export interface paths {
                     visibility?: "promoted" | "latent" | "archived";
                     parentSessionId?: string;
                     rootsOnly?: "true" | "false";
+                    query?: string;
                 };
                 header?: never;
                 path: {
@@ -6222,23 +6206,26 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
-                                provider: string;
+                                /** @enum {string} */
+                                owner: "member" | "project";
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                                providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
                                 environment: string | null;
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -6255,12 +6242,13 @@ export interface paths {
                                     description: string;
                                     /** @enum {string} */
                                     status: "pending" | "in_progress" | "completed";
+                                    activeForm?: string;
                                 }[];
                                 authorityHostId: string;
                                 authorityRevision: number;
                                 /** Format: date-time */
-                                authoritySeenAt: string | null;
-                                mirrorMessageCount: number;
+                                authoritySeenAt: string;
+                                mirrorSequence: number;
                                 /** @enum {string} */
                                 handoffStatus: "none" | "pending";
                                 handoffDestinationHostId: string | null;
@@ -6276,6 +6264,22 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -6323,6 +6327,11 @@ export interface paths {
                         /** Format: uuid */
                         parentSessionId?: string;
                         title?: string;
+                        workspace?: {
+                            ref: string;
+                            /** @enum {string} */
+                            update?: "reset" | "rebase";
+                        };
                     };
                 };
             };
@@ -6343,23 +6352,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -6376,12 +6388,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -6397,6 +6410,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6506,424 +6535,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/mirror": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        /** @enum {string} */
-                        workStatus?: "open" | "completed";
-                        stateRevision?: number;
-                        events?: {
-                            /** Format: uuid */
-                            id: string;
-                            /** @enum {string} */
-                            kind: "session.created" | "session.message-received" | "session.message-sent" | "session.turn-changed" | "session.state-changed" | "session.work-changed" | "session.authority-changed";
-                            /** Format: date-time */
-                            occurredAt: string;
-                            payload: {
-                                [key: string]: components["schemas"]["JsonValueInput"];
-                            };
-                        }[];
-                        authority: {
-                            hostId: string;
-                            revision: number;
-                        };
-                        title?: string | null;
-                        icon?: string | null;
-                        provider?: string;
-                        /** @enum {string} */
-                        source?: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                        todos: {
-                            /** Format: uuid */
-                            id: string;
-                            title: string;
-                            description: string;
-                            /** @enum {string} */
-                            status: "pending" | "in_progress" | "completed";
-                        }[];
-                        agentSlug?: string;
-                        messages: {
-                            /** Format: uuid */
-                            id: string;
-                            /** @enum {string} */
-                            role: "user" | "assistant" | "system";
-                            content: string;
-                            metadata?: {
-                                [key: string]: unknown;
-                            } | null;
-                            author: {
-                                /** @enum {string} */
-                                kind: "user";
-                                externalUserId: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "agent";
-                                /** Format: uuid */
-                                sessionId: string;
-                                agentId: string | null;
-                            } | {
-                                /** @enum {string} */
-                                kind: "workflow";
-                                /** Format: uuid */
-                                runId: string;
-                                workflowName: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "watcher";
-                                /** Format: uuid */
-                                watcherId: string;
-                                /** Format: uuid */
-                                runId?: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "system";
-                                code: string;
-                            };
-                            /** @enum {string} */
-                            deliveryMode: "message_only" | "next_turn" | "interrupt";
-                            idempotencyKey: string | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                        }[];
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** @enum {string} */
-                            workStatus: "open" | "completed";
-                            stateRevision: number;
-                            childCount?: number;
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string;
-                            externalUserId: string;
-                            provider: string;
-                            /** @enum {string} */
-                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
-                            /** Format: uuid */
-                            sandboxId: string | null;
-                            environment: string | null;
-                            /** Format: uuid */
-                            allocationId: string | null;
-                            agentId: string | null;
-                            model: string | null;
-                            /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-                            title: string | null;
-                            icon: string | null;
-                            /** Format: uuid */
-                            forkedFromSessionId: string | null;
-                            /** Format: uuid */
-                            parentSessionId: string | null;
-                            /** @enum {string} */
-                            visibility: "latent" | "promoted" | "archived";
-                            /** Format: date-time */
-                            archivedAt: string | null;
-                            /** @enum {string} */
-                            status: "active" | "closed";
-                            activity: string | null;
-                            todos: {
-                                /** Format: uuid */
-                                id: string;
-                                title: string;
-                                description: string;
-                                /** @enum {string} */
-                                status: "pending" | "in_progress" | "completed";
-                            }[];
-                            authorityHostId: string;
-                            authorityRevision: number;
-                            /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
-                            /** @enum {string} */
-                            handoffStatus: "none" | "pending";
-                            handoffDestinationHostId: string | null;
-                            resumable: boolean;
-                            /** Format: date-time */
-                            pausedAt: string | null;
-                            running: boolean;
-                            attentionRevision: number;
-                            attentionSeenRevision: number;
-                            attentionRequired: boolean;
-                            attentionMessage?: {
-                                /** Format: uuid */
-                                id: string;
-                                content: string;
-                            };
-                            baseCommitSha: string | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        } | {
-                            error: string;
-                            code: string;
-                            reasons?: string[];
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                            diverged: boolean;
-                        } | {
-                            error: string;
-                            code: string;
-                            reasons?: string[];
-                        };
-                    };
-                };
-                /** @description Default Response */
-                422: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                            code: string;
-                            reasons?: string[];
-                        };
-                    };
-                };
-                /** @description Default Response */
-                428: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                            /** @enum {string} */
-                            code: "authentication_required";
-                            environment: string;
-                            requirements: {
-                                alias: string;
-                                providerKind: string;
-                                principalKinds: ("member" | "project_service" | "tenant_service")[];
-                            }[];
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/resume": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        expectedAuthorityRevision: number;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** @enum {string} */
-                            workStatus: "open" | "completed";
-                            stateRevision: number;
-                            childCount?: number;
-                            /** Format: uuid */
-                            id: string;
-                            /** Format: uuid */
-                            projectId: string;
-                            externalUserId: string;
-                            provider: string;
-                            /** @enum {string} */
-                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
-                            /** Format: uuid */
-                            sandboxId: string | null;
-                            environment: string | null;
-                            /** Format: uuid */
-                            allocationId: string | null;
-                            agentId: string | null;
-                            model: string | null;
-                            /** @enum {string|null} */
-                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-                            title: string | null;
-                            icon: string | null;
-                            /** Format: uuid */
-                            forkedFromSessionId: string | null;
-                            /** Format: uuid */
-                            parentSessionId: string | null;
-                            /** @enum {string} */
-                            visibility: "latent" | "promoted" | "archived";
-                            /** Format: date-time */
-                            archivedAt: string | null;
-                            /** @enum {string} */
-                            status: "active" | "closed";
-                            activity: string | null;
-                            todos: {
-                                /** Format: uuid */
-                                id: string;
-                                title: string;
-                                description: string;
-                                /** @enum {string} */
-                                status: "pending" | "in_progress" | "completed";
-                            }[];
-                            authorityHostId: string;
-                            authorityRevision: number;
-                            /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
-                            /** @enum {string} */
-                            handoffStatus: "none" | "pending";
-                            handoffDestinationHostId: string | null;
-                            resumable: boolean;
-                            /** Format: date-time */
-                            pausedAt: string | null;
-                            running: boolean;
-                            attentionRevision: number;
-                            attentionSeenRevision: number;
-                            attentionRequired: boolean;
-                            attentionMessage?: {
-                                /** Format: uuid */
-                                id: string;
-                                content: string;
-                            };
-                            baseCommitSha: string | null;
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}": {
         parameters: {
             query?: never;
@@ -6959,23 +6570,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -6992,12 +6606,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -7013,100 +6628,28 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
                             /** Format: date-time */
                             updatedAt: string;
-                            questions?: {
-                                requestId: string;
-                                blocking?: boolean;
-                                questions?: {
-                                    question: string;
-                                    header: string;
-                                    multiSelect: boolean;
-                                    options: {
-                                        label: string;
-                                        description: string;
-                                    }[];
-                                }[];
-                            }[];
-                            execution: {
-                                turnId: string;
-                                /** @enum {string} */
-                                status: "queued" | "held" | "running" | "completed" | "failed" | "cancelled";
-                                /** @enum {string} */
-                                phase: "preparing" | "working" | "waiting" | "saving";
-                                activity: string | null;
-                                activityAt: string | null;
-                                startedAt: string | null;
-                                retryAt: string | null;
-                                attempt: number;
-                                executorHealthy: boolean;
-                                cancellationRequested: boolean;
-                            } | null;
-                            messages: {
-                                /** Format: uuid */
-                                id: string;
-                                /** Format: uuid */
-                                sessionId: string;
-                                /** @enum {string} */
-                                role: "user" | "assistant" | "system";
-                                content: string;
-                                commitSha: string | null;
-                                metadata: {
-                                    [key: string]: unknown;
-                                } | null;
-                                author: {
-                                    /** @enum {string} */
-                                    kind: "user";
-                                    externalUserId: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "agent";
-                                    /** Format: uuid */
-                                    sessionId: string;
-                                    agentId: string | null;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "workflow";
-                                    /** Format: uuid */
-                                    runId: string;
-                                    workflowName: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "watcher";
-                                    /** Format: uuid */
-                                    watcherId: string;
-                                    /** Format: uuid */
-                                    runId?: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "system";
-                                    code: string;
-                                };
-                                /** @enum {string} */
-                                deliveryMode: "message_only" | "next_turn" | "interrupt";
-                                idempotencyKey: string | null;
-                                /** Format: date-time */
-                                createdAt: string;
-                            }[];
-                            pendingTurns: {
-                                /** Format: uuid */
-                                id: string;
-                                /** Format: uuid */
-                                messageId: string;
-                                content: string;
-                                metadata: {
-                                    [key: string]: unknown;
-                                } | null;
-                                /** @enum {string} */
-                                deliveryMode: "next_turn" | "interrupt";
-                                /** @enum {string} */
-                                status: "queued" | "held" | "running";
-                                /** Format: date-time */
-                                createdAt: string;
-                            }[];
+                            snapshot: components["schemas"]["SessionSnapshot"];
                         };
                     };
                 };
@@ -7164,23 +6707,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -7197,12 +6743,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -7218,6 +6765,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7290,23 +6853,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -7323,12 +6889,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -7344,6 +6911,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7397,6 +6980,11 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
+                        } | {
+                            error: string;
                         };
                     };
                 };
@@ -7447,6 +7035,802 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    before: number;
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["Item"][];
+                            olderBefore: number | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    after?: number;
+                };
+                header?: {
+                    /** @description The last sequence the client applied; a reconnecting EventSource sends it, and it wins over `after` */
+                    "last-event-id"?: string;
+                };
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description A stream of `data: <SessionStreamMessage JSON>` events; each `id:` is the stream's sequence */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": components["schemas"]["SessionStreamMessage"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        type: "send";
+                        commandId: string;
+                        text: string;
+                        attachments?: components["schemas"]["ProtocolAttachmentInput"][];
+                        /** @enum {string} */
+                        dispatch?: "queue" | "steer" | "interrupt";
+                        workspace?: {
+                            ref: string;
+                            /** @enum {string} */
+                            update?: "rebase" | "reset";
+                        };
+                    } | {
+                        /** @enum {string} */
+                        type: "interrupt";
+                        commandId: string;
+                        turnId?: string;
+                    } | {
+                        /** @enum {string} */
+                        type: "retry";
+                        commandId: string;
+                        turnId: string;
+                    } | {
+                        /** @enum {string} */
+                        type: "edit_queued";
+                        commandId: string;
+                        turnId: string;
+                        text?: string;
+                        held?: boolean;
+                    } | {
+                        /** @enum {string} */
+                        type: "cancel_queued";
+                        commandId: string;
+                        turnId: string;
+                    } | {
+                        /** @enum {string} */
+                        type: "send_now";
+                        commandId: string;
+                        turnId: string;
+                    } | {
+                        /** @enum {string} */
+                        type: "steer_now";
+                        commandId: string;
+                        itemId: string;
+                    } | {
+                        /** @enum {string} */
+                        type: "respond";
+                        commandId: string;
+                        requestId: string;
+                        response: {
+                            /** @enum {string} */
+                            kind: "approval";
+                            /** @enum {string} */
+                            decision: "approved" | "denied";
+                            /** @enum {string} */
+                            remember?: "always";
+                            reason?: string;
+                        } | {
+                            /** @enum {string} */
+                            kind: "question";
+                            answers: string[];
+                            attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
+                        } | {
+                            /** @enum {string} */
+                            kind: "elicitation";
+                            /** @enum {string} */
+                            action: "accept" | "decline" | "cancel";
+                            content?: components["schemas"]["ProtocolJsonValueInput"];
+                        };
+                    } | {
+                        /** @enum {string} */
+                        type: "rollback";
+                        commandId: string;
+                        turnId: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CommandReceipt"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        expectedAuthorityRevision: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
+                            childCount?: number;
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            agentId: string | null;
+                            harness: string | null;
+                            model: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
+                            title: string | null;
+                            icon: string | null;
+                            /** Format: uuid */
+                            forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
+                            /** Format: uuid */
+                            parentSessionId: string | null;
+                            /** @enum {string} */
+                            visibility: "latent" | "promoted" | "archived";
+                            /** Format: date-time */
+                            archivedAt: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
+                            }[];
+                            authorityHostId: string;
+                            authorityRevision: number;
+                            /** Format: date-time */
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
+                            /** @enum {string} */
+                            handoffStatus: "none" | "pending";
+                            handoffDestinationHostId: string | null;
+                            resumable: boolean;
+                            /** Format: date-time */
+                            pausedAt: string | null;
+                            running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/mirror": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    after?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            base?: components["schemas"]["SessionSnapshot"];
+                            events: components["schemas"]["StoredSessionEvent"][];
+                            projectEvents?: {
+                                /** Format: uuid */
+                                id: string;
+                                kind: string;
+                                /** Format: date-time */
+                                occurredAt: string;
+                                payload: {
+                                    [key: string]: components["schemas"]["JsonValue"];
+                                };
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        authority: {
+                            hostId: string;
+                            revision: number;
+                        };
+                        title?: string | null;
+                        icon?: string | null;
+                        /** @enum {string} */
+                        source?: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
+                        agentSlug?: string;
+                        todos?: {
+                            /** Format: uuid */
+                            id: string;
+                            title: string;
+                            description: string;
+                            /** @enum {string} */
+                            status: "pending" | "in_progress" | "completed";
+                            activeForm?: string;
+                        }[];
+                        /** @enum {string} */
+                        workStatus?: "open" | "completed";
+                        base?: components["schemas"]["SessionSnapshotInput"];
+                        events: components["schemas"]["StoredSessionEventInput"][];
+                        projectEvents?: {
+                            /** Format: uuid */
+                            id: string;
+                            kind: string;
+                            /** Format: date-time */
+                            occurredAt: string;
+                            payload: {
+                                [key: string]: components["schemas"]["JsonValueInput"];
+                            };
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            session: {
+                                /** @enum {string} */
+                                workStatus: "open" | "completed";
+                                stateRevision: number;
+                                childCount?: number;
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string;
+                                externalUserId: string;
+                                /** @enum {string} */
+                                owner: "member" | "project";
+                                /** @enum {string} */
+                                source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
+                                /** Format: uuid */
+                                sandboxId: string | null;
+                                environment: string | null;
+                                /** Format: uuid */
+                                allocationId: string | null;
+                                agentId: string | null;
+                                harness: string | null;
+                                model: string | null;
+                                /** @enum {string|null} */
+                                modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
+                                title: string | null;
+                                icon: string | null;
+                                /** Format: uuid */
+                                forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
+                                /** Format: uuid */
+                                parentSessionId: string | null;
+                                /** @enum {string} */
+                                visibility: "latent" | "promoted" | "archived";
+                                /** Format: date-time */
+                                archivedAt: string | null;
+                                /** @enum {string} */
+                                status: "active" | "closed";
+                                activity: string | null;
+                                todos: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    title: string;
+                                    description: string;
+                                    /** @enum {string} */
+                                    status: "pending" | "in_progress" | "completed";
+                                    activeForm?: string;
+                                }[];
+                                authorityHostId: string;
+                                authorityRevision: number;
+                                /** Format: date-time */
+                                authoritySeenAt: string;
+                                mirrorSequence: number;
+                                /** @enum {string} */
+                                handoffStatus: "none" | "pending";
+                                handoffDestinationHostId: string | null;
+                                resumable: boolean;
+                                /** Format: date-time */
+                                pausedAt: string | null;
+                                running: boolean;
+                                attentionRevision: number;
+                                attentionSeenRevision: number;
+                                attentionRequired: boolean;
+                                attentionMessage?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    content: string;
+                                };
+                                match?: string;
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
+                                baseCommitSha: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                            };
+                            sequence: number;
+                            agentNotice?: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        } | {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": ({
+                            error: string;
+                            /** @enum {string} */
+                            code: "diverged";
+                        } | {
+                            error: string;
+                            /** @enum {string} */
+                            code: "behind";
+                            sequence: number;
+                        } | {
+                            error: string;
+                            /** @enum {string} */
+                            code: "turn_in_progress";
+                        }) | {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                            reasons?: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                428: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "authentication_required";
+                            environment: string;
+                            requirements: {
+                                alias: string;
+                                providerKind: string;
+                                principalKinds: ("member" | "project_service" | "tenant_service")[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/attention/acknowledge": {
         parameters: {
             query?: never;
@@ -7490,23 +7874,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -7523,12 +7910,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -7544,6 +7932,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7690,7 +8094,7 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             delegationId: string;
-                            routeId: string;
+                            grant: string;
                             task: string;
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
@@ -7707,23 +8111,26 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
-                                provider: string;
+                                /** @enum {string} */
+                                owner: "member" | "project";
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                                providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
                                 environment: string | null;
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -7740,12 +8147,13 @@ export interface paths {
                                     description: string;
                                     /** @enum {string} */
                                     status: "pending" | "in_progress" | "completed";
+                                    activeForm?: string;
                                 }[];
                                 authorityHostId: string;
                                 authorityRevision: number;
                                 /** Format: date-time */
-                                authoritySeenAt: string | null;
-                                mirrorMessageCount: number;
+                                authoritySeenAt: string;
+                                mirrorSequence: number;
                                 /** @enum {string} */
                                 handoffStatus: "none" | "pending";
                                 handoffDestinationHostId: string | null;
@@ -7761,6 +8169,22 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -7808,8 +8232,12 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        routeId?: string;
                         agentId?: string;
+                        model?: string;
+                        /** @enum {string} */
+                        effort?: "low" | "medium" | "high" | "xhigh" | "max";
+                        readOnly?: boolean;
+                        delegate?: boolean;
                         task: string;
                         /** @enum {string} */
                         contextMode?: "fresh" | "inherit";
@@ -7827,7 +8255,7 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             delegationId: string;
-                            routeId: string;
+                            grant: string;
                             task: string;
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
@@ -7844,23 +8272,26 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
-                                provider: string;
+                                /** @enum {string} */
+                                owner: "member" | "project";
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                                providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
                                 environment: string | null;
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -7877,12 +8308,13 @@ export interface paths {
                                     description: string;
                                     /** @enum {string} */
                                     status: "pending" | "in_progress" | "completed";
+                                    activeForm?: string;
                                 }[];
                                 authorityHostId: string;
                                 authorityRevision: number;
                                 /** Format: date-time */
-                                authoritySeenAt: string | null;
-                                mirrorMessageCount: number;
+                                authoritySeenAt: string;
+                                mirrorSequence: number;
                                 /** @enum {string} */
                                 handoffStatus: "none" | "pending";
                                 handoffDestinationHostId: string | null;
@@ -7898,6 +8330,22 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8007,7 +8455,7 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             delegationId: string;
-                            routeId: string;
+                            grant: string;
                             task: string;
                             /** @enum {string} */
                             contextMode: "fresh" | "inherit";
@@ -8024,23 +8472,26 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
-                                provider: string;
+                                /** @enum {string} */
+                                owner: "member" | "project";
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                                providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
                                 environment: string | null;
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -8057,12 +8508,13 @@ export interface paths {
                                     description: string;
                                     /** @enum {string} */
                                     status: "pending" | "in_progress" | "completed";
+                                    activeForm?: string;
                                 }[];
                                 authorityHostId: string;
                                 authorityRevision: number;
                                 /** Format: date-time */
-                                authoritySeenAt: string | null;
-                                mirrorMessageCount: number;
+                                authoritySeenAt: string;
+                                mirrorSequence: number;
                                 /** @enum {string} */
                                 handoffStatus: "none" | "pending";
                                 handoffDestinationHostId: string | null;
@@ -8078,6 +8530,22 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8229,23 +8697,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -8262,12 +8733,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -8283,6 +8755,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -8376,117 +8864,6 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        trace?: never;
-    };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        message: string;
-                        idempotencyKey?: string;
-                        attachments?: ({
-                            /** @enum {string} */
-                            kind: "image" | "document";
-                            name: string;
-                            mediaType: string;
-                            dataBase64: string;
-                        } | {
-                            /** @enum {string} */
-                            kind: "text";
-                            name: string;
-                            text: string;
-                            source: {
-                                /** @enum {string} */
-                                type: "paste";
-                            } | {
-                                /** @enum {string} */
-                                type: "selection";
-                                filePath: string;
-                                startLine?: number;
-                                endLine?: number;
-                            } | {
-                                /** @enum {string} */
-                                type: "url";
-                                url: string;
-                            } | {
-                                /** @enum {string} */
-                                type: "path";
-                                path: string;
-                            } | {
-                                /** @enum {string} */
-                                type: "tab";
-                                key: string;
-                                kind: string;
-                                title: string;
-                                url?: string;
-                                filePath?: string;
-                            };
-                        })[];
-                        /** @enum {string} */
-                        deliveryMode?: "next_turn" | "interrupt";
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** Format: uuid */
-                            messageId: string;
-                            /** Format: uuid */
-                            turnId: string | null;
-                            /** @enum {string} */
-                            mode: "message_only" | "next_turn" | "interrupt";
-                            created: boolean;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -8494,19 +8871,9 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                422: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                            code: string;
-                            reasons?: string[];
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
                         };
                     };
                 };
@@ -8523,94 +8890,9 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/permissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            permissions: {
-                                id: string;
-                                sessionId?: string;
-                                agentLabel?: string;
-                                request: {
-                                    sessionId?: string;
-                                    server: string;
-                                    tool: string;
-                                    description?: string;
-                                    input: {
-                                        [key: string]: unknown;
-                                    };
-                                    annotations?: {
-                                        readOnlyHint?: boolean;
-                                        destructiveHint?: boolean;
-                                    };
-                                };
-                                createdAt: string;
-                                expiresAt: string;
-                            }[];
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/permissions/{permissionId}": {
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/title": {
         parameters: {
             query?: never;
             header?: never;
@@ -8619,27 +8901,24 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: {
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
                     projectId: string;
                     sessionId: string;
-                    permissionId: string;
                 };
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
-                        /** @enum {string} */
-                        decision: "allow";
-                        /** @enum {string} */
-                        remember?: "always";
-                    } | {
-                        /** @enum {string} */
-                        decision: "deny";
+                        title: string;
                     };
                 };
             };
@@ -8668,6 +8947,20 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -8680,13 +8973,9 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/retry": {
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/metadata": {
         parameters: {
             query?: never;
             header?: never;
@@ -8695,7 +8984,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: {
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
             parameters: {
                 query?: never;
                 header?: never;
@@ -8705,22 +8998,47 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Values by key; null removes a key */
+                        metadata: {
+                            [key: string]: components["schemas"]["JsonValueInput"];
+                        };
+                    };
+                };
+            };
             responses: {
                 /** @description Default Response */
-                202: {
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            messageId: string;
-                            /** Format: uuid */
-                            turnId: string | null;
-                            /** @enum {string} */
-                            mode: "message_only" | "next_turn" | "interrupt";
-                            created: boolean;
+                            metadata: components["schemas"]["SessionMetadata"];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -8743,6 +9061,9 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
                         };
                     };
                 };
@@ -8759,10 +9080,6 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/fork": {
@@ -8787,7 +9104,6 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        /** Format: uuid */
                         messageId?: string;
                     };
                 };
@@ -8809,23 +9125,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -8842,12 +9161,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -8863,6 +9183,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -8901,24 +9237,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}": {
+    "/api/projects/{projectId}/agent/chats/{key}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: {
+            parameters: {
+                query?: {
+                    audience?: "project";
+                    member?: string;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
+                            childCount?: number;
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            agentId: string | null;
+                            harness: string | null;
+                            model: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
+                            title: string | null;
+                            icon: string | null;
+                            /** Format: uuid */
+                            forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
+                            /** Format: uuid */
+                            parentSessionId: string | null;
+                            /** @enum {string} */
+                            visibility: "latent" | "promoted" | "archived";
+                            /** Format: date-time */
+                            archivedAt: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
+                            }[];
+                            authorityHostId: string;
+                            authorityRevision: number;
+                            /** Format: date-time */
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
+                            /** @enum {string} */
+                            handoffStatus: "none" | "pending";
+                            handoffDestinationHostId: string | null;
+                            resumable: boolean;
+                            /** Format: date-time */
+                            pausedAt: string | null;
+                            running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         put?: never;
         post?: never;
         delete: {
             parameters: {
-                query?: never;
+                query?: {
+                    audience?: "project";
+                    member?: string;
+                };
                 header?: never;
                 path: {
                     projectId: string;
-                    sessionId: string;
-                    turnId: string;
+                    key: string;
                 };
                 cookie?: never;
             };
@@ -8931,225 +9405,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** @enum {boolean} */
-                            ok: true;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        patch: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                    turnId: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        content?: string;
-                        metadata?: {
-                            [key: string]: unknown;
-                        };
-                        held?: boolean;
-                    };
-                };
-            };
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** @enum {boolean} */
-                            ok: true;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        trace?: never;
-    };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/send-now": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                    turnId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** @enum {boolean} */
-                            ok: true;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/projects/{projectId}/agent/sessions/{sessionId}/interrupt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    projectId: string;
-                    sessionId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            /** @enum {boolean} */
-                            ok: true;
+                            /** Format: uuid */
+                            sessionId: string | null;
+                            closed: boolean;
                         };
                     };
                 };
@@ -9177,7 +9435,6 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -9318,23 +9575,26 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
-                                provider: string;
+                                /** @enum {string} */
+                                owner: "member" | "project";
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                                providerSessionId: string | null;
                                 /** Format: uuid */
                                 sandboxId: string | null;
                                 environment: string | null;
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                                readOnly: boolean;
                                 title: string | null;
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -9351,12 +9611,13 @@ export interface paths {
                                     description: string;
                                     /** @enum {string} */
                                     status: "pending" | "in_progress" | "completed";
+                                    activeForm?: string;
                                 }[];
                                 authorityHostId: string;
                                 authorityRevision: number;
                                 /** Format: date-time */
-                                authoritySeenAt: string | null;
-                                mirrorMessageCount: number;
+                                authoritySeenAt: string;
+                                mirrorSequence: number;
                                 /** @enum {string} */
                                 handoffStatus: "none" | "pending";
                                 handoffDestinationHostId: string | null;
@@ -9372,6 +9633,22 @@ export interface paths {
                                     id: string;
                                     content: string;
                                 };
+                                match?: string;
+                                key: string | null;
+                                keyWorkflows: string[];
+                                placement: {
+                                    environment: string;
+                                    /** @enum {string} */
+                                    reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                    machine: {
+                                        id: string;
+                                        label: string;
+                                    };
+                                } | null;
+                                workspace: {
+                                    ref: string;
+                                    commit: string;
+                                } | null;
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -9477,23 +9754,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -9510,12 +9790,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -9531,6 +9812,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -9649,6 +9946,7 @@ export interface paths {
                             name: string;
                             title: string;
                             description: string;
+                            argumentHint?: string;
                             path: string;
                             /** @enum {string} */
                             source: "project" | "user" | "host";
@@ -9725,9 +10023,13 @@ export interface paths {
                                         description?: string;
                                         available: boolean;
                                         clientRequired?: boolean;
+                                        /** @description False when no machine for it is online and open to this work, such as a member's computer that is not connected */
+                                        machineOnline: boolean;
                                         compatible: boolean;
                                         preferred: boolean;
                                         allowed: boolean;
+                                        /** @description Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their files and may run on their own sign-in */
+                                        personalCredentials?: boolean;
                                         reasons: string[];
                                         binding?: {
                                             /** @enum {string} */
@@ -9741,6 +10043,16 @@ export interface paths {
                                         };
                                     }[];
                                     defaultEnvironment?: string;
+                                };
+                                /** @enum {string} */
+                                sandboxing?: "contained" | "propose" | "publish";
+                                harnessPermissions?: {
+                                    /** @enum {string} */
+                                    permissionMode?: "default" | "acceptEdits" | "plan" | "auto" | "dontAsk" | "bypassPermissions";
+                                    /** @enum {string} */
+                                    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+                                    /** @enum {string} */
+                                    approvals?: "untrusted" | "on-failure" | "on-request" | "never";
                                 };
                             }[];
                             defaultAgentId?: string;
@@ -9818,13 +10130,22 @@ export interface paths {
                                 /** @enum {string} */
                                 effort?: "low" | "medium" | "high" | "xhigh" | "max";
                                 /** @enum {string} */
-                                mode?: "read-only" | "edit" | "full-access";
+                                sandboxing?: "contained" | "propose" | "publish";
+                                harnessPermissions?: {
+                                    /** @enum {string} */
+                                    permissionMode?: "default" | "acceptEdits" | "plan" | "auto" | "dontAsk" | "bypassPermissions";
+                                    /** @enum {string} */
+                                    sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+                                    /** @enum {string} */
+                                    approvals?: "untrusted" | "on-failure" | "on-request" | "never";
+                                };
                                 memory?: boolean;
                                 description?: string;
                                 credentials?: {
                                     /** @enum {string} */
-                                    source: "profile" | "secret" | "local";
+                                    source: "profile" | "secret" | "local" | "connection" | "personal";
                                     secret?: string;
+                                    connection?: string;
                                 };
                                 connections?: (string | {
                                     alias: string;
@@ -9907,6 +10228,9 @@ export interface paths {
                         resourceLimits?: ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
+                        processes?: boolean;
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes")[];
+                        publicKey?: string;
                     };
                 };
             };
@@ -9922,6 +10246,17 @@ export interface paths {
                             id: string;
                             /** Format: uuid */
                             token: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -9989,6 +10324,9 @@ export interface paths {
                         id: string;
                         /** Format: uuid */
                         token: string;
+                        /** Format: uuid */
+                        pollId: string;
+                        max?: number;
                     };
                 };
             };
@@ -10003,78 +10341,31 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             operation: {
-                                /** @enum {string} */
-                                kind: "create";
-                                options: {
-                                    resources?: {
-                                        cpuMillis?: number;
-                                        memoryMb?: number;
-                                        storageMb?: number;
-                                        gpu?: boolean;
-                                    };
-                                    snapshotName?: string;
-                                    language?: string;
-                                    envVars?: {
-                                        [key: string]: string;
-                                    };
-                                    autoStopInterval?: number;
-                                    labels?: {
-                                        [key: string]: string;
-                                    };
+                                kind: string;
+                                sealed: {
+                                    /** @enum {number} */
+                                    v: 1;
+                                    epk: string;
+                                    nonce: string;
+                                    ct: string;
                                 };
-                            } | {
-                                /** @enum {string} */
-                                kind: "start" | "stop" | "destroy" | "status";
-                                sandboxId: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "execute";
-                                sandboxId: string;
-                                command: string;
-                                options?: {
-                                    cwd?: string;
-                                    timeout?: number;
-                                    env?: {
-                                        [key: string]: string;
-                                    };
-                                };
-                            } | {
-                                /** @enum {string} */
-                                kind: "upload";
-                                sandboxId: string;
-                                files: {
-                                    [key: string]: string;
-                                };
-                                basePath: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "download";
-                                sandboxId: string;
-                                path: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "clone";
-                                sandboxId: string;
-                                url: string;
-                                path: string;
-                                options?: {
-                                    branch?: string;
-                                    commitId?: string;
-                                    username?: string;
-                                    password?: string;
-                                };
-                            } | {
-                                /** @enum {string} */
-                                kind: "checkout";
-                                sandboxId: string;
-                                path: string;
-                                ref: string;
                             };
-                        } | null;
+                        }[];
                     };
                 };
                 /** @description Default Response */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -10153,6 +10444,17 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -10206,7 +10508,47 @@ export interface paths {
                         } | {
                             exitCode: number;
                             result: string;
-                        }) | null;
+                        } | {
+                            processId: string;
+                            sandboxId: string;
+                            command: string;
+                            name?: string;
+                            cwd: string;
+                            /** @enum {string} */
+                            status: "running" | "exited";
+                            exitCode: number | null;
+                            /** @enum {string|null} */
+                            signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | null;
+                            startedAt: string;
+                            endedAt: string | null;
+                            outputBytes: number;
+                        } | {
+                            processId: string;
+                            chunk: string;
+                            cursor: number;
+                            nextCursor: number;
+                            more: boolean;
+                            outputBytes: number;
+                            /** @enum {string} */
+                            status: "running" | "exited";
+                            exitCode: number | null;
+                            /** @enum {string|null} */
+                            signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | null;
+                        } | {
+                            processId: string;
+                            sandboxId: string;
+                            command: string;
+                            name?: string;
+                            cwd: string;
+                            /** @enum {string} */
+                            status: "running" | "exited";
+                            exitCode: number | null;
+                            /** @enum {string|null} */
+                            signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | null;
+                            startedAt: string;
+                            endedAt: string | null;
+                            outputBytes: number;
+                        }[]) | null;
                         error?: string;
                     };
                 };
@@ -10360,7 +10702,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items: {
+                            items: ({
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -10372,44 +10714,72 @@ export interface paths {
                                 authorityRevision: number;
                                 /** Format: uuid */
                                 messageId: string;
-                                content: string;
-                                author: {
-                                    /** @enum {string} */
-                                    kind: "user";
-                                    externalUserId: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "agent";
-                                    /** Format: uuid */
-                                    sessionId: string;
-                                    agentId: string | null;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "workflow";
-                                    /** Format: uuid */
-                                    runId: string;
-                                    workflowName: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "watcher";
-                                    /** Format: uuid */
-                                    watcherId: string;
-                                    /** Format: uuid */
-                                    runId?: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "system";
-                                    code: string;
-                                };
-                                /** @enum {string} */
-                                mode: "message_only" | "next_turn" | "interrupt";
                                 idempotencyKey: string | null;
-                                metadata: {
-                                    [key: string]: unknown;
-                                } | null;
+                                causation: string[];
                                 /** Format: date-time */
                                 createdAt: string;
-                            }[];
+                                /** @enum {string} */
+                                kind: "input";
+                                input: components["schemas"]["SessionInput"];
+                                /**
+                                 * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+                                 * @enum {string}
+                                 */
+                                mode: "queue" | "steer" | "interrupt" | "message_only";
+                                attention: boolean;
+                                deliveredBy: string | null;
+                                ownerAuthored: boolean;
+                            } | {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string;
+                                /** Format: uuid */
+                                sessionId: string;
+                                sourceHostId: string;
+                                destinationHostId: string;
+                                authorityRevision: number;
+                                /** Format: uuid */
+                                messageId: string;
+                                idempotencyKey: string | null;
+                                causation: string[];
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** @enum {string} */
+                                kind: "action";
+                                action: {
+                                    operation: string;
+                                    args: components["schemas"]["JsonValue"];
+                                    actor: {
+                                        /** @enum {string} */
+                                        kind: "user";
+                                        externalUserId: string;
+                                    } | ({
+                                        /** @enum {string} */
+                                        kind: "agent";
+                                        sessionId: string;
+                                        agentId: string | null;
+                                        projectId?: string;
+                                    } | {
+                                        /** @enum {string} */
+                                        kind: "assistant";
+                                        externalUserId: string;
+                                    } | {
+                                        /** @enum {string} */
+                                        kind: "workflow";
+                                        runId: string;
+                                        workflowName: string;
+                                        displayName?: string;
+                                        enablementId?: string;
+                                        watcher?: {
+                                            id: string;
+                                            sessionId: string;
+                                        };
+                                        scheduledFor?: string;
+                                        firedAt?: string;
+                                    });
+                                };
+                            })[];
                         };
                     };
                 };
@@ -10503,6 +10873,480 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @default 80 */
+                        cols?: number;
+                        /** @default 24 */
+                        rows?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            terminalId: string;
+                            pty: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}/output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    cursor?: number;
+                    waitMs?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: string;
+                            cursor: number;
+                            nextCursor: number;
+                            more: boolean;
+                            exited: boolean;
+                            exitCode: number | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        data: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}/resize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        cols: number;
+                        rows: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notifications/attention": {
         parameters: {
             query?: never;
@@ -10535,23 +11379,26 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
-                            provider: string;
+                            /** @enum {string} */
+                            owner: "member" | "project";
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
-                            providerSessionId: string | null;
                             /** Format: uuid */
                             sandboxId: string | null;
                             environment: string | null;
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            readOnly: boolean;
                             title: string | null;
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -10568,12 +11415,13 @@ export interface paths {
                                 description: string;
                                 /** @enum {string} */
                                 status: "pending" | "in_progress" | "completed";
+                                activeForm?: string;
                             }[];
                             authorityHostId: string;
                             authorityRevision: number;
                             /** Format: date-time */
-                            authoritySeenAt: string | null;
-                            mirrorMessageCount: number;
+                            authoritySeenAt: string;
+                            mirrorSequence: number;
                             /** @enum {string} */
                             handoffStatus: "none" | "pending";
                             handoffDestinationHostId: string | null;
@@ -10589,6 +11437,22 @@ export interface paths {
                                 id: string;
                                 content: string;
                             };
+                            match?: string;
+                            key: string | null;
+                            keyWorkflows: string[];
+                            placement: {
+                                environment: string;
+                                /** @enum {string} */
+                                reason: "requested" | "agent_preferred" | "project_default" | "available";
+                                machine: {
+                                    id: string;
+                                    label: string;
+                                };
+                            } | null;
+                            workspace: {
+                                ref: string;
+                                commit: string;
+                            } | null;
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -10981,7 +11845,6 @@ export interface paths {
                                 version: 1;
                                 name: string;
                                 description?: string;
-                                builder?: boolean;
                                 permissions?: string[];
                                 agents?: (string | {
                                     name: string;
@@ -11327,6 +12190,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                         }[];
                     };
                 };
@@ -11388,6 +12252,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                             text?: string;
                         };
                     };
@@ -11464,6 +12329,7 @@ export interface paths {
                             writtenBy?: string;
                             writtenAt?: string;
                             digest?: string;
+                            commit?: string;
                         };
                     };
                 };
@@ -12546,6 +13412,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            url: string;
+                            workflows: string[];
+                            listening: boolean;
+                            verified: boolean;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/webhooks/{name}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            url: string;
+                            workflows: string[];
+                            listening: boolean;
+                            verified: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/apps/{appName}/presentation": {
         parameters: {
             query?: never;
@@ -13390,6 +14376,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -13579,6 +14566,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -14570,6 +15558,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -14697,7 +15686,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         put?: never;
         post: {
             parameters: {
@@ -14719,7 +15727,26 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -14847,11 +15874,15 @@ export interface paths {
                 content: {
                     "application/json": {
                         name: string;
-                        /** @default {} */
+                        /**
+                         * @description The capability's own input, per its discovered schema
+                         * @default {}
+                         */
                         input?: {
                             [key: string]: unknown;
                         };
-                        requestId: string;
+                        /** @description Optional; the same id again marks a retry of one operation */
+                        requestId?: string;
                     };
                 };
             };
@@ -14908,7 +15939,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/status": {
+    "/api/code-hosts": {
         parameters: {
             query?: never;
             header?: never;
@@ -14931,20 +15962,33 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            connected: boolean;
-                            login?: string;
-                        };
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
+                            provider: string;
+                            displayName: string;
+                            connection: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string | null;
+                                providerKind: string;
+                                /** @enum {string} */
+                                principalKind: "member" | "project_service" | "tenant_service";
+                                name: string | null;
+                                ownerExternalUserId: string | null;
+                                label: string;
+                                /** @enum {string} */
+                                status: "pending" | "ready" | "expired" | "revoked";
+                                account: unknown;
+                                scopes: string[];
+                                capabilities: string[];
+                                /** Format: date-time */
+                                expiresAt: string | null;
+                                revision: number;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                            } | null;
+                        }[];
                     };
                 };
             };
@@ -14957,7 +16001,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/connect": {
+    "/api/code-hosts/{provider}/connection/authorize": {
         parameters: {
             query?: never;
             header?: never;
@@ -14970,14 +16014,16 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    provider: string;
+                };
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
-                        code: string;
-                        redirectUri?: string;
+                        /** Format: uri */
+                        redirectUri: string;
                     };
                 };
             };
@@ -14989,13 +16035,47 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            connected: boolean;
-                            login?: string;
+                            authorizationId: string;
+                            challenge: {
+                                /** @enum {string} */
+                                kind: "url";
+                                /** Format: uri */
+                                url: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "device";
+                                /** Format: uri */
+                                verificationUrl: string;
+                                userCode: string;
+                                expiresAt?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "form";
+                                fields: {
+                                    name: string;
+                                    label: string;
+                                    secret: boolean;
+                                    required: boolean;
+                                    multiline?: boolean;
+                                }[];
+                            };
                         };
                     };
                 };
                 /** @description Default Response */
-                400: {
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15024,53 +16104,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/connection": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Default Response */
-                204: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": null;
-                    };
-                };
-                /** @description Default Response */
-                503: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            error: string;
-                        };
-                    };
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/github/repos": {
+    "/api/code-hosts/{provider}/repositories": {
         parameters: {
             query?: never;
             header?: never;
@@ -15081,7 +16115,9 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    provider: string;
+                };
                 cookie?: never;
             };
             requestBody?: never;
@@ -15093,12 +16129,12 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            id: number;
                             fullName: string;
                             name: string;
                             owner: string;
                             private: boolean;
                             defaultBranch: string;
+                            cloneUrl: string;
                             description: string | null;
                             pushedAt: string | null;
                         }[];
@@ -15116,6 +16152,17 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -15136,7 +16183,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/github/import": {
+    "/api/code-hosts/{provider}/import": {
         parameters: {
             query?: never;
             header?: never;
@@ -15149,7 +16196,9 @@ export interface paths {
             parameters: {
                 query?: never;
                 header?: never;
-                path?: never;
+                path: {
+                    provider: string;
+                };
                 cookie?: never;
             };
             requestBody: {
@@ -15174,6 +16223,10 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
+                            /** Format: date-time */
+                            remoteDivergedAt: string | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -15184,6 +16237,17 @@ export interface paths {
                 };
                 /** @description Default Response */
                 401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15223,7 +16287,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/github/push": {
+    "/api/projects/{projectId}/code-host/publish": {
         parameters: {
             query?: never;
             header?: never;
@@ -15241,19 +16305,32 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        provider: string;
+                        name: string;
+                        organization?: string;
+                        /** @enum {string} */
+                        visibility?: "private" | "public";
+                    };
+                };
+            };
             responses: {
                 /** @description Default Response */
-                204: {
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": null;
+                        "application/json": {
+                            fullName: string;
+                            remoteUrl: string;
+                        };
                     };
                 };
                 /** @description Default Response */
-                400: {
+                401: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15264,7 +16341,29 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
-                401: {
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15592,9 +16691,7 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: {
-                    stage?: "test" | "production";
-                };
+                query?: never;
                 header?: never;
                 path: {
                     projectId: string;
@@ -15611,14 +16708,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
-                            hasValue: boolean;
-                            /** Format: date-time */
-                            updatedAt: string | null;
                             label?: string;
                             description?: string;
                             required: boolean;
                             /** @enum {string} */
                             source: "project" | "plugin";
+                            environments: string[];
+                            shared: boolean;
+                            /** Format: date-time */
+                            updatedAt: string | null;
+                            setBy: string | null;
+                            own: boolean;
+                            /** Format: date-time */
+                            ownUpdatedAt: string | null;
+                            members: {
+                                member: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                setBy: string | null;
+                            }[];
                         }[];
                     };
                 };
@@ -15653,9 +16761,7 @@ export interface paths {
         get?: never;
         put: {
             parameters: {
-                query?: {
-                    stage?: "test" | "production";
-                };
+                query?: never;
                 header?: never;
                 path: {
                     projectId: string;
@@ -15679,14 +16785,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
-                            hasValue: boolean;
-                            /** Format: date-time */
-                            updatedAt: string | null;
                             label?: string;
                             description?: string;
                             required: boolean;
                             /** @enum {string} */
                             source: "project" | "plugin";
+                            environments: string[];
+                            shared: boolean;
+                            /** Format: date-time */
+                            updatedAt: string | null;
+                            setBy: string | null;
+                            own: boolean;
+                            /** Format: date-time */
+                            ownUpdatedAt: string | null;
+                            members: {
+                                member: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                setBy: string | null;
+                            }[];
                         };
                     };
                 };
@@ -15717,9 +16834,7 @@ export interface paths {
         post?: never;
         delete: {
             parameters: {
-                query?: {
-                    stage?: "test" | "production";
-                };
+                query?: never;
                 header?: never;
                 path: {
                     projectId: string;
@@ -15737,6 +16852,136 @@ export interface paths {
                     content: {
                         "application/json": {
                             deleted: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/secrets/{name}/members/{member}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    member: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        value: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            member: string | null;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    member: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            deleted: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -15808,7 +17053,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/playground/parse": {
+    "/api/workflows/parse": {
         parameters: {
             query?: never;
             header?: never;
@@ -15871,6 +17116,7 @@ export interface paths {
                             triggers: {
                                 kind: string;
                                 config: unknown;
+                                where?: unknown;
                                 sourceRange: {
                                     start: number;
                                     end: number;
@@ -15888,11 +17134,12 @@ export interface paths {
                                 capabilities?: string[];
                                 optional?: boolean;
                             }[];
+                            permissions: string[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
                                 /** @enum {string} */
-                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
+                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "return";
                                 label: string;
                                 description?: string;
                                 sourceRange: {
@@ -15940,6 +17187,7 @@ export interface paths {
                                 triggerBindings?: {
                                     kind: string;
                                     config: unknown;
+                                    where?: unknown;
                                     display?: {
                                         label?: string;
                                         icon?: string;
@@ -15953,10 +17201,206 @@ export interface paths {
                                 target: string;
                                 label?: string;
                                 /** @enum {string} */
-                                type: "branch-false" | "branch-true" | "parallel" | "sequential";
+                                type: "branch-false" | "branch-true" | "sequential";
                             }[];
                             sourceCode: string;
                         } | null;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hooks/{projectId}/{name}/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            duplicate: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                405: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            duplicate: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                405: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
                     };
                 };
             };
@@ -15971,8 +17415,1775 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        JsonValueInput: string | number | boolean | (null) | components["schemas"]["JsonValueInput"][] | {
+        JsonValueInput: JsonValue;
+        ImportedSessionInput: {
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
+            nativeSessionId: string;
+            sourcePath: string;
+            contentSha256: string;
+            sourceModifiedAt: string;
+        };
+        ProtocolJsonValueInput: JsonValue;
+        ProtocolAttachmentInput: {
+            /** @enum {string} */
+            kind: "image" | "document";
+            name: string;
+            mediaType: string;
+            dataBase64: string;
+        } | {
+            /** @enum {string} */
+            kind: "text";
+            name: string;
+            text: string;
+            source: {
+                /** @enum {string} */
+                type: "paste";
+            } | {
+                /** @enum {string} */
+                type: "selection";
+                filePath: string;
+                startLine?: number;
+                endLine?: number;
+            } | {
+                /** @enum {string} */
+                type: "url";
+                url: string;
+            } | {
+                /** @enum {string} */
+                type: "path";
+                path: string;
+            } | {
+                /** @enum {string} */
+                type: "tab";
+                key: string;
+                kind: string;
+                title: string;
+                url?: string;
+                filePath?: string;
+            } | {
+                /** @enum {string} */
+                type: "skill";
+                name: string;
+                path?: string;
+            };
+        };
+        InboundSenderInput: {
+            /** @enum {string} */
+            kind: "agent";
+            sessionId: string;
+            agentId: string | null;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "assistant";
+            externalUserId: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow";
+            runId: string;
+            workflowName: string;
+            displayName?: string;
+            enablementId?: string;
+            watcher?: {
+                id: string;
+                sessionId: string;
+            };
+            scheduledFor?: string;
+            firedAt?: string;
+        };
+        InputSourceInput: {
+            /** @enum {string} */
+            kind: "session";
+            sessionId: string;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow_run";
+            runId: string;
+            workflowName: string;
+        } | {
+            /** @enum {string} */
+            kind: "surface";
+            key: string;
+        };
+        SessionInputInput: {
+            /** @enum {string} */
+            kind: "user_message";
+            author: {
+                /** @enum {string} */
+                kind: "user";
+                externalUserId: string;
+            };
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
+        } | {
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: {
+                /** @enum {string} */
+                kind: "agent";
+                sessionId: string;
+                agentId: string | null;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "assistant";
+                externalUserId: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow";
+                runId: string;
+                workflowName: string;
+                displayName?: string;
+                enablementId?: string;
+                watcher?: {
+                    id: string;
+                    sessionId: string;
+                };
+                scheduledFor?: string;
+                firedAt?: string;
+            };
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
+        } | {
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: ({
+                /** @enum {string} */
+                kind: "session";
+                sessionId: string;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow_run";
+                runId: string;
+                workflowName: string;
+            } | {
+                /** @enum {string} */
+                kind: "surface";
+                key: string;
+            }) | null;
+        };
+        TurnInput: {
+            id: string;
+            sessionId: string;
+            ordinal: number;
+            /** @enum {string} */
+            status: "queued" | "held" | "preparing" | "running" | "waiting" | "finalizing" | "completed" | "failed" | "interrupted" | "cancelled" | "rolled_back";
+            inputItemId: string | null;
+            /** @enum {string} */
+            dispatch: "queue" | "interrupt";
+            priority: number;
+            activity: string | null;
+            activityAt: string | null;
+            providerRetry: {
+                error: {
+                    message: string;
+                    /** @enum {string} */
+                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                };
+                attempt: number | null;
+                maxAttempts: number | null;
+                retryAt: string | null;
+            } | null;
+            attemptCount: number;
+            activeAttemptId: string | null;
+            providerThreadId: string | null;
+            retryAt: string | null;
+            cancellationRequested: boolean;
+            error: {
+                message: string;
+                /** @enum {string} */
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                retrySafe?: boolean;
+            } | null;
+            outcome: {
+                changedFiles: {
+                    path: string;
+                    /** @enum {string} */
+                    kind: "modified" | "deleted";
+                }[];
+                usage?: {
+                    model?: string;
+                    inputTokens?: number;
+                    cachedInputTokens?: number;
+                    cacheCreationTokens?: number;
+                    outputTokens?: number;
+                    reasoningTokens?: number;
+                    costUsd?: number;
+                    contextTokens?: number;
+                    contextWindow?: number;
+                };
+                storeSync?: {
+                    [key: string]: components["schemas"]["JsonValueInput"];
+                };
+                workspaceSync?: {
+                    error: string;
+                };
+                notification?: {
+                    title?: string;
+                    body?: string;
+                };
+            } | null;
+            checkpoint: {
+                before: string | null;
+                after: string | null;
+            };
+            continuationOf: string | null;
+            createdAt: string;
+            startedAt: string | null;
+            completedAt: string | null;
+            updatedAt: string;
+        };
+        AttemptInput: {
+            id: string;
+            turnId: string;
+            sessionId: string;
+            ordinal: number;
+            /** @enum {string} */
+            reason: "initial" | "retry" | "steer_restart" | "recovery";
+            /** @enum {string} */
+            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded";
+            providerThreadId: string | null;
+            nativeTurnRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            error: {
+                message: string;
+                /** @enum {string} */
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                retrySafe?: boolean;
+            } | null;
+            createdAt: string;
+            startedAt: string | null;
+            completedAt: string | null;
+        };
+        ItemInput: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            deliveredBy: string | null;
+            causation: string[];
+            /** @enum {string} */
+            kind: "user_message";
+            author: {
+                /** @enum {string} */
+                kind: "user";
+                externalUserId: string;
+            };
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            deliveredBy: string | null;
+            causation: string[];
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: components["schemas"]["InboundSenderInput"];
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            deliveredBy: string | null;
+            causation: string[];
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: components["schemas"]["InputSourceInput"] | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "assistant_message";
+            text: string;
+            agentId: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "reasoning";
+            text: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "tool_call";
+            tool: string;
+            server: string | null;
+            description: string | null;
+            input: components["schemas"]["JsonValueInput"];
+            result: components["schemas"]["JsonValueInput"] | null;
+            error: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "command";
+            command: string;
+            description: string | null;
+            output: string;
+            exitCode: number | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "file_change";
+            path: string;
+            /** @enum {string|null} */
+            change: "created" | "modified" | "deleted" | "renamed" | null;
+            previousPath: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "plan";
+            steps: {
+                text: string;
+                /** @enum {string} */
+                status: "pending" | "in_progress" | "completed";
+            }[];
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "request";
+            requestId: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "subagent";
+            title: string;
+            agentType: string | null;
+            childSessionId: string | null;
+            result: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "notice";
+            code: string;
+            text: string;
+            data: {
+                [key: string]: components["schemas"]["JsonValueInput"];
+            };
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "context_handoff";
+            /** @enum {string} */
+            strategy: "delta" | "full";
+            fromProviderThreadIds: string[];
+            toProviderThreadId: string;
+            coveredTurnOrdinals: {
+                from: number;
+                to: number;
+            };
+            text: string;
+        };
+        RuntimeRequestInput: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            itemId: string | null;
+            /** @enum {string} */
+            kind: "question" | "approval" | "elicitation";
+            /** @enum {string} */
+            status: "pending" | "resolved" | "expired" | "cancelled";
+            answerable: boolean;
+            blocking: boolean;
+            title: string;
+            description: string | null;
+            origin: {
+                /** @enum {string} */
+                kind: "tool" | "provider" | "mcp" | "host";
+                id: string;
+                displayName?: string;
+            };
+            questions: {
+                question: string;
+                header: string;
+                multiSelect: boolean;
+                options: {
+                    label: string;
+                    description: string;
+                }[];
+            }[] | null;
+            approval: {
+                action: string;
+                details?: string;
+                tool?: {
+                    server: string | null;
+                    name: string;
+                    input: components["schemas"]["JsonValueInput"];
+                };
+            } | null;
+            elicitation: {
+                server: string;
+                message: string;
+                schema?: {
+                    [key: string]: components["schemas"]["JsonValueInput"];
+                };
+                url?: string;
+            } | null;
+            approvers: string[];
+            expiresAt: string | null;
+            response: ({
+                /** @enum {string} */
+                kind: "approval";
+                /** @enum {string} */
+                decision: "approved" | "denied";
+                /** @enum {string} */
+                remember?: "always";
+                reason?: string;
+            } | {
+                /** @enum {string} */
+                kind: "question";
+                answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
+            } | {
+                /** @enum {string} */
+                kind: "elicitation";
+                /** @enum {string} */
+                action: "accept" | "decline" | "cancel";
+                content?: components["schemas"]["JsonValueInput"];
+            }) | null;
+            resolvedBy: string | null;
+            reason: string | null;
+            createdAt: string;
+            resolvedAt: string | null;
+            runnerKey?: string;
+        };
+        ProviderThreadInput: {
+            id: string;
+            sessionId: string;
+            harness: string;
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            /** @enum {string} */
+            status: "active" | "unavailable" | "closed";
+            lastTurnOrdinal: number | null;
+            portable: boolean;
+            createdAt: string;
+            updatedAt: string;
+        };
+        SessionMetadataInput: {
             [key: string]: components["schemas"]["JsonValueInput"];
+        };
+        SessionFieldsInput: {
+            id: string;
+            projectId: string;
+            title: string | null;
+            icon: string | null;
+            agentId: string | null;
+            harness: string | null;
+            model: string | null;
+            /** @enum {string|null} */
+            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+            /** @enum {string} */
+            status: "active" | "closed";
+            /** @enum {string} */
+            workStatus: "open" | "completed";
+            activity: string | null;
+            todos: {
+                /** Format: uuid */
+                id: string;
+                title: string;
+                description: string;
+                /** @enum {string} */
+                status: "pending" | "in_progress" | "completed";
+                activeForm?: string;
+            }[];
+            metadata: components["schemas"]["SessionMetadataInput"];
+            imported?: components["schemas"]["ImportedSessionInput"] | null;
+            parentSessionId: string | null;
+            forkedFromSessionId: string | null;
+            attentionRevision: number;
+            environment: string | null;
+            authorityHostId: string;
+            authorityRevision: number;
+            /** @enum {string} */
+            handoffStatus: "none" | "pending";
+            updatedAt: string;
+        };
+        SessionEventInput: {
+            /** @enum {string} */
+            type: "session.changed";
+            session: {
+                id?: string;
+                projectId?: string;
+                title?: string | null;
+                icon?: string | null;
+                agentId?: string | null;
+                harness?: string | null;
+                model?: string | null;
+                /** @enum {string|null} */
+                modelEffort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                /** @enum {string} */
+                status?: "active" | "closed";
+                /** @enum {string} */
+                workStatus?: "open" | "completed";
+                activity?: string | null;
+                todos?: {
+                    /** Format: uuid */
+                    id: string;
+                    title: string;
+                    description: string;
+                    /** @enum {string} */
+                    status: "pending" | "in_progress" | "completed";
+                    activeForm?: string;
+                }[];
+                metadata?: components["schemas"]["SessionMetadataInput"];
+                imported?: components["schemas"]["ImportedSessionInput"] | null;
+                parentSessionId?: string | null;
+                forkedFromSessionId?: string | null;
+                attentionRevision?: number;
+                environment?: string | null;
+                authorityHostId?: string;
+                authorityRevision?: number;
+                /** @enum {string} */
+                handoffStatus?: "none" | "pending";
+                updatedAt?: string;
+            };
+        } | {
+            /** @enum {string} */
+            type: "turn.changed";
+            turn: components["schemas"]["TurnInput"];
+        } | {
+            /** @enum {string} */
+            type: "attempt.changed";
+            attempt: components["schemas"]["AttemptInput"];
+        } | {
+            /** @enum {string} */
+            type: "item.added";
+            item: components["schemas"]["ItemInput"];
+        } | {
+            /** @enum {string} */
+            type: "item.changed";
+            item: components["schemas"]["ItemInput"];
+        } | {
+            /** @enum {string} */
+            type: "item.text_appended";
+            itemId: string;
+            /** @enum {string} */
+            field: "text" | "output";
+            text: string;
+            at: string;
+        } | {
+            /** @enum {string} */
+            type: "request.changed";
+            request: components["schemas"]["RuntimeRequestInput"];
+        } | {
+            /** @enum {string} */
+            type: "provider_thread.changed";
+            thread: components["schemas"]["ProviderThreadInput"];
+        };
+        StoredSessionEventInput: {
+            sessionId: string;
+            sequence: number;
+            at: string;
+            commandId: string | null;
+            event: components["schemas"]["SessionEventInput"];
+        };
+        SessionSnapshotInput: {
+            sequence: number;
+            session: components["schemas"]["SessionFieldsInput"];
+            turns: components["schemas"]["TurnInput"][];
+            attempts: components["schemas"]["AttemptInput"][];
+            items: components["schemas"]["ItemInput"][];
+            requests: components["schemas"]["RuntimeRequestInput"][];
+            providerThreads: components["schemas"]["ProviderThreadInput"][];
+            olderBefore: number | null;
+        };
+        SessionStreamMessageInput: {
+            /** @enum {string} */
+            type: "events";
+            events: components["schemas"]["StoredSessionEventInput"][];
+        } | {
+            /** @enum {string} */
+            type: "reset";
+            snapshot: components["schemas"]["SessionSnapshotInput"];
+        } | {
+            /** @enum {string} */
+            type: "heartbeat";
+            sequence: number;
+        };
+        CommandReceiptInput: {
+            commandId: string;
+            /** @enum {string} */
+            status: "accepted" | "rejected";
+            sequence: number;
+            result: {
+                [key: string]: components["schemas"]["JsonValueInput"];
+            } | null;
+            error: {
+                code: string;
+                message: string;
+            } | null;
+        };
+        JsonValue: JsonValue;
+        ImportedSession: {
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
+            nativeSessionId: string;
+            sourcePath: string;
+            contentSha256: string;
+            sourceModifiedAt: string;
+        };
+        ProtocolJsonValue: JsonValue;
+        ProtocolAttachment: {
+            /** @enum {string} */
+            kind: "image" | "document";
+            name: string;
+            mediaType: string;
+            dataBase64: string;
+        } | {
+            /** @enum {string} */
+            kind: "text";
+            name: string;
+            text: string;
+            source: {
+                /** @enum {string} */
+                type: "paste";
+            } | {
+                /** @enum {string} */
+                type: "selection";
+                filePath: string;
+                startLine?: number;
+                endLine?: number;
+            } | {
+                /** @enum {string} */
+                type: "url";
+                url: string;
+            } | {
+                /** @enum {string} */
+                type: "path";
+                path: string;
+            } | {
+                /** @enum {string} */
+                type: "tab";
+                key: string;
+                kind: string;
+                title: string;
+                url?: string;
+                filePath?: string;
+            } | {
+                /** @enum {string} */
+                type: "skill";
+                name: string;
+                path?: string;
+            };
+        };
+        InboundSender: {
+            /** @enum {string} */
+            kind: "agent";
+            sessionId: string;
+            agentId: string | null;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "assistant";
+            externalUserId: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow";
+            runId: string;
+            workflowName: string;
+            displayName?: string;
+            enablementId?: string;
+            watcher?: {
+                id: string;
+                sessionId: string;
+            };
+            scheduledFor?: string;
+            firedAt?: string;
+        };
+        InputSource: {
+            /** @enum {string} */
+            kind: "session";
+            sessionId: string;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow_run";
+            runId: string;
+            workflowName: string;
+        } | {
+            /** @enum {string} */
+            kind: "surface";
+            key: string;
+        };
+        SessionInput: {
+            /** @enum {string} */
+            kind: "user_message";
+            author: {
+                /** @enum {string} */
+                kind: "user";
+                externalUserId: string;
+            };
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachment"][];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
+        } | {
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: {
+                /** @enum {string} */
+                kind: "agent";
+                sessionId: string;
+                agentId: string | null;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "assistant";
+                externalUserId: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow";
+                runId: string;
+                workflowName: string;
+                displayName?: string;
+                enablementId?: string;
+                watcher?: {
+                    id: string;
+                    sessionId: string;
+                };
+                scheduledFor?: string;
+                firedAt?: string;
+            };
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachment"][];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
+        } | {
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: ({
+                /** @enum {string} */
+                kind: "session";
+                sessionId: string;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow_run";
+                runId: string;
+                workflowName: string;
+            } | {
+                /** @enum {string} */
+                kind: "surface";
+                key: string;
+            }) | null;
+        };
+        Turn: {
+            id: string;
+            sessionId: string;
+            ordinal: number;
+            /** @enum {string} */
+            status: "queued" | "held" | "preparing" | "running" | "waiting" | "finalizing" | "completed" | "failed" | "interrupted" | "cancelled" | "rolled_back";
+            inputItemId: string | null;
+            /** @enum {string} */
+            dispatch: "queue" | "interrupt";
+            priority: number;
+            activity: string | null;
+            activityAt: string | null;
+            providerRetry: {
+                error: {
+                    message: string;
+                    /** @enum {string} */
+                    kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                };
+                attempt: number | null;
+                maxAttempts: number | null;
+                retryAt: string | null;
+            } | null;
+            attemptCount: number;
+            activeAttemptId: string | null;
+            providerThreadId: string | null;
+            retryAt: string | null;
+            cancellationRequested: boolean;
+            error: {
+                message: string;
+                /** @enum {string} */
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                retrySafe?: boolean;
+            } | null;
+            outcome: {
+                changedFiles: {
+                    path: string;
+                    /** @enum {string} */
+                    kind: "modified" | "deleted";
+                }[];
+                usage?: {
+                    model?: string;
+                    inputTokens?: number;
+                    cachedInputTokens?: number;
+                    cacheCreationTokens?: number;
+                    outputTokens?: number;
+                    reasoningTokens?: number;
+                    costUsd?: number;
+                    contextTokens?: number;
+                    contextWindow?: number;
+                };
+                storeSync?: {
+                    [key: string]: components["schemas"]["JsonValue"];
+                };
+                workspaceSync?: {
+                    error: string;
+                };
+                notification?: {
+                    title?: string;
+                    body?: string;
+                };
+            } | null;
+            checkpoint: {
+                before: string | null;
+                after: string | null;
+            };
+            continuationOf: string | null;
+            createdAt: string;
+            startedAt: string | null;
+            completedAt: string | null;
+            updatedAt: string;
+        };
+        Attempt: {
+            id: string;
+            turnId: string;
+            sessionId: string;
+            ordinal: number;
+            /** @enum {string} */
+            reason: "initial" | "retry" | "steer_restart" | "recovery";
+            /** @enum {string} */
+            status: "preparing" | "running" | "completed" | "failed" | "interrupted" | "lost" | "superseded";
+            providerThreadId: string | null;
+            nativeTurnRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            error: {
+                message: string;
+                /** @enum {string} */
+                kind?: "auth" | "rate_limit" | "unavailable" | "model_incompat";
+                retrySafe?: boolean;
+            } | null;
+            createdAt: string;
+            startedAt: string | null;
+            completedAt: string | null;
+        };
+        Item: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            deliveredBy: string | null;
+            causation: string[];
+            /** @enum {string} */
+            kind: "user_message";
+            author: {
+                /** @enum {string} */
+                kind: "user";
+                externalUserId: string;
+            };
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachment"][];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            deliveredBy: string | null;
+            causation: string[];
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: components["schemas"]["InboundSender"];
+            text: string;
+            attachments: components["schemas"]["ProtocolAttachment"][];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            deliveredBy: string | null;
+            causation: string[];
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: components["schemas"]["InputSource"] | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "assistant_message";
+            text: string;
+            agentId: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "reasoning";
+            text: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "tool_call";
+            tool: string;
+            server: string | null;
+            description: string | null;
+            input: components["schemas"]["JsonValue"];
+            result: components["schemas"]["JsonValue"] | null;
+            error: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "command";
+            command: string;
+            description: string | null;
+            output: string;
+            exitCode: number | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "file_change";
+            path: string;
+            /** @enum {string|null} */
+            change: "created" | "modified" | "deleted" | "renamed" | null;
+            previousPath: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "plan";
+            steps: {
+                text: string;
+                /** @enum {string} */
+                status: "pending" | "in_progress" | "completed";
+            }[];
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "request";
+            requestId: string;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "subagent";
+            title: string;
+            agentType: string | null;
+            childSessionId: string | null;
+            result: string | null;
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "notice";
+            code: string;
+            text: string;
+            data: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /** @enum {string} */
+            kind: "context_handoff";
+            /** @enum {string} */
+            strategy: "delta" | "full";
+            fromProviderThreadIds: string[];
+            toProviderThreadId: string;
+            coveredTurnOrdinals: {
+                from: number;
+                to: number;
+            };
+            text: string;
+        };
+        RuntimeRequest: {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            itemId: string | null;
+            /** @enum {string} */
+            kind: "question" | "approval" | "elicitation";
+            /** @enum {string} */
+            status: "pending" | "resolved" | "expired" | "cancelled";
+            answerable: boolean;
+            blocking: boolean;
+            title: string;
+            description: string | null;
+            origin: {
+                /** @enum {string} */
+                kind: "tool" | "provider" | "mcp" | "host";
+                id: string;
+                displayName?: string;
+            };
+            questions: {
+                question: string;
+                header: string;
+                multiSelect: boolean;
+                options: {
+                    label: string;
+                    description: string;
+                }[];
+            }[] | null;
+            approval: {
+                action: string;
+                details?: string;
+                tool?: {
+                    server: string | null;
+                    name: string;
+                    input: components["schemas"]["JsonValue"];
+                };
+            } | null;
+            elicitation: {
+                server: string;
+                message: string;
+                schema?: {
+                    [key: string]: components["schemas"]["JsonValue"];
+                };
+                url?: string;
+            } | null;
+            approvers: string[];
+            expiresAt: string | null;
+            response: ({
+                /** @enum {string} */
+                kind: "approval";
+                /** @enum {string} */
+                decision: "approved" | "denied";
+                /** @enum {string} */
+                remember?: "always";
+                reason?: string;
+            } | {
+                /** @enum {string} */
+                kind: "question";
+                answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachment"][][];
+            } | {
+                /** @enum {string} */
+                kind: "elicitation";
+                /** @enum {string} */
+                action: "accept" | "decline" | "cancel";
+                content?: components["schemas"]["JsonValue"];
+            }) | null;
+            resolvedBy: string | null;
+            reason: string | null;
+            createdAt: string;
+            resolvedAt: string | null;
+            runnerKey?: string;
+        };
+        ProviderThread: {
+            id: string;
+            sessionId: string;
+            harness: string;
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            /** @enum {string} */
+            status: "active" | "unavailable" | "closed";
+            lastTurnOrdinal: number | null;
+            portable: boolean;
+            createdAt: string;
+            updatedAt: string;
+        };
+        SessionMetadata: {
+            [key: string]: components["schemas"]["JsonValue"];
+        };
+        SessionFields: {
+            id: string;
+            projectId: string;
+            title: string | null;
+            icon: string | null;
+            agentId: string | null;
+            harness: string | null;
+            model: string | null;
+            /** @enum {string|null} */
+            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+            /** @enum {string} */
+            status: "active" | "closed";
+            /** @enum {string} */
+            workStatus: "open" | "completed";
+            activity: string | null;
+            todos: {
+                /** Format: uuid */
+                id: string;
+                title: string;
+                description: string;
+                /** @enum {string} */
+                status: "pending" | "in_progress" | "completed";
+                activeForm?: string;
+            }[];
+            metadata: components["schemas"]["SessionMetadata"];
+            imported?: components["schemas"]["ImportedSession"] | null;
+            parentSessionId: string | null;
+            forkedFromSessionId: string | null;
+            attentionRevision: number;
+            environment: string | null;
+            authorityHostId: string;
+            authorityRevision: number;
+            /** @enum {string} */
+            handoffStatus: "none" | "pending";
+            updatedAt: string;
+        };
+        SessionEvent: {
+            /** @enum {string} */
+            type: "session.changed";
+            session: {
+                id?: string;
+                projectId?: string;
+                title?: string | null;
+                icon?: string | null;
+                agentId?: string | null;
+                harness?: string | null;
+                model?: string | null;
+                /** @enum {string|null} */
+                modelEffort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                /** @enum {string} */
+                status?: "active" | "closed";
+                /** @enum {string} */
+                workStatus?: "open" | "completed";
+                activity?: string | null;
+                todos?: {
+                    /** Format: uuid */
+                    id: string;
+                    title: string;
+                    description: string;
+                    /** @enum {string} */
+                    status: "pending" | "in_progress" | "completed";
+                    activeForm?: string;
+                }[];
+                metadata?: components["schemas"]["SessionMetadata"];
+                imported?: components["schemas"]["ImportedSession"] | null;
+                parentSessionId?: string | null;
+                forkedFromSessionId?: string | null;
+                attentionRevision?: number;
+                environment?: string | null;
+                authorityHostId?: string;
+                authorityRevision?: number;
+                /** @enum {string} */
+                handoffStatus?: "none" | "pending";
+                updatedAt?: string;
+            };
+        } | {
+            /** @enum {string} */
+            type: "turn.changed";
+            turn: components["schemas"]["Turn"];
+        } | {
+            /** @enum {string} */
+            type: "attempt.changed";
+            attempt: components["schemas"]["Attempt"];
+        } | {
+            /** @enum {string} */
+            type: "item.added";
+            item: components["schemas"]["Item"];
+        } | {
+            /** @enum {string} */
+            type: "item.changed";
+            item: components["schemas"]["Item"];
+        } | {
+            /** @enum {string} */
+            type: "item.text_appended";
+            itemId: string;
+            /** @enum {string} */
+            field: "text" | "output";
+            text: string;
+            at: string;
+        } | {
+            /** @enum {string} */
+            type: "request.changed";
+            request: components["schemas"]["RuntimeRequest"];
+        } | {
+            /** @enum {string} */
+            type: "provider_thread.changed";
+            thread: components["schemas"]["ProviderThread"];
+        };
+        StoredSessionEvent: {
+            sessionId: string;
+            sequence: number;
+            at: string;
+            commandId: string | null;
+            event: components["schemas"]["SessionEvent"];
+        };
+        SessionSnapshot: {
+            sequence: number;
+            session: components["schemas"]["SessionFields"];
+            turns: components["schemas"]["Turn"][];
+            attempts: components["schemas"]["Attempt"][];
+            items: components["schemas"]["Item"][];
+            requests: components["schemas"]["RuntimeRequest"][];
+            providerThreads: components["schemas"]["ProviderThread"][];
+            olderBefore: number | null;
+        };
+        SessionStreamMessage: {
+            /** @enum {string} */
+            type: "events";
+            events: components["schemas"]["StoredSessionEvent"][];
+        } | {
+            /** @enum {string} */
+            type: "reset";
+            snapshot: components["schemas"]["SessionSnapshot"];
+        } | {
+            /** @enum {string} */
+            type: "heartbeat";
+            sequence: number;
+        };
+        CommandReceipt: {
+            commandId: string;
+            /** @enum {string} */
+            status: "accepted" | "rejected";
+            sequence: number;
+            result: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            error: {
+                code: string;
+                message: string;
+            } | null;
         };
     };
     responses: never;

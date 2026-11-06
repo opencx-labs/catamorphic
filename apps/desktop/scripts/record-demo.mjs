@@ -3,6 +3,7 @@
 // writes frames + a duration manifest for ffmpeg assembly.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,12 +15,8 @@ fs.rmSync(OUT_DIR, { recursive: true, force: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-demo-"));
-const electronPackage = path.join(DESKTOP_DIR, "node_modules", "electron");
-const electronBinary = path.join(
-  electronPackage,
-  "dist",
-  fs.readFileSync(path.join(electronPackage, "path.txt"), "utf-8").trim(),
-);
+// The package names its executable, downloading it first in a fresh install.
+const electronBinary = createRequire(import.meta.url)("electron");
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -289,11 +286,12 @@ await sleep(350);
 await press("Enter");
 await sleep(4000);
 
-// D. Tile the agent terminal to the side via the surface chip's split button
+// D. Tile the agent terminal to the side via its chip's open-to-the-side button
 await evalJs(`(() => {
-  const chip = document.querySelector('[data-testid="surface-chip"]');
-  const btn = chip && chip.querySelector("button");
-  if (!btn) throw new Error("no split button on surface chip");
+  const btn = document.querySelector(
+    '[data-testid="chip"][data-kind="terminal"] [data-chip-button="open-side"]',
+  );
+  if (!btn) throw new Error("no open-to-the-side button on the terminal chip");
   btn.click();
   return true;
 })()`);

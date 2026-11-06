@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   desktopVitestArguments,
   includeDesktopTestSource,
+  isInstallInput,
 } from "./desktop-test.js";
 import { isIsolatedDesktopTestHost } from "./desktop-test-environment.js";
 
@@ -89,5 +91,29 @@ describe("desktop test isolation", () => {
     ]);
     expect(args.slice(-2)).toEqual(["window-state", "--shard=2/8"]);
     expect(args).toContain("--outputFile.junit=/tmp/results/junit.xml");
+  });
+});
+
+describe("desktop test image dependencies", () => {
+  it("install from the manifests, the lockfile and every overridden stand-in", () => {
+    const manifest: { overrides: Record<string, string> } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    const local = Object.values(manifest.overrides)
+      .filter((spec) => spec.startsWith("file:./"))
+      .map((spec) => `${spec.slice("file:./".length)}/package.json`);
+    expect(local.length).toBeGreaterThan(0);
+    for (const file of [
+      "bun.lock",
+      "package.json",
+      "packages/core/package.json",
+      "apps/desktop/package.json",
+      ...local,
+    ])
+      expect(isInstallInput(file), file).toBe(true);
+    expect(isInstallInput("packages/core/src/index.ts")).toBe(false);
+    expect(isInstallInput("packages/core/node_modules/x/package.json")).toBe(
+      false,
+    );
   });
 });

@@ -19,10 +19,10 @@ const source = (id: string, name: string): WorkflowNode => ({
     endColumn: 11,
   },
 });
-const node = (id: string, y: number): Node => ({
+const node = (id: string, y: number, name: string): Node => ({
   id,
   position: { x: 0, y },
-  data: {},
+  data: { ...source(id, name) },
   style: { width: 240, height: 44 },
 });
 afterEach(() => {
@@ -41,14 +41,12 @@ it("animates matching steps from their old positions, retains exits, and settles
     (props) => useGraphTransition({ ...props, edges: [] }),
     {
       initialProps: {
-        nodes: [node("a", 0), node("b", 100)],
-        graphNodes: [source("a", "keep"), source("b", "remove")],
+        nodes: [node("a", 0, "keep"), node("b", 100, "remove")],
       },
     },
   );
   rerender({
-    nodes: [node("new", 0), node("a2", 100)],
-    graphNodes: [source("new", "insert"), source("a2", "keep")],
+    nodes: [node("new", 0, "insert"), node("a2", 100, "keep")],
   });
   expect(result.current.transitioning).toBe(true);
   expect(
@@ -82,12 +80,41 @@ it("settles immediately for reduced motion", () => {
     (props) => useGraphTransition({ ...props, edges: [] }),
     {
       initialProps: {
-        nodes: [node("a", 0)],
-        graphNodes: [source("a", "keep")],
+        nodes: [node("a", 0, "keep")],
       },
     },
   );
-  rerender({ nodes: [node("a", 100)], graphNodes: [source("a", "keep")] });
+  rerender({ nodes: [node("a", 100, "keep")] });
   expect(result.current.transitioning).toBe(false);
   expect(result.current.nodes[0]?.position.y).toBe(100);
+});
+
+it("moves a step whose parser id another step now uses, and fades the insert in", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const { result, rerender } = renderHook(
+    (props) => useGraphTransition({ ...props, edges: [] }),
+    {
+      initialProps: {
+        nodes: [node("step-1", 0, "gather"), node("step-2", 100, "write")],
+      },
+    },
+  );
+  rerender({
+    nodes: [
+      node("step-1", 0, "gather"),
+      node("step-2", 100, "check"),
+      node("step-3", 200, "write"),
+    ],
+  });
+  const at = (id: string) =>
+    result.current.nodes.find((item) => item.id === id);
+  expect(at("step-3")?.position.y).toBeCloseTo(100);
+  expect(at("step-3")?.style?.opacity).toBeCloseTo(1);
+  expect(at("step-2")?.style?.opacity).toBeCloseTo(0);
+  expect(result.current.entered).toEqual(["step-2"]);
 });

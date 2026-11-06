@@ -16,8 +16,16 @@ export const DiscoverCapabilitiesSchema = z.object({
 });
 export const InvokeCapabilitySchema = z.object({
   name: z.string().min(1).max(200),
-  input: z.record(z.string(), z.unknown()).default({}),
-  requestId: z.string().min(1).max(200),
+  input: z
+    .record(z.string(), z.unknown())
+    .default({})
+    .describe("The capability's own input, per its discovered schema"),
+  requestId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe("Optional; the same id again marks a retry of one operation"),
 });
 export const CapabilityPageSchema = z.object({
   items: z.array(CapabilityDescriptorSchema),
@@ -43,16 +51,24 @@ export function agentCapabilityTools(
       description:
         "Find permitted host capabilities by topic, such as apps, workflows, browser, terminal, sessions, documents, connections, or execution. Returns typed schemas. Visibility is not permission to perform another action.",
       parameters: DiscoverCapabilitiesSchema.shape,
+      // Strict for agents: an unknown field (say intent for query) would
+      // otherwise be dropped and return an unfiltered page, which reads as
+      // "the capability does not exist".
       execute: (input) =>
-        gateway.discover(DiscoverCapabilitiesSchema.parse(input)),
+        gateway.discover(DiscoverCapabilitiesSchema.strict().parse(input)),
     },
     {
       name: "invoke_capability",
       description:
-        "Invoke a capability using its discovered name and input schema. Reuse the requestId when explicitly retrying the same operation; never assume an uncertain write failed. Live authorization applies to every call.",
+        "Invoke a capability by its discovered name, with its fields inside input. Never assume an uncertain write failed; check before retrying. Live authorization applies to every call.",
       parameters: InvokeCapabilitySchema.shape,
+      // Strict as discovery is: a field beside input (say key) would
+      // otherwise vanish, and the capability would run on defaults.
       execute: (input) =>
-        gateway.invoke({ ...InvokeCapabilitySchema.parse(input), signal }),
+        gateway.invoke({
+          ...InvokeCapabilitySchema.strict().parse(input),
+          signal,
+        }),
     },
   ];
 }
@@ -95,4 +111,23 @@ export function renderTurnContext(
       return `<${tag}>\n${note}${text}\n</${tag}>`;
     })
     .join("\n\n");
+}
+
+/**
+ * The title of a reasoning summary's latest part ("**Reviewing database
+ * migrations**"): the agent's own words for what it is doing, which hosts
+ * show as its live line until it titles the next part, as Codex shows its
+ * own. Only a line that is a bold title counts: a bold lead-in ("**Note:**
+ * ...") or a word bolded mid-sentence never does.
+ */
+export function reasoningHeading(text: string): string | undefined {
+  let heading: string | undefined;
+  for (const line of text.split("\n")) {
+    const title = line
+      .trim()
+      .match(/^\*\*([^*\n]+)\*\*$/)?.[1]
+      ?.trim();
+    if (title) heading = title;
+  }
+  return heading;
 }

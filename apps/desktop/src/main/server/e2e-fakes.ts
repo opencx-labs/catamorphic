@@ -1,39 +1,49 @@
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  type AgentAttachment,
+  type AgentQuestion,
+  type JsonValue,
+  type NativeRef,
+  type RuntimeRequestResponse,
+  sessionPullRequests,
+} from "@catamorphic/agent-protocol";
+import {
+  type AttemptControl,
+  type AttemptHost,
+  type AttemptStart,
+  type HarnessAdapter,
+  type HarnessCapabilities,
+  type HarnessEvent,
+  type HostToolResult,
+  RequestClosedError,
+} from "@catamorphic/agent-protocol/runner";
 import {
   appScaffold,
   projectDataDirectory,
   workspaceFiles,
 } from "@catamorphic/core";
 import type {
-  AgentEvent,
-  CodingAgentProvider,
   CreateSandboxOpts,
   ExecOpts,
   ExecResult,
-  ExtraTool,
-  ExtraToolContext,
   GitCloneOpts,
-  ProviderSession,
   SandboxHandle,
   SandboxProvider,
   SandboxStatus,
-  StartSessionOpts,
-  ToolPermissionHandler,
-  TurnOptions,
 } from "@catamorphic/sandbox";
 import {
   inlineAttachmentReferences,
   StdioDeploymentRuntimeProvider,
 } from "@catamorphic/sandbox";
 import { z } from "zod";
-import type { WorkspaceBridge } from "../agent-bridge.js";
-import { createCodexElicitation } from "./codex-elicitation.js";
 import type { desktopSettingsContext } from "./desktop-settings-context.js";
 import { reviewAppFiles, reviewAppSource } from "./e2e-review-app.js";
+import { localAgentWorkspace } from "./local-agent-workspace.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -116,7 +126,7 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
         : undefined;
     this.environments.set(id, {
       ...opts.envVars,
-      ...(data ? { CATAMORPHIC_APP_DATA_DIR: data } : {}),
+      ...(data ? { WORK_APP_DATA_DIR: data } : {}),
     });
     return { id, providerId: id, sandboxType: "dev", status: "started" };
   }
@@ -208,201 +218,1166 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
 }
 
 /**
- * E2E-only coding agent with scripted, prompt-keyed behavior:
- *
- * - "ask me ... questions" → a preamble, then an ask_user question turn;
- *   the follow-up answer gets acknowledged with plain text.
- * - "preamble" → two preamble text segments split by tool work, then a
- *   final summary (exercises the streamed-preamble message split).
- * - "edit a file" → writes a file in the sandbox (exercises changed-file
- *   sync-back and chips).
- * - "subagent" → a delegated worker with nested activity (subagent chip).
- * - "watcher" → a background process event (watcher chip).
- * - "point: <target>" / "point keep: <target>" / "unpoint" → the real
- *   point_at tool (glow + scroll).
- * - "show: <target>" → the real open_surface tool (tab behind the chat).
- * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
- *   mode flips, kill-and-relaunch recovery).
- * - "auth error" → the turn fails with a provider-style credential
- *   rejection, verbatim OpenRouter 401 text (exercises the friendly
- *   auth-error rewrite in agent-errors.ts).
- * - anything else → set_title + one text reply echoing the message.
- */
-
-/**
  * One-shot failure triggers, process-wide: a given trigger message fails
- * once and recovers on retry (same content re-runs); a NEW trigger message
- * fails again. Deliberately NOT per provider instance — a reconnect updates
- * the stored credential, which rebuilds the provider (agent-registry cache
- * key), exactly like production; the failure cause (the "expired key") must
- * not come back with the rebuilt instance.
+ * once and recovers on retry (the same content runs again); a NEW trigger
+ * message fails again.
  */
 const oneShotFailures = new Set<string>();
+/** How often each "expired sign-in" message was turned away so far. */
+const signInFailures = new Map<string, number>();
 const pdfArtifactSource =
   "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n";
 
-export class E2eFakeCodingAgent implements CodingAgentProvider {
-  readonly name = "e2e-fake";
-  private readonly sessions = new Map<
-    string,
-    {
-      sandboxId: string;
-      workingDirectory: string;
-      askedQuestion: boolean;
-      interrupted: boolean;
-      /**
-       * The last turn this in-memory session ran, for retryTurn — the
-       * same "history lives in memory" semantics as the ai-sdk harness,
-       * so retry flows exercise the production paths (native re-run on a
-       * live session; core's sendMessage fallback after a re-anchor).
-       */
-      lastTurn?: { message: string; opts?: TurnOptions };
-      /** Context for driving the real workspace toolkit ("terminal:"). */
-      toolContext: ExtraToolContext;
+const FAKE_CAPABILITIES: HarnessCapabilities = {
+  steer: true,
+  interrupt: true,
+  // Core resends the input; the fake keeps no turn to run again.
+  retry: false,
+  fork: false,
+  rollback: false,
+  questions: true,
+  approvals: true,
+  elicitations: true,
+  toolSearch: false,
+  subagents: true,
+  streamsText: true,
+  streamsReasoning: false,
+  nativeState: "store",
+  ids: { thread: "strong", turn: "none", item: "none" },
+};
+
+/** One scripted step, the way the e2e scenarios are written. */
+type FakeStep =
+  | { type: "title"; content: string }
+  /**
+   * The agent's reasoning, and the words a harness takes from it for its
+   * live line (`said`, as Claude Code's and Codex's adapters do): they hold
+   * the line through the steps that follow until the next thinking.
+   */
+  | { type: "thinking"; content: string; said?: string }
+  | { type: "text"; content: string }
+  /** More of the text being written, as a model streams it. */
+  | { type: "text_delta"; content: string }
+  /** Ends the turn failed, with the provider's own words. */
+  | { type: "error"; content: string; retrySafe?: boolean }
+  | {
+      type: "provider";
+      event: Extract<
+        HarnessEvent,
+        { type: "provider.retrying" | "provider.resumed" }
+      >;
     }
-  >();
+  | {
+      type: "tool_call";
+      toolName?: string;
+      toolInput?: unknown;
+      toolResult?: unknown;
+      /** Set to finish later with an `ended` step of the same id. */
+      toolUseId?: string;
+      status?: "ended";
+      subagentId?: string;
+      description?: string;
+    }
+  | {
+      type: "command";
+      content?: string;
+      description?: string;
+      toolUseId?: string;
+      status?: "ended";
+      toolResult?: string;
+      subagentId?: string;
+    }
+  | { type: "file_edit"; content: "write" | "edit"; filePath: string }
+  | {
+      type: "subagent";
+      status: "started" | "ended";
+      subagentId: string;
+      subagentType?: string;
+      content?: string;
+    }
+  /** A question the person answers later, as their next message. */
+  | { type: "question"; questions: AgentQuestion[] };
+
+/** What a scripted turn can do: the real host tools, requests and files. */
+interface FakeTurn {
+  message: string;
+  attachments: AgentAttachment[];
+  /** The host's instructions, after the harness's own (ADR 0049). */
+  systemPrompt: string;
+  /** This turn's context fragments, rendered (ADR 0152). */
+  context: string;
+  projectId: string;
+  sessionId: string;
+  workingDirectory: string;
+  /** The last turn asked the person a question this message answers. */
+  askedQuestion: boolean;
+  interrupted(): boolean;
+  /** Waits, ending early when the turn is interrupted. */
+  pause(ms: number): Promise<void>;
+  /** The names of the tools the host serves this turn. */
+  hostTools: string[];
+  /** A workspace tool, served as a host tool or a discovered capability. */
+  tool(name: string, input: Record<string, unknown>): Promise<unknown>;
+  /** A host tool's result as the harness receives it, images included. */
+  toolResult(
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<HostToolResult>;
+  /** The next message sent into this turn, or one that arrived unasked. */
+  nextSteer(): Promise<{ text: string; attachments: AgentAttachment[] }>;
+  /**
+   * The next message within `ms`, else nothing: a message that comes later
+   * is echoed at the turn's end rather than taken by a step that stopped
+   * waiting.
+   */
+  steerWithin(
+    ms: number,
+  ): Promise<{ text: string; attachments: AgentAttachment[] } | undefined>;
+  discover(query: string): Promise<{ items: Array<{ name: string }> }>;
+  /** Discovers the capability by name, then invokes it. */
+  capability(name: string, input: Record<string, unknown>): Promise<unknown>;
+  writeFiles(files: Record<string, string>): Promise<void>;
+  request(
+    request: Parameters<AttemptHost["request"]>[1],
+    options?: { signal?: AbortSignal },
+  ): Promise<RuntimeRequestResponse>;
+  settingsContext(): ReturnType<typeof desktopSettingsContext> | undefined;
+}
+
+/**
+ * E2E-only harness with scripted, prompt-keyed behavior over the real
+ * host (ADR 0198): its tools are the desktop's workspace tools and
+ * capabilities, its questions, approvals and elicitations are session
+ * requests, and its files land in the chat's checkout. No model.
+ *
+ * - "ask me ... questions" → a preamble, then a question the next
+ *   message answers ("Got it, noted").
+ * - "blocking question" → a blocking question; a chat message sent while
+ *   it waits is answered in the same turn and the question stays open
+ *   (ADR 0195).
+ * - "look at my screen" → read_tab's window screenshot.
+ * - "close my questions" → the close_questions tool core gives every agent.
+ * - "preamble" → two preamble segments split by tool work, then a summary.
+ * - "edit a file" → writes a file (changed-file chips).
+ * - "subagent" → a delegated worker with nested activity.
+ * - "point: <target>" / "point keep: <target>" / "unpoint" → point_at.
+ * - "show: <target>" → open_surface.
+ * - "slowly" → a ~4s turn (mid-turn UI: spinners, queueing, interrupts).
+ * - "narrate" / "step by step" → paced notes and commands.
+ * - "perf turn [steps=N] [quiet=S] [stream=S]" → many short steps, one
+ *   long quiet step, then a long Markdown answer streamed in small chunks
+ *   (resource measurements); "perf answer" → that answer at once.
+ * - "pace the work" → a note, a beat, a dozen commands, each changing the
+ *   live line, then an answer streamed a few words at a time ("quickly",
+ *   "with notes", "then go quiet" and "at length" vary it).
+ * - "auth error" / "rate limit" → a provider failure once per message.
+ * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
+ *   did not refresh, safe to retry, on the first (N) attempts.
+ * - "permission: <server>/<tool>" → a tool approval request.
+ * - "elicitation: queue|cancel|app" → MCP elicitation requests.
+ * - anything else → a title and one reply echoing the message.
+ */
+export class E2eFakeAdapter implements HarnessAdapter {
+  readonly id = "e2e-fake";
 
   constructor(
-    private readonly sandboxProvider: SandboxProvider,
-    /**
-     * The real workspace toolkit, when the host has one: keyed prompts
-     * ("terminal: <cmd>", "terminal @<id>: <cmd>") execute the actual
-     * run_terminal tool, so e2e covers the bridge → renderer → chips
-     * path with the deterministic agent.
-     */
-    private readonly workspaceTools: ExtraTool[] = [],
-    /**
-     * The real tool-permission prompt (bridge → renderer consent modal),
-     * so "permission: <server>/<tool>" exercises the ask path end to end
-     * without a model or a live MCP server.
-     */
-    private readonly askToolPermission?: ToolPermissionHandler,
-    private readonly settingsContext?: (
-      projectId: string,
-    ) => ReturnType<typeof desktopSettingsContext>,
-    private readonly elicit?: WorkspaceBridge["elicit"],
-    private readonly bindTurn?: (
-      sessionId: string,
-      options?: TurnOptions,
-    ) => () => void,
+    private readonly options: {
+      settingsContext?: (
+        projectId: string,
+      ) => ReturnType<typeof desktopSettingsContext>;
+    } = {},
   ) {}
 
-  private readonly questionAborts = new Map<string, AbortController>();
-
-  interrupt(providerSessionId: string): void {
-    this.questionAborts.get(providerSessionId)?.abort();
-    const state = this.sessions.get(providerSessionId);
-    if (state) state.interrupted = true;
+  capabilities(): HarnessCapabilities {
+    return FAKE_CAPABILITIES;
   }
 
-  /** In-memory like the real ai-sdk harness — resurrection tests rely
-      on this reporting honestly after a relaunch. */
-  hasSession(providerSessionId: string): boolean {
-    return this.sessions.has(providerSessionId);
-  }
-
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    const providerSessionId = crypto.randomUUID();
-    this.sessions.set(providerSessionId, {
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
-      askedQuestion: false,
-      interrupted: false,
-      toolContext: {
-        projectId: opts.projectId,
-        sessionId: opts.sessionId,
-        workingDirectory: opts.workingDirectory,
-      },
+  start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
+    let interrupted = false;
+    const wakers = new Set<() => void>();
+    type Steer = {
+      itemId: string;
+      text: string;
+      attachments: AgentAttachment[];
+    };
+    /**
+     * Messages sent into the turn that no step was waiting for: the next
+     * step that asks takes them first; any still here when the turn ends
+     * are echoed at its end.
+     */
+    const steered: Steer[] = [];
+    const steerWaiters: Array<(input: Steer) => void> = [];
+    /**
+     * Sent while a step was under way, as with a real harness: read once
+     * that step ends (ADR 0240). A stop leaves them unread.
+     */
+    const unread: string[] = [];
+    const takeIn = (itemIds: string[]) => {
+      if (itemIds.length > 0) host.emit({ type: "input.consumed", itemIds });
+    };
+    /** A step takes a message that waited for it: read now. */
+    const read = (steer: Steer) => {
+      const at = unread.indexOf(steer.itemId);
+      if (at >= 0) takeIn(unread.splice(at, 1));
+      return steer;
+    };
+    /** A step: when it ends, what was steered during it is read. */
+    const step = (ms: number) => {
+      let cancel = () => {};
+      const ended = new Promise<void>((resolve) => {
+        if (interrupted) return resolve();
+        const wake = () => {
+          clearTimeout(timer);
+          wakers.delete(wake);
+          if (!interrupted) takeIn(unread.splice(0));
+          resolve();
+        };
+        const timer = setTimeout(wake, ms);
+        wakers.add(wake);
+        // Given up on before it ended: no boundary, nothing read.
+        cancel = () => {
+          clearTimeout(timer);
+          wakers.delete(wake);
+          resolve();
+        };
+      });
+      return { ended, cancel };
+    };
+    const pause = (ms: number) => step(ms).ended;
+    const run = async () => {
+      const ref = threadRef(attempt);
+      host.emit({ type: "thread", ref });
+      const saved =
+        attempt.thread.mode === "resume" || attempt.thread.mode === "restore"
+          ? await host.nativeState.load({})
+          : null;
+      host.emit({ type: "turn.started" });
+      const turn: FakeTurn = {
+        // The person's words: a context handoff before them (what the
+        // agent missed) never decides what the script does.
+        message: withoutEarlierDeliveries(
+          (attempt.input?.text ?? "").split(HANDOFF_SEPARATOR).at(-1) ?? "",
+        ),
+        attachments: attempt.input?.attachments ?? [],
+        systemPrompt: attempt.systemPrompt,
+        context: attempt.context,
+        projectId: attempt.projectId,
+        sessionId: attempt.sessionId,
+        workingDirectory: attempt.workingDirectory,
+        askedQuestion: lastAskedQuestion(saved),
+        interrupted: () => interrupted,
+        pause,
+        hostTools: attempt.hostTools.map((tool) => tool.name),
+        tool: (name, input) =>
+          attempt.hostTools.some((tool) => tool.name === name)
+            ? host.callTool({ name, input: toJson(input) }).then(toolValue)
+            : turn.capability(`workspace.${name}`, input),
+        toolResult: (name, input) =>
+          host.callTool({ name, input: toJson(input) }),
+        nextSteer: () => {
+          const waiting = steered.shift();
+          return waiting
+            ? Promise.resolve(read(waiting))
+            : new Promise<Steer>((resolve) => {
+                steerWaiters.push(resolve);
+              });
+        },
+        steerWithin: async (ms) => {
+          const waiting = steered.shift();
+          if (waiting) return read(waiting);
+          const waiter: { resolve?: (input: Steer) => void } = {};
+          const steer = new Promise<Steer>((resolve) => {
+            waiter.resolve = resolve;
+            steerWaiters.push(resolve);
+          });
+          const boundary = step(ms);
+          const news = await Promise.race([
+            steer,
+            boundary.ended.then(() => undefined),
+          ]);
+          boundary.cancel();
+          // Given up on: its claim goes, so a later message is echoed.
+          if (!news && waiter.resolve) {
+            const at = steerWaiters.indexOf(waiter.resolve);
+            if (at >= 0) steerWaiters.splice(at, 1);
+          }
+          return news;
+        },
+        discover: async (query) =>
+          z.object({ items: z.array(z.object({ name: z.string() })) }).parse(
+            await host
+              .callTool({
+                name: "discover_capabilities",
+                input: { query },
+              })
+              .then(toolValue),
+          ),
+        capability: async (name, input) => {
+          const page = await turn.discover(name);
+          if (!page.items.some((item) => item.name === name))
+            throw new Error(`Capability unavailable: ${name}`);
+          return host
+            .callTool({
+              name: "invoke_capability",
+              input: { name, input: toJson(input), requestId: randomUUID() },
+            })
+            .then(toolValue);
+        },
+        writeFiles: (files) =>
+          localAgentWorkspace.uploadFiles(
+            "local",
+            files,
+            attempt.workingDirectory,
+          ),
+        request: (request, options) =>
+          host.request(`request:${randomUUID()}`, request, options),
+        settingsContext: () =>
+          this.options.settingsContext?.(attempt.projectId),
+      };
+      const transcript = new FakeTranscript(host);
+      let failure: { message: string; retrySafe?: boolean } | undefined;
+      for await (const step of fakeScript(turn)) {
+        if (step.type === "error") {
+          failure = {
+            message: step.content,
+            ...(step.retrySafe ? { retrySafe: true } : {}),
+          };
+          break;
+        }
+        transcript.apply(step);
+      }
+      // A turn that stopped or failed never read what was still waiting:
+      // Work runs it as a turn of its own.
+      if (!interrupted && !failure) {
+        takeIn(unread.splice(0));
+        for (const steer of steered)
+          transcript.apply({ type: "text", content: `Steered: ${steer.text}` });
+      }
+      transcript.close();
+      await host.nativeState.append({
+        entries: [{ askedQuestion: turn.askedQuestion }],
+      });
+      if (interrupted)
+        host.emit({ type: "turn.completed", status: "interrupted" });
+      else if (failure)
+        host.emit({ type: "turn.completed", status: "failed", error: failure });
+      else host.emit({ type: "turn.completed", status: "completed" });
+    };
+    const finished = run().catch((error: unknown) => {
+      host.emit({
+        type: "turn.completed",
+        status: interrupted ? "interrupted" : "failed",
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
     });
     return {
-      providerSessionId,
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
+      steer: async (input) => {
+        const waiter = steerWaiters.shift();
+        // A step waiting for it reads it now; else the step under way ends first.
+        if (waiter) {
+          waiter(input);
+          takeIn([input.itemId]);
+        } else {
+          steered.push(input);
+          unread.push(input.itemId);
+        }
+        return true;
+      },
+      interrupt: () => {
+        interrupted = true;
+        for (const wake of [...wakers]) wake();
+      },
+      finished,
     };
   }
+}
 
-  async *sendMessage(
-    session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    const abort = new AbortController();
-    if (session.providerSessionId)
-      this.questionAborts.set(session.providerSessionId, abort);
-    const ask = opts?.askQuestion;
-    const options = {
-      ...opts,
-      ...(ask
-        ? {
-            askQuestion: (
-              input: Parameters<NonNullable<TurnOptions["askQuestion"]>>[0],
-            ) =>
-              ask({
-                ...input,
-                signal: input.signal
-                  ? AbortSignal.any([input.signal, abort.signal])
-                  : abort.signal,
-              }),
-          }
-        : {}),
-    };
-    const release = this.bindTurn?.(session.sessionId, options);
+/** The native thread: Work's id when fresh, the stored one when resumed. */
+function threadRef(attempt: AttemptStart): NativeRef {
+  switch (attempt.thread.mode) {
+    case "fresh":
+      return { id: attempt.thread.providerThreadId, strength: "strong" };
+    case "resume":
+    case "restore":
+      return attempt.thread.nativeRef;
+    case "fork":
+      return { id: randomUUID(), strength: "strong" };
+  }
+}
+
+function lastAskedQuestion(saved: JsonValue[] | null): boolean {
+  const last = saved?.at(-1);
+  return Boolean(
+    last &&
+      typeof last === "object" &&
+      !Array.isArray(last) &&
+      last.askedQuestion === true,
+  );
+}
+
+function toJson(value: unknown): JsonValue {
+  const parsed: JsonValue = JSON.parse(JSON.stringify(value ?? null));
+  return parsed;
+}
+
+/** A host tool's result as the value the tool returned. */
+function toolValue(result: HostToolResult): unknown {
+  const parts = result.content.flatMap((part) =>
+    part.type === "text" ? [part.text] : [],
+  );
+  const text = parts.join("");
+  if (result.isError) throw new Error(text || "The tool failed");
+  if (result.structured !== undefined) return result.structured;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Core can append a waiting note as a separate text block when a
+    // steer reaches a host call. Its primary JSON reply still stands.
     try {
-      yield* this.sendMessageWithQuestions(session, message, options);
-    } finally {
-      release?.();
-      abort.abort();
-      if (session.providerSessionId)
-        this.questionAborts.delete(session.providerSessionId);
+      return JSON.parse(parts[0] ?? "");
+    } catch {
+      return text;
     }
   }
+}
 
-  private async *sendMessageWithQuestions(
-    session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    const state = session.providerSessionId
-      ? this.sessions.get(session.providerSessionId)
-      : undefined;
-    if (!state) {
-      yield { type: "error", content: "Session not found" };
+/** Scripted steps as transcript items: text segments split by work. */
+class FakeTranscript {
+  private openText: string | undefined;
+  private counter = 0;
+  /** The agent's own words for its work, from its latest thinking. */
+  private said: string | undefined;
+
+  constructor(private readonly host: AttemptHost) {}
+
+  apply(step: FakeStep): void {
+    if (step.type === "provider") {
+      this.host.emit(step.event);
       return;
     }
-    state.workingDirectory = session.workingDirectory;
-    state.toolContext.workingDirectory = session.workingDirectory;
-    state.interrupted = false;
-    state.lastTurn = { message, ...(opts ? { opts } : {}) };
-    // Scripted decisions, production tool transport. Every deferred workspace
-    // action in the UI suites discovers and invokes the same live registry.
-    const workspaceTools = this.workspaceTools.map((tool) =>
-      "eager" in tool && tool.eager
-        ? tool
-        : {
-            ...tool,
-            execute: async (input: Record<string, unknown>) => {
-              const gateway = opts?.capabilities;
-              if (!gateway) throw new Error("Capability gateway unavailable");
-              const name = `workspace.${tool.name}`;
-              const page = await gateway.discover({ query: name });
-              if (!page.items.some((item) => item.name === name))
-                throw new Error(`Capability unavailable: ${name}`);
-              return gateway.invoke({
-                name,
-                input,
-                requestId: crypto.randomUUID(),
-              });
-            },
+    if (step.type === "text_delta" && this.openText) {
+      this.host.emit({
+        type: "item.delta",
+        key: this.openText,
+        field: "text",
+        text: step.content,
+      });
+      return;
+    }
+    if (step.type === "text" || step.type === "text_delta") {
+      if (this.openText) {
+        this.host.emit({
+          type: "item.delta",
+          key: this.openText,
+          field: "text",
+          text:
+            step.type === "text_delta" ? step.content : `\n\n${step.content}`,
+        });
+        return;
+      }
+      this.openText = this.key("text");
+      this.host.emit({
+        type: "item.started",
+        key: this.openText,
+        item: { kind: "assistant_message", text: step.content, agentId: null },
+      });
+      return;
+    }
+    if (step.type === "title") {
+      this.host.emit({ type: "title", text: step.content });
+      return;
+    }
+    this.close();
+    if (step.type === "thinking") {
+      this.host.emit({
+        type: "item.started",
+        key: this.key("thinking"),
+        status: "completed",
+        item: { kind: "reasoning", text: step.content },
+      });
+      this.said = step.said;
+      if (step.said) this.host.emit({ type: "status", text: step.said });
+      return;
+    }
+    const activity =
+      this.said && !("subagentId" in step && step.subagentId)
+        ? { activity: this.said }
+        : {};
+    switch (step.type) {
+      case "tool_call": {
+        if (step.status === "ended" && step.toolUseId) {
+          this.host.emit({
+            type: "item.completed",
+            key: step.toolUseId,
+            status: "completed",
+            ...(step.toolResult === undefined
+              ? {}
+              : { item: { result: toJson(step.toolResult) } }),
+          });
+          return;
+        }
+        const pending =
+          Boolean(step.toolUseId) && step.toolResult === undefined;
+        this.host.emit({
+          type: "item.started",
+          ...activity,
+          key: step.toolUseId ?? this.key("tool"),
+          status: pending ? "in_progress" : "completed",
+          item: {
+            kind: "tool_call",
+            tool: step.toolName ?? "tool",
+            server: null,
+            description: step.description || null,
+            input: toJson(step.toolInput ?? {}),
+            result:
+              step.toolResult === undefined ? null : toJson(step.toolResult),
+            error: null,
+            ...(step.subagentId ? { parentKey: step.subagentId } : {}),
           },
-    );
-    const prompt = message.toLowerCase();
+        });
+        return;
+      }
+      case "command": {
+        if (step.status === "ended" && step.toolUseId) {
+          this.host.emit({
+            type: "item.completed",
+            key: step.toolUseId,
+            status: "completed",
+            item: { output: step.toolResult ?? "", exitCode: 0 },
+          });
+          return;
+        }
+        this.host.emit({
+          type: "item.started",
+          ...activity,
+          key: step.toolUseId ?? this.key("command"),
+          status: step.toolUseId ? "in_progress" : "completed",
+          item: {
+            kind: "command",
+            command: step.content ?? "",
+            description: step.description ?? null,
+            output: "",
+            exitCode: step.toolUseId ? null : 0,
+            ...(step.subagentId ? { parentKey: step.subagentId } : {}),
+          },
+        });
+        return;
+      }
+      case "file_edit":
+        this.host.emit({
+          type: "item.started",
+          ...activity,
+          key: this.key("file"),
+          status: "completed",
+          item: {
+            kind: "file_change",
+            path: step.filePath,
+            change: step.content === "write" ? "created" : "modified",
+            previousPath: null,
+          },
+        });
+        return;
+      case "subagent":
+        if (step.status === "ended") {
+          this.host.emit({
+            type: "item.completed",
+            key: step.subagentId,
+            status: "completed",
+          });
+          return;
+        }
+        this.host.emit({
+          type: "item.started",
+          key: step.subagentId,
+          item: {
+            kind: "subagent",
+            title: step.content ?? "Subagent",
+            agentType: step.subagentType ?? null,
+            childSessionId: null,
+            result: null,
+          },
+        });
+        return;
+      case "question":
+        // The answer arrives as the person's next message.
+        void this.host
+          .request(this.key("question"), {
+            kind: "question",
+            blocking: false,
+            title: "Question",
+            origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+            questions: step.questions,
+          })
+          .catch(() => {});
+        return;
+    }
+  }
 
-    if (prompt.includes("nonblocking question")) {
-      await opts?.askQuestion?.({
-        requestId: "favorite-color",
+  /** Ends the text segment being written, when there is one. */
+  close(): void {
+    if (!this.openText) return;
+    this.host.emit({
+      type: "item.completed",
+      key: this.openText,
+      status: "completed",
+    });
+    this.openText = undefined;
+  }
+
+  private key(prefix: string): string {
+    this.counter += 1;
+    return `${prefix}:${this.counter}`;
+  }
+}
+
+/** The answer an approval or elicitation came back with, in the echo's words. */
+function elicitationAction(
+  response: RuntimeRequestResponse | undefined,
+): string {
+  return response?.kind === "elicitation" ? response.action : "decline";
+}
+
+/** What separates a context handoff from the input it precedes (core's turn engine). */
+const HANDOFF_SEPARATOR = "\n\n---\n\n";
+
+/**
+ * The turn's own input, without what was delivered to read before it
+ * (ADR 0217): those arrive first, each in its envelope, and the script
+ * answers what the turn was started with.
+ */
+function withoutEarlierDeliveries(text: string): string {
+  return text.replace(
+    /^(?:[^\n]*\n<(task-notification|agent-message|workflow-message)\b[\s\S]*?<\/\1>\n\n)+/,
+    "",
+  );
+}
+
+/** A long Markdown answer: prose, lists, a table and code blocks. */
+const PERF_ANSWER = Array.from(
+  { length: 6 },
+  (_, part) => `## Part ${part + 1}: what changed
+
+The parser now treats **empty input** as an empty program instead of an
+error, and the lexer keeps \`line\` and \`column\` for every token so the
+editor can point at the exact place a problem starts.
+
+- Tokens carry their source range.
+- Empty input parses to \`[]\`.
+- Errors name the token they stopped at, with [a link](file:src/parser.ts).
+
+| Case | Before | After |
+| --- | --- | --- |
+| \`""\` | throws | \`[]\` |
+| \`"a b"\` | 2 tokens | 2 tokens with ranges |
+
+\`\`\`ts
+export function parse(input = ""): Token[] {
+  const tokens: Token[] = [];
+  for (const match of input.matchAll(/\\S+/g)) {
+    tokens.push({ text: match[0], at: match.index ?? 0 });
+  }
+  return tokens;
+}
+\`\`\`
+
+`,
+).join("");
+
+async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
+  const message = turn.message;
+  const prompt = message.toLowerCase();
+
+  if (prompt.includes("provider retry lifecycle")) {
+    if (oneShotFailures.has(prompt)) {
+      yield { type: "text", content: "Manual retry completed." };
+      return;
+    }
+    oneShotFailures.add(prompt);
+    const gate = process.env.CATAMORPHIC_E2E_RETRY_GATE;
+    if (!gate) throw new Error("Provider retry fixture needs a phase gate");
+    const wait = async (phase: string) => {
+      const deadline = Date.now() + 60_000;
+      while (!turn.interrupted() && fs.readFileSync(gate, "utf8") !== phase) {
+        if (Date.now() > deadline)
+          throw new Error(`Provider retry fixture timed out at ${phase}`);
+        await turn.pause(40);
+      }
+    };
+    yield { type: "text", content: "Checking the request." };
+    await wait("retry");
+    if (turn.interrupted()) return;
+    yield {
+      type: "provider",
+      event: {
+        type: "provider.retrying",
+        error: {
+          message: "HTTP 503: the model service is temporarily unavailable.",
+          kind: "unavailable",
+        },
+        attempt: 1,
+        maxAttempts: 3,
+        retryAt: new Date(Date.now() + 2000).toISOString(),
+      },
+    };
+    await wait("detail");
+    if (turn.interrupted()) return;
+    yield {
+      type: "provider",
+      event: {
+        type: "provider.retrying",
+        error: {
+          message:
+            "Provider E42: the upstream request was rejected. This provider supplied additional details that must remain visible, even when the cause cannot be classified.\n\nRequest id: fixture-request-42.\nPlease include this id when contacting support.",
+        },
+        attempt: null,
+        maxAttempts: null,
+        retryAt: null,
+      },
+    };
+    await wait("recover");
+    if (turn.interrupted()) return;
+    yield { type: "provider", event: { type: "provider.resumed" } };
+    yield {
+      type: "text",
+      content: "Connection recovered. Continuing the work.",
+    };
+    await wait("fail");
+    if (!turn.interrupted())
+      yield {
+        type: "error",
+        content: "Provider E99: the request could not be completed.",
+      };
+    return;
+  }
+
+  if (prompt.includes("large retained transcript")) {
+    for (let index = 0; index < 65; index++) {
+      yield {
+        type: "text",
+        content: `### Review ${index + 1}\n\nThe retained history includes a table, code and prose so switching exercises the real Markdown renderer.\n\n| Resource | Result |\n| --- | --- |\n| Fixture ${index + 1} | Checked and retained |\n\n`,
+      };
+      yield {
+        type: "command",
+        content: `inspect fixture-${index}`,
+        description: `Review fixture ${index + 1}`,
+        status: "ended",
+        toolResult: "Completed.",
+      };
+    }
+    yield {
+      type: "text",
+      content:
+        "Retained review complete.\n\n" +
+        Array.from(
+          { length: 60 },
+          (_, index) =>
+            `Paragraph ${index + 1}: this long final response stays rendered when visiting a browser tab. It should return at its existing position without rebuilding the transcript.`,
+        ).join("\n\n"),
+    };
+    return;
+  }
+
+  if (prompt.includes("context reports main")) {
+    yield {
+      type: "text",
+      content: "Waiting for independent context reports.",
+    };
+    while (!turn.interrupted()) {
+      const peers = await turn.tool("list_project_sessions", {});
+      yield {
+        type: "tool_call",
+        toolName: "list_project_sessions",
+        toolResult: peers,
+      };
+      const update = await turn.steerWithin(150);
+      if (update?.text.includes("Continue after context reports")) break;
+    }
+    if (!turn.interrupted())
+      yield { type: "text", content: "Continued after the context reports." };
+    return;
+  }
+  const contextPeer = /context reports peer ([a-z0-9-]+)/.exec(prompt)?.[1];
+  if (contextPeer) {
+    for (let i = 1; i <= 9; i++) {
+      await turn.pause(600);
+      if (turn.interrupted()) return;
+      await turn.tool("send_project_session_message", {
+        session_id: contextPeer,
+        message: `Context report ${i}: independent check passed.`,
+        delivery_mode: "message_only",
+      });
+    }
+    yield { type: "text", content: "Independent context reports sent." };
+    return;
+  }
+
+  if (prompt.includes("agent activity parent")) {
+    yield { type: "text", content: "Checking the delegated review." };
+    await turn.tool("spawn_subsession", {
+      task: `Agent activity child ${turn.sessionId}`,
+      title: "Delegated review",
+    });
+    const reports = new Set<string>();
+    let carryOn = false;
+    while (!turn.interrupted() && (reports.size < 5 || !carryOn)) {
+      const update = await turn.steerWithin(1_000);
+      if (!update) continue;
+      const report = /Progress report ([1-5])/.exec(update.text)?.[1];
+      if (report) reports.add(report);
+      if (update.text.includes("Continue after the updates")) carryOn = true;
+    }
+    if (!turn.interrupted())
+      yield {
+        type: "text",
+        content:
+          "All five updates reached this turn. Continued with your message.",
+      };
+    return;
+  }
+  const activityChild = /agent activity child ([a-z0-9-]+)/.exec(prompt)?.[1];
+  if (activityChild) {
+    for (let i = 1; i <= 5; i++) {
+      await turn.pause(350);
+      await turn.tool("send_project_session_message", {
+        session_id: activityChild,
+        message: `Progress report ${i}: check passed.`,
+        delivery_mode: "message_only",
+      });
+    }
+    yield { type: "text", content: "Subagent checks passed." };
+    return;
+  }
+
+  if (prompt.includes("agent activity blocker parent")) {
+    await turn.tool("spawn_subsession", {
+      task: "Agent activity failed child",
+      title: "Blocked review",
+    });
+    while (!turn.interrupted()) {
+      const update = await turn.steerWithin(1_000);
+      if (update?.text.includes("failed")) break;
+    }
+    if (!turn.interrupted())
+      yield { type: "text", content: "The delegated review needs attention." };
+    return;
+  }
+  if (prompt.includes("agent activity failed child"))
+    throw new Error("The fixture needs a decision before publishing.");
+
+  // A message the person sends while the question waits releases it (core
+  // keeps it open beside the chat) and steers this turn (ADR 0195).
+  if (prompt.includes("blocking question") && !prompt.includes("nonblocking")) {
+    const reply = turn.nextSteer();
+    try {
+      const response = await turn.request({
+        kind: "question",
+        blocking: true,
+        title: "Question",
+        origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+        questions: [
+          {
+            question: "Which layout should I use?",
+            header: "Layout",
+            multiSelect: false,
+            options: [
+              { label: "Grid", description: "Cards in columns." },
+              { label: "List", description: "One row per item." },
+            ],
+          },
+        ],
+      });
+      yield {
+        type: "text",
+        content: `Using the ${response.kind === "question" ? response.answers.join(", ") : "default"} layout.`,
+      };
+    } catch (error) {
+      if (!(error instanceof RequestClosedError)) throw error;
+      const input = await Promise.race([
+        reply,
+        turn.pause(10_000).then(() => undefined),
+      ]);
+      if (input)
+        yield {
+          type: "text",
+          content: `Replying before you answer: ${input.text}${
+            input.attachments.length
+              ? ` (attachments: ${input.attachments.map((item) => item.name).join(", ")})`
+              : ""
+          }`,
+        };
+    }
+    return;
+  }
+
+  // What voice tells agents (ADR 0216): any chat hears that the person
+  // talks by voice while they do, and the assistant who it is.
+  // The person's own instructions would say when voice ends; this agent
+  // ends it when told to, saying goodbye before and after.
+  if (prompt.includes("stop listening")) {
+    yield { type: "text", content: "Okay, I'll stop listening." };
+    yield { type: "tool_call", toolName: "stop_listening", toolInput: {} };
+    const result = await turn.tool("stop_listening", {});
+    yield {
+      type: "text",
+      content: String(result).startsWith("Stopped listening")
+        ? "Talk soon."
+        : `Voice was not on: ${String(result)}`,
+    };
+    return;
+  }
+  if (prompt.includes("how am i talking to you")) {
+    yield {
+      type: "text",
+      content: turn.context.includes("talking with you by voice")
+        ? "By voice."
+        : "By text.",
+    };
+    return;
+  }
+  if (prompt.includes("who are you")) {
+    // The e2e gives one agent these instructions of its own; they lead,
+    // before Work's guidance for the assistant.
+    const persona = turn.systemPrompt.indexOf("You are Juniper.");
+    const assistant = turn.systemPrompt.indexOf(
+      "the person's assistant in Work",
+    );
+    const name = persona >= 0 && (assistant < 0 || persona < assistant);
+    yield {
+      type: "text",
+      content:
+        assistant >= 0
+          ? `Your assistant${name ? ", Juniper" : ""}.`
+          : `An agent${name ? ", Juniper" : ""}.`,
+    };
+    return;
+  }
+
+  // What the assistant can discover (ADR 0216): no project-only chat tools.
+  if (prompt.includes("which session capabilities can you find")) {
+    const page = await turn.discover("project session subsession");
+    yield {
+      type: "text",
+      content: `Capabilities: ${page.items.map((item) => item.name).join(", ")}`,
+    };
+    return;
+  }
+
+  // The assistant's surface (ADR 0216): the tools it is served.
+  if (prompt.includes("which tools can you use")) {
+    yield {
+      type: "text",
+      content: `Tools: ${[...turn.hostTools].sort().join(", ")}`,
+    };
+    return;
+  }
+
+  // The assistant managing the person's own chats.
+  const listedChats = z.array(
+    z.object({
+      session_id: z.string(),
+      title: z.string(),
+      started_by_you: z.boolean(),
+    }),
+  );
+  if (prompt.includes("tell my other chat to")) {
+    const chats = listedChats.parse(await turn.tool("list_sessions", {}));
+    const target = chats.find((chat) => !chat.started_by_you);
+    if (!target) throw new Error("No chat of the person's to message");
+    await turn.tool("message_session", {
+      session_id: target.session_id,
+      message: turn.message.slice(prompt.indexOf("tell my other chat to") + 22),
+      delivery_mode: "queue",
+    });
+    yield { type: "text", content: `Told ${target.title}.` };
+    return;
+  }
+
+  // The assistant handing work to sessions of its own, with the tool any
+  // agent starts subsessions with (ADR 0271).
+  const delegations: [string, { task: string; title: string }, string][] = [
+    [
+      "start a session to tidy the docs",
+      { task: "Tidy the docs", title: "Tidy the docs" },
+      "It's started. I'll tell you when it's done.",
+    ],
+    [
+      "start a session that reports as it goes",
+      { task: "Report as you go", title: "Report" },
+      "Started. I'll pass on what it finds.",
+    ],
+    [
+      "start a session that asks me to choose a layout",
+      { task: "Choose a layout with the person", title: "Layout" },
+      "Started. It will ask you which layout.",
+    ],
+    [
+      "start a session that asks me something",
+      { task: "Ask the person which pages to keep", title: "Docs pages" },
+      "Started. It may have a question for you.",
+    ],
+  ];
+  const delegation = delegations.find(([said]) => prompt.includes(said));
+  if (delegation) {
+    const [, input, reply] = delegation;
+    yield { type: "text", content: "Starting a session for that." };
+    yield { type: "tool_call", toolName: "spawn_subsession", toolInput: input };
+    await turn.tool("spawn_subsession", input);
+    yield { type: "text", content: reply };
+    return;
+  }
+
+  // A session the assistant started, asking the person
+  // something through the assistant chat its brief names.
+  if (prompt.includes("ask the person which pages to keep")) {
+    const assistantChat = /session_id (\S+), delivery_mode steer/.exec(
+      turn.message,
+    )?.[1];
+    if (!assistantChat) throw new Error("The brief names no assistant chat");
+    // Asks a while in, after the person has turned voice off.
+    await turn.pause(8_000);
+    await turn.tool("send_project_session_message", {
+      session_id: assistantChat,
+      message: "Docs pages: Which pages should I keep?",
+      delivery_mode: "steer",
+    });
+    yield { type: "text", content: "I asked which pages to keep." };
+    return;
+  }
+
+  // A session the assistant started, asking the person natively.
+  if (prompt.includes("choose a layout with the person")) {
+    // Asks once the assistant's own turn is over, so the question starts
+    // a turn of its own there.
+    await turn.pause(3_000);
+    const response = await turn.request({
+      kind: "question",
+      blocking: true,
+      title: "Question",
+      origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+      questions: [
+        {
+          question: "Which layout should I use?",
+          header: "Layout",
+          multiSelect: false,
+          options: [
+            { label: "Wide", description: "Room to breathe." },
+            { label: "Narrow", description: "Easy to scan." },
+          ],
+        },
+      ],
+    });
+    yield {
+      type: "text",
+      content: `Using the ${response.kind === "question" ? response.answers.join(", ") : "default"} layout.`,
+    };
+    return;
+  }
+
+  // The assistant hearing that question, and the person's answer back.
+  if (prompt.includes("layout asks the person")) {
+    yield {
+      type: "text",
+      content: "The layout session wants to know: wide or narrow?",
+    };
+    return;
+  }
+  if (prompt.includes("the answer is wide")) {
+    const chats = listedChats.parse(await turn.tool("list_sessions", {}));
+    const layout = chats.find((chat) => chat.title === "Layout");
+    if (!layout) throw new Error("No layout session to answer");
+    await turn.tool("answer_question", {
+      session_id: layout.session_id,
+      answers: ["Wide"],
+    });
+    yield { type: "text", content: "Told it: wide." };
+    return;
+  }
+
+  // A session the assistant started, writing notes as it works.
+  if (prompt.includes("report as you go")) {
+    yield { type: "text", content: "Reading the docs folder." };
+    yield { type: "tool_call", toolName: "Read", toolInput: { path: "docs" } };
+    // Long enough for the note to reach the assistant before the end.
+    await turn.pause(5_000);
+    yield { type: "text", content: "Two pages are stale." };
+    return;
+  }
+
+  // The assistant passing a session's question on, and the answer back.
+  if (prompt.includes("docs pages: which pages should i keep")) {
+    yield {
+      type: "text",
+      content: "The docs session wants to know which pages to keep.",
+    };
+    return;
+  }
+  if (prompt.includes("keep the new ones")) {
+    const chats = listedChats.parse(await turn.tool("list_sessions", {}));
+    const docs = chats.find((chat) => chat.title === "Docs pages");
+    if (!docs) throw new Error("No docs session to answer");
+    await turn.tool("message_session", {
+      session_id: docs.session_id,
+      message: "Keep the new ones.",
+    });
+    yield { type: "text", content: "I passed that on." };
+    return;
+  }
+
+  // What the person saw as they started speaking (ADR 0265): the turn's
+  // context, and the picture its tool loads.
+  if (prompt.includes("what was on my screen")) {
+    const result = await turn.toolResult("screen_when_spoken", {});
+    const images = result.content.filter((part) => part.type === "image");
+    const text = result.content.find((part) => part.type === "text");
+    const facts: { in?: string } =
+      text?.type === "text" ? JSON.parse(text.text) : {};
+    yield { type: "tool_call", toolName: "screen_when_spoken", toolInput: {} };
+    yield {
+      type: "text",
+      content: `Saw ${images.length} picture in ${facts.in ?? "nothing"}${
+        turn.context.includes("As the person started saying")
+          ? ", as you began"
+          : ""
+      }.`,
+    };
+    return;
+  }
+
+  if (prompt.includes("look at my screen")) {
+    const result = await turn.toolResult("read_tab", { key: "window" });
+    const images = result.content.filter((part) => part.type === "image");
+    const text = result.content.find((part) => part.type === "text");
+    yield {
+      type: "tool_call",
+      toolName: "read_tab",
+      toolInput: { key: "window" },
+    };
+    yield {
+      type: "text",
+      content: `Saw ${images.length} window image: ${text?.type === "text" ? text.text : "nothing"}`,
+    };
+    return;
+  }
+
+  if (prompt.includes("close my questions")) {
+    const report = await turn.tool("close_questions", {});
+    yield {
+      type: "text",
+      content: `Questions: ${typeof report === "string" ? report : JSON.stringify(report)}`,
+    };
+    return;
+  }
+
+  if (prompt.includes("nonblocking question")) {
+    let answer: string[] | undefined;
+    void turn
+      .request({
+        kind: "question",
         blocking: false,
+        title: "Question",
+        origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
         questions: [
           {
             question: "Which accent color should I use?",
@@ -414,461 +1389,429 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
             ],
           },
         ],
-      });
-      yield {
-        type: "text",
-        content: "I am continuing independent work while you decide.",
-      };
-      for (let step = 0; step < 100 && !state.interrupted; step++) {
-        yield {
-          type: "tool_call",
-          toolName: "read",
-          toolInput: { path: "notes.md" },
-        };
-        const input = (await opts?.readPendingMessages?.()) ?? [];
-        if (input.length) {
-          await opts?.acknowledgeMessages?.({
-            ids: input.map((entry) => entry.id),
-          });
-          yield {
-            type: "text",
-            content: `Answer received during the same turn: ${input.map((entry) => entry.content).join("\n")}`,
-          };
-          yield { type: "done" };
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 200));
-      }
-      yield {
-        type: "text",
-        content: "Independent work finished; you can still answer later.",
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    // Attachments echo what arrived (exercises the attachment path). Text
-    // pills additionally echo their source and content so e2e can assert
-    // the model-facing payload, not just the name.
-    if (opts?.attachments && opts.attachments.length > 0) {
-      const names = opts.attachments
-        .map((attachment) => attachment.name)
-        .join(", ");
-      const texts = opts.attachments.filter(
-        (attachment) => attachment.kind === "text",
+      })
+      .then(
+        (response) => {
+          if (response.kind === "question") answer = response.answers;
+        },
+        () => {},
       );
-      yield {
-        type: "title",
-        content: texts.length > 0 ? "Context received" : "Media received",
-      };
-      // The prose as the model would read it: inline markers become
-      // numbered references (the same rendering every real harness uses).
-      yield {
-        type: "text",
-        content: `[prose] ${inlineAttachmentReferences(message, opts.attachments)}`,
-      };
-      yield {
-        type: "text",
-        content: `Received ${opts.attachments.length} attachment${
-          opts.attachments.length > 1 ? "s" : ""
-        }: ${names}`,
-      };
-      for (const attachment of texts) {
-        if (attachment.kind !== "text") continue;
-        yield {
-          type: "text",
-          content: `[text-pill ${attachment.source.type}${
-            attachment.source.type === "selection"
-              ? ` ${attachment.source.filePath}:${attachment.source.startLine ?? "?"}-${attachment.source.endLine ?? "?"}`
-              : ""
-          }] ${attachment.text}`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.startsWith("session workflow ")) {
-      const gateway = opts?.capabilities;
-      if (!gateway) throw new Error("Capability gateway unavailable");
-      const sessionId = state.toolContext.sessionId;
-      if (!sessionId) throw new Error("Session context unavailable");
-      const scenario = prompt.slice("session workflow ".length).trim();
-      const invoke = async (name: string, input: Record<string, unknown>) => {
-        const discovered = await gateway.discover({ query: name });
-        if (!discovered.items.some((item) => item.name === name))
-          throw new Error(`Capability unavailable: ${name}`);
-        return gateway.invoke({ name, input, requestId: crypto.randomUUID() });
-      };
-      if (
-        scenario === "complete" ||
-        scenario === "reopen" ||
-        scenario === "notify" ||
-        scenario === "spawn"
-      ) {
-        const result = await invoke(
-          scenario === "notify"
-            ? "project.send_agent_message"
-            : `project.session_${scenario}`,
-          {
-            sessionId,
-            idempotencyKey: `manual-${scenario}-${crypto.randomUUID()}`,
-            ...(scenario === "complete"
-              ? { content: "The requested work is finished." }
-              : {}),
-            ...(scenario === "notify"
-              ? {
-                  toSessionId: sessionId,
-                  message: "This result needs your attention.",
-                  mode: "message_only",
-                  attention: "required",
-                }
-              : {}),
-            ...(scenario === "spawn"
-              ? {
-                  task: "Report that the delegated check is complete.",
-                  title: "Delegated check",
-                }
-              : {}),
-          },
-        );
-        yield {
-          type: "text",
-          content: `Session ${scenario} recorded. ${JSON.stringify(result)}`,
-        };
-      } else {
-        const name = `session${scenario.replace(/[^a-z]/g, "")}`;
-        const source = sessionWorkflowFixture({ scenario, sessionId, name });
-        const result = z.object({ id: z.string() }).parse(
-          await invoke("project.create_watcher", {
-            workflowName: name,
-            source,
-          }),
-        );
-        yield {
-          type: "text",
-          content: `Created [${scenario} workflow](artifact:${result.id}). It has no automatic expiry and stops after its intended result. Archiving this chat cancels it.`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    if (
-      process.env.CATAMORPHIC_E2E_REVIEW === "1" &&
-      prompt.includes("build an individual interactive code review")
-    ) {
-      const gateway = opts?.capabilities;
-      if (!gateway) throw new Error("Component registry unavailable");
-      const discovered = await gateway.discover({ query: "components" });
-      if (!discovered.items.some((item) => item.name === "components.read"))
-        throw new Error("Component registry was not discoverable");
-      const listed = z.array(z.object({ name: z.string() })).parse(
-        await gateway.invoke({
-          name: "components.read",
-          input: {},
-          requestId: crypto.randomUUID(),
-        }),
-      );
-      if (!listed.some((item) => item.name === "code-review"))
-        throw new Error("Review pack was not listed");
-      const pack = await gateway.invoke({
-        name: "components.read",
-        input: { name: "code-review" },
-        requestId: crypto.randomUUID(),
-      });
+    // A non-blocking question's answer reaches the agent as a message
+    // steered into the turn still working (ADR 0195).
+    void turn.nextSteer().then((input) => {
+      answer ??= [input.text.split("User answer:\n").pop() ?? input.text];
+    });
+    yield {
+      type: "text",
+      content: "I am continuing independent work while you decide.",
+    };
+    for (let step = 0; step < 100 && !turn.interrupted(); step++) {
       yield {
         type: "tool_call",
-        toolName: "invoke_capability",
-        toolInput: { name: "components.read", input: { name: "code-review" } },
-        toolResult: pack,
+        toolName: "read",
+        toolInput: { path: "notes.md" },
       };
-      const input = {
-        action: "create",
-        kind: "app",
-        name: "review",
-        title: "Validate input before processing",
-        source: reviewAppSource,
-        files: reviewAppFiles(pack),
+      if (answer) {
+        yield {
+          type: "text",
+          content: `Answer received during the same turn: ${answer.join("\n")}`,
+        };
+        return;
+      }
+      await turn.pause(200);
+    }
+    yield {
+      type: "text",
+      content: "Independent work finished; you can still answer later.",
+    };
+    return;
+  }
+
+  // A skill the person put in the message (ADR 0274) runs as its sentence
+  // does below: the REAL read_skill tool (or a harness's own skill file),
+  // the message's other words as its instructions. The rest of the
+  // attachments then echo as usual.
+  for (const attachment of turn.attachments) {
+    if (attachment.kind !== "text" || attachment.source.type !== "skill")
+      continue;
+    const { name, path: skillPath } = attachment.source;
+    const instructions = inlineAttachmentReferences(
+      message,
+      turn.attachments,
+      (_index, each) =>
+        each.kind === "text" && each.source.type === "skill"
+          ? ""
+          : `[${each.name}]`,
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (skillPath) {
+      yield {
+        type: "text",
+        content: `native skill loaded: ${fs.readFileSync(skillPath, "utf8").trim()} | ${instructions}`,
       };
-      const artifacts = await gateway.discover({ query: "session_artifact" });
-      if (
-        !artifacts.items.some(
-          (item) => item.name === "project.session_artifact",
-        )
-      )
-        throw new Error("Session artifacts were not discoverable");
-      const body = await gateway.invoke({
-        name: "project.session_artifact",
-        input: { ...input, icon: "review" },
-        requestId: crypto.randomUUID(),
-      });
+      continue;
+    }
+    try {
       const result = z
         .object({
-          target: z.string(),
-          build: z.object({
-            status: z.enum(["building", "ready", "failed"]),
-            error: z.string().nullish(),
-          }),
+          source: z.string().optional(),
+          content: z.string().optional(),
         })
-        .parse(body);
-      if (result.build.status !== "ready")
-        throw new Error(
-          result.build.error ?? "Review fixture build did not finish",
-        );
-      yield {
-        type: "tool_call",
-        toolName: "invoke_capability",
-        toolInput: { name: "project.session_artifact", input },
-        toolResult: body,
-      };
+        .parse(await turn.tool("read_skill", { name }));
       yield {
         type: "text",
-        content: `[Open review](${result.target})`,
+        content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)${instructions ? ` | ${instructions}` : ""}`,
       };
-      yield { type: "done" };
-      return;
-    }
-
-    // "read the editor": overview → active editor tab → read_tab, echoing
-    // the live selection the bridge exposes (agent-side selection path).
-    if (prompt.includes("read the editor")) {
-      const overviewTool = workspaceTools.find(
-        (candidate) => candidate.name === "workspace_overview",
-      );
-      const readTool = workspaceTools.find(
-        (candidate) => candidate.name === "read_tab",
-      );
-      if (!overviewTool || !readTool) {
-        yield { type: "error", content: "workspace tools unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "title", content: "Reading the editor" };
-      const overview = (await overviewTool.execute({}, state.toolContext)) as {
-        tabs?: Array<{ key: string; kind?: string; active?: boolean }>;
-        activeTabKey?: string;
-      };
-      const tabs = overview.tabs ?? [];
-      const editor =
-        tabs.find(
-          (tab) =>
-            tab.kind === "editor" &&
-            (tab.active || tab.key === overview.activeTabKey),
-        ) ?? tabs.find((tab) => tab.kind === "editor");
-      if (!editor) {
-        yield { type: "text", content: "No editor tab is open." };
-        yield { type: "done" };
-        return;
-      }
-      const detail = (await readTool.execute(
-        { key: editor.key },
-        state.toolContext,
-      )) as {
-        filePath?: string;
-        selection?: { text?: string; startLine?: number; endLine?: number };
-      };
+    } catch (error) {
       yield {
         type: "text",
-        content: detail.selection
-          ? `[editor ${detail.filePath}:${detail.selection.startLine ?? "?"}-${detail.selection.endLine ?? "?"}] ${detail.selection.text ?? ""}`
-          : `[editor ${detail.filePath}] no selection`,
+        content: `skill error: ${error instanceof Error ? error.message : String(error)}`,
       };
-      yield { type: "done" };
-      return;
     }
+  }
 
-    if (state.askedQuestion) {
-      state.askedQuestion = false;
-      yield { type: "text", content: `Got it, noted: ${message}` };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("clear todo list")) {
-      const updateTodos = workspaceTools.find(
-        (candidate) => candidate.name === "update_todo_list",
-      );
-      if (!updateTodos) {
-        yield { type: "error", content: "todo tools unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      const input = { items: [] };
-      const result = await updateTodos.execute(input, state.toolContext);
-      yield {
-        type: "tool_call",
-        toolName: "update_todo_list",
-        toolInput: input,
-        toolResult: result,
-      };
-      yield { type: "text", content: "I cleared the progress list." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("todo list")) {
-      const updateTodos = workspaceTools.find(
-        (candidate) => candidate.name === "update_todo_list",
-      );
-      if (!updateTodos) {
-        yield { type: "error", content: "todo tools unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      const input = {
-        items: [
-          {
-            title: "Inspect the project",
-            description:
-              "Read the existing implementation and identify the right extension points.",
-            status: "completed",
-          },
-          {
-            title: "Verify the result",
-            description:
-              "Run the focused tests and confirm the user-facing behavior.",
-            status: "in_progress",
-          },
-        ],
-      };
-      const result = await updateTodos.execute(input, state.toolContext);
-      yield {
-        type: "tool_call",
-        toolName: "update_todo_list",
-        toolInput: input,
-        toolResult: result,
-      };
-      yield { type: "text", content: "I added a progress list to this chat." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("ask me") && prompt.includes("question")) {
-      state.askedQuestion = true;
-      yield { type: "title", content: "Getting to know you" };
+  // Attachments echo what arrived (exercises the attachment path). Text
+  // pills additionally echo their source and content so e2e can assert
+  // the model-facing payload, not just the name.
+  if (turn.attachments.length > 0) {
+    const names = turn.attachments
+      .map((attachment) => attachment.name)
+      .join(", ");
+    const texts = turn.attachments.filter(
+      (attachment) => attachment.kind === "text",
+    );
+    yield {
+      type: "title",
+      content: texts.length > 0 ? "Context received" : "Media received",
+    };
+    // The prose as the model would read it: inline markers become
+    // numbered references (the same rendering every real harness uses).
+    yield {
+      type: "text",
+      content: `[prose] ${inlineAttachmentReferences(message, turn.attachments)}`,
+    };
+    yield {
+      type: "text",
+      content: `Received ${turn.attachments.length} attachment${
+        turn.attachments.length > 1 ? "s" : ""
+      }: ${names}`,
+    };
+    for (const attachment of texts) {
+      if (attachment.kind !== "text") continue;
       yield {
         type: "text",
-        content: "Happy to! A couple of quick questions first.",
+        content: `[text-pill ${attachment.source.type}${
+          attachment.source.type === "selection"
+            ? ` ${attachment.source.filePath}:${attachment.source.startLine ?? "?"}-${attachment.source.endLine ?? "?"}`
+            : ""
+        }] ${attachment.text}`,
       };
-      yield {
-        type: "question",
-        questions: [
-          {
-            question: "What is your favorite color?",
-            header: "Color",
-            multiSelect: false,
-            options: [
-              { label: "Orange", description: "Warm and energetic." },
-              { label: "Blue", description: "Calm and steady." },
-            ],
-          },
-          {
-            question: "Cats or dogs?",
-            header: "Pets",
-            multiSelect: false,
-            options: [
-              { label: "Cats", description: "Independent companions." },
-              { label: "Dogs", description: "Loyal companions." },
-            ],
-          },
-        ],
-      };
-      yield { type: "done" };
-      return;
     }
+    return;
+  }
 
-    // "subagent" → a delegated worker with nested activity (exercises the
-    // subagent chip, its spinner while working, and the info popover).
-    if (prompt.includes("subagent")) {
-      yield { type: "title", content: "Delegating" };
-      yield { type: "text", content: "I'll hand this to a reviewer." };
-      yield {
-        type: "subagent",
-        status: "started",
-        subagentId: "fake-task-1",
-        subagentType: "code-reviewer",
-        content: "Review the changes",
-      };
-      // Split the subagent's start and its later activity across preambles.
-      yield { type: "text", content: "The reviewer is checking the details." };
-      yield {
-        type: "tool_call",
-        toolName: "Grep",
-        toolInput: { pattern: "TODO" },
-        subagentId: "fake-task-1",
-      };
-      yield {
-        type: "command",
-        content: "bun test",
-        subagentId: "fake-task-1",
-      };
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      yield { type: "subagent", status: "ended", subagentId: "fake-task-1" };
-      yield { type: "text", content: "The reviewer found nothing alarming." };
-      yield { type: "done" };
-      return;
-    }
-
-    // "watcher" → a background process the agent started (exercises the
-    // watcher chip that persists across turns).
-    if (prompt.includes("watcher")) {
-      yield { type: "title", content: "Background work" };
-      yield { type: "text", content: "Starting the dev server for you." };
-      yield {
-        type: "background",
-        status: "started",
-        backgroundId: "fake-bg-1",
-        content: "npm run dev",
-      };
-      yield { type: "text", content: "It's running in the background." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("prepare pdf")) {
-      await this.sandboxProvider.uploadFiles(
-        state.sandboxId,
-        { "artifact.pdf": pdfArtifactSource },
-        state.workingDirectory,
-      );
-      yield { type: "file_edit", content: "write", filePath: "artifact.pdf" };
-      yield { type: "text", content: "PDF prepared." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("build contained app")) {
-      const build = workspaceTools.find((tool) => tool.name === "build_app");
-      if (!build) throw new Error("App building is unavailable");
-      const result = await build.execute(
-        { name: "catalog" },
-        state.toolContext,
-      );
-      yield {
-        type: "text",
-        content: `Catalog build: ${JSON.stringify(result)}`,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("contained workspace")) {
-      await this.sandboxProvider.uploadFiles(
-        state.sandboxId,
+  if (prompt.startsWith("session workflow ")) {
+    const sessionId = turn.sessionId;
+    const scenario = prompt.slice("session workflow ".length).trim();
+    if (
+      scenario === "complete" ||
+      scenario === "reopen" ||
+      scenario === "notify" ||
+      scenario === "spawn"
+    ) {
+      const result = await turn.capability(
+        scenario === "notify"
+          ? "project.send_agent_message"
+          : `project.session_${scenario}`,
         {
-          ...workspaceFiles({ name: "contained-capabilities" }),
-          ...appScaffold({ name: "catalog" }),
-          ".catamorphic/apps/catalog/src/app.tsx":
-            "export function App() { return <main><h1>Catalog</h1><p>The contained workspace is ready.</p></main>; }\n",
-          ".catamorphic/workflows/src/catalog.ts": `import { defineWorkflow } from "@catamorphic/workflow";
+          sessionId,
+          idempotencyKey: `manual-${scenario}-${randomUUID()}`,
+          ...(scenario === "complete"
+            ? { content: "The requested work is finished." }
+            : {}),
+          ...(scenario === "notify"
+            ? {
+                toSessionId: sessionId,
+                message: "This result needs your attention.",
+                mode: "message_only",
+                attention: "required",
+              }
+            : {}),
+          ...(scenario === "spawn"
+            ? {
+                task: "Report that the delegated check is complete.",
+                title: "Delegated check",
+              }
+            : {}),
+        },
+      );
+      yield {
+        type: "text",
+        content: `Session ${scenario} recorded. ${JSON.stringify(result)}`,
+      };
+    } else {
+      const name = `session${scenario.replace(/[^a-z]/g, "")}`;
+      const source = sessionWorkflowFixture({ scenario, sessionId, name });
+      const result = z.object({ id: z.string() }).parse(
+        await turn.capability("project.create_watcher", {
+          workflowName: name,
+          source,
+        }),
+      );
+      yield {
+        type: "text",
+        content: `Created [${scenario} workflow](artifact:${result.id}). It has no automatic expiry and stops after its intended result. Archiving this chat cancels it.`,
+      };
+    }
+    return;
+  }
+
+  if (
+    process.env.CATAMORPHIC_E2E_REVIEW === "1" &&
+    prompt.includes("build an individual interactive code review")
+  ) {
+    const discovered = await turn.discover("registry");
+    if (!discovered.items.some((item) => item.name === "registry.read"))
+      throw new Error("The pack registry was not discoverable");
+    const listed = z
+      .array(z.object({ name: z.string() }))
+      .parse(await turn.capability("registry.read", {}));
+    if (!listed.some((item) => item.name === "code-review"))
+      throw new Error("Review pack was not listed");
+    const pack = await turn.capability("registry.read", {
+      name: "code-review",
+    });
+    yield {
+      type: "tool_call",
+      toolName: "invoke_capability",
+      toolInput: { name: "registry.read", input: { name: "code-review" } },
+      toolResult: pack,
+    };
+    const input = {
+      action: "create",
+      kind: "app",
+      name: "review",
+      title: "Validate input before processing",
+      source: reviewAppSource,
+      files: reviewAppFiles(pack),
+    };
+    const artifacts = await turn.discover("session_artifact");
+    if (
+      !artifacts.items.some((item) => item.name === "project.session_artifact")
+    )
+      throw new Error("Session artifacts were not discoverable");
+    const body = await turn.capability("project.session_artifact", {
+      ...input,
+      icon: "review",
+    });
+    const result = z
+      .object({
+        target: z.string(),
+        build: z.object({
+          status: z.enum(["building", "ready", "failed"]),
+          error: z.string().nullish(),
+        }),
+      })
+      .parse(body);
+    if (result.build.status !== "ready")
+      throw new Error(
+        result.build.error ?? "Review fixture build did not finish",
+      );
+    yield {
+      type: "tool_call",
+      toolName: "invoke_capability",
+      toolInput: { name: "project.session_artifact", input },
+      toolResult: body,
+    };
+    yield { type: "text", content: `[Open review](${result.target})` };
+    return;
+  }
+
+  // "read the editor": overview → active editor tab → read_tab, echoing
+  // the live selection the bridge exposes (agent-side selection path).
+  if (prompt.includes("read the editor")) {
+    yield { type: "title", content: "Reading the editor" };
+    const overview = z
+      .object({
+        tabs: z
+          .array(
+            z.object({
+              key: z.string(),
+              kind: z.string().optional(),
+              active: z.boolean().optional(),
+            }),
+          )
+          .optional(),
+        activeTabKey: z.string().optional(),
+      })
+      .parse(await turn.tool("workspace_overview", {}));
+    const tabs = overview.tabs ?? [];
+    const editor =
+      tabs.find(
+        (tab) =>
+          tab.kind === "editor" &&
+          (tab.active || tab.key === overview.activeTabKey),
+      ) ?? tabs.find((tab) => tab.kind === "editor");
+    if (!editor) {
+      yield { type: "text", content: "No editor tab is open." };
+      return;
+    }
+    const detail = z
+      .object({
+        filePath: z.string().optional(),
+        selection: z
+          .object({
+            text: z.string().optional(),
+            startLine: z.number().optional(),
+            endLine: z.number().optional(),
+          })
+          .optional(),
+      })
+      .parse(await turn.tool("read_tab", { key: editor.key }));
+    yield {
+      type: "text",
+      content: detail.selection
+        ? `[editor ${detail.filePath}:${detail.selection.startLine ?? "?"}-${detail.selection.endLine ?? "?"}] ${detail.selection.text ?? ""}`
+        : `[editor ${detail.filePath}] no selection`,
+    };
+    return;
+  }
+
+  if (turn.askedQuestion) {
+    turn.askedQuestion = false;
+    yield { type: "text", content: `Got it, noted: ${message}` };
+    return;
+  }
+
+  if (prompt.includes("clear todo list")) {
+    const input = { items: [] };
+    const result = await turn.tool("update_todo_list", input);
+    yield {
+      type: "tool_call",
+      toolName: "update_todo_list",
+      toolInput: input,
+      toolResult: result,
+    };
+    yield { type: "text", content: "I cleared the progress list." };
+    return;
+  }
+
+  if (prompt.includes("todo list")) {
+    const input = {
+      items: [
+        {
+          title: "Inspect the project",
+          description:
+            "Read the existing implementation and identify the right extension points.",
+          status: "completed",
+        },
+        {
+          title: "Verify the result",
+          description:
+            "Run the focused tests and confirm the user-facing behavior.",
+          status: "in_progress",
+        },
+      ],
+    };
+    const result = await turn.tool("update_todo_list", input);
+    yield {
+      type: "tool_call",
+      toolName: "update_todo_list",
+      toolInput: input,
+      toolResult: result,
+    };
+    yield { type: "text", content: "I added a progress list to this chat." };
+    return;
+  }
+
+  if (prompt.includes("ask me") && prompt.includes("question")) {
+    turn.askedQuestion = true;
+    yield { type: "title", content: "Getting to know you" };
+    yield {
+      type: "text",
+      content: "Happy to! A couple of quick questions first.",
+    };
+    yield {
+      type: "question",
+      questions: [
+        {
+          question: "What is your favorite color?",
+          header: "Color",
+          multiSelect: false,
+          options: [
+            { label: "Orange", description: "Warm and energetic." },
+            { label: "Blue", description: "Calm and steady." },
+          ],
+        },
+        {
+          question: "Cats or dogs?",
+          header: "Pets",
+          multiSelect: false,
+          options: [
+            { label: "Cats", description: "Independent companions." },
+            { label: "Dogs", description: "Loyal companions." },
+          ],
+        },
+      ],
+    };
+    return;
+  }
+
+  // "subagent" → a delegated worker with nested activity (exercises the
+  // subagent chip, its spinner while working, and the info popover).
+  if (prompt.includes("subagent")) {
+    yield { type: "title", content: "Delegating" };
+    yield { type: "text", content: "I'll hand this to a reviewer." };
+    yield {
+      type: "subagent",
+      status: "started",
+      subagentId: "fake-task-1",
+      subagentType: "code-reviewer",
+      content: "Review the changes",
+    };
+    // Split the subagent's start and its later activity across preambles.
+    yield { type: "text", content: "The reviewer is checking the details." };
+    yield {
+      type: "tool_call",
+      toolName: "Grep",
+      toolInput: { pattern: "TODO" },
+      subagentId: "fake-task-1",
+    };
+    yield { type: "command", content: "bun test", subagentId: "fake-task-1" };
+    await turn.pause(800);
+    yield { type: "subagent", status: "ended", subagentId: "fake-task-1" };
+    yield { type: "text", content: "The reviewer found nothing alarming." };
+    return;
+  }
+
+  if (prompt.includes("prepare pdf")) {
+    await turn.writeFiles({ "artifact.pdf": pdfArtifactSource });
+    yield { type: "file_edit", content: "write", filePath: "artifact.pdf" };
+    yield { type: "text", content: "PDF prepared." };
+    return;
+  }
+
+  if (prompt.includes("build contained app")) {
+    const result = await turn.tool("build_app", { name: "catalog" });
+    yield { type: "text", content: `Catalog build: ${JSON.stringify(result)}` };
+    return;
+  }
+
+  if (prompt.includes("contained workspace")) {
+    await turn.writeFiles({
+      ...workspaceFiles({ name: "contained-capabilities" }),
+      ...appScaffold({ name: "catalog" }),
+      ".work/apps/catalog/src/app.tsx":
+        "export function App() { return <main><h1>Catalog</h1><p>The contained workspace is ready.</p></main>; }\n",
+      ".work/workflows/src/catalog.ts": `import { defineWorkflow } from "@catamorphic/workflow";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 /** @displayname Save catalog
  * @param name - @displayname Catalog name
  */
 async function saveCatalog({ name }: { name: string }) {
   "use step";
-  const root = process.env.CATAMORPHIC_APP_DATA_DIR;
+  const root = process.env.WORK_APP_DATA_DIR;
   if (!root) throw new Error("Persistent project data is unavailable");
   const directory = root + "/" + name;
   await mkdir(directory, { recursive: true });
@@ -881,645 +1824,978 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   steps: [defineBoundary({ run: async () => saveCatalog({ name: "catalog" }) })],
 }));
 `,
-        },
-        state.workingDirectory,
-      );
-      const data = projectDataDirectory({ root: state.workingDirectory });
-      fs.mkdirSync(path.join(data, "catalog"), { recursive: true });
-      fs.writeFileSync(path.join(data, "catalog", "items.json"), "[]\n");
-      yield {
-        type: "text",
-        content:
-          "Created the workflow, app, and local data inside .catamorphic/. [Open catalog](catamorphic://workflow/catalog).",
-      };
-      yield { type: "done" };
-      return;
-    }
+    });
+    const data = projectDataDirectory({ root: turn.workingDirectory });
+    fs.mkdirSync(path.join(data, "catalog"), { recursive: true });
+    fs.writeFileSync(path.join(data, "catalog", "items.json"), "[]\n");
+    yield {
+      type: "text",
+      content:
+        "Created the workflow, app, and local data inside .work/. [Open catalog](catamorphic://workflow/catalog).",
+    };
+    return;
+  }
 
-    if (prompt.includes("artifact links")) {
-      const files = {
-        "artifact.pdf": pdfArtifactSource,
-        "linked-notes.md":
-          "# Linked notes\n\nAn artifact opened from an agent reply.\n",
-        "linked-source.ts":
-          "// Linked source\nexport const first = 1;\nexport const second = 2;\n",
-        ".catamorphic/workflows/linked-workflow.ts":
-          'import { defineWorkflow } from "@catamorphic/workflow";\n/** @displayname Make greeting\n * @param name - @displayname Name\n */\nasync function greet({ name }: { name: string }) { "use step"; return { greeting: "Hello " + name }; }\n/** @displayname Linked workflow */\nexport const linkedWorkflow = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => greet({ name: "World" }) })] }));\n',
-        ".catamorphic/apps/linked-app/package.json":
-          '{"name":"linked-app","catamorphic":{"displayName":"Linked app"}}',
-      };
-      await this.sandboxProvider.uploadFiles(
-        state.sandboxId,
-        files,
-        state.workingDirectory,
-      );
-      for (const filePath of Object.keys(files))
-        yield { type: "file_edit" as const, content: "write", filePath };
-      yield {
-        type: "text",
-        content:
-          "[Read linked notes](file:linked-notes.md) [Inspect linked source](file:linked-source.ts:3) [Open linked graph](workflow:linkedWorkflow) [Open linked app](app:linked-app) [Read linked PDF](file:artifact.pdf)",
-      };
-      yield { type: "done" };
-      return;
-    }
+  if (prompt.includes("artifact links")) {
+    const files = {
+      "artifact.pdf": pdfArtifactSource,
+      "linked-notes.md":
+        "# Linked notes\n\nAn artifact opened from an agent reply.\n",
+      "linked-source.ts":
+        "// Linked source\nexport const first = 1;\nexport const second = 2;\n",
+      ".work/workflows/linked-workflow.ts":
+        'import { defineWorkflow } from "@catamorphic/workflow";\n/** @displayname Make greeting\n * @param name - @displayname Name\n */\nasync function greet({ name }: { name: string }) { "use step"; return { greeting: "Hello " + name }; }\n/** @displayname Linked workflow */\nexport const linkedWorkflow = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => greet({ name: "World" }) })] }));\n',
+      ".work/apps/linked-app/package.json":
+        '{"name":"linked-app","catamorphic":{"displayName":"Linked app"}}',
+    };
+    await turn.writeFiles(files);
+    for (const filePath of Object.keys(files))
+      yield { type: "file_edit", content: "write", filePath };
+    yield {
+      type: "text",
+      content:
+        "[Read linked notes](file:linked-notes.md) [Inspect linked source](file:linked-source.ts:3) [Open linked graph](workflow:linkedWorkflow) [Open linked app](app:linked-app) [Read linked PDF](file:artifact.pdf)",
+    };
+    return;
+  }
 
-    if (prompt.includes("preamble")) {
-      yield { type: "title", content: "Preamble exercise" };
-      yield { type: "text", content: "First, I will look at the project." };
-      yield { type: "command", content: "ls" };
-      yield { type: "text", content: "Found it. Now writing some notes." };
-      yield { type: "file_edit", content: "write", filePath: "NOTES.md" };
-      await this.sandboxProvider.uploadFiles(
-        state.sandboxId,
-        { "NOTES.md": "notes from the fake agent\n" },
-        state.workingDirectory,
-      );
-      yield { type: "text", content: "All done: two preambles, one summary." };
-      yield { type: "done" };
-      return;
-    }
-
-    // "slowly" → a multi-second turn, so tests can exercise mid-turn UI
-    // (spinners, minimize, mode flips, queueing, interrupts) before the
-    // agent completes. Interruptible: the sleep polls the abort flag.
-    if (prompt.includes("slowly")) {
+  // The live line (e2e/chat-live-line.e2e.ts): the agent's own words from
+  // its thinking hold it through their steps, a step's description fills it
+  // when the agent said nothing, and a bare command gets Work's verb.
+  if (prompt.includes("live line")) {
+    yield { type: "title", content: "Parser fix" };
+    const step = async function* (
+      id: string,
+      command: string,
+      description?: string,
+    ): AsyncGenerator<FakeStep> {
+      yield { type: "command", content: command, description, toolUseId: id };
+      await turn.pause(1400);
       yield {
-        type: "title",
-        content: prompt.includes("private-marker")
-          ? "Private marker"
-          : "Slow burn",
+        type: "command",
+        status: "ended",
+        toolUseId: id,
+        toolResult: "ok",
       };
-      yield { type: "text", content: "Working on it, give me a moment." };
-      yield { type: "command", content: "sleep" };
-      // Hidden Chromium renderers can throttle DOM updates heavily on loaded
-      // CI runners. Keep the interruption fixture alive long enough for its
-      // send-now control to render; ordinary slow-turn tests retain 4 seconds.
-      const delayMs = prompt.includes("hold for coordination")
+    };
+    yield {
+      type: "thinking",
+      content: "**Reading the parser**\n\nThe walk may skip nested scopes.",
+      said: "Reading the parser",
+    };
+    yield {
+      type: "text",
+      content: "I'll start with how the parser walks nested scopes.",
+    };
+    yield* step(
+      "live-1",
+      "rg -n walk src/parser",
+      "Find where the parser walks scopes",
+    );
+    yield* step("live-2", "sed -n 1,80p src/parser/walk.ts", "Read the walker");
+    yield { type: "thinking", content: "" };
+    yield {
+      type: "text",
+      content:
+        "Found it: the walker never descends into nested scopes. Fixing it now.",
+    };
+    yield* step("live-3", "bun test parser", "Run the parser tests");
+    yield* step("live-4", "git diff --stat");
+    yield {
+      type: "text",
+      content:
+        "Fixed: the walker now descends into nested scopes, and the parser tests pass.",
+    };
+    return;
+  }
+
+  if (prompt.includes("preamble")) {
+    yield { type: "title", content: "Preamble exercise" };
+    yield { type: "text", content: "First, I will look at the project." };
+    yield { type: "command", content: "ls" };
+    yield { type: "text", content: "Found it. Now writing some notes." };
+    yield { type: "file_edit", content: "write", filePath: "NOTES.md" };
+    await turn.writeFiles({ "NOTES.md": "notes from the fake agent\n" });
+    yield { type: "text", content: "All done: two preambles, one summary." };
+    return;
+  }
+
+  // A long settled log, without shell or provider IO: used to verify that
+  // folded history releases its rows and details after their exit.
+  if (prompt === "retained history fixture") {
+    yield { type: "title", content: "Retained history" };
+    for (let index = 0; index < 500; index += 1) {
+      yield {
+        type: "command",
+        content: `Read fixture document ${index}`,
+        description: `Read fixture document ${index}`,
+        toolUseId: `retained-${index}`,
+      };
+      yield {
+        type: "command",
+        status: "ended",
+        toolUseId: `retained-${index}`,
+        toolResult: `Document ${index}\n${"Fixture content\n".repeat(60)}`,
+      };
+    }
+    yield { type: "text", content: "Finished reading the fixture documents." };
+    return;
+  }
+
+  // Resource measurements: a turn shaped like a real one — many short
+  // steps with changing activity, a long quiet step, then a long answer
+  // streamed in small chunks, as a model writes it.
+  if (prompt.includes("perf turn")) {
+    const setting = (name: string, fallback: number) =>
+      Number(new RegExp(`${name}=(\\d+)`).exec(prompt)?.[1] ?? fallback);
+    yield { type: "title", content: "Performance turn" };
+    const steps = setting("steps", 24);
+    for (let index = 0; index < steps && !turn.interrupted(); index += 1) {
+      if (index % 4 === 0)
+        yield {
+          type: "text",
+          content: `Checking part ${index / 4 + 1} of the parser before changing it.`,
+        };
+      const toolUseId = `perf-${index}`;
+      yield {
+        type: "command",
+        content: `rg -n 'token${index}' src`,
+        description: `Search for token ${index}`,
+        toolUseId,
+      };
+      await turn.pause(250);
+      yield {
+        type: "command",
+        toolUseId,
+        status: "ended",
+        toolResult: `src/parser.ts:${index}: token${index}`,
+      };
+    }
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      content: "bun test",
+      description: "Run every test",
+      toolUseId: "perf-quiet",
+    };
+    await turn.pause(setting("quiet", 8) * 1000);
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      toolUseId: "perf-quiet",
+      status: "ended",
+      toolResult: "120 passed",
+    };
+    const answer = PERF_ANSWER;
+    const chunkMs = 40;
+    const chunks = Math.max(
+      1,
+      Math.floor((setting("stream", 12) * 1000) / chunkMs),
+    );
+    const size = Math.ceil(answer.length / chunks);
+    for (let at = 0; at < answer.length; at += size) {
+      if (turn.interrupted()) return;
+      yield { type: "text_delta", content: answer.slice(at, at + size) };
+      await turn.pause(chunkMs);
+    }
+    return;
+  }
+  if (prompt.includes("perf answer")) {
+    yield { type: "title", content: "Performance history" };
+    yield { type: "text", content: PERF_ANSWER.slice(0, 1_800) };
+    return;
+  }
+
+  // "pace the work" → an even, longer turn for watching the chat move: a
+  // note, a beat, then a dozen commands whose programs each change the live
+  // line (and carry the step count past ten), optionally a note every four
+  // ("with notes") and a silence past the stall notice ("then go quiet"),
+  // then an answer streamed a few words at a time.
+  if (prompt.includes("pace the work")) {
+    yield { type: "title", content: "Paced work" };
+    yield {
+      type: "text",
+      content: "Reading the parser and its callers first.",
+    };
+    // A beat: the note settles before the first step takes the turn
+    // line's place.
+    await turn.pause(1_000);
+    const commands: Array<[string, string]> = [
+      ["cat src/parser.ts", "Read the parser"],
+      ["rg -n 'parse(' src", "Find the parser's callers"],
+      ["ls src/fixtures", "List the fixtures"],
+      ["git log -5 --oneline src/parser.ts", "Read the parser's history"],
+      ["bun test src/parser.test.ts", "Run the parser tests"],
+      ["cat src/lexer.ts", "Read the lexer"],
+      ["make lint", "Lint the sources"],
+      ["curl -s localhost:4100/health", "Check the dev server"],
+      ["vitest run src/lexer.test.ts", "Run the lexer tests"],
+      ["node scripts/check-fixtures.js", "Check the fixtures"],
+      ["find src -name '*.test.ts'", "Find every test"],
+      ["python3 tools/coverage.py", "Measure the coverage"],
+    ];
+    const notes = [
+      "The parser is fine. The lexer drops empty input.",
+      "Fixed the lexer. Checking the fixtures and coverage.",
+    ];
+    const pace = prompt.includes("quickly") ? 350 : 800;
+    for (const [index, [command, description]] of commands.entries()) {
+      if (turn.interrupted()) return;
+      if (prompt.includes("with notes") && index > 0 && index % 4 === 0)
+        yield { type: "text", content: notes[index / 4 - 1] ?? "Still going." };
+      const toolUseId = `pace-${index}`;
+      yield { type: "command", content: command, description, toolUseId };
+      await turn.pause(pace);
+      yield { type: "command", toolUseId, status: "ended", toolResult: "ok" };
+    }
+    // A throttled renderer measures actual frames, not how many frames a
+    // fixed server-side sleep happened to permit on this runner.
+    const paceGate = process.env.CATAMORPHIC_E2E_PACE_GATE;
+    if (prompt.includes("measured frames") && paceGate) {
+      const deadline = Date.now() + 60_000;
+      while (fs.existsSync(paceGate) && !turn.interrupted()) {
+        if (Date.now() > deadline)
+          throw new Error("The motion sampler did not release the answer");
+        await turn.pause(20);
+      }
+    }
+    if (prompt.includes("then go quiet")) await turn.pause(33_000);
+    if (turn.interrupted()) return;
+    const answer = [
+      "Fixed: the lexer now keeps empty input, so the parser returns an empty list instead of throwing.\n\n",
+      "What changed:\n\n",
+      "- `src/lexer.ts` returns no tokens for an empty string.\n",
+      "- `src/parser.ts` treats no tokens as an empty program.\n",
+      "- A fixture covers both, and the coverage report is back above ninety percent.\n\n",
+      "Every test passes, and the dev server answers its health check.",
+      // "at length" → a long Markdown answer, for the cost of streaming one.
+      ...(prompt.includes("at length")
+        ? Array.from(
+            { length: 12 },
+            (_, n) =>
+              `\n\n## Part ${n + 1}\n\nThe lexer reads part ${n + 1} of the input one token at a time, and the parser builds a node for each statement it finds.\n\n- Tokens keep their offsets.\n- Errors name the line.\n\n\`\`\`ts\nconst part${n + 1} = parse(lex(input));\n\`\`\``,
+          )
+        : []),
+    ]
+      .join("")
+      .split(/(?<= )/);
+    for (let at = 0; at < answer.length; at += 3) {
+      if (turn.interrupted()) return;
+      yield { type: "text_delta", content: answer.slice(at, at + 3).join("") };
+      await turn.pause(45);
+    }
+    return;
+  }
+
+  if (prompt.includes("narrate")) {
+    yield { type: "title", content: "Narrated fix" };
+    yield { type: "text", content: "First, I will read the parser." };
+    yield {
+      type: "tool_call",
+      toolName: "Read",
+      toolInput: { file_path: "src/parser.ts" },
+      toolUseId: "narrate-read",
+    };
+    await turn.pause(600);
+    yield { type: "tool_call", toolUseId: "narrate-read", status: "ended" };
+    yield { type: "text", content: "Found the bug. Fixing it, then testing." };
+    yield { type: "file_edit", content: "edit", filePath: "src/parser.ts" };
+    await turn.writeFiles({
+      "src/parser.ts": "export const parse = (input = '') => input;\n",
+    });
+    yield {
+      type: "command",
+      content: "bun test",
+      description: "Run the tests",
+      toolUseId: "narrate-test",
+    };
+    await turn.pause(prompt.includes("stall") ? 45_000 : 3500);
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      toolUseId: "narrate-test",
+      status: "ended",
+      toolResult: "12 passed",
+    };
+    yield { type: "text", content: "Fixed: the parser handles empty input." };
+    return;
+  }
+
+  // "step by step" → a paced turn of notes and commands, so the live
+  // work can be watched (and filmed) as each step joins the list.
+  if (prompt.includes("step by step")) {
+    yield { type: "title", content: "Step by step" };
+    // Each command carries its own words, as a harness's do: the live
+    // line (and the running row's text) changes with every step.
+    const segments = [
+      {
+        note: "Reading the parser and its tests first.",
+        commands: [
+          ["cat src/parser.ts", "Read the parser"],
+          ["cat src/lexer.ts", "Read the lexer"],
+          ["bun test src/parser.test.ts", "Run the parser tests"],
+        ],
+      },
+      {
+        note: "The lexer drops empty input. Checking every caller.",
+        commands: [
+          ["rg -n 'lex\\(' src", "Find the lexer's callers"],
+          ["cat src/cli.ts", "Read the CLI entry"],
+          ["bun test", "Run every test"],
+        ],
+      },
+    ];
+    for (const [index, segment] of segments.entries()) {
+      if (turn.interrupted()) break;
+      yield { type: "text", content: segment.note };
+      for (const [step, [command, description]] of segment.commands.entries()) {
+        const toolUseId = `step-${index}-${step}`;
+        yield { type: "command", content: command, description, toolUseId };
+        await turn.pause(900);
+        yield { type: "command", toolUseId, status: "ended", toolResult: "ok" };
+        if (turn.interrupted()) break;
+      }
+    }
+    if (turn.interrupted()) return;
+    yield { type: "text", content: "Fixed: empty input parses to nothing." };
+    return;
+  }
+
+  // "slowly" → a multi-second turn, so tests can exercise mid-turn UI
+  // (spinners, minimize, mode flips, queueing, interrupts) before the
+  // agent completes. Interruptible.
+  if (prompt.includes("slowly")) {
+    yield {
+      type: "title",
+      content: prompt.includes("private-marker")
+        ? "Private marker"
+        : "Slow burn",
+    };
+    yield { type: "text", content: "Working on it, give me a moment." };
+    yield { type: "command", content: "sleep" };
+    // Hidden Chromium renderers can throttle DOM updates heavily on loaded
+    // CI runners. Keep the interruption fixture alive long enough for its
+    // send-now control to render; ordinary slow-turn tests retain 4 seconds.
+    await turn.pause(
+      prompt.includes("hold for coordination")
         ? 90_000
         : prompt.includes("wait for interruption")
           ? 30_000
-          : 4000;
-      const deadline = Date.now() + delayMs;
-      while (Date.now() < deadline && !state.interrupted) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      if (state.interrupted) {
-        yield { type: "error", content: "Interrupted." };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "text", content: "Done after a long think." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("coordinate worktree")) {
-      const listSessions = workspaceTools.find(
-        (candidate) => candidate.name === "list_project_sessions",
-      );
-      const createWorktree = workspaceTools.find(
-        (candidate) => candidate.name === "create_worktree",
-      );
-      if (!listSessions || !createWorktree) {
-        yield { type: "error", content: "coordination tools unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      const peers = await listSessions.execute({}, state.toolContext);
-      const checkout = await createWorktree.execute({}, state.toolContext);
-      if (
-        checkout &&
-        typeof checkout === "object" &&
-        "path" in checkout &&
-        typeof checkout.path === "string"
-      ) {
-        const filePath = path.join(checkout.path, "coordination-same-turn.txt");
-        fs.writeFileSync(filePath, "created after checkout transition\n");
-        yield { type: "file_edit", content: "write", filePath };
-      }
-      yield { type: "title", content: "Coordinating work" };
-      yield {
-        type: "text",
-        content: `coordination result: ${JSON.stringify({ peers, checkout })}`,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("inspect coordination privacy")) {
-      const listSessions = workspaceTools.find(
-        (candidate) => candidate.name === "list_project_sessions",
-      );
-      const overview = workspaceTools.find(
-        (candidate) => candidate.name === "workspace_overview",
-      );
-      if (!listSessions || !overview) {
-        yield { type: "error", content: "coordination tools unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "title", content: "Checking privacy" };
-      yield {
-        type: "text",
-        content: `privacy result: ${JSON.stringify({
-          peers: await listSessions.execute({}, state.toolContext),
-          overview: await overview.execute({}, state.toolContext),
-        })}`,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    // "auth error" → the turn dies exactly the way a revoked key does in
-    // production: the provider's raw 401 body as the error event. What the
-    // user must see instead is the actionable rewrite (agent-errors.ts) —
-    // the e2e asserts that mapping on the real send path. One-shot: the
-    // retry of the same message recovers (exercises retry-in-place).
-    // "terminal: <cmd>" / "terminal @<id>: <cmd>" → the REAL run_terminal
-    // workspace tool. E2e's only path through the bridge with the
-    // deterministic agent — chips, spinners, targeting all run for real.
-    const terminalRun = /^terminal(?:\s+@(\S+))?:\s*(.+)$/s.exec(
-      message.trim(),
+          : 4000,
     );
-    if (terminalRun) {
-      const [, targetId, command] = terminalRun;
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "run_terminal",
-      );
-      if (!tool || !command) {
-        yield { type: "error", content: "run_terminal unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "title", content: "Terminal exercise" };
-      yield { type: "command", content: command };
-      try {
-        const result = await tool.execute(
-          { command, ...(targetId ? { terminalId: targetId } : {}) },
-          state.toolContext,
-        );
-        // Human-readable body with the machine-readable bits e2e greps for
-        // ('terminal result', the "terminalId":"..." pattern, and the raw
-        // command output) preserved verbatim.
-        const resultRecord = result as {
-          key?: string;
-          terminalId?: string;
-          output?: string;
-          commandRunning?: boolean;
-        };
-        const cleanOutput = String(resultRecord.output ?? "")
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips OSC sequences from terminal output
-          .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips CSI sequences
-          .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips keypad mode toggles
-          .replace(/\u001b[=>]/g, "")
-          .trim();
-        yield {
-          type: "text",
-          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}${resultRecord.key ? `\n\n[Open terminal](${resultRecord.key})` : ""}`,
-        };
-      } catch (error) {
-        yield {
-          type: "text",
-          content: `terminal error: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    if (message === "elicitation: app") {
-      const handler = createCodexElicitation({
-        elicit: this.elicit,
-        askQuestion: () => opts?.askQuestion,
-      });
-      const request = {
-        serverName: "Computer Use",
-        mode: "form",
-        message: 'Allow Computer Use to use "Calculator"?',
-        requestedSchema: { type: "object", properties: {} },
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
-          connector_id: "computer-use",
-          tool_params: { app: "com.apple.calculator" },
-          persist: ["session"],
-          riskLevel: "low",
-        },
-      };
-      const first = await handler(request);
-      const second = await handler(request);
-      yield {
-        type: "text",
-        content: `app consent: ${first.action},${second.action}`,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    if (message === "elicitation: queue" || message === "elicitation: cancel") {
-      if (!this.elicit) throw new Error("Elicitation unavailable");
-      const abort = new AbortController();
-      const timer =
-        message === "elicitation: cancel"
-          ? setTimeout(() => abort.abort(), 1200)
-          : undefined;
-      try {
-        const results = await Promise.all(
-          (message === "elicitation: queue"
-            ? ["First app", "Second app"]
-            : ["Cancelled app"]
-          ).map((label) =>
-            this.elicit?.(
-              label,
-              {
-                mode: "form",
-                message: `Allow access to ${label}?`,
-                fields: [],
-              },
-              abort.signal,
-            ),
-          ),
-        );
-        yield {
-          type: "text",
-          content: `elicitation decisions: ${results.map((result) => result?.action).join(",")}`,
-        };
-        yield { type: "done" };
-      } finally {
-        clearTimeout(timer);
-      }
-      return;
-    }
-
-    if (message.startsWith("E2E workspace tool ")) {
-      const request = JSON.parse(message.slice("E2E workspace tool ".length));
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === request.name,
-      );
-      try {
-        if (!tool) throw new Error(`Tool unavailable: ${request.name}`);
-        const result = await tool.execute(request.input, state.toolContext);
-        yield {
-          type: "text",
-          content:
-            `\n\`\`\`json\nE2E result ${request.serial}: ` +
-            JSON.stringify(result, (key, value) =>
-              key === "data" && typeof value === "string" && value.length > 1000
-                ? `<${value.length} base64 characters>`
-                : value,
-            ) +
-            "E2E end\n```",
-        };
-      } catch (error) {
-        yield {
-          type: "text",
-          content:
-            `\n\`\`\`json\nE2E result ${request.serial}: ` +
-            JSON.stringify({ error: String(error) }) +
-            "E2E end\n```",
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    // "point: <target>" / "point keep: <target>" → the REAL point_at
-    // workspace tool (glow + scroll); "unpoint" → point_at { target: null }.
-    const pointRun = /^point(\s+keep)?:\s*(.+)$/s.exec(message.trim());
-    if (pointRun) {
-      const [, keep, target] = pointRun;
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "point_at",
-      );
-      if (!tool || !target) {
-        yield { type: "error", content: "point_at unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      try {
-        await tool.execute(
-          {
-            target: target.trim(),
-            note: "Look here",
-            ...(keep ? { keep_previous: true } : {}),
-          },
-          state.toolContext,
-        );
-        yield { type: "text", content: `Pointing at ${target.trim()}.` };
-      } catch (error) {
-        yield {
-          type: "text",
-          content: `point error: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-    if (prompt.trim() === "unpoint") {
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "point_at",
-      );
-      if (!tool) throw new Error("point_at unavailable");
-      await tool.execute({ target: null }, state.toolContext);
-      yield { type: "text", content: "Cleared the pointers." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (message.trim() === "E2E enable personal framed content") {
-      const context = this.settingsContext?.(session.projectId);
-      const file = context?.files?.preferences.personal;
-      if (!file || context.access !== "native")
-        throw new Error("Personal settings file unavailable");
-      const raw = fs.existsSync(file)
-        ? JSON.parse(fs.readFileSync(file, "utf8"))
-        : {};
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify({ ...raw, contentFrame: true }));
-      yield {
-        type: "text",
-        content: "Personal framed content updated by editing its JSON file.",
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    // Native Codex discovery supplies a concrete file, outside the shared
-    // read_skill catalog. Exercise the actual file read and argument payload.
-    const nativeSkillRun =
-      /^Use the "native-notes" skill at ("(?:[^"\\]|\\.)*")\.\s*([\s\S]*)$/.exec(
-        message.trim(),
-      );
-    if (nativeSkillRun?.[1]) {
-      const file: unknown = JSON.parse(nativeSkillRun[1]);
-      if (typeof file !== "string")
-        throw new Error("Invalid native skill path");
-      yield {
-        type: "text",
-        content: `native skill loaded: ${fs.readFileSync(file, "utf8").trim()} | ${nativeSkillRun[2]}`,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    // `Use the "<name>" skill` — the EXACT message palette skill rows and
-    // composer /commands send — runs the REAL read_skill tool, so skill
-    // e2e covers renderer → invocation message → toolkit → core's merged
-    // tiers (project files + host skills) end to end.
-    const skillRun = /^Use the "([^"]+)" skill[.:]?/.exec(message.trim());
-    if (skillRun?.[1]) {
-      const name = skillRun[1];
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "read_skill",
-      );
-      if (!tool) {
-        yield { type: "error", content: "read_skill unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "title", content: "Skill exercise" };
-      try {
-        const result = (await tool.execute({ name }, state.toolContext)) as {
-          source?: string;
-          content?: string;
-        };
-        yield {
-          type: "text",
-          content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)`,
-        };
-      } catch (error) {
-        yield {
-          type: "text",
-          content: `skill error: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    // "permission: <server>/<tool>" → the REAL tool-permission ask: the
-    // front window shows the consent modal; the echo says what came back.
-    const permissionRun = /^permission:\s*([^/\s]+)\/(\S+)$/.exec(
-      message.trim(),
-    );
-    if (permissionRun?.[1] && permissionRun[2]) {
-      if (!this.askToolPermission) {
-        yield { type: "error", content: "tool permission prompt unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      const decision = await this.askToolPermission({
-        // The host session id, like real harnesses (ToolGate.decide) —
-        // remote clients list pending asks per session over HTTP.
-        ...(session.sessionId ? { sessionId: session.sessionId } : {}),
-        server: permissionRun[1],
-        tool: permissionRun[2],
-        description: "E2E fake tool",
-        input: { text: "hello from e2e" },
-        annotations: { readOnlyHint: false },
-      });
-      yield {
-        type: "text",
-        content: `permission decision: ${decision.decision}${
-          decision.decision === "allow" && decision.remember
-            ? ` (${decision.remember})`
-            : ""
-        }`,
-      };
-      yield { type: "done" };
-      return;
-    }
-
-    // "connect: <query>" → the REAL request_connection tool: the front
-    // window opens the connectors modal seeded with the query; the tool
-    // resolves with whatever the user (the test) installed before closing.
-    const connectRun = /^connect:\s*(.+)$/s.exec(message.trim());
-    if (connectRun?.[1]) {
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "request_connection",
-      );
-      if (!tool) {
-        yield { type: "error", content: "request_connection unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "title", content: "Connection request" };
-      try {
-        const result = (await tool.execute(
-          { query: connectRun[1].trim(), reason: "E2E exercise" },
-          state.toolContext,
-        )) as { installed?: string[] };
-        yield {
-          type: "text",
-          content: `connection request settled: installed=[${(result.installed ?? []).join(", ")}]`,
-        };
-      } catch (error) {
-        yield {
-          type: "text",
-          content: `connection error: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    // "show: <target>" → the REAL open_surface tool (focused open behind
-    // the chat, or a background open + chip attention when the user is
-    // elsewhere — the echoed "opened" field says which). "show later:"
-    // delays the call ~2.5s so a test can move the user's focus away
-    // first (the focus-steal regression pin).
-    const showRun = /^show(\s+later)?:\s*(.+)$/s.exec(message.trim());
-    if (showRun) {
-      const [, later, rawTarget] = showRun;
-      const target = rawTarget?.trim() ?? "";
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "open_surface",
-      );
-      if (!tool) {
-        yield { type: "error", content: "open_surface unavailable" };
-        yield { type: "done" };
-        return;
-      }
-      if (later) {
-        const deadline = Date.now() + 2500;
-        while (Date.now() < deadline && !state.interrupted) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-      }
-      try {
-        const result = (await tool.execute({ target }, state.toolContext)) as {
-          key?: string;
-          opened?: string;
-        };
-        yield {
-          type: "text",
-          content: `Opened ${target} ("key":"${result.key ?? "unknown"}", "opened":"${result.opened ?? "unknown"}").`,
-        };
-      } catch (error) {
-        yield {
-          type: "text",
-          content: `open error: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("auth error")) {
-      if (!oneShotFailures.has(prompt)) {
-        oneShotFailures.add(prompt);
-        yield { type: "error", content: "User not found." };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "text", content: "Recovered after reconnecting." };
-      yield { type: "done" };
-      return;
-    }
-
-    // "rate limit" → a provider-style 429, once per message; drives the
-    // auto-retry backoff loop, whose retry then recovers.
-    if (prompt.includes("rate limit")) {
-      if (!oneShotFailures.has(prompt)) {
-        oneShotFailures.add(prompt);
-        yield {
-          type: "error",
-          content: "429 rate limit exceeded",
-          retrySafe: true,
-        };
-        yield { type: "done" };
-        return;
-      }
-      yield { type: "text", content: "Recovered after the rate limit." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("desktop layout: sidebar")) {
-      await this.sandboxProvider.uploadFiles(
-        state.sandboxId,
-        {
-          ".catamorphic/desktop/layout.json": JSON.stringify({
-            tabPlacement: "sidebar",
-            pinnedBookmarks: "list",
-            headerPlacement: "sidebar",
-          }),
-        },
-        state.workingDirectory,
-      );
-      yield { type: "text", content: "Updated your workspace layout." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("edit a file")) {
-      yield { type: "title", content: "File edit exercise" };
-      yield { type: "file_edit", content: "write", filePath: "HELLO.md" };
-      await this.sandboxProvider.uploadFiles(
-        state.sandboxId,
-        { "HELLO.md": "hello from the fake agent\n" },
-        state.workingDirectory,
-      );
-      yield { type: "text", content: "I created HELLO.md for you." };
-      yield { type: "done" };
-      return;
-    }
-
-    if (prompt.includes("session menu")) {
-      yield { type: "title", content: "Session menu" };
-      yield { type: "text", content: "The session menu is ready." };
-      yield { type: "done" };
-      return;
-    }
-
-    yield { type: "title", content: "Quick chat" };
-    yield { type: "text", content: `You said: ${message}` };
-    yield { type: "done" };
+    if (turn.interrupted()) return;
+    yield { type: "text", content: "Done after a long think." };
+    return;
   }
 
-  /**
-   * Native retry-in-place, mirroring the ai-sdk harness: the failed turn
-   * re-runs from in-memory session state without a new user message. A
-   * freshly re-anchored session (provider rebuilt after a reconnect)
-   * holds no turn — core must route that retry through sendMessage
-   * instead of ever reaching the defensive error below.
-   */
-  async *retryTurn(
-    session: ProviderSession,
-    opts?: TurnOptions & { sanitizeReasoning?: boolean },
-  ): AsyncIterable<AgentEvent> {
-    const state = session.providerSessionId
-      ? this.sessions.get(session.providerSessionId)
-      : undefined;
-    if (!state) {
+  if (prompt.includes("coordinate worktree")) {
+    const peers = await turn.tool("list_project_sessions", {});
+    const checkout = await turn.tool("create_worktree", {});
+    const created = z.object({ path: z.string() }).safeParse(checkout);
+    if (created.success) {
+      const filePath = path.join(
+        created.data.path,
+        "coordination-same-turn.txt",
+      );
+      fs.writeFileSync(filePath, "created after checkout transition\n");
+      yield { type: "file_edit", content: "write", filePath };
+    }
+    yield { type: "title", content: "Coordinating work" };
+    yield {
+      type: "text",
+      content: `coordination result: ${JSON.stringify({ peers, checkout })}`,
+    };
+    return;
+  }
+
+  if (prompt.includes("inspect coordination privacy")) {
+    yield { type: "title", content: "Checking privacy" };
+    yield {
+      type: "text",
+      content: `privacy result: ${JSON.stringify({
+        peers: await turn.tool("list_project_sessions", {}),
+        overview: await turn.tool("workspace_overview", {}),
+      })}`,
+    };
+    return;
+  }
+
+  // "monitor: <cmd>" → a background command that wakes the chat on what it
+  // prints, while this turn keeps working: its news reaches the turn as it
+  // works, once per line it has not reported (ADR 0217).
+  const monitorRun = /^monitor:\s*(.+)$/s.exec(message.trim());
+  if (monitorRun?.[1]) {
+    const command = monitorRun[1];
+    const description = "Start the worker";
+    yield { type: "title", content: "Monitor exercise" };
+    yield {
+      type: "tool_call",
+      toolName: "run_background_command",
+      toolInput: { command, description },
+      description,
+    };
+    await turn.tool("run_background_command", {
+      command,
+      description,
+      wake_on_output: "Error|ready",
+      wake_on_exit: true,
+    });
+    yield { type: "text", content: "Watching the worker while I work." };
+    const news = await turn.steerWithin(30_000);
+    yield {
+      type: "text",
+      content: news?.text.includes("<task-notification>")
+        ? "The worker printed an error. Looking into it."
+        : "Nothing from the worker yet.",
+    };
+    // Still working while the error repeats: nothing more wakes this turn.
+    await turn.pause(6_000);
+    yield { type: "text", content: "Done with the worker for now." };
+    return;
+  }
+
+  // "wait on: <cmd>" → a background command, then a turn that does nothing
+  // but wait for it (read_background_output with a wait, a step of its
+  // own): its chat's icon shows the command it waits on, not the spinner.
+  const waitOn = /^wait on:\s*(.+)$/s.exec(message.trim());
+  if (waitOn?.[1]) {
+    const command = waitOn[1];
+    const description = "Run it to wait on";
+    yield { type: "title", content: "Wait exercise" };
+    yield {
+      type: "tool_call",
+      toolName: "run_background_command",
+      toolInput: { command, description },
+      description,
+    };
+    const started = z.object({ id: z.string(), status: z.string() }).parse(
+      await turn.tool("run_background_command", {
+        command,
+        description,
+        wake_on_exit: false,
+      }),
+    );
+    let status = started.status;
+    const deadline = Date.now() + 60_000;
+    for (let read = 0; status === "running" && Date.now() < deadline; read++) {
+      const toolUseId = `wait-${started.id}-${read}`;
+      const input = { id: started.id, wait_seconds: 60 };
       yield {
-        type: "error",
-        content: "Session not found (host restarted?); start a new session",
+        type: "tool_call",
+        toolName: "mcp__workspace__read_background_output",
+        toolInput: input,
+        toolUseId,
+        description: "Wait for it",
       };
+      const result = z
+        .object({ status: z.string() })
+        .parse(await turn.tool("read_background_output", input));
+      status = result.status;
+      yield {
+        type: "tool_call",
+        toolUseId,
+        status: "ended",
+        toolResult: result,
+      };
+    }
+    yield { type: "text", content: `Waited on it (${status}).` };
+    return;
+  }
+
+  // "terminal: <cmd>" → the REAL run_background_command tool, then a
+  // blocking read until it ends: e2e's path through the bridge with the
+  // deterministic agent (chips, spinners, output). Its terminal ends with
+  // the command (ADR 0223), so the answer links none. "background: <cmd>"
+  // starts one and ends the turn, leaving it to wake the chat; "start:
+  // <cmd>" starts one that wakes nobody and links its terminal while it
+  // runs; "stop: <cmd>" starts one and stops it a moment later.
+  const terminalRun = /^(terminal|background|start|stop):\s*(.+)$/s.exec(
+    message.trim(),
+  );
+  if (terminalRun?.[2]) {
+    const [, mode, command] = terminalRun;
+    // Without words of its own, a command is titled by itself.
+    const description = mode === "background" ? "Run it in the background" : "";
+    yield { type: "title", content: "Terminal exercise" };
+    yield {
+      type: "tool_call",
+      toolName: "run_background_command",
+      toolInput: { command, description },
+      description,
+    };
+    try {
+      const started = z
+        .object({
+          id: z.string(),
+          key: z.string(),
+          status: z.string(),
+          output: z.string(),
+        })
+        .parse(
+          await turn.tool("run_background_command", {
+            command,
+            description,
+            wake_on_exit: mode === "background",
+          }),
+        );
+      if (mode === "background") {
+        yield {
+          type: "text",
+          content: `Started it in the background ("terminalId":"${started.id}").`,
+        };
+        return;
+      }
+      if (mode === "start") {
+        yield {
+          type: "text",
+          content: `Started \`${command}\` in the background ("terminalId":"${started.id}").\n\n[Open terminal](${started.key})`,
+        };
+        return;
+      }
+      if (mode === "stop") {
+        // Long enough to watch its chip spin first.
+        await turn.pause(3_000);
+        const stopped = z
+          .object({ status: z.string() })
+          .parse(
+            await turn.tool("stop_background_command", { id: started.id }),
+          );
+        yield {
+          type: "text",
+          content: `Stopped it ("terminalId":"${started.id}", "status":"${stopped.status}").`,
+        };
+        return;
+      }
+      // A blocking read returns once the command prints anything new, so
+      // one that outlives the start's settle (a slow runner) takes reads
+      // until it ends; a single read could stop between two of its lines.
+      let output = started.output;
+      let status = started.status;
+      const deadline = Date.now() + 60_000;
+      while (status === "running" && Date.now() < deadline) {
+        const read = z.object({ status: z.string(), output: z.string() }).parse(
+          await turn.tool("read_background_output", {
+            id: started.id,
+            wait_seconds: 60,
+          }),
+        );
+        output += read.output;
+        status = read.status;
+      }
+      yield {
+        type: "text",
+        content: `Ran it in the terminal ("terminalId":"${started.id}"). terminal result:\n\n${cleanTerminalText(output)}`,
+      };
+    } catch (error) {
+      yield {
+        type: "text",
+        content: `terminal error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return;
+  }
+
+  // Native app consent: the first answer may allow the app for the rest
+  // of this turn, so the second identical request needs no answer.
+  if (message === "elicitation: app") {
+    const ask = () =>
+      turn.request({
+        kind: "elicitation",
+        blocking: true,
+        title: "Computer Use",
+        origin: {
+          kind: "mcp",
+          id: "computer-use",
+          displayName: "Computer Use",
+        },
+        elicitation: {
+          server: "Computer Use",
+          message: 'Allow Computer Use to use "Calculator"?',
+          schema: { type: "object", properties: {} },
+        },
+      });
+    const first = elicitationAction(await ask().catch(() => undefined));
+    const second =
+      first === "accept"
+        ? "accept"
+        : elicitationAction(await ask().catch(() => undefined));
+    yield { type: "text", content: `app consent: ${first},${second}` };
+    return;
+  }
+
+  if (message === "elicitation: queue" || message === "elicitation: cancel") {
+    const abort = new AbortController();
+    const timer =
+      message === "elicitation: cancel"
+        ? setTimeout(() => abort.abort(), 1200)
+        : undefined;
+    try {
+      const results = await Promise.all(
+        (message === "elicitation: queue"
+          ? ["First app", "Second app"]
+          : ["Cancelled app"]
+        ).map((label) =>
+          turn
+            .request(
+              {
+                kind: "elicitation",
+                blocking: true,
+                title: label,
+                origin: { kind: "mcp", id: label, displayName: label },
+                elicitation: {
+                  server: label,
+                  message: `Allow access to ${label}?`,
+                  schema: { type: "object", properties: {} },
+                },
+              },
+              { signal: abort.signal },
+            )
+            .then(elicitationAction, (error: unknown) => {
+              if (error instanceof RequestClosedError) return "decline";
+              throw error;
+            }),
+        ),
+      );
+      yield {
+        type: "text",
+        content: `elicitation decisions: ${results.join(",")}`,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+    return;
+  }
+
+  if (message.startsWith("E2E workspace tool ")) {
+    const request = z
+      .object({
+        name: z.string(),
+        input: z.record(z.string(), z.unknown()),
+        serial: z.union([z.string(), z.number()]),
+      })
+      .parse(JSON.parse(message.slice("E2E workspace tool ".length)));
+    let body: string;
+    try {
+      // A page image is the result's content itself; anything else reads
+      // as the tool's value.
+      const result =
+        request.name === "browser_snapshot" && request.input.format === "image"
+          ? {
+              content: (
+                await turn.toolResult("browser_snapshot", request.input)
+              ).content,
+            }
+          : await turn.tool(request.name, request.input);
+      body = JSON.stringify(result, (key, value) =>
+        key === "data" && typeof value === "string" && value.length > 1000
+          ? `<${value.length} base64 characters>`
+          : value,
+      );
+    } catch (error) {
+      body = JSON.stringify({ error: String(error) });
+    }
+    yield {
+      type: "text",
+      content: `\n\`\`\`json\nE2E result ${request.serial}: ${body}E2E end\n\`\`\``,
+    };
+    return;
+  }
+
+  // "record pr: <number> <state>" → the REAL set_session_metadata tool,
+  // as the desktop-workspace skill teaches (ADR 0226): read the chat's
+  // pull_requests, then write the list back with this one in it. The
+  // address never resolves (.invalid), so opening it stays offline.
+  const recordPr = /^record pr:\s*(\d+)\s+(open|draft|merged|closed)$/.exec(
+    message.trim(),
+  );
+  if (recordPr?.[1] && recordPr[2]) {
+    const number = Number(recordPr[1]);
+    const url = `https://git.invalid/acme/web/pull/${number}`;
+    const read = z
+      .object({ metadata: z.record(z.string(), z.unknown()) })
+      .parse(await turn.tool("set_session_metadata", { key: "pull_requests" }));
+    const listed = sessionPullRequests(read.metadata).filter(
+      (entry) => entry.url !== url,
+    );
+    const recorded = await turn.tool("set_session_metadata", {
+      key: "pull_requests",
+      value: [
+        ...listed,
+        {
+          url,
+          number,
+          title: "Show this session beside the chat",
+          state: recordPr[2],
+        },
+      ],
+    });
+    yield { type: "title", content: "Pull request" };
+    yield {
+      type: "text",
+      content: `Recorded pull request #${number}: ${JSON.stringify(recorded)}`,
+    };
+    return;
+  }
+
+  // "point: <target>" / "point keep: <target>" → the REAL point_at
+  // workspace tool (glow + scroll); "unpoint" → point_at { target: null }.
+  const pointRun = /^point(\s+keep)?:\s*(.+)$/s.exec(message.trim());
+  if (pointRun?.[2]) {
+    const [, keep, target] = pointRun;
+    try {
+      await turn.tool("point_at", {
+        target: target.trim(),
+        note: "Look here",
+        ...(keep ? { keep_previous: true } : {}),
+      });
+      yield { type: "text", content: `Pointing at ${target.trim()}.` };
+    } catch (error) {
+      yield {
+        type: "text",
+        content: `point error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return;
+  }
+  if (prompt.trim() === "unpoint") {
+    await turn.tool("point_at", { target: null });
+    yield { type: "text", content: "Cleared the pointers." };
+    return;
+  }
+
+  if (message.trim() === "E2E enable personal framed content") {
+    const context = turn.settingsContext();
+    const file = context?.files?.preferences.personal;
+    if (!file || context.access !== "native")
+      throw new Error("Personal settings file unavailable");
+    const raw = fs.existsSync(file)
+      ? JSON.parse(fs.readFileSync(file, "utf8"))
+      : {};
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...raw, contentFrame: true }));
+    yield {
+      type: "text",
+      content: "Personal framed content updated by editing its JSON file.",
+    };
+    return;
+  }
+
+  // Native Codex discovery supplies a concrete file, outside the shared
+  // read_skill catalog. Exercise the actual file read and argument payload.
+  const nativeSkillRun =
+    /^Use the "native-notes" skill at ("(?:[^"\\]|\\.)*")\.\s*([\s\S]*)$/.exec(
+      message.trim(),
+    );
+  if (nativeSkillRun?.[1]) {
+    const file: unknown = JSON.parse(nativeSkillRun[1]);
+    if (typeof file !== "string") throw new Error("Invalid native skill path");
+    yield {
+      type: "text",
+      content: `native skill loaded: ${fs.readFileSync(file, "utf8").trim()} | ${nativeSkillRun[2]}`,
+    };
+    return;
+  }
+
+  // `Use the "<name>" skill`, the EXACT message the palette's skills send,
+  // runs the REAL read_skill tool, so skill e2e covers renderer →
+  // invocation message → toolkit → core's merged tiers. What followed it
+  // (instructions) is echoed back.
+  const skillRun = /^Use the "([^"]+)" skill[.:]?/.exec(message.trim());
+  if (skillRun?.[1]) {
+    const name = skillRun[1];
+    const instructions = message.trim().slice(skillRun[0].length).trim();
+    yield { type: "title", content: "Skill exercise" };
+    try {
+      const result = z
+        .object({
+          source: z.string().optional(),
+          content: z.string().optional(),
+        })
+        .parse(await turn.tool("read_skill", { name }));
+      yield {
+        type: "text",
+        content: `skill loaded: ${name} (source:${result.source ?? "?"}, ${String(result.content ?? "").length} chars)${instructions ? ` | ${instructions}` : ""}`,
+      };
+    } catch (error) {
+      yield {
+        type: "text",
+        content: `skill error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return;
+  }
+
+  // "permission: <server>/<tool>" → a tool approval request, answered
+  // from the chat (or any client); the echo says what came back.
+  const permissionRun = /^permission:\s*([^/\s]+)\/(\S+)$/.exec(message.trim());
+  if (permissionRun?.[1] && permissionRun[2]) {
+    const [, server, tool] = permissionRun;
+    const response = await turn
+      .request({
+        kind: "approval",
+        blocking: true,
+        title: `Allow ${tool}?`,
+        origin: { kind: "mcp", id: server, displayName: server },
+        approval: {
+          action: `${server} · ${tool}`,
+          details: "E2E fake tool",
+          tool: { server, name: tool, input: { text: "hello from e2e" } },
+        },
+      })
+      .catch(() => undefined);
+    const allowed =
+      response?.kind === "approval" && response.decision === "approved";
+    yield {
+      type: "text",
+      content: `permission decision: ${allowed ? "allow" : "deny"}${
+        allowed && response.remember ? ` (${response.remember})` : ""
+      }`,
+    };
+    return;
+  }
+
+  // "connect: <query>" → the REAL request_connection tool: the front
+  // window opens the connectors modal seeded with the query; the tool
+  // resolves with whatever the user (the test) installed before closing.
+  const connectRun = /^connect:\s*(.+)$/s.exec(message.trim());
+  if (connectRun?.[1]) {
+    yield { type: "title", content: "Connection request" };
+    try {
+      const result = z
+        .object({ installed: z.array(z.string()).optional() })
+        .parse(
+          await turn.tool("request_connection", {
+            query: connectRun[1].trim(),
+            reason: "E2E exercise",
+          }),
+        );
+      yield {
+        type: "text",
+        content: `connection request settled: installed=[${(result.installed ?? []).join(", ")}]`,
+      };
+    } catch (error) {
+      yield {
+        type: "text",
+        content: `connection error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return;
+  }
+
+  // "show: <target>" → the REAL open_surface tool (focused open behind the
+  // chat, or a background open + chip attention when the user is
+  // elsewhere; the echoed "opened" field says which). "show later:" delays
+  // the call ~2.5s so a test can move the user's focus away first.
+  const showRun = /^show(\s+later)?:\s*(.+)$/s.exec(message.trim());
+  if (showRun) {
+    const [, later, rawTarget] = showRun;
+    const target = rawTarget?.trim() ?? "";
+    if (later) await turn.pause(2500);
+    try {
+      const result = z
+        .object({ key: z.string().optional(), opened: z.string().optional() })
+        .parse(await turn.tool("open_surface", { target }));
+      yield {
+        type: "text",
+        content: `Opened ${target} ("key":"${result.key ?? "unknown"}", "opened":"${result.opened ?? "unknown"}").`,
+      };
+    } catch (error) {
+      yield {
+        type: "text",
+        content: `open error: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return;
+  }
+
+  // "auth error" → the turn dies the way a revoked key does: the
+  // provider's raw 401 body. The person sees the actionable rewrite
+  // (agent-errors.ts). One-shot: the retry of the same message recovers.
+  if (prompt.includes("auth error")) {
+    if (!oneShotFailures.has(prompt)) {
+      oneShotFailures.add(prompt);
+      yield { type: "error", content: "User not found." };
       return;
     }
-    if (!state.lastTurn) {
+    yield { type: "text", content: "Recovered after reconnecting." };
+    return;
+  }
+
+  // "expired sign-in" (or "expired sign-in xN") → Claude Code turned away
+  // on an access token it did not refresh, before any work, on the
+  // message's first attempt (or first N): what a refresh lost to another
+  // Claude Code holding the shared lock looks like (ADR 0228).
+  const expired = /expired sign-in(?: x(\d+))?/.exec(prompt);
+  if (expired) {
+    const failures = signInFailures.get(prompt) ?? 0;
+    if (failures < Number(expired[1] ?? 1)) {
+      signInFailures.set(prompt, failures + 1);
       yield {
         type: "error",
         content:
-          "This conversation was restored and the failed turn can't be " +
-          "replayed automatically. Send your message again to continue.",
+          "Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.",
+        retrySafe: true,
       };
       return;
     }
-    const { message, opts: lastOpts } = state.lastTurn;
-    yield* this.sendMessage(session, message, { ...lastOpts, ...opts });
+    yield { type: "text", content: "Signed in again." };
+    return;
   }
 
-  async dispose(session: ProviderSession): Promise<void> {
-    if (session.providerSessionId) {
-      this.sessions.delete(session.providerSessionId);
+  // "rate limit" → a provider-style 429, once per message; drives the
+  // auto-retry backoff loop, whose retry then recovers.
+  if (prompt.includes("rate limit")) {
+    if (!oneShotFailures.has(prompt)) {
+      oneShotFailures.add(prompt);
+      yield {
+        type: "error",
+        content: "429 rate limit exceeded",
+        retrySafe: true,
+      };
+      return;
     }
+    yield { type: "text", content: "Recovered after the rate limit." };
+    return;
   }
-}
 
+  if (prompt.includes("desktop layout: sidebar")) {
+    await turn.writeFiles({
+      ".work/desktop/layout.json": JSON.stringify({
+        tabPlacement: "sidebar",
+        headerPlacement: "sidebar",
+      }),
+    });
+    yield { type: "text", content: "Updated your workspace layout." };
+    return;
+  }
+
+  if (prompt.includes("edit a file")) {
+    yield { type: "title", content: "File edit exercise" };
+    yield { type: "file_edit", content: "write", filePath: "HELLO.md" };
+    await turn.writeFiles({ "HELLO.md": "hello from the fake agent\n" });
+    yield { type: "text", content: "I created HELLO.md for you." };
+    return;
+  }
+
+  if (prompt.includes("session menu")) {
+    yield { type: "title", content: "Session menu" };
+    yield { type: "text", content: "The session menu is ready." };
+    return;
+  }
+
+  // Work's news about a task the agent started (ADR 0217): read, and said.
+  const summary = /<summary>([^<]*)<\/summary>/.exec(message)?.[1];
+  if (summary && message.includes("<task-notification>")) {
+    const detail = /<detail>\n([\s\S]*?)\n<\/detail>/.exec(message)?.[1];
+    yield {
+      type: "text",
+      content: `Read it: ${summary}.${detail ? `\n\n${detail.trim()}` : ""}`,
+    };
+    return;
+  }
+  yield { type: "title", content: "Quick chat" };
+  yield { type: "text", content: `You said: ${message}` };
+}
 /** Credential-free scenarios still author ordinary source and execute real host transitions. */
 function sessionWorkflowFixture({
   scenario,
@@ -1540,10 +2816,10 @@ function sessionWorkflowFixture({
       : scenario === "failure"
         ? 'throw new Error("Controlled monitor failure");'
         : ["reminder", "longreminder", "overdue"].includes(scenario)
-          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: "reminder" });`
+          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: ${JSON.stringify(scenario)} });`
           : scenario === "monitor"
             ? `return context.host["catamorphic.sessions"].deliver({ mode: "message_only", attention: "required", sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
-            : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "next_turn", idempotencyKey: "scheduled-wake" });`;
+            : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "queue", idempotencyKey: "scheduled-wake" });`;
   return `import { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";
 /** @displayname Session ${scenario} */
 export const ${name} = defineWorkflow(({ defineBoundary }) => ({
@@ -1555,4 +2831,18 @@ export const ${name} = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({ run: (context: BoundaryContext<unknown>) => context.host["catamorphic.sessions"].stop({ idempotencyKey: "stop" }) }),
   ],
 }));`;
+}
+
+/** Terminal output without escape sequences, for e2e assertions. */
+function cleanTerminalText(output: string): string {
+  return (
+    output
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strips OSC sequences from terminal output
+      .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strips CSI sequences
+      .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strips keypad mode toggles
+      .replace(/\u001b[=>]/g, "")
+      .trim()
+  );
 }

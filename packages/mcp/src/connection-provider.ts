@@ -1,5 +1,5 @@
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
-import { connectMcpServer } from "./client.js";
+import { connectMcpServer, type McpToolInfo } from "./client.js";
 import type { McpOAuthClientHint } from "./marketplace.js";
 import {
   bearerHeaders,
@@ -87,6 +87,7 @@ export function defineMcpConnectionProvider(args: {
           },
         }
       : {}),
+    mcp: true as const,
     async listActions(input: {
       material: Uint8Array;
       capabilities: readonly string[];
@@ -96,14 +97,10 @@ export function defineMcpConnectionProvider(args: {
         input.material,
       );
       try {
-        return server.tools
-          .filter((tool) => input.capabilities.includes(tool.name))
-          .map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-            ...(tool.annotations ? { annotations: tool.annotations } : {}),
-          }));
+        return mcpToolActions({
+          tools: server.tools,
+          capabilities: input.capabilities,
+        });
       } finally {
         await server.close().catch(() => {});
       }
@@ -113,6 +110,7 @@ export function defineMcpConnectionProvider(args: {
       action: string;
       input: unknown;
       capabilities: readonly string[];
+      signal?: AbortSignal;
     }): Promise<unknown> {
       if (!input.capabilities.includes(input.action)) {
         throw new Error(
@@ -122,8 +120,10 @@ export function defineMcpConnectionProvider(args: {
       const server = await connectWithCredentialOrExpire(
         serverConfig,
         input.material,
+        input.signal,
       );
       try {
+        input.signal?.throwIfAborted();
         const callArgs =
           typeof input.input === "object" &&
           input.input !== null &&
@@ -139,30 +139,55 @@ export function defineMcpConnectionProvider(args: {
   };
 }
 
+/**
+ * A connection action for each granted tool, as the server declared it:
+ * its title, schemas and annotations reach agents unchanged (ADR 0225).
+ */
+export function mcpToolActions(input: {
+  tools: readonly McpToolInfo[];
+  capabilities: readonly string[];
+}) {
+  return input.tools
+    .filter((tool) => input.capabilities.includes(tool.name))
+    .map((tool) => ({
+      name: tool.name,
+      ...(tool.title ? { title: tool.title } : {}),
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+      ...(tool.annotations ? { annotations: tool.annotations } : {}),
+    }));
+}
+
 async function connectWithCredential(
   serverConfig: HostMcpServerConfig,
   material: Uint8Array,
+  signal?: AbortSignal,
 ) {
   const credential = decodeCredential(material);
-  return connectMcpServer({
-    ...serverConfig,
-    ...(serverConfig.transport === "stdio"
-      ? { ...(credential.env ? { env: credential.env } : {}) }
-      : {
-          headers: {
-            ...credential.headers,
-            ...bearerHeaders(credential.oauth),
-          },
-        }),
-  } as AgentMcpServerConfig);
+  return connectMcpServer(
+    {
+      ...serverConfig,
+      ...(serverConfig.transport === "stdio"
+        ? { ...(credential.env ? { env: credential.env } : {}) }
+        : {
+            headers: {
+              ...credential.headers,
+              ...bearerHeaders(credential.oauth),
+            },
+          }),
+    } as AgentMcpServerConfig,
+    { signal },
+  );
 }
 
 async function connectWithCredentialOrExpire(
   serverConfig: HostMcpServerConfig,
   material: Uint8Array,
+  signal?: AbortSignal,
 ) {
   try {
-    return await connectWithCredential(serverConfig, material);
+    return await connectWithCredential(serverConfig, material, signal);
   } catch (error) {
     if (looksLikeAuthorizationFailure(error)) {
       throw new McpAuthorizationExpiredError();

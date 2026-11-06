@@ -6,7 +6,9 @@ import { PasswordVault } from "./browser-vault.js";
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
+    isAsyncEncryptionAvailable: async () => true,
     encryptStringAsync: async (value: string) => Buffer.from(value),
     decryptStringAsync: async (value: Buffer) => ({
       result: value.toString(),
@@ -50,7 +52,7 @@ it("preserves destination passwords, imports once and persists an encrypted vaul
         incoming,
       ],
     }),
-  ).toEqual({ imported: 1, existing: 2 });
+  ).toEqual({ imported: 1, importedPasskeys: 0, existing: 2 });
   const reopened = new PasswordVault(dir);
   expect(await reopened.list("profile")).toHaveLength(2);
   expect((await reopened.reveal("profile", kept.id))?.password).toBe(

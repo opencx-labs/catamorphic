@@ -108,7 +108,9 @@ class PtyHarness {
   }
 }
 
-async function shimZdotdir(): Promise<string> {
+async function shimZdotdir(input: {
+  delayFirstPrompt: boolean;
+}): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-pty-test-"));
   await fs.writeFile(
     path.join(dir, ".zshrc"),
@@ -116,7 +118,10 @@ async function shimZdotdir(): Promise<string> {
 PS1='PROMPT> '
 autoload -Uz add-zsh-hook 2>/dev/null && {
   __cat_test_preexec() { builtin printf '\\e]133;C\\a'; }
-  __cat_test_precmd() { builtin printf '\\e]133;D;%s\\a' "$?"; }
+  __cat_test_precmd() {
+    builtin printf '\\e]133;D;%s\\a' "$?"
+    ${input.delayFirstPrompt ? 'if [[ -z "$__cat_test_prompt_seen" ]]; then __cat_test_prompt_seen=1; sleep 0.1; fi' : ""}
+  }
   add-zsh-hook preexec __cat_test_preexec
   add-zsh-hook precmd __cat_test_precmd
 }
@@ -133,8 +138,10 @@ describe.skipIf(!existsSync(ZSH))(
       await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
     });
 
-    async function readyHarness(): Promise<PtyHarness> {
-      const zdotdir = await shimZdotdir();
+    async function readyHarness(
+      input = { delayFirstPrompt: false },
+    ): Promise<PtyHarness> {
+      const zdotdir = await shimZdotdir(input);
       const harness = new PtyHarness(zdotdir);
       cleanups.push(async () => {
         const exited = new Promise<void>((resolve) => {
@@ -159,30 +166,36 @@ describe.skipIf(!existsSync(ZSH))(
       return harness;
     }
 
-    it("echoes a command exactly once: prompt+command line, then output", async () => {
-      const harness = await readyHarness();
-      const promptsBefore = harness.prompts;
+    it.each([false, true])(
+      "echoes a command exactly once with a delayed first prompt: %s",
+      async (delayFirstPrompt) => {
+        const harness = await readyHarness({ delayFirstPrompt });
+        const promptsBefore = harness.prompts;
 
-      harness.pty.write(encodeCommand("echo catamorphic-pty-single"));
-      expect(await harness.waitFor(() => harness.prompts > promptsBefore)).toBe(
-        true,
-      );
+        harness.pty.write(encodeCommand("echo catamorphic-pty-single"));
+        expect(
+          await harness.waitFor(() => harness.prompts > promptsBefore),
+        ).toBe(true);
 
-      // The WHOLE transcript, startup included — the duplicate used to be
-      // a bare command line echoed BEFORE the first prompt ever showed.
-      const clean = sanitizeTerminalOutput(harness.buffer);
-      // The command text appears ONCE (the prompt echo) — not a bare
-      // duplicate line ahead of the prompt redraw.
-      expect(clean.match(/echo catamorphic-pty-single/g) ?? []).toHaveLength(1);
-      // And it reads like a shell session: the prompt line carries the
-      // command; the output is the next line.
-      expect(clean).toMatch(
-        /PROMPT> echo catamorphic-pty-single\ncatamorphic-pty-single\n/,
-      );
-      // Exactly one command ran (one C), and its exit code came through.
-      expect(harness.starts).toBe(1);
-      expect(harness.markers.at(-1)).toEqual({ kind: "D", exitCode: 0 });
-    });
+        // The WHOLE transcript, startup included — the duplicate used to be
+        // a bare command line echoed BEFORE the first prompt ever showed.
+        const clean = sanitizeTerminalOutput(harness.buffer);
+        // The command text appears ONCE (the prompt echo) — not a bare
+        // duplicate line ahead of the prompt redraw.
+        expect(
+          clean.match(/echo catamorphic-pty-single/g) ?? [],
+          clean,
+        ).toHaveLength(1);
+        // And it reads like a shell session: the prompt line carries the
+        // command; the output is the next line.
+        expect(clean).toMatch(
+          /PROMPT> echo catamorphic-pty-single\ncatamorphic-pty-single\n/,
+        );
+        // Exactly one command ran (one C), and its exit code came through.
+        expect(harness.starts).toBe(1);
+        expect(harness.markers.at(-1)).toEqual({ kind: "D", exitCode: 0 });
+      },
+    );
 
     it("runs a multi-line command as ONE bracketed paste with one exit code", async () => {
       const harness = await readyHarness();

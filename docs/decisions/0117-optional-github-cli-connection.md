@@ -1,6 +1,6 @@
 # 0117: Optional GitHub CLI connection
 
-- **Status:** Accepted
+- **Status:** Accepted (refined by [ADR 0177](0177-github-is-a-connection.md): the CLI token may become the person's `github` connection; pull requests prefer that connection)
 - **Date:** 2026-09-10
 
 ## Context

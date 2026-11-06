@@ -8,6 +8,8 @@ export {
   type McpResourceContent,
   type McpToolAnnotations,
   type McpToolInfo,
+  mcpConnectionLost,
+  mcpServerError,
   pickIcon,
   probeMcpServer,
   uiResourceUri,
@@ -15,6 +17,7 @@ export {
 export {
   defineMcpConnectionProvider,
   type McpConnectionCredential,
+  mcpToolActions,
 } from "./connection-provider.js";
 export {
   type ElicitFormField,

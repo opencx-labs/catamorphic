@@ -20,18 +20,64 @@ describe("electronLaunchArgs", () => {
       }),
     ).not.toContain("--use-mock-keychain");
   });
+  it("plays a recording into the synthetic microphone once", () => {
+    expect(
+      electronLaunchArgs({
+        cdpPort: 9342,
+        ci: undefined,
+        platform: "linux",
+        fakeAudioCapture: "/tmp/request.wav",
+      }),
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+      "--use-file-for-fake-audio-capture=/tmp/request.wav%noloop",
+    ]);
+  });
+
   it("disables Chromium's SUID sandbox only on Linux CI runners", () => {
     expect(
       electronLaunchArgs({ cdpPort: 9342, ci: "true", platform: "linux" }),
-    ).toEqual([".", "--remote-debugging-port=9342", "--no-sandbox"]);
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+      "--no-sandbox",
+    ]);
+  });
+
+  it("keeps sandboxed renderers there for suites that need them", () => {
+    expect(
+      electronLaunchArgs({
+        cdpPort: 9342,
+        ci: "true",
+        platform: "linux",
+        sandboxedRenderers: true,
+      }),
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+      "--no-sandbox",
+      "--enable-sandbox",
+    ]);
   });
 
   it("preserves the normal Electron sandbox outside Linux CI", () => {
     expect(
       electronLaunchArgs({ cdpPort: 9342, ci: undefined, platform: "linux" }),
-    ).toEqual([".", "--remote-debugging-port=9342"]);
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+    ]);
     expect(
       electronLaunchArgs({ cdpPort: 9342, ci: "true", platform: "darwin" }),
-    ).toEqual([".", "--remote-debugging-port=9342"]);
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+    ]);
   });
 });

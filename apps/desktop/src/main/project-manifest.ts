@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_MANIFEST_PATH } from "@catamorphic/git";
+import { hasLocalGit, nativeGit } from "@catamorphic/git";
+import {
+  PROJECT_MANIFEST_PATH,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import {
   matchesProjectExperience,
   type ProjectExperienceContext,
   sanitizeProjectExperienceWhen,
 } from "../shared/project-experience.js";
+import { trustedHostEntry } from "../shared/trusted-hosts.js";
 
 /**
- * The project manifest (`.catamorphic/project.json`) is the committed home
+ * The project manifest (`.work/project.json`) is the committed home
  * of project-scoped config (ADR 0043). This module reads and writes the
  * `defaultAgent` key (ADR 0056): the slug of the committed project agent
  * that answers new chats for every collaborator, unless a user's own
@@ -90,6 +95,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function projectAllowsIncognito(rootPath: string): boolean {
   return readManifest(rootPath).allowIncognito !== false;
+}
+
+/**
+ * The published program's approved hosts (ADR 0277), trusted by everyone.
+ * Working files and checkpoint commits cannot grant trust. A project with
+ * no publication has no shared approved list; never fall back to HEAD.
+ */
+export async function projectTrustedHosts(rootPath: string): Promise<string[]> {
+  let value: unknown;
+  try {
+    if (!(await hasLocalGit({ path: rootPath }))) return [];
+    const text = await nativeGit(rootPath, [
+      "--no-replace-objects",
+      "show",
+      `${publishedRef()}:${PROJECT_MANIFEST_PATH}`,
+    ]);
+    const manifest: unknown = JSON.parse(text);
+    value = isRecord(manifest) ? manifest.trustedHosts : undefined;
+  } catch {
+    // Missing publication or malformed policy grants nothing.
+    return [];
+  }
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.flatMap((entry) => {
+        const host = typeof entry === "string" ? trustedHostEntry(entry) : null;
+        return host ? [host] : [];
+      }),
+    ),
+  ].slice(0, 200);
 }
 
 /** The committed default agent's slug, when the manifest declares one. */

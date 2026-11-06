@@ -43,7 +43,12 @@ export class InMemoryObjectStore implements ObjectStore {
     return [...this.objects.keys()].filter((key) => key.startsWith(prefix));
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, opts?: { ifMatch?: string }): Promise<void> {
+    if (
+      opts?.ifMatch !== undefined &&
+      this.objects.get(key)?.etag !== opts.ifMatch
+    )
+      throw new PreconditionFailedError(key);
     this.objects.delete(key);
   }
 

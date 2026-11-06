@@ -1,4 +1,4 @@
-import { postJson } from "./api.js";
+import { postJson, verifySessionProtocol } from "./api.js";
 import type { Route } from "./nav.js";
 import {
   activeProfile,
@@ -48,7 +48,7 @@ export async function claimPairing(
         : `Pairing failed (${response.status}).`,
     );
   }
-  return (await response.json()) as PairingClaim;
+  return pairedWithProtocol((await response.json()) as PairingClaim);
 }
 
 /** Recover a paired connection in an installed app with isolated storage. */
@@ -64,7 +64,19 @@ export async function claimPairingInstall(
         : `Installed app setup failed (${response.status}).`,
     );
   }
-  return (await response.json()) as PairingClaim;
+  return pairedWithProtocol((await response.json()) as PairingClaim);
+}
+
+/**
+ * A claim whose desktop speaks this app's session protocol (ADR 0197):
+ * an older or newer Work desktop is refused before its connection is kept.
+ */
+async function pairedWithProtocol(claim: PairingClaim): Promise<PairingClaim> {
+  await verifySessionProtocol({
+    serverUrl: claim.server,
+    accessToken: claim.token,
+  });
+  return claim;
 }
 
 /**

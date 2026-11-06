@@ -27,6 +27,7 @@ export type AuthorizationChallenge =
         label: string;
         secret: boolean;
         required: boolean;
+        multiline?: boolean;
       }>;
     };
 

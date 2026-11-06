@@ -1,6 +1,6 @@
-import type { IPty } from "@lydell/node-pty";
+import type { TerminalBackend } from "./remote-terminal.js";
 
-type TerminalProcess = Pick<IPty, "kill" | "onExit">;
+type TerminalProcess = Pick<TerminalBackend, "kill" | "onExit">;
 
 /** Track native processes independently of tabs, which disappear before exit. */
 export class TerminalLifecycle {

@@ -5,8 +5,11 @@ import {
   isMediaAttachment,
   isTextAttachment,
   messageWithAttachmentNames,
+  renderQuestionAnswer,
   renderTextAttachments,
   renderUserMessage,
+  splitAttachmentMarkers,
+  withMarkerCount,
 } from "../coding-agent/text-attachments.js";
 import type { AgentAttachment } from "../coding-agent/types.js";
 
@@ -108,6 +111,43 @@ describe("text attachments", () => {
     );
   });
 
+  it("describes mentioned folders, workspace links and skills", () => {
+    const describe = (
+      source: Extract<AgentAttachment, { kind: "text" }>["source"],
+    ) => describeTextSource({ kind: "text", name: "", text: "", source });
+    expect(describe({ type: "path", path: "src/lib/" })).toBe(
+      "Folder: src/lib/",
+    );
+    expect(describe({ type: "url", url: "workflow:triage" })).toBe(
+      "Workflow triage (link workflow:triage)",
+    );
+    expect(describe({ type: "url", url: "app:board" })).toBe(
+      "App board (link app:board)",
+    );
+    expect(describe({ type: "url", url: "session:s-1" })).toBe(
+      "Chat session s-1 in this project; read it with read_project_session",
+    );
+    expect(describe({ type: "skill", name: "review" })).toBe(
+      'Skill "review": use it for this message',
+    );
+    expect(
+      describe({ type: "skill", name: "lint", path: "/s/lint/SKILL.md" }),
+    ).toBe('Skill "lint" at "/s/lint/SKILL.md": follow it for this message');
+    // A skill reads as its reference, never as fenced text.
+    expect(
+      renderTextAttachments([
+        {
+          kind: "text",
+          name: "Code review",
+          text: 'Use the "review" skill.',
+          source: { type: "skill", name: "review" },
+        },
+      ]),
+    ).toBe(
+      '\n\n[Attachment 1: Code review — Skill "review": use it for this message]',
+    );
+  });
+
   it("renders nothing without text attachments", () => {
     expect(renderTextAttachments([])).toBe("");
     expect(renderTextAttachments([image])).toBe("");
@@ -199,11 +239,62 @@ describe("text attachments", () => {
     expect(out).not.toContain(M);
   });
 
+  it("renders an answer's pills in it, and says its media follow (ADR 0244)", () => {
+    const M = ATTACHMENT_MARKER;
+    const out = renderQuestionAnswer(`Grid, like ${M} with ${M}`, [
+      paste,
+      image,
+    ]);
+    expect(
+      out.startsWith(
+        "Grid, like [attachment 1: notes.txt] with [attachment 2: shot.png, attachment 1 of the message after these answers]",
+      ),
+    ).toBe(true);
+    expect(out).toContain(
+      "[Attachment 1: notes.txt — Pasted text]\n<<<\na\nb\n>>>",
+    );
+    expect(out).not.toContain(M);
+    expect(renderQuestionAnswer("Grid", undefined)).toBe("Grid");
+    // A later answer's media count on from the earlier answers' in that
+    // message.
+    expect(renderQuestionAnswer(`${M} ${M}`, [image, image], 3)).toBe(
+      "[attachment 1: shot.png, attachment 3 of the message after these answers] [attachment 2: shot.png, attachment 4 of the message after these answers]",
+    );
+  });
+
+  it("keeps one marker per attachment", () => {
+    const M = ATTACHMENT_MARKER;
+    expect(withMarkerCount(`a ${M} b`, 1)).toBe(`a ${M} b`);
+    // Markers past the attachments go; missing ones join at the end; the
+    // ones in place stay there.
+    expect(withMarkerCount(`a ${M} b ${M}`, 0)).toBe("a  b ");
+    expect(withMarkerCount(`a ${M} b ${M}`, 1)).toBe(`a ${M} b `);
+    expect(withMarkerCount(`a ${M} b`, 2)).toBe(`a ${M} b${M}`);
+    expect(withMarkerCount("a", 2)).toBe(`a${M}${M}`);
+  });
+
   it("names attachments in plain-text renderings (titles)", () => {
     const M = ATTACHMENT_MARKER;
     expect(messageWithAttachmentNames(`fix ${M} now`, [paste])).toBe(
       "fix [notes.txt] now",
     );
     expect(messageWithAttachmentNames("plain", [])).toBe("plain");
+  });
+});
+
+describe("splitAttachmentMarkers", () => {
+  it("interleaves runs and numbered slots", () => {
+    expect(
+      splitAttachmentMarkers(`a ${ATTACHMENT_MARKER}${ATTACHMENT_MARKER} b`),
+    ).toEqual([
+      { type: "text", text: "a " },
+      { type: "pill", index: 0 },
+      { type: "pill", index: 1 },
+      { type: "text", text: " b" },
+    ]);
+    expect(splitAttachmentMarkers("plain")).toEqual([
+      { type: "text", text: "plain" },
+    ]);
+    expect(splitAttachmentMarkers("")).toEqual([]);
   });
 });

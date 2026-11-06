@@ -1,10 +1,14 @@
-import { FitAddon, init as initGhostty, Terminal } from "ghostty-web";
+import { FitAddon, Terminal } from "ghostty-web";
 import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import type { TerminalChat } from "../../shared/terminal.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
+import { isMoving } from "../lib/project-move.js";
+import { ipcErrorText } from "../lib/remote-workspace.js";
 import { sanitizeScrollback } from "../lib/scrollback.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
+import { terminalGhostty } from "../lib/terminal-ghostty.js";
 
 /**
  * A terminal tab. Emulation runs in-process via ghostty-web — libghostty-vt
@@ -13,10 +17,6 @@ import { useTerminalAppearance } from "../lib/terminal-appearance.js";
  * IPC. The component stays mounted while its tab is hidden; unmounting
  * kills the shell.
  */
-
-// The WASM module is shared by every Terminal instance; load it once.
-let ghosttyReady: Promise<void> | null = null;
-const ensureGhostty = () => (ghosttyReady ??= initGhostty());
 
 // Matches the browser tab's deferred mount: opening the (canvas-heavy)
 // terminal mid tab-animation would stutter the slide-in.
@@ -41,11 +41,25 @@ export interface TerminalScreenProps {
    * user may still have wanted to read that output.
    */
   restoreSessionId?: string;
+  /**
+   * A shell still running in the window this tab's project moved from:
+   * this tab takes it over, its output so far printed first. One that
+   * ended meanwhile starts fresh beneath what it printed.
+   */
+  adoptSessionId?: string;
   /** Viewing only — keystrokes don't reach the PTY (agent in control). */
   readOnly?: boolean;
+  /**
+   * The chat whose working folder the shell opens in, locally or on its server.
+   */
+  chat?: TerminalChat;
   /** Shell title changes (OSC 0/2) — feeds the tab label. */
   onTitle: (title: string) => void;
-  /** The shell exited (Ctrl+D, `exit`) — the tab closes itself. */
+  /**
+   * The shell exited (Ctrl+D, `exit`) — the tab closes itself. An attached
+   * agent terminal reports it too when it had ended before this view
+   * attached.
+   */
   onExit: () => void;
   /**
    * Reports the PTY session backing this tab. The workspace records it so
@@ -63,7 +77,9 @@ export function TerminalScreen({
   macroShortcuts = [],
   floating = false,
   restoreSessionId,
+  adoptSessionId,
   readOnly = false,
+  chat,
   onTitle,
   onExit,
   onSession,
@@ -94,6 +110,8 @@ export function TerminalScreen({
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const initialCommandRef = useRef(initialCommand);
+  // Fixed for the terminal's life, like the shell it names.
+  const chatRef = useRef(chat);
   const floatingRef = useRef(floating);
   floatingRef.current = floating;
   const macroShortcutsRef = useRef(macroShortcuts);
@@ -110,11 +128,12 @@ export function TerminalScreen({
 
     const timer = window.setTimeout(() => {
       void (async () => {
-        await ensureGhostty();
+        const ghostty = await terminalGhostty();
         if (disposed) return;
         const currentAppearance = appearanceRef.current;
         setAppliedAppearance(currentAppearance);
         term = new Terminal({
+          ghostty,
           fontSize: currentAppearance.fontSize,
           fontFamily: currentAppearance.fontFamily,
           cursorBlink: true,
@@ -200,24 +219,41 @@ export function TerminalScreen({
           if (sessionId) void desktopApi.terminalResize(sessionId, cols, rows);
         });
 
+        // A shell taken over from the window this project moved from: it
+        // keeps running and streams here from now on.
+        const adopted =
+          adoptSessionId && !attachSessionId
+            ? await desktopApi.terminalAdopt(adoptSessionId, projectId)
+            : null;
+        if (disposed) {
+          // Taken over by a view already gone: the shell is this window's
+          // to end, as the view's own would have been.
+          if (adopted && adoptSessionId && !isMoving(projectId))
+            void desktopApi.terminalKill(adoptSessionId);
+          return;
+        }
         if (attachSessionId) {
           // Attach to the agent's live session: replay, then stream. The
           // shared PTY snaps to this view's geometry (tmux-attach style) —
           // the shell redraws on SIGWINCH, cleaning up replay wrapping.
-          sessionId = attachSessionId;
           const history = await desktopApi.terminalBuffer(attachSessionId);
           if (disposed) return;
           if (history?.buffer) term.write(history.buffer);
-          void desktopApi.terminalResize(attachSessionId, term.cols, term.rows);
+          // Its command ended before this view attached (ADR 0223): what
+          // it printed stays to read, and nothing runs in it to type into.
+          if (history?.running) sessionId = attachSessionId;
+        } else if (adopted && adoptSessionId) {
+          if (adopted.buffer) term.write(adopted.buffer);
+          sessionId = adoptSessionId;
         } else {
           // Reopened tab: the dead session's scrollback prints first —
           // sanitized to plain text (raw ANSI replay is grid-state
           // dependent and eats lines) and dimmed as a whole to read as
           // history — closed by a divider; the fresh shell prompts
           // beneath it.
-          if (restoreSessionId) {
-            const dead =
-              await desktopApi.terminalRestoreBuffer(restoreSessionId);
+          const ended = restoreSessionId ?? adoptSessionId;
+          if (ended) {
+            const dead = await desktopApi.terminalRestoreBuffer(ended);
             if (disposed) return;
             const lines = dead ? sanitizeScrollback(dead.buffer) : [];
             if (lines.length > 0) {
@@ -226,31 +262,64 @@ export function TerminalScreen({
               );
             }
           }
-          const created = await desktopApi.terminalCreate({
-            projectId,
-            cols: term.cols,
-            rows: term.rows,
-          });
+          const chat = chatRef.current;
+          // Opening may start the chat's workspace and run its setup,
+          // which takes a while: say so where the shell will be. One row,
+          // so erasing it once the shell is there leaves nothing behind.
+          const progress = chat?.remote
+            ? "Starting the chat's workspace on the server…".slice(
+                0,
+                Math.max(0, term.cols - 1),
+              )
+            : "";
+          if (progress) term.write(`\x1b[2m${progress}\x1b[0m`);
+          const created = await desktopApi
+            .terminalCreate({
+              projectId,
+              cols: term.cols,
+              rows: term.rows,
+              ...(chat ? { chat } : {}),
+            })
+            .catch((error: unknown) => {
+              // A remote workspace can refuse (not running, no access) or
+              // its server can stop answering: say why where the shell
+              // would have been.
+              term?.write(
+                `${progress ? "\r\x1b[2K" : ""}\x1b[31m${ipcErrorText(error)}\x1b[0m\r\n`,
+              );
+              return null;
+            });
+          if (!created) return;
           if (disposed) {
             void desktopApi.terminalKill(created.sessionId);
             return;
           }
+          if (progress) term.write("\r\x1b[2K");
           sessionId = created.sessionId;
         }
-        onSessionRef.current?.(sessionId);
-        // The layout may have changed while the PTY was being created.
-        void desktopApi.terminalResize(sessionId, term.cols, term.rows);
-
-        unsubscribes.push(
-          desktopApi.onTerminalData((payload) => {
-            if (payload.sessionId === sessionId) term?.write(payload.data);
-          }),
-          desktopApi.onTerminalExit((payload) => {
-            if (payload.sessionId !== sessionId) return;
-            sessionId = null;
-            onExitRef.current();
-          }),
-        );
+        if (sessionId) {
+          onSessionRef.current?.(sessionId);
+          // The layout may have changed while the PTY was being created.
+          void desktopApi.terminalResize(sessionId, term.cols, term.rows);
+          unsubscribes.push(
+            desktopApi.onTerminalData((payload) => {
+              if (payload.sessionId === sessionId) term?.write(payload.data);
+            }),
+            desktopApi.onTerminalExit((payload) => {
+              if (payload.sessionId !== sessionId) return;
+              sessionId = null;
+              // Ended for a reason of its own (its workspace was given
+              // back, the server went away): the tab stays to say so.
+              if (payload.message) {
+                term?.write(`\r\n\x1b[2m${payload.message}\x1b[0m\r\n`);
+                return;
+              }
+              onExitRef.current();
+            }),
+          );
+        } else {
+          onExitRef.current();
+        }
         // Cursor states, native-terminal style: blinking solid block when
         // focused and idle, pinned solid while typing, and a steady hollow
         // outline while the terminal is unfocused. Read-only terminals
@@ -526,7 +595,13 @@ export function TerminalScreen({
         });
         term.onTitleChange((title) => onTitleRef.current(title));
         const command = initialCommandRef.current?.trim();
-        if (command && sessionId && !attachSessionId && !restoreSessionId) {
+        if (
+          command &&
+          sessionId &&
+          !attachSessionId &&
+          !restoreSessionId &&
+          !adoptSessionId
+        ) {
           await desktopApi.terminalWrite(sessionId, `${command}\r`);
         }
         term.focus();
@@ -537,8 +612,14 @@ export function TerminalScreen({
       disposed = true;
       window.clearTimeout(timer);
       for (const unsubscribe of unsubscribes) unsubscribe();
-      // Attached (agent) sessions outlive their view; owned ones die here.
-      if (sessionId && !attachSessionId) {
+      // Attached (agent) sessions outlive their view; owned ones die here,
+      // unless their project is moving to another window, which takes a
+      // shell on this computer over (lib/project-move.ts).
+      if (
+        sessionId &&
+        !attachSessionId &&
+        (chatRef.current?.remote || !isMoving(projectId))
+      ) {
         void desktopApi.terminalKill(sessionId);
       }
       fit?.dispose();
@@ -546,7 +627,7 @@ export function TerminalScreen({
       term?.dispose();
       termRef.current = null;
     };
-  }, [projectId, attachSessionId, restoreSessionId, ready]);
+  }, [projectId, attachSessionId, restoreSessionId, adoptSessionId, ready]);
 
   // This ghostty-web version bakes colors into its WASM terminal at open().
   // Apply appearance to new terminals; never restart a running shell for it.

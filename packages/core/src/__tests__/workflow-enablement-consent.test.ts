@@ -7,12 +7,11 @@ const base = {
   deploymentArtifactDigest: "artifact-digest",
   commitSha: "a".repeat(40),
   remoteBranch: "main",
-  environment: "local",
+  environment: "default",
   owner: { type: "member" as const, externalUserId: "alice" },
   connections: [
     {
       alias: "mail",
-      bindingId: "binding-1",
       connectionId: "connection-1",
       providerKind: "mcp",
       principalKind: "member" as const,
@@ -20,6 +19,7 @@ const base = {
     },
   ],
   capabilities: ["messages.search", "messages.read"],
+  permissions: ["sessions:write"],
 };
 
 describe("workflowEnablementConsentDigest", () => {
@@ -53,6 +53,18 @@ describe("workflowEnablementConsentDigest", () => {
         ...base,
         deploymentArtifactDigest: "new-artifact",
       }),
+    ).not.toBe(workflowEnablementConsentDigest(base));
+  });
+
+  it("changes when the declared permissions change (ADR 0158)", () => {
+    expect(
+      workflowEnablementConsentDigest({
+        ...base,
+        permissions: ["sessions:write", "runs:read"],
+      }),
+    ).not.toBe(workflowEnablementConsentDigest(base));
+    expect(
+      workflowEnablementConsentDigest({ ...base, permissions: [] }),
     ).not.toBe(workflowEnablementConsentDigest(base));
   });
 });

@@ -3,6 +3,7 @@ import {
   query,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { hostProcessEnv } from "./options.js";
 
 /**
  * A slash command the Claude Code CLI would accept in this project:
@@ -46,7 +47,13 @@ export async function listClaudeSlashCommands(opts: {
     options: {
       cwd: opts.workingDirectory,
       abortController: abort,
-      env: { ...process.env, ...opts.env },
+      env: {
+        ...hostProcessEnv({
+          env: opts.env,
+          workingDirectory: opts.workingDirectory,
+        }),
+        ...opts.env,
+      },
       pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
       settingSources: ["user", "project", "local"],
       plugins: opts.plugins,

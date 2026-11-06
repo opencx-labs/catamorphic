@@ -57,7 +57,7 @@ export type DeletedProject =
   paths["/api/projects/{projectId}"]["delete"]["responses"][200]["content"]["application/json"];
 
 export type ParseWorkflowRequest =
-  paths["/api/playground/parse"]["post"]["requestBody"]["content"]["application/json"];
+  paths["/api/workflows/parse"]["post"]["requestBody"]["content"]["application/json"];
 
 export type ParseWorkflowResponse =
-  paths["/api/playground/parse"]["post"]["responses"][200]["content"]["application/json"];
+  paths["/api/workflows/parse"]["post"]["responses"][200]["content"]["application/json"];

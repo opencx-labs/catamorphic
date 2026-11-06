@@ -1,8 +1,59 @@
+import {
+  type AgentTurnUsage,
+  type Attempt,
+  agentQuestionSchema,
+  attachmentSchema,
+  type CommandReceipt,
+  type DispatchMode,
+  dispatchModeSchema,
+  IMPORTED_HARNESSES,
+  type ImportedSession,
+  type InboundSender,
+  type InputSource,
+  type Item,
+  inboundSenderSchema,
+  inputSourceSchema,
+  type JsonObject,
+  jsonValueSchema,
+  type NativeRef,
+  type ProviderThread,
+  questionAnswerSchema,
+  type RuntimeRequest,
+  type RuntimeRequestResponse,
+  SESSION_METADATA_KEY_PATTERN,
+  SESSION_METADATA_LIMITS,
+  SESSION_PROTOCOL_VERSION,
+  type SessionCommand,
+  type SessionEvent,
+  type SessionFields,
+  type SessionInput,
+  type SessionMessageAuthor,
+  type SessionMetadata,
+  type SessionSnapshot,
+  type SessionStreamMessage,
+  type StoredSessionEvent,
+  sessionCommandSchema,
+  sessionInputSchema,
+  sessionMessageAuthorSchema,
+  settledAlertSchema,
+  type Turn,
+  type TurnError,
+  type TurnOutcome,
+  taskNotificationStatusSchema,
+} from "@catamorphic/agent-protocol";
+import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import { APP_ICON_NAMES } from "@catamorphic/app";
 import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
+  type SessionMailboxItem,
 } from "@catamorphic/core";
+import {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  SANDBOXING_LEVELS,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 
 // --- Params ---
@@ -159,12 +210,15 @@ export const TriggerKindDisplaySchema = z.object({
 export const NodeTriggerBindingSchema = z.object({
   kind: z.string(),
   config: JsonOutSchema,
+  where: JsonOutSchema.optional(),
   display: TriggerKindDisplaySchema.optional(),
 });
 
+/** A binding as written: a host kind or a project trigger kind (ADR 0171). */
 export const WorkflowTriggerBindingSchema = z.object({
   kind: z.string(),
   config: JsonOutSchema,
+  where: JsonOutSchema.optional(),
   sourceRange: SourceRangeSchema,
 });
 
@@ -176,12 +230,19 @@ export const TriggerKindInfoSchema = z.object({
   payloadJsonSchema: JsonOutSchema,
   configJsonSchema: JsonOutSchema,
   outputJsonSchema: JsonOutSchema.optional(),
+  /** Permissions a workflow must declare to bind the kind (ADR 0210). */
+  requiredPermissions: z.array(z.string()).optional(),
 });
 
 export const TriggerBindingInfoSchema = z.object({
   workflowName: z.string(),
+  /** The host kind that fires the binding. */
   kind: z.string(),
   config: JsonOutSchema,
+  /** Filters the payload must satisfy, all of them (ADR 0171). */
+  where: z.array(JsonOutSchema),
+  /** The project trigger kind the workflow bound. */
+  projectKind: z.string().optional(),
   canSuspend: z.boolean(),
   inputParameters: z.array(ParameterInfoSchema),
   inputSchema: JsonOutSchema,
@@ -190,16 +251,11 @@ export const TriggerBindingInfoSchema = z.object({
 
 export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member"), externalUserId: z.string().min(1) }),
-  z.object({
-    type: z.literal("service"),
-    principalKind: z.enum(["project_service", "tenant_service"]),
-    connectionId: z.string().uuid(),
-  }),
+  z.object({ type: z.literal("project") }),
 ]);
 
 export const WorkflowEnablementConnectionSchema = z.object({
   alias: z.string(),
-  bindingId: z.string().uuid(),
   connectionId: z.string().uuid(),
   providerKind: z.string(),
   principalKind: z.enum(["member", "project_service", "tenant_service"]),
@@ -211,6 +267,7 @@ export const WorkflowEnablementTriggerSchema = z.object({
   definitionId: z.string().uuid(),
   kind: z.string(),
   config: JsonOutSchema,
+  projectKind: z.string().optional(),
   status: z.enum(["active", "paused"]),
 });
 
@@ -224,6 +281,8 @@ const WorkflowEnablementTargetSchema = z.object({
   owner: WorkflowEnablementOwnerSchema,
   connections: z.array(WorkflowEnablementConnectionSchema),
   capabilities: z.array(z.string()),
+  /** Project permissions the workflow declares (ADR 0158). */
+  permissions: z.array(z.string()),
   consentDigest: z.string().length(64),
 });
 
@@ -231,7 +290,13 @@ export const WorkflowEnablementPreviewSchema =
   WorkflowEnablementTargetSchema.extend({
     deploymentArtifactDigest: z.string(),
     triggerCount: z.number().int().nonnegative(),
-    triggers: z.array(z.object({ kind: z.string(), config: JsonOutSchema })),
+    triggers: z.array(
+      z.object({
+        kind: z.string(),
+        config: JsonOutSchema,
+        projectKind: z.string().optional(),
+      }),
+    ),
     connectionLabels: z.record(z.string(), z.string()),
   });
 
@@ -265,6 +330,18 @@ export const ProjectSchema = z.object({
   name: z.string(),
   storageType: z.enum(["managed", "remote"]),
   remoteUrl: z.string().nullable(),
+  /**
+   * Who created the linked remote (ADR 0170). `attached`: Work only pushes
+   * `work/*` branches there and shares changes as pull requests. `owned`:
+   * Work created it and sync keeps it converged. `null` when unlinked.
+   */
+  remoteOwnership: z.enum(["owned", "attached"]).nullable(),
+  /**
+   * Since when the project's main has not been a fast-forward of its code
+   * host's default branch (ADR 0170): accepted changes stop arriving until
+   * the two are reconciled. `null` while they converge.
+   */
+  remoteDivergedAt: z.string().datetime().nullable(),
   defaultBranch: z.string(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -315,21 +392,18 @@ export const WorkflowNodeTypeSchema = z.enum([
   "branch",
   "if-block",
   "loop-block",
-  "parallel",
   "parallel-block",
   "scope-block",
   "durable-boundary",
   "batch",
   "pause",
   "call-workflow",
-  "delay",
   "return",
 ]);
 
 export const WorkflowEdgeTypeSchema = z.enum([
   "branch-false",
   "branch-true",
-  "parallel",
   "sequential",
 ]);
 
@@ -400,6 +474,7 @@ export const WorkflowGraphSchema = z.object({
       optional: z.boolean().optional(),
     }),
   ),
+  permissions: z.array(z.string()),
   canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
@@ -497,6 +572,8 @@ export const RunSchema = z.object({
   batchScopes: z.array(BatchProgressSchema),
   provenance: z.object({
     commitSha: z.string().optional(),
+    /** The workflow's display name at that commit. */
+    displayName: z.string().optional(),
   }),
   artifact: z.object({ deploymentArtifactId: z.string().uuid() }).optional(),
   initiatedBy: z.string().nullable(),
@@ -580,9 +657,20 @@ export const EnvironmentListSchema = z.object({
       description: z.string().optional(),
       available: z.boolean(),
       clientRequired: z.boolean().optional(),
+      machineOnline: z
+        .boolean()
+        .describe(
+          "False when no machine for it is online and open to this work, such as a member's computer that is not connected",
+        ),
       compatible: z.boolean(),
       preferred: z.boolean(),
       allowed: z.boolean(),
+      personalCredentials: z
+        .boolean()
+        .optional()
+        .describe(
+          "Present when the Environment allows personal credentials (ADR 0184): whether the caller's own chats placed there would carry their files and may run on their own sign-in",
+        ),
       reasons: z.array(z.string()),
       binding: z
         .object({
@@ -617,6 +705,8 @@ export const ConnectionRecordSchema = z.object({
   projectId: z.string().uuid().nullable(),
   providerKind: z.string(),
   principalKind: z.enum(["member", "project_service", "tenant_service"]),
+  /** A service connection's name; Environment bindings refer to it. */
+  name: z.string().nullable(),
   ownerExternalUserId: z.string().nullable(),
   label: z.string(),
   status: z.enum(["pending", "ready", "expired", "revoked"]),
@@ -638,21 +728,17 @@ const ConnectionBindingPrincipalStatusSchema = z.object({
   scopes: z.array(z.string()),
 });
 
+/** One alias an Environment commits in `.work/project.json` (ADR 0172). */
 export const ConnectionBindingSchema = z.object({
-  id: z.string().uuid(),
-  projectId: z.string().uuid(),
   environment: z.string(),
   alias: z.string(),
-  providerKind: z.string(),
-  principalKinds: z.array(
-    z.enum(["member", "project_service", "tenant_service"]),
-  ),
-  serviceConnectionId: z.string().uuid().nullable(),
-  capabilities: z.array(z.string()),
+  provider: z.string(),
+  principal: z.enum(["member", "service", "either"]),
+  /** The service connection's name; shown to connection administrators. */
+  service: z.string().nullable(),
+  capabilities: z.array(z.string()).nullable(),
   memberConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
   serviceConnection: ConnectionBindingPrincipalStatusSchema.nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
 });
 
 export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
@@ -675,6 +761,7 @@ export const AuthorizationChallengeSchema = z.discriminatedUnion("kind", [
         label: z.string(),
         secret: z.boolean(),
         required: z.boolean(),
+        multiline: z.boolean().optional(),
       }),
     ),
   }),
@@ -754,11 +841,33 @@ export const RunsQuerySchema = PaginationQuerySchema.extend({
 });
 
 export const SignalRunSchema = z.object({
+  runId: z.string().uuid(),
   correlationKey: CorrelationKeySchema,
   signal: z.string().min(1).max(255),
   idempotencyKey: z.string().min(1).max(255),
   value: JsonValueSchema,
 });
+
+export const RunSignalReceiptSchema = z.discriminatedUnion("status", [
+  z.object({
+    id: z.string().uuid(),
+    runId: z.string().uuid(),
+    status: z.literal("buffered"),
+    pauseId: z.null(),
+  }),
+  z.object({
+    id: z.string().uuid(),
+    runId: z.string().uuid(),
+    status: z.literal("resumed"),
+    pauseId: z.string().uuid(),
+  }),
+  z.object({
+    id: z.string().uuid(),
+    runId: z.string().uuid(),
+    status: z.literal("discarded"),
+    pauseId: z.null(),
+  }),
+]);
 
 export const CancelRunByKeySchema = z.object({
   correlationKey: CorrelationKeySchema,
@@ -876,13 +985,6 @@ export const RepoStatusSchema = z.object({
   remoteHeadTimestamp: z.number().nullable(),
 });
 
-export const BranchInfoSchema = z.object({
-  name: z.string(),
-  commit: z.string(),
-  isCurrent: z.boolean(),
-  createdAt: z.number().nullable(),
-});
-
 export const DiffEntrySchema = z.object({
   path: z.string(),
   kind: z.enum(["added", "modified", "deleted"]),
@@ -895,16 +997,29 @@ export const ConflictEntrySchema = z.object({
   base: z.string().nullable(),
   ours: z.string().nullable(),
   theirs: z.string().nullable(),
+  /** A file that is not text: its sides are not rendered as text. */
+  binary: z.boolean().optional(),
 });
 
 export const DeployRequestSchema = z.object({
   message: z.string().min(1).optional(),
-  /** Optional draft files to write to the working tree before committing. */
+  /**
+   * Files to publish as one commit on top of the published program, leaving
+   * the member's draft untouched (ADR 0191).
+   */
   files: z.record(z.string(), z.string()).optional(),
+  /**
+   * The published commit `files` were edited from: files changed on the
+   * server since merge with them, or come back as conflicts.
+   */
+  base: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
 });
 
 export const PullRequestSchema = z.object({
-  /** Optional draft files to write to the working tree before merging. */
+  /** Files to write into the member's draft before merging. */
   files: z.record(z.string(), z.string()).optional(),
 });
 
@@ -924,12 +1039,6 @@ export const PullResponseSchema = z.object({
 export const DiscardResponseSchema = z.object({
   discarded: z.boolean(),
   branch: z.string(),
-});
-
-export const CreateBranchSchema = z.object({
-  /** Optional explicit name; when omitted the server generates `work/YYYY-MM-DD_HH-mm`. */
-  name: z.string().optional(),
-  fromRef: z.string().optional(),
 });
 
 export const ResolveConflictsSchema = z.object({
@@ -988,6 +1097,8 @@ export const AgentTodoSchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().min(1).max(4_000),
   status: AgentTodoStatusSchema,
+  /** What the agent does while this is in progress ("Reviewing migrations"). */
+  activeForm: z.string().max(200).optional(),
 });
 
 export const AgentSessionSourceSchema = z.enum([
@@ -1006,9 +1117,70 @@ export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
     .enum(["true", "false"])
     .transform((value) => value === "true")
     .optional(),
+  /** Words each found in the chat's title or one of its messages. */
+  query: z.string().max(500).optional(),
 }).refine((value) => !(value.rootsOnly && value.parentSessionId), {
   message: "Choose rootsOnly or parentSessionId, not both.",
 });
+
+/**
+ * A chat named by the project's key (ADR 0173): the caller's own, the
+ * project chat with `audience=project`, or a member's with `member=<id>`.
+ */
+export const KeyedChatParamsSchema = ProjectIdParamsSchema.extend({
+  key: z.string().trim().min(1).max(200),
+});
+export const KeyedChatQuerySchema = z
+  .object({
+    audience: z.literal("project").optional(),
+    member: z.string().min(1).optional(),
+  })
+  .refine((value) => !(value.audience && value.member), {
+    message: "Choose audience=project or member, not both.",
+  });
+export const ClosedKeyedChatSchema = z.object({
+  sessionId: z.string().uuid().nullable(),
+  closed: z.boolean(),
+});
+
+/**
+ * Where a chat's workspace starts, or moves to (ADR 0178): a branch, tag,
+ * commit, or full ref (`refs/pull/42/head`) of the project's linked remote.
+ */
+export const SessionWorkspaceRequestBodySchema = z.strictObject({
+  ref: z.string().trim().min(1).max(255),
+  update: z.enum(["reset", "rebase"]).optional(),
+});
+
+/** The base a chat's workspace stands on (ADR 0178). */
+export const SessionWorkspaceSchema = z.object({
+  ref: z.string(),
+  commit: z.string(),
+});
+
+export const AgentSessionPlacementSchema = z.object({
+  environment: z.string(),
+  reason: z.enum([
+    "requested",
+    "agent_preferred",
+    "project_default",
+    "available",
+  ]),
+  machine: z.object({ id: z.string(), label: z.string() }),
+});
+
+/** Where a session another tool ran was imported from (ADR 0233). */
+export const ImportedSessionSchema = describes<ImportedSession>()(
+  z
+    .object({
+      harness: z.enum(IMPORTED_HARNESSES),
+      nativeSessionId: z.string(),
+      sourcePath: z.string(),
+      contentSha256: z.string(),
+      sourceModifiedAt: z.string(),
+    })
+    .meta({ id: "ImportedSession" }),
+);
 
 export const AgentSessionSchema = z.object({
   workStatus: z.enum(["open", "completed"]),
@@ -1017,18 +1189,23 @@ export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   externalUserId: z.string(),
-  provider: z.string(),
+  owner: z.enum(["member", "project"]),
   source: AgentSessionSourceSchema,
-  providerSessionId: z.string().nullable(),
   sandboxId: z.string().uuid().nullable(),
   environment: z.string().nullable(),
   allocationId: z.string().uuid().nullable(),
   agentId: z.string().nullable(),
+  /** The harness used by the latest bound turn; null before it starts. */
+  harness: z.string().nullable(),
   model: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
+  /** Runs in its harness's read-only mode (ADR 0271). */
+  readOnly: z.boolean(),
   title: z.string().nullable(),
   icon: z.string().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
+  /** Provenance of a chat imported from another tool (ADR 0233). */
+  imported: ImportedSessionSchema.nullable(),
   parentSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   archivedAt: z.string().datetime().nullable(),
@@ -1037,8 +1214,9 @@ export const AgentSessionSchema = z.object({
   todos: z.array(AgentTodoSchema).max(50),
   authorityHostId: z.string().min(1),
   authorityRevision: z.number().int().positive(),
-  authoritySeenAt: z.string().datetime().nullable(),
-  mirrorMessageCount: z.number().int().nonnegative(),
+  authoritySeenAt: z.string().datetime(),
+  /** The last event sequence a mirror pushed here (ADR 0197). */
+  mirrorSequence: z.number().int().nonnegative(),
   handoffStatus: z.enum(["none", "pending"]),
   handoffDestinationHostId: z.string().nullable(),
   resumable: z.boolean(),
@@ -1050,6 +1228,16 @@ export const AgentSessionSchema = z.object({
   attentionMessage: z
     .object({ id: z.string().uuid(), content: z.string() })
     .optional(),
+  /** A searched list's excerpt of the message the words were found in. */
+  match: z.string().optional(),
+  /** The project's key for this chat (ADR 0173); closing frees it. */
+  key: z.string().nullable(),
+  /** Workflows that delivered to the chat by its key. */
+  keyWorkflows: z.array(z.string()),
+  /** Where the chat runs and why (ADR 0173). */
+  placement: AgentSessionPlacementSchema.nullable(),
+  /** The base the chat's workspace stands on (ADR 0178). */
+  workspace: SessionWorkspaceSchema.nullable(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -1078,6 +1266,11 @@ export const UpdateAgentSessionActivitySchema = z.object({
   activity: z.string().max(500).nullable(),
 });
 
+/** A person's name for their chat; it keeps it (ADR 0247). */
+export const RenameAgentSessionSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+});
+
 export const CreateAgentSessionSchema = z.object({
   systemPrompt: z.string().optional(),
   /** Host-registry key of the agent to run this session on. */
@@ -1089,11 +1282,20 @@ export const CreateAgentSessionSchema = z.object({
   source: AgentSessionSourceSchema.optional(),
   parentSessionId: z.string().uuid().optional(),
   title: z.string().min(1).max(500).optional(),
+  /** Start the workspace at a ref of the project's linked remote. */
+  workspace: SessionWorkspaceRequestBodySchema.optional(),
 });
 
 export const CreateAgentSubsessionSchema = z.object({
-  routeId: z.string().min(1).max(100).optional(),
+  /** Omitted: a copy of the parent's own agent (ADR 0271). */
   agentId: z.string().min(1).optional(),
+  /** A model a grant allows and the agent's harness offers. */
+  model: z.string().min(1).optional(),
+  effort: AgentEffortSchema.optional(),
+  /** Run in the harness's read-only mode; always allowed. */
+  readOnly: z.boolean().optional(),
+  /** False keeps the child from starting its own; always allowed. */
+  delegate: z.boolean().optional(),
   task: z.string().min(1).max(100_000),
   contextMode: z.enum(["fresh", "inherit"]).optional(),
   title: z.string().min(1).max(500).optional(),
@@ -1101,7 +1303,8 @@ export const CreateAgentSubsessionSchema = z.object({
 
 export const AgentSubsessionSchema = z.object({
   delegationId: z.string().uuid(),
-  routeId: z.string(),
+  /** The grant that admitted it: `self`, `*` or an agent id. */
+  grant: z.string(),
   task: z.string(),
   contextMode: z.enum(["fresh", "inherit"]),
   allowFurtherDelegation: z.boolean(),
@@ -1165,147 +1368,718 @@ export const EnvironmentErrorSchema = z.object({
   reasons: z.array(z.string()).optional(),
 });
 
-export const SessionDeliveryModeSchema = z.enum([
-  "message_only",
-  "next_turn",
-  "interrupt",
-]);
+// --- Agent session log (ADR 0197) ---
+//
+// The wire shapes of `@catamorphic/agent-protocol`. Each schema is bound to
+// its protocol type with `describes`, so a change on either side that the
+// other does not follow fails the typecheck here.
 
-export const SessionMessageAuthorSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user"), externalUserId: z.string() }),
-  z.object({
-    kind: z.literal("agent"),
-    sessionId: z.string().uuid(),
-    agentId: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("workflow"),
-    runId: z.string().uuid(),
-    workflowName: z.string(),
-  }),
-  z.object({
-    kind: z.literal("watcher"),
-    watcherId: z.string().uuid(),
-    runId: z.string().uuid().optional(),
-  }),
-  z.object({ kind: z.literal("system"), code: z.string() }),
-]);
+/** Every member's keys, across a union. */
+type KeysOf<T> = T extends unknown ? `${Exclude<keyof T, symbol>}` : never;
 
-/** A transcript pushed from another backend (ADR 0061). */
-export const MirrorAgentSessionSchema = z.object({
-  workStatus: z.enum(["open", "completed"]).optional(),
-  stateRevision: z.number().int().nonnegative().optional(),
-  events: z
-    .array(
-      z.object({
-        id: z.string().uuid(),
-        kind: z.enum([
-          "session.created",
-          "session.message-received",
-          "session.message-sent",
-          "session.turn-changed",
-          "session.state-changed",
-          "session.work-changed",
-          "session.authority-changed",
-        ]),
-        occurredAt: z.string().datetime(),
-        payload: z.record(z.string(), JsonValueSchema),
+/**
+ * Bind a schema to the protocol type it describes: the schema's output must
+ * be assignable to the type, the type to the schema's output, and both name
+ * the same fields (so a new optional field is not silently stripped).
+ */
+function describes<T>() {
+  return <S extends z.ZodType<T>>(
+    schema: S &
+      ([T] extends [z.output<S>]
+        ? [KeysOf<T>] extends [KeysOf<z.output<S>>]
+          ? unknown
+          : never
+        : never),
+  ): S => schema;
+}
+
+// The protocol's own JSON value (inside a `respond` command) is recursive;
+// naming it lets the OpenAPI document reference it instead of an anonymous
+// cycle.
+z.globalRegistry.add(jsonValueSchema, { id: "ProtocolJsonValue" });
+// Messages, answers and their history carry attachments: one definition
+// the document references rather than a copy at each use.
+z.globalRegistry.add(attachmentSchema, { id: "ProtocolAttachment" });
+
+export const DispatchModeSchema = describes<DispatchMode>()(
+  dispatchModeSchema.describe(
+    "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn",
+  ),
+);
+
+export const SessionMessageAuthorSchema = describes<SessionMessageAuthor>()(
+  sessionMessageAuthorSchema,
+);
+
+export const InboundSenderSchema = describes<InboundSender>()(
+  inboundSenderSchema.meta({ id: "InboundSender" }),
+);
+
+const InputSourceSchema = describes<InputSource>()(
+  inputSourceSchema.meta({ id: "InputSource" }),
+);
+
+/** What a delivery puts into a session (ADR 0217). */
+export const SessionInputSchema = describes<SessionInput>()(
+  sessionInputSchema.meta({ id: "SessionInput" }),
+);
+
+const JsonObjectSchema = describes<JsonObject>()(
+  z.record(z.string(), JsonValueSchema),
+);
+
+const NativeRefSchema = describes<NativeRef>()(
+  z.object({
+    id: z.string(),
+    strength: z.enum(["strong", "weak", "none"]),
+  }),
+);
+
+const TurnErrorSchema = describes<TurnError>()(
+  z.object({
+    message: z.string(),
+    kind: z
+      .enum(["auth", "rate_limit", "unavailable", "model_incompat"])
+      .optional(),
+    retrySafe: z.boolean().optional(),
+  }),
+);
+
+const ProviderRetrySchema = z.object({
+  error: TurnErrorSchema.omit({ retrySafe: true }),
+  attempt: z.number().int().positive().nullable(),
+  maxAttempts: z.number().int().positive().nullable(),
+  retryAt: z.string().nullable(),
+});
+
+const AgentTurnUsageSchema = describes<AgentTurnUsage>()(
+  z.object({
+    model: z.string().optional(),
+    inputTokens: z.number().optional(),
+    cachedInputTokens: z.number().optional(),
+    cacheCreationTokens: z.number().optional(),
+    outputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
+    costUsd: z.number().optional(),
+    contextTokens: z.number().optional(),
+    contextWindow: z.number().optional(),
+  }),
+);
+
+const TurnOutcomeSchema = describes<TurnOutcome>()(
+  z.object({
+    changedFiles: z.array(
+      z.object({ path: z.string(), kind: z.enum(["modified", "deleted"]) }),
+    ),
+    usage: AgentTurnUsageSchema.optional(),
+    storeSync: JsonObjectSchema.optional(),
+    workspaceSync: z.object({ error: z.string() }).optional(),
+    notification: z
+      .object({ title: z.string().optional(), body: z.string().optional() })
+      .optional(),
+  }),
+);
+
+export const TurnSchema = describes<Turn>()(
+  z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      ordinal: z.number().int(),
+      status: z.enum([
+        "queued",
+        "held",
+        "preparing",
+        "running",
+        "waiting",
+        "finalizing",
+        "completed",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "rolled_back",
+      ]),
+      inputItemId: z.string().nullable(),
+      dispatch: z.enum(["queue", "interrupt"]),
+      priority: z.number(),
+      activity: z.string().nullable(),
+      activityAt: z.string().nullable(),
+      providerRetry: ProviderRetrySchema.nullable(),
+      attemptCount: z.number().int(),
+      activeAttemptId: z.string().nullable(),
+      providerThreadId: z.string().nullable(),
+      retryAt: z.string().nullable(),
+      cancellationRequested: z.boolean(),
+      error: TurnErrorSchema.nullable(),
+      outcome: TurnOutcomeSchema.nullable(),
+      checkpoint: z.object({
+        before: z.string().nullable(),
+        after: z.string().nullable(),
       }),
+      continuationOf: z.string().nullable(),
+      createdAt: z.string(),
+      startedAt: z.string().nullable(),
+      completedAt: z.string().nullable(),
+      updatedAt: z.string(),
+    })
+    .meta({ id: "Turn" }),
+);
+
+export const AttemptSchema = describes<Attempt>()(
+  z
+    .object({
+      id: z.string(),
+      turnId: z.string(),
+      sessionId: z.string(),
+      ordinal: z.number().int(),
+      reason: z.enum(["initial", "retry", "steer_restart", "recovery"]),
+      status: z.enum([
+        "preparing",
+        "running",
+        "completed",
+        "failed",
+        "interrupted",
+        "lost",
+        "superseded",
+      ]),
+      providerThreadId: z.string().nullable(),
+      nativeTurnRef: NativeRefSchema.nullable(),
+      error: TurnErrorSchema.nullable(),
+      createdAt: z.string(),
+      startedAt: z.string().nullable(),
+      completedAt: z.string().nullable(),
+    })
+    .meta({ id: "Attempt" }),
+);
+
+/** The identity and placement Work assigns every item. */
+const itemCommon = {
+  id: z.string(),
+  sessionId: z.string(),
+  turnId: z.string().nullable(),
+  attemptId: z.string().nullable(),
+  parentItemId: z.string().nullable(),
+  position: z.number().int(),
+  status: z.enum(["in_progress", "completed", "failed", "cancelled"]),
+  nativeRef: NativeRefSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+};
+
+/** What every delivered input carries (ADR 0217). */
+const deliveryFields = {
+  dispatch: DispatchModeSchema,
+  attention: z.literal("required").nullable(),
+  idempotencyKey: z.string().nullable(),
+  deliveredBy: z.string().nullable(),
+  causation: z.array(z.string()),
+};
+
+export const ItemSchema = describes<Item>()(
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        ...itemCommon,
+        ...deliveryFields,
+        kind: z.literal("user_message"),
+        author: z.object({
+          kind: z.literal("user"),
+          externalUserId: z.string(),
+        }),
+        text: z.string(),
+        attachments: z.array(attachmentSchema),
+        answer: questionAnswerSchema.optional(),
+      }),
+      z.object({
+        ...itemCommon,
+        ...deliveryFields,
+        kind: z.literal("inbound_message"),
+        from: InboundSenderSchema,
+        text: z.string(),
+        attachments: z.array(attachmentSchema),
+        alert: settledAlertSchema.optional(),
+      }),
+      z.object({
+        ...itemCommon,
+        ...deliveryFields,
+        kind: z.literal("task_notification"),
+        task: z.object({
+          type: z.string(),
+          id: z.string(),
+          title: z.string(),
+          status: taskNotificationStatusSchema,
+        }),
+        summary: z.string(),
+        detail: z.string(),
+        source: InputSourceSchema.nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("assistant_message"),
+        text: z.string(),
+        agentId: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("reasoning"),
+        text: z.string(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("tool_call"),
+        tool: z.string(),
+        server: z.string().nullable(),
+        description: z.string().nullable(),
+        input: JsonValueSchema,
+        result: JsonValueSchema.nullable(),
+        error: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("command"),
+        command: z.string(),
+        description: z.string().nullable(),
+        output: z.string(),
+        exitCode: z.number().int().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("file_change"),
+        path: z.string(),
+        change: z
+          .enum(["created", "modified", "deleted", "renamed"])
+          .nullable(),
+        previousPath: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("plan"),
+        steps: z.array(
+          z.object({
+            text: z.string(),
+            status: z.enum(["pending", "in_progress", "completed"]),
+          }),
+        ),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("request"),
+        requestId: z.string(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("subagent"),
+        title: z.string(),
+        agentType: z.string().nullable(),
+        childSessionId: z.string().nullable(),
+        result: z.string().nullable(),
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("notice"),
+        code: z.string(),
+        text: z.string(),
+        data: JsonObjectSchema,
+      }),
+      z.object({
+        ...itemCommon,
+        kind: z.literal("context_handoff"),
+        strategy: z.enum(["delta", "full"]),
+        fromProviderThreadIds: z.array(z.string()),
+        toProviderThreadId: z.string(),
+        coveredTurnOrdinals: z.object({
+          from: z.number().int(),
+          to: z.number().int(),
+        }),
+        text: z.string(),
+      }),
+    ])
+    .meta({ id: "Item" }),
+);
+
+/** An answer to a runtime request; the protocol's own schema, typed exactly. */
+const RuntimeRequestResponseSchema = describes<RuntimeRequestResponse>()(
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("approval"),
+      decision: z.enum(["approved", "denied"]),
+      remember: z.literal("always").optional(),
+      /** Why Work denied it when no person did: told to the agent. */
+      reason: z.string().optional(),
+    }),
+    z.object({
+      kind: z.literal("question"),
+      answers: z.array(z.string()),
+      /** Each answer's pills, in the order of its markers (ADR 0244). */
+      attachments: z.array(z.array(attachmentSchema)).optional(),
+    }),
+    z.object({
+      kind: z.literal("elicitation"),
+      action: z.enum(["accept", "decline", "cancel"]),
+      content: JsonValueSchema.optional(),
+    }),
+  ]),
+);
+
+export const RuntimeRequestSchema = describes<RuntimeRequest>()(
+  z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      turnId: z.string().nullable(),
+      attemptId: z.string().nullable(),
+      itemId: z.string().nullable(),
+      kind: z.enum(["question", "approval", "elicitation"]),
+      status: z.enum(["pending", "resolved", "expired", "cancelled"]),
+      answerable: z.boolean(),
+      blocking: z.boolean(),
+      title: z.string(),
+      description: z.string().nullable(),
+      origin: z.object({
+        kind: z.enum(["tool", "provider", "mcp", "host"]),
+        id: z.string(),
+        displayName: z.string().optional(),
+      }),
+      questions: z.array(agentQuestionSchema).nullable(),
+      approval: z
+        .object({
+          action: z.string(),
+          details: z.string().optional(),
+          tool: z
+            .object({
+              server: z.string().nullable(),
+              name: z.string(),
+              input: JsonValueSchema,
+            })
+            .optional(),
+        })
+        .nullable(),
+      elicitation: z
+        .object({
+          server: z.string(),
+          message: z.string(),
+          schema: JsonObjectSchema.optional(),
+          url: z.string().optional(),
+        })
+        .nullable(),
+      approvers: z.array(z.string()),
+      expiresAt: z.string().nullable(),
+      response: RuntimeRequestResponseSchema.nullable(),
+      resolvedBy: z.string().nullable(),
+      reason: z.string().nullable(),
+      createdAt: z.string(),
+      resolvedAt: z.string().nullable(),
+      runnerKey: z.string().optional(),
+    })
+    .meta({ id: "RuntimeRequest" }),
+);
+
+export const ProviderThreadSchema = describes<ProviderThread>()(
+  z
+    .object({
+      id: z.string(),
+      sessionId: z.string(),
+      harness: z.string(),
+      nativeRef: NativeRefSchema.nullable(),
+      status: z.enum(["active", "unavailable", "closed"]),
+      lastTurnOrdinal: z.number().int().nullable(),
+      portable: z.boolean(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+    })
+    .meta({ id: "ProviderThread" }),
+);
+
+/** A session's metadata (ADR 0226): values by key, each any JSON. */
+export const SessionMetadataSchema = describes<SessionMetadata>()(
+  z.record(z.string(), JsonValueSchema).meta({ id: "SessionMetadata" }),
+);
+
+/** A session's shared fields, what every viewer sees alike. */
+export const SessionFieldsSchema = describes<SessionFields>()(
+  z
+    .object({
+      id: z.string(),
+      projectId: z.string(),
+      title: z.string().nullable(),
+      icon: z.string().nullable(),
+      agentId: z.string().nullable(),
+      harness: z.string().nullable(),
+      model: z.string().nullable(),
+      modelEffort: AgentEffortSchema.nullable(),
+      status: z.enum(["active", "closed"]),
+      workStatus: z.enum(["open", "completed"]),
+      activity: z.string().nullable(),
+      todos: z.array(AgentTodoSchema),
+      metadata: SessionMetadataSchema,
+      imported: ImportedSessionSchema.nullable().optional(),
+      parentSessionId: z.string().nullable(),
+      forkedFromSessionId: z.string().nullable(),
+      attentionRevision: z.number().int(),
+      environment: z.string().nullable(),
+      authorityHostId: z.string(),
+      authorityRevision: z.number().int(),
+      handoffStatus: z.enum(["none", "pending"]),
+      updatedAt: z.string(),
+    })
+    .meta({ id: "SessionFields" }),
+);
+
+/**
+ * Set named values on a session (ADR 0226): each key takes its value, and
+ * null removes the key. Keys are lowercase words of letters and digits
+ * joined by `_`, `-` or `.`; core bounds the count and sizes.
+ */
+export const UpdateAgentSessionMetadataSchema = z.object({
+  metadata: z
+    .record(
+      z
+        .string()
+        .max(SESSION_METADATA_LIMITS.keyLength)
+        .regex(SESSION_METADATA_KEY_PATTERN),
+      JsonValueSchema,
     )
-    .optional(),
+    .describe("Values by key; null removes a key"),
+});
+
+export const AgentSessionMetadataSchema = z.object({
+  metadata: SessionMetadataSchema,
+});
+
+export const SessionEventSchema = describes<SessionEvent>()(
+  z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("session.changed"),
+        session: SessionFieldsSchema.partial(),
+      }),
+      z.object({ type: z.literal("turn.changed"), turn: TurnSchema }),
+      z.object({ type: z.literal("attempt.changed"), attempt: AttemptSchema }),
+      z.object({ type: z.literal("item.added"), item: ItemSchema }),
+      z.object({ type: z.literal("item.changed"), item: ItemSchema }),
+      z.object({
+        type: z.literal("item.text_appended"),
+        itemId: z.string(),
+        field: z.enum(["text", "output"]),
+        text: z.string(),
+        at: z.string(),
+      }),
+      z.object({
+        type: z.literal("request.changed"),
+        request: RuntimeRequestSchema,
+      }),
+      z.object({
+        type: z.literal("provider_thread.changed"),
+        thread: ProviderThreadSchema,
+      }),
+    ])
+    .meta({ id: "SessionEvent" }),
+);
+
+export const StoredSessionEventSchema = describes<StoredSessionEvent>()(
+  z
+    .object({
+      sessionId: z.string(),
+      sequence: z.number().int().positive(),
+      at: z.string(),
+      commandId: z.string().nullable(),
+      event: SessionEventSchema,
+    })
+    .meta({ id: "StoredSessionEvent" }),
+);
+
+export const SessionSnapshotSchema = describes<SessionSnapshot>()(
+  z
+    .object({
+      sequence: z.number().int().nonnegative(),
+      session: SessionFieldsSchema,
+      turns: z.array(TurnSchema),
+      attempts: z.array(AttemptSchema),
+      items: z.array(ItemSchema),
+      requests: z.array(RuntimeRequestSchema),
+      providerThreads: z.array(ProviderThreadSchema),
+      olderBefore: z.number().int().nullable(),
+    })
+    .meta({ id: "SessionSnapshot" }),
+);
+
+/** One server-sent event of `GET …/events`, as its `data:` JSON. */
+export const SessionStreamMessageSchema = describes<SessionStreamMessage>()(
+  z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("events"),
+        events: z.array(StoredSessionEventSchema),
+      }),
+      z.object({ type: z.literal("reset"), snapshot: SessionSnapshotSchema }),
+      z.object({
+        type: z.literal("heartbeat"),
+        sequence: z.number().int().nonnegative(),
+      }),
+    ])
+    .meta({ id: "SessionStreamMessage" }),
+);
+
+export const CommandReceiptSchema = describes<CommandReceipt>()(
+  z
+    .object({
+      commandId: z.string(),
+      status: z.enum(["accepted", "rejected"]),
+      sequence: z.number().int().nonnegative(),
+      result: JsonObjectSchema.nullable(),
+      error: z.object({ code: z.string(), message: z.string() }).nullable(),
+    })
+    .meta({ id: "CommandReceipt" }),
+);
+
+/** A command to a session; resending one `commandId` returns its first receipt. */
+export const SessionCommandSchema =
+  describes<SessionCommand>()(sessionCommandSchema);
+
+export const AgentSessionDetailSchema = AgentSessionSchema.extend({
+  snapshot: SessionSnapshotSchema,
+});
+
+export const SessionItemsQuerySchema = z.object({
+  /** Items before this position: a snapshot's or page's `olderBefore`. */
+  before: z.coerce.number().int().positive(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+export const SessionItemsPageSchema = z.object({
+  items: z.array(ItemSchema),
+  olderBefore: z.number().int().nullable(),
+});
+
+export const SessionEventsQuerySchema = z.object({
+  /** Stream events after this sequence: a snapshot's `sequence`. */
+  after: z.coerce.number().int().nonnegative().optional(),
+});
+
+export const SessionMirrorQuerySchema = z.object({
+  /** The copy's last sequence; omitted for a copy that does not exist yet. */
+  after: z.coerce.number().int().nonnegative().optional(),
+});
+
+/** One workflow-facing session event a mirror carries (ADR 0156). */
+const MirrorProjectEventSchema = z.object({
+  id: z.string().uuid(),
+  kind: z
+    .string()
+    .regex(/^session\./)
+    .max(100),
+  occurredAt: z.string().datetime(),
+  payload: JsonObjectSchema,
+});
+
+/**
+ * One mirror push (ADR 0197): the source's log after this copy's sequence,
+ * or, for a copy that does not exist yet, a full snapshot to start from.
+ */
+export const MirrorAgentSessionSchema = z.object({
   authority: z.object({
     hostId: z.string().min(1).max(255),
     revision: z.number().int().positive(),
   }),
   title: z.string().max(500).nullable().optional(),
   icon: z.string().max(100).nullable().optional(),
-  /** The source's provider name, kept for provenance. */
-  provider: z.string().max(100).optional(),
   /** The surface that originally created the conversation. */
   source: AgentSessionSourceSchema.optional(),
-  todos: z.array(AgentTodoSchema).max(50),
-  /** The source session's project-agent slug: same agent here when
-   * available and covered (ADR 0062), else the registry default. */
+  /**
+   * The source session's project-agent slug: the same agent here when
+   * this server has it and the caller's role covers it, else the default.
+   */
   agentSlug: z.string().max(200).optional(),
-  messages: z
-    .array(
-      z.object({
-        id: z.string().uuid(),
-        role: z.enum(["user", "assistant", "system"]),
-        content: z.string().max(1_000_000),
-        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
-        author: SessionMessageAuthorSchema,
-        deliveryMode: SessionDeliveryModeSchema,
-        idempotencyKey: z.string().max(500).nullable(),
-        createdAt: z.string().datetime(),
-      }),
-    )
-    .max(2_000),
+  todos: z.array(AgentTodoSchema).max(50).optional(),
+  workStatus: z.enum(["open", "completed"]).optional(),
+  /** Every turn, item, request and thread at `base.sequence`, for a new copy. */
+  base: SessionSnapshotSchema.optional(),
+  events: z.array(StoredSessionEventSchema).max(5_000),
+  projectEvents: z.array(MirrorProjectEventSchema).max(5_000).optional(),
 });
 
-export const MirrorConflictSchema = z.object({
-  error: z.string(),
-  /** True: this server holds messages the source doesn't — stop pushing. */
-  diverged: z.boolean(),
+export const MirrorAgentSessionResultSchema = z.object({
+  session: AgentSessionSchema,
+  /** The copy's last event sequence after the push. */
+  sequence: z.number().int().nonnegative(),
+  /** Why a newly mirrored chat continues with another agent than the one it ran. */
+  agentNotice: z.string().optional(),
 });
 
+export const MirrorExportSchema = z.object({
+  /** The whole session, when the copy is new or too far behind for events. */
+  base: SessionSnapshotSchema.optional(),
+  events: z.array(StoredSessionEventSchema),
+  projectEvents: z.array(MirrorProjectEventSchema).optional(),
+});
+
+/**
+ * Why a mirror push was refused: `diverged` (the chat continued here, so
+ * stop pushing), `behind` (the copy ends at `sequence`, so resend from
+ * there), or `turn_in_progress` (a turn runs here; push when it settles).
+ */
+export const MirrorConflictSchema = z.discriminatedUnion("code", [
+  z.object({ error: z.string(), code: z.literal("diverged") }),
+  z.object({
+    error: z.string(),
+    code: z.literal("behind"),
+    sequence: z.number().int().nonnegative(),
+  }),
+  z.object({ error: z.string(), code: z.literal("turn_in_progress") }),
+]);
+
+/** Continue a mirrored chat here, taking its authority (ADR 0077). */
 export const ResumeAgentSessionSchema = z.object({
   expectedAuthorityRevision: z.number().int().positive(),
 });
 
 export const ForkAgentSessionSchema = z.object({
   /**
-   * Fork point: the transcript is copied up to and including this
-   * message. Omitted = the whole settled transcript.
+   * Fork point: the item (ADR 0197) the transcript is copied through,
+   * with the turn it belongs to. Omitted = every settled turn.
    */
-  messageId: z.string().uuid().optional(),
+  messageId: z.string().min(1).max(200).optional(),
 });
 
-export const AgentMessageSchema = z.object({
-  id: z.string().uuid(),
-  sessionId: z.string().uuid(),
-  role: z.enum(["user", "assistant", "system"]),
-  content: z.string(),
-  commitSha: z.string().length(40).nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-  author: SessionMessageAuthorSchema,
-  deliveryMode: SessionDeliveryModeSchema,
-  idempotencyKey: z.string().nullable(),
-  createdAt: z.string().datetime(),
-});
-
-export const PendingSessionTurnSchema = z.object({
-  id: z.string().uuid(),
-  messageId: z.string().uuid(),
-  content: z.string(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
-  deliveryMode: z.enum(["next_turn", "interrupt"]),
-  status: z.enum(["queued", "held", "running"]),
-  createdAt: z.string().datetime(),
-});
-
-export const SessionDeliveryReceiptSchema = z.object({
-  messageId: z.string().uuid(),
-  turnId: z.string().uuid().nullable(),
-  mode: SessionDeliveryModeSchema,
-  created: z.boolean(),
-});
-
-export const SessionMailboxItemSchema = z.object({
+const mailboxCommon = {
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   sessionId: z.string().uuid(),
   sourceHostId: z.string(),
   destinationHostId: z.string(),
   authorityRevision: z.number().int().positive(),
+  /** The item the delivery becomes on the destination (ADR 0197). */
   messageId: z.string().uuid(),
-  content: z.string(),
-  author: SessionMessageAuthorSchema,
-  mode: SessionDeliveryModeSchema,
   idempotencyKey: z.string().nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
+  causation: z.array(z.string()),
   createdAt: z.string().datetime(),
-});
+};
+
+/** What crosses to a session's authority (ADR 0219): an input, or an action. */
+export const SessionMailboxItemSchema = describes<SessionMailboxItem>()(
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...mailboxCommon,
+      kind: z.literal("input"),
+      input: SessionInputSchema,
+      mode: DispatchModeSchema,
+      attention: z.boolean(),
+      deliveredBy: z.string().nullable(),
+      ownerAuthored: z.boolean(),
+    }),
+    z.object({
+      ...mailboxCommon,
+      kind: z.literal("action"),
+      action: z.object({
+        operation: z.string(),
+        args: JsonValueSchema,
+        actor: SessionMessageAuthorSchema,
+      }),
+    }),
+  ]),
+);
 
 export const SessionMailboxListQuerySchema = z.object({
   destinationHostId: z.string().min(1).max(255),
@@ -1354,167 +2128,66 @@ export const WatcherIdParamsSchema = AgentSessionIdParamsSchema.extend({
   watcherId: z.string().uuid(),
 });
 
-export const AgentTurnIdParamsSchema = AgentSessionIdParamsSchema.extend({
-  turnId: z.string().uuid(),
-});
-
-export const UpdateQueuedAgentTurnSchema = z
-  .object({
-    content: z.string().min(1).max(200_000).optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    held: z.boolean().optional(),
-  })
-  .refine(
-    (input) =>
-      input.content !== undefined ||
-      input.metadata !== undefined ||
-      input.held !== undefined,
-    { message: "Provide content, metadata, or held." },
-  );
-
 export const OkSchema = z.object({ ok: z.literal(true) });
 
-// --- tool permissions (ADR 0054) ---
-export const ToolPermissionIdParamsSchema = AgentSessionIdParamsSchema.extend({
-  permissionId: z.string().uuid(),
-});
-export const PendingToolPermissionSchema = z.object({
-  id: z.string(),
-  sessionId: z.string().optional(),
-  agentLabel: z.string().optional(),
-  request: z.object({
-    sessionId: z.string().optional(),
-    server: z.string(),
-    tool: z.string(),
-    description: z.string().optional(),
-    input: z.record(z.string(), z.unknown()),
-    annotations: z
-      .object({
-        readOnlyHint: z.boolean().optional(),
-        destructiveHint: z.boolean().optional(),
-      })
-      .optional(),
-  }),
-  createdAt: z.string(),
-  expiresAt: z.string(),
-});
-export const PendingToolPermissionsSchema = z.object({
-  permissions: z.array(PendingToolPermissionSchema),
-});
-export const ToolPermissionDecisionSchema = z.discriminatedUnion("decision", [
-  z.object({
-    decision: z.literal("allow"),
-    remember: z.literal("always").optional(),
-  }),
-  z.object({ decision: z.literal("deny") }),
-]);
+// --- Terminals in a chat's workspace (ADR 0209) ---
 
-export const AgentMediaAttachmentSchema = z.object({
-  kind: z.enum(["image", "document"]),
-  name: z.string().min(1).max(200),
-  /** MIME type, e.g. "image/png", "application/pdf". */
-  mediaType: z.string().min(1).max(100),
-  /** ~10MB decoded per file (base64 is 4/3 the byte size). */
-  dataBase64: z.string().min(1).max(14_000_000),
+const TerminalSizeSchema = z.number().int().min(1).max(1000);
+
+export const SessionTerminalParamsSchema = AgentSessionIdParamsSchema.extend({
+  /** The terminal's process in the workspace's sandbox. */
+  terminalId: z.string().regex(/^proc-[a-z0-9]{8,32}$/),
 });
 
-export const AgentTextSourceSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("paste") }),
-  z.object({
-    type: z.literal("selection"),
-    filePath: z.string().min(1).max(4096),
-    startLine: z.number().int().positive().optional(),
-    endLine: z.number().int().positive().optional(),
-  }),
-  z.object({ type: z.literal("url"), url: z.string().min(1).max(8192) }),
-  z.object({ type: z.literal("path"), path: z.string().min(1).max(4096) }),
-  z.object({
-    type: z.literal("tab"),
-    key: z.string().min(1).max(200),
-    kind: z.string().min(1).max(40),
-    title: z.string().min(1).max(500),
-    url: z.string().min(1).max(8192).optional(),
-    filePath: z.string().min(1).max(4096).optional(),
-  }),
-]);
-
-/** Text context beside a message: paste, editor selection, URL, path. */
-export const AgentTextAttachmentSchema = z.object({
-  kind: z.literal("text"),
-  name: z.string().min(1).max(200),
-  /** ~2MB of text — well past any sane paste, well short of the DB row cap. */
-  text: z.string().max(2_000_000),
-  source: AgentTextSourceSchema,
+export const OpenSessionTerminalSchema = z.object({
+  cols: TerminalSizeSchema.default(80),
+  rows: TerminalSizeSchema.default(24),
 });
 
-export const AgentAttachmentSchema = z.union([
-  AgentMediaAttachmentSchema,
-  AgentTextAttachmentSchema,
-]);
-
-export const SendMessageSchema = z
-  .object({
-    // Empty prose is fine when attachments carry the message ("look at
-    // this" with just a pill); rejected only when BOTH are empty.
-    message: z.string().max(200_000),
-    idempotencyKey: z.string().min(1).max(200).optional(),
-    attachments: z.array(AgentAttachmentSchema).max(32).optional(),
-    deliveryMode: z.enum(["next_turn", "interrupt"]).optional(),
-  })
-  .refine(
-    (body) =>
-      body.message.trim().length > 0 || (body.attachments?.length ?? 0) > 0,
-    { message: "A message needs text or at least one attachment." },
-  );
-
-export const AgentExecutionSchema = z.object({
-  turnId: z.string(),
-  status: z.enum([
-    "queued",
-    "held",
-    "running",
-    "completed",
-    "failed",
-    "cancelled",
-  ]),
-  phase: z.enum(["preparing", "working", "waiting", "saving"]),
-  activity: z.string().nullable(),
-  activityAt: z.string().nullable(),
-  startedAt: z.string().nullable(),
-  retryAt: z.string().nullable(),
-  attempt: z.number(),
-  executorHealthy: z.boolean(),
-  cancellationRequested: z.boolean(),
+export const SessionTerminalSchema = z.object({
+  terminalId: z.string(),
+  /**
+   * The shell runs on a pseudo-terminal. Without one it is an interactive
+   * shell on a pipe: line by line, and resizing does nothing.
+   */
+  pty: z.boolean(),
 });
 
-export const PendingAgentQuestionSchema = z.object({
-  requestId: z.string(),
-  blocking: z.boolean().optional(),
-  questions: z
-    .array(
-      z.object({
-        question: z.string(),
-        header: z.string(),
-        multiSelect: z.boolean(),
-        options: z.array(
-          z.object({ label: z.string(), description: z.string() }),
-        ),
-      }),
-    )
-    .optional(),
-});
-export const AgentQuestionParamsSchema = AgentSessionIdParamsSchema.extend({
-  requestId: z.string().min(1),
-});
-export const AnswerAgentQuestionSchema = z.object({
-  answer: z.string().trim().min(1).max(200_000),
+export const SessionTerminalOutputQuerySchema = z.object({
+  cursor: z.coerce.number().int().min(0).default(0),
+  /** Answer as soon as there is output, at the latest after this long. */
+  waitMs: z.coerce.number().int().min(0).max(20_000).default(0),
 });
 
-export const AgentSessionDetailSchema = AgentSessionSchema.extend({
-  questions: z.array(PendingAgentQuestionSchema).optional(),
-  execution: AgentExecutionSchema.nullable(),
-  messages: z.array(AgentMessageSchema),
-  pendingTurns: z.array(PendingSessionTurnSchema),
+export const SessionTerminalOutputSchema = z.object({
+  /** UTF-8 text from `cursor` to `nextCursor`. */
+  data: z.string(),
+  cursor: z.number().int().nonnegative(),
+  nextCursor: z.number().int().nonnegative(),
+  /** More output waits past `nextCursor`; read again at once. */
+  more: z.boolean(),
+  /** The shell ended and all its output has been read. */
+  exited: z.boolean(),
+  exitCode: z.number().int().nullable(),
+});
+
+export const SessionTerminalInputSchema = z.object({
+  /** Keys as the terminal sends them, control characters included. */
+  data: z
+    .string()
+    .min(1)
+    .max(1024 * 1024),
+});
+
+export const ResizeSessionTerminalSchema = z.object({
+  cols: TerminalSizeSchema,
+  rows: TerminalSizeSchema,
+});
+
+/** Why a chat's workspace is not open to a person right now (409). */
+export const SessionWorkspaceErrorSchema = z.object({
+  error: z.string(),
+  code: z.string(),
 });
 
 // --- Skills ---
@@ -1523,12 +2196,21 @@ export const SkillSchema = z.object({
   /** Human-facing name (frontmatter `title`, else the humanized slug). */
   title: z.string(),
   description: z.string(),
+  /** Frontmatter `argument-hint`: what an invocation's instructions say. */
+  argumentHint: z.string().optional(),
   path: z.string(),
   source: z.enum(["project", "user", "host"]),
 });
 
+/** A harness's own permission settings, in its native values (ADR 0182). */
+export const HarnessPermissionsSchema = z.object({
+  permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
+  sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+  approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
+});
+
 // --- Project agent definitions (ADR 0050) ---
-// Committed `.catamorphic/agents/<slug>.json` files, parsed and validated by core's
+// Committed `.work/agents/<slug>.json` files, parsed and validated by core's
 // AgentDefinitionsService. Broken files come back as invalid entries with
 // the error — never a failed request.
 export const ProjectAgentDefinitionSchema = z.object({
@@ -1537,13 +2219,18 @@ export const ProjectAgentDefinitionSchema = z.object({
   kind: z.string(),
   model: z.string().optional(),
   effort: AgentEffortSchema.optional(),
-  mode: z.enum(["read-only", "edit", "full-access"]).optional(),
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+  /** The harness's own permission mode, in its native values (ADR 0182). */
+  harnessPermissions: HarnessPermissionsSchema.optional(),
   memory: z.boolean().optional(),
   description: z.string().optional(),
   credentials: z
     .object({
-      source: z.enum(["profile", "secret", "local"]),
+      source: z.enum(["profile", "secret", "local", "connection", "personal"]),
       secret: z.string().optional(),
+      /** The Environment alias of the agent's model connection (ADR 0180). */
+      connection: z.string().optional(),
     })
     .optional(),
   connections: z
@@ -1571,7 +2258,7 @@ export const ProjectAgentDefinitionSchema = z.object({
 export const ProjectAgentEntrySchema = z.object({
   slug: z.string(),
   definition: ProjectAgentDefinitionSchema.optional(),
-  /** Content of the sibling `.catamorphic/agents/<slug>.md` persona file. */
+  /** Content of the sibling `.work/agents/<slug>.md` persona file. */
   promptFile: z.string().optional(),
   invalid: z.object({ error: z.string() }).optional(),
 });
@@ -1615,6 +2302,8 @@ export const DocumentEntrySchema = z.object({
   writtenBy: z.string().optional(),
   writtenAt: z.string().optional(),
   digest: z.string().optional(),
+  /** Program only: the published commit the listing read (ADR 0191). */
+  commit: z.string().optional(),
 });
 
 export const DocumentContentSchema = DocumentEntrySchema.extend({
@@ -1766,11 +2455,22 @@ export const PublicationParamsSchema = ProjectIdParamsSchema.extend({
 // --- Introspection (ADR 0055) ---
 export const MeSchema = z.object({
   version: z.literal(1),
-  identity: z.object({ externalUserId: z.string(), root: z.boolean() }),
+  identity: z.object({
+    externalUserId: z.string(),
+    root: z.boolean(),
+    /**
+     * Host-issued permissions over the organization's shared resources
+     * (ADR 0172), expanded: `connections:write` also lists `connections:read`.
+     */
+    controlPlanePermissions: z.array(
+      z.enum(["connections:read", "connections:write"]),
+    ),
+  }),
   projects: z.array(
     z.object({
       projectId: z.string(),
-      builder: z.boolean(),
+      /** The project's display name, for every member. */
+      name: z.string(),
       source: z
         .object({
           remoteUrl: z.string(),
@@ -1800,24 +2500,32 @@ export const MeSchema = z.object({
   features: z.object({
     publications: z.union([z.enum(["public", "members"]), z.literal(false)]),
     proposals: z.boolean(),
-    /** True when a proposalBot is configured: proposals open pull requests. */
+    /** True when a code host is configured: proposals open pull requests through the service connection. */
     proposalsOpenPullRequests: z.boolean(),
     mcp: z.boolean(),
     agentSessions: z.boolean(),
     storeUploadMaxBytes: z.number(),
   }),
+  /**
+   * The protocols this server speaks (ADR 0197, 0198): a client refuses a
+   * server whose session or runner protocol it does not know.
+   */
+  agentProtocol: z.object({
+    session: z.literal(SESSION_PROTOCOL_VERSION),
+    runner: z.literal(RUNNER_PROTOCOL_VERSION),
+  }),
 });
 
-// --- Playground Parse ---
+// --- Workflow parse ---
 // Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
 // can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.
-export const PlaygroundParseRequestSchema = z.object({
+export const ParseWorkflowRequestSchema = z.object({
   files: z.record(z.string(), z.string()),
   workflowName: z.string().min(1),
   preferredFilePath: z.string().optional(),
 });
 
-export const PlaygroundParseResponseSchema = WorkflowGraphSchema.nullable();
+export const ParseWorkflowResponseSchema = WorkflowGraphSchema.nullable();
 
 // --- Plugins ---
 export const PluginSecretSchema = z.object({
@@ -1866,15 +2574,33 @@ export const PluginPackageParamsSchema = ProjectIdParamsSchema.extend({
   packageName: z.string().min(1),
 });
 
-// --- Secrets ---
+// --- Secrets (ADR 0206) ---
+export const SecretMemberValueSchema = z.object({
+  /** The member's external user id. */
+  member: z.string(),
+  updatedAt: z.string().datetime(),
+  setBy: z.string().nullable(),
+});
+
+/** One declared secret: where it is declared and which values exist, never a value. */
 export const SecretStatusSchema = z.object({
   name: z.string(),
-  hasValue: z.boolean(),
-  updatedAt: z.string().datetime().nullable(),
   label: z.string().optional(),
   description: z.string().optional(),
   required: z.boolean(),
   source: z.enum(["project", "plugin"]),
+  /** Environments whose sandboxes receive it. */
+  environments: z.array(z.string()),
+  /** A shared value is set. */
+  shared: z.boolean(),
+  /** When the shared value was stored, and by whom. */
+  updatedAt: z.string().datetime().nullable(),
+  setBy: z.string().nullable(),
+  /** The caller holds a value of their own. */
+  own: z.boolean(),
+  ownUpdatedAt: z.string().datetime().nullable(),
+  /** Members holding their own value; empty without `secrets:read`. */
+  members: z.array(SecretMemberValueSchema),
 });
 
 export const UpsertSecretSchema = z.object({
@@ -1885,42 +2611,69 @@ export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
 });
 
-export const RunStageQuerySchema = z.object({
-  stage: z.enum(["test", "production"]).default("production"),
+export const SecretMemberParamsSchema = SecretNameParamsSchema.extend({
+  /** A member's external user id, or `me`. */
+  member: z.string().min(1),
 });
 
-// --- GitHub ---
-export const GithubStatusSchema = z.object({
-  connected: z.boolean(),
-  login: z.string().optional(),
+export const SecretValueChangeSchema = z.object({
+  name: z.string(),
+  member: z.string().nullable(),
+  updatedAt: z.string().datetime(),
 });
 
-export const GithubConnectSchema = z.object({
-  /** Authorization code from the GitHub web-flow callback. */
-  code: z.string().min(1),
-  /** Must match the redirect_uri sent to /login/oauth/authorize, if any. */
-  redirectUri: z.string().optional(),
+// --- Code hosts (ADR 0177) ---
+export const CodeHostParamsSchema = z.object({
+  provider: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
 });
 
-export const GithubRepoSchema = z.object({
-  id: z.number(),
+export const CodeHostRepositorySchema = z.object({
   fullName: z.string(),
   name: z.string(),
   owner: z.string(),
   private: z.boolean(),
   defaultBranch: z.string(),
+  cloneUrl: z.string(),
   description: z.string().nullable(),
   pushedAt: z.string().nullable(),
 });
 
-export const GithubImportSchema = z.object({
-  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/repo"),
+export const CodeHostImportSchema = z.object({
+  /** Host-specific repository path, e.g. `owner/name` on GitHub. */
+  fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/name"),
   name: z.string().min(1).optional(),
+});
+
+/** Publish an unlinked project to a new repository Work creates (ADR 0170). */
+export const CodeHostPublishSchema = z.object({
+  provider: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/),
+  name: z.string().regex(/^[\w.-]+$/, "Expected a repository name"),
+  /** Organization; the connected account when omitted. */
+  organization: z
+    .string()
+    .regex(/^[\w.-]+$/, "Expected an organization login")
+    .optional(),
+  visibility: z.enum(["private", "public"]).optional(),
+});
+
+export const CodeHostPublishResultSchema = z.object({
+  fullName: z.string(),
+  remoteUrl: z.string(),
 });
 
 // --- Generic ---
 export const ErrorSchema = z.object({
   error: z.string(),
+});
+
+/**
+ * Why a session refused a change (409): closed, held by another host (take
+ * it over with `/resume` at `authorityRevision`), or moving between hosts.
+ */
+export const SessionConflictSchema = z.object({
+  error: z.string(),
+  code: z.enum(["session_closed", "authority_required", "handoff_pending"]),
+  authorityRevision: z.number().int().optional(),
 });
 
 /** A 403 may be project scope denial or a structured Environment denial. */
@@ -1944,6 +2697,10 @@ export const AgentCatalogSchema = z.object({
       available: z.boolean(),
       reason: z.string().nullable(),
       environments: EnvironmentListSchema,
+      /** What may leave the agent's sandbox, when declared (ADR 0182). */
+      sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+      /** The harness's own permission settings, as declared (ADR 0182). */
+      harnessPermissions: HarnessPermissionsSchema.optional(),
     }),
   ),
   defaultAgentId: z.string().optional(),
@@ -1954,4 +2711,59 @@ export const AgentCatalogSchema = z.object({
       agentId: z.string().optional(),
     }),
   ),
+});
+
+// --- Personal environments (ADRs 0184, 0199) ---
+
+export const PutPersonalEnvironmentSchema = z
+  .strictObject({
+    files: z
+      .array(
+        z.object({
+          path: z
+            .string()
+            .min(1)
+            .max(512)
+            .describe("Repository-relative path, / separated"),
+          content: z.string().describe("The file's bytes, base64"),
+        }),
+      )
+      .max(50)
+      .default([]),
+    setup: z
+      .string()
+      .max(16_384)
+      .optional()
+      .describe(
+        "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none",
+      ),
+  })
+  .describe(
+    "The caller's personal files and setup for this project; replaces what the server holds",
+  );
+
+export const PersonalEnvironmentSchema = z.object({
+  allowed: z
+    .boolean()
+    .describe(
+      "Some Environment of the project gives the caller's own chats their personal files",
+    ),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      fingerprint: z.string(),
+      bytes: z.number().int().nonnegative(),
+      updatedAt: z.string(),
+    }),
+  ),
+  setup: z
+    .object({ command: z.string(), updatedAt: z.string() })
+    .nullable()
+    .describe("The caller's own setup command, when they sent one"),
+});
+
+export const PersonalEnvironmentInvalidSchema = z.object({
+  error: z.string(),
+  code: z.literal("personal_environment_invalid"),
+  issues: z.array(z.string()),
 });

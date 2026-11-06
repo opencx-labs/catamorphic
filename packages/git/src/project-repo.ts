@@ -1,16 +1,19 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  PROJECT_WORKSPACE_ROOT,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import ignore, { type Ignore } from "ignore";
 import git from "isomorphic-git";
-import http from "isomorphic-git/http/node";
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import { isPersonalFile } from "./personal-files.js";
+import { assertResolvableRef } from "./ref-names.js";
 import type {
   BranchInfo,
   CommitInfo,
   DiffEntry,
-  GitCredentials,
   ProjectRepo,
   RepoStatus,
 } from "./types.js";
@@ -22,11 +25,11 @@ const STAGING_BATCH_SIZE = 128;
 
 /**
  * Dot-directories that are project content despite the hidden-file skip
- * below. `.catamorphic/` holds authored capabilities and shared config;
+ * below. `.work/` holds authored capabilities and shared config;
  * `.agents/` may contain the owner's harness instructions. Git ignore rules
  * distinguish local data and build outputs from versioned content.
  */
-const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
+const ALLOWED_DOT_DIRS = new Set([".agents", PROJECT_WORKSPACE_ROOT]);
 
 /**
  * Dot-FILES that are project content: the seeded ignore rules must be
@@ -48,8 +51,29 @@ export function assertSafePath(filePath: string): void {
       "Personal files are local-only and cannot be accessed through project APIs",
     );
   }
-  if (normalized.startsWith(".git/") || normalized === ".git") {
+  // Any `.git` segment, in any case: case-insensitive filesystems alias it.
+  if (
+    normalized
+      .split(/[\\/]/)
+      .some((segment) => segment.toLowerCase() === ".git")
+  ) {
     throw new Error("Cannot access .git directory");
+  }
+}
+
+/**
+ * Refuse a path that passes through a symbolic link: a committed link must
+ * never let file APIs read or write outside the working copy.
+ */
+async function assertNoSymlinks(root: string, filePath: string) {
+  let current = root;
+  for (const segment of path.normalize(filePath).split(path.sep)) {
+    if (!segment || segment === ".") continue;
+    current = path.join(current, segment);
+    const stat = await fs.lstat(current).catch(() => undefined);
+    if (!stat) return;
+    if (stat.isSymbolicLink())
+      throw new Error("Symbolic links cannot be read or written here");
   }
 }
 
@@ -129,7 +153,11 @@ export async function walkDirectory(
 }
 
 export class ProjectRepoImpl implements ProjectRepo {
-  private credentials: GitCredentials | undefined;
+  /**
+   * Managed working copies (servers) never follow symbolic links; a
+   * person's own folder on their computer may hold theirs.
+   */
+  protected readonly followsSymlinks: boolean = false;
 
   constructor(
     readonly projectId: string,
@@ -139,11 +167,13 @@ export class ProjectRepoImpl implements ProjectRepo {
 
   async readFile(filePath: string): Promise<string> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     return fs.readFile(path.join(this.repoPath, filePath), "utf-8");
   }
 
   async writeFile(filePath: string, content: string): Promise<void> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     const fullPath = path.join(this.repoPath, filePath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.writeFile(fullPath, content);
@@ -151,6 +181,7 @@ export class ProjectRepoImpl implements ProjectRepo {
 
   async deleteFile(filePath: string): Promise<void> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     await fs.unlink(path.join(this.repoPath, filePath));
   }
 
@@ -257,6 +288,7 @@ export class ProjectRepoImpl implements ProjectRepo {
     options?: { maxBytes?: number },
   ): Promise<Uint8Array | null> {
     assertSafePath(filePath);
+    assertResolvableRef(ref);
     let blob: Uint8Array;
     try {
       const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
@@ -280,6 +312,7 @@ export class ProjectRepoImpl implements ProjectRepo {
 
   async readFileBytes(filePath: string): Promise<Uint8Array | null> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     try {
       return new Uint8Array(
         await fs.readFile(path.join(this.repoPath, filePath)),
@@ -300,6 +333,7 @@ export class ProjectRepoImpl implements ProjectRepo {
     ref: string,
     opts?: { prefix?: string },
   ): Promise<Array<{ path: string; oid: string }>> {
+    assertResolvableRef(ref);
     const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
     const prefix = opts?.prefix;
     const blobs: Array<{ path: string; oid: string }> = [];
@@ -348,7 +382,7 @@ export class ProjectRepoImpl implements ProjectRepo {
   async commit(
     message: string,
     author: { name: string; email: string },
-    opts?: { paths?: readonly string[] },
+    opts?: { paths?: readonly string[]; allowEmpty?: boolean },
   ): Promise<string> {
     for (const file of opts?.paths ?? []) assertSafePath(file);
     // Keep index/object caches local to this operation, never to the repo's
@@ -403,6 +437,7 @@ export class ProjectRepoImpl implements ProjectRepo {
     maxCount?: number;
     ref?: string;
   }): Promise<CommitInfo[]> {
+    if (options?.ref) assertResolvableRef(options.ref);
     try {
       const commits = await git.log({
         fs: nodeFs,
@@ -425,67 +460,11 @@ export class ProjectRepoImpl implements ProjectRepo {
   }
 
   async resolveRef(ref = "HEAD"): Promise<string> {
+    assertResolvableRef(ref);
     return git.resolveRef({
       fs: nodeFs,
       dir: this.repoPath,
       ref,
-    });
-  }
-
-  async setRemote(url: string, credentials?: GitCredentials): Promise<void> {
-    const remotes = await git.listRemotes({
-      fs: nodeFs,
-      dir: this.repoPath,
-    });
-    const hasOrigin = remotes.some((r) => r.remote === "origin");
-
-    if (hasOrigin) {
-      await git.deleteRemote({
-        fs: nodeFs,
-        dir: this.repoPath,
-        remote: "origin",
-      });
-    }
-
-    await git.addRemote({
-      fs: nodeFs,
-      dir: this.repoPath,
-      remote: "origin",
-      url,
-    });
-
-    if (credentials) {
-      this.credentials = credentials;
-    }
-  }
-
-  async fetch(): Promise<void> {
-    await git.fetch({
-      fs: nodeFs,
-      http,
-      dir: this.repoPath,
-      remote: "origin",
-      onAuth: this.credentials
-        ? () => ({
-            username: this.credentials!.username,
-            password: this.credentials!.password,
-          })
-        : undefined,
-    });
-  }
-
-  async push(): Promise<void> {
-    await git.push({
-      fs: nodeFs,
-      http,
-      dir: this.repoPath,
-      remote: "origin",
-      onAuth: this.credentials
-        ? () => ({
-            username: this.credentials!.username,
-            password: this.credentials!.password,
-          })
-        : undefined,
     });
   }
 
@@ -509,7 +488,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       .map(([filepath]) => filepath);
 
     const baseCommit = await this.resolveRef("HEAD").catch(() => null);
-    const remoteRef = `refs/catamorphic/published/main`;
+    const remoteRef = publishedRef();
     const remoteHead = await git
       .resolveRef({ fs: nodeFs, dir: this.repoPath, ref: remoteRef })
       .catch(() => null);

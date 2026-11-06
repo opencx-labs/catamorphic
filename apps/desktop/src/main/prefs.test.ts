@@ -33,6 +33,31 @@ describe("PrefsStore", () => {
     expect(normalizePrefs({})).toEqual(DEFAULT_PREFS);
   });
 
+  it("starts the dock folded on the right and keeps the person's choice", () => {
+    expect(normalizePrefs({})).toMatchObject({
+      dockCollapsed: true,
+      dockSide: "right",
+    });
+    expect(normalizePrefs({ dockCollapsed: true }).dockCollapsed).toBe(true);
+    expect(normalizePrefs({ dockCollapsed: false }).dockCollapsed).toBe(false);
+    expect(normalizePrefs({ dockCollapsed: "yes" }).dockCollapsed).toBe(true);
+    expect(normalizePrefs({ dockSide: "left" }).dockSide).toBe("left");
+  });
+
+  it("shows the window buttons unless turned off", () => {
+    expect(normalizePrefs({}).windowButtons).toBe(true);
+    expect(normalizePrefs({ windowButtons: false }).windowButtons).toBe(false);
+    expect(normalizePrefs({ windowButtons: "no" }).windowButtons).toBe(true);
+  });
+
+  it("keeps each choice for how a running turn reads, and only those", () => {
+    for (const choice of ["all", "latest", "notes"])
+      expect(normalizePrefs({ chatWorkLive: choice }).chatWorkLive).toBe(
+        choice,
+      );
+    expect(normalizePrefs({ chatWorkLive: "steps" }).chatWorkLive).toBe("all");
+  });
+
   it("normalizes and deduplicates persisted session ids", () => {
     expect(
       normalizePrefs({

@@ -1,39 +1,52 @@
 import type { AgentSession } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import {
+  defaultModelLabel,
+  modelId,
+  useAgentDefaultModel,
+} from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
+import { agentPermissionView } from "../lib/agent-permissions.js";
 import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
-  type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
+import { ChatFolder } from "./chat-folder.js";
+import { useRemoteProject } from "./project-authority-provider.js";
 import { SessionInspectorContent } from "./session-inspector.js";
 
-export type SessionCommand = "model" | "effort" | "fork" | "parent";
+export type SessionCommand =
+  | "switch-agent"
+  | "model"
+  | "effort"
+  | "permission-mode"
+  | "fork"
+  | "parent";
 
 /** Mounted on hover only: the same live details and actions as chat chrome. */
 export function SidebarSessionInspector({
   projectId,
   session,
   agent: profileAgent,
+  agents = [],
   agentName,
-  checkout,
   onCommand,
   onArchive,
 }: {
   projectId: string;
   session: AgentSession;
   agent?: AgentInfo;
+  /** The profile's agents: what the session may switch to. */
+  agents?: AgentInfo[];
   agentName: string;
-  checkout: SessionCheckoutInfo | null;
   onCommand: (command: SessionCommand) => void;
   onArchive: () => void;
 }) {
   const projectAgents = useQuery({
     queryKey: ["desktop-project-agents", projectId],
     queryFn: () => desktopApi.projectAgentsList(projectId),
-    enabled: !profileAgent,
     staleTime: 30_000,
   });
   const agent =
@@ -41,6 +54,18 @@ export function SidebarSessionInspector({
     projectAgents.data?.agents
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
+  // Another agent to pick for the session. Committed agents whose definition fails are
+  // listed in the picker, never picked. A connected project's session runs
+  // on the server's agents, not these.
+  const remote = useRemoteProject(projectId);
+  const otherAgents = remote
+    ? 0
+    : [
+        ...agents.map((candidate) => candidate.id),
+        ...(projectAgents.data?.agents
+          .filter((candidate) => !candidate.invalid)
+          .map((candidate) => candidate.id) ?? []),
+      ].filter((id) => id !== session.agentId).length;
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibility = useQuery({
@@ -62,10 +87,18 @@ export function SidebarSessionInspector({
     enabled: !!agent,
     staleTime: 600_000,
   });
-  const model = session.model || agent?.model || "Automatic";
+  const pinnedModel = session.model || agent?.model;
+  const harnessDefault = useAgentDefaultModel({
+    projectId,
+    agent,
+    sessionId: session.id,
+    enabled: !pinnedModel,
+  });
+  const runningModel = pinnedModel || harnessDefault.data?.model?.id;
   const effortModel = catalog.data?.models.find(
-    (entry) => entry.id === model || entry.resolvedId === model,
+    (entry) => entry.id === runningModel || entry.resolvedId === runningModel,
   );
+  const permissions = agentPermissionView({ agent });
   const reason = session.running
     ? "Wait for the current work to finish"
     : eligibility.isPending
@@ -81,9 +114,22 @@ export function SidebarSessionInspector({
         session={session}
         fallbackTitle="Chat"
         agentName={agentName}
-        checkout={checkout}
+        folder={
+          remote ? undefined : (
+            <ChatFolder
+              projectId={projectId}
+              sessionId={session.id}
+              busy={session.running}
+            />
+          )
+        }
         incognito={privacy.data ?? false}
-        model={model}
+        model={
+          pinnedModel
+            ? modelId(pinnedModel, catalog.data?.models)
+            : defaultModelLabel(agent, harnessDefault.data?.model)
+        }
+        modelIsDefault={!pinnedModel && Boolean(harnessDefault.data?.model)}
         effort={
           effectiveEffort(
             agent,
@@ -91,13 +137,38 @@ export function SidebarSessionInspector({
             effortModel,
           ) ?? "Default"
         }
+        onEditAgent={
+          !session.running && otherAgents > 0
+            ? () => onCommand("switch-agent")
+            : undefined
+        }
+        agentDisabledReason={
+          otherAgents > 0 && session.running
+            ? "Agent can be changed after the current turn finishes."
+            : undefined
+        }
         onEditModel={
           !session.running && agent ? () => onCommand("model") : undefined
+        }
+        modelDisabledReason={
+          session.running
+            ? "Finish the current turn to change the model."
+            : undefined
         }
         onEditEffort={
           !session.running && supportedEfforts(agent, effortModel).length
             ? () => onCommand("effort")
             : undefined
+        }
+        permissionMode={permissions.permissionMode}
+        sandboxing={permissions.sandboxing}
+        onEditPermissionMode={
+          !session.running && permissions.editable
+            ? () => onCommand("permission-mode")
+            : undefined
+        }
+        permissionModeDisabledReason={
+          permissions.editable ? undefined : permissions.readOnlyReason
         }
         onFork={() => onCommand("fork")}
         onOpenParent={

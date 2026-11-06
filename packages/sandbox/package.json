@@ -1,11 +1,15 @@
 {
   "name": "@catamorphic/sandbox",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.37",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./testing": {
+      "bun": "./src/testing.ts",
+      "import": "./dist/testing.js",
+      "types": "./dist/testing.d.ts"
+    },
     ".": {
       "bun": "./src/index.ts",
       "import": "./dist/index.js",
@@ -13,30 +17,56 @@
     },
     "./attachments": {
       "bun": "./src/coding-agent/text-attachments.ts",
-      "import": "./dist/attachments.js",
+      "import": "./dist/coding-agent/text-attachments.js",
       "types": "./dist/coding-agent/text-attachments.d.ts"
-    },
-    "./testing": {
-      "development": "./src/coding-agent/runtime-conformance.ts",
-      "bun": "./src/coding-agent/runtime-conformance.ts",
-      "import": "./dist/testing.js",
-      "types": "./dist/coding-agent/runtime-conformance.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/sandbox --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/testing.ts",
+      "src/coding-agent/text-attachments.ts"
+    ],
+    "external": [
+      "@catamorphic/sandbox"
+    ],
+    "splitting": false
   },
   "dependencies": {
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/runtime": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
     "@catamorphic/app": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/sandbox"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
+  ]
 }

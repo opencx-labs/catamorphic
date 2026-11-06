@@ -11,6 +11,7 @@ import {
   normalizeTheme,
   resolveTheme,
   ThemeStore,
+  validateThemeConfig,
 } from "./theme.js";
 
 const temporaryDirectories: string[] = [];
@@ -133,6 +134,39 @@ describe("desktop theme", () => {
     });
   });
 
+  it("keeps https backgrounds per surface, fills defaults and drops the rest", () => {
+    expect(
+      normalizeTheme({
+        backgrounds: {
+          left: { image: "https://example.com/a.png", pixelate: 4, blur: 99 },
+          right: { image: "file:///etc/passwd" },
+          chat: { image: "https://example.com/b.png", position: "center" },
+          footer: { image: "https://example.com/c.png" },
+        },
+      }).backgrounds,
+    ).toEqual({
+      left: {
+        image: "https://example.com/a.png",
+        position: "bottom",
+        opacity: 0.35,
+        blur: 0,
+        pixelate: 4,
+      },
+      chat: {
+        image: "https://example.com/b.png",
+        position: "center",
+        opacity: 0.35,
+        blur: 0,
+        pixelate: 1,
+      },
+    });
+    expect(() =>
+      validateThemeConfig({
+        backgrounds: { left: { image: "http://x.test/a.png" } },
+      }),
+    ).toThrow("needs an https image");
+  });
+
   it("broadcasts a newly resolved system theme but leaves fixed themes alone", () => {
     let appearance: "dark" | "light" = "dark";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cat-theme-"));
@@ -144,12 +178,13 @@ describe("desktop theme", () => {
       projects: path.join(dataRoot, "projects"),
       remotes: path.join(dataRoot, "remotes"),
       appBundles: path.join(dataRoot, "app-bundles"),
-      githubFile: path.join(root, "github.json"),
       profilesFile: path.join(root, "profiles.json"),
       profilesDir: path.join(root, "profiles"),
       agentHomesDir: path.join(root, "agent-homes"),
       harnessComponentsDir: path.join(root, "harness-components"),
       hostSkillsDir: path.join(root, "host-skills"),
+      bookmarksFile: path.join(root, "bookmarks.json"),
+      attachmentsDir: path.join(root, "attachments"),
     };
     const profiles = new ProfilesStore(paths.profilesFile);
     const systemProfile = profiles.create("System");

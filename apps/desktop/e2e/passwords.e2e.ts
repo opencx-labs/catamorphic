@@ -1,4 +1,5 @@
 import http from "node:http";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
 
@@ -23,6 +24,96 @@ const loginForm = (error = "") =>
 const server = http.createServer((request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost");
   response.setHeader("Content-Type", "text/html");
+  if (url.pathname === "/framed") {
+    const mode = url.searchParams.get("mode") ?? "inline";
+    const authOrigin = origin.replace("127.0.0.1", "localhost");
+    response.end(
+      page(
+        "Framed sign in",
+        `
+      <iframe id=auth ${mode === "sandbox" ? 'sandbox="allow-scripts allow-forms"' : ""}
+        style="width:500px;height:400px" src="${authOrigin}/auth-frame?mode=${mode}"></iframe>
+      <iframe id=sibling src="/empty-frame"></iframe>
+      <script>
+        addEventListener('message', ({data, source}) => {
+          if (source !== document.querySelector('#auth')?.contentWindow) return;
+          if (data.focused) document.body.dataset.focused = data.focused;
+          if (data.typed) document.body.dataset.typed = data.typed;
+          if (data.phase) document.body.dataset.phase = data.phase;
+          if (data.done) {
+            document.title = 'Frame finished';
+            if (${JSON.stringify(mode)} === 'remove') document.querySelector('#auth').remove();
+          }
+        });
+      </script>`,
+      ),
+    );
+    return;
+  }
+  if (url.pathname === "/empty-frame") {
+    response.end(page("Empty frame", "<p>No login here</p>"));
+    return;
+  }
+  if (url.pathname === "/auth-frame") {
+    const mode = url.searchParams.get("mode") ?? "inline";
+    const rejected = url.searchParams.has("rejected");
+    response.end(
+      page(
+        "Authentication",
+        `
+      <form><label for=email>Email</label><input id=email type=email autocomplete=username>
+        <button>Continue</button></form>
+      <script>
+        const form = document.querySelector('form');
+        let expectedInput;
+        form.addEventListener('input', (event) => {
+          if (event.isTrusted && event.target === expectedInput?.element && event.target.value === expectedInput.text)
+            parent.postMessage({typed:event.target.id}, '*');
+        });
+        const passwordStep = () => {
+          form.innerHTML = '<label for=pw>Password</label><input id=pw type=password autocomplete=current-password><button>Sign in</button>';
+          parent.postMessage({phase:'password'}, '*');
+        };
+        addEventListener('message', ({data}) => {
+          if (data.focus) {
+            const element = document.querySelector('#' + data.focus);
+            element.value = '';
+            expectedInput = {element, text:data.text};
+            element.focus();
+            const ready = () => {
+              if (document.activeElement === element && document.hasFocus()) parent.postMessage({focused:data.focus}, '*');
+              else requestAnimationFrame(ready);
+            };
+            ready();
+          }
+        });
+        form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          if (!document.querySelector('#pw')) { passwordStep(); return; }
+          if (document.querySelector('#pw').value !== 'correct horse') {
+            location.href = '/auth-frame?rejected=1';
+            return;
+          }
+          if (${JSON.stringify(mode)} === 'pending') {
+            parent.postMessage({phase:'pending'}, '*');
+            return;
+          }
+          if (${JSON.stringify(mode)} === 'top') {
+            top.location.href = ${JSON.stringify(`${origin}/welcome`)};
+            return;
+          }
+          if (${JSON.stringify(mode)} !== 'remove') form.remove();
+          parent.postMessage({done:true}, '*');
+        });
+        if (${rejected}) {
+          passwordStep();
+          parent.postMessage({phase:'rejected'}, '*');
+        } else parent.postMessage({phase:'email'}, '*');
+      </script>`,
+      ),
+    );
+    return;
+  }
   if (request.method === "POST") {
     let body = "";
     request.on("data", (chunk) => {
@@ -126,6 +217,7 @@ async function pressUntil(
   // A guest between documents throws instead of answering; that is "not yet".
   const settled = `Promise.resolve().then(() => ${effect}).catch(() => false)`;
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0 && (await app.eval(settled))) return;
     await app.press(key);
     try {
       await app.waitFor(settled, { timeoutMs: 3_000, label });
@@ -145,10 +237,61 @@ const profileId = () =>
     `window.catamorphicDesktop.profilesList().then((data) => data.defaultProfileId)`,
   );
 const saved = async () =>
-  app.eval<Array<{ id: string; username: string; hasNote: boolean }>>(
+  app.eval<
+    Array<{ id: string; origin: string; username: string; hasNote: boolean }>
+  >(
     `window.catamorphicDesktop.vaultList({ profileId: ${JSON.stringify(await profileId())} })`,
   );
 const prompt = `document.querySelector('[data-testid="password-prompt"]')`;
+
+/** Cross-origin fields focus themselves; typing and Enter still use real input. */
+async function typeInFrame(field: string, text: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await app.eval(`${guest}.focus(); true`);
+    await inGuest(`(() => {
+      document.body.dataset.focused = '';
+      document.body.dataset.typed = '';
+      const frame = document.querySelector('#auth');
+      frame.focus();
+      frame.contentWindow.postMessage({focus:${JSON.stringify(field)},text:${JSON.stringify(text)}}, '*');
+    })()`);
+    await app.waitFor(
+      `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.focused === ${JSON.stringify(field)}`)})`,
+      { label: `${field} focused in authentication frame` },
+    );
+    await app.insertText(text);
+    try {
+      await app.waitFor(
+        `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.typed === ${JSON.stringify(field)}`)})`,
+        { timeoutMs: 3_000, label: `${field} received trusted input` },
+      );
+      return;
+    } catch (error) {
+      // Native macOS can drop the first input after switching frames.
+      // The fixture clears the field before retrying, so text never doubles.
+      if (attempt === 2) throw error;
+    }
+  }
+}
+
+const framePhase = (phase: string) =>
+  app.waitFor(
+    `${guest}.executeJavaScript(${JSON.stringify(`document.body.dataset.phase === ${JSON.stringify(phase)}`)})`,
+    { label: `${phase} step in authentication frame` },
+  );
+
+async function framedLogin(mode: string, username: string, password: string) {
+  await navigate(`/framed?mode=${mode}`, "Framed sign in");
+  await framePhase("email");
+  await typeInFrame("email", username);
+  await pressUntil(
+    "Enter",
+    `${guest}.executeJavaScript("document.body.dataset.phase === 'password'")`,
+    "password step in authentication frame",
+  );
+  await typeInFrame("pw", password);
+  await app.press("Enter");
+}
 
 describe("browser passwords", () => {
   it("offers to save a sign-in that lands, and saves it", async () => {
@@ -214,6 +357,44 @@ describe("browser passwords", () => {
     );
   });
 
+  it("fills even when the page reports its blur before the press lands", async () => {
+    // Pressing the list takes focus from the page. On macOS the page's
+    // blur report can reach the window before the press does; the list
+    // must still take the click (it used to close first, flakily).
+    await navigate("/login", "Sign in");
+    await focusInPage("#email");
+    await pressUntil(
+      "ArrowDown",
+      `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
+      "suggestions open",
+    );
+    await inGuest("document.activeElement.blur(); true");
+    await clickInApp('[data-testid="password-suggestion"]');
+    await app.waitFor(
+      `${guest}.executeJavaScript("document.querySelector('#pw').value === 'correct horse' && document.querySelector('#email').value === 'alice@example.com'")`,
+      { label: "filled after an early blur" },
+    );
+    await app.waitFor(
+      `!document.querySelector('[data-testid="password-suggestions"]')`,
+      { label: "suggestions closed" },
+    );
+  });
+
+  it("closes the list when the page's field loses focus for good", async () => {
+    await navigate("/login", "Sign in");
+    await focusInPage("#email");
+    await pressUntil(
+      "ArrowDown",
+      `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
+      "suggestions open",
+    );
+    await inGuest("document.activeElement.blur(); true");
+    await app.waitFor(
+      `!document.querySelector('[data-testid="password-suggestions"]')`,
+      { label: "suggestions closed after the blur" },
+    );
+  });
+
   it("suggests a strong password for a new account and saves it on submit", async () => {
     await navigate("/signup", "Create account");
     await typeInPage("#email", "carol@example.com");
@@ -233,7 +414,26 @@ describe("browser passwords", () => {
       )})`,
       { label: "both fields filled" },
     );
-    // Filling leaves focus in the password field; Enter sends the form.
+    // Filled values can arrive before the overlay's native focus handoff.
+    // Observe that handoff without focusing the field on the test's behalf.
+    try {
+      await app.waitFor(
+        `!document.querySelector('[data-testid="password-suggestions"]') &&
+          ${guest}.executeJavaScript("document.hasFocus() && document.activeElement === document.querySelector('#pw')")`,
+        { label: "generated password returns keyboard focus to the page" },
+      );
+    } catch (error) {
+      const focus = await app.eval(`(async () => ({
+        hostFocused:document.hasFocus(),
+        hostActive:document.activeElement?.tagName,
+        suggestions:document.querySelector('[data-testid="password-suggestions"]')?.dataset.open,
+        guest:await ${guest}.executeJavaScript("({focused:document.hasFocus(),active:document.activeElement?.id})"),
+      }))()`);
+      throw new Error(`Generated password focus: ${JSON.stringify(focus)}`, {
+        cause: error,
+      });
+    }
+    // Once the page owns its keys, Enter sends the form.
     await pressUntil(
       "Enter",
       `${prompt}?.dataset.kind === 'saved'`,
@@ -275,5 +475,70 @@ describe("browser passwords", () => {
         `window.catamorphicDesktop.vaultReveal({ profileId: ${JSON.stringify(await profileId())}, id: ${JSON.stringify(carol?.id)} }).then((secret) => [secret.note, secret.password])`,
       ),
     ).toEqual(["Recovery code 1234", users.get("carol@example.com")]);
+  });
+
+  it.each(["inline", "top", "remove"])(
+    "saves an email-first iframe login when it lands via %s",
+    async (mode) => {
+      await app.waitFor(`!${prompt}`, {
+        label: "previous password card closed",
+      });
+      const username = `${mode}@framed.example`;
+      await framedLogin(mode, username, "correct horse");
+      await pageReady(mode === "top" ? "Welcome" : "Frame finished");
+      await app.waitFor(`${prompt}?.dataset.kind === 'save'`, {
+        label: "framed sign-in offers to save",
+      });
+      expect(await app.eval(`${prompt}.textContent`)).toContain(username);
+      if (mode === "inline" && process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR) {
+        await app.waitFor(
+          `${prompt}.getAnimations().every((animation) => animation.playState === 'finished')`,
+          { label: "save card settled" },
+        );
+        await app.screenshot(
+          path.join(
+            process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+            "framed-password-offer.png",
+          ),
+        );
+      }
+      await clickInApp('[data-testid="password-prompt-save"]');
+      await app.waitFor(`!${prompt}`, { label: "framed login saved" });
+      const login = (await saved()).find((item) => item.username === username);
+      expect(login?.origin).toBe(origin.replace("127.0.0.1", "localhost"));
+      expect(
+        await app.eval(
+          `window.catamorphicDesktop.vaultReveal({ profileId: ${JSON.stringify(await profileId())}, id: ${JSON.stringify(login?.id)} }).then((secret) => secret.password)`,
+        ),
+      ).toBe("correct horse");
+    },
+  );
+
+  it("does not offer a rejected iframe password or an opaque frame's login", async () => {
+    await app.eval(`window.__frameOffers = [];
+      window.catamorphicDesktop.onBrowserCredentialSaveOffer((offer) => window.__frameOffers.push(offer)); true`);
+    await framedLogin("inline", "rejected@framed.example", "wrong");
+    await framePhase("rejected");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await app.eval("window.__frameOffers.length")).toBe(0);
+
+    await framedLogin("sandbox", "opaque@framed.example", "correct horse");
+    await pageReady("Frame finished");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await app.eval("window.__frameOffers.length")).toBe(0);
+    expect(await app.eval(`!!${prompt}`)).toBe(false);
+  });
+
+  it("does not treat a sibling iframe's empty landing as login success", async () => {
+    await framedLogin("pending", "pending@framed.example", "correct horse");
+    await framePhase("pending");
+    await inGuest(
+      `document.querySelector('#sibling').src = '/empty-frame?after-submit'`,
+    );
+    await pageReady("Framed sign in");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await app.eval("window.__frameOffers.length")).toBe(0);
+    expect(await app.eval(`!!${prompt}`)).toBe(false);
+    expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -1,5 +1,17 @@
 # Desktop settings
 
+Executable sidebar, palette and chip sources declare their access in
+`catamorphic.access` in the nearest `package.json`. Work asks before they
+run with that access and when it grows. File grants bind their resolved
+destinations; changing a symlink's target asks again. Modules run confined
+on macOS and Linux, with only declared hosts through a proxy and no inherited keys.
+They cannot reach Work's own servers, even through a DNS or loopback alias.
+
+Chat hosts declared in `.work/project.json` become shared trust only in the
+project's approved published program. Every person uses that list automatically;
+local drafts and checkpoint commits do not widen it. Without a publication,
+Work uses its built-in hosts and the person's own trusted hosts.
+
 `src/shared/settings.ts` declares ordinary preference keys, labels, validation and
 permitted scopes. `app-prefs.ts` supplies defaults and runtime preference shape.
 `main/settings-store.ts` owns per-key resolution and atomic writes.
@@ -10,12 +22,14 @@ For project-overridable settings, lowest to highest priority:
 
 1. Built-in default.
 2. Profile: `profiles/<id>/prefs.json`.
-3. Shared project: `<project>/.catamorphic/settings.json`.
+3. Shared project: `<project>/.work/settings.json`.
 4. Personal project: `profiles/<id>/settings-projects/<projectId>.json`.
 
 Layout, framed content, bookmarks presentation and link defaults support all three
-editable scopes. Notifications, terminal appearance and terminal macros are
-profile choices. `SETTINGS` is the executable scope allowlist. A shared project
+editable scopes. Notifications, terminal appearance, terminal macros,
+switching to a page's open tab (`switchToOpenTab`), browser tab sleep
+(`browserTabSleep`, ADR 0194) and window buttons (`windowButtons`) are profile
+choices. `SETTINGS` is the executable scope allowlist. A shared project
 file is ordinary committed project configuration; a personal override never enters
 team git history. Without a local project root, shared-file editing is unavailable.
 
@@ -36,22 +50,57 @@ immediately. Framed content independently controls the inset window and its bord
 Scope selectors wrap below headings when space is tight, and option controls
 shrink within their rows so both sidebars can remain open without horizontal scroll.
 
+## Shared profile settings
+
+A profile can import parts of another profile's settings, once or kept in sync
+(ADR 0272): Appearance, Workspace, Macros, Keyboard shortcuts and
+Notifications, the Settings categories `shared/profile-sync.ts` lists. A
+preference belongs to the part named by its Settings category
+(`settingCategory` in `shared/settings-catalog.ts`). `profiles.json` records
+`syncedFrom: { <part>: <owner id> }` per profile; followers always name the
+owner. A synced profile's theme, shortcut and workspace stores open the owner's
+`theme.json`, `keybindings.json` and `workspace.js`. Its `PrefsStore` and the
+profile settings layer read and write the part's preference keys in the owner's
+`prefs.json` (`SettingsFiles.synced`), while runtime state and other keys stay
+in its own. Per-project overrides (`settings-projects/`, `workspace-projects/`)
+are never shared.
+
+`ProfileConfigManager.syncSettings` links or copies parts;
+`stopSyncing` gives the follower a copy and ends the link; removing an owner
+hands its parts to the first follower and repoints the rest. Each swaps the
+affected profiles' stores in place and repaints their windows. A copy never
+overwrites an invalid `prefs.json`. The welcome screen and Profile settings
+mount the same `ProfileImportDialog`; Settings shows `SyncedNote` under a shared
+category; `desktop_settings` reports `sharedSettings`. Tests:
+`profile-sync.test.ts`, `desktop-settings-context.test.ts` and
+`profile-settings-screen.test.tsx`.
+
 ## Other families
 
 Settings > Workspace > Code review exposes `diffLayout`, `diffWrap`,
-`reviewStartView`, `reviewGrouping`, `changesFileLayout` and `prDefaultView`.
+`reviewStartView` and `reviewGrouping`.
 These are profile preferences in `prefs.json`, with reset and live file edits.
 The code theme lives in Appearance as `codeTheme`. Review progress and explicit
 checkout selection are runtime state, separate from presentation preferences.
 
 | Family | Resolution |
 |---|---|
-| Sidebar contents | Built-in, profile, shared project, personal project; whole document |
+| Workspace (`workspace.js`: sidebars, palette modes) | Built-in, profile, shared project, personal project; whole document |
 | Theme | Profile, shared project, personal project; sparse selection, token and font overrides |
 | Default agent | Profile, shared project, personal project |
+| Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voiceDictation`, `voiceShortcutsAsked`, `voiceInDock`, `voiceInChats`, `voiceBubbleSpot`, `voiceprint`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0216, 0236) |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
-Do not apply generic object merging to sidebar documents or themes. Credentials,
+App-themed terminals use the nearest resolved project theme and its monospace
+font, including shared and personal project overrides. The appearance provider
+loads only the profile's source choice and optional Ghostty configuration; it
+does not resolve app colors outside a project's theme scope. A new terminal
+waits for that scope to load. Existing shells retain their opening colors
+because the embedded terminal engine fixes its palette when opened; font edits
+apply live without restarting a shell. Choosing Ghostty remains an explicit
+profile-wide appearance choice.
+
+Do not apply generic object merging to workspace documents or themes. Credentials,
 enforced permissions, last project, unread markers and sidebar pose are not ordinary
 project-overridable settings. `ProfileConfigManager.forProject` identifies an owning
 profile; `resolveSettings` resolves layers. These are different operations.
@@ -63,7 +112,7 @@ profile, exact file paths, access mode and validation errors. It resolves the pr
 project folder even when the session runs in a worktree or another profile is
 foreground. Turn context carries only current validation errors (ADR 0152). Native
 agents edit files directly with ordinary file/shell facilities; native permissions
-still apply. Read-only agents inspect only. Sandboxed agents without host filesystem
+still apply. Agents whose sandboxing is contained inspect only. Sandboxed agents without host filesystem
 access must report that limitation. No settings write tools or mirrored
 configuration transport exist.
 
@@ -89,6 +138,11 @@ controls, scrolls, highlights and focuses the target. A floating chat minimizes 
 the control. Rows identify the inspected scope even when navigation passes its
 section header. Navigation never changes a preference itself.
 
+Category navigation animates the content column while its navigation stays in
+place. Search destinations use an inset highlight that fits wholly inside the
+target row or card, including clipped shortcut and color lists. Existing corner
+radii remain intact when the highlight clears.
+
 Project themes use the same profile, shared-project and personal-project priority
 as workspace settings. Missing selections, colors and fonts inherit. Choosing a
 selection replaces inherited color overrides; individual token and font edits
@@ -108,7 +162,9 @@ again.
 `dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
 their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
 rests in. Dragging the collapsed bubble changes the corner; dragging the
-arrows of an expanded strip changes the placement.
+arrows of an expanded strip changes the placement, and an open chat collapses as
+the drag starts. The detached window keeps its size while dragged and lands
+with its final size in one move.
 
 ## Workspace frame
 
@@ -121,7 +177,7 @@ personal overrides, appear in settings search and apply live in every tab layout
 
 ## Theme picker
 
-Onboarding, Settings > Appearance > Choose theme, and the Choose theme palette
+Tutorial, Settings > Appearance > Choose theme, and the Choose theme palette
 command open one modal. Theme-related settings search destinations open that same
 picker, revealing advanced colors or fonts when needed. Preset selection applies
 immediately, and Done dismisses the modal. Color token changes interpolate over
@@ -129,8 +185,46 @@ immediately, and Done dismisses the modal. Color token changes interpolate over
 labeled disclosure; the centered dialog animates its bounded height in both
 directions as content expands or shrinks. A project opens the picker at
 Just for me; the scope selector retains Profile, Project where available, and
-Just for me. Sparse file resolution and reset behavior are unchanged.
+Just for me. Sparse file resolution and reset behavior are unchanged. Each edit
+builds on the latest authored values, including an in-flight save; color and font
+changes preserve theme backgrounds.
 
 The picker can start a theme customization chat. If the profile needs an agent,
 the existing setup flow opens in a separate tab before the normal chat begins.
-The onboarding tab keeps its step throughout.
+The Tutorial tab keeps its step throughout.
+
+## Window buttons
+
+`windowButtons` (default true) shows the macOS close, minimize and full screen
+buttons at a workspace window's top left. A setting marked `macOnly` appears in
+Settings (Workspace > Window) and the palette only on macOS, and the skill table
+says so; elsewhere the OS draws the frame and the key changes nothing.
+`main/window-buttons.ts` combines the preference with the workspace's own hiding
+(a collapsed sidebar holding the header hides them until revealed). It applies
+before a new window first shows and on every preference change, including file
+edits, so an agent can turn them off. While they are hidden the chrome gives back
+the corner it keeps for them: the sidebar's project switcher moves up into the
+row beside its toggle, across it, unless the header shares that row. The
+window then drags by the chrome's empty room, as Chrome's does (the tab
+strip's spare end, or the title row). The menu bar still
+closes (File > Close Window), minimizes and enters full screen.
+
+## macOS Dock icon
+
+Settings > Appearance > Dock icon accepts a PNG or JPEG up to 10 MB and 16 megapixels, applies it
+immediately, and offers Reset to restore Work's default icon. The choice is local
+to this app installation and shared by every profile and window. It is independent
+of profile Appearance syncing and project overrides. Search finds it as Dock icon.
+
+Images may be at most 8192 pixels per side.
+The main process validates image headers and dimensions before decoding content, fits it within 1024 pixels while keeping
+its aspect ratio, and atomically stores a managed PNG at `<userData>/dock-icon.png`.
+The source file can then move or be deleted. Startup applies the saved image;
+a damaged saved image falls back to the default and exposes a choose/reset message.
+Reset removes the managed PNG and restores the signed bundle's native icon, including
+Icon Composer rendering, rather than replacing it with a flattened bundled PNG.
+Development builds restore their development Work icon.
+
+This customizes the running macOS Dock icon only. Finder and a pinned Dock tile
+while Work is closed keep the installed bundle icon. Work's application name,
+Dock label and app switcher name remain Work. There is no application-name setting.

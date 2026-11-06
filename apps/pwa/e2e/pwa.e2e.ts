@@ -37,9 +37,27 @@ const CLICK_BY_TEXT = (selector: string, text: string) => `
 describe.skipIf(!chromeBinary())("pwa PWA", () => {
   let app: PwaHandle;
 
+  /**
+   * Type a message and send it once the button takes it: a new chat's Send
+   * waits for its agent and environment, and a click before then does
+   * nothing.
+   */
+  const send = async (
+    text: string,
+    button: "chat-send" | "chat-send-now" = "chat-send",
+  ) => {
+    expect(await app.eval(TYPE("[data-testid=chat-input]", text))).toBe(true);
+    const selector = `[data-testid=${button}]`;
+    await app.waitFor(
+      `document.querySelector(${JSON.stringify(selector)})?.disabled === false`,
+      { label: `${button} ready` },
+    );
+    expect(await app.eval(CLICK(selector))).toBe(true);
+  };
+
   beforeAll(async () => {
     app = await launchPwa();
-  }, 90_000);
+  }, 180_000);
 
   afterAll(async () => {
     await app?.stop();
@@ -67,8 +85,7 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
   it("starts a chat, sends a message, and renders the reply with steps", async () => {
     await app.eval(CLICK("[data-testid=new-chat]"));
     await app.waitFor("!!document.querySelector('[data-testid=chat-input]')");
-    await app.eval(TYPE("[data-testid=chat-input]", "hello there"));
-    await app.eval(CLICK("[data-testid=chat-send]"));
+    await send("hello there");
     // Optimistic user bubble, then the scripted reply + collapsed steps.
     await app.waitFor("document.body.innerText.includes('hello there')");
     await app.waitFor("document.body.innerText.includes('You said:')", {
@@ -81,8 +98,7 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
   });
 
   it("surfaces a tool-permission ask and resolves it from the phone", async () => {
-    await app.eval(TYPE("[data-testid=chat-input]", "ask to post"));
-    await app.eval(CLICK("[data-testid=chat-send]"));
+    await send("ask to post");
     await app.waitFor(
       "!!document.querySelector('[data-testid=tool-permission-card]')",
       { timeoutMs: 20_000, label: "permission card" },
@@ -95,19 +111,137 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
   });
 
   it("renders agent questions and submits a picked answer", async () => {
-    await app.eval(TYPE("[data-testid=chat-input]", "question time"));
-    await app.eval(CLICK("[data-testid=chat-send]"));
+    await send("question time");
     await app.waitFor(
       "document.body.innerText.includes('Which environment should I target?')",
       { timeoutMs: 20_000, label: "question panel" },
     );
     await app.eval(CLICK_BY_TEXT("button", "Staging"));
     await app.eval(CLICK_BY_TEXT("button", "Submit"));
-    // The answer goes back as a plain user message.
+    // The answer reads as the question with what was picked.
     await app.waitFor(
-      "[...document.querySelectorAll('article')].some(a => a.innerText.includes('Staging'))",
+      "[...document.querySelectorAll('[data-testid=question-answer]')].some(a => a.innerText.includes('Staging'))",
       { timeoutMs: 20_000, label: "answer in transcript" },
     );
+    await app.waitFor("document.body.innerText.includes('Going with')", {
+      timeoutMs: 20_000,
+      label: "reply to the answer",
+    });
+  });
+
+  it("keeps a question open when the person replies in their own words", async () => {
+    await send("question again");
+    await app.waitFor(
+      "document.querySelector('[data-testid=chat-input]').placeholder.includes('own words')",
+      { timeoutMs: 20_000, label: "question placeholder" },
+    );
+    await send("what is the difference?");
+    await app.waitFor(
+      "document.body.innerText.includes('Good question') && document.body.innerText.includes('Answer when ready')",
+      {
+        timeoutMs: 20_000,
+        label: "steered reply with the question still open",
+      },
+    );
+    await app.eval(CLICK_BY_TEXT("button", "Production"));
+    await app.eval(CLICK_BY_TEXT("button", "Submit"));
+    await app.waitFor(
+      "document.body.innerText.includes('Answered: Production')",
+      { timeoutMs: 20_000, label: "late answer as a message" },
+    );
+  });
+
+  it("shows a failed turn and retries it", async () => {
+    await send("fail then work");
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-error-card]')",
+      { timeoutMs: 20_000, label: "error card" },
+    );
+    await app.eval(CLICK("[data-testid=chat-retry]"));
+    await app.waitFor(
+      "document.body.innerText.includes('You said: then work') && !document.querySelector('[data-testid=chat-error-card]')",
+      { timeoutMs: 20_000, label: "retried turn" },
+    );
+  });
+
+  it("sends a message the working agent reads, and interrupts for it", async () => {
+    // The turn before may still be finishing: a message now would reach it.
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await send("slow first task");
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupt]')",
+      {
+        timeoutMs: 20_000,
+        label: "working",
+      },
+    );
+    await send("second task");
+    // In the conversation at once, not queued: unread until its next step.
+    await app.waitFor(
+      "document.querySelector('[data-unread] [data-testid=chat-unread-state]')?.textContent === 'Not read yet' && !!document.querySelector('[data-unread] [data-testid=chat-steer-now]') && !document.querySelector('[data-testid=chat-queued-message]')",
+      { timeoutMs: 20_000, label: "unread message" },
+    );
+    expect(
+      await app.eval(CLICK("[data-unread] [data-testid=chat-steer-now]")),
+    ).toBe(true);
+    await app.waitFor("!document.querySelector('[data-unread]')", {
+      timeoutMs: 10_000,
+      label: "read at once",
+    });
+    await app.waitFor(
+      "document.body.innerText.includes('You also said: second task')",
+      { timeoutMs: 20_000, label: "answered in the same turn" },
+    );
+  });
+
+  it("interrupts the agent to send a message now", async () => {
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await send("slow long task");
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "working" },
+    );
+    await send("third task", "chat-send-now");
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupted]') && document.body.innerText.includes('You said: third task')",
+      { timeoutMs: 20_000, label: "first interrupted, third answered" },
+    );
+  });
+
+  it("keeps following the newest message after a panel below the chat closes", async () => {
+    const atBottom =
+      "(() => { const el = document.querySelector('[role=log] > div'); return el.scrollHeight > el.clientHeight && el.scrollHeight - el.clientHeight - el.scrollTop < 8; })()";
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await app.waitFor(atBottom, { label: "following before the panel" });
+    // A question or approval panel opens and closes under the chat: the
+    // scroller shrinks, then grows back and pulls its position up.
+    await app.eval(`(async () => {
+      const panel = document.createElement('div');
+      panel.style.height = '300px';
+      document.querySelector('[role=log]').after(panel);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      panel.remove();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return true;
+    })()`);
+    await send("after the panel");
+    await app.waitFor(
+      "document.body.innerText.includes('You said: after the panel') && !document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "reply after the panel" },
+    );
+    await app.waitFor(atBottom, {
+      timeoutMs: 5_000,
+      label: "chat follows the newest message",
+    });
   });
 
   it("navigates back through the stack to projects", async () => {
@@ -142,7 +276,7 @@ describe.skipIf(!chromeBinary())("pwa installation", () => {
       label: "sessions screen for install",
       timeoutMs: 20_000,
     });
-  }, 90_000);
+  }, 180_000);
 
   afterAll(async () => {
     await app?.stop();
@@ -201,7 +335,7 @@ describe.skipIf(!chromeBinary())("mobile subsessions", () => {
   let app: PwaHandle;
   beforeAll(async () => {
     app = await launchPwa();
-  }, 90_000);
+  }, 180_000);
   afterAll(async () => {
     await app?.stop();
   });

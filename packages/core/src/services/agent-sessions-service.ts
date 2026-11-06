@@ -1,89 +1,242 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { DB, Json, JsonObject } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
 import {
-  getTracer,
-  markSpanError,
-  withSpan,
-  withTelemetryContext,
-} from "@catamorphic/otel";
+  ACTIVE_TURN_STATUSES,
+  type AgentErrorKind,
+  type AgentQuestion,
+  type Attempt,
+  type CommandReceipt,
+  type DispatchMode,
+  type ImportedSession,
+  type ImportedTranscript,
+  INPUT_ITEM_KINDS,
+  type InboundSender,
+  type InputItem,
+  type InputSource,
+  type Item,
+  isActiveTurnStatus,
+  isInputItem,
+  isSettledTurnStatus,
+  isUnreadSteer,
+  type JsonValue,
+  messageInput,
+  type NativeRef,
+  type NotifiedTask,
+  type JsonObject as ProtocolJsonObject,
+  type QuestionAnswer,
+  type RuntimeRequest,
+  type RuntimeRequestResponse,
+  type SessionCommand,
+  type SessionEvent,
+  type SessionInput,
+  type SessionMessageAuthor,
+  type SessionMetadata,
+  type SessionSnapshot,
+  type SessionStreamMessage,
+  type SettledAlert,
+  sessionInputSchema,
+  type Turn,
+  type TurnError,
+  withSessionMetadata,
+} from "@catamorphic/agent-protocol";
+import {
+  ASK_USER_TOOL,
+  type AttemptStart,
+  type HostToolDescriptor,
+  type HostToolResult,
+  type McpServerSpec,
+  type PolicyLayer,
+} from "@catamorphic/agent-protocol/runner";
+import {
+  type DB,
+  type Json,
+  type JsonObject,
+  jsonbText,
+  storedJson,
+} from "@catamorphic/db";
+import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
+import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import {
   type AgentAttachment,
   type AgentEffort,
-  type AgentEvent,
   type AgentMcpServerConfig,
-  type AgentQuestionRequest,
-  type AgentRuntimeRequestResponse,
+  type AgentTurnUsage,
+  ATTACHMENT_MARKER,
   type AttachedPluginForAgent,
-  capabilityEventPresenter,
+  agentCapabilityTools,
+  agentQuestionDescription,
+  agentQuestionInputSchema,
+  buildPluginsPreamble,
+  closeQuestionsDescription,
+  closeQuestionsInputSchema,
+  type ExtraTool,
+  extraToolResult,
+  type HarnessPermissions,
+  isMediaAttachment,
   type McpToolPolicyLayers,
-  messageWithAttachmentNames,
+  mergePolicyLayers,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
-  type ProviderSession,
+  readOnlyPermissions,
+  renderQuestionAnswer,
+  renderTurnContext,
+  SANDBOXING_LEVELS,
+  type SandboxEgress,
+  type Sandboxing,
+  type SandboxModelGateway,
   type SandboxProvider,
+  type SignInHarness,
+  STOPPED_WAITING_NOTE,
   serverKeyOf,
+  signInCapability,
+  signInHomePath,
+  stagedPluginFiles,
+  stagePluginDocs,
   type ToolPermission,
-  type TurnOptions,
+  type TurnContextFragment,
+  waitUntil,
+  withMarkerCount,
 } from "@catamorphic/sandbox";
-import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import {
+  AGENT_COMMIT_AUTHOR,
+  PROJECT_MANIFEST_PATH,
+} from "@catamorphic/workflow/project-layout";
+import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
+  EVERY_ARTIFACT,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
-  scopeCovers,
+  isProjectPrincipal,
+  PROJECT_PRINCIPAL_ID,
   scopeCoversSessions,
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
+  type AgentDefinition,
   AgentDefinitionsService,
   type AgentDelegationPolicy,
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
-import { startAgentLeaseHeartbeat } from "./agent-lease-heartbeat.js";
-import { sameCanonicalRuntimeJson } from "./agent-runtime-json.js";
 import {
-  AgentRequestAlreadyResolvedError,
-  AgentRuntimeRequestNotFoundError,
-  AgentRuntimeRequestsService,
-} from "./agent-runtime-requests-service.js";
-import { assertAgentSessionAccess } from "./agent-session-access.js";
+  assertAgentSessionAccess,
+  assertSessionWorkspaceAccess,
+} from "./agent-session-access.js";
 import {
-  type AgentExecution,
-  AgentTurnsService,
-  type PendingSessionTurn,
-  type SessionDeliveryMode,
-  type SessionDeliveryReceipt,
-  type SessionMessageAuthor,
-} from "./agent-turns-service.js";
-import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
+  type AllocationMaintenanceClaim,
+  AllocationMaintenanceLostError,
+  allocationSandboxProvider,
+  claimAllocationMaintenance,
+  replaceAllocationSandbox,
+  withAllocationMaintenance,
+  withAllocationSandboxPolicy,
+} from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
-import type {
-  CodingAgentRegistry,
-  RegisteredCodingAgent,
+import { projectChatIdentity } from "./chat-delivery.js";
+import {
+  type AgentModelChoice,
+  type AgentTurnContext,
+  type CodingAgentRegistry,
+  harnessIdOf,
+  type RegisteredCodingAgent,
 } from "./coding-agent-registry.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
-import { connectionMcpServerName } from "./connection-types.js";
+import type { ModelApi } from "./connection-providers.js";
+import {
+  connectionMcpServerName,
+  isHttpMethodCapability,
+  isProtocolCapability,
+  MODEL_CAPABILITY,
+  type ResolvedConnectionBinding,
+} from "./connection-types.js";
 import { DbSandboxStore } from "./db-sandbox-store.js";
+import {
+  catalogEntry,
+  catalogRefusal,
+  childSettings,
+  chooseGrant,
+  delegationMenu,
+  delegationPolicy,
+  effortFits,
+  effortOf,
+  grantAgentId,
+  namesTarget,
+} from "./delegation-grants.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
-import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import { checkpointDraft, draftStoreFolder } from "./draft-workspace.js";
+import type {
+  ExecutionAllocation,
+  ExecutionAllocationsService,
+} from "./execution-allocations-service.js";
+import {
+  type AdmittedSetup,
+  admissionPolicy,
+  EnvironmentAccessDeniedError,
+  type EnvironmentAdmission,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
+  type ExecutionEnvironmentsService,
+  NoCompatibleEnvironmentError,
+  type PlacementReason,
+  placementOwner,
+} from "./execution-environments-service.js";
+import {
+  deliverPersonalEnvironment,
+  removePersonalEnvironment,
+} from "./personal-environment-delivery.js";
+import type { PersonalEnvironmentService } from "./personal-environment-service.js";
+import {
+  PLACEMENT_WAIT_FRESH_SECONDS,
+  type PlacementWait,
+  PlacementWaitsService,
+  type PlacementWaitTarget,
+} from "./placement-waits.js";
 import type { PluginsService } from "./plugins-service.js";
 import {
   PROGRAM_READER,
   readProgramFile,
   withProgram,
 } from "./program-reader.js";
+import { DEFAULT_SETUP_TIMEOUT_MINUTES } from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
-import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import { ExecutorNotConnectedError } from "./remote-operations.js";
+import {
+  ReplicaClaimBusyError,
+  takeReplicaClaim,
+  withReplicaClaim,
+} from "./replica-claims.js";
+import {
+  configureSandboxGateway,
+  ensureSandboxBaseline,
+  removeSandboxGateway,
+  removeSessionCredentials,
+  SESSION_DIRECTORY,
+  sandboxGrantDirectory,
+  seedSandboxBase,
+  seedSandboxRepository,
+} from "./sandbox-git.js";
+import {
+  deliverSandboxSecrets,
+  removeSandboxSecrets,
+  sandboxEnvFiles,
+  sandboxSecretsFile,
+  sandboxSecretsNote,
+} from "./sandbox-secrets.js";
+import {
+  SandboxSyncError,
+  type SyncedFileChange,
+  syncSandboxChanges,
+} from "./sandbox-sync.js";
 import { nextScheduledTime } from "./schedules-service.js";
+import type { SecretsService } from "./secrets-service.js";
 import {
   SessionMailboxesService,
   type SessionMailboxItem,
@@ -94,24 +247,137 @@ import {
   writeSessionMirror,
 } from "./session-mirror.js";
 import {
+  type SessionWorkspaceHandle,
+  SessionWorkspaceUnavailableError,
+  WORKSPACE_NOT_RUNNING_MESSAGE,
+} from "./session-workspace.js";
+import {
+  basePin,
+  movePin,
+  parseWorkspaceBase,
+  parseWorkspaceMove,
+  type SessionWorkspaceBase,
+  type SessionWorkspaceMove,
+  type SessionWorkspaceRequest,
+  type SessionWorkspaces,
+  workspaceJson,
+  workspaceMoveJson,
+  workspaceMoveNote,
+  workspaceMoveRefusedNote,
+} from "./session-workspaces.js";
+import { modelInputText } from "./sessions/input-text.js";
+import { NativeStateStore } from "./sessions/native-state.js";
+import {
+  approvalPolicy,
+  expiredApprovalReason,
+} from "./sessions/request-policy.js";
+import {
+  type RunnerChannel,
+  type RunnerLocation,
+  sandboxChannel,
+  startInProcessRunner,
+  startSandboxRunner,
+} from "./sessions/runner-channels.js";
+import { SecretMask } from "./sessions/secret-mask.js";
+import { copySettledHistory } from "./sessions/session-copy.js";
+import { SessionFeed } from "./sessions/session-feed.js";
+import {
+  importedSessionTitle,
+  importedTranscriptEvents,
+} from "./sessions/session-import.js";
+import {
+  renameCommandId,
+  SessionCommandRejectedError,
+  SessionLog,
+} from "./sessions/session-log.js";
+import {
+  readFullSnapshot,
+  readItemsBefore,
+  readReply,
+  readSnapshot,
+  readTranscript,
+  type TranscriptMessage,
+} from "./sessions/session-reads.js";
+import {
+  attemptFromRow,
+  importedSessionFromRow,
+  itemFromRow,
+  providerThreadFromRow,
+  requestFromRow,
+  type SessionRow,
+  sessionMetadataFromRow,
+  turnFromRow,
+  waitingNotificationTurn,
+} from "./sessions/session-rows.js";
+import {
+  type FinalizedTurn,
+  type OwnerOnlyCause,
+  type PreparedAttempt,
+  TurnEngine,
+  type TurnEngineHost,
+} from "./sessions/turn-engine.js";
+import { TurnQueue } from "./sessions/turn-queue.js";
+import {
   documentsClientFor,
   shipRemoteProject,
   syncRemoteProject,
 } from "./store-sync.js";
+import { UserNotificationsService } from "./user-notifications-service.js";
+import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
+import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
+import {
+  environmentSetupDue,
+  narrowSandboxEgress,
+  readSetupRecord,
+  runWorkspaceSetup,
+  SetupNetworkError,
+  type SetupNetworkRefusal,
+  sessionDirectory,
+  type WorkspaceSetupOutcome,
+  workspaceSetupFailedNote,
+  workspaceSetupNetworkRefusedNote,
+  workspaceSetupUnavailableNote,
+} from "./workspace-setup.js";
+
+export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+
+/** How a delivered input was taken: the protocol's dispatch, or `message_only`. */
+export interface SessionDeliveryReceipt {
+  /** The item the input became. */
+  messageId: string;
+  turnId: string | null;
+  mode: DispatchMode;
+  created: boolean;
+}
 
 interface AgentExecutionRuntime {
   bindingId: string;
   environmentName: string;
   provider?: SandboxProvider;
   devSandboxes?: DevSandboxService;
+  /** The Allocation's budget for one foreground command (ADR 0174). */
+  commandTimeoutSeconds?: number;
+  /** The placement may run the owner's own sign-ins (ADR 0199). */
+  personalCredentials?: boolean;
+  /** The placement isolates the work's owner (ADR 0206). */
+  isolated?: boolean;
+  /** Where the sandbox sees the owner's sign-in for the agent's harness. */
+  signInHome?: string;
+  /** The Environment's setup for new workspaces (ADRs 0208, 0257). */
+  setup?: AdmittedSetup;
+  /** The Allocation the workspace belongs to. */
+  allocation?: ExecutionAllocation;
+  /**
+   * Destroy the Allocation's sandbox, so the next workspace it makes is a
+   * new one (ADR 0257).
+   */
+  destroySandbox?: (sandboxId: string) => Promise<void>;
 }
 
-type SessionRow = Selectable<DB["agent_sessions"]>;
-type MessageRow = Selectable<DB["agent_messages"]>;
 export interface SessionOperationOrigin {
   author: SessionMessageAuthor;
   causation?: string[];
-  provenance?: JsonObject;
 }
 
 type SessionVisibility = "latent" | "promoted" | "archived";
@@ -140,24 +406,42 @@ export interface AgentSession {
   id: string;
   projectId: string;
   externalUserId: string;
-  provider: string;
+  /**
+   * `project`: a shared chat owned by the project (ADR 0156), open to
+   * everyone whose role reaches its agent. `member`: one person's chat.
+   */
+  owner: "member" | "project";
   /** Surface that first created this conversation; informational, not auth. */
   source: AgentSessionSource;
-  providerSessionId: string | null;
   sandboxId: string | null;
   environment: string | null;
   allocationId: string | null;
   /** Host-registry key of the agent this session runs on; null = default. */
   agentId: string | null;
+  /**
+   * The harness used by the latest bound turn. Null before the conversation
+   * starts; switching agents can select a different harness for the next turn.
+   */
+  harness: string | null;
   /** Per-session model override; null = the agent harness's configured default. */
   model: string | null;
   /** Per-session reasoning-effort override; null = the agent's default. */
   modelEffort: AgentEffort | null;
+  /**
+   * The chat runs in its harness's read-only mode: a subsession started
+   * read-only, or by a read-only parent (ADR 0271).
+   */
+  readOnly: boolean;
   title: string | null;
   /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
   icon: string | null;
   /** Session this one was forked from, if any. */
   forkedFromSessionId: string | null;
+  /**
+   * Where a session another tool ran was imported from (ADR 0233): only an
+   * agent of that tool continues it. Null for Work's own.
+   */
+  imported: ImportedSession | null;
   /** Immediate parent in the visible session hierarchy, if any. */
   parentSessionId: string | null;
   /** Per-user navigation state. Archived sessions remain readable. */
@@ -176,8 +460,8 @@ export interface AgentSession {
   authorityRevision: number;
   /** Last time this host observed the current authority's stable snapshot. */
   authoritySeenAt: string;
-  /** Number of transcript messages imported with the current mirror. */
-  mirrorMessageCount: number;
+  /** The last event sequence a mirror pushed here (ADR 0197). */
+  mirrorSequence: number;
   /** A coordinated move blocks local sends while remote authority is claimed. */
   handoffStatus: "none" | "pending";
   handoffDestinationHostId: string | null;
@@ -195,15 +479,38 @@ export interface AgentSession {
   attentionRequired: boolean;
   /** Most recent message explicitly requesting attention. */
   attentionMessage?: { id: string; content: string };
+  /** A searched list's excerpt of the message the words were found in. */
+  match?: string;
   status: "active" | "closed";
+  /**
+   * The project-scoped key automations reach this chat by (ADR 0173), or
+   * null. Closing the chat frees the key.
+   */
+  key: string | null;
+  /** Workflows that delivered to this chat by its key, first first. */
+  keyWorkflows: string[];
+  /** Where this chat runs and why (ADR 0173); null for chats from before. */
+  placement: SessionPlacement | null;
+  /**
+   * The base this chat's workspace stands on (ADR 0178): the ref of the
+   * project's linked remote it was asked to start at and the commit that
+   * ref named, so a review cites exactly what it reviewed. Null for a chat
+   * started from the project itself.
+   */
+  workspace: SessionWorkspaceBase | null;
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface AgentSessionWakeReceipt extends SessionDeliveryReceipt {
-  sessionId: string;
-  sessionCreated: boolean;
+/**
+ * A chat's placement: its Environment, the rule that chose it, and the
+ * machine holding its workspace when the chat was last admitted.
+ */
+export interface SessionPlacement {
+  environment: string;
+  reason: PlacementReason;
+  machine: { id: string; label: string };
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -216,34 +523,33 @@ export interface AgentTodo {
   /** Important task detail, collapsed by default in the UI. */
   description: string;
   status: AgentTodoStatus;
+  /**
+   * What the agent is doing while this item is in progress, in the
+   * present continuous ("Reviewing database migrations"). Shown as the
+   * turn's live status.
+   */
+  activeForm?: string;
 }
 
 export interface AgentTodoInput {
-  /** Echo the returned id when editing an existing item; omit for new items. */
+  /**
+   * The item's identity across updates: echo it to keep the item. An id the
+   * list does not hold yet adds a new item with it; omitted, one is made.
+   */
   id?: string;
   title: string;
   description: string;
   status: AgentTodoStatus;
+  activeForm?: string;
 }
 
-export interface AgentMessage {
-  id: string;
-  sessionId: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  commitSha: string | null;
-  metadata: Record<string, unknown> | null;
-  author: SessionMessageAuthor;
-  deliveryMode: SessionDeliveryMode;
-  idempotencyKey: string | null;
-  createdAt: string;
-}
-
+/**
+ * A session for one viewer, with its snapshot (ADR 0197): the per-person
+ * fields of {@link AgentSession} and a bounded view of its turns, items and
+ * requests at one sequence, which later events keep current.
+ */
 export interface AgentSessionDetail extends AgentSession {
-  questions?: AgentQuestionRequest[];
-  execution: AgentExecution | null;
-  messages: AgentMessage[];
-  pendingTurns: PendingSessionTurn[];
+  snapshot: SessionSnapshot;
 }
 
 export interface AgentSessionPeer {
@@ -263,7 +569,8 @@ export interface AgentSessionPeer {
 
 export interface AgentSubsession {
   delegationId: string;
-  routeId: string;
+  /** The grant that admitted it: `self`, `*` or an agent id (ADR 0271). */
+  grant: string;
   task: string;
   contextMode: "fresh" | "inherit";
   allowFurtherDelegation: boolean;
@@ -311,6 +618,14 @@ export class AgentSessionAuthorityRequiredError extends Error {
   }
 }
 
+/** A rollback of this chat is rewinding its files; try again shortly. */
+export class AgentSessionRewindingError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Agent session '${sessionId}' is rolling back`);
+    this.name = "AgentSessionRewindingError";
+  }
+}
+
 export class AgentSessionHandoffPendingError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is moving to another server`);
@@ -329,6 +644,14 @@ export class AgentDelegationDeniedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AgentDelegationDeniedError";
+  }
+}
+
+/** A subsession's model or effort its harness does not offer (ADR 0271). */
+export class AgentDelegationSettingsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentDelegationSettingsError";
   }
 }
 
@@ -359,19 +682,51 @@ export class AgentTurnInProgressError extends Error {
   }
 }
 
+/** Where a sent message's turn stands when it has no reply to return. */
+export type UnsettledTurnState =
+  | "queued"
+  | "waiting"
+  | "held"
+  | "cancelled"
+  | "interrupted";
+
+const UNSETTLED_TURN_MESSAGES: Record<UnsettledTurnState, string> = {
+  queued:
+    "The message is queued: the machine that runs this chat is away or busy. It runs when a machine takes it; read the chat for the reply.",
+  waiting:
+    "The message waits for a machine: none open to this chat has room or is online yet. It runs once one does, or fails when the chat has waited as long as its Environment allows; read the chat for the reply rather than sending it again.",
+  held: "The message is held: it runs once it is released.",
+  cancelled: "The message was cancelled before it ran.",
+  interrupted:
+    "The machine running this turn stopped: it is settled as interrupted. Send a new message to continue.",
+};
+
+/**
+ * A message was accepted, but its turn has no reply to return: it waits
+ * for a machine, is held or cancelled, or the machine running it stopped.
+ */
+export class AgentTurnUnsettledError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly turnId: string,
+    readonly state: UnsettledTurnState,
+  ) {
+    super(UNSETTLED_TURN_MESSAGES[state]);
+    this.name = "AgentTurnUnsettledError";
+  }
+}
+
 export { parsePorcelain, type SyncedFileChange } from "./sandbox-sync.js";
 
 const tracer = getTracer("@catamorphic/core");
 
-/** Only transport failures, never arbitrary tool output, are retryable here. */
-function connectionFailureKind(message: string): "unavailable" | undefined {
-  if (message.startsWith("Tool ")) return undefined;
-  return /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|fetch failed|network error|socket hang up|stream disconnected|connection closed)\b/i.test(
-    message,
-  )
-    ? "unavailable"
-    : undefined;
-}
+/**
+ * How long a person opening a chat's workspace waits for a turn (or
+ * another server) preparing it at that moment (ADR 0209).
+ */
+const PERSON_WORKSPACE_WAIT_MS = 60_000;
+/** Steps (readmit, wait, create) one opening takes at most. */
+const PERSON_WORKSPACE_PASSES = 200;
 
 /** Shown in place of a turn that died with the process. */
 export const INTERRUPTED_TURN_MESSAGE =
@@ -381,12 +736,58 @@ export const INTERRUPTED_TURN_MESSAGE =
  * Author on turn-checkpoint commits — distinct from human commits and from
  * the system author used for generated-file syncs, so history reads honestly.
  */
-const CHECKPOINT_AUTHOR = {
-  name: "Catamorphic Agent",
-  email: "agent@catamorphic.dev",
-};
+const CHECKPOINT_AUTHOR = AGENT_COMMIT_AUTHOR;
+
+/**
+ * A session's sandbox being replaced for a setup on its own network (ADR
+ * 0257), marked before it is destroyed: the next preparation finishes it.
+ */
+const REPLACING_SANDBOX = "replacing";
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
+
+/** An untitled chat's name from its first message, until its harness names it. */
+function provisionalTitle(input: {
+  text: string;
+  attachments: readonly { name?: string }[];
+}): string {
+  const names = input.attachments
+    .map((attachment) => attachment.name)
+    .filter(Boolean);
+  const text = input.text.replace(/\s+/g, " ").trim() || names.join(", ");
+  return text.length > 500 ? `${text.slice(0, 499)}…` : text;
+}
+
+/** What a chat search reads: the conversation, not tool calls or reasoning. */
+const SEARCHED_ITEM_KINDS = ["user_message", "assistant_message"] as const;
+
+/** A chat search's distinct words, lowercased and bounded. */
+function searchTerms(query: string | undefined): string[] {
+  const words = (query ?? "").toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return [...new Set(words)].slice(0, 8).map((word) => word.slice(0, 100));
+}
+
+function containsPattern(term: string): string {
+  return `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
+
+/**
+ * The part of a matching message from a few words before its first matched
+ * word, so a one-line row still shows the word.
+ */
+function matchExcerpt(text: string, terms: readonly string[]): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const lower = flat.toLocaleLowerCase();
+  const at = Math.min(
+    ...terms.map((term) => lower.indexOf(term)).filter((index) => index >= 0),
+  );
+  const from = Number.isFinite(at) ? Math.max(0, at - 24) : 0;
+  const space = flat.indexOf(" ", from);
+  // Start on a word: the first one wholly inside the window.
+  const start = from > 0 && space >= 0 && space < at ? space + 1 : from;
+  const end = Math.min(flat.length, start + 200);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end).trim()}${end < flat.length ? "…" : ""}`;
+}
 
 /** Compact, bounded peer context derived from a session's latest request. */
 export function summarizeSessionTask(message: string): string | null {
@@ -396,9 +797,13 @@ export function summarizeSessionTask(message: string): string | null {
   return `${normalized.slice(0, SESSION_TASK_SUMMARY_LIMIT - 1)}…`;
 }
 
-/** First line of the user's request, trimmed into a commit subject. */
-function checkpointMessage(userMessage: string): string {
-  const firstLine = userMessage.split("\n", 1)[0]?.trim() ?? "";
+/**
+ * First line of the turn's request, trimmed into a commit subject: the
+ * person's or a sender's words, or a notification's summary, never the
+ * model-facing envelope ("Agent: Deploy is live: done").
+ */
+export function checkpointMessage(request: string): string {
+  const firstLine = request.trimStart().split("\n", 1)[0]?.trim() ?? "";
   const subject =
     firstLine.length > 68 ? `${firstLine.slice(0, 67).trimEnd()}…` : firstLine;
   return subject ? `Agent: ${subject}` : "Agent checkpoint";
@@ -419,13 +824,15 @@ Every turn comes with fresh session context beside the person's message: who the
 
 ## Talk to the person you are working with
 
-Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .catamorphic, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
+Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .work, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
 
-Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them.
+Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them. When a tool takes a short description, write one in plain words: the person sees it as what you are doing right now.
 
 ## Build what the work needs
 
-When something should happen repeatedly, on a schedule, or when an event occurs, offer to automate it with a workflow; for a one-off, just do the task. When the person needs a tool with a screen, build an app. Before writing a workflow or an app, load the matching skill (writing-workflows, workflow-lifecycle, building-apps, or catamorphic-projects for project structure and roles) and follow it. Describe the result in the person's terms: what it does, when it runs, and where they can see it.
+When something should happen repeatedly, on a schedule, or when an event occurs, offer to automate it with a workflow; for a one-off, just do the task. When the person needs a tool with a screen, build an app. Before writing a workflow or an app, load the matching skill (writing-workflows, workflow-lifecycle, building-apps, or work-projects for project structure and roles) and follow it. Describe the result in the person's terms: what it does, when it runs, and where they can see it.
+
+Workflows run ordinary TypeScript, npm and IO. Glue in workflows and host hooks is normal; compose primitives before requiring native integrations. Use workflow-lifecycle and durable-workflows to assess a concrete missing guarantee. Hooks own credentials and authorization.
 
 Saving, sharing, publishing, and turning on an automation are separate outcomes. Report only the ones that actually succeeded.`;
 
@@ -447,6 +854,20 @@ export function buildAgentSystemPrompt({
     .join("\n\n");
 }
 
+/** How often an open session stream checks its reader's access again. */
+const STREAM_ACCESS_RECHECK_MS = 60_000;
+
+/** A person's "Always allow" for one tool of one server. */
+export interface ToolAlwaysAllowedEvent {
+  identity: Identity;
+  projectId: string;
+  sessionId: string;
+  agentId: string | null;
+  /** The server key the harness knows the tool by. */
+  server: string;
+  tool: string;
+}
+
 /** A chat turn reaching a settled state, for host hooks (e.g. triggers). */
 export interface AgentTurnSettledEvent {
   identity: Identity;
@@ -455,6 +876,10 @@ export interface AgentTurnSettledEvent {
   messageId: string;
   turnId?: string;
   status: "completed" | "failed" | "awaiting_input";
+  /** The session's agent, for a host that reacts to its failures. */
+  agentId: string | null;
+  /** What a failed turn's error was classified as (`auth`, `rate_limit`). */
+  errorKind?: AgentErrorKind;
   interrupted?: boolean;
   retrying?: boolean;
   /** Present only when a workflow asked the host to surface this turn. */
@@ -464,27 +889,102 @@ export interface AgentTurnSettledEvent {
   workingDirectory: string;
 }
 
+/** The folder a native agent works in, as the host resolved it. */
+export interface NativeCheckout {
+  path: string;
+  /**
+   * The checkout belongs to this session alone: a worktree the host made
+   * for it. The framework moves a workspace base (ADR 0178) only in such a
+   * checkout; a person's own project folder, or a worktree they assigned,
+   * is never reset or rebased.
+   */
+  owned: boolean;
+}
+
 export interface NativeAgentCheckout {
   resolve(input: {
     bindingId?: string;
     environmentName?: string;
     projectId: string;
     sessionId: string;
-  }): Promise<string | undefined> | string | undefined;
+    /**
+     * The base the session stands on, or the one a pending delivery asked
+     * it to move to (ADR 0178). A session without its own checkout gets a
+     * new one started at `commit`, which the host's mirror at `repository`
+     * holds under `pin`; an owned checkout is left as it is (base moves are
+     * applied by the framework in the checkout it returns).
+     */
+    workspace?: {
+      ref: string;
+      commit: string;
+      repository: string;
+      pin: string;
+    };
+  }): Promise<NativeCheckout | undefined> | NativeCheckout | undefined;
   checkpoint?(input: {
     projectId: string;
     sessionId: string;
     workingDirectory: string;
     message: string;
   }): Promise<string | null>;
+  /** The checkout's current commit, which a rollback of the next turn restores. */
+  head?(input: { workingDirectory: string }): Promise<string | null>;
+  /**
+   * Put the checkout back at `commit` for a rollback (ADR 0197), or say
+   * why not. A checkout the chat owns is reset; a person's own folder only
+   * when its commit is still `expectedHead` and it holds no other changes.
+   */
+  restore?(input: {
+    projectId: string;
+    sessionId: string;
+    workingDirectory: string;
+    commit: string;
+    expectedHead: string | null;
+    owned: boolean;
+  }): Promise<"restored" | string>;
+  /**
+   * Set up a checkout the chat owns before its turn (ADR 0208, 0215): the
+   * Environment's `setup`, then the owner's own when `personalAllowed`, in
+   * `workingDirectory`, unless this checkout already ran these commands on
+   * this base. `onRun` is called just before commands run, so the chat can
+   * show it.
+   */
+  setup?(input: {
+    projectId: string;
+    sessionId: string;
+    workingDirectory: string;
+    environment?: string;
+    personal?: string;
+    personalAllowed: boolean;
+    /** The checkout's base commit, when it stands on one (ADRs 0178, 0257). */
+    base?: string;
+    timeoutMinutes: number;
+    signal: AbortSignal;
+    onRun(): Promise<void>;
+  }): Promise<{ outcome: WorkspaceSetupOutcome; logPath: string }>;
+  /**
+   * Give back the checkout of a chat that was archived or closed and runs
+   * no turn (ADR 0215); its next turn resolves it again.
+   */
+  release?(input: { projectId: string; sessionId: string }): Promise<void>;
 }
 
 interface AgentSessionsDeps {
   /** Stable, host-owned identity used to fence cross-host session delivery. */
   hostId: string;
+  /**
+   * This process's own local node. Its work runs only here; work on remote
+   * nodes and on no node runs on any host of the authority (ADR 0192).
+   */
   workerNode?: { id: string; token: string };
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
+  /**
+   * This process's hints that turns or session events may be waiting, and
+   * how often its pollers look when none came (ADR 0229).
+   */
+  wakeups?: WorkWakeups;
+  idlePollMs?: number;
   projectManager: ProjectManager;
   codingAgents: CodingAgentRegistry;
   /**
@@ -502,6 +1002,36 @@ interface AgentSessionsDeps {
     sessionId: string;
     alias: string;
   }) => string | undefined;
+  /** Workspaces at a ref of the project's linked remote (ADR 0178). */
+  workspaces?: SessionWorkspaces;
+  /**
+   * The gateway as sandboxes reach it (ADRs 0175, 0180, 0212): its base
+   * URL (`…/gateway`, serving `git/<alias>/…`, `model/<alias>/…` and
+   * `http/<alias>/…`), the remote base URLs a connection provider serves
+   * with Git, the API a model provider speaks (undefined when it serves
+   * neither), and whether a provider is an HTTP API code may call.
+   */
+  sandboxGateway?: {
+    url: (args: { projectId: string; sessionId: string }) => string | undefined;
+    remoteBaseUrls: (providerKind: string) => readonly string[] | undefined;
+    modelApi: (providerKind: string) => ModelApi | undefined;
+    servesHttp: (providerKind: string) => boolean;
+    /** What a turn's model calls through the gateway used (ADR 0180). */
+    turnUsage?: (args: {
+      sessionId: string;
+      turnId: string;
+    }) => Promise<AgentTurnUsage | undefined>;
+  };
+  /**
+   * Members' personal logins and files (ADR 0184), delivered into their
+   * own chats' sandboxes where the Environment and placement allow.
+   */
+  personalEnvironments?: PersonalEnvironmentService;
+  /**
+   * Project secrets (ADR 0206), delivered into sandboxes of Environments
+   * that list them where the placement isolates the work's owner.
+   */
+  secrets?: SecretsService;
   plugins?: PluginsService;
   pluginResolver?: PluginResolver;
   /**
@@ -509,6 +1039,12 @@ interface AgentSessionsDeps {
    * exceptions are swallowed, and the turn's response never waits on it.
    */
   onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /**
+   * A person chose "Always allow" for a tool (ADR 0054): the host persists
+   * it where its policies live, so later attempts and other agents see it.
+   * The asking attempt already remembers it. Exceptions are swallowed.
+   */
+  onToolAlwaysAllowed?: (input: ToolAlwaysAllowedEvent) => void | Promise<void>;
   /**
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
@@ -527,9 +1063,9 @@ interface AgentSessionsDeps {
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
   /**
-   * The documents surface. When present, `.catamorphic/app-data/store/` in the caller's working
+   * The documents surface. When present, `.work/app-data/store/` in the caller's working
    * copy is pulled before each turn and shipped after it AS THE CALLER
-   * (ADR 0055): a member's agent writing `.catamorphic/app-data/store/customers/acme/notes.md`
+   * (ADR 0055): a member's agent writing `.work/app-data/store/customers/acme/notes.md`
    * lands it in the store with the right author, and never anything the
    * member may not write. Hosts whose working copies are the truth (the
    * desktop's local projects) leave it unset.
@@ -558,45 +1094,149 @@ export interface ArchiveSessionResourcesHandler {
  *    dev sandbox) is anchored on the first turn. Switching a session to a
  *    different agent just clears the anchor; the next turn re-anchors.
  * 2. `controller` agents run against the dev sandbox and their changes sync
- *    back into the user's dev working copy as an uncommitted draft.
+ *    back into the user's draft (a draft commit on a server, ADR 0191).
  *    `native` agents run directly in the project's WorkerNode directory. Their
  *    edits land in place, so no sync step and no draft.
  * 3. The conversation persists to `agent_sessions` / `agent_messages`.
  */
+/**
+ * Work's question tool (ADR 0195), offered to every agent beside its own:
+ * the runner answers it through the request protocol, so it never runs here.
+ */
+const ASK_USER_HOST_TOOL: ExtraTool = {
+  name: ASK_USER_TOOL,
+  description: agentQuestionDescription,
+  parameters: agentQuestionInputSchema.shape,
+  execute: async () => {
+    throw new Error("Work's runner answers ask_user");
+  },
+};
+
+/** How long a change waits for a finalizing turn before it is refused. */
+const FINALIZING_WAIT_MS = 20_000;
+
 export class AgentSessionsService {
-  readonly turns: AgentTurnsService;
   readonly mailboxes: SessionMailboxesService;
+  /** The session event log (ADR 0197). */
+  readonly log: SessionLog;
+  readonly queue: TurnQueue;
+  readonly feed: SessionFeed;
+  private readonly engine: TurnEngine;
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
   readonly authorityLeaseMs: number;
+  private readonly wakeups?: WorkWakeups;
+  private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
   private readonly codingAgents: CodingAgentRegistry;
   private readonly nativeAgentCheckout?: NativeAgentCheckout;
   private readonly executionEnvironments: ExecutionEnvironmentsService;
   private readonly executionAllocations: ExecutionAllocationsService;
+  /** Chats waiting for a machine (ADR 0258). */
+  private readonly placementWaits: PlacementWaitsService;
   private readonly connectionAdmission?: ConnectionAdmissionService;
   private readonly connectionGrants?: ConnectionCapabilityGrantsService;
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
+  private readonly workspaces?: SessionWorkspaces;
+  private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
+  private readonly personalEnvironments?: PersonalEnvironmentService;
+  private readonly secrets?: SecretsService;
+  /** Replica memory (a): sandbox grant renewals of this process's turns. */
+  private readonly grantRenewals = new Map<string, NodeJS.Timeout>();
+  /**
+   * Replica memory (a): this process's running turns' connection MCP grant
+   * renewals, by session (#122).
+   */
+  private readonly mcpGrantRenewals = new Map<string, NodeJS.Timeout>();
+  /**
+   * Replica memory (a): the checkout each turn this process runs works in,
+   * for its host tools and the host's after-turn hook (never persisted).
+   */
+  private readonly workingDirectories = new Map<string, string>();
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
+  private readonly onToolAlwaysAllowed?: AgentSessionsDeps["onToolAlwaysAllowed"];
   private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
   private readonly appPolicies?: AppPoliciesService;
   private readonly storeSync?: AgentSessionsDeps["storeSync"];
   /**
-   * Sessions with a turn currently executing in this process. Turns run
-   * inside the send request, so an `in_progress` message whose session is
-   * not in this set is orphaned (the app/server died mid-turn) — reads
-   * settle it as failed so clients never spin on a dead turn.
+   * Replica memory (a): this process's drain loop per session; the turn
+   * claim in Postgres decides which process runs a turn.
    */
-  private readonly runningTurns = new Set<string>();
-  /** Sessions whose in-flight turn was interrupted by the user. */
-  private readonly interruptedTurns = new Set<string>();
   private readonly drainers = new Map<string, Promise<void>>();
-  private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
+  /** Set by {@link stopLocalTurns}: this process claims no more turns. */
+  private stoppingTurns = false;
+  /** This process's name as a running turn's lease owner. */
+  readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
   private archiveResources?: ArchiveSessionResourcesHandler;
+  /**
+   * Owners recently seen acting on their own chats, so their turns run as
+   * them without a resolver round trip. A cache (ADR 0193): another
+   * replica resolves the owner through the host instead.
+   * Replica memory (single process): a host running several replicas
+   * resolves owners (`resolveIdentity`).
+   */
+  private readonly knownOwners = new Map<string, Identity>();
+  /** The host's identity resolver, from {@link startWorker}. */
+  private resolveOwner?: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
+
+  /**
+   * Stop this process's turns before its machine goes away (ADRs 0190,
+   * 0198). It claims no more. A turn whose runner lives in a sandbox that
+   * outlives this process (on a worker or a member's machine) is handed
+   * back at once and continues where another replica claims it; the rest
+   * are asked to stop and settle here within `timeoutMs` (default 15 s).
+   * `handBack: "all"` is for a host that starts again (a desktop
+   * restarting to update, ADR 0246): every turn is handed back, and the
+   * next process continues one whose runner went with this one, as after
+   * a crash (ADR 0198).
+   */
+  async stopLocalTurns(
+    input: { timeoutMs?: number; handBack?: "reattachable" | "all" } = {},
+  ): Promise<void> {
+    this.stoppingTurns = true;
+    const localNode = this.workerNode?.id;
+    const remoteAllocations = new Set(
+      (
+        await this.db
+          .selectFrom("execution_allocations")
+          .leftJoin(
+            "worker_nodes",
+            "worker_nodes.id",
+            "execution_allocations.worker_node_id",
+          )
+          .select("execution_allocations.id")
+          .where("execution_allocations.status", "=", "active")
+          .where((eb) =>
+            eb.or([
+              eb("worker_nodes.remote", "is not", null),
+              eb.and([
+                eb("execution_allocations.worker_node_id", "is", null),
+                eb("execution_allocations.binding_id", "like", "client:%"),
+              ]),
+            ]),
+          )
+          .execute()
+          .catch(() => [])
+      ).map((row) => row.id),
+    );
+    await this.engine.stop({
+      timeoutMs: input.timeoutMs ?? 15_000,
+      handBack: (location) =>
+        input.handBack === "all" ||
+        (location?.kind === "sandbox_process" &&
+          remoteAllocations.has(location.allocationId) &&
+          localNode !== undefined),
+    });
+    this.feed.close();
+  }
 
   /** Hosts start this alongside their workflow worker, after migrations. */
   startWorker(input: {
@@ -606,31 +1246,93 @@ export class AgentSessionsService {
       externalUserId: string;
     }) => Promise<Identity | null>;
     pollIntervalMs?: number;
+    /**
+     * How long it waits after a poll while nothing is queued, due or
+     * hinted in this process (ADR 0229). Defaults to the host's
+     * `idlePollMs`; without either it waits `pollIntervalMs` after each
+     * poll.
+     */
+    idlePollIntervalMs?: number;
+    /** How often idle chats' workspaces are checked (ADR 0173). */
+    idleReleaseIntervalMs?: number;
   }): { stop(): Promise<void> } {
+    this.resolveOwner = input.resolveIdentity;
     let stopped = false;
-    let polling: Promise<void> | undefined;
+    let nextIdleSweep = 0;
+    const controller = new AbortController();
+    const pacer = new PollPacer({
+      quickMs: input.pollIntervalMs ?? 1_000,
+      idleMs: input.idlePollIntervalMs ?? this.idlePollMs,
+      signal: controller.signal,
+      wakeups: this.wakeups,
+      topic: "agent",
+    });
     const poll = async () => {
       const candidates = await this.db
         .selectFrom("agent_sessions")
-        .innerJoin("projects", "projects.id", "agent_sessions.project_id")
-        .select([
-          "agent_sessions.id",
-          "agent_sessions.project_id",
-          "agent_sessions.external_user_id",
-          "projects.tenant_id",
-        ])
+        .select(["agent_sessions.id"])
         .where("agent_sessions.authority_host_id", "=", this.hostId)
+        // Work this host may run (ADR 0192): on its own local node, on a
+        // remote node or none (any host of the authority runs those; the
+        // turn claim decides which), and chats whose workspace was released.
         .$if(this.workerNode !== undefined, (query) =>
-          query.where(({ exists, selectFrom }) =>
+          query.where(({ eb, exists, or, selectFrom }) =>
+            or([
+              // Waiting for a machine (ADR 0258): any host may admit it.
+              eb("agent_sessions.allocation_id", "is", null),
+              exists(
+                selectFrom("execution_allocations")
+                  .leftJoin(
+                    "worker_nodes",
+                    "worker_nodes.id",
+                    "execution_allocations.worker_node_id",
+                  )
+                  .select("execution_allocations.id")
+                  .whereRef(
+                    "execution_allocations.id",
+                    "=",
+                    "agent_sessions.allocation_id",
+                  )
+                  .where((allocation) =>
+                    allocation.or([
+                      allocation(
+                        "execution_allocations.worker_node_id",
+                        "is",
+                        null,
+                      ),
+                      allocation(
+                        "execution_allocations.worker_node_id",
+                        "=",
+                        this.workerNode?.id ?? "",
+                      ),
+                      allocation("worker_nodes.remote", "is not", null),
+                      allocation(
+                        "execution_allocations.status",
+                        "=",
+                        "released",
+                      ),
+                    ]),
+                  ),
+              ),
+            ]),
+          ),
+        )
+        // A chat waiting for a machine is tried again after its backoff.
+        .where(({ not, exists, selectFrom }) =>
+          not(
             exists(
-              selectFrom("execution_allocations")
-                .select("id")
-                .whereRef("id", "=", "agent_sessions.allocation_id")
-                .where("worker_node_id", "=", this.workerNode?.id ?? ""),
+              selectFrom("placement_waits")
+                .select("placement_waits.root_workload_id")
+                .whereRef(
+                  "placement_waits.root_workload_id",
+                  "=",
+                  "agent_sessions.id",
+                )
+                .where("placement_waits.retry_at", ">", sql<Date>`now()`)
+                .where("placement_waits.last_tried_at", ">", waitFresh()),
             ),
           ),
         )
-        .where("agent_sessions.status", "=", "active")
         .where(({ exists, selectFrom }) =>
           exists(
             selectFrom("agent_turns")
@@ -642,104 +1344,370 @@ export class AgentSessionsService {
                     eb("agent_turns.status", "=", "queued"),
                     eb("agent_turns.available_at", "<=", sql<Date>`now()`),
                   ]),
+                  // A turn whose holder's lease lapsed is recovered (ADR 0198).
                   and([
-                    eb("agent_turns.status", "=", "running"),
-                    eb("agent_turns.lease_expires_at", "<=", sql<Date>`now()`),
+                    eb("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES]),
+                    or([
+                      eb("agent_turns.lease_expires_at", "is", null),
+                      eb(
+                        "agent_turns.lease_expires_at",
+                        "<=",
+                        sql<Date>`now()`,
+                      ),
+                    ]),
                   ]),
                 ]),
               ),
           ),
         )
         .execute();
+      if (candidates.length > 0) pacer.busy();
       for (const candidate of candidates) {
-        if (stopped) return;
-        try {
-          const identity = await input.resolveIdentity({
-            tenantId: candidate.tenant_id,
-            projectId: candidate.project_id,
-            externalUserId: candidate.external_user_id,
-          });
-          if (!identity) continue;
-          // Recovery belongs to the worker, never to a client's GET request.
-          const pending = await this.turns.listPending({
-            sessionId: candidate.id,
-          });
-          if (pending.some((turn) => turn.status === "running")) {
-            const messages = await this.db
-              .selectFrom("agent_messages")
-              .selectAll()
-              .where("session_id", "=", candidate.id)
-              .orderBy("seq", "asc")
-              .execute();
-            await this.settleOrphanedTurns(identity, candidate.id, messages);
-          }
-          // A provider can ignore interruption after losing its lease. Surface
-          // its durable failure even while that local iterator is still stuck,
-          // but never dispatch overlapping work through the same provider.
-          if (this.drainers.has(candidate.id)) continue;
-          void this.scheduleDrain(
-            identity,
-            candidate.project_id,
-            candidate.id,
-          ).catch((error) =>
-            console.warn("[catamorphic] Agent queue dispatch failed", error),
-          );
-        } catch (error) {
-          console.warn(
-            `[catamorphic] Agent recovery failed for ${candidate.id}`,
-            error,
-          );
-        }
+        if (stopped || this.stoppingTurns) return;
+        if (this.drainers.has(candidate.id)) continue;
+        this.kick(candidate.id);
       }
-      if (!stopped) await this.reconcileDelegations(input.resolveIdentity);
+      if (stopped) return;
+      await this.reconcileDelegations(input.resolveIdentity).catch((error) =>
+        console.warn("[catamorphic] Delegation reconciliation failed", error),
+      );
+      await this.expireRequests().catch((error) =>
+        console.warn("[catamorphic] Request expiry failed", error),
+      );
+      if (Date.now() >= nextIdleSweep) {
+        nextIdleSweep = Date.now() + (input.idleReleaseIntervalMs ?? 60_000);
+        await this.releaseIdleWorkspaces().catch((error) =>
+          console.warn("[catamorphic] Idle workspace release failed", error),
+        );
+        await this.finishAbandonedClosings().catch((error) =>
+          console.warn("[catamorphic] Finishing closed chats failed", error),
+        );
+        await this.placementWaits
+          .sweep()
+          .catch((error) =>
+            console.warn("[catamorphic] Forgetting old waits failed", error),
+          );
+      }
     };
-    const tick = () => {
-      if (stopped || polling) return;
-      polling = poll()
-        .catch((error) =>
+    const loop = async () => {
+      while (!stopped) {
+        await poll().catch((error) =>
           console.warn("[catamorphic] Agent queue recovery failed", error),
-        )
-        .finally(() => {
-          polling = undefined;
-        });
+        );
+        if (stopped) return;
+        // Idle: sleep until something falls due (a retry's backoff, a
+        // lapsing lease, a request's deadline), a hint from this process,
+        // or the idle poll.
+        const due = pacer.quick
+          ? undefined
+          : await this.nextAgentWorkAt().catch(() => undefined);
+        await pacer.wait({ until: due?.getTime() });
+      }
     };
-    const timer = setInterval(tick, input.pollIntervalMs ?? 1_000);
-    timer.unref();
-    tick();
+    const running = loop();
     return {
       stop: async () => {
         stopped = true;
-        clearInterval(timer);
-        await polling;
+        controller.abort();
+        await running;
+        // The resolver belongs to this worker.
+        if (this.resolveOwner === input.resolveIdentity)
+          this.resolveOwner = undefined;
       },
     };
+  }
+
+  /**
+   * When this host's agent worker next has something due (ADR 0229): a
+   * queued turn's `available_at` (a retry's backoff), an active turn's
+   * lease running out, or a pending request's deadline. Null with none.
+   */
+  private async nextAgentWorkAt(): Promise<Date | null> {
+    const row = await this.db
+      .selectNoFrom((eb) => [
+        eb
+          .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_turns.session_id",
+          )
+          .select(({ fn }) => fn.min("agent_turns.available_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_turns.status", "=", "queued")
+          .where(({ not, exists, selectFrom }) =>
+            not(
+              exists(
+                selectFrom("placement_waits")
+                  .select("placement_waits.root_workload_id")
+                  .whereRef(
+                    "placement_waits.root_workload_id",
+                    "=",
+                    "agent_turns.session_id",
+                  )
+                  .where("placement_waits.retry_at", ">", sql<Date>`now()`)
+                  .where("placement_waits.last_tried_at", ">", waitFresh()),
+              ),
+            ),
+          )
+          .as("queued"),
+        // A chat waiting for a machine falls due when its backoff ends.
+        eb
+          .selectFrom("placement_waits")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "placement_waits.root_workload_id",
+          )
+          .select(({ fn }) => fn.min("placement_waits.retry_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("placement_waits.last_tried_at", ">", waitFresh())
+          .where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("agent_turns")
+                .select("agent_turns.id")
+                .whereRef(
+                  "agent_turns.session_id",
+                  "=",
+                  "placement_waits.root_workload_id",
+                )
+                .where("agent_turns.status", "=", "queued"),
+            ),
+          )
+          .as("waits"),
+        eb
+          .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_turns.session_id",
+          )
+          .select(({ fn }) => fn.min("agent_turns.lease_expires_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+          .as("lapses"),
+        eb
+          .selectFrom("agent_runtime_requests")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_runtime_requests.session_id",
+          )
+          .select(({ fn }) =>
+            fn.min("agent_runtime_requests.expires_at").as("at"),
+          )
+          .where("agent_sessions.authority_host_id", "in", [
+            this.hostId,
+            "unassigned",
+          ])
+          .where("agent_runtime_requests.status", "=", "pending")
+          .as("expires"),
+      ])
+      .executeTakeFirst();
+    const times = [row?.queued, row?.waits, row?.lapses, row?.expires]
+      .filter((at) => at !== null && at !== undefined)
+      .map((at) => new Date(at).getTime());
+    return times.length > 0 ? new Date(Math.min(...times)) : null;
+  }
+
+  /**
+   * Expire requests past their deadline (an unattended approval nobody
+   * answered): the asking agent is told no, through its runner.
+   */
+  private async expireRequests(): Promise<void> {
+    const rows = await this.db
+      .selectFrom("agent_runtime_requests")
+      .selectAll("agent_runtime_requests")
+      // A mirrored copy's requests are its source's to expire.
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_runtime_requests.session_id",
+      )
+      .where("agent_sessions.authority_host_id", "in", [
+        this.hostId,
+        "unassigned",
+      ])
+      .where("agent_runtime_requests.status", "=", "pending")
+      .where("agent_runtime_requests.expires_at", "<=", sql<Date>`now()`)
+      .limit(50)
+      .execute();
+    for (const candidate of rows) {
+      await this.db.transaction().execute(async (trx) => {
+        // Answered meanwhile: the answer stands.
+        await this.log.lock(trx, candidate.session_id);
+        const row = await trx
+          .selectFrom("agent_runtime_requests")
+          .selectAll()
+          .where("session_id", "=", candidate.session_id)
+          .where("request_id", "=", candidate.request_id)
+          .where("status", "=", "pending")
+          .executeTakeFirst();
+        if (!row) return;
+        const request = requestFromRow(row);
+        const now = new Date().toISOString();
+        const events: SessionEvent[] = [
+          {
+            type: "request.changed",
+            request: {
+              ...request,
+              status: "expired",
+              answerable: false,
+              reason: "Nobody answered in time.",
+              resolvedAt: now,
+            },
+          },
+        ];
+        if (request.turnId && request.attemptId && request.runnerKey)
+          await this.queue.enqueueCommand(trx, {
+            turnId: request.turnId,
+            attemptId: request.attemptId,
+            kind: "respond",
+            payload: {
+              requestKey: request.runnerKey,
+              response:
+                request.kind === "approval"
+                  ? {
+                      kind: "approval",
+                      decision: "denied",
+                      reason: expiredApprovalReason(request),
+                    }
+                  : request.kind === "elicitation"
+                    ? { kind: "elicitation", action: "cancel" }
+                    : { kind: "question", answers: ["(No answer in time.)"] },
+            },
+          });
+        await this.log.append(trx, { sessionId: request.sessionId, events });
+      });
+    }
   }
 
   constructor(
     private readonly db: Kysely<DB>,
     deps: AgentSessionsDeps,
   ) {
-    this.turns = new AgentTurnsService(db);
     this.hostId = deps.hostId;
     this.workerNode = deps.workerNode;
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
+    this.wakeups = deps.wakeups;
+    this.idlePollMs = deps.idlePollMs;
+    this.log = new SessionLog(db, deps.wakeups);
+    this.queue = new TurnQueue(db, this.log);
+    this.feed = new SessionFeed(db, this.log, {
+      idleMs: deps.idlePollMs,
+      wakeups: deps.wakeups,
+    });
     this.projectManager = deps.projectManager;
     this.codingAgents = deps.codingAgents;
     this.nativeAgentCheckout = deps.nativeAgentCheckout;
     this.executionEnvironments = deps.executionEnvironments;
     this.executionAllocations = deps.executionAllocations;
+    this.placementWaits = new PlacementWaitsService(db);
     this.connectionAdmission = deps.connectionAdmission;
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
+    this.workspaces = deps.workspaces;
+    this.sandboxGateway = deps.sandboxGateway;
+    this.personalEnvironments = deps.personalEnvironments;
+    this.secrets = deps.secrets;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
+    this.onToolAlwaysAllowed = deps.onToolAlwaysAllowed;
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
     this.storeSync = deps.storeSync;
+    this.engine = new TurnEngine({
+      db,
+      log: this.log,
+      queue: this.queue,
+      workerId: this.turnWorkerId,
+      host: this.engineHost(),
+      inputText: modelInputText,
+    });
+  }
+
+  /**
+   * Sessions with a turn working now, on any replica (ADR 0193): claimed,
+   * its lease live. A turn waiting on a request counts: it runs.
+   */
+  private async sessionsWithRunningTurns(input: {
+    sessionIds: readonly string[];
+    executor?: Kysely<DB> | Transaction<DB>;
+  }): Promise<Set<string>> {
+    if (input.sessionIds.length === 0) return new Set();
+    const rows = await (input.executor ?? this.db)
+      .selectFrom("agent_turns")
+      .select("session_id")
+      .distinct()
+      .where("session_id", "in", [...input.sessionIds])
+      .where("status", "in", [...ACTIVE_TURN_STATUSES])
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .execute();
+    return new Set(rows.map((row) => row.session_id));
+  }
+
+  /** Refuse a change while a turn runs in the session, on any replica. */
+  private async assertNoRunningTurn(input: {
+    sessionId: string;
+    executor?: Kysely<DB> | Transaction<DB>;
+  }): Promise<void> {
+    const running = await this.sessionsWithRunningTurns({
+      sessionIds: [input.sessionId],
+      ...(input.executor ? { executor: input.executor } : {}),
+    });
+    if (running.size > 0) throw new AgentTurnInProgressError(input.sessionId);
+  }
+
+  /**
+   * Wait, briefly, for a turn that only finalizes (its checkpoint and sync
+   * after the reply) to settle, so a change made right after a reply is not
+   * refused. A turn still working is not waited for.
+   */
+  private async settleFinalizing(
+    sessionId: string,
+    timeoutMs = FINALIZING_WAIT_MS,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const active = await this.db
+        .selectFrom("agent_turns")
+        .select("status")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", [...ACTIVE_TURN_STATUSES])
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .execute();
+      if (
+        active.length === 0 ||
+        active.some((turn) => turn.status !== "finalizing") ||
+        Date.now() > deadline
+      )
+        return;
+      await delay(100);
+    }
+  }
+
+  /**
+   * Lock the session row for a change, and refuse it while a turn runs: a
+   * turn claim locks the row too, so none starts until the change lands.
+   */
+  private async lockIdleSession(input: {
+    sessionId: string;
+    transaction: Transaction<DB>;
+  }): Promise<void> {
+    await input.transaction
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("id", "=", input.sessionId)
+      .forUpdate()
+      .execute();
+    await this.assertNoRunningTurn({
+      sessionId: input.sessionId,
+      executor: input.transaction,
+    });
   }
 
   /** Late-bound because WatchersService itself depends on this service. */
@@ -772,7 +1740,7 @@ export class AgentSessionsService {
       .execute();
     const rows = candidates.filter(
       (row) =>
-        isBuilder(identity, row.project_id) ||
+        this.coversEveryAgent(identity, row.project_id) ||
         scopeCoversSessions(identity, row.project_id) ||
         (row.agent_id !== null &&
           this.coveredAgentIds(identity, row.project_id).includes(
@@ -785,17 +1753,17 @@ export class AgentSessionsService {
       rows.map((row) => row.id),
     );
     const messages = await this.db
-      .selectFrom("agent_messages")
-      .select(["id", "session_id", "content"])
+      .selectFrom("agent_items")
+      .select(["id", "session_id", "text as content"])
       .where(
         "session_id",
         "in",
         rows.map((row) => row.id),
       )
-      .where(sql<string>`metadata ->> 'attention'`, "=", "required")
+      .where("attention", "=", true)
       .distinctOn("session_id")
       .orderBy("session_id")
-      .orderBy("created_at", "desc")
+      .orderBy("position", "desc")
       .execute();
     const bySession = new Map(
       messages.map((message) => [
@@ -803,11 +1771,14 @@ export class AgentSessionsService {
         { id: message.id, content: message.content },
       ]),
     );
+    const running = await this.sessionsWithRunningTurns({
+      sessionIds: rows.map((row) => row.id),
+    });
     return rows
       .map((row) => ({
         ...mapSession(
           row,
-          this.runningTurns.has(row.id),
+          running.has(row.id),
           this.hostId,
           this.authorityLeaseMs,
           presentations.get(row.id),
@@ -826,25 +1797,47 @@ export class AgentSessionsService {
       parentSessionId?: string;
       rootsOnly?: boolean;
       visibility?: SessionVisibility;
+      /**
+       * Words that must each appear in the chat's title or in one of its
+       * messages; matches come newest activity first, each with `match`.
+       */
+      query?: string;
     } = {},
   ): Promise<{ items: AgentSession[]; total: number }> {
     await this.requireProject(identity, projectId);
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    // A viewer sees only its own conversations, on agents its scope still
-    // covers (a revoked agent's sessions vanish from the list too). A
-    // sessions ref (ADR 0148) covers every agent for that viewer.
+    // Without `sessions:read` a caller sees only its own conversations, on
+    // agents its scope still covers (a revoked agent's sessions vanish from
+    // the list too), plus project chats on those agents. `agents: ["*"]`
+    // and a sessions ref (ADR 0148) cover every agent.
     let query = this.db
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId);
-    if (!isBuilder(identity, projectId)) {
-      query = query.where("external_user_id", "=", identity.externalUserId);
-      if (!scopeCoversSessions(identity, projectId)) {
-        const agentIds = this.coveredAgentIds(identity, projectId);
-        if (agentIds.length === 0) return { items: [], total: 0 };
-        query = query.where("agent_id", "in", agentIds);
-      }
+    if (!this.readsAllSessions(identity, projectId)) {
+      const agentIds = this.coveredAgentIds(identity, projectId);
+      const anyAgent = this.coversEveryAgent(identity, projectId);
+      const ownOnAnyAgent =
+        anyAgent || scopeCoversSessions(identity, projectId);
+      if (!ownOnAnyAgent && agentIds.length === 0)
+        return { items: [], total: 0 };
+      query = query.where((eb) =>
+        eb.or([
+          eb.and([
+            eb("external_user_id", "=", identity.externalUserId),
+            ...(ownOnAnyAgent ? [] : [eb("agent_id", "in", agentIds)]),
+          ]),
+          ...(anyAgent || agentIds.length
+            ? [
+                eb.and([
+                  eb("external_user_id", "=", PROJECT_PRINCIPAL_ID),
+                  ...(anyAgent ? [] : [eb("agent_id", "in", agentIds)]),
+                ]),
+              ]
+            : []),
+        ]),
+      );
     }
 
     if (input.visibility) {
@@ -866,6 +1859,10 @@ export class AgentSessionsService {
       );
     }
 
+    // Child counts describe the same authorized, visibility-filtered list
+    // as its branches, before selecting a particular parent or roots.
+    const visibleSessions = query;
+
     if (input.parentSessionId) {
       await this.requireSession(identity, projectId, input.parentSessionId);
       query = query.where("parent_session_id", "=", input.parentSessionId);
@@ -886,20 +1883,24 @@ export class AgentSessionsService {
                       "agent_sessions.parent_session_id",
                     )
                     .where("ancestor.project_id", "=", projectId)
-                    .$if(!isBuilder(identity, projectId), (parent) =>
-                      parent
-                        .where(
-                          "ancestor.external_user_id",
-                          "=",
-                          identity.externalUserId,
-                        )
-                        .$if(!scopeCoversSessions(identity, projectId), (own) =>
-                          own.where(
-                            "ancestor.agent_id",
-                            "in",
-                            this.coveredAgentIds(identity, projectId),
+                    .$if(
+                      !this.readsAllSessions(identity, projectId),
+                      (parent) =>
+                        parent
+                          .where(
+                            "ancestor.external_user_id",
+                            "=",
+                            identity.externalUserId,
+                          )
+                          .$if(
+                            !this.ownOnAnyAgent(identity, projectId),
+                            (own) =>
+                              own.where(
+                                "ancestor.agent_id",
+                                "in",
+                                this.coveredAgentIds(identity, projectId),
+                              ),
                           ),
-                        ),
                     )
                     .where((parent) =>
                       parent(
@@ -927,9 +1928,26 @@ export class AgentSessionsService {
         : query.where("parent_session_id", "is", null);
     }
 
+    const terms = searchTerms(input.query);
+    const words = terms.map(containsPattern);
+    for (const word of words)
+      query = query.where((eb) =>
+        eb.or([
+          eb("title", "ilike", word),
+          eb.exists(
+            eb
+              .selectFrom("agent_items")
+              .select("agent_items.id")
+              .whereRef("agent_items.session_id", "=", "agent_sessions.id")
+              .where("agent_items.kind", "in", SEARCHED_ITEM_KINDS)
+              .where("agent_items.text", "ilike", word),
+          ),
+        ]),
+      );
+
     const rows = await query
       .selectAll()
-      .orderBy("created_at", "desc")
+      .orderBy(words.length ? "updated_at" : "created_at", "desc")
       .limit(limit)
       .offset(offset)
       .execute();
@@ -941,17 +1959,17 @@ export class AgentSessionsService {
 
     const attentionMessages = rows.length
       ? await this.db
-          .selectFrom("agent_messages")
-          .select(["id", "session_id", "content"])
+          .selectFrom("agent_items")
+          .select(["id", "session_id", "text as content"])
           .where(
             "session_id",
             "in",
             rows.map((row) => row.id),
           )
-          .where(sql<string>`metadata ->> 'attention'`, "=", "required")
+          .where("attention", "=", true)
           .distinctOn("session_id")
           .orderBy("session_id")
-          .orderBy("created_at", "desc")
+          .orderBy("position", "desc")
           .execute()
       : [];
     const attentionBySession = new Map(
@@ -966,25 +1984,45 @@ export class AgentSessionsService {
     );
     const running = await this.runningSessionIds(rows.map((row) => row.id));
 
+    // Each found chat's message with the most of the words, latest first.
+    const matches =
+      words.length && rows.length
+        ? await this.db
+            .selectFrom("agent_items")
+            .select(["session_id", "text"])
+            .where(
+              "session_id",
+              "in",
+              rows.map((row) => row.id),
+            )
+            .where("kind", "in", SEARCHED_ITEM_KINDS)
+            .where((eb) =>
+              eb.or(words.map((word) => eb("text", "ilike", word))),
+            )
+            .distinctOn("session_id")
+            .orderBy("session_id")
+            .orderBy(
+              sql`${sql.join(
+                words.map((word) => sql`(text ilike ${word})::int`),
+                sql` + `,
+              )} desc`,
+            )
+            .orderBy("position", "desc")
+            .execute()
+        : [];
+    const matchBySession = new Map(
+      matches.map((match) => [
+        match.session_id,
+        matchExcerpt(match.text, terms),
+      ]),
+    );
+
     const children = rows.length
-      ? await query
-          .clearWhere()
-          .where("project_id", "=", projectId)
+      ? await visibleSessions
           .where(
             "parent_session_id",
             "in",
             rows.map((row) => row.id),
-          )
-          .$if(!isBuilder(identity, projectId), (builder) =>
-            builder
-              .where("external_user_id", "=", identity.externalUserId)
-              .$if(!scopeCoversSessions(identity, projectId), (own) =>
-                own.where(
-                  "agent_id",
-                  "in",
-                  this.coveredAgentIds(identity, projectId),
-                ),
-              ),
           )
           .select(["parent_session_id"])
           .select((eb) => eb.fn.countAll<number>().as("count"))
@@ -1006,6 +2044,7 @@ export class AgentSessionsService {
         ),
         childCount: counts.get(row.id) ?? 0,
         attentionMessage: attentionBySession.get(row.id),
+        match: matchBySession.get(row.id),
       })),
       total,
     };
@@ -1027,11 +2066,11 @@ export class AgentSessionsService {
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId)
       .where("id", "!=", ownSessionId);
-    if (!isBuilder(identity, projectId)) {
+    if (!this.readsAllSessions(identity, projectId)) {
       if (scopeCoversSessions(identity, projectId)) {
         // An app reading the viewer's chats sees the viewer's own peers.
         query = query.where("external_user_id", "=", identity.externalUserId);
-      } else {
+      } else if (!this.coversEveryAgent(identity, projectId)) {
         const agentIds = this.coveredAgentIds(identity, projectId);
         if (agentIds.length === 0) return [];
         query = query.where("agent_id", "in", agentIds);
@@ -1049,17 +2088,17 @@ export class AgentSessionsService {
     );
 
     const latestRequests = await this.db
-      .selectFrom("agent_messages")
+      .selectFrom("agent_items")
       .where(
         "session_id",
         "in",
         rows.map((row) => row.id),
       )
-      .where("role", "=", "user")
-      .select(["session_id", "content", "seq"])
+      .where("kind", "in", ["user_message", "inbound_message"])
+      .select(["session_id", "text as content", "position"])
       .distinctOn("session_id")
       .orderBy("session_id")
-      .orderBy("seq", "desc")
+      .orderBy("position", "desc")
       .execute();
     const taskBySession = new Map<string, string | null>();
     const running = await this.runningSessionIds(rows.map((row) => row.id));
@@ -1099,11 +2138,161 @@ export class AgentSessionsService {
     if (normalized && normalized.length > 500) {
       throw new Error("Session activity must be 500 characters or fewer");
     }
-    await this.db
-      .updateTable("agent_sessions")
-      .set({ activity: normalized, updated_at: new Date() })
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, sessionId);
+      await this.assertLocalAuthority(trx, sessionId);
+      await this.log.append(trx, {
+        sessionId,
+        events: [
+          { type: "session.changed", session: { activity: normalized } },
+        ],
+      });
+    });
+  }
+
+  /**
+   * A person names their chat (ADR 0247). The name is their command in the
+   * chat's log, and the chat keeps it: a harness's title no longer
+   * replaces it.
+   */
+  async rename(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    title: string,
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sessionId);
+    const normalized = title.replace(/\s+/g, " ").trim();
+    if (!normalized || normalized.length > 500)
+      throw new Error("A chat's name is 1 to 500 characters");
+    const commandId = renameCommandId(identity.externalUserId);
+    await this.log.command({
+      sessionId,
+      commandId,
+      type: "rename",
+      externalUserId: identity.externalUserId,
+      run: async (trx) => {
+        await this.assertLocalAuthority(trx, sessionId);
+        // Its command id marks the name the person's (namedByPerson).
+        await this.log.append(trx, {
+          sessionId,
+          commandId,
+          events: [{ type: "session.changed", session: { title: normalized } }],
+        });
+        return null;
+      },
+    });
+  }
+
+  /**
+   * Refuse a change to a session another host holds (ADR 0197): the copy
+   * here is a mirror, and an event logged on it would fork the person's
+   * chat when its holder next pushes. A session moving to another host
+   * refuses it too, as it refuses messages: its log was pushed before the
+   * move, and a change logged now would never reach its new holder. Call
+   * under the session's lock.
+   */
+  private async assertLocalAuthority(
+    trx: Transaction<DB>,
+    sessionId: string,
+  ): Promise<void> {
+    const session = await trx
+      .selectFrom("agent_sessions")
+      .select(["authority_host_id", "authority_revision", "handoff_status"])
       .where("id", "=", sessionId)
-      .execute();
+      .executeTakeFirstOrThrow();
+    if (session.handoff_status === "pending")
+      throw new AgentSessionHandoffPendingError(sessionId);
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    )
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+  }
+
+  /**
+   * A session's metadata (ADR 0226), for whoever may read the session: an
+   * agent reads a key before writing it whole again.
+   */
+  async metadata(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionMetadata> {
+    const session = await this.requireSession(
+      args.identity,
+      args.projectId,
+      args.sessionId,
+      "read",
+    );
+    return sessionMetadataFromRow(session.metadata);
+  }
+
+  /**
+   * Set named values on a session (ADR 0226): each key of `values` takes
+   * its value, and null removes the key. Whoever may change the session
+   * may set them, as for its activity, on the host holding its authority
+   * (`AgentSessionAuthorityRequiredError` elsewhere, and
+   * `AgentSessionHandoffPendingError` while it moves to another host),
+   * closed or archived included; the change is logged, so every viewer's
+   * snapshot and stream follow it. Returns the session's metadata. Throws
+   * `SessionMetadataError` for a malformed key or value, or past the
+   * limits (`SESSION_METADATA_LIMITS`).
+   */
+  async setMetadata(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    values: Readonly<Record<string, JsonValue>>;
+  }): Promise<SessionMetadata> {
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.set_metadata",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+          "catamorphic.agent.session.id": args.sessionId,
+          "catamorphic.agent.session.metadata.keys": Object.keys(args.values)
+            .length,
+        },
+      },
+      async () => {
+        await this.requireSession(
+          args.identity,
+          args.projectId,
+          args.sessionId,
+        );
+        // What is not JSON is refused as given (JSON text would turn a NaN
+        // into null, a removal); then each value is taken as the database
+        // will hold it (U+FFFD for what jsonb refuses), so the logged
+        // change and the projection read back the same.
+        withSessionMetadata({}, args.values);
+        const values = storedJson(args.values);
+        return this.db.transaction().execute(async (trx) => {
+          await this.log.lock(trx, args.sessionId);
+          await this.assertLocalAuthority(trx, args.sessionId);
+          const row = await trx
+            .selectFrom("agent_sessions")
+            .select("metadata")
+            .where("id", "=", args.sessionId)
+            .executeTakeFirstOrThrow();
+          const current = sessionMetadataFromRow(row.metadata);
+          const metadata = withSessionMetadata(current, values);
+          if (metadata === current) return current;
+          await this.log.append(trx, {
+            sessionId: args.sessionId,
+            events: [{ type: "session.changed", session: { metadata } }],
+          });
+          return metadata;
+        });
+      },
+    );
   }
 
   /**
@@ -1117,12 +2306,10 @@ export class AgentSessionsService {
     sessionId: string,
     input: readonly AgentTodoInput[],
   ): Promise<AgentTodo[]> {
-    const session = await this.requireSession(identity, projectId, sessionId);
+    await this.requireSession(identity, projectId, sessionId);
     if (input.length > 50) {
       throw new Error("A todo list can contain at most 50 items");
     }
-    const existing = agentTodos(session.todos);
-    const existingIds = new Set(existing.map((item) => item.id));
     const usedIds = new Set<string>();
     const todos = input.map((item) => {
       const title = item.title.replace(/\s+/g, " ").trim();
@@ -1142,410 +2329,3650 @@ export class AgentSessionsService {
       ) {
         throw new Error(`Unknown todo status: ${String(item.status)}`);
       }
-      const requestedId = item.id?.trim();
-      if (requestedId && !existingIds.has(requestedId)) {
-        throw new Error(`Todo '${requestedId}' does not exist in this session`);
-      }
-      const id = requestedId || randomUUID();
+      // An id the list does not hold yet names a new item, kept as given
+      // so the agent can echo it in its next update.
+      const id = item.id?.trim() || randomUUID();
       if (usedIds.has(id)) throw new Error(`Duplicate todo id: ${id}`);
       usedIds.add(id);
-      return { id, title, description, status: item.status };
+      const activeForm = liveStatusLine(item.activeForm);
+      return {
+        id,
+        title,
+        description,
+        status: item.status,
+        ...(activeForm ? { activeForm } : {}),
+      };
     });
-    await this.db
-      .updateTable("agent_sessions")
-      .set({
-        todos: agentTodosJson(todos),
-        updated_at: new Date(),
-      })
-      .where("id", "=", sessionId)
-      .execute();
+    // The in-progress item is the agent's live line, shown at once even when
+    // the next harness event is a long command away.
+    const current = todos.find((item) => item.status === "in_progress");
+    await this.db.transaction().execute(async (trx) => {
+      // The running turn as it stands: it may settle meanwhile.
+      await this.log.lock(trx, sessionId);
+      const events: SessionEvent[] = [
+        { type: "session.changed", session: { todos } },
+      ];
+      if (current?.activeForm) {
+        const running = await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", sessionId)
+          .where("status", "in", ["running", "waiting"])
+          .executeTakeFirst();
+        if (running)
+          events.push({
+            type: "turn.changed",
+            turn: {
+              ...turnFromRow(running),
+              activity: current.activeForm,
+              activityAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          });
+      }
+      await this.log.append(trx, { sessionId, events });
+    });
     return todos;
   }
 
+  /**
+   * A session with its snapshot (ADR 0197): the per-person fields of
+   * {@link AgentSession} and a bounded view of its turns, items and
+   * requests at one sequence. Clients apply later events from
+   * {@link subscribe} to it.
+   */
   async get(
     identity: Identity,
     projectId: string,
     sessionId: string,
   ): Promise<AgentSessionDetail> {
     await this.requireSession(identity, projectId, sessionId, "read");
-    // Progress and transcript must describe one database snapshot. Otherwise
-    // a settling turn can return an old placeholder with "completed" execution,
-    // causing clients to stop polling before they receive the final reply.
-    const { row, messages, execution, pendingTurns, questions } = await this.db
-      .transaction()
-      .setIsolationLevel("repeatable read")
-      .execute(async (trx) => {
-        const row = await trx
-          .selectFrom("agent_sessions")
-          .selectAll()
-          .where("id", "=", sessionId)
-          .executeTakeFirstOrThrow();
-        const messages = await trx
-          .selectFrom("agent_messages")
-          .selectAll()
-          .where("session_id", "=", sessionId)
-          .orderBy("seq", "asc")
-          .execute();
-        const turns = new AgentTurnsService(trx);
-        return {
-          row,
-          messages,
-          execution: await turns.execution({ sessionId }),
-          pendingTurns: await turns.listPendingMessages({ sessionId }),
-          questions: (
-            await new AgentRuntimeRequestsService(trx).listPending({
-              identity,
-              sessionId,
-            })
-          ).filter(
-            (request): request is AgentQuestionRequest =>
-              request.kind === "question" && Boolean(request.questions),
-          ),
-        };
-      });
+    const snapshot = await readSnapshot({ db: this.db, sessionId });
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
     const presentation = (await this.presentations(identity, [sessionId])).get(
       sessionId,
     );
+    const running = (
+      await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })
+    ).has(sessionId);
     return {
       ...mapSession(
         row,
-        execution?.status === "running",
+        running,
         this.hostId,
         this.authorityLeaseMs,
         presentation,
       ),
-      attentionMessage: messages
-        .filter(
-          (message) =>
-            message.metadata &&
-            typeof message.metadata === "object" &&
-            !Array.isArray(message.metadata) &&
-            message.metadata.attention === "required",
-        )
-        .map((message) => ({ id: message.id, content: message.content }))
-        .at(-1),
-      messages: messages.map(mapMessage),
-      execution,
-      pendingTurns,
-      questions,
+      attentionMessage: await this.attentionItem(sessionId),
+      snapshot,
     };
   }
 
-  private async runningSessionIds(sessionIds: string[]): Promise<Set<string>> {
-    if (!sessionIds.length) return new Set();
-    const rows = await this.db
-      .selectFrom("agent_turns")
-      .select("session_id")
-      .distinct()
-      .where("session_id", "in", sessionIds)
-      .where("status", "=", "running")
-      .execute();
-    return new Set(rows.map((row) => row.session_id));
-  }
-
-  /** Resolve one question batch and durably deliver its answer to its session. */
-  async answerQuestion(args: {
-    identity: Identity;
-    projectId: string;
-    sessionId: string;
-    requestId: string;
-    answer: string;
-  }): Promise<SessionDeliveryReceipt> {
-    if (!args.answer.trim() || args.answer.length > 200_000)
-      throw new Error("An answer needs 1 to 200000 characters");
-    await this.requireSession(args.identity, args.projectId, args.sessionId);
-    const receipt = await this.db.transaction().execute(async (transaction) => {
-      const session = await transaction
-        .selectFrom("agent_sessions")
-        .selectAll()
-        .where("id", "=", args.sessionId)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-      if (session.status !== "active")
-        throw new AgentSessionClosedError(args.sessionId);
-      if (session.handoff_status === "pending")
-        throw new AgentSessionHandoffPendingError(args.sessionId);
-      if (
-        session.authority_host_id !== "unassigned" &&
-        session.authority_host_id !== this.hostId
-      ) {
-        throw new AgentSessionAuthorityRequiredError(
-          args.sessionId,
-          session.authority_host_id,
-          Number(session.authority_revision),
-        );
-      }
-      const row = await transaction
-        .selectFrom("agent_runtime_requests")
-        .selectAll()
-        .where("session_id", "=", args.sessionId)
-        .where("request_id", "=", args.requestId)
-        .forUpdate()
-        .executeTakeFirst();
-      if (row?.kind !== "question")
-        throw new AgentRuntimeRequestNotFoundError(args.requestId);
-      const request: AgentQuestionRequest = JSON.parse(
-        JSON.stringify(row.payload),
-      );
-      const response = {
-        kind: "question",
-        answers: [args.answer],
-      } satisfies AgentRuntimeRequestResponse;
-      if (row.status === "resolved") {
-        if (!sameCanonicalRuntimeJson(row.response, response))
-          throw new AgentRequestAlreadyResolvedError(args.requestId);
-      } else {
-        await new AgentRuntimeRequestsService(this.db).respond({
-          identity: args.identity,
-          sessionId: args.sessionId,
-          requestId: args.requestId,
-          response,
-          transaction,
-        });
-      }
-      const content = `${(request.questions ?? []).map((question) => question.question).join("\n")}\n\nUser answer:\n${args.answer}`;
-      return this.turns.deliver({
-        sessionId: args.sessionId,
-        content,
-        author: { kind: "user", externalUserId: args.identity.externalUserId },
-        mode: "next_turn",
-        idempotencyKey: `question-answer:${args.requestId}`,
-        metadata: {
-          questionRequestId: args.requestId,
-          inTurn: request.blocking === false,
-        },
-        transaction,
-      });
-    });
-    if (receipt.turnId)
-      void this.scheduleDrain(
-        args.identity,
-        args.projectId,
-        args.sessionId,
-      ).catch(() => {});
-    return receipt;
-  }
-
-  async updateQueuedTurn(
+  /** Older items of a session, before a position (paging back through history). */
+  async items(
     identity: Identity,
     projectId: string,
     sessionId: string,
-    turnId: string,
-    input: { content?: string; metadata?: JsonObject; held?: boolean },
-  ): Promise<boolean> {
-    await this.requireSession(identity, projectId, sessionId);
-    const updated = await this.turns.updateQueued({
-      turnId,
+    input: { before: number; limit?: number },
+  ): Promise<{ items: Item[]; olderBefore: number | null }> {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    return readItemsBefore({
+      db: this.db,
       sessionId,
-      ...input,
+      before: input.before,
+      ...(input.limit ? { limit: input.limit } : {}),
     });
-    if (updated && input.held === false) {
-      void this.scheduleDrain(identity, projectId, sessionId).catch(() => {});
-    }
-    return updated;
-  }
-
-  async cancelQueuedTurn(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    turnId: string,
-  ): Promise<boolean> {
-    await this.requireSession(identity, projectId, sessionId);
-    return this.turns.cancelQueued({ turnId, sessionId });
-  }
-
-  async promoteQueuedTurn(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    turnId: string,
-  ): Promise<boolean> {
-    await this.requireSession(identity, projectId, sessionId);
-    const promoted = await this.turns.promoteQueued({ turnId, sessionId });
-    if (!promoted) return false;
-    await this.interrupt(identity, projectId, sessionId);
-    void this.scheduleDrain(identity, projectId, sessionId).catch(() => {});
-    return true;
   }
 
   /**
-   * Finalize `in_progress` assistant messages left behind by a turn that
-   * died with the process (app quit, crash, dev restart). Without this the
-   * placeholder stays in-progress forever and every client shows a spinner
-   * that never stops.
+   * The conversation as people read it, in order: what session tools,
+   * workflows' `history` and peers read (ADR 0197).
    */
-  private async settleOrphanedTurns(
+  async transcript(
     identity: Identity,
+    projectId: string,
     sessionId: string,
-    messages: MessageRow[],
-  ): Promise<MessageRow[]> {
-    const updated = await this.db.transaction().execute(async (trx) => {
-      const session = await trx
-        .selectFrom("agent_sessions")
-        .select(["authority_host_id", "project_id", "external_user_id"])
-        .where("id", "=", sessionId)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-      if (session.authority_host_id !== this.hostId) return [];
-      const active = await trx
-        .selectFrom("agent_turns")
-        .selectAll()
-        .select(sql<boolean>`lease_expires_at > now()`.as("lease_live"))
-        .where("session_id", "=", sessionId)
-        .where("status", "=", "running")
-        .forUpdate()
-        .execute();
-      if (active.some((turn) => turn.lease_live)) return [];
-      // A worker can die between claiming the inbox entry and creating its
-      // first reply. Give that failure the same visible recovery path.
-      for (const turn of active) {
-        if (turn.result_message_id) continue;
-        const reply = await trx
-          .insertInto("agent_messages")
-          .values({
-            session_id: sessionId,
-            role: "assistant",
-            content: "",
-            author_kind: "agent",
-            author_payload: { kind: "agent", sessionId, agentId: null },
-            delivery_mode: "message_only",
-            metadata: { status: "in_progress" },
-          })
-          .returning("id")
-          .executeTakeFirstOrThrow();
-        await trx
-          .updateTable("agent_turns")
-          .set({ result_message_id: reply.id })
-          .where("id", "=", turn.id)
-          .execute();
-      }
-      const orphaned = await trx
-        .selectFrom("agent_messages")
-        .selectAll()
-        .where("session_id", "=", sessionId)
-        .where("role", "=", "assistant")
-        .where(sql`metadata ->> 'status'`, "=", "in_progress")
-        .execute();
-      // A crash after the final reply committed but before queue settlement
-      // must not convert a known completion into an uncertain failed attempt.
-      for (const turn of active) {
-        if (!turn.result_message_id) continue;
-        const result = await trx
-          .selectFrom("agent_messages")
-          .select("metadata")
-          .where("id", "=", turn.result_message_id)
-          .executeTakeFirst();
-        const status = (result?.metadata as JsonObject | null)?.status;
-        if (status === "completed" || status === "awaiting_input") {
-          await trx
-            .updateTable("agent_turns")
-            .set({
-              status: "completed",
-              error: null,
-              completed_at: new Date(),
-              lease_owner: null,
-              lease_token: null,
-              lease_expires_at: null,
-            })
-            .where("id", "=", turn.id)
-            .execute();
-        }
-      }
-      const interrupted = active.some(
-        (turn) => turn.cancellation_requested_at !== null,
+    input: { through?: string; limit?: number } = {},
+  ): Promise<TranscriptMessage[]> {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    return readTranscript({ db: this.db, sessionId, ...input });
+  }
+
+  /**
+   * Stream a session's events after `after` (ADR 0197): the gap, or a fresh
+   * snapshot when it is too large, then live events. The caller's access is
+   * checked once, when the stream opens.
+   */
+  async subscribe(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      after: number;
+      send: (message: SessionStreamMessage) => boolean;
+      onClose: (reason: "slow" | "ended") => void;
+    },
+  ): Promise<() => void> {
+    await this.requireSession(identity, projectId, sessionId, "read");
+    // Access is checked again while the stream lasts: a member whose role
+    // no longer reaches the chat stops receiving it within a minute.
+    let unsubscribe = () => {};
+    const recheck = setInterval(() => {
+      void this.requireSession(identity, projectId, sessionId, "read").catch(
+        () => {
+          stop();
+          input.onClose("ended");
+        },
       );
-      await trx
-        .updateTable("agent_turns")
-        .set({
-          status: "failed",
-          error: "The host stopped while this turn was running",
-          completed_at: new Date(),
-          lease_owner: null,
-          lease_token: null,
-          lease_expires_at: null,
-          updated_at: new Date(),
-        })
-        .where("session_id", "=", sessionId)
-        .where("status", "=", "running")
-        .execute();
-      const rows: MessageRow[] = [];
-      for (const message of orphaned) {
-        const row = await trx
-          .updateTable("agent_messages")
-          .set({
-            content: interrupted ? "Interrupted." : INTERRUPTED_TURN_MESSAGE,
-            metadata: {
-              ...(message.metadata as JsonObject | null),
-              status: "failed",
-              ...(interrupted
-                ? { interrupted: true }
-                : { unexpectedStop: true }),
-            },
-          })
-          .where("id", "=", message.id)
-          .where(sql`metadata ->> 'status'`, "=", "in_progress")
-          .returningAll()
-          .executeTakeFirst();
-        if (row) rows.push(row);
-      }
-      if (rows.length && !interrupted)
-        await trx
-          .updateTable("agent_sessions")
-          .set(({ ref }) => ({
-            attention_revision: sql`${ref("attention_revision")} + 1`,
-          }))
-          .where("id", "=", sessionId)
-          .execute();
-      return rows;
+    }, STREAM_ACCESS_RECHECK_MS);
+    recheck.unref?.();
+    const stop = () => {
+      clearInterval(recheck);
+      unsubscribe();
+    };
+    unsubscribe = await this.feed.subscribe({
+      sessionId,
+      ...input,
+      onClose: (reason) => {
+        clearInterval(recheck);
+        input.onClose(reason);
+      },
     });
-    if (!updated.length) return messages;
-    const session = await this.db
-      .selectFrom("agent_sessions")
-      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
-      .select([
-        "projects.tenant_id",
-        "agent_sessions.project_id",
-        "agent_sessions.external_user_id",
-      ])
-      .where("agent_sessions.id", "=", sessionId)
-      .executeTakeFirstOrThrow();
-    for (const row of updated) {
-      await this.settleDelegation({
-        identity,
-        projectId: session.project_id,
-        sessionId,
-        resultMessageId: row.id,
-        status: "failed",
-        content: row.content,
-      });
-      const turn = await this.db
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("result_message_id", "=", row.id)
+    return stop;
+  }
+
+  /** The latest message that asked the owner to look, for attention lists. */
+  private async attentionItem(
+    sessionId: string,
+  ): Promise<{ id: string; content: string } | undefined> {
+    const row = await this.db
+      .selectFrom("agent_items")
+      .select(["id", "text"])
+      .where("session_id", "=", sessionId)
+      .where("attention", "=", true)
+      .orderBy("position", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    return row ? { id: row.id, content: row.text } : undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Delivering input
+
+  /**
+   * Put input into a session inside the caller's transaction (ADR 0197): an
+   * item of the input's kind (ADR 0217) and, unless it is `message_only`, a
+   * turn. `steer` joins the active turn, `in_progress` until the agent reads
+   * it at its next step (the engine delivers it, natively or by a restart;
+   * ADR 0240); `interrupt` jumps the queue and stops the active turn. A task
+   * notification steers into a turn that has not finished its work and
+   * otherwise joins the one turn waiting for notifications, so they never
+   * stack up. A `message_only` input waits, `in_progress`, for the next turn
+   * to take it in, unless it is only for people to read (`forAgent: false`).
+   * A subagent's message joins its working parent without stopping it (ADR 0278).
+   * Idempotent by `idempotencyKey`. The session row must be locked by the
+   * caller.
+   */
+  private async deliverIn(
+    trx: Transaction<DB>,
+    delivery: {
+      session: SessionRow;
+      input: SessionInput;
+      dispatch: DispatchMode;
+      attention?: "required" | "none";
+      idempotencyKey?: string;
+      /** The member whose call delivered it (ADR 0199). */
+      deliveredBy: string | null;
+      causation?: string[];
+      commandId?: string;
+      /** Pre-allocated item id (a mailbox delivery keeps its id across hosts). */
+      itemId?: string;
+      /**
+       * False for words only people read: another member's message to a
+       * chat on its owner's own machine (ADR 0199) never reaches its agent.
+       */
+      forAgent?: boolean;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    const { input, session } = delivery;
+    if (
+      input.kind === "task_notification"
+        ? !input.summary.trim()
+        : !input.text.trim() && input.attachments.length === 0
+    )
+      throw new Error("Session message cannot be empty");
+    const sessionId = session.id;
+    if (delivery.idempotencyKey) {
+      const existing = await trx
+        .selectFrom("agent_items")
+        .select(["id", "turn_id", "dispatch"])
+        .where("session_id", "=", sessionId)
+        .where("idempotency_key", "=", delivery.idempotencyKey)
         .executeTakeFirst();
-      await this.onTurnSettled?.({
+      if (existing)
+        return {
+          messageId: existing.id,
+          turnId: existing.turn_id,
+          mode: parseDispatch(existing.dispatch),
+          created: false,
+        };
+    }
+    const active = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "=", sessionId)
+      .where("status", "in", [...ACTIVE_TURN_STATUSES])
+      .executeTakeFirst();
+    // A turn on its owner's sign-in or files takes in only what the owner
+    // wrote (ADR 0199); anyone else's message waits for a turn of its own,
+    // which runs without them. Before its runner starts, that is unknown.
+    const joinable =
+      !active ||
+      (await this.authoredByOwner({
+        projectId: session.project_id,
+        owner: session.external_user_id,
+        input,
+        deliveredBy: delivery.deliveredBy,
+        executor: trx,
+      })) ||
+      (await trx
+        .selectFrom("agent_turn_attempts")
+        .select("runner")
+        .where("id", "=", active.active_attempt_id ?? "")
+        .executeTakeFirst()
+        .then((row) => {
+          const runner = row?.runner as { ownerOnly?: boolean } | null;
+          return runner !== null && runner !== undefined && !runner.ownerOnly;
+        }));
+    // A child's context is work its parent is coordinating (ADR 0278):
+    // deliver it during that work, never hold it for another turn or stop
+    // the current one. Context-only messages still wake nothing when idle.
+    const fromChild =
+      delivery.forAgent !== false &&
+      input.kind === "inbound_message" &&
+      input.from.kind === "agent" &&
+      (await trx
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where("id", "=", input.from.sessionId)
+        .where("parent_session_id", "=", sessionId)
+        .executeTakeFirst()) !== undefined;
+    const requested: DispatchMode =
+      fromChild &&
+      ((active !== undefined && active.status !== "finalizing") ||
+        delivery.dispatch === "queue")
+        ? "steer"
+        : delivery.dispatch;
+    // A person's message while the turn waits on a question joins that
+    // turn (ADR 0195), as does their own assistant's asking for them: the
+    // question stays open as a non-blocking one and its answer arrives
+    // later; a permission request is withdrawn.
+    const replyToWaiting =
+      joinable &&
+      ((input.kind === "user_message" && !input.answer) ||
+        (input.kind === "inbound_message" &&
+          input.from.kind === "assistant")) &&
+      (requested === "queue" || requested === "steer") &&
+      active?.status === "waiting";
+    // A notification reaches a turn until its work is done, waiting on the
+    // person included (the agent reads it once they answer); once its
+    // answer is on the way, the next turn takes it in.
+    const steerable =
+      active !== undefined &&
+      joinable &&
+      (input.kind !== "task_notification" || active.status !== "finalizing");
+    const dispatch: DispatchMode = replyToWaiting
+      ? "steer"
+      : requested === "steer" && !steerable
+        ? "queue"
+        : requested;
+    // A notification joins the turn waiting for notifications only when
+    // both are as much the owner's: one runs on their sign-in or files
+    // (ADR 0199), the other may not.
+    const waitingTurn =
+      input.kind === "task_notification" && dispatch === "queue"
+        ? await waitingNotificationTurn(trx, sessionId)
+        : null;
+    const waiting =
+      waitingTurn &&
+      (await this.alikeForOwner(trx, {
+        session,
+        input,
+        deliveredBy: delivery.deliveredBy,
+        turn: waitingTurn,
+      }))
+        ? waitingTurn
+        : null;
+    const now = new Date().toISOString();
+    const itemId = delivery.itemId ?? randomUUID();
+    const events: SessionEvent[] = [];
+    if (replyToWaiting && active)
+      events.push(
+        ...(await this.deferWaitingRequests(trx, {
+          turn: turnFromRow(active),
+          now,
+        })),
+      );
+    let turnId: string | null = null;
+    if (dispatch === "steer" && active) {
+      turnId = active.id;
+    } else if (waiting) {
+      turnId = waiting.id;
+    } else if (dispatch === "queue" || dispatch === "interrupt") {
+      const last = await trx
+        .selectFrom("agent_turns")
+        .select((eb) => eb.fn.max("ordinal").as("ordinal"))
+        .where("session_id", "=", sessionId)
+        .executeTakeFirst();
+      turnId = randomUUID();
+      const turn: Turn = {
+        id: turnId,
+        sessionId,
+        ordinal: Number(last?.ordinal ?? 0) + 1,
+        status: "queued",
+        inputItemId: itemId,
+        dispatch: dispatch === "interrupt" ? "interrupt" : "queue",
+        priority: dispatch === "interrupt" ? 100 : 0,
+        activity: null,
+        activityAt: null,
+        providerRetry: null,
+        attemptCount: 0,
+        activeAttemptId: null,
+        providerThreadId: null,
+        retryAt: null,
+        cancellationRequested: false,
+        error: null,
+        outcome: null,
+        checkpoint: { before: null, after: null },
+        continuationOf: null,
+        createdAt: now,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: now,
+      };
+      events.push({ type: "turn.changed", turn });
+      if (dispatch === "interrupt" && active) {
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turnFromRow(active),
+            cancellationRequested: true,
+            updatedAt: now,
+          },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: active.id,
+          attemptId: active.active_attempt_id,
+          kind: "interrupt",
+        });
+      }
+    }
+    const attention = delivery.attention === "required";
+    const item: InputItem = {
+      id: itemId,
+      sessionId,
+      turnId,
+      attemptId: null,
+      parentItemId: null,
+      position: 0,
+      // Unread until the agent takes it in: delivered without a turn, until
+      // the next turn does; steered, until the turn's next step.
+      status:
+        (dispatch === "message_only" && delivery.forAgent !== false) ||
+        (dispatch === "steer" && active)
+          ? "in_progress"
+          : "completed",
+      nativeRef: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+      endedAt: now,
+      ...input,
+      dispatch,
+      attention: attention ? "required" : null,
+      idempotencyKey: delivery.idempotencyKey ?? null,
+      deliveredBy: delivery.deliveredBy,
+      causation: delivery.causation ?? [],
+    };
+    // The item comes first: a turn's input is in the log before the turn.
+    events.unshift({ type: "item.added", item });
+    // An untitled chat goes by what it was first asked to do from the
+    // moment it is asked, until its harness names it. Context delivered
+    // without a turn (message_only) and Work's notifications name nothing.
+    if (
+      session.title === null &&
+      dispatch !== "message_only" &&
+      input.kind !== "task_notification"
+    ) {
+      const title = provisionalTitle({
+        text: input.text,
+        attachments: input.attachments,
+      });
+      if (title) events.push({ type: "session.changed", session: { title } });
+    }
+    if (attention)
+      events.push({
+        type: "session.changed",
+        session: {
+          attentionRevision: Number(session.attention_revision) + 1,
+        },
+      });
+    if (dispatch === "steer" && active)
+      await this.queue.enqueueCommand(trx, {
+        turnId: active.id,
+        attemptId: active.active_attempt_id,
+        kind: "steer",
+        payload: { itemId },
+      });
+    // The actor and causation of the workflow-facing events (ADR 0090).
+    await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...inputActor(input), causation: delivery.causation ?? [] })}, true)`.execute(
+      trx,
+    );
+    await this.log.append(trx, {
+      sessionId,
+      events,
+      ...(delivery.commandId ? { commandId: delivery.commandId } : {}),
+    });
+    if (attention) {
+      const owner = await trx
+        .selectFrom("projects")
+        .select("tenant_id")
+        .where("id", "=", session.project_id)
+        .executeTakeFirstOrThrow();
+      await trx
+        .insertInto("agent_session_views")
+        .values({
+          session_id: sessionId,
+          tenant_id: owner.tenant_id,
+          external_user_id: session.external_user_id,
+          visibility: "promoted",
+          previous_visibility: "promoted",
+        })
+        .onConflict((conflict) =>
+          conflict
+            .columns(["session_id", "tenant_id", "external_user_id"])
+            .doUpdateSet(({ ref }) => ({
+              visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
+              previous_visibility: "promoted",
+              updated_at: new Date(),
+            })),
+        )
+        .execute();
+      await new UserNotificationsService(this.db).publish({
         identity: {
-          tenantId: session.tenant_id,
+          tenantId: owner.tenant_id,
           externalUserId: session.external_user_id,
         },
         projectId: session.project_id,
         sessionId,
-        messageId: row.id,
-        turnId: turn?.id,
-        status: "failed",
-        interrupted: (row.metadata as JsonObject | null)?.interrupted === true,
-        changedFiles: [],
-        workingDirectory: "",
+        kind: "session_attention",
+        title: "A message needs your attention",
+        body: input.kind === "task_notification" ? input.summary : input.text,
+        route: `/?project=${encodeURIComponent(session.project_id)}&session=${encodeURIComponent(sessionId)}&message=${encodeURIComponent(itemId)}`,
+        collapseKey: `message:${itemId}`,
+        transaction: trx,
       });
     }
-    const byId = new Map(updated.map((row) => [row.id, row]));
-    return messages.map((message) => byId.get(message.id) ?? message);
+    return { messageId: itemId, turnId, mode: dispatch, created: true };
   }
+
+  /** Refuse input a session cannot take here: closed, moving, or another host's. */
+  private assertAcceptsInput(session: SessionRow): void {
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(session.id);
+    if (session.handoff_status === "pending")
+      throw new AgentSessionHandoffPendingError(session.id);
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    )
+      throw new AgentSessionAuthorityRequiredError(
+        session.id,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+  }
+
+  /**
+   * Deliver attributed words (ADR 0217): the person's become a user
+   * message; an agent's, an assistant's or a workflow's an inbound
+   * message. A session whose authority is another host gets it through
+   * that host's mailbox. Runs a turn unless `mode` is `message_only`.
+   */
+  async deliver(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      signal?: AbortSignal;
+      content: string;
+      author: SessionMessageAuthor;
+      mode: DispatchMode;
+      attention?: "required" | "none";
+      idempotencyKey?: string;
+      /** The enablements whose runs led here; an agent's are looked up. */
+      causation?: string[];
+      /** A workflow's ask that the chat's people hear when the turn settles. */
+      alert?: SettledAlert;
+      attachments?: AgentAttachment[];
+      /** Move the chat's workspace to a ref before its next turn (ADR 0178). */
+      workspace?: SessionWorkspaceRequest;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    input.signal?.throwIfAborted();
+    if (input.workspace)
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        sessionId,
+        input.workspace,
+        { signal: input.signal },
+      );
+    const causation =
+      input.causation ??
+      (input.author.kind === "agent"
+        ? await this.causalContext({
+            identity,
+            projectId: input.author.projectId ?? projectId,
+            sessionId: input.author.sessionId,
+          })
+        : []);
+    const message = messageInput({
+      author: input.author,
+      text: input.content,
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+    });
+    input.signal?.throwIfAborted();
+    return this.deliverInput(identity, projectId, sessionId, {
+      signal: input.signal,
+      input:
+        message.kind === "inbound_message" && input.alert
+          ? { ...message, alert: input.alert }
+          : message,
+      mode: input.mode,
+      ...(input.attention ? { attention: input.attention } : {}),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      causation,
+    });
+  }
+
+  /**
+   * Tell a session's agent about a task it started (ADR 0217): a
+   * background command, a watch, a subsession, a chat it follows. The
+   * person sees `summary` as one line; the agent reads it with `detail`.
+   * It reaches the agent's turn while it works; else it wakes the agent,
+   * together with any other notification still waiting. `message_only`
+   * waits for the agent's next turn instead.
+   */
+  async notify(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      task: NotifiedTask;
+      summary: string;
+      detail?: string;
+      source?: InputSource | null;
+      mode?: "steer" | "message_only";
+      idempotencyKey: string;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    // Checked here, so a host's mistake fails its call rather than a
+    // mailbox read on another host later.
+    const notification = sessionInputSchema.parse({
+      kind: "task_notification",
+      task: { ...input.task, title: input.task.title.slice(0, 2_000) },
+      summary: input.summary.trim().slice(0, 2_000),
+      detail: input.detail ?? "",
+      source: input.source ?? null,
+    });
+    return this.deliverInput(identity, projectId, sessionId, {
+      input: notification,
+      mode: input.mode ?? "steer",
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+
+  private async deliverInput(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    delivery: {
+      signal?: AbortSignal;
+      input: SessionInput;
+      mode: DispatchMode;
+      attention?: "required" | "none";
+      idempotencyKey?: string;
+      causation?: string[];
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    // Whose call delivered it, whoever wrote it: a chat that runs on its
+    // owner's own sign-in answers only their own doing (ADR 0199).
+    const deliveredBy = identity.externalUserId;
+    const session = await this.requireSession(identity, projectId, sessionId);
+    delivery.signal?.throwIfAborted();
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(sessionId);
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    )
+      return this.mailboxes.enqueue(identity, projectId, sessionId, {
+        signal: delivery.signal,
+        destination: {
+          hostId: session.authority_host_id,
+          revision: Number(session.authority_revision),
+        },
+        // The authority runs a turn only for what the owner wrote: it runs
+        // on the owner's own machine and credentials (ADR 0199).
+        delivery: {
+          kind: "input",
+          input: delivery.input,
+          mode: delivery.mode,
+          attention: delivery.attention === "required",
+          deliveredBy,
+          ownerAuthored: await this.authoredByOwner({
+            projectId,
+            owner: session.external_user_id,
+            input: delivery.input,
+            deliveredBy,
+          }),
+        },
+        ...(delivery.idempotencyKey
+          ? { idempotencyKey: delivery.idempotencyKey }
+          : {}),
+        ...(delivery.causation ? { causation: delivery.causation } : {}),
+      });
+    delivery.signal?.throwIfAborted();
+    await this.claimLocalAuthority(session);
+    const receipt = await this.db.transaction().execute(async (trx) => {
+      const locked = await trx
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (locked.status !== "active")
+        throw new AgentSessionClosedError(sessionId);
+      delivery.signal?.throwIfAborted();
+      const result = await this.deliverIn(trx, {
+        session: locked,
+        input: delivery.input,
+        dispatch: delivery.mode,
+        ...(delivery.attention ? { attention: delivery.attention } : {}),
+        ...(delivery.idempotencyKey
+          ? { idempotencyKey: delivery.idempotencyKey }
+          : {}),
+        deliveredBy,
+        ...(delivery.causation ? { causation: delivery.causation } : {}),
+      });
+      delivery.signal?.throwIfAborted();
+      return result;
+    });
+    // Work delivered to an archived chat runs; the chat comes back into view.
+    if (receipt.created && receipt.turnId)
+      await this.restoreArchived([sessionId]);
+    if (receipt.turnId) this.kick(sessionId);
+    return receipt;
+  }
+
+  /** Import one item fetched by this authoritative host, idempotently. */
+  async importMailbox(
+    identity: Identity,
+    projectId: string,
+    item: SessionMailboxItem,
+  ): Promise<SessionDeliveryReceipt> {
+    const session = await this.requireSession(
+      identity,
+      projectId,
+      item.sessionId,
+    );
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(item.sessionId);
+    if (
+      session.authority_host_id !== this.hostId ||
+      Number(session.authority_revision) !== item.authorityRevision ||
+      item.destinationHostId !== this.hostId
+    )
+      throw new SessionMirrorDivergedError(item.sessionId);
+    if (item.kind === "action") {
+      const handle = this.sessionActionHandler;
+      if (!handle) throw new Error("Session actions are not configured here");
+      const { SESSION_ACTION_SCHEMAS } = await import(
+        "./session-actions-service.js"
+      );
+      const named = {
+        operation: item.action.operation,
+        schemas: SESSION_ACTION_SCHEMAS,
+      };
+      if (!isSessionActionOperation(named))
+        throw new Error("Unknown session action");
+      await handle({
+        identity,
+        projectId,
+        author: item.action.actor,
+        operation: named.operation,
+        args: item.action.args,
+        causation: item.causation,
+      });
+      return {
+        messageId: item.messageId,
+        mode: "message_only",
+        turnId: null,
+        created: true,
+      };
+    }
+    // This host runs the chat on its owner's own machine and credentials:
+    // only what the owner wrote starts a turn; anything else is delivered
+    // to read, attributed, and runs nothing (ADR 0199).
+    const receipt = await this.db.transaction().execute(async (trx) => {
+      const locked = await trx
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", item.sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      return this.deliverIn(trx, {
+        session: locked,
+        input: item.input,
+        dispatch: item.ownerAuthored ? item.mode : "message_only",
+        forAgent: item.ownerAuthored,
+        itemId: item.messageId,
+        idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
+        ...(item.attention ? { attention: "required" as const } : {}),
+        deliveredBy: item.deliveredBy,
+        causation: item.causation,
+      });
+    });
+    if (receipt.turnId) this.kick(item.sessionId);
+    return receipt;
+  }
+
+  /**
+   * Send a message and wait for its turn to settle: the one-shot shape
+   * the project MCP's `ask_agent` uses. Returns the turn's final reply.
+   * `from` names who asks when it is not the caller themself (an agent,
+   * or the person's own assistant): it arrives as an inbound message.
+   * Throws {@link AgentTurnUnsettledError} when the turn cannot settle now
+   * (no machine takes it, it was held or cancelled, its machine stopped).
+   */
+  async sendMessage(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    message: string,
+    input: {
+      attachments?: AgentAttachment[];
+      dispatch?: "queue" | "interrupt";
+      from?: InboundSender;
+    } = {},
+  ): Promise<{ reply: Item | null; turn: Turn }> {
+    let turnId: string | null;
+    if (input.from) {
+      // As a person's send is: closed, moving and remote chats refuse it.
+      this.assertAcceptsInput(
+        await this.requireSession(identity, projectId, sessionId),
+      );
+      const receipt = await this.deliver(identity, projectId, sessionId, {
+        content: message,
+        author: input.from,
+        mode: input.dispatch ?? "queue",
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      });
+      turnId = receipt.turnId;
+    } else {
+      // It answers with the reply to this message: a turn of its own.
+      const receipt = await this.command(identity, projectId, sessionId, {
+        type: "send",
+        commandId: randomUUID(),
+        text: message,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+        dispatch: input.dispatch ?? "queue",
+      });
+      if (receipt.status === "rejected")
+        throw new Error(receipt.error?.message ?? "The message was refused");
+      turnId =
+        typeof receipt.result?.turnId === "string"
+          ? receipt.result.turnId
+          : null;
+    }
+    if (!turnId) throw new Error("A send must create a turn");
+    let unclaimedSince = Date.now();
+    for (;;) {
+      const row = await this.db
+        .selectFrom("agent_turns")
+        .selectAll()
+        .select(
+          sql<boolean>`coalesce(lease_expires_at > now(), false)`.as(
+            "lease_live",
+          ),
+        )
+        .where("id", "=", turnId)
+        .executeTakeFirstOrThrow();
+      const turn = turnFromRow(row);
+      if (isSettledTurnStatus(turn.status)) {
+        if (turn.status === "cancelled")
+          throw new AgentTurnUnsettledError(sessionId, turnId, "cancelled");
+        return { reply: await readReply({ db: this.db, turn }), turn };
+      }
+      if (turn.status === "held")
+        throw new AgentTurnUnsettledError(sessionId, turnId, "held");
+      if (turn.status === "queued") {
+        // Waiting behind the chat's own earlier turn, which a machine is
+        // running, is not waiting for a machine.
+        const ahead = await this.db
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("session_id", "=", row.session_id)
+          .where("ordinal", "<", row.ordinal)
+          .where("status", "in", [...ACTIVE_TURN_STATUSES])
+          .where(sql<boolean>`lease_expires_at > now()`)
+          .limit(1)
+          .executeTakeFirst();
+        if (ahead) unclaimedSince = Date.now();
+        else if (await this.placementWaits.get({ rootWorkloadId: sessionId }))
+          // Waiting for a machine (ADR 0258) can take minutes: say so now.
+          throw new AgentTurnUnsettledError(sessionId, turnId, "waiting");
+        else if (Date.now() - unclaimedSince > 5_000)
+          throw new AgentTurnUnsettledError(sessionId, turnId, "queued");
+      } else {
+        unclaimedSince = Date.now();
+        if (!row.lease_live && Date.now() - Date.parse(turn.updatedAt) > 90_000)
+          throw new AgentTurnUnsettledError(sessionId, turnId, "interrupted");
+      }
+      await delay(250);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Commands (ADR 0197)
+
+  /**
+   * Run a person's command on a session, at most once per `commandId`
+   * (scoped to them). Returns the durable receipt: a repeat returns the
+   * first one. A host running one by itself names what must still hold
+   * when it runs, checked in the command's own transaction.
+   */
+  async command(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    command: SessionCommand,
+    conditions: {
+      /**
+       * Only while this turn is still the session's latest, nothing after
+       * it: an automatic retry (ADR 0228) never overtakes a message the
+       * person sent meanwhile.
+       */
+      ifLatestTurnId?: string;
+    } = {},
+  ): Promise<CommandReceipt> {
+    // An answer checks its own audience (an unattended chat's approvers,
+    // who may hold no other access to it); every other command changes the
+    // chat.
+    const session =
+      command.type === "respond"
+        ? await this.sessionInTenant(identity, projectId, sessionId)
+        : await this.requireSession(identity, projectId, sessionId);
+    // Who may answer is settled before anything moves, authority included.
+    if (command.type === "respond")
+      await this.assertMayRespond({
+        identity,
+        session,
+        requestId: command.requestId,
+      });
+    if (command.type === "send") this.assertAcceptsInput(session);
+    else if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    )
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+    await this.claimLocalAuthority(session);
+    const commandId = `user:${identity.externalUserId}:${command.commandId}`;
+    // A rollback rewinds the files before its transaction: restoring them
+    // reaches the host and the database on its own connections.
+    let rewound: { undo: string[] } | undefined;
+    let rewindHeld = false;
+    const receipt = await this.log
+      .command({
+        sessionId,
+        commandId,
+        type: command.type,
+        externalUserId: identity.externalUserId,
+        // Work outside the transaction, once per new command: a repeated
+        // command moves no workspace and rewinds no files.
+        before: async () => {
+          if (command.type === "send" && command.workspace)
+            await this.requestWorkspace(
+              identity,
+              projectId,
+              sessionId,
+              command.workspace,
+            );
+          if (command.type === "rollback") {
+            // No turn of the chat starts until the rollback is recorded.
+            await this.beginRewind(sessionId);
+            rewindHeld = true;
+            rewound = await this.rewindFiles({
+              identity,
+              session,
+              turnId: command.turnId,
+            });
+          }
+        },
+        run: async (trx) => {
+          const locked = await trx
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .executeTakeFirstOrThrow();
+          if (conditions.ifLatestTurnId !== undefined) {
+            const latest = await trx
+              .selectFrom("agent_turns")
+              .select("id")
+              .where("session_id", "=", sessionId)
+              .orderBy("ordinal", "desc")
+              .limit(1)
+              .executeTakeFirst();
+            if (latest?.id !== conditions.ifLatestTurnId)
+              throw new SessionCommandRejectedError(
+                "not_latest",
+                "Something came after that turn.",
+              );
+          }
+          switch (command.type) {
+            case "send": {
+              this.assertAcceptsInput(locked);
+              // A turn that works reads it at its next step (ADR 0240),
+              // unless it moves the workspace, which happens before a turn.
+              const dispatch: DispatchMode =
+                command.dispatch ?? (command.workspace ? "queue" : "steer");
+              const delivered = await this.deliverIn(trx, {
+                session: locked,
+                input: {
+                  kind: "user_message",
+                  author: {
+                    kind: "user",
+                    externalUserId: identity.externalUserId,
+                  },
+                  text: command.text,
+                  attachments: (command.attachments ?? []) as AgentAttachment[],
+                },
+                dispatch,
+                idempotencyKey: commandId,
+                commandId,
+                deliveredBy: identity.externalUserId,
+              });
+              return {
+                itemId: delivered.messageId,
+                turnId: delivered.turnId,
+                mode: delivered.mode,
+              };
+            }
+            case "interrupt":
+              return this.interruptIn(trx, {
+                identity,
+                session: locked,
+                turnId: command.turnId,
+                commandId,
+              });
+            case "retry":
+              return this.retryIn(trx, {
+                session: locked,
+                turnId: command.turnId,
+                commandId,
+              });
+            case "edit_queued":
+            case "cancel_queued":
+            case "send_now":
+              return this.changeQueuedIn(trx, {
+                identity,
+                session: locked,
+                command,
+                commandId,
+              });
+            case "steer_now":
+              return this.steerNowIn(trx, {
+                session: locked,
+                itemId: command.itemId,
+                commandId,
+              });
+            case "respond":
+              return this.respondIn(trx, {
+                identity,
+                session: locked,
+                command,
+                commandId,
+              });
+            case "rollback":
+              return this.rollbackIn(trx, {
+                session: locked,
+                turnId: command.turnId,
+                commandId,
+                undo: rewound?.undo ?? [],
+              });
+          }
+        },
+      })
+      .finally(async () => {
+        if (!rewindHeld) return;
+        await this.endRewind(sessionId);
+        this.kick(sessionId);
+      });
+    if (receipt.status === "accepted") {
+      if (command.type === "send") {
+        if (session.parent_session_id)
+          await this.promoteSession(identity, sessionId);
+        await this.restoreArchived([sessionId]);
+      }
+      if (command.type === "interrupt")
+        await this.interruptDelegation(identity, projectId, sessionId);
+      if (
+        command.type === "respond" &&
+        command.response.kind === "approval" &&
+        command.response.decision === "approved" &&
+        command.response.remember === "always"
+      )
+        await this.rememberAlwaysAllowed({
+          identity,
+          session,
+          requestId: command.requestId,
+        });
+      this.kick(sessionId);
+    }
+    return receipt;
+  }
+
+  /**
+   * Stop a session's work from the host side: a parent stopping its
+   * subsession, a session action, a workflow. A person's interrupt goes
+   * through {@link command} with their own command id.
+   */
+  async interrupt(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    options: {
+      turnId?: string;
+      notifyParent?: boolean;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    const commandId = `host:interrupt:${randomUUID()}`;
+    await this.log.command({
+      sessionId,
+      commandId,
+      type: "interrupt",
+      run: async (trx) => {
+        options.signal?.throwIfAborted();
+        const result = await this.interruptIn(trx, {
+          identity,
+          session,
+          ...(options.turnId ? { turnId: options.turnId } : {}),
+          commandId,
+        });
+        options.signal?.throwIfAborted();
+        return result;
+      },
+    });
+    if (options.notifyParent !== false)
+      await this.interruptDelegation(identity, projectId, sessionId);
+    this.kick(sessionId);
+  }
+
+  /**
+   * An unattended chat's approvers answer its approvals (ADR 0176), and
+   * need no other access to it; otherwise whoever may change the chat does.
+   */
+  private assertRequestAudience(input: {
+    identity: Identity;
+    session: SessionRow;
+    request: RuntimeRequest;
+  }): void {
+    if (input.request.approvers.length > 0) {
+      if (!input.request.approvers.includes(input.identity.externalUserId))
+        throw new SessionCommandRejectedError(
+          "not_an_approver",
+          "Only this chat's approvers can answer this request.",
+          403,
+        );
+      return;
+    }
+    assertAgentSessionAccess({
+      identity: input.identity,
+      projectId: input.session.project_id,
+      externalUserId: input.session.external_user_id,
+      agentId: input.session.agent_id,
+      intent: "change",
+    });
+  }
+
+  /**
+   * Before a `respond` command runs: the caller may answer that request,
+   * or, for a request this chat does not have, may change the chat.
+   */
+  private async assertMayRespond(input: {
+    identity: Identity;
+    session: SessionRow;
+    requestId: string;
+  }): Promise<void> {
+    const row = await this.db
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .where("request_id", "=", input.requestId)
+      .executeTakeFirst();
+    const request = row ? requestFromRow(row) : undefined;
+    if (request?.approvers.length) {
+      if (request.approvers.includes(input.identity.externalUserId)) return;
+      throw new AccessDeniedError();
+    }
+    assertAgentSessionAccess({
+      identity: input.identity,
+      projectId: input.session.project_id,
+      externalUserId: input.session.external_user_id,
+      agentId: input.session.agent_id,
+      intent: "change",
+    });
+  }
+
+  private async rememberAlwaysAllowed(input: {
+    identity: Identity;
+    session: SessionRow;
+    requestId: string;
+  }): Promise<void> {
+    if (!this.onToolAlwaysAllowed) return;
+    // A one-time approver answers once; only who may change the chat may
+    // widen what its agent may do.
+    try {
+      assertAgentSessionAccess({
+        identity: input.identity,
+        projectId: input.session.project_id,
+        externalUserId: input.session.external_user_id,
+        agentId: input.session.agent_id,
+        intent: "change",
+      });
+    } catch {
+      return;
+    }
+    const row = await this.db
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .where("request_id", "=", input.requestId)
+      .executeTakeFirst();
+    const tool = row ? requestFromRow(row).approval?.tool : undefined;
+    if (!tool?.server) return;
+    await Promise.resolve()
+      .then(() =>
+        this.onToolAlwaysAllowed?.({
+          identity: input.identity,
+          projectId: input.session.project_id,
+          sessionId: input.session.id,
+          agentId: input.session.agent_id,
+          server: tool.server ?? "",
+          tool: tool.name,
+        }),
+      )
+      .catch((error) =>
+        console.warn("[catamorphic] Could not keep an Always allow", error),
+      );
+  }
+
+  private async interruptIn(
+    trx: Transaction<DB>,
+    input: {
+      identity: Identity;
+      session: SessionRow;
+      turnId?: string;
+      commandId: string;
+    },
+  ): Promise<JsonObject> {
+    const rows = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .$if(input.turnId !== undefined, (query) =>
+        query.where("id", "=", input.turnId ?? ""),
+      )
+      .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+      .execute();
+    const now = new Date().toISOString();
+    const events: SessionEvent[] = [];
+    for (const row of rows) {
+      const turn = turnFromRow(row);
+      if (isActiveTurnStatus(turn.status)) {
+        // A transient retry waiting in the queue is withdrawn with it.
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, cancellationRequested: true, updatedAt: now },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: turn.activeAttemptId,
+          kind: "interrupt",
+        });
+      } else if (turn.attemptCount > 0) {
+        // A turn waiting to retry already ran: stopping it interrupts it,
+        // so it reads as stopped and can be retried by hand. What was
+        // steered into it and never read runs as turns of its own.
+        events.push(
+          {
+            type: "turn.changed",
+            turn: {
+              ...turn,
+              status: "interrupted",
+              error: null,
+              retryAt: null,
+              completedAt: now,
+              updatedAt: now,
+            },
+          },
+          ...(await this.engine.requeueSteers(trx, turn, now)),
+        );
+      } else if (input.turnId !== undefined) {
+        // Interrupting a named queued turn cancels it.
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            status: "cancelled",
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+    }
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      events,
+      commandId: input.commandId,
+    });
+    return { interrupted: rows.map((row) => row.id) };
+  }
+
+  /**
+   * The person replied in the chat while the turn waited: each waiting
+   * question ends its call and stays open beside the chat, and each
+   * waiting permission request is withdrawn as declined (ADR 0195).
+   */
+  private async deferWaitingRequests(
+    trx: Transaction<DB>,
+    input: { turn: Turn; now: string },
+  ): Promise<SessionEvent[]> {
+    const rows = await trx
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("turn_id", "=", input.turn.id)
+      .where("status", "=", "pending")
+      .where("blocking", "=", true)
+      .execute();
+    const events: SessionEvent[] = [];
+    for (const request of rows.map(requestFromRow)) {
+      if (request.kind === "question") {
+        events.push({
+          type: "request.changed",
+          request: { ...request, blocking: false },
+        });
+        if (request.runnerKey)
+          await this.queue.enqueueCommand(trx, {
+            turnId: input.turn.id,
+            attemptId: request.attemptId,
+            kind: "release",
+            payload: {
+              requestKey: request.runnerKey,
+              reason: `The user wrote in the chat before answering. Their message follows; respond to it. Question request ${request.id} stays open beside the chat and its answer arrives as a later message, so do not ask it again. If their message answers it or makes it moot, close it with close_questions.`,
+            },
+          });
+        continue;
+      }
+      const reason =
+        "The user wrote in the chat instead of answering this permission request, so it was withdrawn and nothing ran. Their message follows; respond to it.";
+      events.push({
+        type: "request.changed",
+        request: {
+          ...request,
+          status: "cancelled",
+          answerable: false,
+          reason,
+          resolvedAt: input.now,
+        },
+      });
+      if (request.runnerKey)
+        await this.queue.enqueueCommand(trx, {
+          turnId: input.turn.id,
+          attemptId: request.attemptId,
+          kind: "respond",
+          payload: {
+            requestKey: request.runnerKey,
+            response:
+              request.kind === "approval"
+                ? { kind: "approval", decision: "denied", reason }
+                : { kind: "elicitation", action: "decline" },
+          },
+        });
+    }
+    if (events.length > 0)
+      events.push({
+        type: "turn.changed",
+        turn: {
+          ...input.turn,
+          status: "running",
+          activity: "Reading your message",
+          activityAt: input.now,
+          updatedAt: input.now,
+        },
+      });
+    return events;
+  }
+
+  /** A delegated subsession the person interrupted reports it to its parent. */
+  private async interruptDelegation(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("target_session_id", "=", sessionId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (!delegation) return;
+    await this.db
+      .updateTable("agent_delegations")
+      .set({
+        status: "interrupted",
+        interrupted_by_external_user_id: identity.externalUserId,
+        completed_at: new Date(),
+      })
+      .where("id", "=", delegation.id)
+      .execute();
+    const title = await this.subsessionTitle(sessionId);
+    await this.notify(identity, projectId, delegation.source_session_id, {
+      task: { type: "subsession", id: sessionId, title, status: "stopped" },
+      summary: `${title} was interrupted`,
+      detail:
+        "Its turn was stopped before it finished, so it will not report a result. Read its chat to see where it stopped; message it to carry on.",
+      source: { kind: "session", sessionId },
+      idempotencyKey: `delegation:${delegation.id}:interrupted`,
+    }).catch((error) =>
+      console.warn(
+        "[catamorphic] Could not tell a parent about an interrupted subsession",
+        error,
+      ),
+    );
+  }
+
+  /** Run a failed or interrupted turn again, as a new attempt of the same turn. */
+  private async retryIn(
+    trx: Transaction<DB>,
+    input: { session: SessionRow; turnId: string; commandId: string },
+  ): Promise<JsonObject> {
+    const row = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("id", "=", input.turnId)
+      .where("session_id", "=", input.session.id)
+      .executeTakeFirst();
+    if (!row)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That turn does not exist.",
+        404,
+      );
+    const turn = turnFromRow(row);
+    if (turn.status !== "failed" && turn.status !== "interrupted")
+      throw new SessionCommandRejectedError(
+        "not_retryable",
+        "Only a failed or interrupted turn can be retried.",
+      );
+    const busy = await trx
+      .selectFrom("agent_turns")
+      .select("id")
+      .where("session_id", "=", input.session.id)
+      .where("status", "in", [...ACTIVE_TURN_STATUSES])
+      .executeTakeFirst();
+    if (busy)
+      throw new SessionCommandRejectedError(
+        "turn_in_progress",
+        "Wait for the running turn to finish, or interrupt it.",
+      );
+    const now = new Date().toISOString();
+    await trx
+      .updateTable("agent_turns")
+      .set({ available_at: new Date() })
+      .where("id", "=", turn.id)
+      .execute();
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      commandId: input.commandId,
+      events: [
+        {
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            status: "queued",
+            error: null,
+            cancellationRequested: false,
+            completedAt: null,
+            retryAt: null,
+            priority: 100,
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+    return { turnId: turn.id };
+  }
+
+  /**
+   * Have the agent read a message steered into its turn now (ADR 0240):
+   * the attempt is interrupted and the turn starts again on the same
+   * thread with what it had not read, the way a steer the harness refused
+   * does. A message the agent already read, or whose turn is not working
+   * (it starts, finishes, or the person stopped it), has nothing to stop
+   * for: accepted, and nothing changes.
+   */
+  private async steerNowIn(
+    trx: Transaction<DB>,
+    input: { session: SessionRow; itemId: string; commandId: string },
+  ): Promise<JsonObject> {
+    const row = await trx
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("id", "=", input.itemId)
+      .where("session_id", "=", input.session.id)
+      .executeTakeFirst();
+    const item = row ? itemFromRow(row) : null;
+    if (item?.kind !== "user_message")
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That message does not exist.",
+        404,
+      );
+    const turnRow =
+      isUnreadSteer(item) && item.turnId
+        ? await trx
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("id", "=", item.turnId)
+            .executeTakeFirst()
+        : undefined;
+    const turn = turnRow ? turnFromRow(turnRow) : null;
+    if (
+      !turn ||
+      (turn.status !== "running" && turn.status !== "waiting") ||
+      turn.cancellationRequested
+    )
+      return { itemId: item.id, interrupted: false };
+    const now = new Date().toISOString();
+    await this.queue.enqueueCommand(trx, {
+      turnId: turn.id,
+      attemptId: turn.activeAttemptId,
+      kind: "interrupt",
+      payload: { restart: true, itemId: item.id },
+    });
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      commandId: input.commandId,
+      events: [
+        {
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            activity: "Stopping to read your message",
+            activityAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+    return { turnId: turn.id, itemId: item.id, interrupted: true };
+  }
+
+  private async changeQueuedIn(
+    trx: Transaction<DB>,
+    input: {
+      identity: Identity;
+      session: SessionRow;
+      command: Extract<
+        SessionCommand,
+        { type: "edit_queued" | "cancel_queued" | "send_now" }
+      >;
+      commandId: string;
+    },
+  ): Promise<JsonObject> {
+    const row = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("id", "=", input.command.turnId)
+      .where("session_id", "=", input.session.id)
+      .executeTakeFirst();
+    if (!row)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That turn does not exist.",
+        404,
+      );
+    const turn = turnFromRow(row);
+    if (turn.status !== "queued" && turn.status !== "held")
+      throw new SessionCommandRejectedError(
+        "not_queued",
+        "That message already ran.",
+      );
+    const now = new Date().toISOString();
+    const events: SessionEvent[] = [];
+    if (input.command.type === "cancel_queued") {
+      events.push({
+        type: "turn.changed",
+        turn: {
+          ...turn,
+          status: "cancelled",
+          completedAt: now,
+          updatedAt: now,
+        },
+      });
+    } else if (input.command.type === "edit_queued") {
+      const { text, held } = input.command;
+      if (text !== undefined && turn.inputItemId) {
+        const itemRow = await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", turn.inputItemId)
+          .executeTakeFirst();
+        const item = itemRow ? itemFromRow(itemRow) : null;
+        // Words stay their author's: nobody else rewrites them, and what an
+        // agent, a workflow or Work delivered is not edited at all.
+        if (
+          item &&
+          (item.kind !== "user_message" ||
+            item.author.externalUserId !== input.identity.externalUserId)
+        )
+          throw new SessionCommandRejectedError(
+            "not_author",
+            "Only the person who wrote a queued message can edit it.",
+            403,
+          );
+        if (item?.kind === "user_message")
+          events.push({
+            type: "item.changed",
+            item: { ...item, text, updatedAt: now },
+          });
+      }
+      if (held !== undefined)
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, status: held ? "held" : "queued", updatedAt: now },
+        });
+    } else {
+      events.push({
+        type: "turn.changed",
+        turn: {
+          ...turn,
+          status: "queued",
+          priority: 100,
+          dispatch: "interrupt",
+          updatedAt: now,
+        },
+      });
+      const active = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", input.session.id)
+        .where("status", "in", [...ACTIVE_TURN_STATUSES])
+        .executeTakeFirst();
+      if (active) {
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turnFromRow(active),
+            cancellationRequested: true,
+            updatedAt: now,
+          },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: active.id,
+          attemptId: active.active_attempt_id,
+          kind: "interrupt",
+        });
+      }
+    }
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      events,
+      commandId: input.commandId,
+    });
+    return { turnId: turn.id };
+  }
+
+  /**
+   * Answer a question, approval or elicitation (ADR 0198). An answer to an
+   * agent still waiting goes to its runner, from whichever replica takes
+   * it; an answer to a non-blocking question whose turn ended becomes a
+   * message. A request whose agent stopped can no longer be answered.
+   */
+  /** Each approver hears about an approval and finds the chat waiting for them. */
+  private async notifyApprovers(input: {
+    session: SessionRow;
+    requests: RuntimeRequest[];
+  }): Promise<void> {
+    const project = await this.db
+      .selectFrom("projects")
+      .select("tenant_id")
+      .where("id", "=", input.session.project_id)
+      .executeTakeFirstOrThrow();
+    const notifications = new UserNotificationsService(this.db);
+    const agent = await this.resolveAgent(
+      input.session.agent_id,
+      input.session.project_id,
+    ).catch(() => undefined);
+    const label = agent?.name ?? "An agent";
+    for (const request of input.requests)
+      for (const approver of request.approvers) {
+        await this.db
+          .insertInto("agent_session_views")
+          .values({
+            session_id: input.session.id,
+            tenant_id: project.tenant_id,
+            external_user_id: approver,
+            visibility: "promoted",
+            previous_visibility: "promoted",
+          })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_id", "tenant_id", "external_user_id"])
+              .doUpdateSet({ visibility: "promoted", updated_at: new Date() }),
+          )
+          .execute();
+        const tool = request.approval?.tool;
+        await notifications.publish({
+          identity: { tenantId: project.tenant_id, externalUserId: approver },
+          projectId: input.session.project_id,
+          sessionId: input.session.id,
+          kind: "approval_requested",
+          title: `${label} needs your approval`,
+          body: `${tool ? `${tool.name} on ${tool.server ?? "this agent"}` : request.title}${
+            input.session.title ? ` in "${input.session.title}"` : ""
+          }`,
+          route: `/?project=${encodeURIComponent(input.session.project_id)}&session=${encodeURIComponent(input.session.id)}`,
+          collapseKey: `approval:${request.id}`,
+        });
+      }
+    if (input.requests.some((request) => request.approvers.length > 0))
+      this.chatsChanged();
+  }
+
+  /**
+   * Ask a session's person to approve something the host itself guards
+   * (ADR 0162: a brokered connection action), as a request on the turn
+   * working now. Durable like any request: whichever replica answers, the
+   * asking replica sees the answer. Denies when no turn is working, and when
+   * nobody answers before `timeoutMs`.
+   */
+  async askApproval(input: {
+    sessionId: string;
+    title: string;
+    description?: string;
+    origin: RuntimeRequest["origin"];
+    approval: NonNullable<RuntimeRequest["approval"]>;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<"allow" | "deny"> {
+    const policy = await approvalPolicy(this.db, input.sessionId);
+    if (policy.unattended && policy.approvers.length === 0) return "deny";
+    const timeoutMs = input.timeoutMs ?? policy.waitMs;
+    const opened = await this.db.transaction().execute(async (trx) => {
+      // The session first, as everything that changes it locks it.
+      await this.log.lock(trx, input.sessionId);
+      const row = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("session_id", "=", input.sessionId)
+        .where("status", "in", ["running", "waiting"])
+        .executeTakeFirst();
+      if (!row) return null;
+      const turn = turnFromRow(row);
+      // One reading of the clock: the request lives exactly its timeout.
+      const openedAt = Date.now();
+      const now = new Date(openedAt).toISOString();
+      const id = randomUUID();
+      const itemId = randomUUID();
+      const request: RuntimeRequest = {
+        id,
+        sessionId: input.sessionId,
+        turnId: turn.id,
+        attemptId: turn.activeAttemptId,
+        itemId,
+        kind: "approval",
+        status: "pending",
+        answerable: true,
+        blocking: true,
+        title: input.title,
+        description: input.description ?? null,
+        origin: input.origin,
+        questions: null,
+        approval: input.approval,
+        elicitation: null,
+        approvers: policy.approvers,
+        expiresAt: new Date(openedAt + timeoutMs).toISOString(),
+        response: null,
+        resolvedBy: null,
+        reason: null,
+        createdAt: now,
+        resolvedAt: null,
+      };
+      const events: SessionEvent[] = [
+        { type: "request.changed", request },
+        {
+          type: "item.added",
+          item: {
+            id: itemId,
+            sessionId: input.sessionId,
+            turnId: turn.id,
+            attemptId: turn.activeAttemptId,
+            parentItemId: null,
+            position: 0,
+            status: "in_progress",
+            nativeRef: null,
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            endedAt: null,
+            kind: "request",
+            requestId: id,
+          },
+        },
+      ];
+      if (turn.status === "running")
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            status: "waiting",
+            activity: "Waiting for your approval",
+            activityAt: now,
+            updatedAt: now,
+          },
+        });
+      await this.log.append(trx, { sessionId: input.sessionId, events });
+      return request;
+    });
+    if (!opened) return "deny";
+    if (opened.approvers.length > 0) {
+      const session = await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", input.sessionId)
+        .executeTakeFirstOrThrow();
+      await this.notifyApprovers({ session, requests: [opened] }).catch(
+        (error) =>
+          console.warn("[catamorphic] Could not tell approvers", error),
+      );
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && !input.signal?.aborted) {
+      const row = await this.db
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("session_id", "=", opened.sessionId)
+        .where("request_id", "=", opened.id)
+        .executeTakeFirst();
+      const request = row ? requestFromRow(row) : null;
+      if (request?.status !== "pending")
+        return request?.response?.kind === "approval" &&
+          request.response.decision === "approved"
+          ? "allow"
+          : "deny";
+      await delay(500);
+    }
+    // Nobody answered: the request closes and the turn works on.
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, opened.sessionId);
+      const row = await trx
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("session_id", "=", opened.sessionId)
+        .where("request_id", "=", opened.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) return;
+      const request = requestFromRow(row);
+      if (request.status !== "pending") return;
+      const now = new Date().toISOString();
+      const events: SessionEvent[] = [
+        {
+          type: "request.changed",
+          request: {
+            ...request,
+            status: input.signal?.aborted ? "cancelled" : "expired",
+            answerable: false,
+            reason: input.signal?.aborted
+              ? "The action was withdrawn."
+              : "Nobody answered in time.",
+            resolvedAt: now,
+          },
+        },
+        ...(await this.unblockedTurn(trx, request)),
+      ];
+      await this.log.append(trx, { sessionId: request.sessionId, events });
+    });
+    return "deny";
+  }
+
+  /** The turn back to running once none of its blocking requests is open. */
+  private async unblockedTurn(
+    trx: Transaction<DB>,
+    request: RuntimeRequest,
+  ): Promise<SessionEvent[]> {
+    if (!request.turnId) return [];
+    const row = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("id", "=", request.turnId)
+      .executeTakeFirst();
+    if (!row) return [];
+    const turn = turnFromRow(row);
+    if (turn.status !== "waiting") return [];
+    const others = await trx
+      .selectFrom("agent_runtime_requests")
+      .select("request_id")
+      .where("turn_id", "=", turn.id)
+      .where("status", "=", "pending")
+      .where("blocking", "=", true)
+      .where("request_id", "!=", request.id)
+      .executeTakeFirst();
+    if (others) return [];
+    const now = new Date().toISOString();
+    return [
+      {
+        type: "turn.changed",
+        turn: {
+          ...turn,
+          status: "running",
+          activity: "Continuing",
+          activityAt: now,
+          updatedAt: now,
+        },
+      },
+    ];
+  }
+
+  private async respondIn(
+    trx: Transaction<DB>,
+    input: {
+      identity: Identity;
+      session: SessionRow;
+      command: Extract<SessionCommand, { type: "respond" }>;
+      commandId: string;
+    },
+  ): Promise<JsonObject> {
+    const row = await trx
+      .selectFrom("agent_runtime_requests")
+      .selectAll()
+      .where("session_id", "=", input.session.id)
+      .where("request_id", "=", input.command.requestId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That request does not exist.",
+        404,
+      );
+    const request = requestFromRow(row);
+    this.assertRequestAudience({
+      identity: input.identity,
+      session: input.session,
+      request,
+    });
+    if (request.status !== "pending")
+      throw new SessionCommandRejectedError(
+        "already_answered",
+        "That request was already answered or withdrawn.",
+      );
+    if (!request.answerable && request.blocking)
+      throw new SessionCommandRejectedError(
+        "not_answerable",
+        request.reason ??
+          "The agent that asked stopped, so this can no longer be answered. Send a message to continue.",
+      );
+    if (input.command.response.kind !== request.kind)
+      throw new SessionCommandRejectedError(
+        "wrong_kind",
+        `This request needs a ${request.kind} answer.`,
+      );
+    // An answer reaches the attempt as the agent's input: one on its
+    // owner's sign-in or files takes only the owner's words (ADR 0199). An
+    // approval is an approver's decision; its reason, words the agent
+    // would read, stays with the owner too.
+    let response = input.command.response as RuntimeRequestResponse;
+    if (
+      request.attemptId &&
+      input.identity.externalUserId !== input.session.external_user_id
+    ) {
+      const attempt = await trx
+        .selectFrom("agent_turn_attempts")
+        .select("runner")
+        .where("id", "=", request.attemptId)
+        .executeTakeFirst();
+      const runner = attempt?.runner as {
+        ownerOnly?: boolean;
+        ownerOnlyBecause?: OwnerOnlyCause;
+      } | null;
+      if (runner?.ownerOnly) {
+        if (response.kind !== "approval")
+          throw new SessionCommandRejectedError(
+            "owner_only",
+            runner.ownerOnlyBecause === "credentials"
+              ? "This turn has its owner's own secrets or files, so only they can answer it."
+              : "This chat runs on its owner's own sign-in, so only they can answer it.",
+            403,
+          );
+        const { reason: _reason, ...decision } = response;
+        response = decision;
+      }
+    }
+    if (response.kind === "question") response = withAnswerPills(response);
+    const now = new Date().toISOString();
+    const resolved: RuntimeRequest = {
+      ...request,
+      status: "resolved",
+      answerable: false,
+      response,
+      resolvedBy: input.identity.externalUserId,
+      resolvedAt: now,
+    };
+    const events: SessionEvent[] = [
+      { type: "request.changed", request: resolved },
+    ];
+    const turnRow = request.turnId
+      ? await trx
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("id", "=", request.turnId)
+          .executeTakeFirst()
+      : undefined;
+    const turn = turnRow ? turnFromRow(turnRow) : null;
+    // A non-blocking question's agent moved on: its answer is a message.
+    const live =
+      request.blocking &&
+      turn &&
+      isActiveTurnStatus(turn.status) &&
+      turn.activeAttemptId === request.attemptId;
+    if (live && turn) {
+      // A runner's request is answered through its runner; a host's own
+      // (askApproval) is read from its row by whoever waits on it.
+      if (request.runnerKey)
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: request.attemptId,
+          kind: "respond",
+          payload: {
+            requestKey: request.runnerKey,
+            response: protocolJson(agentResponse(response)),
+          },
+        });
+      events.push(...(await this.unblockedTurn(trx, request)));
+    }
+    if (request.itemId) {
+      const itemRow = await trx
+        .selectFrom("agent_items")
+        .select("payload")
+        .where("session_id", "=", input.session.id)
+        .where("id", "=", request.itemId)
+        .executeTakeFirst();
+      if (itemRow) {
+        const item = itemFromRow(itemRow);
+        events.push({
+          type: "item.changed",
+          item: {
+            ...item,
+            status: "completed",
+            endedAt: now,
+            updatedAt: now,
+          } as Item,
+        });
+      }
+    }
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      events,
+      commandId: input.commandId,
+    });
+    if (response.kind === "question") {
+      const questions = request.questions ?? [];
+      // The batch and the raw answers render the history entry where this
+      // message lands; the pills their markers stand for are the request's,
+      // never a second copy here.
+      const answer: QuestionAnswer = {
+        requestId: request.id,
+        questions,
+        answers: response.answers,
+      };
+      const author = {
+        kind: "user" as const,
+        externalUserId: input.identity.externalUserId,
+      };
+      if (!live) {
+        // The agent learns a non-blocking answer as a message, pills
+        // included: within the turn still working, else as a turn of its
+        // own.
+        await this.deliverIn(trx, {
+          session: input.session,
+          input: {
+            kind: "user_message",
+            author,
+            // Only the answers' markers count: the questions' text is the
+            // agent's own, and a marker there would shift every pill.
+            text: `${questions.map((question) => question.question.split(ATTACHMENT_MARKER).join("")).join("\n")}\n\nUser answer:\n${response.answers.join("\n")}`,
+            attachments: response.attachments?.flat() ?? [],
+            answer,
+          },
+          dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
+          idempotencyKey: `question-answer:${request.id}`,
+          deliveredBy: input.identity.externalUserId,
+        });
+      } else {
+        // An answer the agent waited on is text; its images and documents
+        // follow at once as a message (ADR 0244), which the turn takes at
+        // its next step, or runs as the next turn should this one end first.
+        const media = answerMedia(questions, response);
+        if (media)
+          await this.deliverIn(trx, {
+            session: input.session,
+            input: { kind: "user_message", author, ...media, answer },
+            dispatch: "steer",
+            idempotencyKey: `question-media:${request.id}`,
+            deliveredBy: input.identity.externalUserId,
+          });
+      }
+    }
+    return { requestId: request.id };
+  }
+
+  /**
+   * Undo a turn and every later one (ADR 0197): the conversation from that
+   * turn on is marked rolled back, the next turn's native thread forks
+   * through the turn before it (or starts over with a handoff), and the
+   * workspace returns to where it stood before the turn. Files move only
+   * in a workspace the chat owns, or a project folder nothing else changed
+   * since this chat's last turn.
+   */
+  /** The turns a rollback to `turnId` undoes, or why it cannot. */
+  private async rollbackPlan(
+    executor: Kysely<DB> | Transaction<DB>,
+    input: { session: SessionRow; turnId: string },
+  ) {
+    const { session } = input;
+    const busy = await executor
+      .selectFrom("agent_turns")
+      .select("id")
+      .where("session_id", "=", session.id)
+      .where("status", "in", [...ACTIVE_TURN_STATUSES])
+      .executeTakeFirst();
+    if (busy)
+      throw new SessionCommandRejectedError(
+        "turn_in_progress",
+        "Stop the running turn before rolling back.",
+      );
+    const targetRow = await executor
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("id", "=", input.turnId)
+      .where("session_id", "=", session.id)
+      .executeTakeFirst();
+    if (!targetRow)
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That turn does not exist.",
+        404,
+      );
+    const target = turnFromRow(targetRow);
+    if (target.status === "rolled_back")
+      throw new SessionCommandRejectedError(
+        "already_rolled_back",
+        "That turn was already rolled back.",
+      );
+    const later = await executor
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "=", session.id)
+      .where("ordinal", ">=", target.ordinal)
+      .where("status", "!=", "rolled_back")
+      .orderBy("ordinal")
+      .execute();
+    return { target, later };
+  }
+
+  /**
+   * Files first: a rollback that cannot restore them changes nothing. The
+   * restore checks the workspace is where the last turn left it.
+   */
+  private async rewindFiles(input: {
+    identity: Identity;
+    session: SessionRow;
+    turnId: string;
+  }): Promise<{ undo: string[] }> {
+    const { target, later } = await this.rollbackPlan(this.db, input);
+    const last = later.at(-1);
+    const restore = target.checkpoint.before;
+    if (restore) {
+      const restored = await this.restoreWorkspace({
+        identity: input.identity,
+        session: input.session,
+        commit: restore,
+        // A last turn that changed nothing recorded no checkpoint: the
+        // workspace is still where that turn started.
+        expectedHead:
+          last?.checkpoint_after?.trim() ||
+          last?.checkpoint_before?.trim() ||
+          null,
+      });
+      if (restored !== "restored")
+        throw new SessionCommandRejectedError(
+          "workspace_not_restored",
+          restored,
+        );
+    }
+    return { undo: later.map((row) => row.id) };
+  }
+
+  /**
+   * Hold the chat's turns while a rollback rewinds its files (no claim
+   * takes one). A second rollback meanwhile waits and is sent again.
+   */
+  private async beginRewind(sessionId: string): Promise<void> {
+    const held = await this.db
+      .updateTable("agent_sessions")
+      .set({ rewind_until: sql<Date>`now() + interval '2 minutes'` })
+      .where("id", "=", sessionId)
+      .where((eb) =>
+        eb.or([
+          eb("rewind_until", "is", null),
+          eb("rewind_until", "<=", sql<Date>`now()`),
+        ]),
+      )
+      .returning("id")
+      .executeTakeFirst();
+    if (!held) throw new AgentSessionRewindingError(sessionId);
+  }
+
+  private async endRewind(sessionId: string): Promise<void> {
+    await this.db
+      .updateTable("agent_sessions")
+      .set({ rewind_until: null })
+      .where("id", "=", sessionId)
+      .execute();
+  }
+
+  private async rollbackIn(
+    trx: Transaction<DB>,
+    input: {
+      session: SessionRow;
+      turnId: string;
+      commandId: string;
+      /** The turns whose files were rewound: exactly these roll back. */
+      undo: readonly string[];
+    },
+  ): Promise<JsonObject> {
+    const { session } = input;
+    const plan = await this.rollbackPlan(trx, input);
+    const { target } = plan;
+    // A message sent while the files were rewound stays queued, and runs
+    // on the rewound files.
+    const later = plan.later.filter((row) => input.undo.includes(row.id));
+    if (later.length !== input.undo.length)
+      throw new SessionCommandRejectedError(
+        "chat_moved_on",
+        "The chat moved on while its files were rewound. Roll back again.",
+      );
+    const now = new Date().toISOString();
+    const events: SessionEvent[] = later.map((row) => ({
+      type: "turn.changed",
+      turn: { ...turnFromRow(row), status: "rolled_back", updatedAt: now },
+    }));
+    // The native conversation goes back too: the next turn forks the thread
+    // through the turn before the target, natively when the harness can.
+    const previous = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "=", session.id)
+      .where("ordinal", "<", target.ordinal)
+      .where("status", "in", ["completed", "failed", "interrupted"])
+      .orderBy("ordinal", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    // Every harness may have seen the discarded turns. None may resume its
+    // old thread after the rewind; only the retained history can be forked.
+    const activeThreads = await trx
+      .selectFrom("agent_provider_threads")
+      .selectAll()
+      .where("session_id", "=", session.id)
+      .where("status", "=", "active")
+      .execute();
+    events.push(
+      ...activeThreads.map((thread) => ({
+        type: "provider_thread.changed" as const,
+        thread: {
+          ...providerThreadFromRow(thread),
+          status: "closed" as const,
+          updatedAt: now,
+        },
+      })),
+    );
+    const threadRow = previous?.provider_thread_id
+      ? await trx
+          .selectFrom("agent_provider_threads")
+          .selectAll()
+          .where("id", "=", previous.provider_thread_id)
+          .executeTakeFirst()
+      : undefined;
+    if (threadRow) {
+      const endRef = previous?.active_attempt_id
+        ? ((
+            await trx
+              .selectFrom("agent_turn_attempts")
+              .select("native_turn_ref")
+              .where("id", "=", previous.active_attempt_id)
+              .executeTakeFirst()
+          )?.native_turn_ref as unknown as NativeRef | null)
+        : null;
+      const sourceRef = threadRow.native_ref as unknown as NativeRef | null;
+      if (sourceRef && endRef) {
+        const forkId = randomUUID();
+        events.push({
+          type: "provider_thread.changed",
+          thread: {
+            id: forkId,
+            sessionId: session.id,
+            harness: threadRow.harness,
+            nativeRef: null,
+            status: "active",
+            lastTurnOrdinal: previous ? previous.ordinal : null,
+            portable: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        await this.log.append(trx, {
+          sessionId: session.id,
+          events,
+          commandId: input.commandId,
+        });
+        await trx
+          .updateTable("agent_provider_threads")
+          .set({
+            fork_source: {
+              source: sourceRef,
+              throughTurnRef: endRef,
+              threadId: threadRow.id,
+              bornAtOrdinal: previous ? previous.ordinal : null,
+              ...(threadRow.state_path
+                ? { statePath: threadRow.state_path }
+                : {}),
+            } as unknown as Json,
+          })
+          .where("id", "=", forkId)
+          .execute();
+        return { rolledBack: later.map((row) => row.id) };
+      }
+    }
+    await this.log.append(trx, {
+      sessionId: session.id,
+      events,
+      commandId: input.commandId,
+    });
+    return { rolledBack: later.map((row) => row.id) };
+  }
+
+  /**
+   * Put a chat's workspace back at a commit, or say why not. A session
+   * copy is reset and its sandbox given back (the next turn rehydrates it
+   * from the session branch); a native checkout is reset by the host when
+   * the chat owns it, or when nothing changed it since `expectedHead`.
+   */
+  private async restoreWorkspace(input: {
+    identity: Identity;
+    session: SessionRow;
+    commit: string;
+    expectedHead: string | null;
+  }): Promise<"restored" | string> {
+    const agent = await this.resolveAgent(
+      input.session.agent_id,
+      input.session.project_id,
+    );
+    if (agent.topology === "native") {
+      const checkout = await this.nativeAgentCheckout?.resolve({
+        projectId: input.session.project_id,
+        sessionId: input.session.id,
+      });
+      if (!checkout || !this.nativeAgentCheckout?.restore)
+        return "This host cannot rewind the files of this chat.";
+      return this.nativeAgentCheckout.restore({
+        projectId: input.session.project_id,
+        sessionId: input.session.id,
+        workingDirectory: checkout.path,
+        commit: input.commit,
+        expectedHead: input.expectedHead,
+        owned: checkout.owned,
+      });
+    }
+    if (!this.usesSessionCopy(input.session))
+      return "This chat works in your draft, which other chats share, so its files cannot be rewound. Fork the chat instead.";
+    await this.projectManager.resetSession({
+      tenantId: input.identity.tenantId,
+      projectId: input.session.project_id,
+      sessionId: input.session.id,
+      commit: input.commit,
+    });
+    if (input.session.allocation_id) {
+      await this.executionAllocations.release({
+        identity: input.identity,
+        allocationId: input.session.allocation_id,
+        reason: "rollback",
+      });
+      await this.db
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", input.session.id)
+        .execute();
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: input.session.allocation_id })
+        .catch(() => {});
+    }
+    return "restored";
+  }
+
+  // ---------------------------------------------------------------------------
+  // Running turns (ADR 0198)
+
+  /** Run the session's due turns in this process, soon. */
+  private kick(sessionId: string): void {
+    void this.scheduleDrain(sessionId).catch((error) =>
+      console.warn("[catamorphic] Agent queue dispatch failed", error),
+    );
+  }
+
+  private scheduleDrain(sessionId: string): Promise<void> {
+    const previous = this.drainers.get(sessionId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => this.drainSession(sessionId));
+    this.drainers.set(sessionId, current);
+    const cleanup = () => {
+      if (this.drainers.get(sessionId) === current)
+        this.drainers.delete(sessionId);
+    };
+    void current.then(cleanup, cleanup);
+    return current;
+  }
+
+  /**
+   * Claim and run the session's turns until none is due here: readmitting
+   * a workspace given back while the chat waited, and finishing a close
+   * that happened while a turn ran.
+   */
+  private async drainSession(sessionId: string): Promise<void> {
+    while (!this.stoppingTurns) {
+      const session = await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .executeTakeFirst();
+      if (!session || session.authority_host_id !== this.hostId) return;
+      const identity = await this.ownerOf(session);
+      if (!identity) return;
+      if (session.status !== "active") {
+        await this.finishClosing({
+          identity,
+          projectId: session.project_id,
+          sessionId,
+        });
+        return;
+      }
+      if (session.handoff_status !== "none") return;
+      const allocation = session.allocation_id
+        ? await this.executionAllocations.get({
+            identity,
+            allocationId: session.allocation_id,
+          })
+        : undefined;
+      const due = await this.db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "queued")
+        .where("available_at", "<=", sql<Date>`now()`)
+        .executeTakeFirst();
+      // No workspace: given back while the chat waited, or a chat that is
+      // waiting for a machine (ADR 0258).
+      const placing =
+        session.allocation_id === null || allocation?.status === "released";
+      if (placing && !due)
+        await this.placementWaits.clear({ rootWorkloadIds: [sessionId] });
+      if (placing && due) {
+        const placed = await this.placeWaiting(identity, session);
+        if (placed.kind === "admitted") continue;
+        if (placed.kind === "waiting") return;
+        // It waited as long as its Environment allows: its turn fails.
+        const refused = await this.engine.runNext({
+          sessionId,
+          ...(this.workerNode ? { localNode: this.workerNode } : {}),
+          refusal: placed.reason,
+        });
+        if (!refused) return;
+        continue;
+      }
+      if (
+        allocation?.status === "active" &&
+        (await this.releaseEndedConnection({ identity, session, allocation }))
+      )
+        continue;
+      const ran = await this.engine.runNext({
+        sessionId,
+        ...(this.workerNode ? { localNode: this.workerNode } : {}),
+      });
+      if (!ran) return;
+    }
+  }
+
+  /** The identity a session's work runs as: its owner (ADR 0173). */
+  private async ownerOf(session: SessionRow): Promise<Identity | null> {
+    const project = await this.db
+      .selectFrom("projects")
+      .select("tenant_id")
+      .where("id", "=", session.project_id)
+      .executeTakeFirst();
+    if (!project) return null;
+    if (isProjectPrincipal(session.external_user_id))
+      return projectChatIdentity({
+        tenantId: project.tenant_id,
+        projectId: session.project_id,
+      });
+    const known = this.knownOwners.get(
+      `${project.tenant_id}:${session.project_id}:${session.external_user_id}`,
+    );
+    // The host resolves members again, so revoked access stops their work;
+    // a root caller (no scope) is nobody the host could resolve.
+    if (known && (!this.resolveOwner || known.scope === undefined))
+      return known;
+    return (
+      (await this.resolveOwner?.({
+        tenantId: project.tenant_id,
+        projectId: session.project_id,
+        externalUserId: session.external_user_id,
+      })) ?? null
+    );
+  }
+
+  /** The engine's view of this service (ADR 0198). */
+  private engineHost(): TurnEngineHost {
+    return {
+      owner: (session) => this.ownerOf(session),
+      harnessOf: async ({ session }) => {
+        const agent = await this.resolveAgent(
+          session.agent_id,
+          session.project_id,
+        );
+        return {
+          harness: harnessIdOf(agent),
+          agentId: session.agent_id,
+          recovery: agent.recovery ?? "continue",
+          ...(agent.unavailable ? { unavailable: agent.unavailable } : {}),
+        };
+      },
+      prepare: (input) => this.prepareAttempt(input),
+      authoredByOwner: ({ session, item }) =>
+        this.authoredByOwner({
+          projectId: session.project_id,
+          owner: session.external_user_id,
+          input: item,
+          deliveredBy: item.deliveredBy,
+        }),
+      reattach: (input) => this.reattachRunner(input),
+      hostTool: (input) => this.runHostTool(input),
+      finalize: (input) => this.finalizeTurn(input),
+      settled: (input) => this.afterTurn(input),
+      approvalsOpened: (input) => this.notifyApprovers(input),
+      // Whether a failure is passing is the agent's host's to say (ADR 0228).
+      retryFailure: async ({ session, turn, error }) => {
+        const agent = await this.resolveAgent(
+          session.agent_id,
+          session.project_id,
+        );
+        return agent.retryFailure?.({
+          error,
+          projectId: session.project_id,
+          sessionId: session.id,
+          turnId: turn.id,
+        });
+      },
+      released: ({ sessionId, turnId }) => {
+        this.stopGrantRenewal(sessionId);
+        this.workingDirectories.delete(turnId);
+      },
+      secretValues: ({ identity, session }) =>
+        this.sessionSecretValues({
+          identity,
+          projectId: session.project_id,
+          sessionId: session.id,
+        }),
+    };
+  }
+
+  /**
+   * Every secret value a chat could repeat (ADR 0206), once it, or a chat
+   * it came from (a fork's source, a subsession's parent), has held
+   * secrets: its workspace's processes and files and its own transcript
+   * keep them, whoever writes next. The owners' and shared values,
+   * declared defaults, and every value ever delivered to those chats; empty
+   * for a chat that never held any. What every turn of it masks.
+   */
+  private async sessionSecretValues(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<Record<string, string[]>> {
+    if (!this.secrets) return {};
+    const chain: Array<{ id: string; owner: string | null; held: boolean }> =
+      [];
+    const pending = [input.sessionId];
+    while (pending.length > 0 && chain.length < 32) {
+      const rows = await this.db
+        .selectFrom("agent_sessions")
+        .select([
+          "id",
+          "external_user_id",
+          "secrets_held_at",
+          "forked_from_session_id",
+          "parent_session_id",
+        ])
+        .where("project_id", "=", input.projectId)
+        .where("id", "in", pending.splice(0))
+        .execute();
+      for (const row of rows) {
+        if (chain.some((entry) => entry.id === row.id)) continue;
+        chain.push({
+          id: row.id,
+          owner: placementOwner(row.external_user_id),
+          held: row.secrets_held_at !== null,
+        });
+        for (const source of [
+          row.forked_from_session_id,
+          row.parent_session_id,
+        ])
+          if (source && !chain.some((entry) => entry.id === source))
+            pending.push(source);
+      }
+    }
+    if (!chain.some((entry) => entry.held)) return {};
+    return this.secrets.valuesForMasking({
+      identity: input.identity,
+      projectId: input.projectId,
+      owners: [...new Set(chain.map((entry) => entry.owner))],
+      sessionIds: chain.map((entry) => entry.id),
+    });
+  }
+
+  /** The tools a turn's agent is served by this host, by name. */
+  private async hostToolsFor(input: {
+    identity: Identity;
+    session: SessionRow;
+    agent: RegisteredCodingAgent;
+    turnId: string;
+    workingDirectory?: string;
+  }): Promise<ExtraTool[]> {
+    const hosted =
+      input.agent.harness.placement === "host"
+        ? (input.agent.harness.hostTools ?? [])
+        : [];
+    const own = [
+      // A read-only chat keeps the host's tools that only read, and its
+      // subagents, which read only too (ADR 0271).
+      ...(input.session.read_only
+        ? hosted.filter(
+            (tool) => tool.readOnly === true || SUBSESSION_TOOLS.has(tool.name),
+          )
+        : hosted),
+      ASK_USER_HOST_TOOL,
+      this.closeQuestionsTool(input.session.id),
+    ];
+    if (!this.agentCapabilities) return own;
+    const gateway = this.agentCapabilities.forSession({
+      identity: input.identity,
+      projectId: input.session.project_id,
+      sessionId: input.session.id,
+      allocationId: input.session.allocation_id ?? undefined,
+    });
+    const names = new Set(own.map((tool) => tool.name));
+    return [
+      ...own,
+      ...agentCapabilityTools(gateway, new AbortController().signal).filter(
+        (tool) => !names.has(tool.name),
+      ),
+    ];
+  }
+
+  /** The agent withdraws its own open questions (ADR 0195). */
+  private closeQuestionsTool(sessionId: string): ExtraTool {
+    return {
+      name: "close_questions",
+      description: closeQuestionsDescription,
+      parameters: closeQuestionsInputSchema.shape,
+      execute: async (args) => {
+        const requestIds = closeQuestionsInputSchema.parse(args).requestIds;
+        if (requestIds?.length === 0) return "No open questions matched.";
+        const closed = await this.db.transaction().execute(async (trx) => {
+          await this.log.lock(trx, sessionId);
+          const rows = await trx
+            .selectFrom("agent_runtime_requests")
+            .selectAll()
+            .where("session_id", "=", sessionId)
+            .where("kind", "=", "question")
+            .where("status", "=", "pending")
+            .where("blocking", "=", false)
+            .$if(requestIds !== undefined, (query) =>
+              query.where("request_id", "in", requestIds ?? []),
+            )
+            .execute();
+          const now = new Date().toISOString();
+          const requests = rows.map(requestFromRow);
+          if (requests.length > 0)
+            await this.log.append(trx, {
+              sessionId,
+              events: requests.map(
+                (request): SessionEvent => ({
+                  type: "request.changed",
+                  request: {
+                    ...request,
+                    status: "cancelled",
+                    answerable: false,
+                    reason: "The agent closed this question.",
+                    resolvedAt: now,
+                  },
+                }),
+              ),
+            });
+          return requests;
+        });
+        return closed.length === 0
+          ? "No open questions matched."
+          : `Closed ${closed.map((request) => request.id).join(", ")}.`;
+      },
+    };
+  }
+
+  private async runHostTool(input: {
+    identity: Identity;
+    session: SessionRow;
+    turn: Turn;
+    name: string;
+    input: JsonValue;
+    stopWaiting: AbortSignal;
+  }): Promise<HostToolResult> {
+    const agent = await this.resolveAgent(
+      input.session.agent_id,
+      input.session.project_id,
+    );
+    const tools = await this.hostToolsFor({
+      identity: input.identity,
+      session: input.session,
+      agent,
+      turnId: input.turn.id,
+    });
+    const tool = tools.find((candidate) => candidate.name === input.name);
+    if (!tool) throw new Error(`This agent has no tool '${input.name}'`);
+    const args =
+      input.input &&
+      typeof input.input === "object" &&
+      !Array.isArray(input.input)
+        ? (input.input as Record<string, unknown>)
+        : {};
+    const result = await tool.execute(args, {
+      projectId: input.session.project_id,
+      sessionId: input.session.id,
+      turnId: input.turn.id,
+      workingDirectory: this.workingDirectories.get(input.turn.id) ?? "",
+      caller: {
+        tenantId: input.identity.tenantId,
+        externalUserId: input.identity.externalUserId,
+      },
+      stopWaiting: input.stopWaiting,
+    });
+    const answer = hostToolResult(extraToolResult(result));
+    // Said once, for every tool: why a wait came back early (ADR 0264).
+    return input.stopWaiting.aborted
+      ? {
+          ...answer,
+          content: [
+            ...answer.content,
+            { type: "text", text: STOPPED_WAITING_NOTE },
+          ],
+        }
+      : answer;
+  }
+
+  private async reattachRunner(input: {
+    identity: Identity;
+    session: SessionRow;
+    turn: Turn;
+    attempt: Attempt;
+    leaseToken: string;
+    location: Extract<RunnerLocation, { kind: "sandbox_process" }>;
+  }): Promise<RunnerChannel | undefined> {
+    const allocation = await this.executionAllocations.get({
+      identity: input.identity,
+      allocationId: input.location.allocationId,
+    });
+    if (allocation?.status !== "active") return undefined;
+    const runtime = await this.executionEnvironments.getRuntimeBinding({
+      identity: input.identity,
+      bindingId: allocation.bindingId,
+      ...(allocation.workerNodeId
+        ? { workerNodeId: allocation.workerNodeId }
+        : {}),
+      owner: placementOwner(input.session.external_user_id),
+    });
+    const selected = runtime?.sandboxProvider;
+    if (!selected?.processes) return undefined;
+    const provider = allocationSandboxProvider({
+      db: this.db,
+      allocation,
+      provider: selected,
+      ...this.localFence(allocation),
+    });
+    const processes = provider.processes;
+    if (!processes) return undefined;
+    const present = await processes
+      .listProcesses({ sandboxId: input.location.sandboxId })
+      .then(
+        (list) =>
+          list.some(
+            (process) => process.processId === input.location.processId,
+          ),
+        (error: unknown) => {
+          if (error instanceof ExecutorNotConnectedError) throw error;
+          return false;
+        },
+      );
+    if (!present) return undefined;
+    if (
+      input.turn.activeAttemptId === input.attempt.id &&
+      ["preparing", "running", "waiting"].includes(input.turn.status) &&
+      ["preparing", "running"].includes(input.attempt.status)
+    ) {
+      const grantInput = {
+        identity: input.identity,
+        projectId: input.session.project_id,
+        sessionId: input.session.id,
+        allocationId: allocation.id,
+        provider,
+        sandboxProviderId: input.location.sandboxId,
+        renewOnly: true,
+        modelTurn: {
+          turnId: input.turn.id,
+          attemptId: input.attempt.id,
+          leaseToken: input.leaseToken,
+        },
+      };
+      // The runner survived its holder, but its old model grant did not.
+      // Refresh the exact new claim before answering or reading it again.
+      await this.configureSandboxGateway(grantInput);
+      this.startGrantRenewal(grantInput);
+      await this.keepConnectionGrants(input.session.id);
+    }
+    return sandboxChannel({ provider, location: input.location });
+  }
+
+  /**
+   * Ready one attempt (ADR 0198), all of it safe to do again: the
+   * workspace (moved to a requested base, anchored, seeded), the sandbox's
+   * grants and Git, the owner's personal files, the store, and the
+   * attempt's start: instructions, context, tools, policies, MCP servers
+   * and model access. Nothing here asks the harness to do anything.
+   */
+  private async prepareAttempt(input: {
+    identity: Identity;
+    session: SessionRow;
+    turn: Turn;
+    attempt: Attempt;
+    leaseToken: string;
+    signal: AbortSignal;
+  }): Promise<PreparedAttempt> {
+    const { identity, turn } = input;
+    let session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", input.session.id)
+      .executeTakeFirstOrThrow();
+    const projectId = session.project_id;
+    const sessionId = session.id;
+    const agent = await this.resolveAgent(session.agent_id, projectId);
+    const runtime = await this.resolveExecutionRuntime(
+      identity,
+      projectId,
+      session,
+      agent,
+    );
+    const notes: string[] = [];
+    const ownerAuthored = await this.ownerAuthoredTurn({
+      projectId,
+      owner: session.external_user_id,
+      turn,
+    });
+    let ownerOnly = false;
+    // A sign-in outranks secrets and files in what the refusal says.
+    let ownerOnlyBecause: OwnerOnlyCause | undefined;
+    // What this attempt masks, read once the workspace's secrets are in
+    // place (ADR 0206).
+    let masked: Promise<Record<string, string[]>> | undefined;
+    const secretValuesOfChat = () => {
+      masked ??= this.sessionSecretValues({
+        identity,
+        projectId,
+        sessionId: session.id,
+      });
+      return masked;
+    };
+
+    // A base a delivery asked for moves before the agent runs (ADR 0178).
+    const workspaceMove = parseWorkspaceMove(session.workspace_move);
+    if (workspaceMove && agent.topology !== "native")
+      notes.push(
+        await this.applyWorkspaceMove({
+          identity,
+          projectId,
+          session,
+          move: workspaceMove,
+        }),
+      );
+    const baseBefore = parseWorkspaceBase(session.workspace)?.commit;
+    if (workspaceMove && agent.topology !== "native")
+      session = await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .executeTakeFirstOrThrow();
+    // A setup on its own network (ADR 0257) widens only a sandbox this
+    // preparation makes, holding the base checkout alone; why it cannot.
+    const setupNetwork = this.setupNetworkOf({ runtime, session });
+    let workspace = await this.ensureWorkspace(
+      identity,
+      projectId,
+      session,
+      agent,
+      runtime,
+      { populate: !setupNetwork.widens },
+    );
+    session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    if (workspaceMove && agent.topology === "native")
+      notes.push(
+        await this.applyWorkspaceMove({
+          identity,
+          projectId,
+          session,
+          move: workspaceMove,
+          native: { checkout: workspace.checkout },
+        }),
+      );
+    await this.keepConnectionGrants(sessionId);
+
+    let modelAccess: AttemptStart["modelAccess"] = { kind: "host" };
+    let secrets: Record<string, string> = {};
+    const nativeSetup = this.nativeAgentCheckout?.setup?.bind(
+      this.nativeAgentCheckout,
+    );
+    if (workspace.sandboxProviderId && runtime.provider) {
+      // Before anything reaches the sandbox: narrow, and a new one where a
+      // setup must run on its own network again (ADR 0257).
+      const prepared = await this.prepareSetupSandbox({
+        identity,
+        projectId,
+        session,
+        agent,
+        runtime,
+        provider: runtime.provider,
+        sandboxProviderId: workspace.sandboxProviderId,
+        created: workspace.created === true,
+        widens: setupNetwork.widens,
+        moved: baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+      });
+      if (prepared.note) notes.push(prepared.note);
+      const { sandboxProviderId, fresh } = prepared;
+      if (sandboxProviderId !== workspace.sandboxProviderId) {
+        workspace = { ...workspace, sandboxProviderId };
+        session = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", sessionId)
+          .executeTakeFirstOrThrow();
+      }
+      // The Environment's setup on its own network, before Git, grants,
+      // secrets and files reach the sandbox (ADR 0257).
+      const widened =
+        fresh && setupNetwork.widens && runtime.setup
+          ? await this.setUpOnItsNetwork({
+              identity,
+              projectId,
+              session,
+              turn,
+              runtime,
+              setup: runtime.setup,
+              egress: setupNetwork.widens.egress,
+              base: setupNetwork.widens.base,
+              provider: runtime.provider,
+              sandboxProviderId,
+              ownerAuthored,
+              signal: input.signal,
+            })
+          : undefined;
+      // The log's tail may print a secret the setup named, or one an
+      // earlier workspace held (ADR 0206). Read now, not kept: this turn's
+      // secrets arrive below.
+      if (widened?.note)
+        notes.push(
+          new SecretMask(
+            await this.sessionSecretValues({
+              identity,
+              projectId,
+              sessionId: session.id,
+            }),
+          ).text(widened.note),
+        );
+      const models = await this.prepareSandboxGit({
+        identity,
+        projectId,
+        sessionId,
+        modelTurn: {
+          turnId: turn.id,
+          attemptId: input.attempt.id,
+          leaseToken: input.leaseToken,
+        },
+        provider: runtime.provider,
+        sandboxProviderId,
+        afterSetup: widened !== undefined,
+      });
+      if (agent.signIn) {
+        // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
+        if (!ownerAuthored)
+          throw new Error(
+            `This chat runs on its owner's own ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in, so only they can send it messages.`,
+          );
+        if (!runtime.signInHome)
+          throw new Error(
+            `This machine has no ${SIGN_IN_HARNESS_NAMES[agent.signIn]} sign-in for this chat's owner. Sign in on the machine (work worker sign-in ${agent.signIn}) or move the chat.`,
+          );
+        modelAccess = { kind: "sign_in", home: runtime.signInHome };
+        ownerOnly = true;
+        ownerOnlyBecause = "sign-in";
+      } else if (agent.harness.placement === "sandbox") {
+        const gateway = agent.modelConnection
+          ? models.find((model) => model.alias === agent.modelConnection)
+          : undefined;
+        if (!gateway)
+          throw new Error(
+            "This agent reaches its model through the gateway, and this chat has no model connection: bind one in the agent's Environment and name it in the agent's credentials.",
+          );
+        modelAccess = {
+          kind: "gateway",
+          api: gateway.api,
+          baseUrl: gateway.baseUrl,
+          grantDirectory: gateway.grantDirectory,
+        };
+      }
+      const delivery = await this.prepareSandboxSecrets({
+        identity,
+        projectId,
+        session,
+        environment: runtime.environmentName,
+        isolated: runtime.isolated === true,
+        provider: runtime.provider,
+        sandboxProviderId,
+        ownerAuthored,
+      });
+      if (delivery.note) notes.push(delivery.note);
+      if (delivery.ownerOnly) {
+        ownerOnly = true;
+        ownerOnlyBecause ??= "credentials";
+      }
+      secrets = delivery.values;
+      const files = await this.preparePersonalFiles({
+        identity,
+        projectId,
+        session,
+        allowed: runtime.personalCredentials === true,
+        provider: runtime.provider,
+        sandboxProviderId,
+        ownerAuthored,
+      });
+      if (files.note) notes.push(files.note);
+      if (files.delivered) {
+        ownerOnly = true;
+        ownerOnlyBecause ??= "credentials";
+      }
+      // A new workspace that could not have an exclusive volume of its own
+      // (ADR 0208) says so once.
+      if (fresh && runtime.allocation) {
+        const volumes = temporaryVolumesNote({
+          volumes: await temporaryVolumes({
+            db: this.db,
+            allocation: runtime.allocation,
+          }),
+          projectChat: isProjectPrincipal(session.external_user_id),
+        });
+        if (volumes) notes.push(volumes);
+      }
+      // The rest of setup, once the sandbox is narrow and holds the
+      // session's work: the owner's own, or all of it without a network of
+      // its own. A widened setup that did not succeed runs again next turn.
+      const setup =
+        widened && !widened.settled
+          ? undefined
+          : await this.prepareWorkspaceSetup({
+              identity,
+              projectId,
+              session,
+              turn,
+              runner: {
+                kind: "sandbox",
+                provider: runtime.provider,
+                sandboxProviderId,
+                ...(setupNetwork.refusal
+                  ? { networkRefusal: setupNetwork.refusal }
+                  : {}),
+              },
+              environment: runtime.setup,
+              personalAllowed:
+                runtime.personalCredentials === true && ownerAuthored,
+              signal: input.signal,
+            });
+      if (setup?.note)
+        notes.push(new SecretMask(await secretValuesOfChat()).text(setup.note));
+      if (session.allocation_id)
+        this.startGrantRenewal({
+          identity,
+          projectId,
+          sessionId,
+          allocationId: session.allocation_id,
+          modelTurn: {
+            turnId: turn.id,
+            attemptId: input.attempt.id,
+            leaseToken: input.leaseToken,
+          },
+          provider: runtime.provider,
+          sandboxProviderId,
+          renewOnly: true,
+        });
+    } else if (workspace.checkout?.owned && nativeSetup) {
+      // A native chat's own worktree is a new workspace too (ADR 0215).
+      const setup = await this.prepareWorkspaceSetup({
+        identity,
+        projectId,
+        session,
+        turn,
+        runner: {
+          kind: "native",
+          setup: nativeSetup,
+          workingDirectory: workspace.workingDirectory,
+        },
+        environment: runtime.setup,
+        personalAllowed: runtime.personalCredentials === true && ownerAuthored,
+        signal: input.signal,
+      });
+      if (setup.note) notes.push(setup.note);
+    }
+
+    const workingDirectory = workspace.workingDirectory;
+    this.workingDirectories.set(turn.id, workingDirectory);
+    const context: AgentTurnContext = {
+      projectId,
+      sessionId,
+      turnId: turn.id,
+      workingDirectory,
+      ...(session.read_only ? { readOnly: true } : {}),
+      caller: {
+        tenantId: identity.tenantId,
+        externalUserId: identity.externalUserId,
+      },
+    };
+    const fragments: TurnContextFragment[] = [];
+    if (this.agentCapabilities)
+      fragments.push(
+        await this.agentCapabilities.prompt({
+          allocationId: session.allocation_id ?? undefined,
+          identity,
+          projectId,
+          sessionId,
+          workingDirectory,
+          ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
+        }),
+      );
+    if (agent.harness.placement === "host" && agent.harness.context)
+      fragments.push(...(await agent.harness.context(context)));
+
+    // The caller's view of the store, in the folder the agent works in
+    // (ADR 0055): pulled before the turn, shipped after it.
+    const storeDir = parseWorkspaceBase(session.workspace)
+      ? null
+      : await this.storeSyncDir(
+          identity,
+          projectId,
+          workspace,
+          sessionId,
+          this.usesSessionCopy(session),
+        );
+    if (storeDir)
+      await syncRemoteProject(
+        storeDir,
+        documentsClientFor(this.storeSync!.documents, identity, projectId, {
+          source: "store",
+        }),
+      ).catch((error) =>
+        console.warn(
+          `[catamorphic] store pull before turn failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+
+    const plugins = await this.loadAttachedPlugins(projectId);
+    if (plugins?.length) {
+      const files = stagedPluginFiles(plugins);
+      if (
+        workspace.sandboxProviderId &&
+        runtime.provider &&
+        Object.keys(files).length > 0
+      )
+        await runtime.provider.uploadFiles(
+          workspace.sandboxProviderId,
+          files,
+          workingDirectory,
+        );
+      else if (!workspace.sandboxProviderId)
+        await stagePluginDocs(workingDirectory, plugins);
+    }
+    const instructions = buildAgentSystemPrompt({
+      systemPrompt:
+        [
+          agent.systemPrompt,
+          session.system_prompt,
+          agent.harness.placement === "host"
+            ? agent.harness.instructions
+            : undefined,
+          plugins?.length ? buildPluginsPreamble(plugins, {}) : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n") || undefined,
+      standingPrompt: this.standingAgentPrompt,
+    });
+
+    const tools = await this.hostToolsFor({
+      identity,
+      session,
+      agent,
+      turnId: turn.id,
+      workingDirectory,
+    });
+    const ownPolicies =
+      agent.harness.placement === "host"
+        ? agent.harness.toolPolicies?.()
+        : undefined;
+    const callerLayers = withAgentLayers(
+      await this.callerToolPolicies(identity, projectId, session.agent_id),
+      agent,
+    );
+    const toolPolicies =
+      mergePolicyLayers(
+        ownPolicies,
+        callerLayers ? { ...callerLayers } : undefined,
+      ) ?? {};
+    const mcpServers: Record<string, AgentMcpServerConfig> = {
+      ...(agent.harness.placement === "host"
+        ? agent.harness.mcpServers?.(context)
+        : {}),
+      ...(await this.connectionMcpServers(identity, session)),
+    };
+    const checkpointBefore = await this.workspaceHead({
+      identity,
+      session,
+      agent,
+      workspace,
+    }).catch(() => null);
+    const stateDirectory = runtime.provider
+      ? `${runtime.provider.workspaceRoot}/${SESSION_DIRECTORY}`
+      : workingDirectory;
+    const configured = agent.defaults?.harnessPermissions ?? {};
+    // A read-only chat runs in its harness's read-only mode (ADR 0271).
+    const harnessPermissions = session.read_only
+      ? readOnlyPermissions({
+          harness: harnessIdOf(agent),
+          permissions: configured,
+        })
+      : configured;
+    if (!harnessPermissions)
+      throw new Error(
+        `This chat runs read-only, and ${harnessIdOf(agent)} has no read-only mode.`,
+      );
+    const permissions = protocolJson(harnessPermissions);
+    const start: PreparedAttempt["start"] = {
+      harness: harnessIdOf(agent),
+      workingDirectory,
+      stateDirectory,
+      systemPrompt: instructions,
+      context: renderTurnContext(fragments),
+      ...((session.model ?? agent.defaults?.model)
+        ? { model: session.model ?? agent.defaults?.model }
+        : {}),
+      ...((session.model_effort ?? agent.defaults?.effort)
+        ? {
+            effort:
+              (session.model_effort as AgentEffort | null) ??
+              agent.defaults?.effort,
+          }
+        : {}),
+      permissions,
+      modelAccess,
+      toolPolicies: protocolPolicies(toolPolicies),
+      toolAnnotations:
+        agent.harness.placement === "host"
+          ? (agent.harness.toolAnnotations?.() ?? {})
+          : {},
+      mcpServers: protocolMcpServers(mcpServers),
+      hostTools: tools.map(hostToolDescriptor),
+      plugins:
+        agent.harness.placement === "host"
+          ? [...(agent.harness.plugins ?? [])]
+          : [],
+      env: agent.harness.placement === "host" ? { ...agent.harness.env } : {},
+      // A runner beside the workspace loads the gateway's variables and
+      // the session's secrets for every attempt (ADRs 0206, 0212); a
+      // missing file adds nothing.
+      ...(agent.harness.placement === "sandbox" && runtime.provider
+        ? {
+            envFiles: sandboxEnvFiles({
+              workspaceRoot: runtime.provider.workspaceRoot,
+            }),
+          }
+        : {}),
+      options: protocolJson(agent.options ?? {}),
+    };
+    const harness = agent.harness;
+    const provider = runtime.provider;
+    const sandboxProviderId = workspace.sandboxProviderId;
+    const delivered = Object.keys(secrets).length > 0;
+    const secretValues = await secretValuesOfChat();
+    return {
+      start,
+      notes: notes.filter(Boolean),
+      checkpointBefore,
+      ownerOnly,
+      ...(ownerOnly && ownerOnlyBecause ? { ownerOnlyBecause } : {}),
+      ...(Object.keys(secretValues).length > 0 ? { secretValues } : {}),
+      launch: async () => {
+        if (harness.placement === "host")
+          return startInProcessRunner({
+            adapter: harness.adapter,
+            local: {
+              ...harness.local?.(context),
+              ...(provider && sandboxProviderId
+                ? {
+                    sandbox: {
+                      provider,
+                      sandboxId: sandboxProviderId,
+                      workingDirectory,
+                      // Its commands load the gateway's variables and the
+                      // session's secrets (ADRs 0206, 0212), named from
+                      // where they start.
+                      envFiles: sandboxEnvFiles({
+                        workspaceRoot: provider.workspaceRoot,
+                      }).map((file) =>
+                        path.posix.relative(workingDirectory, file),
+                      ),
+                      ...(runtime.commandTimeoutSeconds
+                        ? {
+                            commandBudgetSeconds: runtime.commandTimeoutSeconds,
+                          }
+                        : {}),
+                    },
+                  }
+                : {}),
+            },
+          });
+        if (!provider || !sandboxProviderId || !session.allocation_id)
+          throw new Error(
+            "This agent runs in the session's sandbox, and the chat has none.",
+          );
+        return startSandboxRunner({
+          provider,
+          allocationId: session.allocation_id,
+          sandboxId: sandboxProviderId,
+          stateDirectory,
+          ...(delivered
+            ? {
+                env: {
+                  BASH_ENV: sandboxSecretsFile({
+                    workspaceRoot: provider.workspaceRoot,
+                  }),
+                },
+              }
+            : {}),
+        });
+      },
+    };
+  }
+
+  /** The workspace's current commit: what a rollback of this turn restores. */
+  private async workspaceHead(input: {
+    identity: Identity;
+    session: SessionRow;
+    agent: RegisteredCodingAgent;
+    workspace: { workingDirectory: string; sandboxProviderId?: string };
+  }): Promise<string | null> {
+    if (input.agent.topology === "native")
+      return (
+        (await this.nativeAgentCheckout?.head?.({
+          workingDirectory: input.workspace.workingDirectory,
+        })) ?? null
+      );
+    if (!this.usesSessionCopy(input.session)) return null;
+    const copy = await this.projectManager.openSession({
+      tenantId: input.identity.tenantId,
+      projectId: input.session.project_id,
+      sessionId: input.session.id,
+    });
+    try {
+      return await copy.resolveRef("HEAD");
+    } finally {
+      await copy.dispose();
+    }
+  }
+
+  /**
+   * After the harness finished (ADR 0198), safe to do again: sync the
+   * sandbox's changes back, ship the store, and commit the checkpoint.
+   */
+  private async finalizeTurn(input: {
+    identity: Identity;
+    session: SessionRow;
+    turn: Turn;
+    inputText: string;
+    completion: { status: "completed" | "failed" | "interrupted" };
+  }): Promise<FinalizedTurn> {
+    const { identity, turn } = input;
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", input.session.id)
+      .executeTakeFirstOrThrow();
+    const projectId = session.project_id;
+    const sessionId = session.id;
+    this.stopGrantRenewal(sessionId);
+    const agent = await this.resolveAgent(session.agent_id, projectId);
+    const runtime = await this.resolveExecutionRuntime(
+      identity,
+      projectId,
+      session,
+      agent,
+    );
+    const sandboxProviderId =
+      session.sandbox_id && runtime.provider
+        ? await this.resolveSandboxProviderId(session, runtime.provider).catch(
+            () => undefined,
+          )
+        : undefined;
+    const workingDirectory =
+      agent.topology === "native" && this.nativeAgentCheckout
+        ? ((
+            await this.nativeAgentCheckout.resolve({
+              projectId,
+              sessionId,
+              bindingId: runtime.bindingId,
+              environmentName: runtime.environmentName,
+            })
+          )?.path ??
+          this.workingDirectories.get(turn.id) ??
+          "")
+        : runtime.provider
+          ? this.projectDir(runtime.provider)
+          : "";
+    this.workingDirectories.set(turn.id, workingDirectory);
+    const keepsChangesInSandbox = Boolean(
+      sandboxProviderId && agent.sandboxing === "contained",
+    );
+    let workspaceSyncError: string | undefined;
+    const changedFiles: SyncedFileChange[] = keepsChangesInSandbox
+      ? []
+      : sandboxProviderId && runtime.provider
+        ? await this.syncBackChanges(
+            runtime.provider,
+            identity,
+            projectId,
+            sandboxProviderId,
+            this.usesSessionCopy(session) ? sessionId : undefined,
+          ).catch((error: unknown) => {
+            if (!(error instanceof SandboxSyncError)) throw error;
+            console.warn(
+              `[catamorphic] Session ${sessionId}: ${error.message}`,
+            );
+            workspaceSyncError = error.message;
+            return [];
+          })
+        : await this.changedFilesOfTurn(turn.id, workingDirectory);
+    let storeSync: JsonObject | undefined;
+    const storeDir =
+      sandboxProviderId && !parseWorkspaceBase(session.workspace)
+        ? await this.storeSyncDir(
+            identity,
+            projectId,
+            { sandboxProviderId },
+            sessionId,
+            this.usesSessionCopy(session),
+          )
+        : null;
+    if (storeDir && !keepsChangesInSandbox) {
+      try {
+        const report = await shipRemoteProject(
+          storeDir,
+          documentsClientFor(this.storeSync!.documents, identity, projectId, {
+            source: "store",
+          }),
+        );
+        if (
+          report.shipped.length +
+            report.deleted.length +
+            report.conflicts.length +
+            report.notShippable.length +
+            report.failed.length >
+          0
+        )
+          storeSync = protocolJson(report) as JsonObject;
+      } catch (error) {
+        storeSync = {
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    let failure: TurnError | undefined;
+    let checkpointAfter: string | null = null;
+    if (
+      !keepsChangesInSandbox &&
+      (agent.topology === "native" || changedFiles.length > 0)
+    ) {
+      try {
+        checkpointAfter = await this.checkpointTurn(
+          identity,
+          projectId,
+          input.inputText,
+          {
+            sessionId,
+            workingDirectory,
+            nativeExecution: agent.topology === "native",
+            // A native agent's checkout is the host's: no session copy there.
+            sessionCopy:
+              agent.topology !== "native" && this.usesSessionCopy(session),
+          },
+        );
+      } catch (error) {
+        failure = {
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    let usage = turn.outcome?.usage;
+    if (!usage && agent.modelConnection)
+      usage = await this.sandboxGateway
+        ?.turnUsage?.({ sessionId, turnId: turn.id })
+        .catch(() => undefined);
+    const inputRow = turn.inputItemId
+      ? await this.db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", turn.inputItemId)
+          .executeTakeFirst()
+      : undefined;
+    const inputItem = inputRow ? itemFromRow(inputRow) : null;
+    // A workflow's chat alerts its people when the turn it started settles.
+    const notification =
+      inputItem?.kind === "inbound_message" &&
+      inputItem.from.kind === "workflow" &&
+      input.completion.status !== "interrupted"
+        ? inputItem.alert
+        : undefined;
+    return {
+      outcome: {
+        changedFiles: changedFiles.map((change) => ({
+          path: change.path,
+          kind: change.kind,
+        })),
+        ...(usage ? { usage } : {}),
+        ...(storeSync ? { storeSync: protocolJson(storeSync) } : {}),
+        ...(workspaceSyncError
+          ? { workspaceSync: { error: workspaceSyncError } }
+          : {}),
+        ...(notification ? { notification } : {}),
+      },
+      checkpointAfter,
+      ...(failure ? { failure } : {}),
+    };
+  }
+
+  /** Files a native turn changed, from its file change items. */
+  /**
+   * Changed files of a host-execution turn: there is no sandbox baseline to
+   * diff, so the harness's file items are the record, relative to the
+   * checkout so they read like repository paths.
+   */
+  private async changedFilesOfTurn(
+    turnId: string,
+    workingDirectory: string,
+  ): Promise<SyncedFileChange[]> {
+    const root = workingDirectory.endsWith("/")
+      ? workingDirectory
+      : `${workingDirectory}/`;
+    const rows = await this.db
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("turn_id", "=", turnId)
+      .where("kind", "=", "file_change")
+      .execute();
+    const paths = new Map<string, SyncedFileChange>();
+    for (const row of rows) {
+      const item = itemFromRow(row);
+      if (item.kind !== "file_change" || !item.path) continue;
+      const path =
+        workingDirectory && item.path.startsWith(root)
+          ? item.path.slice(root.length)
+          : item.path;
+      paths.set(path, {
+        path,
+        kind: item.change === "deleted" ? "deleted" : "modified",
+      });
+    }
+    return [...paths.values()];
+  }
+
+  /** After a turn settled: its delegation, notifications and the host's hook. */
+  private async afterTurn(input: {
+    identity: Identity;
+    session: SessionRow;
+    turn: Turn;
+    reply: Item | null;
+    retrying: boolean;
+  }): Promise<void> {
+    const { turn } = input;
+    const workingDirectory = this.workingDirectories.get(turn.id) ?? "";
+    this.workingDirectories.delete(turn.id);
+    // An interrupted or cancelled turn is no result: whoever stopped it
+    // (the person, an archive) tells the parent.
+    if (
+      !input.retrying &&
+      (turn.status === "completed" || turn.status === "failed")
+    )
+      await this.settleDelegation({
+        identity: input.identity,
+        projectId: input.session.project_id,
+        sessionId: input.session.id,
+        resultMessageId:
+          input.reply?.id ?? input.turn.inputItemId ?? input.turn.id,
+        status: turn.status === "completed" ? "completed" : "failed",
+        content:
+          input.reply?.kind === "assistant_message" && input.reply.text
+            ? input.reply.text
+            : (turn.error?.message ?? ""),
+      });
+    if (!this.onTurnSettled) return;
+    const event: AgentTurnSettledEvent = {
+      identity: input.identity,
+      projectId: input.session.project_id,
+      sessionId: input.session.id,
+      turnId: turn.id,
+      messageId: input.reply?.id ?? turn.inputItemId ?? turn.id,
+      status: turn.status === "completed" ? "completed" : "failed",
+      agentId: input.session.agent_id,
+      ...(turn.status === "failed" && turn.error?.kind
+        ? { errorKind: turn.error.kind }
+        : {}),
+      interrupted: turn.status === "interrupted",
+      retrying: input.retrying,
+      ...(turn.outcome?.notification
+        ? { notification: turn.outcome.notification }
+        : {}),
+      changedFiles: (turn.outcome?.changedFiles ?? []).map(
+        (change) => change.path,
+      ),
+      workingDirectory,
+    };
+    await Promise.resolve()
+      .then(() => this.onTurnSettled?.(event))
+      .catch((error) =>
+        console.warn(
+          `[catamorphic] onTurnSettled hook failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+  }
+
+  /** Sessions whose chats show as running now, on any replica. */
+  private runningSessionIds(sessionIds: string[]): Promise<Set<string>> {
+    return this.sessionsWithRunningTurns({ sessionIds });
+  }
+
   async create(
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       systemPrompt?: string;
       agentId?: string;
@@ -1555,6 +5982,8 @@ export class AgentSessionsService {
       source?: AgentSessionSource;
       parentSessionId?: string;
       title?: string;
+      /** Start the workspace at a ref of the project's linked remote. */
+      workspace?: SessionWorkspaceRequest;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -1576,6 +6005,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       origin?: SessionOperationOrigin;
       systemPrompt?: string;
@@ -1584,14 +6014,19 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       title?: string;
-      wakeKey?: string;
+      chatKey?: string;
+      /** The workflow that started a keyed chat. */
+      chatWorkflow?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
+      /** Run in the harness's read-only mode (a subsession, ADR 0271). */
+      readOnly?: boolean;
       transaction?: Transaction<DB>;
       prepared?: PreparedSessionCreate;
+      workspace?: SessionWorkspaceRequest;
     },
   ): Promise<AgentSession> {
     if (input.sourceActionId && !input.transaction) {
@@ -1608,14 +6043,16 @@ export class AgentSessionsService {
       (await this.prepareSessionCreate(identity, projectId, input));
     const insert = async (transaction: Transaction<DB>) => {
       if (input.origin)
-        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+        await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
+      input.signal?.throwIfAborted();
       return prepared.insert(transaction);
     };
     const row = input.transaction
       ? await insert(input.transaction)
       : await this.db.transaction().execute(insert);
+    this.chatsChanged();
 
     return mapSession(row, false, this.hostId, this.authorityLeaseMs, {
       visibility: prepared.visibility,
@@ -1627,6 +6064,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       systemPrompt?: string;
       agentId?: string;
@@ -1634,12 +6072,17 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       title?: string;
-      wakeKey?: string;
+      chatKey?: string;
+      /** The workflow that started a keyed chat. */
+      chatWorkflow?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
       visibility?: Exclude<SessionVisibility, "archived">;
       allowFurtherDelegation?: boolean;
+      /** Run in the harness's read-only mode (a subsession, ADR 0271). */
+      readOnly?: boolean;
+      workspace?: SessionWorkspaceRequest;
     },
   ): Promise<PreparedSessionCreate> {
     await this.requireProject(identity, projectId);
@@ -1691,7 +6134,10 @@ export class AgentSessionsService {
     const systemPrompt = [
       relationshipPrompt,
       input.systemPrompt,
-      this.delegationPrompt(
+      input.readOnly && !input.systemPrompt?.includes(READ_ONLY_NOTE)
+        ? READ_ONLY_NOTE
+        : null,
+      await this.delegationPrompt(
         identity,
         projectId,
         agent,
@@ -1700,7 +6146,9 @@ export class AgentSessionsService {
     ]
       .filter((part): part is string => Boolean(part))
       .join("\n\n");
-    const admitted = await this.executionEnvironments.admit({
+    // With no machine free, a chat in an Environment that lets work wait
+    // starts without a workspace and its first turn waits (ADR 0258).
+    const placed = await this.executionEnvironments.admitOrWait({
       identity,
       projectId,
       environment: input.environment,
@@ -1711,7 +6159,14 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
     });
+    const admitted = "admission" in placed ? placed.admission : undefined;
+    const environmentName = admitted
+      ? admitted.environmentName
+      : "wait" in placed
+        ? placed.wait.environmentName
+        : "";
     const requirements = agent.connectionRequirements ?? [];
     if (requirements.length > 0 && !this.connectionAdmission) {
       throw new Error("Connection providers are not configured");
@@ -1721,29 +6176,80 @@ export class AgentSessionsService {
         ? await this.connectionAdmission!.admit({
             identity,
             projectId,
-            environment: admitted.environmentName,
+            environment: environmentName,
             requirements,
+            // A project chat is unattended: service connections only (ADR 0181).
+            unattended: isProjectPrincipal(identity.externalUserId),
           })
         : [];
+    // A workspace at a ref starts from that commit (ADR 0178): fetched into
+    // the host's mirror and, for sandbox agents, published as the session's
+    // branch before the first turn seeds its sandbox from it.
+    const workspace = input.workspace
+      ? await this.requireWorkspaces().fetch({
+          identity,
+          projectId,
+          sessionId,
+          ref: input.workspace.ref,
+          pin: basePin(sessionId),
+          bindings: connections,
+        })
+      : null;
+    input.signal?.throwIfAborted();
+    if (workspace && agent.topology !== "native")
+      await this.projectManager.setSessionBase({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId,
+        pin: basePin(sessionId),
+        commit: workspace.commit,
+      });
 
     const visibility = input.visibility ?? "promoted";
     return {
       visibility,
       insert: async (transaction: Transaction<DB>) => {
-        const allocation = await this.executionAllocations.create({
-          identity,
-          projectId,
-          environmentName: admitted.environmentName,
-          workloadKind: "agent",
-          rootWorkloadId: sessionId,
-          workerNodeId: admitted.runtime.workerNodeId,
-          policy: {
-            binding: admitted.binding,
-            requirements: admitted.effectiveRequirements,
-            connections,
-          },
-          transaction,
-        });
+        input.signal?.throwIfAborted();
+        // The machine admitted may fill up before the Allocation is made:
+        // the chat then waits too, where its Environment lets it.
+        const allocation = admitted
+          ? await this.executionAllocations
+              .create({
+                identity,
+                projectId,
+                environmentName: admitted.environmentName,
+                workloadKind: "agent",
+                rootWorkloadId: sessionId,
+                workerNodeId: admitted.runtime.workerNodeId,
+                policy: admissionPolicy({ admission: admitted, connections }),
+                transaction,
+              })
+              .catch((error: unknown) => {
+                if (
+                  error instanceof EnvironmentCapacityError &&
+                  admitted.wait.waitMinutes > 0
+                )
+                  return undefined;
+                throw error;
+              })
+          : undefined;
+        const wait: PlacementWaitTarget | undefined =
+          "wait" in placed
+            ? placed.wait
+            : allocation || !admitted
+              ? undefined
+              : { ...admitted.wait, reason: "capacity" };
+        if (wait)
+          await this.placementWaits.record({
+            tenantId: identity.tenantId,
+            projectId,
+            workloadKind: "agent",
+            rootWorkloadId: sessionId,
+            target: wait,
+            limitMinutes: wait.waitMinutes,
+            transaction,
+          });
+        input.signal?.throwIfAborted();
         const session = await transaction
           .insertInto("agent_sessions")
           .values({
@@ -1751,22 +6257,27 @@ export class AgentSessionsService {
             source_action_id: input.sourceActionId ?? null,
             project_id: projectId,
             external_user_id: identity.externalUserId,
-            provider: agent.provider.name,
             source: input.source ?? "api",
-            provider_session_id: null,
             agent_id: selectedAgentId ?? null,
             model: input.model || null,
             model_effort: input.effort ?? null,
+            read_only: input.readOnly === true,
             system_prompt: systemPrompt || null,
             sandbox_id: null,
-            allocation_id: allocation.id,
-            environment_name: admitted.environmentName,
+            allocation_id: allocation?.id ?? null,
+            environment_name: environmentName,
+            placement:
+              allocation && admitted
+                ? toPlacementJson(placementOf(admitted))
+                : null,
             status: "active",
             title: input.title ?? null,
-            wake_key: input.wakeKey ?? null,
+            chat_key: input.chatKey ?? null,
+            chat_workflows: input.chatWorkflow ? [input.chatWorkflow] : [],
             parent_session_id: input.parentSessionId ?? null,
             forked_from_session_id: input.forkedFromSessionId ?? null,
             base_commit_sha: null,
+            workspace: workspace ? workspaceJson(workspace) : null,
             authority_host_id: this.hostId,
             authority_revision: 1,
           })
@@ -1782,32 +6293,1488 @@ export class AgentSessionsService {
             previous_visibility: visibility,
           })
           .execute();
+        input.signal?.throwIfAborted();
         return session;
       },
     };
   }
 
   /**
-   * Create or reuse one stable session for a workflow and queue a turn in it.
-   * The queued message asks clients to surface the session only after the turn
-   * settles, so a scheduled agent never steals focus while it is working.
+   * Ask an open chat's workspace to move to a ref of the project's linked
+   * remote (ADR 0178). The ref is fetched now, so the move names the commit
+   * it pointed at when delivered; the move itself happens before the chat's
+   * next turn, and the agent is told what changed. Asking for the base the
+   * chat already stands on changes nothing.
    */
-  async wake(
+  async requestWorkspace(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    workspace: SessionWorkspaceRequest,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active")
+      throw new AgentSessionClosedError(sessionId);
+    const target = await this.requireWorkspaces().fetch({
+      identity,
+      projectId,
+      sessionId,
+      ref: workspace.ref,
+      pin: movePin(sessionId),
+      bindings: await this.sessionBindings(identity, session),
+    });
+    const current = parseWorkspaceBase(session.workspace);
+    const move: SessionWorkspaceMove = {
+      ...target,
+      update: workspace.update ?? "rebase",
+    };
+    options.signal?.throwIfAborted();
+    await this.db.transaction().execute(async (trx) => {
+      options.signal?.throwIfAborted();
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          workspace_move:
+            current?.commit === target.commit && current.ref === target.ref
+              ? null
+              : workspaceMoveJson(move),
+          updated_at: new Date(),
+        })
+        .where("id", "=", sessionId)
+        .execute();
+      options.signal?.throwIfAborted();
+    });
+  }
+
+  /** The connection bindings of the session's current Allocation. */
+  private async sessionBindings(
+    identity: Identity,
+    session: Pick<SessionRow, "allocation_id">,
+  ) {
+    if (!session.allocation_id) return [];
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    return allocation?.policy.connections ?? [];
+  }
+
+  private requireWorkspaces(): SessionWorkspaces {
+    if (!this.workspaces)
+      throw new Error(
+        "This host does not start workspaces at a ref of the project's remote",
+      );
+    return this.workspaces;
+  }
+
+  /**
+   * Whether this session works in its own copy (`session-<id>`) rather than
+   * its member's draft: every session on a worker host, and a session
+   * whose workspace stands on a ref (ADR 0178).
+   */
+  private usesSessionCopy(session: Pick<SessionRow, "workspace">): boolean {
+    return (
+      Boolean(this.workerNode) || parseWorkspaceBase(session.workspace) !== null
+    );
+  }
+
+  /**
+   * Move the workspace to the base a delivery asked for (ADR 0178), in the
+   * session's copy (sandbox agents) or in the checkout the agent works in
+   * (native agents). Only a checkout the session owns moves: a person's own
+   * folder is never reset or rebased. Returns what the agent is told.
+   */
+  private async applyWorkspaceMove(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    move: SessionWorkspaceMove;
+    /** Present for native agents: the checkout they work in. */
+    native?: { checkout: NativeCheckout | undefined };
+  }): Promise<string> {
+    const { identity, projectId, session, move } = input;
+    const workspaces = this.requireWorkspaces();
+    // Settle only the move this call applies: a delivery that asked for
+    // another base meanwhile keeps its move for the next turn.
+    const settleMove = (workspace?: SessionWorkspaceBase): Promise<unknown> =>
+      this.db
+        .updateTable("agent_sessions")
+        .set({
+          ...(workspace ? { workspace: workspaceJson(workspace) } : {}),
+          workspace_move: sql<Json>`case when workspace_move = ${jsonbText(
+            workspaceMoveJson(move),
+          )}::jsonb then null else workspace_move end`,
+        })
+        .where("id", "=", session.id)
+        .execute();
+    if (input.native && !input.native.checkout?.owned) {
+      await settleMove();
+      return workspaceMoveRefusedNote({ to: move });
+    }
+    const checkout = input.native?.checkout?.path;
+    const pin = movePin(session.id);
+    const bindings = await this.sessionBindings(identity, session);
+    // Another replica may have fetched the move; make sure this mirror has it.
+    const target = await workspaces
+      .fetch({
+        identity,
+        projectId,
+        sessionId: session.id,
+        ref: move.commit,
+        pin,
+        bindings,
+      })
+      .catch(() =>
+        workspaces.fetch({
+          identity,
+          projectId,
+          sessionId: session.id,
+          ref: move.ref,
+          pin,
+          bindings,
+        }),
+      );
+    const to: SessionWorkspaceBase = { ref: move.ref, commit: target.commit };
+    const current = parseWorkspaceBase(session.workspace);
+    const fromCommit = current?.commit ?? session.base_commit_sha;
+    const update = fromCommit ? move.update : "reset";
+    const outcome = checkout
+      ? await moveCheckoutBase({
+          repoPath: checkout,
+          mirrorPath: workspaces.mirrorPath({
+            tenantId: identity.tenantId,
+            projectId,
+          }),
+          pin,
+          from: fromCommit ?? to.commit,
+          to: to.commit,
+          update,
+        })
+      : await this.projectManager.moveSessionBase({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId: session.id,
+          pin,
+          from: fromCommit ?? to.commit,
+          to: to.commit,
+          update,
+        });
+    if (outcome.status === "moved")
+      await workspaces.fetch({
+        identity,
+        projectId,
+        sessionId: session.id,
+        ref: to.commit,
+        pin: basePin(session.id),
+      });
+    await settleMove(outcome.status === "moved" ? to : undefined);
+    return workspaceMoveNote({
+      from: current,
+      to,
+      update,
+      outcome,
+      changed: fromCommit
+        ? await workspaces
+            .changedFiles({
+              tenantId: identity.tenantId,
+              projectId,
+              from: fromCommit,
+              to: to.commit,
+            })
+            .catch(() => null)
+        : null,
+    });
+  }
+
+  /**
+   * Git in a sandbox turn (ADRs 0175, 0178): seed the repository at the
+   * workspace base when it is not there yet, and write the session's
+   * gateway grants and Git configuration.
+   */
+  private async prepareSandboxGit(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** The sandbox holds its base and what a setup made on it (ADR 0257). */
+    afterSetup?: boolean;
+  }): Promise<readonly SandboxModelGateway[]> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select(["workspace", "allocation_id"])
+      .where("id", "=", input.sessionId)
+      .executeTakeFirstOrThrow();
+    const base = parseWorkspaceBase(row.workspace);
+    if (base) {
+      const copy = await this.projectManager.openSession({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+      });
+      try {
+        await seedSandboxRepository({
+          provider: input.provider,
+          sandboxId: input.sandboxProviderId,
+          projectDir: this.projectDir(input.provider),
+          sessionCopyPath: copy.repoPath,
+          head: await copy.resolveRef("HEAD"),
+          base: base.commit,
+          branch: `work/${input.sessionId.replaceAll("-", "").slice(0, 8)}`,
+          originUrl: await this.linkedRemoteUrl(
+            input.identity,
+            input.projectId,
+          ),
+          ...(input.afterSetup ? { afterSetup: true } : {}),
+        });
+      } finally {
+        await copy.dispose();
+      }
+    }
+    // Git through the gateway is a convenience of the turn, not a condition
+    // of it: the agent still works in its checkout if it cannot be set up.
+    // A harness that needs its model says so when it cannot reach it.
+    if (!row.allocation_id) return [];
+    return this.configureSandboxGateway({
+      identity: input.identity,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      allocationId: row.allocation_id,
+      ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
+      provider: input.provider,
+      sandboxProviderId: input.sandboxProviderId,
+      renewOnly: false,
+    }).catch((error: unknown) => {
+      console.warn(
+        `[catamorphic] Could not configure the gateway for session ${input.sessionId}`,
+        error,
+      );
+      return [];
+    });
+  }
+
+  /**
+   * Issue the session's sandbox grants (ADRs 0175, 0180, 0212) for its
+   * aliases served to sandboxes, Git, models and HTTP APIs, and write them
+   * into the sandbox, with the Git configuration and the variables naming
+   * each HTTP alias unless renewing. Returns how the sandbox reaches each
+   * model alias.
+   */
+  private async configureSandboxGateway(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    allocationId: string;
+    modelTurn?: { turnId: string; attemptId: string; leaseToken: string };
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    renewOnly: boolean;
+  }): Promise<SandboxModelGateway[]> {
+    const grants = this.connectionGrants;
+    const gateway = this.sandboxGateway;
+    if (!grants || !gateway) return [];
+    const allocation = await this.executionAllocations.get({
+      identity: input.identity,
+      allocationId: input.allocationId,
+    });
+    if (allocation?.status !== "active") return [];
+    const bindings = (allocation.policy.connections ?? []).flatMap(
+      (binding) => {
+        const remoteBaseUrls = gateway.remoteBaseUrls(binding.providerKind);
+        const git =
+          remoteBaseUrls?.length &&
+          binding.capabilities.some((capability) =>
+            capability.startsWith("git:"),
+          )
+            ? remoteBaseUrls
+            : undefined;
+        const api = binding.capabilities.includes(MODEL_CAPABILITY)
+          ? gateway.modelApi(binding.providerKind)
+          : undefined;
+        const http =
+          binding.capabilities.some(isHttpMethodCapability) &&
+          gateway.servesHttp(binding.providerKind);
+        return git || api || http
+          ? [{ alias: binding.alias, git, api, http }]
+          : [];
+      },
+    );
+    if (bindings.length === 0) return [];
+    const url = gateway
+      .url({ projectId: input.projectId, sessionId: input.sessionId })
+      ?.replace(/\/+$/, "");
+    if (!url) {
+      console.warn(
+        "[catamorphic] The gateway is not reachable from sandboxes; Git, model and HTTP aliases are unavailable",
+      );
+      return [];
+    }
+    // The previous grants stay live until the sandbox holds the new ones,
+    // so a harness reading its grant file between the two still has a live
+    // one (ADR 0255); then they are revoked.
+    const issued = [];
+    for (const binding of bindings) {
+      const grant = await grants.issue({
+        identity: input.identity,
+        allocationId: input.allocationId,
+        agentSessionId: input.sessionId,
+        ...(input.modelTurn ? { modelTurn: input.modelTurn } : {}),
+        alias: binding.alias,
+        ttlSeconds: 3600,
+        channel: "sandbox",
+        keepPrevious: true,
+      });
+      issued.push({
+        alias: binding.alias,
+        grant: grant.token,
+        id: grant.id,
+        publicationRevision: grant.publicationRevision,
+        ...(binding.api && input.modelTurn
+          ? { modelAttemptId: input.modelTurn.attemptId }
+          : {}),
+      });
+    }
+    await configureSandboxGateway({
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      gatewayGitUrl: `${url}/git`,
+      grants: issued,
+      gitAliases: bindings.flatMap((binding) =>
+        binding.git
+          ? [{ alias: binding.alias, remoteBaseUrls: binding.git }]
+          : [],
+      ),
+      httpAliases: bindings.flatMap((binding) =>
+        binding.http
+          ? [{ alias: binding.alias, url: `${url}/http/${binding.alias}` }]
+          : [],
+      ),
+      renewOnly: input.renewOnly,
+    });
+    for (const grant of issued)
+      await grants.revokeOthers({
+        agentSessionId: input.sessionId,
+        alias: grant.alias,
+        channel: "sandbox",
+        keepId: grant.id,
+      });
+    return bindings.flatMap((binding) =>
+      binding.api
+        ? [
+            {
+              alias: binding.alias,
+              api: binding.api,
+              baseUrl: `${url}/model/${binding.alias}`,
+              grantDirectory: sandboxGrantDirectory({
+                provider: input.provider,
+                alias: binding.alias,
+                ...(input.modelTurn
+                  ? { modelAttemptId: input.modelTurn.attemptId }
+                  : {}),
+              }),
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** Keep a running turn's sandbox grants fresh (ADRs 0175, 0180). */
+  private startGrantRenewal(
+    input: Parameters<AgentSessionsService["configureSandboxGateway"]>[0],
+  ): void {
+    const previous = this.grantRenewals.get(input.sessionId);
+    if (previous) clearInterval(previous);
+    let renewing = false;
+    const timer = setInterval(() => {
+      if (renewing) return;
+      renewing = true;
+      void this.configureSandboxGateway({ ...input, renewOnly: true })
+        .catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not renew the sandbox grants of session ${input.sessionId}`,
+            error,
+          ),
+        )
+        .finally(() => {
+          renewing = false;
+        });
+    }, GRANT_RENEWAL_MS);
+    timer.unref?.();
+    this.grantRenewals.set(input.sessionId, timer);
+  }
+
+  private stopGrantRenewal(sessionId: string): void {
+    const timer = this.grantRenewals.get(sessionId);
+    if (timer) clearInterval(timer);
+    this.grantRenewals.delete(sessionId);
+    const mcp = this.mcpGrantRenewals.get(sessionId);
+    if (mcp) clearInterval(mcp);
+    this.mcpGrantRenewals.delete(sessionId);
+  }
+
+  /**
+   * Keep a turn's connection tools reachable (#122). The harness holds its
+   * connection MCP grants in static headers from anchoring, which may be
+   * days old for a long-lived chat, so the turn extends the same grants
+   * before it runs and every renewal tick while it runs.
+   */
+  private async keepConnectionGrants(sessionId: string): Promise<void> {
+    const grants = this.connectionGrants;
+    if (!grants) return;
+    const extend = () =>
+      grants
+        .extend({ agentSessionId: sessionId, channel: "mcp" })
+        .catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not renew the connection grants of session ${sessionId}`,
+            error,
+          ),
+        );
+    await extend();
+    const previous = this.mcpGrantRenewals.get(sessionId);
+    if (previous) clearInterval(previous);
+    const timer = setInterval(() => void extend(), GRANT_RENEWAL_MS);
+    timer.unref?.();
+    this.mcpGrantRenewals.set(sessionId, timer);
+  }
+
+  /**
+   * The Environment's secrets in a sandbox turn (ADR 0206): written to the
+   * session's secrets file where the placement isolates the work's owner
+   * and, in a member's own chat, the owner wrote everything the turn
+   * answers; taken back out otherwise. Returns the values delivered (the
+   * turn's output masks them), whether the turn must stay the owner's
+   * own, and a note for the agent about listed secrets it did not get.
+   */
+  private async prepareSandboxSecrets(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    environment: string;
+    /** The placement isolates the work's owner. */
+    isolated: boolean;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** The owner wrote everything the turn answers. */
+    ownerAuthored: boolean;
+  }): Promise<{
+    values: Record<string, string>;
+    ownerOnly: boolean;
+    note?: string;
+  }> {
+    const { identity, projectId, session, environment } = input;
+    const service = this.secrets;
+    const none = { values: {}, ownerOnly: false };
+    if (!service) return none;
+    const target = {
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+    };
+    const owner = placementOwner(session.external_user_id);
+    // Recorded before any delivery, whichever path made it (a turn, a
+    // person opening the workspace), so what one left is always taken out.
+    const held =
+      (
+        await this.db
+          .selectFrom("agent_sessions")
+          .select("secrets_held_at")
+          .where("id", "=", session.id)
+          .executeTakeFirst()
+      )?.secrets_held_at != null;
+    const withdraw = async () => {
+      if (held) await removeSandboxSecrets(target);
+    };
+    const listed = await service.environmentSecrets({
+      identity,
+      projectId,
+      environment,
+    });
+    if (listed.length === 0) {
+      // Listed no longer (or never): take out what an earlier turn left.
+      await withdraw();
+      return none;
+    }
+    const names = listed.join(", ");
+    if (!input.isolated || (owner !== null && !input.ownerAuthored)) {
+      await withdraw();
+      return {
+        ...none,
+        note: !input.isolated
+          ? `Environment '${environment}' lists secrets (${names}), but the machine this chat runs on also runs other people's work as plain processes, so Work did not set them in this workspace. Tell the user if the work needs them: a sandboxed machine, or one only ${owner ? "they use" : "this project uses"}, receives them.`
+          : `Environment '${environment}' lists secrets (${names}), but Work sets them only for turns that answer the chat owner's own messages, so this turn runs without them.`,
+      };
+    }
+    const resolved = await service.resolveForSandbox({
+      identity,
+      projectId,
+      environment,
+      owner,
+    });
+    if (Object.keys(resolved.variables).length === 0) await withdraw();
+    else {
+      // From here on every turn of this chat, and of its forks, masks
+      // what it could hold, whoever writes (ADR 0206).
+      await service.rememberDelivery({
+        tenantId: identity.tenantId,
+        sessionId: session.id,
+        variables: resolved.variables,
+      });
+      const { changed } = await deliverSandboxSecrets({
+        ...target,
+        variables: resolved.variables,
+      });
+      if (changed)
+        await service.auditDelivery({
+          identity,
+          projectId,
+          sessionId: session.id,
+          ...(session.allocation_id
+            ? { allocationId: session.allocation_id }
+            : {}),
+          delivered: resolved.delivered,
+          missing: resolved.missing,
+          unmasked: resolved.unmasked,
+        });
+    }
+    const note = sandboxSecretsNote({
+      environment,
+      owner,
+      missing: resolved.missing,
+      unmasked: resolved.unmasked,
+    });
+    return {
+      values: resolved.variables,
+      // Set because the owner wrote the input (ADR 0206): only the owner's
+      // input may join the turn, as for personal files.
+      ownerOnly: owner !== null && resolved.delivered.length > 0,
+      ...(note ? { note } : {}),
+    };
+  }
+
+  /**
+   * The owner's personal files in a sandbox turn (ADR 0184, files only
+   * since ADR 0199): placed where the turn's placement allows personal
+   * credentials and the owner wrote the input it answers; taken back out
+   * otherwise. Returns a note for the agent about files it did not place.
+   */
+  private async preparePersonalFiles(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    allowed: boolean;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** The owner wrote everything the turn answers. */
+    ownerAuthored: boolean;
+  }): Promise<{ note?: string; delivered: boolean }> {
+    const { session, identity, projectId } = input;
+    const service = this.personalEnvironments;
+    const owner = session.external_user_id;
+    const withdraw = () =>
+      removePersonalEnvironment({
+        provider: input.provider,
+        sandboxId: input.sandboxProviderId,
+        projectDir: this.projectDir(input.provider),
+      });
+    if (!service || isProjectPrincipal(owner)) return { delivered: false };
+    if (!input.allowed || !input.ownerAuthored) {
+      await withdraw();
+      return { delivered: false };
+    }
+    const environment = await service.unseal({
+      tenantId: identity.tenantId,
+      projectId,
+      owner,
+    });
+    if (environment.files.length === 0) {
+      await withdraw();
+      return { delivered: false };
+    }
+    const result = await deliverPersonalEnvironment({
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+      environment,
+    });
+    if (result.delivered.length > 0)
+      await service.auditDelivery({
+        identity,
+        projectId,
+        sessionId: session.id,
+        ...(session.allocation_id
+          ? { allocationId: session.allocation_id }
+          : {}),
+        delivered: result.delivered,
+        refused: [...result.refused, ...result.unsafe],
+      });
+    const notes: string[] = [];
+    const { refused, unsafe } = result;
+    if (refused.length > 0) {
+      const one = refused.length === 1;
+      notes.push(
+        `Work did not place the user's personal ${one ? "copy" : "copies"} of ${refused.join(", ")} in this workspace: the repository tracks ${one ? "that path" : "those paths"}, and Work never replaces tracked files with personal ones. Tell the user, and suggest removing ${one ? "it" : "them"} from .work/personal/environment.json or no longer tracking ${one ? "it" : "them"}.`,
+      );
+    }
+    if (unsafe.length > 0) {
+      const one = unsafe.length === 1;
+      notes.push(
+        `Work did not place the user's personal ${one ? "copy" : "copies"} of ${unsafe.join(", ")} in this workspace: ${one ? "that path goes" : "those paths go"} through a symbolic link or ${one ? "is not a plain file" : "are not plain files"}, and Work writes personal files only at their own place in the project. Tell the user, and suggest replacing the link with a folder or removing ${one ? "the path" : "those paths"} from .work/personal/environment.json.`,
+      );
+    }
+    const delivered = result.delivered.length > 0;
+    return notes.length > 0
+      ? { note: notes.join("\n\n"), delivered }
+      : { delivered };
+  }
+
+  /**
+   * Set up a turn's workspace (ADR 0208): a sandbox, after its secrets and
+   * personal files are in place, or a native checkout the chat owns (ADR
+   * 0215). The Environment's `setup`, then the owner's own where their
+   * personal files may go, run in the project folder when this workspace
+   * has not run them yet. With `network`, only the Environment's part runs,
+   * on its own network, in a sandbox holding the base alone (ADR 0257). An
+   * Environment's setup that names a network runs nowhere else; the agent
+   * is told why. The chat shows the setup while it runs. Returns a note for
+   * the agent when it failed (it runs again before the next turn), and
+   * whether it settled: ran, or had nothing to run.
+   */
+  private async prepareWorkspaceSetup(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    turn: Turn;
+    runner:
+      | {
+          kind: "sandbox";
+          provider: SandboxProvider;
+          sandboxProviderId: string;
+          /** The setup's own network, in a sandbox holding its base alone. */
+          network?: { egress: SandboxEgress; env: Record<string, string> };
+          /** Why its setup's network cannot be given here. */
+          networkRefusal?: SetupNetworkRefusal;
+        }
+      | {
+          kind: "native";
+          setup: NonNullable<NativeAgentCheckout["setup"]>;
+          workingDirectory: string;
+        };
+    environment?: AdmittedSetup;
+    /** The placement may hold the owner's credentials and the owner wrote the turn. */
+    personalAllowed: boolean;
+    signal: AbortSignal;
+  }): Promise<{ note?: string; settled: boolean }> {
+    const { session, runner } = input;
+    const owner = session.external_user_id;
+    const widening = runner.kind === "sandbox" ? runner.network : undefined;
+    const personalAllowed =
+      input.personalAllowed &&
+      !widening &&
+      Boolean(this.personalEnvironments) &&
+      !isProjectPrincipal(owner);
+    const personal = personalAllowed
+      ? await this.personalEnvironments?.setup({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          owner,
+        })
+      : undefined;
+    // A setup that needs its own network runs only where it can have it
+    // (ADR 0257): a folder on a person's computer has none to switch.
+    const refusal: SetupNetworkRefusal | undefined = input.environment?.network
+      ? runner.kind === "native"
+        ? "folder"
+        : runner.networkRefusal
+      : undefined;
+    const refused = refusal
+      ? workspaceSetupNetworkRefusedNote({ reason: refusal })
+      : undefined;
+    const environment = refused ? undefined : input.environment;
+    if (!environment && !personal)
+      return { ...(refused ? { note: refused } : {}), settled: true };
+    const timeoutMinutes =
+      input.environment?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES;
+    const base = parseWorkspaceBase(session.workspace)?.commit;
+    let shown = false;
+    const onRun = async () => {
+      if (shown) return;
+      shown = true;
+      await this.showPreparing({
+        sessionId: session.id,
+        turnId: input.turn.id,
+        activity: "Setting up the workspace",
+      });
+    };
+    const commands = {
+      ...(environment ? { environment: environment.command } : {}),
+      ...(personal ? { personal } : {}),
+      ...(base ? { base } : {}),
+    };
+    const unavailable = (error: unknown) => ({
+      // The turn goes on without it, as after a failed command (ADR 0208).
+      status: "unavailable" as const,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    const { outcome, logPath } = await withSpan(
+      {
+        tracer,
+        name: "agent.session.workspace.setup",
+        attributes: {
+          "catamorphic.project.id": input.projectId,
+          "catamorphic.agent.session.id": session.id,
+          "catamorphic.agent.turn.id": input.turn.id,
+          "catamorphic.workspace.setup.network": Boolean(widening),
+        },
+      },
+      async (): Promise<{
+        outcome:
+          | WorkspaceSetupOutcome
+          | { status: "unavailable"; reason: string };
+        logPath: string;
+      }> => {
+        if (runner.kind === "native")
+          return runner
+            .setup({
+              projectId: input.projectId,
+              sessionId: session.id,
+              workingDirectory: runner.workingDirectory,
+              ...commands,
+              personalAllowed,
+              timeoutMinutes,
+              signal: input.signal,
+              onRun,
+            })
+            .catch((error: unknown) => ({
+              outcome: unavailable(error),
+              logPath: "",
+            }));
+        const logPath = `${sessionDirectory(runner.provider)}/setup.log`;
+        return runWorkspaceSetup({
+          provider: runner.provider,
+          sandboxId: runner.sandboxProviderId,
+          projectDir: this.projectDir(runner.provider),
+          ...commands,
+          personalAllowed,
+          timeoutMinutes,
+          ...(widening ? { network: widening } : {}),
+          signal: input.signal,
+          onRun,
+        }).then(
+          (outcome) => ({ outcome, logPath }),
+          (error: unknown) => {
+            // A sandbox left wide fails the preparation (ADR 0257).
+            if (error instanceof SetupNetworkError) throw error;
+            return { outcome: unavailable(error), logPath };
+          },
+        );
+      },
+    );
+    if (shown)
+      await this.showPreparing({
+        sessionId: session.id,
+        turnId: input.turn.id,
+        activity: "Preparing agent",
+      });
+    const note =
+      outcome.status === "unavailable"
+        ? input.signal.aborted
+          ? undefined
+          : workspaceSetupUnavailableNote({ reason: outcome.reason })
+        : outcome.status === "failed"
+          ? workspaceSetupFailedNote({ outcome, timeoutMinutes, logPath })
+          : undefined;
+    const notes = [refused, note].filter(Boolean).join("\n\n");
+    return {
+      ...(notes ? { note: notes } : {}),
+      settled: outcome.status === "succeeded" || outcome.status === "current",
+    };
+  }
+
+  /**
+   * Whether this turn's Environment setup runs on its own network (ADR
+   * 0257), and on which base, or why it cannot. It needs the setup network
+   * the Allocation fixed at admission, a workspace standing on a commit of
+   * the project's remote (the base, free of any agent's work), and no sign-in
+   * mounted in the sandbox from its start.
+   */
+  private setupNetworkOf(input: {
+    runtime: AgentExecutionRuntime;
+    session: Pick<SessionRow, "workspace">;
+  }): {
+    widens?: { egress: SandboxEgress; base: string };
+    refusal?: SetupNetworkRefusal;
+  } {
+    const { runtime } = input;
+    if (!runtime.setup?.network || !runtime.provider) return {};
+    const egress = runtime.allocation?.policy.sandbox?.setupEgress;
+    const base = parseWorkspaceBase(input.session.workspace)?.commit;
+    if (!egress) return { refusal: "not-admitted" };
+    if (!base) return { refusal: "no-base" };
+    if (runtime.signInHome) return { refusal: "sign-in" };
+    return { widens: { egress, base } };
+  }
+
+  /**
+   * The Environment's setup on its own network (ADR 0257), in a sandbox
+   * this preparation made: seeded with the base commit alone, holding no
+   * grant, secret, gateway variable or file of anyone's, widened to the
+   * setup's hosts only, and narrowed once it ended. Only the secrets the
+   * setup names reach it, as its environment. The session's work, grants,
+   * secrets and files arrive after.
+   */
+  private async setUpOnItsNetwork(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    turn: Turn;
+    runtime: AgentExecutionRuntime;
+    setup: AdmittedSetup;
+    egress: SandboxEgress;
+    base: string;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    ownerAuthored: boolean;
+    signal: AbortSignal;
+  }): Promise<{ note?: string; settled: boolean }> {
+    const { identity, projectId, session, provider } = input;
+    const copy = await this.projectManager.openSession({
+      tenantId: identity.tenantId,
+      projectId,
+      sessionId: session.id,
+    });
+    try {
+      await seedSandboxBase({
+        provider,
+        sandboxId: input.sandboxProviderId,
+        projectDir: this.projectDir(provider),
+        sessionCopyPath: copy.repoPath,
+        base: input.base,
+      });
+    } finally {
+      await copy.dispose();
+    }
+    await removeSessionCredentials({
+      provider,
+      sandboxId: input.sandboxProviderId,
+    });
+    const env = await this.setupSecretValues({
+      identity,
+      projectId,
+      session,
+      runtime: input.runtime,
+      names: input.setup.secrets ?? [],
+      ownerAuthored: input.ownerAuthored,
+    });
+    return this.prepareWorkspaceSetup({
+      identity,
+      projectId,
+      session,
+      turn: input.turn,
+      runner: {
+        kind: "sandbox",
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        network: { egress: input.egress, env },
+      },
+      environment: input.setup,
+      personalAllowed: false,
+      signal: input.signal,
+    }).catch(async (error: unknown) => {
+      // A sandbox that may still be wide fails the attempt (ADR 0257).
+      if (error instanceof SetupNetworkError)
+        await this.connectionGrants
+          ?.revokeSession({ agentSessionId: session.id, channel: "sandbox" })
+          .catch(() => {});
+      throw error;
+    });
+  }
+
+  /**
+   * The secrets a setup on its own network names (ADR 0257), resolved as
+   * the turn's own are (ADR 0206) but never written into the sandbox: they
+   * reach the setup's process alone. Remembered, so its log is masked, and
+   * audited as delivered. None where the turn would get none.
+   */
+  private async setupSecretValues(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    runtime: AgentExecutionRuntime;
+    names: readonly string[];
+    ownerAuthored: boolean;
+  }): Promise<Record<string, string>> {
+    const { identity, projectId, session } = input;
+    const service = this.secrets;
+    const owner = placementOwner(session.external_user_id);
+    if (
+      !service ||
+      input.names.length === 0 ||
+      input.runtime.isolated !== true ||
+      (owner !== null && !input.ownerAuthored)
+    )
+      return {};
+    const resolved = await service.resolveForSandbox({
+      identity,
+      projectId,
+      environment: input.runtime.environmentName,
+      owner,
+    });
+    const variables = Object.fromEntries(
+      Object.entries(resolved.variables).filter(([name]) =>
+        input.names.includes(name),
+      ),
+    );
+    if (Object.keys(variables).length === 0) return {};
+    await service.rememberDelivery({
+      tenantId: identity.tenantId,
+      sessionId: session.id,
+      variables,
+    });
+    await service.auditDelivery({
+      identity,
+      projectId,
+      sessionId: session.id,
+      ...(session.allocation_id ? { allocationId: session.allocation_id } : {}),
+      delivered: resolved.delivered.filter((entry) =>
+        input.names.includes(entry.name),
+      ),
+      missing: resolved.missing.filter((entry) =>
+        input.names.includes(entry.name),
+      ),
+      unmasked: resolved.unmasked.filter((name) => input.names.includes(name)),
+    });
+    return variables;
+  }
+
+  /**
+   * Ready a sandbox an earlier preparation made for a turn whose
+   * Allocation fixed a setup network (ADR 0257). It is narrowed first: a
+   * preparation that stopped while its setup ran may have left it wide.
+   * When that setup must run again on its own network (its command
+   * changed, the base moved, or it never finished), the sandbox is replaced
+   * by a new one in the same Allocation, since only a sandbox holding its
+   * base alone may be widened: the session's work comes back once the new
+   * one is narrow. Returns the turn's sandbox, whether this preparation
+   * made it, and a note for the agent.
+   */
+  private async prepareSetupSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    agent: RegisteredCodingAgent;
+    runtime: AgentExecutionRuntime;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** This preparation made the sandbox. */
+    created: boolean;
+    /** The setup may run on its own network, on this base. */
+    widens: { egress: SandboxEgress; base: string } | undefined;
+    /** This preparation moved the workspace's base (ADR 0178). */
+    moved: boolean;
+  }): Promise<{ sandboxProviderId: string; fresh: boolean; note?: string }> {
+    const { identity, projectId, session, runtime, provider } = input;
+    if (input.created || !runtime.allocation?.policy.sandbox?.setupEgress)
+      return {
+        sandboxProviderId: input.sandboxProviderId,
+        fresh: input.created,
+      };
+    await narrowSandboxEgress({
+      provider,
+      sandboxId: input.sandboxProviderId,
+      id: randomUUID(),
+    }).catch(async (error: unknown) => {
+      await this.connectionGrants
+        ?.revokeSession({ agentSessionId: session.id, channel: "sandbox" })
+        .catch(() => {});
+      throw error;
+    });
+    const due =
+      input.widens &&
+      runtime.setup &&
+      environmentSetupDue({
+        environment: runtime.setup.command,
+        base: input.widens.base,
+        recorded: await readSetupRecord({
+          provider,
+          sandboxId: input.sandboxProviderId,
+          projectDir: this.projectDir(provider),
+        }),
+      });
+    if (!due || !session.sandbox_id)
+      return { sandboxProviderId: input.sandboxProviderId, fresh: false };
+    // Marked first, so a preparation that stops midway is finished by the
+    // next one rather than left pointing at a sandbox that is gone.
+    await this.db
+      .updateTable("project_sandboxes")
+      .set({ status: REPLACING_SANDBOX })
+      .where("id", "=", session.sandbox_id)
+      .execute();
+    // What changed since the last turn is kept, as when a workspace is
+    // given back while idle; a moved base replaces it anyway, and a
+    // contained agent's work never leaves its sandbox (ADR 0182).
+    const note = input.moved
+      ? undefined
+      : input.agent.sandboxing === "contained"
+        ? "[Workspace] This workspace was made again to run its setup on its own network. This agent's sandboxing is contained, so what it changed here before is gone with the old workspace."
+        : await this.saveSandboxChanges({
+            identity,
+            projectId,
+            session,
+            provider,
+            sandboxProviderId: input.sandboxProviderId,
+          });
+    await this.finishReplacingSandbox({
+      session,
+      runtime,
+      sandboxId: session.sandbox_id,
+      providerId: input.sandboxProviderId,
+    });
+    const workspace = await this.ensureWorkspace(
+      identity,
+      projectId,
+      { ...session, sandbox_id: null },
+      input.agent,
+      runtime,
+      { populate: false },
+    );
+    if (!workspace.sandboxProviderId)
+      throw new Error("The workspace's new sandbox did not start");
+    return {
+      sandboxProviderId: workspace.sandboxProviderId,
+      fresh: true,
+      ...(note ? { note } : {}),
+    };
+  }
+
+  /**
+   * Destroy a session's sandbox that is being replaced, then forget it
+   * (ADR 0257): destroyed first, so a sandbox is never left running
+   * unowned. One its Allocation no longer owns was destroyed already.
+   */
+  private async finishReplacingSandbox(input: {
+    session: Pick<SessionRow, "id">;
+    runtime: AgentExecutionRuntime;
+    sandboxId: string;
+    providerId: string;
+  }): Promise<void> {
+    const { runtime } = input;
+    const allocation = runtime.allocation;
+    const owned =
+      !allocation ||
+      !this.managedWorkspace(allocation) ||
+      (
+        await this.db
+          .selectFrom("execution_allocations")
+          .select("sandbox_provider_id")
+          .where("id", "=", allocation.id)
+          .executeTakeFirst()
+      )?.sandbox_provider_id === input.providerId;
+    if (owned) await runtime.destroySandbox?.(input.providerId);
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", input.session.id)
+        .where("sandbox_id", "=", input.sandboxId)
+        .execute();
+      await trx
+        .deleteFrom("project_sandboxes")
+        .where("id", "=", input.sandboxId)
+        .execute();
+    });
+  }
+
+  /**
+   * Save what changed in a sandbox since the last turn into the session's
+   * copy and checkpoint it, before the sandbox goes (ADR 0257). Returns a
+   * note for the agent when the changes could not be read.
+   */
+  private async saveSandboxChanges(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+  }): Promise<string | undefined> {
+    const { identity, projectId, session } = input;
+    const sessionCopy = this.usesSessionCopy(session);
+    const unsaved = await this.syncBackChanges(
+      input.provider,
+      identity,
+      projectId,
+      input.sandboxProviderId,
+      sessionCopy ? session.id : undefined,
+    ).then(
+      () => undefined,
+      (error: unknown) => {
+        if (!(error instanceof SandboxSyncError)) throw error;
+        return `[Workspace] This workspace was made again to run its setup, and what changed in it since the last turn could not be saved first: ${error.message}`;
+      },
+    );
+    if (sessionCopy)
+      await this.projectManager.checkpointSession({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId: session.id,
+        message: "Save the workspace before setting it up again",
+        author: CHECKPOINT_AUTHOR,
+      });
+    return unsaved;
+  }
+
+  /** What a preparing turn shows its chat, while it is still preparing. */
+  private async showPreparing(input: {
+    sessionId: string;
+    turnId: string;
+    activity: string;
+  }): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, input.sessionId);
+      const row = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .where("id", "=", input.turnId)
+        .where("session_id", "=", input.sessionId)
+        .where("status", "=", "preparing")
+        .executeTakeFirst();
+      if (!row) return;
+      const now = new Date().toISOString();
+      await this.log.append(trx, {
+        sessionId: input.sessionId,
+        events: [
+          {
+            type: "turn.changed",
+            turn: {
+              ...turnFromRow(row),
+              activity: input.activity,
+              activityAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+    });
+  }
+
+  /**
+   * Whether the chat's owner wrote the input a turn answers (ADR 0184),
+   * the condition for their login and files. The owner sent it, or it came
+   * from their own doing through a call they made: one of their chats'
+   * agents (a subsession reporting back), their own assistant, a workflow
+   * they enabled or ran for themselves, or Work's notification about a
+   * task of theirs. Another member, an administrator, and the project's
+   * automations never run on the owner's login.
+   */
+  private async authoredByOwner(input: {
+    projectId: string;
+    owner: string;
+    input: SessionInput;
+    deliveredBy: string | null;
+    executor?: Kysely<DB> | Transaction<DB>;
+  }): Promise<boolean> {
+    const { owner, projectId } = input;
+    const db = input.executor ?? this.db;
+    if (input.input.kind === "user_message")
+      return input.input.author.externalUserId === owner;
+    if (input.deliveredBy !== owner) return false;
+    if (input.input.kind === "task_notification") return true;
+    const author = input.input.from;
+    switch (author.kind) {
+      case "assistant":
+        return author.externalUserId === owner;
+      case "agent": {
+        // The sending chat may be in another project of the owner's (the
+        // assistant's, ADR 0216).
+        const source = await db
+          .selectFrom("agent_sessions")
+          .select("external_user_id")
+          .where("id", "=", author.sessionId)
+          .where("project_id", "=", author.projectId ?? projectId)
+          .executeTakeFirst();
+        return source?.external_user_id === owner;
+      }
+      case "workflow": {
+        const run = await db
+          .selectFrom("workflow_runs")
+          .leftJoin(
+            "workflow_enablements",
+            "workflow_enablements.id",
+            "workflow_runs.workflow_enablement_id",
+          )
+          .select([
+            "workflow_runs.external_user_id",
+            "workflow_runs.workflow_enablement_id",
+            "workflow_enablements.owner_kind",
+            "workflow_enablements.owner_external_user_id",
+          ])
+          .where("workflow_runs.id", "=", author.runId)
+          .where("workflow_runs.project_id", "=", projectId)
+          .executeTakeFirst();
+        if (!run) return false;
+        return run.workflow_enablement_id
+          ? run.owner_kind === "member" && run.owner_external_user_id === owner
+          : run.external_user_id === owner;
+      }
+    }
+  }
+
+  /**
+   * Whether an input is as much the chat's owner's as a waiting turn's own
+   * input, so the two may run as one turn (ADR 0199).
+   */
+  private async alikeForOwner(
+    trx: Transaction<DB>,
+    input: {
+      session: SessionRow;
+      input: SessionInput;
+      deliveredBy: string | null;
+      turn: Turn;
+    },
+  ): Promise<boolean> {
+    const row = input.turn.inputItemId
+      ? await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", input.turn.inputItemId)
+          .executeTakeFirst()
+      : undefined;
+    const waiting = row ? itemFromRow(row) : null;
+    if (!waiting || !isInputItem(waiting)) return false;
+    const owned = (candidate: SessionInput, deliveredBy: string | null) =>
+      this.authoredByOwner({
+        projectId: input.session.project_id,
+        owner: input.session.external_user_id,
+        input: candidate,
+        deliveredBy,
+        executor: trx,
+      });
+    return (
+      (await owned(input.input, input.deliveredBy)) ===
+      (await owned(waiting, waiting.deliveredBy))
+    );
+  }
+
+  /**
+   * Whether the owner wrote everything a turn answers: its input and every
+   * message steered into it, and for a continuation, the turn it continues.
+   * The condition for running on their sign-in and files (ADR 0199).
+   */
+  private async ownerAuthoredTurn(input: {
+    projectId: string;
+    owner: string;
+    turn: Turn;
+  }): Promise<boolean> {
+    const turnIds: string[] = [];
+    let turn: Turn | null = input.turn;
+    while (turn && turnIds.length < 20) {
+      turnIds.push(turn.id);
+      const previous: string | null = turn.continuationOf;
+      turn = previous
+        ? await this.db
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("id", "=", previous)
+            .where("session_id", "=", input.turn.sessionId)
+            .executeTakeFirst()
+            .then((row) => (row ? turnFromRow(row) : null))
+        : null;
+    }
+    const rows = await this.db
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("session_id", "=", input.turn.sessionId)
+      .where("turn_id", "in", turnIds)
+      .where("kind", "in", [...INPUT_ITEM_KINDS])
+      .execute();
+    if (rows.length === 0) return false;
+    for (const row of rows) {
+      const item = itemFromRow(row);
+      if (
+        !isInputItem(item) ||
+        !(await this.authoredByOwner({
+          projectId: input.projectId,
+          owner: input.owner,
+          input: item,
+          deliveredBy: item.deliveredBy,
+        }))
+      )
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * Take the owner's personal environment back out of a chat's sandbox
+   * (ADR 0184), on close, idle release, and moves. Best effort: the
+   * sandbox is given back right after. Removal is idempotent, so it runs
+   * whether or not the owner still holds anything on the server.
+   */
+  private async withdrawPersonalEnvironment(input: {
+    projectId: string;
+    session: Pick<SessionRow, "id" | "external_user_id">;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+  }): Promise<void> {
+    if (
+      !this.personalEnvironments ||
+      isProjectPrincipal(input.session.external_user_id)
+    )
+      return;
+    await removePersonalEnvironment({
+      provider: input.provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(input.provider),
+    }).catch((error: unknown) =>
+      console.warn(
+        `[catamorphic] Could not remove the personal environment of session ${input.session.id}`,
+        error,
+      ),
+    );
+  }
+
+  /**
+   * Withdraw the owner's personal environment (ADR 0184), the
+   * Environment's secrets (ADR 0206), and the session's gateway grants and
+   * variables (ADRs 0175, 0212) from a chat's current sandbox, wherever it
+   * runs, as its grants are revoked with the workspace. Best effort, and a
+   * no-op for chats without a sandbox; a project chat has no personal
+   * environment to withdraw.
+   */
+  private async withdrawFromSessionSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    allocation?: ExecutionAllocation;
+    sandboxProviderId?: string;
+  }): Promise<void> {
+    if (!this.personalEnvironments && !this.secrets && !this.sandboxGateway)
+      return;
+    try {
+      const row = await this.db
+        .selectFrom("agent_sessions")
+        .leftJoin(
+          "project_sandboxes",
+          "project_sandboxes.id",
+          "agent_sessions.sandbox_id",
+        )
+        .select([
+          "agent_sessions.external_user_id",
+          "agent_sessions.allocation_id",
+          "project_sandboxes.provider_id",
+        ])
+        .where("agent_sessions.id", "=", input.sessionId)
+        .executeTakeFirst();
+      const sandboxProviderId = input.sandboxProviderId ?? row?.provider_id;
+      if (!row || !sandboxProviderId) return;
+      // A renewal tick must not write the login back after it leaves.
+      if (!isProjectPrincipal(row.external_user_id))
+        this.stopGrantRenewal(input.sessionId);
+      const allocation =
+        input.allocation ??
+        (row.allocation_id
+          ? await this.executionAllocations.get({
+              identity: input.identity,
+              allocationId: row.allocation_id,
+            })
+          : undefined);
+      if (allocation?.status !== "active") return;
+      const runtime = await this.executionEnvironments.getRuntimeBinding({
+        identity: input.identity,
+        bindingId: allocation.bindingId,
+        ...(allocation.workerNodeId
+          ? { workerNodeId: allocation.workerNodeId }
+          : {}),
+        owner: placementOwner(row.external_user_id),
+      });
+      const selected = runtime?.sandboxProvider;
+      if (!selected) return;
+      const provider = allocationSandboxProvider({
+        db: this.db,
+        allocation,
+        provider: selected,
+        ...this.localFence(allocation),
+      });
+      await this.withdrawPersonalEnvironment({
+        projectId: input.projectId,
+        session: {
+          id: input.sessionId,
+          external_user_id: row.external_user_id,
+        },
+        provider,
+        sandboxProviderId,
+      });
+      if (this.secrets)
+        await removeSandboxSecrets({
+          provider,
+          sandboxId: sandboxProviderId,
+          projectDir: this.projectDir(provider),
+        }).catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not remove the secrets of session ${input.sessionId}`,
+            error,
+          ),
+        );
+      if (this.sandboxGateway)
+        await removeSandboxGateway({
+          provider,
+          sandboxId: sandboxProviderId,
+          projectDir: this.projectDir(provider),
+        }).catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not remove the gateway grants of session ${input.sessionId}`,
+            error,
+          ),
+        );
+    } catch (error) {
+      console.warn(
+        `[catamorphic] Could not withdraw the personal environment of session ${input.sessionId}`,
+        error,
+      );
+    }
+  }
+
+  private async linkedRemoteUrl(
+    identity: Identity,
+    projectId: string,
+  ): Promise<string | null> {
+    const row = await this.db
+      .selectFrom("projects")
+      .select("remote_url")
+      .where("id", "=", projectId)
+      .where("tenant_id", "=", identity.tenantId)
+      .executeTakeFirst();
+    return row?.remote_url ?? null;
+  }
+
+  /**
+   * The project's open chat for a key (ADR 0173): the active chat `identity`
+   * keeps for it, or a new one started for it. Keys belong to the project,
+   * not to one workflow, so every automation reaches the same chat for
+   * `pr-42`; each delivering workflow is recorded on the chat. A chat that
+   * someone archived is restored for everyone who archived it, so the
+   * delivery runs and is seen; a closed chat freed its key, so the next
+   * delivery starts a new chat. Concurrent first deliveries converge on one
+   * chat through the partial unique index on `chat_key`.
+   */
+  async chatForKey(
     identity: Identity,
     projectId: string,
     input: {
+      signal?: AbortSignal;
+      key: string;
+      /** The workflow delivering, recorded on the chat. */
+      workflowName?: string;
       origin?: SessionOperationOrigin;
-      wakeKey: string;
-      content: string;
-      workflowName: string;
-      runId: string;
       agentSlug?: string;
       environment?: string;
       title?: string;
-      mode?: "next_turn" | "interrupt";
-      notification?: { title?: string; body?: string };
+      /** Where the chat's workspace starts, or moves to (ADR 0178). */
+      workspace?: SessionWorkspaceRequest;
     },
-  ): Promise<AgentSessionWakeReceipt> {
+  ): Promise<{ sessionId: string; sessionCreated: boolean }> {
     await this.requireProject(identity, projectId);
     const agentId = input.agentSlug
       ? formatProjectAgentId(projectId, input.agentSlug)
@@ -1818,11 +7785,12 @@ export class AgentSessionsService {
         .selectAll()
         .where("project_id", "=", projectId)
         .where("external_user_id", "=", identity.externalUserId)
-        .where("wake_key", "=", input.wakeKey)
+        .where("chat_key", "=", input.key)
         .where("status", "=", "active")
         .executeTakeFirst();
 
     let row = await findExisting();
+    input.signal?.throwIfAborted();
     let sessionCreated = false;
     if (!row) {
       try {
@@ -1830,7 +7798,10 @@ export class AgentSessionsService {
           ...(agentId ? { agentId } : {}),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
-          wakeKey: input.wakeKey,
+          chatKey: input.key,
+          signal: input.signal,
+          ...(input.workflowName ? { chatWorkflow: input.workflowName } : {}),
+          ...(input.workspace ? { workspace: input.workspace } : {}),
           origin: input.origin,
         });
         row = await this.db
@@ -1840,7 +7811,7 @@ export class AgentSessionsService {
           .executeTakeFirstOrThrow();
         sessionCreated = true;
       } catch (error) {
-        // Concurrent retries may race the partial unique wake-key index. The
+        // Concurrent retries may race the partial unique key index. The
         // winning session is the one both calls must use; any other failure
         // remains visible.
         row = await findExisting();
@@ -1850,32 +7821,86 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, row.id);
     if (agentId && row.agent_id !== agentId) {
       throw new Error(
-        `Wake key '${input.wakeKey}' already belongs to a different agent`,
+        `The chat for key ${input.key} already belongs to a different agent`,
       );
     }
-    const receipt = await this.deliver(identity, projectId, row.id, {
-      content: input.content,
-      author: {
-        kind: "workflow",
-        runId: input.runId,
-        workflowName: input.workflowName,
-      },
-      mode: input.mode ?? "next_turn",
-      idempotencyKey: `workflow-wake:${input.runId}:${input.wakeKey}`,
-      metadata: {
-        causation: input.origin?.causation ?? [],
-        provenance: input.origin?.provenance ?? {},
-        workflowNotification: {
-          ...(input.notification?.title
-            ? { title: input.notification.title }
-            : {}),
-          ...(input.notification?.body
-            ? { body: input.notification.body }
-            : {}),
-        },
-      },
+    input.signal?.throwIfAborted();
+    if (input.workspace && !sessionCreated)
+      await this.requestWorkspace(
+        identity,
+        projectId,
+        row.id,
+        input.workspace,
+        { signal: input.signal },
+      );
+    input.signal?.throwIfAborted();
+    if (input.workflowName) {
+      await this.db.transaction().execute(async (trx) => {
+        input.signal?.throwIfAborted();
+        await trx
+          .updateTable("agent_sessions")
+          .set({
+            chat_workflows: sql`chat_workflows || jsonb_build_array(${input.workflowName}::text)`,
+          })
+          .where("id", "=", row.id)
+          .where(
+            sql<boolean>`NOT (chat_workflows @> jsonb_build_array(${input.workflowName}::text))`,
+          )
+          .execute();
+        input.signal?.throwIfAborted();
+      });
+    }
+    input.signal?.throwIfAborted();
+    await this.restoreArchived([row.id], { signal: input.signal });
+    return { sessionId: row.id, sessionCreated };
+  }
+
+  /**
+   * The open chat `ownerId` keeps for a key in this project, if any (ADR
+   * 0173). Never creates one; access is checked by whoever reads it.
+   */
+  async keyedChatId(input: {
+    projectId: string;
+    ownerId: string;
+    key: string;
+  }): Promise<string | undefined> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select("id")
+      .where("project_id", "=", input.projectId)
+      .where("external_user_id", "=", input.ownerId)
+      .where("chat_key", "=", input.key)
+      .where("status", "=", "active")
+      .executeTakeFirst();
+    return row?.id;
+  }
+
+  /**
+   * Undo archive for everyone who archived these chats: work delivered to
+   * a chat runs and is seen, never silently held (ADR 0173). A released
+   * workspace is admitted again when the chat's next turn is claimed.
+   */
+  private async restoreArchived(
+    sessionIds: readonly string[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    if (sessionIds.length === 0) return;
+    const restored = await this.db.transaction().execute(async (trx) => {
+      options.signal?.throwIfAborted();
+      const result = await trx
+        .updateTable("agent_session_views")
+        .set(({ ref }) => ({
+          visibility: ref("previous_visibility"),
+          archived_at: null,
+          updated_at: new Date(),
+        }))
+        .where("session_id", "in", [...sessionIds])
+        .where("visibility", "=", "archived")
+        .executeTakeFirst();
+      options.signal?.throwIfAborted();
+      return result;
     });
-    return { ...receipt, sessionId: row.id, sessionCreated };
+    if (restored.numUpdatedRows > 0n) this.chatsChanged();
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -1897,9 +7922,12 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.chatsChanged();
     return mapSession(
       row,
-      this.runningTurns.has(sessionId),
+      (await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })).has(
+        sessionId,
+      ),
       this.hostId,
       this.authorityLeaseMs,
     );
@@ -1907,22 +7935,20 @@ export class AgentSessionsService {
 
   /**
    * Mirror a session from another backend (a desktop pushing its local
-   * transcript to the server it's linked to, ADR 0061): upsert the
-   * session under the CALLER's identity with THIS registry's default
-   * agent, and append the messages this side doesn't have yet.
-   * Idempotent by message id. The provider anchor stays null, so a later
-   * sendMessage here re-anchors with the mirrored transcript as history —
-   * that IS the "continue on the server" path. If this side already holds
-   * messages the payload doesn't (someone continued here), the mirror is
-   * refused with {@link SessionMirrorDivergedError}: the fork's owner is
-   * now this backend.
+   * session to the server it's linked to, ADR 0197): its log continues
+   * here from this copy's sequence, or a new copy starts from the
+   * source's snapshot. The copy runs this registry's agent for the
+   * source's project-agent slug, else the default. Authority stays with
+   * the source until an explicit handoff (ADR 0077), so a mirror never
+   * dispatches; a copy whose authority moved here refuses with
+   * {@link SessionMirrorDivergedError}.
    */
   async mirror(
     identity: Identity,
     projectId: string,
     sessionId: string,
     input: SessionMirrorInput,
-  ): Promise<AgentSession> {
+  ): Promise<AgentSession & { agentNotice?: string; sequence: number }> {
     return withSpan(
       {
         tracer,
@@ -1934,13 +7960,6 @@ export class AgentSessionsService {
       },
       async () => {
         await this.requireProject(identity, projectId);
-        const agentId = this.mirrorAgentId(
-          identity,
-          projectId,
-          input.agentSlug,
-        );
-        this.assertAgentAccess(identity, projectId, agentId);
-
         const existing = await this.db
           .selectFrom("agent_sessions")
           .selectAll()
@@ -1950,23 +7969,27 @@ export class AgentSessionsService {
           existing &&
           (existing.project_id !== projectId ||
             existing.external_user_id !== identity.externalUserId)
-        ) {
+        )
           throw new AccessDeniedError();
-        }
-        if (existing && this.runningTurns.has(sessionId)) {
-          throw new AgentTurnInProgressError(sessionId);
-        }
-        if (
-          existing &&
-          existing.authority_host_id !== "unassigned" &&
-          (existing.authority_host_id !== input.authority.hostId ||
-            Number(existing.authority_revision) > input.authority.revision)
-        ) {
-          throw new SessionMirrorDivergedError(sessionId);
-        }
-        if (existing && !existing.allocation_id) {
-          throw new Error("Agent session has no Environment Allocation");
-        }
+        if (existing) await this.assertNoRunningTurn({ sessionId });
+        const fallback = this.codingAgents.defaultAgentId(projectId) ?? null;
+        const preferred = input.agentSlug
+          ? formatProjectAgentId(projectId, input.agentSlug)
+          : null;
+        const usable =
+          preferred !== null &&
+          this.codingAgents.get(preferred) !== undefined &&
+          this.coveringAgentRef(identity, projectId, preferred) !== undefined;
+        const agentId = existing
+          ? existing.agent_id
+          : usable
+            ? preferred
+            : fallback;
+        const agentNotice =
+          !existing && input.agentSlug && !usable
+            ? "This chat continues with the server's default agent: this server has no agent for it that your role can use."
+            : undefined;
+        this.assertAgentAccess(identity, projectId, agentId);
         const mirrorAgent = existing
           ? undefined
           : await this.resolveAgent(agentId, projectId);
@@ -1981,63 +8004,99 @@ export class AgentSessionsService {
                 workload: "agent",
                 topology: mirrorAgent.topology,
               },
+              ...(mirrorAgent.signIn ? { signIn: mirrorAgent.signIn } : {}),
             })
           : undefined;
-        const mirrorRequirements = mirrorAgent?.connectionRequirements ?? [];
-        if (mirrorRequirements.length > 0 && !this.connectionAdmission) {
+        const requirements = mirrorAgent?.connectionRequirements ?? [];
+        if (requirements.length > 0 && !this.connectionAdmission)
           throw new Error("Connection providers are not configured");
-        }
-        const mirrorConnections = mirrorAdmission
-          ? mirrorRequirements.length > 0
+        const mirrorConnections =
+          mirrorAdmission && requirements.length > 0
             ? await this.connectionAdmission!.admit({
                 identity,
                 projectId,
                 environment: mirrorAdmission.environmentName,
-                requirements: mirrorRequirements,
+                requirements,
               })
-            : []
-          : undefined;
-
-        const row = await writeSessionMirror({
+            : mirrorAdmission
+              ? []
+              : undefined;
+        const written = await writeSessionMirror({
           db: this.db,
+          log: this.log,
           executionAllocations: this.executionAllocations,
           identity,
           projectId,
           sessionId,
           input,
           agentId,
-          mirrorAdmission,
-          mirrorConnections,
+          ...(mirrorAdmission ? { mirrorAdmission } : {}),
+          ...(mirrorConnections ? { mirrorConnections } : {}),
         });
-        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+        return {
+          ...mapSession(
+            written.session,
+            false,
+            this.hostId,
+            this.authorityLeaseMs,
+          ),
+          sequence: written.sequence,
+          ...(agentNotice ? { agentNotice } : {}),
+        };
       },
     );
   }
 
-  /** The agent a mirrored session lands on: the source's project-agent
-   * slug when this registry has it AND the caller may use it, else the
-   * registry default. */
-  private mirrorAgentId(
-    identity: Identity,
-    projectId: string,
-    agentSlug: string | undefined,
-  ): string | null {
-    if (agentSlug) {
-      const preferred = formatProjectAgentId(projectId, agentSlug);
-      const usable =
-        this.codingAgents.get(preferred) !== undefined &&
-        (isBuilder(identity, projectId) ||
-          this.coveringAgentRef(identity, projectId, preferred) !== undefined);
-      if (usable) return preferred;
+  /**
+   * What a mirror pushes (ADR 0197): the log after the remote's sequence,
+   * or the whole session to start a copy, with its workflow-facing events.
+   */
+  async mirrorExport(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    after: number | null;
+  }): Promise<Pick<SessionMirrorInput, "base" | "events" | "projectEvents">> {
+    await this.requireSession(
+      input.identity,
+      input.projectId,
+      input.sessionId,
+      "read",
+    );
+    const projectEvents = await this.db
+      .selectFrom("project_events")
+      .select(["id", "kind", "occurred_at", "payload"])
+      .where("project_id", "=", input.projectId)
+      .where("source", "=", "session")
+      .where(sql`payload->>'sessionId'`, "=", input.sessionId)
+      .orderBy("sequence")
+      .execute();
+    const exported = projectEvents.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      occurredAt: row.occurred_at.toISOString(),
+      payload: row.payload as JsonObject,
+    }));
+    if (input.after !== null) {
+      const gap = await this.log.eventsAfter({
+        sessionId: input.sessionId,
+        after: input.after,
+        maxEvents: 5_000,
+        maxBytes: 64 * 1024 * 1024,
+      });
+      if (!gap.reset) return { events: gap.events, projectEvents: exported };
     }
-    return this.codingAgents.defaultAgentId(projectId) ?? null;
+    const base = await readFullSnapshot({
+      db: this.db,
+      sessionId: input.sessionId,
+    });
+    return { base, events: [], projectEvents: exported };
   }
 
   /**
    * The mirror source's side of a fork (ADR 0062): once the remote
-   * reported divergence, stamp the LOCAL copy with a visible system
-   * marker naming where the conversation went. Idempotent — one marker
-   * per session, however many times the 409 is re-learned.
+   * reported divergence, the LOCAL copy says where the conversation went.
+   * Idempotent: one notice per session, however often the 409 is re-learned.
    */
   async recordMirrorFork(
     identity: Identity,
@@ -2046,52 +8105,126 @@ export class AgentSessionsService {
     fork: { serverUrl: string; remoteProjectId: string },
   ): Promise<void> {
     await this.requireSession(identity, projectId, sessionId);
-    const existing = await this.db
-      .selectFrom("agent_messages")
-      .select(["metadata"])
-      .where("session_id", "=", sessionId)
-      .where("role", "=", "system")
-      .execute();
-    const already = existing.some((row) => {
-      const marker = (row.metadata as { marker?: { kind?: string } } | null)
-        ?.marker;
-      return marker?.kind === "mirror_fork";
+    await this.db.transaction().execute((trx) =>
+      this.appendNotice(trx, {
+        sessionId,
+        id: derivedNoticeId(sessionId, "mirror_fork"),
+        code: "mirror_fork",
+        text: `Continued on ${hostOf(fork.serverUrl)}. This copy is history now.`,
+        data: {
+          serverUrl: fork.serverUrl,
+          remoteProjectId: fork.remoteProjectId,
+          sessionId,
+        },
+      }),
+    );
+  }
+
+  /** A subsession's name for its parent's notifications. */
+  private async subsessionTitle(sessionId: string): Promise<string> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select("title")
+      .where("id", "=", sessionId)
+      .executeTakeFirst();
+    return row?.title?.trim() || "Subsession";
+  }
+
+  /**
+   * Record a session action someone took on this chat (an archive, a
+   * completion) as a notice naming who took it, inside the action's own
+   * transaction. People read it in the transcript; the agent does not.
+   */
+  async recordActionWithin(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      actionId: string;
+      status: "completed" | "failed";
+      actor: SessionMessageAuthor;
+      text: string;
+      data: JsonObject;
+    },
+  ): Promise<void> {
+    await this.appendNotice(trx, {
+      sessionId: input.sessionId,
+      id: derivedNoticeId(
+        input.sessionId,
+        `action:${input.actionId}:${input.status}`,
+      ),
+      code: "session_action",
+      text: input.text,
+      data: { ...input.data, actor: protocolJson(input.actor) },
     });
-    if (already) return;
-    const host = hostOf(fork.serverUrl);
-    await this.db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "system",
-        content: `Continued on ${host}. This copy is history now.`,
-        author_kind: "system",
-        author_payload: { kind: "system", code: "mirror_fork" },
-        delivery_mode: "message_only",
-        metadata: {
-          marker: {
-            kind: "mirror_fork",
-            serverUrl: fork.serverUrl,
-            remoteProjectId: fork.remoteProjectId,
-            sessionId,
+  }
+
+  /**
+   * A line Work writes into a session's transcript (an agent switch, a
+   * fork, a move), through the log. A notice with an id already there is
+   * left alone.
+   */
+  private async appendNotice(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      id?: string;
+      code: string;
+      text: string;
+      data?: JsonObject;
+    },
+  ): Promise<void> {
+    const id = input.id ?? randomUUID();
+    if (input.id) {
+      const existing = await trx
+        .selectFrom("agent_items")
+        .select("id")
+        .where("id", "=", id)
+        .executeTakeFirst();
+      if (existing) return;
+    }
+    const now = new Date().toISOString();
+    await this.log.append(trx, {
+      sessionId: input.sessionId,
+      events: [
+        {
+          type: "item.added",
+          item: {
+            id,
+            sessionId: input.sessionId,
+            turnId: null,
+            attemptId: null,
+            parentItemId: null,
+            position: 0,
+            status: "completed",
+            nativeRef: null,
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            endedAt: now,
+            kind: "notice",
+            code: input.code,
+            text: input.text,
+            data: protocolJson(input.data ?? {}),
           },
         },
-      })
-      .execute();
+      ],
+    });
   }
 
   /**
    * Re-point a session at another registered agent and/or change its
    * model and reasoning-effort overrides (`null` clears an override back to
-   * the agent's default). Switching agents drops incompatible overrides and the provider anchor; the
-   * next turn re-anchors against the new provider (same working state, but
-   * the new provider starts from its own fresh context).
+   * the agent's default). Switching agents drops model and effort overrides.
+   * The next turn resumes
+   * this harness's native thread, or starts one, with a context handoff for
+   * conversation turns it has not seen.
    */
   async update(
     identity: Identity,
     projectId: string,
     sessionId: string,
     patch: {
+      signal?: AbortSignal;
       agentId?: string;
       model?: string | null;
       effort?: AgentEffort | null;
@@ -2102,18 +8235,20 @@ export class AgentSessionsService {
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
-    if (this.runningTurns.has(sessionId)) {
-      throw new AgentTurnInProgressError(sessionId);
-    }
+    // Changing a chat mid-turn would drop the anchor the turn runs on. The
+    // turn may run on any replica: its lease decides, here and again in the
+    // transaction that writes the change (ADR 0193). A turn whose reply is
+    // in and is only finalizing settles in moments: the change waits for it.
+    await this.settleFinalizing(sessionId);
+    await this.assertNoRunningTurn({ sessionId });
 
     const updates: Partial<{
       agent_id: string;
-      provider: string;
-      provider_session_id: null;
       model: string | null;
       model_effort: string | null;
       allocation_id: string;
       environment_name: string;
+      placement: Json;
       sandbox_id: null;
     }> = {};
     let reallocatedRow: SessionRow | undefined;
@@ -2122,26 +8257,9 @@ export class AgentSessionsService {
       this.assertAgentAccess(identity, projectId, patch.agentId);
       const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
-      // Let the outgoing provider release its in-memory state.
-      if (session.provider_session_id) {
-        const previous = await this.resolveAgent(
-          session.agent_id,
-          projectId,
-        ).catch(() => undefined);
-        await previous?.provider
-          .dispose({
-            providerSessionId: session.provider_session_id,
-            sessionId: session.id,
-            projectId,
-            sandboxId: "",
-            workingDirectory: "",
-          })
-          .catch(() => {});
-      }
       updates.agent_id = patch.agentId;
-      updates.provider = agent.provider.name;
-      updates.provider_session_id = null;
       updates.model = null;
+      updates.model_effort = null;
     }
     if (patch.model !== undefined) {
       updates.model = patch.model;
@@ -2150,10 +8268,8 @@ export class AgentSessionsService {
       updates.model_effort = patch.effort;
     }
     if (patch.environment !== undefined || updates.agent_id !== undefined) {
+      // A chat waiting for a machine (ADR 0258) has none to give back.
       const previousAllocationId = session.allocation_id;
-      if (!previousAllocationId) {
-        throw new Error("Agent session has no Environment Allocation");
-      }
       const nextAgent = await this.resolveAgent(
         patch.agentId ?? session.agent_id,
         projectId,
@@ -2161,6 +8277,7 @@ export class AgentSessionsService {
       const admission = await this.executionEnvironments.admit({
         identity,
         projectId,
+        owner: placementOwner(session.external_user_id),
         environment: patch.environment ?? session.environment_name ?? undefined,
         allowed: nextAgent.environment?.allowed,
         preferred: nextAgent.environment?.preferred,
@@ -2169,6 +8286,7 @@ export class AgentSessionsService {
           workload: "agent",
           topology: nextAgent.topology,
         },
+        ...(nextAgent.signIn ? { signIn: nextAgent.signIn } : {}),
       });
       const requirements = nextAgent.connectionRequirements ?? [];
       if (requirements.length > 0 && !this.connectionAdmission) {
@@ -2181,16 +8299,24 @@ export class AgentSessionsService {
               projectId,
               environment: admission.environmentName,
               requirements,
+              unattended: isProjectPrincipal(session.external_user_id),
             })
           : [];
+      // The old workspace is given back: personal files and logins leave
+      // it now, and the next turn delivers them to the new one (ADR 0184).
+      patch.signal?.throwIfAborted();
+      await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
       reallocatedRow = await this.db
         .transaction()
         .execute(async (transaction) => {
-          await this.executionAllocations.release({
-            identity,
-            allocationId: previousAllocationId,
-            transaction,
-          });
+          await this.lockIdleSession({ sessionId, transaction });
+          patch.signal?.throwIfAborted();
+          if (previousAllocationId)
+            await this.executionAllocations.release({
+              identity,
+              allocationId: previousAllocationId,
+              transaction,
+            });
           const allocation = await this.executionAllocations.create({
             identity,
             projectId,
@@ -2198,27 +8324,27 @@ export class AgentSessionsService {
             workloadKind: "agent",
             rootWorkloadId: sessionId,
             workerNodeId: admission.runtime.workerNodeId,
-            policy: {
-              binding: admission.binding,
-              requirements: admission.effectiveRequirements,
-              connections,
-            },
+            policy: admissionPolicy({ admission, connections }),
             transaction,
           });
           updates.allocation_id = allocation.id;
           updates.environment_name = admission.environmentName;
-          updates.provider_session_id = null;
+          updates.placement = toPlacementJson(placementOf(admission));
           updates.sandbox_id = null;
-          return transaction
+          patch.signal?.throwIfAborted();
+          const result = await transaction
             .updateTable("agent_sessions")
             .set({ ...updates, updated_at: new Date() })
             .where("id", "=", sessionId)
             .returningAll()
             .executeTakeFirstOrThrow();
+          patch.signal?.throwIfAborted();
+          return result;
         });
-      await this.connectionGrants?.revokeAllocation({
-        allocationId: previousAllocationId,
-      });
+      if (previousAllocationId)
+        await this.connectionGrants?.revokeAllocation({
+          allocationId: previousAllocationId,
+        });
     }
 
     if (Object.keys(updates).length === 0)
@@ -2226,49 +8352,67 @@ export class AgentSessionsService {
 
     const row =
       reallocatedRow ??
-      (await this.db
-        .updateTable("agent_sessions")
-        .set({ ...updates, updated_at: new Date() })
-        .where("id", "=", sessionId)
-        .returningAll()
-        .executeTakeFirstOrThrow());
+      (await this.db.transaction().execute(async (transaction) => {
+        await this.lockIdleSession({ sessionId, transaction });
+        patch.signal?.throwIfAborted();
+        const result = await transaction
+          .updateTable("agent_sessions")
+          .set({ ...updates, updated_at: new Date() })
+          .where("id", "=", sessionId)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        patch.signal?.throwIfAborted();
+        return result;
+      }));
 
-    // Leave a marker in the transcript so the conversation shows where the
-    // agent or effort changed. System rows with `metadata.marker` render as
-    // dividers, not messages.
-    const markers: Array<{ content: string; marker: JsonObject }> = [];
-    if (updates.agent_id !== undefined) {
-      markers.push({
-        content: "Agent changed",
-        marker: { kind: "agent_change", agentId: updates.agent_id },
+    // The change reaches every viewer through the log, with a notice in the
+    // transcript where the agent, model or effort changed.
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.append(trx, {
+        sessionId,
+        events: [
+          {
+            type: "session.changed",
+            session: {
+              ...(updates.agent_id !== undefined
+                ? { agentId: updates.agent_id }
+                : {}),
+              ...(updates.model !== undefined ? { model: updates.model } : {}),
+              ...(updates.model_effort !== undefined
+                ? {
+                    modelEffort:
+                      (updates.model_effort as AgentEffort | null) ?? null,
+                  }
+                : {}),
+              ...(updates.environment_name !== undefined
+                ? { environment: updates.environment_name }
+                : {}),
+            },
+          },
+        ],
       });
-    }
-    if (updates.model_effort !== undefined && updates.agent_id === undefined) {
-      markers.push({
-        content: `Effort set to ${updates.model_effort ?? "default"}`,
-        marker: { kind: "effort_change", effort: updates.model_effort },
-      });
-    }
-    if (updates.model !== undefined && updates.agent_id === undefined) {
-      markers.push({
-        content: `Model set to ${updates.model ?? "default"}`,
-        marker: { kind: "model_change", model: updates.model },
-      });
-    }
-    for (const entry of markers) {
-      await this.db
-        .insertInto("agent_messages")
-        .values({
-          session_id: sessionId,
-          role: "system",
-          content: entry.content,
-          author_kind: "system",
-          author_payload: { kind: "system", code: "session_configuration" },
-          delivery_mode: "message_only",
-          metadata: { marker: entry.marker },
-        })
-        .execute();
-    }
+      if (updates.agent_id !== undefined)
+        await this.appendNotice(trx, {
+          sessionId,
+          code: "agent_changed",
+          text: "Agent changed",
+          data: { agentId: updates.agent_id },
+        });
+      if (updates.model_effort !== undefined && updates.agent_id === undefined)
+        await this.appendNotice(trx, {
+          sessionId,
+          code: "effort_changed",
+          text: `Effort set to ${updates.model_effort ?? "default"}`,
+          data: { effort: updates.model_effort },
+        });
+      if (updates.model !== undefined && updates.agent_id === undefined)
+        await this.appendNotice(trx, {
+          sessionId,
+          code: "model_changed",
+          text: `Model set to ${updates.model ?? "default"}`,
+          data: { model: updates.model },
+        });
+    });
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
@@ -2290,7 +8434,340 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.chatsChanged();
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /**
+   * Import a session another tool ran (ADR 0233): Claude Code's or Codex's
+   * transcript, as the host read it, becomes a session of the caller's
+   * or brings theirs up to date. Claude Code's native transcript is stored
+   * with the import, so the first turn resumes the tool's own session. A
+   * content hash already imported writes nothing; once Work ran a turn in
+   * it the file is no longer read (`taken_over`); a native session one of
+   * Work's own chats holds is never imported (`own`). Workflows do not fire
+   * on the history.
+   */
+  async importTranscript(
+    identity: Identity,
+    projectId: string,
+    input: {
+      /**
+       * What the host read. Turns it leaves out stay as they are, so a
+       * host may send only the turns that changed since its last import.
+       */
+      transcript: ImportedTranscript;
+      sourcePath: string;
+      contentSha256: string;
+      sourceModifiedAt: string;
+      /**
+       * The tool's own transcript records from `offset` on (Claude Code's
+       * session lines), stored as the session's native state so its first
+       * turn here resumes the tool's session. Records already stored are
+       * skipped, so a host that reads the file again sends from 0.
+       */
+      native?: { offset: number; entries: JsonValue[] };
+      /** The agent that continues it; the default when omitted. */
+      agentId?: string | null;
+      source?: AgentSessionSource;
+    },
+  ): Promise<{
+    outcome: "created" | "updated" | "unchanged" | "own" | "taken_over";
+    sessionId: string | null;
+  }> {
+    const { transcript } = input;
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.import",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.harness": transcript.harness,
+        },
+      },
+      async () => {
+        await this.requireProject(identity, projectId);
+        const findExisting = (db: Kysely<DB> | Transaction<DB>) =>
+          db
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("project_id", "=", projectId)
+            .where("external_user_id", "=", identity.externalUserId)
+            .where(sql<string>`imported ->> 'harness'`, "=", transcript.harness)
+            .where(
+              sql<string>`imported ->> 'nativeSessionId'`,
+              "=",
+              transcript.nativeSessionId,
+            );
+        const title = importedSessionTitle(transcript);
+        // A new import is created as any chat is: an Environment and its
+        // allocation, so the agent that continues it can run.
+        const prepared = (await findExisting(this.db).executeTakeFirst())
+          ? undefined
+          : await this.prepareSessionCreate(identity, projectId, {
+              ...(input.agentId ? { agentId: input.agentId } : {}),
+              source: input.source ?? "api",
+              ...(title ? { title } : {}),
+              visibility: "promoted",
+            });
+        return this.db.transaction().execute(async (trx) => {
+          // A native session Work's own chat holds is that chat's: a thread
+          // that reported it, or a new Claude Code thread, whose native id
+          // Work chose (its own id) before the harness said a word. Only
+          // the import of this very session holds it as an import.
+          const own = await trx
+            .selectFrom("agent_provider_threads as thread")
+            .innerJoin(
+              "agent_sessions as session",
+              "session.id",
+              "thread.session_id",
+            )
+            .innerJoin(
+              "projects as project",
+              "project.id",
+              "session.project_id",
+            )
+            .select("thread.id")
+            .where("project.tenant_id", "=", identity.tenantId)
+            .where("thread.harness", "=", transcript.harness)
+            .where((eb) =>
+              eb.or([
+                eb(
+                  sql<string>`thread.native_ref ->> 'id'`,
+                  "=",
+                  transcript.nativeSessionId,
+                ),
+                eb(
+                  sql<string>`thread.id::text`,
+                  "=",
+                  transcript.nativeSessionId,
+                ),
+              ]),
+            )
+            .where((eb) =>
+              eb.or([
+                eb("session.imported", "is", null),
+                eb(
+                  sql<string>`session.imported ->> 'nativeSessionId'`,
+                  "<>",
+                  transcript.nativeSessionId,
+                ),
+              ]),
+            )
+            .limit(1)
+            .executeTakeFirst();
+          if (own) return { outcome: "own" as const, sessionId: null };
+          const existing = await findExisting(trx)
+            .forUpdate()
+            .executeTakeFirst();
+          if (existing) {
+            // Work ran a turn in it: the chat goes on here, and what the
+            // tool writes after that is not read into it.
+            const continued = await trx
+              .selectFrom("agent_turns")
+              .select("id")
+              .where("session_id", "=", existing.id)
+              .where("provider_thread_id", "is not", null)
+              .limit(1)
+              .executeTakeFirst();
+            if (continued)
+              return { outcome: "taken_over" as const, sessionId: existing.id };
+            if (
+              importedSessionFromRow(existing.imported)?.contentSha256 ===
+              input.contentSha256
+            )
+              return { outcome: "unchanged" as const, sessionId: existing.id };
+          }
+          if (!existing && !prepared)
+            return { outcome: "unchanged" as const, sessionId: null };
+          // The tool's history is not new activity here: no workflow fires on it.
+          await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+            trx,
+          );
+          const created =
+            existing || !prepared ? undefined : await prepared.insert(trx);
+          const sessionId = existing?.id ?? created?.id ?? "";
+          if (created)
+            // The source tool ran the imported turns on this harness.
+            await trx
+              .updateTable("agent_sessions")
+              .set({
+                harness: transcript.harness,
+                created_at: new Date(transcript.startedAt),
+              })
+              .where("id", "=", sessionId)
+              .execute();
+          // Only the turns this read names: a long session's update reads
+          // and rewrites its last turns, not its whole history.
+          const keys = transcript.turns.map((turn) => turn.key);
+          const attempts =
+            existing && keys.length > 0
+              ? (
+                  await trx
+                    .selectFrom("agent_turn_attempts")
+                    .selectAll()
+                    .where("session_id", "=", sessionId)
+                    .where(sql<string>`native_turn_ref ->> 'id'`, "in", keys)
+                    .execute()
+                ).map(attemptFromRow)
+              : [];
+          const turnIds = [
+            ...new Set(attempts.map((attempt) => attempt.turnId)),
+          ];
+          const lastOrdinal = async () =>
+            Number(
+              (
+                await trx
+                  .selectFrom("agent_turns")
+                  .select((eb) => eb.fn.max("ordinal").as("ordinal"))
+                  .where("session_id", "=", sessionId)
+                  .executeTakeFirst()
+              )?.ordinal ?? 0,
+            );
+          const current = {
+            turns:
+              turnIds.length > 0
+                ? (
+                    await trx
+                      .selectFrom("agent_turns")
+                      .selectAll()
+                      .where("id", "in", turnIds)
+                      .execute()
+                  ).map(turnFromRow)
+                : [],
+            attempts,
+            items:
+              turnIds.length > 0
+                ? (
+                    await trx
+                      .selectFrom("agent_items")
+                      .select("payload")
+                      .where("session_id", "=", sessionId)
+                      .where("turn_id", "in", turnIds)
+                      .execute()
+                  ).map(itemFromRow)
+                : [],
+          };
+          const events = importedTranscriptEvents({
+            sessionId,
+            owner: identity.externalUserId,
+            transcript,
+            existing: current,
+            lastOrdinal: existing ? await lastOrdinal() : 0,
+          });
+          // The tool's own title, unless the person named the chat
+          // (ADR 0247).
+          if (
+            existing &&
+            transcript.title &&
+            transcript.title !== existing.title &&
+            !(await this.log.namedByPerson(trx, sessionId))
+          )
+            events.push({
+              type: "session.changed",
+              session: { title: transcript.title },
+            });
+          await this.log.append(trx, { sessionId, events });
+          const stored = existing
+            ? importedNativeEntries(existing.imported)
+            : 0;
+          const native = input.native;
+          const nativeEntries =
+            native && native.offset <= stored
+              ? Math.max(stored, native.offset + native.entries.length)
+              : stored;
+          if (native && native.offset <= stored) {
+            const fresh = native.entries.slice(stored - native.offset);
+            await this.importNativeState(trx, {
+              sessionId,
+              harness: transcript.harness,
+              nativeSessionId: transcript.nativeSessionId,
+              lastTurnOrdinal: await lastOrdinal(),
+              entries: fresh,
+            });
+          }
+          const imported = {
+            harness: transcript.harness,
+            nativeSessionId: transcript.nativeSessionId,
+            sourcePath: input.sourcePath,
+            contentSha256: input.contentSha256,
+            sourceModifiedAt: input.sourceModifiedAt,
+            nativeEntries,
+          } satisfies ImportedSession & { nativeEntries: number };
+          await trx
+            .updateTable("agent_sessions")
+            .set({ imported: sql<Json>`${jsonbText(imported)}::jsonb` })
+            .where("id", "=", sessionId)
+            .execute();
+          await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
+            trx,
+          );
+          return {
+            outcome: existing ? ("updated" as const) : ("created" as const),
+            sessionId,
+          };
+        });
+      },
+    );
+  }
+
+  /**
+   * The imported session's native thread (ADR 0233): the tool's own
+   * session, its transcript stored with Work as any thread's is (ADR 0198),
+   * marked as having seen every imported turn, so the first turn here
+   * resumes it and is handed nothing.
+   */
+  private async importNativeState(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      harness: string;
+      nativeSessionId: string;
+      lastTurnOrdinal: number;
+      entries: JsonValue[];
+    },
+  ): Promise<void> {
+    const row = await trx
+      .selectFrom("agent_provider_threads")
+      .selectAll()
+      .where("session_id", "=", input.sessionId)
+      .where("harness", "=", input.harness)
+      .executeTakeFirst();
+    const now = new Date().toISOString();
+    const thread = row
+      ? providerThreadFromRow(row)
+      : {
+          id: randomUUID(),
+          sessionId: input.sessionId,
+          harness: input.harness,
+          nativeRef: { id: input.nativeSessionId, strength: "strong" as const },
+          status: "active" as const,
+          lastTurnOrdinal: null,
+          portable: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+    if (!row || thread.lastTurnOrdinal !== input.lastTurnOrdinal)
+      await this.log.append(trx, {
+        sessionId: input.sessionId,
+        events: [
+          {
+            type: "provider_thread.changed",
+            thread: {
+              ...thread,
+              lastTurnOrdinal: input.lastTurnOrdinal,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+    await new NativeStateStore(this.db).append({
+      threadId: thread.id,
+      entries: input.entries,
+      executor: trx,
+    });
   }
 
   /**
@@ -2305,7 +8782,11 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { messageId?: string; sourceActionId?: string } = {},
+    input: {
+      messageId?: string;
+      sourceActionId?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -2333,34 +8814,18 @@ export class AgentSessionsService {
             .executeTakeFirst();
           if (existing) return this.get(identity, projectId, existing.id);
         }
-        const messages = await this.db
-          .selectFrom("agent_messages")
-          .where("session_id", "=", sessionId)
-          .selectAll()
-          .orderBy("seq", "asc")
-          .execute();
+        const history = await readFullSnapshot({ db: this.db, sessionId });
+        if (
+          input.messageId &&
+          !history.items.some((item) => item.id === input.messageId)
+        )
+          throw new AgentSessionNotFoundError(input.messageId);
 
-        let copied = messages;
-        if (input.messageId) {
-          const cut = messages.findIndex(
-            (message) => message.id === input.messageId,
-          );
-          if (cut === -1) {
-            throw new AgentSessionNotFoundError(input.messageId);
-          }
-          copied = messages.slice(0, cut + 1);
-        }
-        // Only settled content forks: an in-flight or failed tail would give
-        // the new conversation a phantom turn.
-        copied = copied.filter((message) => {
-          const status = (message.metadata as JsonObject | null)?.status;
-          return status !== "in_progress" && status !== "failed";
-        });
-
+        // An imported chat (ADR 0233) continues in place on its own tool's
+        // agents, so a fork of one is an ordinary fork.
         const forkTitle = session.title ? `${session.title} (fork)` : null;
-        // Marker rows never reach the harness (transcriptHistory drops them),
-        // so the fork's self-awareness travels in its system prompt: the
-        // first anchored turn already knows it's on a tangent.
+        // Notices never reach the harness, so the fork's self-awareness
+        // travels in its system prompt.
         const forkNote = `This conversation is a fork of ${
           session.title
             ? `the conversation "${session.title}"`
@@ -2369,99 +8834,173 @@ export class AgentSessionsService {
         const forkSystemPrompt = [session.system_prompt, forkNote]
           .filter((part): part is string => Boolean(part))
           .join("\n\n");
+        input.signal?.throwIfAborted();
+        const forkInput = {
+          signal: input.signal,
+          ...(session.agent_id ? { agentId: session.agent_id } : {}),
+          ...(session.model ? { model: session.model } : {}),
+          ...(session.model_effort
+            ? { effort: session.model_effort as AgentEffort }
+            : {}),
+          ...(session.environment_name
+            ? { environment: session.environment_name }
+            : {}),
+          // A fork of a read-only chat reads only too (ADR 0271).
+          ...(session.read_only ? { readOnly: true } : {}),
+          systemPrompt: forkSystemPrompt,
+          source: session.source as AgentSessionSource,
+          parentSessionId: sessionId,
+          forkedFromSessionId: sessionId,
+          visibility: "promoted" as const,
+          ...(forkTitle ? { title: forkTitle } : {}),
+          ...(input.sourceActionId
+            ? { sourceActionId: input.sourceActionId }
+            : {}),
+        };
+        const prepared = await this.prepareSessionCreate(
+          identity,
+          projectId,
+          forkInput,
+        );
         const row = await this.db.transaction().execute(async (trx) => {
-          const fork = await trx
-            .insertInto("agent_sessions")
-            .values({
-              project_id: projectId,
-              external_user_id: identity.externalUserId,
-              provider: session.provider,
-              source: session.source,
-              provider_session_id: null,
-              agent_id: session.agent_id,
-              model: session.model,
-              model_effort: session.model_effort,
-              system_prompt: forkSystemPrompt,
-              sandbox_id: null,
-              status: "active",
-              base_commit_sha: session.base_commit_sha,
-              icon: session.icon,
-              parent_session_id: sessionId,
-              forked_from_session_id: sessionId,
-              source_action_id: input.sourceActionId ?? null,
-              title: forkTitle,
-              authority_host_id: this.hostId,
-              authority_revision: 1,
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
+          const created = await this.createInner(identity, projectId, {
+            ...forkInput,
+            prepared,
+            transaction: trx,
+          });
+          const forkId = created.id;
+          const copy = copySettledHistory({
+            snapshot: history,
+            sessionId: forkId,
+            ...(input.messageId ? { throughItemId: input.messageId } : {}),
+          });
+          if (!copy)
+            throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
           await trx
-            .insertInto("agent_session_views")
-            .values({
-              session_id: fork.id,
-              tenant_id: identity.tenantId,
-              external_user_id: identity.externalUserId,
-              visibility: "promoted",
-              previous_visibility: "promoted",
+            .updateTable("agent_sessions")
+            .set({
+              icon: session.icon,
+              base_commit_sha: session.base_commit_sha,
             })
+            .where("id", "=", forkId)
             .execute();
+          // The copied history is not new activity: no workflow fires on it.
           await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
             trx,
           );
-          for (const message of copied) {
-            await trx
-              .insertInto("agent_messages")
-              .values({
-                session_id: fork.id,
-                role: message.role,
-                content: message.content,
-                commit_sha: message.commit_sha,
-                metadata: message.metadata,
-                author_kind: message.author_kind,
-                author_payload: message.author_payload,
-                delivery_mode: message.delivery_mode,
-                idempotency_key: message.idempotency_key,
-              })
-              .execute();
-          }
+          // Positions stay the source's, so the fork's log continues after
+          // the source's sequence.
+          await this.log.importSnapshot(trx, {
+            sessionId: forkId,
+            snapshot: copy.snapshot,
+          });
           await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
             trx,
           );
-          // The divider that tells both the user and the agent where this
-          // conversation came from.
-          await trx
-            .insertInto("agent_messages")
-            .values({
-              session_id: fork.id,
-              role: "system",
-              content: session.title
-                ? `Forked from "${session.title}"`
-                : "Forked from another conversation",
-              author_kind: "system",
-              author_payload: { kind: "system", code: "session_fork" },
-              delivery_mode: "message_only",
-              metadata: {
-                marker: { kind: "fork", parentSessionId: sessionId },
-              },
-            })
-            .execute();
-          return fork;
+          // The copied history last ran on the source's harness.
+          if (session.harness !== null)
+            await this.log.append(trx, {
+              sessionId: forkId,
+              events: [
+                {
+                  type: "session.changed",
+                  session: { harness: session.harness },
+                },
+              ],
+            });
+          // The fork's first turn forks the source's native thread through
+          // the fork point, when the harness can (ADR 0198); otherwise it
+          // starts fresh and is handed the copied history.
+          if (copy.forkPoint) {
+            const now = new Date().toISOString();
+            const threadId = randomUUID();
+            const source = await trx
+              .selectFrom("agent_provider_threads")
+              .select("state_path")
+              .where("id", "=", copy.forkPoint.threadId)
+              .executeTakeFirst();
+            await this.log.append(trx, {
+              sessionId: forkId,
+              events: [
+                {
+                  type: "provider_thread.changed",
+                  thread: {
+                    id: threadId,
+                    sessionId: forkId,
+                    harness: copy.forkPoint.harness,
+                    nativeRef: null,
+                    status: "active",
+                    lastTurnOrdinal:
+                      copy.snapshot.turns.at(-1)?.ordinal ?? null,
+                    portable: false,
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                },
+              ],
+            });
+            await trx
+              .updateTable("agent_provider_threads")
+              .set({
+                fork_source: protocolJson({
+                  threadId: copy.forkPoint.threadId,
+                  source: copy.forkPoint.source,
+                  bornAtOrdinal: copy.snapshot.turns.at(-1)?.ordinal ?? null,
+                  ...(copy.forkPoint.throughTurnRef
+                    ? { throughTurnRef: copy.forkPoint.throughTurnRef }
+                    : {}),
+                  ...(source?.state_path
+                    ? { statePath: source.state_path }
+                    : {}),
+                }),
+              })
+              .where("id", "=", threadId)
+              .execute();
+          }
+          // The divider that tells the user where this conversation came from.
+          await this.appendNotice(trx, {
+            sessionId: forkId,
+            code: "session_fork",
+            text: session.title
+              ? `Forked from "${session.title}"`
+              : "Forked from another conversation",
+            data: { parentSessionId: sessionId },
+          });
+          // As the log made it (its harness, say).
+          const result = await trx
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", forkId)
+            .executeTakeFirstOrThrow();
+          input.signal?.throwIfAborted();
+          return result;
         });
         return mapSession(row, false, this.hostId, this.authorityLeaseMs);
       },
     );
   }
 
-  /** Create a durable child session through one of the source agent's grants. */
+  /**
+   * Create a durable child session through one of the source agent's grants
+   * (ADR 0271): the agent it names, or a copy of the source, with the model,
+   * effort and narrowing it asks for when a grant allows them.
+   */
   async createSubsession(
     identity: Identity,
     projectId: string,
     sourceSessionId: string,
     input: {
+      signal?: AbortSignal;
       sourceActionId?: string;
       origin?: SessionOperationOrigin;
-      routeId?: string;
+      /** Omitted: a copy of the source agent. */
       agentId?: string;
+      model?: string;
+      effort?: AgentEffort;
+      /** Run in the harness's read-only mode; always allowed. */
+      readOnly?: boolean;
+      /** False keeps the child from starting its own; always allowed. */
+      delegate?: boolean;
       task: string;
       contextMode?: "fresh" | "inherit";
       title?: string;
@@ -2501,45 +9040,166 @@ export class AgentSessionsService {
         "This agent is not allowed to create subsessions",
       );
     }
-    const routeId = input.routeId ?? policy.routes[0]?.id;
-    const route = policy.routes.find((candidate) => candidate.id === routeId);
-    if (!route) {
+    if (!sourceAgentId) throw new AgentNotConfiguredError(undefined);
+    // A child that may not delegate learns so before anything else.
+    const incoming = await this.db
+      .selectFrom("agent_delegations")
+      .select("allow_further_delegation")
+      .where("target_session_id", "=", sourceSessionId)
+      .executeTakeFirst();
+    if (incoming && !incoming.allow_further_delegation)
       throw new AgentDelegationDeniedError(
-        routeId
-          ? `Delegation route '${routeId}' is not allowed`
-          : "This agent has no delegation routes",
+        "This subsession is not allowed to delegate further",
       );
-    }
-    const targetAgentId = resolveDelegationTarget({
-      target: route.target,
-      requestedAgentId: input.agentId,
+    const named = input.agentId?.trim();
+    const requested =
+      !named || named === "self"
+        ? undefined
+        : named.match(/^project:([^:]+)$/)
+          ? grantAgentId({ agent: named }, projectId)
+          : named;
+    const targetAgentId = requested ?? sourceAgentId;
+    const choices = () =>
+      this.delegationChoices(identity, projectId, sourceAgent, "Your choices:");
+    const resolveTarget = async (agentId: string) => {
+      try {
+        this.assertAgentAccess(identity, projectId, agentId);
+        return await this.resolveAgent(agentId, projectId);
+      } catch (error) {
+        if (
+          error instanceof AgentNotConfiguredError ||
+          error instanceof AccessDeniedError
+        )
+          throw new AgentDelegationDeniedError(
+            `There is no agent ${agentId} you may start. ${await choices()}`,
+          );
+        throw error;
+      }
+    };
+    const targetAgent = await resolveTarget(targetAgentId);
+    const copy = targetAgentId === sourceAgentId;
+    // The harness's own catalog, only when the parent names a setting.
+    const catalog =
+      input.model || input.effort
+        ? await this.modelCatalog({ agentId: targetAgentId, projectId })
+        : undefined;
+    const modelNames = (model: string) => {
+      const entry = catalog ? catalogEntry(catalog, model) : undefined;
+      return entry
+        ? [entry.id, ...(entry.resolvedId ? [entry.resolvedId] : [])]
+        : [model];
+    };
+    // A model the catalog knows is stored as the catalog spells it: its
+    // alias, or the version it resolves to, whichever was asked for.
+    const entry =
+      input.model && catalog ? catalogEntry(catalog, input.model) : undefined;
+    const model =
+      entry && input.model
+        ? [entry.id, entry.resolvedId].find(
+            (name) => name?.toLowerCase() === input.model?.toLowerCase(),
+          )
+        : input.model;
+    const parentEffort =
+      effortOf(source.model_effort) ?? sourceAgent.defaults?.effort;
+    // A wildcard decides only where no grant names the target, and admits
+    // the agents the menu names: listed by the host, and no wider than the
+    // caller (ADR 0271).
+    const wildcardAdmits =
+      !namesTarget(policy, { targetAgentId, sourceAgentId, projectId }) &&
+      policy.agents.some((grant) => grant.agent === "*") &&
+      sandboxingRank(targetAgent.sandboxing) <=
+        sandboxingRank(sourceAgent.sandboxing) &&
+      (await this.delegationCandidates(identity, projectId, policy)).some(
+        (candidate) => candidate.id === targetAgentId,
+      );
+    const choice = chooseGrant(policy, {
+      targetAgentId,
       sourceAgentId,
       projectId,
+      ...(model ? { model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(parentEffort ? { parentEffort } : {}),
+      wildcardAdmits,
+      modelNames,
     });
-    this.assertAgentAccess(identity, projectId, targetAgentId);
-    const targetAgent = await this.resolveAgent(targetAgentId, projectId);
-    if (
-      route.target === "*" &&
-      privilegeRank(targetAgent.privilege) >
-        privilegeRank(sourceAgent.privilege)
-    ) {
+    if ("refusal" in choice)
       throw new AgentDelegationDeniedError(
-        "A wildcard delegation route cannot grant a more privileged agent",
+        `${choice.refusal} ${await choices()}`,
       );
+    const { grant } = choice;
+    const settings = childSettings({
+      grant,
+      copy,
+      requested: {
+        ...(model ? { model } : {}),
+        ...(input.effort ? { effort: input.effort } : {}),
+      },
+      parent: {
+        ...(source.model ? { model: source.model } : {}),
+        ...(effortOf(source.model_effort)
+          ? { effort: effortOf(source.model_effort) }
+          : {}),
+      },
+      ...(parentEffort ? { parentEffort } : {}),
+      own: {
+        ...(targetAgent.defaults?.model
+          ? { model: targetAgent.defaults.model }
+          : {}),
+        ...(targetAgent.defaults?.effort
+          ? { effort: targetAgent.defaults.effort }
+          : {}),
+      },
+      modelNames,
+    });
+    if (catalog) {
+      const runningModel = settings.model ?? targetAgent.defaults?.model;
+      const refusal = catalogRefusal({
+        catalog,
+        harness: copy ? "your harness" : `the harness of ${targetAgentId}`,
+        ...(model ? { model } : {}),
+        ...(runningModel ? { runningModel } : {}),
+        ...(input.effort ? { effort: input.effort } : {}),
+      });
+      if (refusal) throw new AgentDelegationSettingsError(refusal);
+      // An effort nobody asked for gives way where the model takes none.
+      if (
+        !input.effort &&
+        settings.effort &&
+        !effortFits({ catalog, model: runningModel, effort: settings.effort })
+      )
+        delete settings.effort;
     }
+    // A read-only parent's children read only too: narrowing never ends
+    // with a child.
+    const readOnly = input.readOnly === true || source.read_only;
+    if (
+      readOnly &&
+      !readOnlyPermissions({
+        harness: harnessIdOf(targetAgent),
+        permissions: targetAgent.defaults?.harnessPermissions ?? {},
+      })
+    )
+      throw new AgentDelegationSettingsError(
+        `${copy ? "Your harness" : `${targetAgentId} runs on ${harnessIdOf(targetAgent)}, which`} has no read-only mode${source.read_only ? ", and this chat's subsessions read only" : ""}.`,
+      );
 
     const task = input.task.trim();
     if (!task) throw new Error("A subsession task is required");
     const contextMode = input.contextMode ?? "fresh";
+    const allowFurtherDelegation = grant.delegate && input.delegate !== false;
+    input.signal?.throwIfAborted();
     const childInput = {
+      signal: input.signal,
       sourceActionId: input.sourceActionId,
       agentId: targetAgentId,
+      ...settings,
+      readOnly,
       parentSessionId: sourceSessionId,
       visibility: "latent" as const,
       title: input.title ?? summarizeSessionTask(task) ?? "Subsession",
       systemPrompt:
         "Complete the delegated task independently. Your settled result is delivered to the parent automatically.",
-      allowFurtherDelegation: route.allowFurtherDelegation,
+      allowFurtherDelegation,
     };
     const preparedChild = await this.prepareSessionCreate(
       identity,
@@ -2558,8 +9218,14 @@ export class AgentSessionsService {
         sessionId: sourceSessionId,
       }),
     };
+    // An inheriting child starts from the parent's settled history; its
+    // first turn is handed it (ADR 0198).
+    const inherited =
+      contextMode === "inherit"
+        ? await readFullSnapshot({ db: this.db, sessionId: sourceSessionId })
+        : null;
     const created = await this.db.transaction().execute(async (transaction) => {
-      await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...origin.author, causation: origin.causation ?? [] })}, true)`.execute(
+      await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...origin.author, causation: origin.causation ?? [] })}, true)`.execute(
         transaction,
       );
       const lockedSource = await transaction
@@ -2594,43 +9260,30 @@ export class AgentSessionsService {
         );
       }
 
+      input.signal?.throwIfAborted();
       const child = await this.createInner(identity, projectId, {
         ...childInput,
         prepared: preparedChild,
         transaction,
       });
-      if (contextMode === "inherit") {
-        const history = await transaction
-          .selectFrom("agent_messages")
-          .selectAll()
-          .where("session_id", "=", sourceSessionId)
-          .where(sql`coalesce(metadata ->> 'status', '')`, "!=", "in_progress")
-          .orderBy("seq", "asc")
-          .execute();
-        await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
-          transaction,
-        );
-        for (const message of history) {
-          await transaction
-            .insertInto("agent_messages")
-            .values({
-              session_id: child.id,
-              role: message.role,
-              content: message.content,
-              commit_sha: message.commit_sha,
-              metadata: message.metadata,
-              author_kind: message.author_kind,
-              author_payload: message.author_payload,
-              delivery_mode: message.delivery_mode,
-              idempotency_key: null,
-            })
-            .execute();
+      if (inherited) {
+        const copy = copySettledHistory({
+          snapshot: inherited,
+          sessionId: child.id,
+        });
+        if (copy) {
+          await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+            transaction,
+          );
+          await this.log.importSnapshot(transaction, {
+            sessionId: child.id,
+            snapshot: copy.snapshot,
+          });
+          await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
+            transaction,
+          );
         }
       }
-
-      await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
-        transaction,
-      );
       const delegation = await transaction
         .insertInto("agent_delegations")
         .values({
@@ -2638,38 +9291,38 @@ export class AgentSessionsService {
           project_id: projectId,
           source_session_id: sourceSessionId,
           target_session_id: child.id,
-          route_id: route.id,
+          grant_agent: grant.agent,
           task,
           context_mode: contextMode,
-          allow_further_delegation: route.allowFurtherDelegation,
+          allow_further_delegation: allowFurtherDelegation,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
-      const receipt = await this.turns.deliver({
-        sessionId: child.id,
-        content: task,
-        author: origin.author,
-        metadata: {
-          causation: origin.causation ?? [],
-          provenance: origin.provenance ?? {},
-        },
-        mode: "next_turn",
+      const childRow = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", child.id)
+        .executeTakeFirstOrThrow();
+      const receipt = await this.deliverIn(transaction, {
+        session: childRow,
+        input: messageInput({ author: origin.author, text: task }),
+        deliveredBy: identity.externalUserId,
+        causation: origin.causation ?? [],
+        dispatch: "queue",
         idempotencyKey: `delegation:${delegation.id}:task`,
-        transaction,
       });
+      input.signal?.throwIfAborted();
       return { child, delegation, receipt };
     });
     if (created.receipt.turnId) {
-      void this.scheduleDrain(identity, projectId, created.child.id).catch(
-        () => {
-          // The durable child turn remains inspectable if execution fails.
-        },
-      );
+      void this.scheduleDrain(created.child.id).catch(() => {
+        // The durable child turn remains inspectable if execution fails.
+      });
     }
     const { child, delegation } = created;
     return {
       delegationId: delegation.id,
-      routeId: delegation.route_id,
+      grant: delegation.grant_agent,
       task: delegation.task,
       contextMode,
       allowFurtherDelegation: delegation.allow_further_delegation,
@@ -2716,7 +9369,7 @@ export class AgentSessionsService {
       return [
         {
           delegationId: delegation.id,
-          routeId: delegation.route_id,
+          grant: delegation.grant_agent,
           task: delegation.task,
           contextMode: delegation.context_mode as "fresh" | "inherit",
           allowFurtherDelegation: delegation.allow_further_delegation,
@@ -2733,34 +9386,51 @@ export class AgentSessionsService {
     });
   }
 
+  /**
+   * Wait until one of the selected children settles, the timeout, or
+   * something reaches the waiting agent (ADR 0264). With no selection, the
+   * children running now: one that settled earlier is no news. Each settled
+   * result also reaches the parent as a message, which ends the wait too.
+   */
   async waitForSubsessions(
     identity: Identity,
     projectId: string,
     sourceSessionId: string,
-    input: { sessionIds?: string[]; timeoutMs?: number } = {},
+    input: {
+      sessionIds?: string[];
+      timeoutMs?: number;
+      stopWaiting: AbortSignal;
+    },
   ): Promise<AgentSubsession[]> {
-    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000);
-    const deadline = Date.now() + timeoutMs;
-    while (true) {
-      const children = await this.listSubsessions(
-        identity,
-        projectId,
-        sourceSessionId,
-      );
-      const selected = input.sessionIds?.length
+    const children = await this.listSubsessions(
+      identity,
+      projectId,
+      sourceSessionId,
+    );
+    const watched = new Set(
+      (input.sessionIds?.length
         ? children.filter((child) =>
             input.sessionIds?.includes(child.session.id),
           )
-        : children;
-      if (
-        selected.length === 0 ||
-        selected.some((child) => child.status !== "running") ||
-        Date.now() >= deadline
-      ) {
-        return selected;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+        : children.filter((child) => child.status === "running")
+      ).map((child) => child.session.id),
+    );
+    let selected = children.filter((child) => watched.has(child.session.id));
+    const done = () =>
+      selected.length === 0 ||
+      selected.some((child) => child.status !== "running");
+    if (done()) return selected;
+    await waitUntil({
+      ready: async () => {
+        selected = (
+          await this.listSubsessions(identity, projectId, sourceSessionId)
+        ).filter((child) => watched.has(child.session.id));
+        return done();
+      },
+      timeoutMs: Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000),
+      stopWaiting: input.stopWaiting,
+    });
+    return selected;
   }
 
   async interruptSubsession(
@@ -2792,367 +9462,22 @@ export class AgentSessionsService {
       .execute();
   }
 
-  async sendMessage(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    message: string,
-    input: {
-      attachments?: AgentAttachment[];
-      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
-    } = {},
-  ): Promise<AgentMessage> {
-    return withSpan(
-      {
-        tracer,
-        name: "agent.session.message",
-        attributes: {
-          "catamorphic.project.id": projectId,
-          "catamorphic.agent.session.id": sessionId,
-        },
-      },
-      () =>
-        this.sendMessageInner(identity, projectId, sessionId, message, input),
-    );
-  }
-
-  private async sendMessageInner(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    message: string,
-    input: {
-      attachments?: AgentAttachment[];
-      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
-    } = {},
-  ): Promise<AgentMessage> {
-    const receipt = await this.enqueueMessage(
-      identity,
-      projectId,
-      sessionId,
-      message,
-      input,
-    );
-    if (!receipt.turnId) throw new Error("A queued send must create a turn");
-    await this.scheduleDrain(identity, projectId, sessionId);
-    const turn = await this.db
-      .selectFrom("agent_turns")
-      .innerJoin(
-        "agent_messages",
-        "agent_messages.id",
-        "agent_turns.result_message_id",
-      )
-      .selectAll("agent_messages")
-      .where("agent_turns.id", "=", receipt.turnId)
-      .executeTakeFirstOrThrow();
-    return mapMessage(turn);
-  }
-
-  /**
-   * Accept a human message into the durable session inbox and return as soon
-   * as it is persisted. Execution is owned by the session drainer, not the
-   * HTTP request or renderer that submitted it.
-   */
-  async enqueueMessage(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    message: string,
-    input: {
-      attachments?: AgentAttachment[];
-      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
-      idempotencyKey?: string;
-    } = {},
-  ): Promise<SessionDeliveryReceipt> {
-    return withSpan(
-      {
-        tracer,
-        name: "agent.session.enqueue_message",
-        attributes: {
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.project.id": projectId,
-          "catamorphic.agent.session.id": sessionId,
-        },
-      },
-      async () => {
-        const session = await this.requireSession(
-          identity,
-          projectId,
-          sessionId,
-        );
-        if (session.status !== "active") {
-          throw new AgentSessionClosedError(sessionId);
-        }
-        if (session.handoff_status === "pending") {
-          throw new AgentSessionHandoffPendingError(sessionId);
-        }
-        if (
-          session.authority_host_id !== "unassigned" &&
-          session.authority_host_id !== this.hostId
-        ) {
-          throw new AgentSessionAuthorityRequiredError(
-            sessionId,
-            session.authority_host_id,
-            Number(session.authority_revision),
-          );
-        }
-        await this.claimLocalAuthority(session);
-        const activeTurn = (await this.turns.listPending({ sessionId })).find(
-          (turn) => turn.status === "running",
-        );
-        const deliveryMode =
-          input.deliveryMode ??
-          (session.parent_session_id && activeTurn ? "interrupt" : "next_turn");
-        const receipt = await this.db
-          .transaction()
-          .execute(async (transaction) => {
-            const current = await transaction
-              .selectFrom("agent_sessions")
-              .selectAll()
-              .where("id", "=", sessionId)
-              .forUpdate()
-              .executeTakeFirstOrThrow();
-            if (current.status !== "active") {
-              throw new AgentSessionClosedError(sessionId);
-            }
-            if (current.handoff_status === "pending") {
-              throw new AgentSessionHandoffPendingError(sessionId);
-            }
-            if (current.authority_host_id !== this.hostId) {
-              throw new AgentSessionAuthorityRequiredError(
-                sessionId,
-                current.authority_host_id,
-                Number(current.authority_revision),
-              );
-            }
-            return this.turns.deliver({
-              sessionId,
-              content: message,
-              author: { kind: "user", externalUserId: identity.externalUserId },
-              mode: deliveryMode,
-              idempotencyKey: input.idempotencyKey,
-              metadata: input.attachments?.length
-                ? {
-                    attachments: JSON.parse(JSON.stringify(input.attachments)),
-                  }
-                : undefined,
-              transaction,
-            });
-          });
-        if (!receipt.turnId)
-          throw new Error("A queued send must create a turn");
-        if (receipt.created) {
-          await this.cancelAutoRetry(sessionId);
-          if (session.parent_session_id)
-            await this.promoteSession(identity, sessionId);
-          if (deliveryMode === "interrupt" && activeTurn) {
-            await this.interrupt(identity, projectId, sessionId, {
-              byExternalUserId: identity.externalUserId,
-              expectedTurnId: activeTurn.id,
-            });
-          }
-        }
-        void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
-          // The accepted turn remains durably failed or queued for inspection.
-        });
-        return receipt;
-      },
-    );
-  }
-
-  async exportEvents(input: {
-    identity: Identity;
-    projectId: string;
-    sessionId: string;
-  }): Promise<NonNullable<SessionMirrorInput["events"]>> {
-    await this.requireSession(input.identity, input.projectId, input.sessionId);
-    const rows = await this.db
-      .selectFrom("project_events")
-      .select(["id", "kind", "occurred_at", "payload"])
-      .where("project_id", "=", input.projectId)
-      .where("source", "=", "session")
-      .where(sql`payload->>'sessionId'`, "=", input.sessionId)
-      .orderBy("sequence")
-      .execute();
-    return rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      occurredAt: row.occurred_at.toISOString(),
-      payload: row.payload as JsonObject,
-    }));
-  }
-
+  /** The causation chain of the turn a session works on now, for what it delivers. */
   async causalContext(input: {
     identity: Identity;
     projectId: string;
     sessionId: string;
   }): Promise<string[]> {
     await this.requireSession(input.identity, input.projectId, input.sessionId);
-    const message = await this.db
+    const row = await this.db
       .selectFrom("agent_turns as turn")
-      .innerJoin("agent_messages as message", "message.id", "turn.message_id")
-      .select("message.metadata")
+      .innerJoin("agent_items as item", "item.id", "turn.input_item_id")
+      .select("item.payload")
       .where("turn.session_id", "=", input.sessionId)
-      .where("turn.status", "=", "running")
+      .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
-    const metadata = message?.metadata;
-    const chain =
-      metadata && typeof metadata === "object" && !Array.isArray(metadata)
-        ? metadata.causation
-        : undefined;
-    return Array.isArray(chain)
-      ? chain.filter((id): id is string => typeof id === "string")
-      : [];
-  }
-
-  /** Deliver an attributed inbox message and optionally schedule an agent turn. */
-  async deliver(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    input: {
-      content: string;
-      author: SessionMessageAuthor;
-      mode: SessionDeliveryMode;
-      attention?: "required" | "none";
-      idempotencyKey?: string;
-      metadata?: JsonObject;
-    },
-  ): Promise<SessionDeliveryReceipt> {
-    if (input.attention)
-      input = {
-        ...input,
-        metadata: { ...input.metadata, attention: input.attention },
-      };
-    if (input.author.kind === "agent" && !input.metadata?.causation) {
-      input = {
-        ...input,
-        metadata: {
-          ...input.metadata,
-          causation: await this.causalContext({
-            identity,
-            projectId,
-            sessionId: input.author.sessionId,
-          }),
-        },
-      };
-    }
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (session.status !== "active") {
-      throw new AgentSessionClosedError(sessionId);
-    }
-    if (
-      session.authority_host_id !== "unassigned" &&
-      session.authority_host_id !== this.hostId
-    ) {
-      return this.mailboxes.enqueue(identity, projectId, sessionId, {
-        destination: {
-          hostId: session.authority_host_id,
-          revision: Number(session.authority_revision),
-        },
-        ...input,
-      });
-    }
-    const activeTurn = (await this.turns.listPending({ sessionId })).find(
-      (turn) => turn.status === "running",
-    );
-    const receipt = await this.turns.deliver({ sessionId, ...input });
-    if (receipt.created && input.mode === "interrupt" && activeTurn) {
-      await this.interrupt(identity, projectId, sessionId, {
-        expectedTurnId: activeTurn.id,
-      });
-    }
-    if (receipt.turnId) {
-      void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
-        // The durable row remains queued or failed and is visible to operators.
-      });
-    }
-    return receipt;
-  }
-
-  /** Import one item fetched by this authoritative host, idempotently. */
-  async importMailbox(
-    identity: Identity,
-    projectId: string,
-    item: SessionMailboxItem,
-  ): Promise<SessionDeliveryReceipt> {
-    const session = await this.requireSession(
-      identity,
-      projectId,
-      item.sessionId,
-    );
-    if (session.status !== "active") {
-      throw new AgentSessionClosedError(item.sessionId);
-    }
-    if (
-      session.authority_host_id !== this.hostId ||
-      Number(session.authority_revision) !== item.authorityRevision ||
-      item.destinationHostId !== this.hostId
-    ) {
-      throw new SessionMirrorDivergedError(item.sessionId);
-    }
-    const action = item.metadata?.sessionAction;
-    if (
-      action &&
-      typeof action === "object" &&
-      !Array.isArray(action) &&
-      typeof action.operation === "string" &&
-      this.sessionActionHandler
-    ) {
-      const { SESSION_ACTION_SCHEMAS } = await import(
-        "./session-actions-service.js"
-      );
-      const operation = action.operation;
-      if (!(operation in SESSION_ACTION_SCHEMAS))
-        throw new Error("Unknown session action");
-      await this.sessionActionHandler({
-        identity,
-        projectId,
-        author: item.author,
-        operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
-        args: action.args,
-        provenance:
-          action.provenance &&
-          typeof action.provenance === "object" &&
-          !Array.isArray(action.provenance)
-            ? action.provenance
-            : {},
-        causation: Array.isArray(action.causation)
-          ? action.causation.filter(
-              (id): id is string => typeof id === "string",
-            )
-          : [],
-      });
-      return {
-        messageId: item.messageId,
-        mode: "message_only",
-        turnId: null,
-        created: true,
-      };
-    }
-    const activeTurn = (
-      await this.turns.listPending({ sessionId: item.sessionId })
-    ).find((turn) => turn.status === "running");
-    const receipt = await this.turns.deliver({
-      sessionId: item.sessionId,
-      content: item.content,
-      author: item.author,
-      mode: item.mode,
-      idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
-      ...(item.metadata ? { metadata: item.metadata } : {}),
-    });
-    if (receipt.created && item.mode === "interrupt" && activeTurn) {
-      await this.interrupt(identity, projectId, item.sessionId, {
-        expectedTurnId: activeTurn.id,
-      });
-    }
-    if (receipt.turnId) {
-      void this.scheduleDrain(identity, projectId, item.sessionId).catch(
-        () => {},
-      );
-    }
-    return receipt;
+    const item = row ? itemFromRow(row) : null;
+    return item && isInputItem(item) ? item.causation : [];
   }
 
   /** Explicitly claim a mirrored session for this host with a fencing CAS. */
@@ -3238,14 +9563,11 @@ export class AgentSessionsService {
               Number(session.authority_revision),
             );
           }
-          if (this.runningTurns.has(sessionId)) {
-            throw new AgentTurnInProgressError(sessionId);
-          }
           const pending = await transaction
             .selectFrom("agent_turns")
             .select("id")
             .where("session_id", "=", sessionId)
-            .where("status", "in", ["queued", "held", "running"])
+            .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
             .executeTakeFirst();
           if (pending) throw new AgentTurnInProgressError(sessionId);
           return transaction
@@ -3400,1297 +9722,827 @@ export class AgentSessionsService {
     throw new SessionMirrorDivergedError(session.id);
   }
 
-  private scheduleDrain(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-  ): Promise<void> {
-    const previous = this.drainers.get(sessionId) ?? Promise.resolve();
-    const current = previous
-      .catch(() => {})
-      .then(() => this.drainSession(identity, projectId, sessionId));
-    this.drainers.set(sessionId, current);
-    const cleanup = () => {
-      if (this.drainers.get(sessionId) === current) {
-        this.drainers.delete(sessionId);
-      }
-    };
-    void current.then(cleanup, cleanup);
-    return current;
+  /** This process's own node lease when the Allocation is on it (ADR 0192). */
+  private localLease(
+    allocation: { workerNodeId: string | null } | undefined,
+  ): { id: string; token: string } | undefined {
+    return this.workerNode && allocation?.workerNodeId === this.workerNode.id
+      ? this.workerNode
+      : undefined;
   }
 
-  private async drainSession(
+  /**
+   * The lease an Allocation's sandbox calls are fenced by in this process:
+   * the local node's own. A remote node's provider fences its operations by
+   * its executor's epoch, and a member's machine by its runner's lease.
+   */
+  private localFence(allocation: {
+    workerNodeId: string | null;
+  }): { workerLeaseToken: () => string | undefined } | Record<string, never> {
+    const lease = this.localLease(allocation);
+    // Read at each call: a single server takes its lease again under a new
+    // token after a lapse (ADR 0190).
+    return lease ? { workerLeaseToken: () => lease.token } : {};
+  }
+
+  /**
+   * Admit a fresh workspace for a chat whose last one was released, while
+   * it waited (ADR 0173) or by archive: its own Environment, placed again by
+   * owner and pool. The next turn's sandbox rehydrates from the session
+   * branch. A concurrent readmission by another instance wins quietly.
+   */
+  /**
+   * Release a member's-machine workspace whose runner connection ended while
+   * the runner is connected again under a new lease (ADR 0192). True when
+   * this host released it.
+   */
+  private async releaseEndedConnection(input: {
+    identity: Identity;
+    session: SessionRow;
+    allocation: ExecutionAllocation;
+  }): Promise<boolean> {
+    const { allocation, session } = input;
+    const [kind, runnerId, token] = allocation.bindingId.split(":");
+    if (kind !== "client" || !runnerId || !token || allocation.workerNodeId)
+      return false;
+    const runner = await this.db
+      .selectFrom("client_runners")
+      .select("lease_token")
+      .where(sql<boolean>`id::text = ${runnerId}`)
+      .where("lease_expires_at", ">", sql<Date>`now()`)
+      .executeTakeFirst();
+    if (!runner || runner.lease_token === token) return false;
+    const released = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id
+      )
+        return false;
+      const running = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", session.id)
+        .where("status", "in", [...ACTIVE_TURN_STATUSES])
+        .executeTakeFirst();
+      if (running) return false;
+      const done = await this.executionAllocations.release({
+        identity: input.identity,
+        allocationId: allocation.id,
+        reason: "connection_ended",
+        transaction: trx,
+      });
+      if (!done) return false;
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", session.id)
+        .execute();
+      return true;
+    });
+    if (released)
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: allocation.id })
+        .catch(() => {});
+    return released;
+  }
+
+  /**
+   * A chat with a queued turn and no workspace (ADR 0258): admitted on its
+   * Environment again, still waiting for a machine (tried again after its
+   * backoff), or out of time, when its due turns fail saying why. The wait
+   * is recorded only while the chat is open, so a close never leaves one.
+   */
+  private async placeWaiting(
+    identity: Identity,
+    session: SessionRow,
+  ): Promise<
+    | { kind: "admitted" }
+    | { kind: "waiting" }
+    | { kind: "expired"; reason: string }
+  > {
+    const wait = await this.placementWaits.get({ rootWorkloadId: session.id });
+    if (wait?.expired)
+      return { kind: "expired", reason: placementWaitExpired(wait) };
+    if (wait && !wait.due) return { kind: "waiting" };
+    const placed = await this.readmit(identity, session.project_id, session, {
+      wait: true,
+    }).catch((error: unknown) => {
+      // Its Environment cannot take it at all (gone, refused, invalid):
+      // waiting would never end, so its due turns fail saying why.
+      if (isPlacementRefusal(error)) return { refused: error.message } as const;
+      throw error;
+    });
+    if ("refused" in placed) {
+      await this.placementWaits.clear({ rootWorkloadIds: [session.id] });
+      return { kind: "expired", reason: placed.refused };
+    }
+    if ("admitted" in placed) return { kind: "admitted" };
+    const recorded = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forShare()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== session.allocation_id
+      )
+        return undefined;
+      return this.placementWaits.record({
+        tenantId: identity.tenantId,
+        projectId: session.project_id,
+        workloadKind: "agent",
+        rootWorkloadId: session.id,
+        target: placed.wait,
+        limitMinutes:
+          placed.wait.waitMinutes > 0 ? placed.wait.waitMinutes : null,
+        transaction: trx,
+      });
+    });
+    // Closed or placed meanwhile: the next look sees it.
+    if (!recorded) return { kind: "admitted" };
+    return recorded.expired
+      ? { kind: "expired", reason: placementWaitExpired(recorded) }
+      : { kind: "waiting" };
+  }
+
+  /**
+   * Admit a chat whose workspace was given back, or that never had one, on
+   * its Environment again. With `wait`, a chat no machine can take yet
+   * answers where it waits (ADR 0258), whatever the Environment's
+   * `waitMinutes`, instead of failing.
+   */
+  private async readmit(
     identity: Identity,
     projectId: string,
-    sessionId: string,
-  ): Promise<void> {
-    while (true) {
-      const session = await this.requireSession(identity, projectId, sessionId);
+    session: SessionRow,
+    options: { wait?: boolean } = {},
+  ): Promise<{ admitted: true } | { wait: PlacementWaitTarget }> {
+    const agent = await this.resolveAgent(session.agent_id, projectId);
+    // A member's machine is readmitted on the runner it last used.
+    const released = session.allocation_id
+      ? await this.executionAllocations.get({
+          identity,
+          allocationId: session.allocation_id,
+        })
+      : undefined;
+    const [kind, runnerId] = released?.bindingId.split(":") ?? [];
+    const admitArgs = {
+      identity:
+        kind === "client" && runnerId
+          ? { ...identity, clientRunnerId: runnerId }
+          : identity,
+      projectId,
+      owner: placementOwner(session.external_user_id),
+      ...(session.environment_name
+        ? { environment: session.environment_name }
+        : {}),
+      allowed: agent.environment?.allowed,
+      preferred: agent.environment?.preferred,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent" as const,
+        topology: agent.topology,
+      },
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
+    };
+    const placed = options.wait
+      ? await this.executionEnvironments.admitOrWait({
+          ...admitArgs,
+          always: true,
+        })
+      : { admission: await this.executionEnvironments.admit(admitArgs) };
+    if ("wait" in placed) return placed;
+    const { admission } = placed;
+    const requirements = agent.connectionRequirements ?? [];
+    const connectionAdmission = this.connectionAdmission;
+    if (requirements.length > 0 && !connectionAdmission) {
+      throw new Error("Connection providers are not configured");
+    }
+    const connections =
+      requirements.length > 0 && connectionAdmission
+        ? await connectionAdmission.admit({
+            identity,
+            projectId,
+            environment: admission.environmentName,
+            requirements,
+            unattended: isProjectPrincipal(session.external_user_id),
+          })
+        : [];
+    const previous = parsePlacement(session.placement);
+    try {
+      await this.readmitInto({
+        identity,
+        projectId,
+        session,
+        admission,
+        connections,
+        reason: previous?.reason ?? admission.reason,
+      });
+    } catch (error) {
+      // The machine admitted filled up (or went) before the Allocation.
+      if (options.wait && error instanceof EnvironmentCapacityError)
+        return { wait: { ...admission.wait, reason: "capacity" } };
+      throw error;
+    }
+    return { admitted: true };
+  }
+
+  /** The readmitted chat's new Allocation, unless it closed or moved meanwhile. */
+  private async readmitInto(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    admission: EnvironmentAdmission;
+    connections: readonly ResolvedConnectionBinding[];
+    reason: PlacementReason;
+  }): Promise<void> {
+    const { identity, projectId, session, admission, connections } = input;
+    await this.db.transaction().execute(async (transaction) => {
+      const current = await transaction
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forUpdate()
+        .executeTakeFirst();
       if (
-        session.status !== "active" ||
-        session.handoff_status !== "none" ||
-        session.authority_host_id !== this.hostId
+        current?.status !== "active" ||
+        current.allocation_id !== session.allocation_id
       )
         return;
-      const presentation = (
-        await this.presentations(identity, [sessionId])
-      ).get(sessionId);
-      if (presentation?.visibility === "archived") return;
-      const allocation = session.allocation_id
-        ? await this.executionAllocations.get({
-            identity,
-            allocationId: session.allocation_id,
-          })
-        : undefined;
-      if (allocation?.workerNodeId !== (this.workerNode?.id ?? null)) return;
-      const turn = await this.turns.claimNextForSession({
-        workerId: this.turnWorkerId,
-        sessionId,
-        workerNode: this.workerNode,
+      const allocation = await this.executionAllocations.create({
+        identity,
+        projectId,
+        environmentName: admission.environmentName,
+        workloadKind: "agent",
+        rootWorkloadId: session.id,
+        workerNodeId: admission.runtime.workerNodeId,
+        policy: admissionPolicy({ admission, connections }),
+        transaction,
       });
-      if (!turn) return;
-      if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
-      const message = await this.turns.messageForTurn({ turnId: turn.id });
-      const attachments = message.metadata?.attachments as
-        | AgentAttachment[]
-        | undefined;
-      this.runningTurns.add(sessionId);
-      const leaseToken = turn.leaseToken;
-      let leaseLost = false;
-      const stopAfterLeaseLoss = () => {
-        if (leaseLost) return;
-        leaseLost = true;
-        try {
-          void this.resolveAgent(session.agent_id, projectId)
-            .then((agent) =>
-              agent.provider.interrupt?.(
-                session.provider_session_id ?? sessionId,
-              ),
-            )
-            .catch((error) =>
-              console.warn(
-                "Could not interrupt the lost execution lease",
-                error,
-              ),
-            );
-        } catch (error) {
-          console.warn(
-            "[catamorphic] Could not interrupt the lost execution lease",
-            error,
-          );
-        }
-      };
-      const heartbeat = startAgentLeaseHeartbeat({
-        renew: async () => {
-          if (this.workerNode) {
-            const owned = await this.db
-              .selectFrom("worker_nodes")
-              .select("id")
-              .where("id", "=", this.workerNode.id)
-              .where("lease_token", "=", this.workerNode.token)
-              .where("enabled", "=", true)
-              .where("lease_expires_at", ">", sql<Date>`now()`)
-              .executeTakeFirst();
-            if (!owned) return false;
-          }
-          const owned = await this.turns.renew({ turnId: turn.id, leaseToken });
-          if (owned) await this.honorCancellation({ session, turnId: turn.id });
-          return owned;
+      await transaction
+        .updateTable("agent_sessions")
+        .set({
+          allocation_id: allocation.id,
+          environment_name: admission.environmentName,
+          sandbox_id: null,
+          placement: toPlacementJson({
+            ...placementOf(admission),
+            reason: input.reason,
+          }),
+        })
+        .where("id", "=", session.id)
+        .execute();
+    });
+  }
+
+  /**
+   * The chat's workspace for a person working beside its agent (ADR 0209):
+   * its owner, or anyone with `sessions:write` for a project chat. With
+   * `start`, a chat whose workspace was given back while idle (or never
+   * started) gets one as its next turn would: readmitted on its
+   * Environment, then created and seeded under the Allocation's maintenance
+   * claim, so no turn starts on it halfway. Without it, a chat with no
+   * running workspace is refused.
+   */
+  async personWorkspace(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    start: boolean;
+  }): Promise<SessionWorkspaceHandle> {
+    return withSpan(
+      {
+        tracer,
+        name: "agent_session.person_workspace",
+        attributes: {
+          "catamorphic.project.id": input.projectId,
+          "catamorphic.session.id": input.sessionId,
+          "catamorphic.workspace.start": input.start,
         },
-        onLost: stopAfterLeaseLoss,
-        onError: (error) =>
-          console.warn("[catamorphic] Agent lease renewal failed", error),
+      },
+      async () => {
+        const { identity, projectId, sessionId } = input;
+        await this.requireProject(identity, projectId);
+        const first = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", sessionId)
+          .where("project_id", "=", projectId)
+          .executeTakeFirst();
+        if (!first) throw new AgentSessionNotFoundError(sessionId);
+        assertSessionWorkspaceAccess({
+          identity,
+          projectId,
+          externalUserId: first.external_user_id,
+          agentId: first.agent_id,
+        });
+        const agent = await this.resolveAgent(first.agent_id, projectId);
+        if (agent.topology === "native")
+          throw new SessionWorkspaceUnavailableError(
+            "unsupported",
+            "This chat's agent works in a folder on its machine, not in a workspace.",
+          );
+        // The chat's work runs as its owner (ADR 0173): the caller, or the
+        // project for its own chats.
+        const owner = isProjectPrincipal(first.external_user_id)
+          ? await this.ownerOf(first)
+          : identity;
+        if (!owner) throw new AccessDeniedError();
+        const notRunning = () =>
+          new SessionWorkspaceUnavailableError(
+            "not_running",
+            WORKSPACE_NOT_RUNNING_MESSAGE,
+          );
+        const deadline = Date.now() + PERSON_WORKSPACE_WAIT_MS;
+        const starting = () =>
+          new SessionWorkspaceUnavailableError(
+            "starting",
+            "This chat's workspace is starting. Try again in a moment.",
+          );
+        // Each pass waits on, or does, one step of starting it.
+        for (let pass = 0; ; pass++) {
+          if (pass >= PERSON_WORKSPACE_PASSES) throw starting();
+          const session = await this.db
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .executeTakeFirstOrThrow();
+          if (session.status !== "active")
+            throw new SessionWorkspaceUnavailableError(
+              "closed",
+              "This chat is closed.",
+            );
+          const allocation = session.allocation_id
+            ? await this.executionAllocations.get({
+                identity: owner,
+                allocationId: session.allocation_id,
+              })
+            : undefined;
+          if (allocation?.status === "active" && session.sandbox_id)
+            return this.liveWorkspace({
+              owner,
+              session,
+              allocation,
+              start: input.start,
+            });
+          if (!input.start) throw notRunning();
+          if (allocation?.status !== "active") {
+            // The drain loop's own readmission: a concurrent one wins
+            // quietly. A chat waiting for a machine (ADR 0258) is admitted
+            // the same way, or says why not.
+            if (!allocation && session.allocation_id) throw notRunning();
+            await this.readmit(owner, projectId, session);
+            continue;
+          }
+          const claim = await claimAllocationMaintenance({
+            db: this.db,
+            allocationId: allocation.id,
+            status: "active",
+            sessionId,
+          });
+          if (!claim) {
+            // A turn is opening the workspace, or another server is saving
+            // it: wait for that rather than racing it.
+            if (Date.now() >= deadline) throw starting();
+            await delay(500);
+            continue;
+          }
+          await withAllocationMaintenance({
+            db: this.db,
+            claim,
+            work: async (held) => {
+              await held();
+              // What a turn did before the claim is what the workspace is.
+              const claimed = await this.db
+                .selectFrom("agent_sessions")
+                .selectAll()
+                .where("id", "=", sessionId)
+                .executeTakeFirstOrThrow();
+              if (
+                claimed.sandbox_id ||
+                claimed.status !== "active" ||
+                claimed.allocation_id !== allocation.id
+              )
+                return;
+              const runtime = await this.resolveExecutionRuntime(
+                owner,
+                projectId,
+                claimed,
+                agent,
+              );
+              await held();
+              const workspace = await this.ensureWorkspace(
+                owner,
+                projectId,
+                claimed,
+                agent,
+                runtime,
+              );
+              if (!workspace.sandboxProviderId || !runtime.provider) return;
+              await held();
+              await this.prepareSandboxGit({
+                identity: owner,
+                projectId,
+                sessionId,
+                provider: runtime.provider,
+                sandboxProviderId: workspace.sandboxProviderId,
+              });
+              // The person opening it may act on the chat as its owner
+              // does, so the workspace starts with the Environment's
+              // secrets and the owner's files (ADRs 0206, 0184). Setup
+              // runs before the next turn, as for any new workspace.
+              await held();
+              await this.prepareSandboxSecrets({
+                identity: owner,
+                projectId,
+                session: claimed,
+                environment: runtime.environmentName,
+                isolated: runtime.isolated === true,
+                provider: runtime.provider,
+                sandboxProviderId: workspace.sandboxProviderId,
+                ownerAuthored: true,
+              });
+              await this.preparePersonalFiles({
+                identity: owner,
+                projectId,
+                session: claimed,
+                allowed: runtime.personalCredentials === true,
+                provider: runtime.provider,
+                sandboxProviderId: workspace.sandboxProviderId,
+                ownerAuthored: true,
+              });
+            },
+          });
+          // Turns that arrived meanwhile waited for the claim.
+          this.kick(sessionId);
+        }
+      },
+    );
+  }
+
+  /** The running workspace of a chat, through its Allocation's machine. */
+  private async liveWorkspace(input: {
+    owner: Identity;
+    session: SessionRow;
+    allocation: ExecutionAllocation;
+    start: boolean;
+  }): Promise<SessionWorkspaceHandle> {
+    const { allocation, session } = input;
+    const runtime = await this.executionEnvironments.getRuntimeBinding({
+      identity: input.owner,
+      bindingId: allocation.bindingId,
+      ...(allocation.workerNodeId
+        ? { workerNodeId: allocation.workerNodeId }
+        : {}),
+      owner: placementOwner(session.external_user_id),
+    });
+    const provider = this.workspaceProvider(
+      allocation,
+      runtime?.sandboxProvider,
+    );
+    if (!provider)
+      throw new SessionWorkspaceUnavailableError(
+        "unreachable",
+        "This server cannot reach the machine that holds this chat's workspace.",
+      );
+    const sandboxId = input.start
+      ? await this.resolveSandboxProviderId(session, provider)
+      : await this.db
+          .selectFrom("project_sandboxes")
+          .select("provider_id")
+          .where("id", "=", session.sandbox_id ?? "")
+          .executeTakeFirst()
+          .then((row) => row?.provider_id);
+    if (!sandboxId)
+      throw new SessionWorkspaceUnavailableError(
+        "not_running",
+        WORKSPACE_NOT_RUNNING_MESSAGE,
+      );
+    return {
+      provider,
+      sandboxId,
+      projectDirectory: this.projectDir(provider),
+      sessionDirectory: `${provider.workspaceRoot}/${SESSION_DIRECTORY}`,
+    };
+  }
+
+  /**
+   * Give back the workspaces of chats that have waited without a turn (or
+   * a person typing in one of their terminals, ADR 0209) for their
+   * Environment's `idleReleaseMinutes` (ADR 0173). The sandbox's
+   * changes are saved to the session branch first; then the Allocation is
+   * released, and the node destroys the sandbox and frees its slot and
+   * reservation. The chat's next turn admits a fresh workspace and
+   * rehydrates it from the branch, so capacity follows activity rather than
+   * open chats. Any host releases a chat's workspace on a remote node, and
+   * this host its own local node's, each under a claim on the Allocation
+   * so two never save it at once (ADR 0192). A member's own machine holds
+   * no shared capacity; its runner stops its sandboxes when it disconnects.
+   * A chat with any queued, held, or running turn (a parked question too,
+   * its lease live or not) is never idle: a quiet turn renews its lease
+   * without touching its row,
+   * so idleness counts from when its last turn settled (ADR 0193).
+   */
+  async releaseIdleWorkspaces(
+    input: { now?: Date; limit?: number } = {},
+  ): Promise<number> {
+    const now = input.now ?? new Date();
+    const rows = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .innerJoin("projects", "projects.id", "session.project_id")
+      .innerJoin("worker_nodes as node", "node.id", "allocation.worker_node_id")
+      .select([
+        "session.id",
+        "session.project_id",
+        "session.environment_name",
+        "session.agent_id",
+        "session.external_user_id",
+        "projects.tenant_id",
+        "allocation.id as allocation_id",
+        "allocation.created_at as allocated_at",
+        "allocation.sandbox_provider_id",
+      ])
+      .select((eb) =>
+        eb
+          .selectFrom("agent_turns")
+          .select((turn) => turn.fn.max("agent_turns.updated_at").as("at"))
+          .whereRef("agent_turns.session_id", "=", "session.id")
+          .as("last_turn_at"),
+      )
+      // A person at a terminal or a preview there keeps it too (ADR 0209).
+      .select((eb) =>
+        eb
+          .selectFrom("session_workspace_use")
+          .select("session_workspace_use.used_at")
+          .whereRef("session_workspace_use.session_id", "=", "session.id")
+          .as("last_used_at"),
+      )
+      .where("session.status", "=", "active")
+      .where("allocation.status", "=", "active")
+      .where((node) =>
+        node.or([
+          node("node.remote", "is not", null),
+          node("node.id", "=", this.workerNode?.id ?? ""),
+        ]),
+      )
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef("agent_turns.session_id", "=", "session.id")
+              .where("agent_turns.status", "in", [
+                "queued",
+                "held",
+                ...ACTIVE_TURN_STATUSES,
+              ]),
+          ),
+        ),
+      )
+      .orderBy("allocation.created_at")
+      .limit(input.limit ?? 100)
+      .execute();
+    const limits = new Map<string, number>();
+    const released: string[] = [];
+    for (const row of rows) {
+      if (this.drainers.has(row.id)) continue;
+      const identity: Identity = {
+        tenantId: row.tenant_id,
+        externalUserId: PROJECT_PRINCIPAL_ID,
+        scope: [],
+      };
+      const environment = row.environment_name;
+      if (!environment) continue;
+      const policyKey = `${row.project_id}:${environment}`;
+      const minutes =
+        limits.get(policyKey) ??
+        (await this.executionEnvironments
+          .idleReleaseMinutes({
+            identity,
+            projectId: row.project_id,
+            environment,
+          })
+          .catch(() => 0));
+      limits.set(policyKey, minutes);
+      if (minutes <= 0) continue;
+      const lastTurnAt = row.last_turn_at
+        ? new Date(row.last_turn_at).getTime()
+        : 0;
+      const lastUsedAt = row.last_used_at
+        ? new Date(row.last_used_at).getTime()
+        : 0;
+      const idleSince = Math.max(
+        row.allocated_at.getTime(),
+        lastTurnAt,
+        lastUsedAt,
+      );
+      if (now.getTime() - idleSince < minutes * 60_000) continue;
+      // Locks the chat and is refused while it has work; turns then wait
+      // until the workspace is saved and released (ADR 0192).
+      const claim = await claimAllocationMaintenance({
+        db: this.db,
+        allocationId: row.allocation_id,
+        status: "active",
+        sessionId: row.id,
       });
+      if (!claim) continue;
       try {
-        const previousResult = turn.resultMessageId
-          ? await this.db
-              .selectFrom("agent_messages")
-              .select("metadata")
-              .where("id", "=", turn.resultMessageId)
-              .executeTakeFirst()
-          : undefined;
-        const result = await withTelemetryContext(
-          { attributes: {}, reset: true },
-          () =>
-            this.runTurn(
-              identity,
-              projectId,
-              sessionId,
-              modelVisibleDelivery(message.content, message.author),
-              {
-                session,
-                turnId: turn.id,
-                leaseToken,
-                leaseLost: () => leaseLost,
-                attachments,
-                persistedUserMessageId: turn.messageId,
-                requestMetadata: message.metadata,
-                ...(turn.resultMessageId
-                  ? { retryOfAssistantId: turn.resultMessageId }
-                  : {}),
-                sanitizeReasoning:
-                  (previousResult?.metadata as JsonObject | null)?.errorKind ===
-                  "model_incompat",
-              },
-            ),
-        );
-        const failed = result.metadata?.status === "failed";
-        const retryable =
-          failed &&
-          result.metadata?.retrySafe === true &&
-          result.metadata?.interrupted !== true &&
-          (result.metadata?.errorKind === "rate_limit" ||
-            result.metadata?.errorKind === "unavailable");
-        const delay =
-          [5_000, 15_000, 30_000, 60_000][Math.min(turn.attempt - 1, 3)] ??
-          60_000;
-        await this.turns.settle({
-          turnId: turn.id,
-          leaseToken,
-          resultMessageId: result.id,
-          attempt: turn.attempt,
-          ...(failed ? { error: result.content } : {}),
-          ...(retryable
-            ? {
-                retryAt: new Date(
-                  Date.now() + delay + Math.floor(Math.random() * delay * 0.2),
-                ),
-              }
-            : {}),
-        });
+        if (
+          await withAllocationMaintenance({
+            db: this.db,
+            claim,
+            work: (held) =>
+              this.releaseIdleWorkspace({
+                claim,
+                held,
+                identity,
+                projectId: row.project_id,
+                sessionId: row.id,
+                agentId: row.agent_id,
+                allocationId: row.allocation_id,
+                sandboxProviderId: row.sandbox_provider_id,
+                owner: placementOwner(row.external_user_id),
+                idleSince: new Date(now.getTime() - minutes * 60_000),
+              }),
+          })
+        )
+          released.push(row.id);
       } catch (error) {
-        await this.turns.fail({
-          turnId: turn.id,
-          leaseToken: turn.leaseToken,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      } finally {
-        heartbeat.stop();
-        this.runningTurns.delete(sessionId);
+        // Nothing is released when the workspace could not be saved first.
+        console.warn(
+          `[catamorphic] Idle workspace of session ${row.id} kept`,
+          error,
+        );
       }
     }
+    return released.length;
   }
 
-  /**
-   * Re-run the session's last failed turn in place: the failed assistant
-   * row flips back to in-progress and the harness re-executes without a
-   * new user message ({@link CodingAgentProvider.retryTurn}; harnesses
-   * without it get the last user message re-sent). `model_incompat`
-   * failures retry with sanitized reasoning history.
-   */
-  async retry(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-  ): Promise<SessionDeliveryReceipt> {
-    return withSpan(
-      {
-        tracer,
-        name: "agent.session.retry",
-        attributes: {
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.project.id": projectId,
-          "catamorphic.agent.session.id": sessionId,
-        },
-      },
-      async () => {
-        const session = await this.requireSession(
-          identity,
-          projectId,
-          sessionId,
-        );
-        if (session.status !== "active") {
-          throw new AgentSessionClosedError(sessionId);
-        }
-        if (this.runningTurns.has(sessionId)) {
-          throw new AgentTurnInProgressError(sessionId);
-        }
-
-        const messages = await this.db
-          .selectFrom("agent_messages")
-          .where("session_id", "=", sessionId)
-          .selectAll()
-          .orderBy("seq", "desc")
-          .limit(20)
-          .execute();
-        const failed = messages.find((row) => row.role === "assistant");
-        const failedMetadata = failed?.metadata as JsonObject | null;
-        if (!failed || failedMetadata?.status !== "failed") {
-          throw new Error("The last turn did not fail; nothing to retry");
-        }
-        if (
-          session.handoff_status !== "none" ||
-          (session.authority_host_id !== this.hostId &&
-            session.authority_host_id !== "unassigned")
-        ) {
-          throw new AgentSessionAuthorityRequiredError(
-            sessionId,
-            session.authority_host_id,
-            Number(session.authority_revision),
-          );
-        }
-        await this.claimLocalAuthority(session);
-        if (
-          !(await this.turns.retry({ sessionId, resultMessageId: failed.id }))
-        ) {
-          throw new Error("The failed turn is no longer retryable");
-        }
-        const turn = await this.db
-          .selectFrom("agent_turns")
-          .selectAll()
-          .where("session_id", "=", sessionId)
-          .where("result_message_id", "=", failed.id)
-          .executeTakeFirstOrThrow();
-        void this.scheduleDrain(identity, projectId, sessionId).catch((error) =>
-          console.warn("[catamorphic] Retried agent turn failed", error),
-        );
-        return {
-          messageId: turn.message_id,
-          turnId: turn.id,
-          mode: turn.delivery_mode === "interrupt" ? "interrupt" : "next_turn",
-          created: false,
-        };
-      },
-    );
-  }
-
-  /**
-   * Abort the session's in-flight turn (and cancel any scheduled
-   * auto-retry). The running turn settles as an interrupted failure; the
-   * session stays usable.
-   */
-  async interrupt(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    opts: {
-      notifyParent?: boolean;
-      byExternalUserId?: string;
-      expectedTurnId?: string;
-    } = {},
-  ): Promise<void> {
-    return withSpan(
-      {
-        tracer,
-        name: "agent.session.interrupt",
-        attributes: {
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.project.id": projectId,
-          "catamorphic.agent.session.id": sessionId,
-        },
-      },
-      async () => {
-        const session = await this.requireSession(
-          identity,
-          projectId,
-          sessionId,
-        );
-        if (
-          session.authority_host_id !== this.hostId &&
-          session.authority_host_id !== "unassigned"
-        ) {
-          throw new AgentSessionAuthorityRequiredError(
-            sessionId,
-            session.authority_host_id,
-            Number(session.authority_revision),
-          );
-        }
-        const active = await this.db
-          .updateTable("agent_turns")
-          .set({ cancellation_requested_at: new Date() })
-          .where("session_id", "=", sessionId)
-          .where("status", "=", "running")
-          .$if(opts.expectedTurnId !== undefined, (query) =>
-            query.where("id", "=", opts.expectedTurnId ?? ""),
-          )
-          .returning("id")
-          .executeTakeFirst();
-        if (opts.expectedTurnId && !active) return;
-        await this.cancelAutoRetry(sessionId);
-        if (active && this.runningTurns.has(sessionId)) {
-          this.interruptedTurns.add(sessionId);
-          try {
-            const agent = await this.resolveAgent(session.agent_id, projectId);
-            // Some harnesses only learn their native id after the stream starts.
-            // The stable Catamorphic id lets them cancel that first turn too.
-            agent.provider.interrupt?.(
-              session.provider_session_id ?? session.id,
-            );
-          } catch {
-            // No resolvable agent — nothing to signal; the turn settles alone.
-          }
-        }
-        const delegation = await this.db
-          .selectFrom("agent_delegations")
-          .selectAll()
-          .where("target_session_id", "=", sessionId)
-          .where("status", "=", "running")
-          .executeTakeFirst();
-        if (delegation) {
-          await this.db
-            .updateTable("agent_delegations")
-            .set({
-              status: "interrupted",
-              interrupted_by_external_user_id: opts.byExternalUserId ?? null,
-              completed_at: new Date(),
-            })
-            .where("id", "=", delegation.id)
-            .execute();
-          if (opts.notifyParent !== false) {
-            await this.deliver(
-              identity,
-              projectId,
-              delegation.source_session_id,
-              {
-                content: opts.byExternalUserId
-                  ? `Subsession ${sessionId} was interrupted because the user took over that conversation.`
-                  : `Subsession ${sessionId} was interrupted.`,
-                author: { kind: "system", code: "subsession_interrupted" },
-                mode: "next_turn",
-                idempotencyKey: `delegation:${delegation.id}:interrupted`,
-              },
-            );
-          }
-        }
-      },
-    );
-  }
-
-  private cancelAutoRetry(sessionId: string): Promise<void> {
-    return this.turns.cancelRetries({ sessionId });
-  }
-
-  private async honorCancellation(input: {
-    session: SessionRow;
-    turnId: string;
-  }): Promise<void> {
-    const row = await this.db
-      .selectFrom("agent_turns")
-      .select("cancellation_requested_at")
-      .where("id", "=", input.turnId)
-      .where("status", "=", "running")
+  private async releaseIdleWorkspace(input: {
+    /** This host's claim on the workspace (ADR 0192). */
+    claim: AllocationMaintenanceClaim;
+    /** Throws once the claim is lost: call it before each step. */
+    held: () => Promise<void>;
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    agentId: string | null;
+    allocationId: string;
+    sandboxProviderId: string | null;
+    /** The session's owner, whose machine may be open only to them. */
+    owner?: string | null;
+    /** Use since this keeps the workspace. */
+    idleSince: Date;
+  }): Promise<boolean> {
+    const { identity, projectId, sessionId } = input;
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: input.allocationId,
+    });
+    if (allocation?.status !== "active") return false;
+    // A person who opened a terminal or a preview after the sweep looked
+    // keeps it (ADR 0209); they mark their use before they start anything.
+    const used = await this.db
+      .selectFrom("session_workspace_use")
+      .select("used_at")
+      .where("session_id", "=", sessionId)
+      .where("used_at", ">", input.idleSince)
       .executeTakeFirst();
-    if (
-      !row?.cancellation_requested_at ||
-      this.interruptedTurns.has(input.session.id)
-    )
-      return;
-    this.interruptedTurns.add(input.session.id);
-    (
-      await this.resolveAgent(input.session.agent_id, input.session.project_id)
-    ).provider.interrupt?.(
-      input.session.provider_session_id ?? input.session.id,
+    if (used) return false;
+    const agent = await this.resolveAgent(input.agentId, projectId).catch(
+      () => undefined,
     );
+    // A contained agent's changes never leave its sandbox (ADR 0182), so
+    // its workspace is given back without saving them.
+    if (input.sandboxProviderId && agent?.sandboxing !== "contained") {
+      const runtime = await this.executionEnvironments.getRuntimeBinding({
+        identity,
+        bindingId: allocation.bindingId,
+        ...(allocation.workerNodeId
+          ? { workerNodeId: allocation.workerNodeId }
+          : {}),
+        ...(input.owner !== undefined ? { owner: input.owner } : {}),
+      });
+      const selected = runtime?.sandboxProvider;
+      // Only the instance that reaches the machine can save its workspace.
+      if (!selected) return false;
+      const provider = allocationSandboxProvider({
+        db: this.db,
+        allocation,
+        provider: selected,
+        ...this.localFence(allocation),
+      });
+      await input.held();
+      const status = await provider.getSandboxStatus(input.sandboxProviderId);
+      if (status === "stopped" || status === "archived")
+        await provider.startSandbox(input.sandboxProviderId);
+      // Throws when the changes cannot be read: the workspace is kept.
+      await input.held();
+      await syncSandboxChanges({
+        provider,
+        projectManager: this.projectManager,
+        identity,
+        projectId,
+        sessionId,
+        sandboxProviderId: input.sandboxProviderId,
+        projectDir: this.projectDir(provider),
+      });
+      await input.held();
+      await this.projectManager.checkpointSession({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId,
+        message: "Save the workspace before releasing it while idle",
+        author: CHECKPOINT_AUTHOR,
+      });
+    }
+    // Personal logins and files leave with the workspace (ADR 0184); the
+    // next turn delivers them again into its new one.
+    await input.held();
+    if (input.sandboxProviderId)
+      await this.withdrawFromSessionSandbox({
+        identity,
+        projectId,
+        sessionId,
+        allocation,
+        sandboxProviderId: input.sandboxProviderId,
+      });
+    const released = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== allocation.id
+      )
+        return false;
+      // Released only while this host still holds the claim, so no turn
+      // was claimed since it began.
+      const claimed = await trx
+        .selectFrom("execution_allocations")
+        .select("id")
+        .where("id", "=", allocation.id)
+        .where("maintenance_claim", "=", input.claim.token)
+        .where("maintenance_claimed_until", ">", sql<Date>`now()`)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!claimed) throw new AllocationMaintenanceLostError();
+      const busy = await trx
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+        .executeTakeFirst();
+      if (busy) return false;
+      await this.executionAllocations.release({
+        identity,
+        allocationId: allocation.id,
+        reason: "idle",
+        transaction: trx,
+      });
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", sessionId)
+        .execute();
+      return true;
+    });
+    if (!released) return false;
+    await this.connectionGrants
+      ?.revokeAllocation({ allocationId: allocation.id })
+      .catch(() => {});
+    return true;
   }
 
-  private async runTurn(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    message: string,
-    extras: {
-      session: SessionRow;
-      turnId: string;
-      leaseLost: () => boolean;
-      leaseToken: string;
-      attachments?: AgentAttachment[];
-      /** Retry: reuse this failed assistant row instead of inserting. */
-      retryOfAssistantId?: string;
-      sanitizeReasoning?: boolean;
-      /** Durable inbox message already persisted by AgentTurnsService. */
-      persistedUserMessageId?: string;
-      /** Metadata on the request that caused this turn. */
-      requestMetadata?: JsonObject | null;
-    },
-  ): Promise<AgentMessage> {
-    return withSpan(
-      {
-        tracer,
-        name: "agent.turn",
-        attributes: {
-          "catamorphic.agent.turn.id": extras.turnId,
-          "catamorphic.project.id": projectId,
-          "catamorphic.tenant.id": identity.tenantId,
-          "user.id": identity.externalUserId,
-          "catamorphic.agent.session.id": sessionId,
-        },
-      },
-      async (span) => {
-        // Note: no stale-flag clearing needed here — interrupt() only sets the
-        // flag while a turn is marked running, and every turn consumes it on
-        // the way out (success and error paths both delete).
-        const { session } = extras;
-        const attachments = extras.attachments?.length
-          ? extras.attachments
-          : undefined;
-
-        // Lock the execution row with every transcript write. An expired executor
-        // may return after recovery; it must not overwrite the recovered outcome.
-        const writeOwned = <T>(write: (trx: Transaction<DB>) => Promise<T>) =>
-          this.db.transaction().execute(async (trx) => {
-            // Match the recovery worker's session -> turn lock order, and fence
-            // a host whose authority was explicitly transferred in the meantime.
-            const authority = await trx
-              .selectFrom("agent_sessions")
-              .select("id")
-              .where("id", "=", sessionId)
-              .where("authority_host_id", "=", this.hostId)
-              .where("authority_revision", "=", session.authority_revision)
-              .forUpdate()
-              .executeTakeFirst();
-            const owned = await trx
-              .selectFrom("agent_turns")
-              .select("id")
-              .where("id", "=", extras.turnId)
-              .where("status", "=", "running")
-              .where("lease_token", "=", extras.leaseToken)
-              .where("lease_expires_at", ">", sql<Date>`clock_timestamp()`)
-              .forUpdate()
-              .executeTakeFirst();
-            if (!authority || !owned)
-              throw new Error(
-                "Execution ownership was lost. Check the last actions before retrying.",
-              );
-            return write(trx);
-          });
-
-        // Persist the user message and the in-progress placeholder BEFORE the
-        // (potentially slow) provider/sandbox anchoring: the turn is then
-        // visible and crash-recoverable from the moment it starts — a process
-        // death during anchoring settles as an interrupted turn instead of a
-        // silently vanished message. Retries reuse the failed assistant row —
-        // the conversation continues in place, no duplicate user message.
-        let assistantMessageId: string;
-        if (extras.retryOfAssistantId) {
-          assistantMessageId = extras.retryOfAssistantId;
-          await writeOwned((trx) =>
-            trx
-              .updateTable("agent_messages")
-              .set({ content: "Thinking...", metadata: progressMetadata([]) })
-              .where("id", "=", assistantMessageId)
-              .execute(),
-          );
-        } else {
-          assistantMessageId = await writeOwned(async (trx) => {
-            if (!extras.persistedUserMessageId) {
-              await trx
-                .insertInto("agent_messages")
-                .values({
-                  session_id: sessionId,
-                  role: "user",
-                  content: message,
-                  author_kind: "user",
-                  author_payload: {
-                    kind: "user",
-                    externalUserId: identity.externalUserId,
-                  },
-                  delivery_mode: "next_turn",
-                  ...(attachments
-                    ? {
-                        metadata: {
-                          attachments: JSON.parse(
-                            JSON.stringify(attachments),
-                          ) as JsonObject[],
-                        },
-                      }
-                    : {}),
-                })
-                .execute();
-            }
-            const assistant = await trx
-              .insertInto("agent_messages")
-              .values({
-                session_id: sessionId,
-                role: "assistant",
-                content: "Thinking...",
-                author_kind: "agent",
-                author_payload: {
-                  kind: "agent",
-                  sessionId,
-                  agentId: session.agent_id,
-                },
-                delivery_mode: "message_only",
-                metadata: progressMetadata([]),
-              })
-              .returning("id")
-              .executeTakeFirstOrThrow();
-            await trx
-              .updateTable("agent_turns")
-              .set({ result_message_id: assistant.id })
-              .where("id", "=", extras.turnId)
-              .execute();
-            return assistant.id;
-          });
-        }
-
-        const events: AgentEvent[] = [];
-        // Events since the last flushed preamble — each assistant message keeps
-        // only its own segment's events.
-        let segmentEvents: AgentEvent[] = [];
-        // The provider yields text at tool-call boundaries (preambles) and once
-        // at the end (the answer). A segment is held until we know which it is:
-        // more work following it makes it a preamble, pushed immediately as its
-        // own completed message with a fresh in-progress placeholder after it.
-        let heldText: string | undefined;
-        let providerFinished = false;
-        let lastFlushed: { id: string; events: AgentEvent[] } | undefined;
-        const flushHeldText = async () => {
-          if (heldText === undefined) return;
-          const metadata: JsonObject = {
-            status: "completed",
-            events: stepLogEvents(segmentEvents),
-          };
-          const settledContent = heldText;
-          // One transaction: a client poll must never observe the settled
-          // preamble without its follow-up placeholder — that half-state
-          // reads as "turn over" for a tick (activity line and working
-          // indicators flicker off and back mid-turn).
-          const next = await writeOwned(async (trx) => {
-            await trx
-              .updateTable("agent_messages")
-              .set({ content: settledContent, metadata })
-              .where("id", "=", assistantMessageId)
-              .execute();
-            const next = await trx
-              .insertInto("agent_messages")
-              .values({
-                session_id: sessionId,
-                role: "assistant",
-                content: "Thinking...",
-                author_kind: "agent",
-                author_payload: {
-                  kind: "agent",
-                  sessionId,
-                  agentId: session.agent_id,
-                },
-                delivery_mode: "message_only",
-                metadata: progressMetadata([]),
-              })
-              .returning("id")
-              .executeTakeFirstOrThrow();
-            await trx
-              .updateTable("agent_turns")
-              .set({ result_message_id: next.id })
-              .where("id", "=", extras.turnId)
-              .execute();
-            return next;
-          });
-          lastFlushed = { id: assistantMessageId, events: segmentEvents };
-          heldText = undefined;
-          segmentEvents = [];
-          assistantMessageId = next.id;
-        };
-        const continuesTurn = (event: AgentEvent): boolean =>
-          event.type === "text" ||
-          event.type === "tool_call" ||
-          event.type === "command" ||
-          event.type === "file_edit" ||
-          event.type === "subagent" ||
-          event.type === "background";
-
-        try {
-          const agent = await this.resolveAgent(session.agent_id, projectId);
-          const runtime = await this.resolveExecutionRuntime(
-            identity,
-            projectId,
-            session,
-            agent,
-          );
-          const callerLayers = await this.callerToolPolicies(
-            identity,
-            projectId,
-            session.agent_id,
-          );
-          const turnOptions: TurnOptions = {
-            ...agent.defaults,
-            ...(session.model ? { model: session.model } : {}),
-            ...(session.model_effort
-              ? { effort: session.model_effort as AgentEffort }
-              : {}),
-            ...(attachments ? { attachments } : {}),
-            toolPolicies: callerLayers ?? {},
-          };
-          const blockingQuestions = new Set<string>();
-          turnOptions.askQuestion = async (input) => {
-            const requestId = `${assistantMessageId}:${input.requestId}`;
-            const requests = new AgentRuntimeRequestsService(this.db);
-            input.signal?.throwIfAborted();
-            await writeOwned((transaction) =>
-              requests.create({
-                transaction,
-                identity,
-                request: {
-                  requestId,
-                  kind: "question",
-                  status: "pending",
-                  sessionId,
-                  turnId: extras.turnId,
-                  createdAt: new Date().toISOString(),
-                  blocking: input.blocking,
-                  origin: {
-                    kind: "tool",
-                    id: "ask_user",
-                    displayName: "Ask User",
-                  },
-                  title: input.questions[0]?.header ?? "Question",
-                  question: {
-                    prompt: input.questions[0]?.question ?? "Question",
-                  },
-                  questions: input.questions,
-                },
-              }),
-            );
-            if (!input.blocking)
-              return `Question request ${requestId} is open. Continue independent work. The user's answer will arrive as a message when submitted.`;
-            blockingQuestions.add(requestId);
-            try {
-              await this.turns.progress({
-                turnId: extras.turnId,
-                leaseToken: extras.leaseToken,
-                phase: "waiting",
-                activity: "Waiting for your answer",
-              });
-              while (true) {
-                input.signal?.throwIfAborted();
-                const row = await this.db
-                  .selectFrom("agent_runtime_requests")
-                  .select(["status", "response"])
-                  .where("session_id", "=", sessionId)
-                  .where("request_id", "=", requestId)
-                  .executeTakeFirstOrThrow();
-                if (row.status === "resolved") {
-                  const response: { answers: string[] } = JSON.parse(
-                    JSON.stringify(row.response),
-                  );
-                  // Every answer enters the durable inbox, even when another
-                  // server receives it. The waiting tool consumes its own answer;
-                  // only non-blocking answers are eligible for native steering.
-                  await writeOwned((trx) =>
-                    trx
-                      .updateTable("agent_turns")
-                      .set({
-                        status: "completed",
-                        result_message_id: assistantMessageId,
-                        completed_at: new Date(),
-                      })
-                      .where("session_id", "=", sessionId)
-                      .where("status", "=", "queued")
-                      .where("message_id", "in", (eb) =>
-                        eb
-                          .selectFrom("agent_messages")
-                          .select("id")
-                          .where("session_id", "=", sessionId)
-                          .where(
-                            "idempotency_key",
-                            "=",
-                            `question-answer:${requestId}`,
-                          ),
-                      )
-                      .execute(),
-                  );
-                  return response.answers.join("\n");
-                }
-                if (row.status !== "pending")
-                  throw new Error("Question is no longer pending");
-                await delay(200, undefined, { signal: input.signal });
-              }
-            } finally {
-              blockingQuestions.delete(requestId);
-              // A waiting request cannot survive the native call that owned it.
-              // Answered requests are untouched; interruption withdraws pending UI.
-              await writeOwned((trx) =>
-                trx
-                  .updateTable("agent_runtime_requests")
-                  .set({
-                    status: "cancelled",
-                    resolved_at: new Date(),
-                    updated_at: new Date(),
-                    revision: sql<number>`revision + 1`,
-                  })
-                  .where("session_id", "=", sessionId)
-                  .where("request_id", "=", requestId)
-                  .where("status", "=", "pending")
-                  .execute(),
-              );
-              await this.turns.progress({
-                turnId: extras.turnId,
-                leaseToken: extras.leaseToken,
-                phase: blockingQuestions.size ? "waiting" : "working",
-                activity: blockingQuestions.size
-                  ? "Waiting for your answer"
-                  : "Continuing",
-              });
-            }
-          };
-          turnOptions.readPendingMessages = async () => {
-            const pending = await this.turns.listPendingMessages({ sessionId });
-            return pending
-              .filter(
-                (entry) =>
-                  entry.status === "queued" && entry.metadata?.inTurn === true,
-              )
-              .map((entry) => ({ id: entry.id, content: entry.content }));
-          };
-          turnOptions.acknowledgeMessages = async ({ ids }) => {
-            if (ids.length === 0) return;
-            await writeOwned((trx) =>
-              trx
-                .updateTable("agent_turns")
-                .set({
-                  status: "completed",
-                  result_message_id: assistantMessageId,
-                  completed_at: new Date(),
-                })
-                .where("session_id", "=", sessionId)
-                .where("id", "in", ids)
-                .where("status", "=", "queued")
-                .execute(),
-            );
-          };
-
-          const anchor = await this.ensureAnchor(
-            identity,
-            projectId,
-            session,
-            agent,
-            runtime,
-          );
-          if (this.agentCapabilities) {
-            turnOptions.context = [
-              await this.agentCapabilities.prompt({
-                allocationId: session.allocation_id ?? undefined,
-                identity,
-                projectId,
-                sessionId,
-                workingDirectory: anchor.providerSession.workingDirectory,
-              }),
-            ];
-            turnOptions.capabilities = this.agentCapabilities.forSession({
-              identity,
-              projectId,
-              sessionId,
-              allocationId: session.allocation_id ?? undefined,
-            });
-          }
-          // The caller's view of the store, in the folder the agent works in
-          // (ADR 0055): pulled before the turn, shipped after it.
-          const storeDir = await this.storeSyncDir(
-            identity,
-            projectId,
-            anchor,
-            sessionId,
-          );
-          if (storeDir) {
-            await syncRemoteProject(
-              storeDir,
-              documentsClientFor(
-                this.storeSync!.documents,
-                identity,
-                projectId,
-                {
-                  source: "store",
-                },
-              ),
-            ).catch((error) => {
-              console.warn(
-                `[catamorphic] store pull before turn failed: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            });
-          }
-
-          // An interrupt can land while the turn is still anchoring (rows,
-          // sandbox) — before any provider signal exists to abort. The
-          // latched flag catches it here: the turn settles as interrupted
-          // without ever calling the provider. Checked with has() (not
-          // delete()) so the finalization below still reads it as interrupted.
-          if (extras.leaseLost())
-            throw new Error(
-              "Execution ownership was lost. Check the last actions before retrying.",
-            );
-          const preparationOwned = await this.turns.progress({
-            turnId: extras.turnId,
-            leaseToken: extras.leaseToken,
-            phase: "working",
-            activity: "Waiting for agent",
-          });
-          if (!preparationOwned)
-            throw new Error(
-              "Execution ownership was lost. Check the last actions before retrying.",
-            );
-          await this.honorCancellation({ session, turnId: extras.turnId });
-          const stream = this.interruptedTurns.has(sessionId)
-            ? (async function* (): AsyncIterable<AgentEvent> {
-                yield { type: "error", content: "Interrupted." };
-                yield { type: "done" };
-              })()
-            : // Retries prefer the harness's native re-run (no duplicated user
-              // message in its history); harnesses without one get a re-send.
-              // A freshly re-anchored session (host restart, credential rebuild
-              // after a re-auth) gets a re-send too: it was seeded from the
-              // settled transcript, which excludes the failed turn's user
-              // message — the harness has nothing to natively re-run, and
-              // asking it to produced dead "Nothing to retry" failures.
-              extras.retryOfAssistantId &&
-                agent.provider.retryTurn &&
-                !anchor.reanchored
-              ? agent.provider.retryTurn(anchor.providerSession, {
-                  ...turnOptions,
-                  sanitizeReasoning: extras.sanitizeReasoning,
-                })
-              : agent.provider.sendMessage(
-                  anchor.providerSession,
-                  message,
-                  turnOptions,
-                );
-          const presentCapability = capabilityEventPresenter();
-          for await (const rawEvent of stream) {
-            const event = presentCapability(rawEvent);
-            if (extras.leaseLost())
-              throw new Error(
-                "Execution ownership was lost. Check the last actions before retrying.",
-              );
-            // A harness that only learns its native session id once the first
-            // turn starts (Codex) reports it here; persist it so later turns
-            // resume the same thread. Pure anchoring signal — never recorded
-            // as turn content.
-            if (event.type === "session") {
-              if (event.providerSessionId) {
-                anchor.providerSession.providerSessionId =
-                  event.providerSessionId;
-                await writeOwned((trx) =>
-                  trx
-                    .updateTable("agent_sessions")
-                    .set({ provider_session_id: event.providerSessionId })
-                    .where("id", "=", sessionId)
-                    .execute(),
-                );
-              }
-              continue;
-            }
-            if (continuesTurn(event)) await flushHeldText();
-            if (event.type === "error" && !event.errorKind && event.content) {
-              event.errorKind = connectionFailureKind(event.content);
-            }
-            events.push(event);
-            segmentEvents.push(event);
-            if (event.type !== "done" && event.type !== "usage") {
-              const owned = await this.turns.progress({
-                turnId: extras.turnId,
-                leaseToken: extras.leaseToken,
-                phase:
-                  blockingQuestions.size > 0 || event.type === "question"
-                    ? "waiting"
-                    : "working",
-                activity:
-                  blockingQuestions.size > 0
-                    ? "Waiting for your answer"
-                    : activityLabel(event),
-              });
-              if (!owned)
-                throw new Error(
-                  "Execution ownership was lost. Check the last actions before retrying.",
-                );
-            }
-            if (event.type === "text" && event.content) {
-              heldText = event.content;
-            }
-            // Usage is accounting that arrives right before done (ADR 0057) —
-            // never a progress beat, so it must not overwrite the activity line.
-            if (event.type !== "done" && event.type !== "usage") {
-              await writeOwned((trx) =>
-                trx
-                  .updateTable("agent_messages")
-                  .set({
-                    content: activityLabel(event),
-                    metadata: progressMetadata(segmentEvents),
-                  })
-                  .where("id", "=", assistantMessageId)
-                  .execute(),
-              );
-            }
-          }
-
-          if (
-            !events.some(
-              (event) =>
-                event.type === "done" ||
-                event.type === "error" ||
-                event.type === "question",
-            )
-          ) {
-            throw new Error(
-              "Agent stream disconnected before the turn completed",
-            );
-          }
-          // A bookkeeping failure after completion must not replay agent actions.
-          providerFinished = true;
-          const savingOwned = await this.turns.progress({
-            turnId: extras.turnId,
-            leaseToken: extras.leaseToken,
-            phase: "saving",
-            activity: "Saving changes",
-          });
-          if (!savingOwned)
-            throw new Error(
-              "Execution ownership was lost. Check the last actions before retrying.",
-            );
-
-          const settledWorkingDirectory =
-            agent.topology === "native" && this.nativeAgentCheckout
-              ? ((await this.nativeAgentCheckout.resolve({
-                  projectId,
-                  sessionId,
-                  bindingId: runtime.bindingId,
-                  environmentName: runtime.environmentName,
-                })) ?? anchor.providerSession.workingDirectory)
-              : anchor.providerSession.workingDirectory;
-          anchor.providerSession.workingDirectory = settledWorkingDirectory;
-
-          const changedFiles =
-            anchor.sandboxProviderId && runtime.provider
-              ? await this.syncBackChanges(
-                  runtime.provider,
-                  identity,
-                  projectId,
-                  anchor.sandboxProviderId,
-                  this.workerNode ? sessionId : undefined,
-                )
-              : hostChangedFiles(events, settledWorkingDirectory);
-
-          // Ship the turn's `store/` writes as the caller (ADR 0055) before the
-          // checkpoint: store paths are gitignored, so they never enter git.
-          let storeSync: JsonObject | undefined;
-          if (storeDir) {
-            try {
-              const report = await shipRemoteProject(
-                storeDir,
-                documentsClientFor(
-                  this.storeSync!.documents,
-                  identity,
-                  projectId,
-                  {
-                    source: "store",
-                  },
-                ),
-              );
-              if (
-                report.shipped.length +
-                  report.deleted.length +
-                  report.conflicts.length +
-                  report.notShippable.length +
-                  report.failed.length >
-                0
-              ) {
-                storeSync = JSON.parse(JSON.stringify(report)) as JsonObject;
-              }
-            } catch (error) {
-              storeSync = {
-                error: error instanceof Error ? error.message : String(error),
-              };
-            }
-          }
-
-          // Checkpoint commit (ADR 0044): both harness families converge here —
-          // sandbox edits just synced back, host edits are already in the tree.
-          // Sweeps ALL dirty state (host harnesses under-report changed files);
-          // failures log and never break the turn.
-          const commitSha =
-            agent.topology === "native" || changedFiles.length > 0
-              ? await this.checkpointTurn(identity, projectId, message, {
-                  sessionId,
-                  workingDirectory: settledWorkingDirectory,
-                  nativeExecution: agent.topology === "native",
-                })
-              : null;
-
-          const questionEvent = [...events]
-            .reverse()
-            .find((event) => event.type === "question");
-          const interrupted = this.interruptedTurns.delete(sessionId);
-          const failed =
-            interrupted || events.some((event) => event.type === "error");
-
-          // The turn ended right after a flushed preamble (no closing text,
-          // error, or question): that preamble IS the final message. Drop the
-          // dangling placeholder and finalize the flushed row instead.
-          const settleFlushed =
-            heldText === undefined && !failed && !questionEvent && lastFlushed;
-          if (settleFlushed) {
-            await writeOwned(async (trx) => {
-              await trx
-                .updateTable("agent_turns")
-                .set({ result_message_id: settleFlushed.id })
-                .where("id", "=", extras.turnId)
-                .where("lease_token", "=", extras.leaseToken)
-                .execute();
-              await trx
-                .deleteFrom("agent_messages")
-                .where("id", "=", assistantMessageId)
-                .execute();
-            });
-            assistantMessageId = settleFlushed.id;
-            segmentEvents = [...settleFlushed.events, ...segmentEvents];
-          }
-
-          const providerError = events
-            .filter((event) => event.type === "error")
-            .map((event) => event.content)
-            .filter((content): content is string => Boolean(content))
-            .join("\n");
-          const content = settleFlushed
-            ? undefined
-            : failed && !interrupted
-              ? providerError || "Agent failed"
-              : (heldText ??
-                (providerError || (questionEvent ? "" : "(no response)")));
-          const errorKind = interrupted
-            ? undefined
-            : [...events]
-                .reverse()
-                .find((event) => event.type === "error" && event.errorKind)
-                ?.errorKind;
-          // The turn's accounting snapshot (ADR 0057): at most one usage event,
-          // emitted by the harness just before done. It lands as metadata.usage
-          // on the settled reply, where the composer's context meter reads it.
-          const usageEvent = [...events]
-            .reverse()
-            .find((event) => event.type === "usage" && event.usage);
-          const metadata: JsonObject = {
-            status: failed
-              ? "failed"
-              : questionEvent
-                ? "awaiting_input"
-                : "completed",
-            retrySafe:
-              events.some(
-                (event) => event.type === "error" && event.retrySafe === true,
-              ) && !events.some((event) => continuesTurn(event)),
-            events: stepLogEvents(segmentEvents),
-            changedFiles: changedFiles.map((change) => ({ ...change })),
-            ...(usageEvent?.usage
-              ? {
-                  usage: JSON.parse(
-                    JSON.stringify(usageEvent.usage),
-                  ) as JsonObject,
-                }
-              : {}),
-            // What the turn's store/ writes became (ADR 0055): shipped, refused,
-            // conflicted, or outside store/. Hosts render it beside the reply.
-            ...(storeSync ? { storeSync } : {}),
-            ...(errorKind ? { errorKind } : {}),
-            ...(interrupted && failed ? { interrupted: true } : {}),
-            ...(failed && !interrupted && heldText
-              ? { partialContent: heldText }
-              : {}),
-            ...(questionEvent?.questions
-              ? {
-                  questions: JSON.parse(
-                    JSON.stringify(questionEvent.questions),
-                  ) as JsonObject[],
-                }
-              : {}),
-          };
-
-          const row = await writeOwned((trx) =>
-            trx
-              .updateTable("agent_messages")
-              .set({
-                ...(content === undefined ? {} : { content }),
-                ...(commitSha ? { commit_sha: commitSha } : {}),
-                metadata,
-              })
-              .where("id", "=", assistantMessageId)
-              .returningAll()
-              .executeTakeFirstOrThrow(),
-          );
-
-          const requestedNotification = workflowNotification(
-            extras.requestMetadata,
-          );
-          const shouldRequestAttention =
-            (failed && !interrupted) ||
-            (requestedNotification !== undefined &&
-              (metadata.status === "completed" ||
-                metadata.status === "awaiting_input" ||
-                (metadata.status === "failed" &&
-                  errorKind !== "rate_limit" &&
-                  errorKind !== "unavailable" &&
-                  !interrupted)));
-          if (shouldRequestAttention) {
-            await writeOwned((trx) =>
-              trx
-                .updateTable("agent_sessions")
-                .set(({ ref }) => ({
-                  attention_revision: sql`${ref("attention_revision")} + 1`,
-                  updated_at: new Date(),
-                }))
-                .where("id", "=", sessionId)
-                .execute(),
-            );
-          }
-
-          const transientFailure =
-            failed &&
-            metadata.retrySafe === true &&
-            !interrupted &&
-            (errorKind === "rate_limit" || errorKind === "unavailable");
-          if (!transientFailure) {
-            await this.settleDelegation({
-              identity,
-              projectId,
-              sessionId,
-              resultMessageId: assistantMessageId,
-              status: metadata.status as AgentTurnSettledEvent["status"],
-              content: row.content,
-            });
-          }
-
-          if (this.onTurnSettled) {
-            const settled: AgentTurnSettledEvent = {
-              identity,
-              projectId,
-              sessionId,
-              messageId: assistantMessageId,
-              turnId: extras.turnId,
-              status: metadata.status as AgentTurnSettledEvent["status"],
-              interrupted,
-              retrying: transientFailure,
-              ...(shouldRequestAttention
-                ? { notification: requestedNotification }
-                : {}),
-              changedFiles: changedFiles.map((change) => change.path),
-              workingDirectory: settledWorkingDirectory,
-            };
-            void Promise.resolve()
-              .then(() => this.onTurnSettled?.(settled))
-              .catch((error) => {
-                console.warn(
-                  `[catamorphic] onTurnSettled hook failed: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                );
-              });
-          }
-
-          // The agent's set_title tool wins; otherwise the first user message
-          // seeds a provisional title.
-          const titleEvent = [...events]
-            .reverse()
-            .find((event) => event.type === "title" && event.content);
-          await writeOwned((trx) =>
-            trx
-              .updateTable("agent_sessions")
-              .set({
-                updated_at: new Date(),
-                ...(titleEvent?.content
-                  ? { title: truncate(titleEvent.content, 500) }
-                  : session.title === null
-                    ? {
-                        title: truncate(
-                          messageWithAttachmentNames(message, attachments),
-                          500,
-                        ),
-                      }
-                    : {}),
-              })
-              .where("id", "=", sessionId)
-              .execute(),
-          );
-
-          span.setAttribute(
-            "catamorphic.agent.outcome",
-            interrupted ? "cancelled" : failed ? "error" : "completed",
-          );
-          if (failed && !interrupted)
-            markSpanError({ span, errorType: errorKind ?? "_OTHER" });
-          return mapMessage(row);
-        } catch (error) {
-          const interrupted = this.interruptedTurns.delete(sessionId);
-          const content =
-            error instanceof Error ? error.message : String(error);
-          const errorKind =
-            extras.leaseLost() || providerFinished
-              ? undefined
-              : connectionFailureKind(content);
-          const row = await writeOwned((trx) =>
-            trx
-              .updateTable("agent_messages")
-              .set({
-                content,
-                metadata: {
-                  status: "failed",
-                  ...(interrupted ? { interrupted: true } : {}),
-                  ...(errorKind ? { errorKind } : {}),
-                  ...(heldText ? { partialContent: heldText } : {}),
-                  events: JSON.parse(JSON.stringify(events)) as JsonObject[],
-                },
-              })
-              .where("id", "=", assistantMessageId)
-              .returningAll()
-              .executeTakeFirstOrThrow(),
-          );
-          // An exception cannot establish that the provider rejected the turn.
-          // Replaying an uncertain stream can duplicate commands or external writes.
-          await this.settleDelegation({
-            identity,
-            projectId,
-            sessionId,
-            resultMessageId: assistantMessageId,
-            status: "failed",
-            content,
-          });
-          if (!interrupted)
-            await writeOwned((trx) =>
-              trx
-                .updateTable("agent_sessions")
-                .set(({ ref }) => ({
-                  attention_revision: sql`${ref("attention_revision")} + 1`,
-                }))
-                .where("id", "=", sessionId)
-                .execute(),
-            );
-          await Promise.resolve()
-            .then(() =>
-              this.onTurnSettled?.({
-                identity,
-                projectId,
-                sessionId,
-                messageId: assistantMessageId,
-                turnId: extras.turnId,
-                status: "failed",
-                interrupted,
-                retrying: false,
-                changedFiles: [],
-                workingDirectory: "",
-              }),
-            )
-            .catch((hookError) =>
-              console.warn("[catamorphic] Failed-turn hook failed", hookError),
-            );
-          span.setAttribute(
-            "catamorphic.agent.outcome",
-            interrupted ? "cancelled" : "error",
-          );
-          if (!interrupted)
-            markSpanError({
-              span,
-              errorType: error instanceof Error ? error.name : "_OTHER",
-            });
-          return mapMessage(row);
-        }
-      },
-    );
-  }
-
+  /**
+   * The end of a chat's life (ADR 0173), for it and its subsessions: queued
+   * work is cancelled and running work interrupted, watchers stop, the
+   * workspace Allocation is released (its node destroys the sandbox), the
+   * session branch and its repository copy are deleted, connection grants
+   * are revoked, and the chat's key is free for a new chat. The transcript
+   * stays readable.
+   */
   async close(
     identity: Identity,
     projectId: string,
     sessionId: string,
+    input: { origin?: SessionOperationOrigin; signal?: AbortSignal } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -4704,70 +10556,385 @@ export class AgentSessionsService {
         },
       },
       async () => {
-        const session = await this.requireSession(
-          identity,
+        await this.requireSession(identity, projectId, sessionId);
+        const sessionIds = await this.descendantSessionIds(
           projectId,
           sessionId,
         );
-        await this.cancelAutoRetry(sessionId);
-
+        const cancelOpenTurns = (trx: Transaction<DB>) =>
+          this.stopSessionTurns(trx, { sessionIds, reason: "Chat closed" });
+        input.signal?.throwIfAborted();
+        await this.db.transaction().execute((trx) =>
+          this.stopSessionTurns(trx, {
+            sessionIds,
+            reason: "Chat closed",
+            signal: input.signal,
+          }),
+        );
         await this.archiveResources?.stop({
           identity,
           projectId,
-          sessionIds: [sessionId],
+          sessionIds,
         });
+        // A chat closing itself from its own turn cannot wait for that turn.
+        const caller =
+          input.origin?.author.kind === "agent"
+            ? input.origin.author.sessionId
+            : undefined;
+        // Running turns stop through their leases, on whichever replica runs
+        // them (ADR 0193).
+        await this.waitForTurnsToStop(
+          sessionIds.filter((id) => id !== caller),
+          { timeoutMs: 30_000 },
+        );
 
-        if (session.provider_session_id) {
-          const agent = await this.resolveAgent(
-            session.agent_id,
-            projectId,
-          ).catch(() => undefined);
-          await agent?.provider
-            .dispose({
-              providerSessionId: session.provider_session_id,
-              sessionId: session.id,
-              projectId,
-              sandboxId: "",
-              workingDirectory: "",
-            })
-            .catch(() => {});
-        }
-
-        if (!session.allocation_id) {
-          throw new Error("Agent session has no Environment Allocation");
-        }
-        const allocationId = session.allocation_id;
-
-        const row = await this.db.transaction().execute(async (transaction) => {
-          const closed = await transaction
-            .updateTable("agent_sessions")
-            .set({ status: "closed", updated_at: new Date() })
-            .where("id", "=", sessionId)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-          await this.executionAllocations.release({
-            identity,
-            allocationId,
-            transaction,
+        const busy = await this.db.transaction().execute(async (trx) => {
+          if (input.origin)
+            await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+              trx,
+            );
+          for (const id of sessionIds)
+            await this.log.append(trx, {
+              sessionId: id,
+              events: [
+                {
+                  type: "session.changed",
+                  session: { status: "closed", activity: null },
+                },
+              ],
+            });
+          // Work delivered while the running turns stopped would wait on a
+          // closed chat forever: cancel it with the closing, under the lock.
+          await cancelOpenTurns(trx);
+          return this.sessionsWithRunningTurns({
+            sessionIds,
+            executor: trx,
           });
-          return closed;
         });
-
         // Admission rechecks status under this session's row lock. Sweep any
         // watcher that committed before closure, after further admission is barred.
         await this.archiveResources?.stop({
           identity,
           projectId,
-          sessionIds: [sessionId],
+          sessionIds,
         });
-
-        await this.connectionGrants?.revokeAllocation({
-          allocationId,
-        });
-
-        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+        // What a chat holds outside its row is given back once no turn runs
+        // in it: now, or by the process running its last turn, when that
+        // turn ends. Its sandbox is never taken from under a running turn,
+        // nor its logins withdrawn (ADR 0193).
+        for (const id of sessionIds)
+          if (!busy.has(id))
+            await this.finishClosing({ identity, projectId, sessionId: id });
+        const sessions = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "in", sessionIds)
+          .execute();
+        const root = sessions.find((row) => row.id === sessionId);
+        if (!root) throw new AgentSessionNotFoundError(sessionId);
+        return mapSession(root, false, this.hostId, this.authorityLeaseMs);
       },
     );
+  }
+
+  /**
+   * Withdraw queued work and ask running turns to stop, in sessions that
+   * are closing or being archived (through the log and the turns' command
+   * inbox, so the replica running each turn hears it).
+   */
+  private async stopSessionTurns(
+    trx: Transaction<DB>,
+    input: {
+      sessionIds: readonly string[];
+      reason: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<void> {
+    if (input.sessionIds.length === 0) return;
+    // Under the sessions' locks, in one order: a turn settling meanwhile is
+    // read settled, never written back as running.
+    for (const sessionId of [...input.sessionIds].sort())
+      await this.log.lock(trx, sessionId);
+    const rows = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "in", [...input.sessionIds])
+      .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
+      .execute();
+    input.signal?.throwIfAborted();
+    const now = new Date().toISOString();
+    const bySession = new Map<string, SessionEvent[]>();
+    for (const row of rows) {
+      const turn = turnFromRow(row);
+      const events = bySession.get(turn.sessionId) ?? [];
+      if (isActiveTurnStatus(turn.status)) {
+        events.push({
+          type: "turn.changed",
+          turn: { ...turn, cancellationRequested: true, updatedAt: now },
+        });
+        await this.queue.enqueueCommand(trx, {
+          turnId: turn.id,
+          attemptId: turn.activeAttemptId,
+          kind: "interrupt",
+        });
+      } else {
+        events.push({
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            status: "cancelled",
+            error: { message: input.reason },
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+      bySession.set(turn.sessionId, events);
+    }
+    for (const [sessionId, events] of bySession)
+      await this.log.append(trx, { sessionId, events });
+    // Nothing of them is queued, so nothing waits for a machine (ADR 0258).
+    input.signal?.throwIfAborted();
+    await this.placementWaits.clear({
+      rootWorkloadIds: input.sessionIds,
+      transaction: trx,
+    });
+    input.signal?.throwIfAborted();
+  }
+
+  /**
+   * Give back what a closed chat holds outside its row (ADR 0173), once no
+   * turn runs in it on any replica: personal logins and files leave its
+   * sandbox (ADR 0184), its Allocation is released (the node destroys the
+   * sandbox), and its provider session, grants, and session workspace go.
+   * Safe to repeat. The process running a closed chat's last turn calls it
+   * when that turn ends, and any replica finishes a chat whose process died
+   * (ADR 0193). One process at a time, under the chat's `close:<id>` claim:
+   * a caller that finds another finishing it leaves it to them.
+   */
+  private async finishClosing(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    /** How long to wait for another process finishing it. Default 30s. */
+    waitMs?: number;
+  }): Promise<void> {
+    try {
+      await withReplicaClaim({
+        db: this.db,
+        name: `close:${input.sessionId}`,
+        waitMs: input.waitMs ?? 30_000,
+        operation: ({ signal }) =>
+          this.finishClosingClaimed({ ...input, signal }),
+      });
+    } catch (error) {
+      if (error instanceof ReplicaClaimBusyError) return;
+      throw error;
+    }
+  }
+
+  private async finishClosingClaimed(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    signal: AbortSignal;
+  }): Promise<void> {
+    const { identity, projectId, sessionId, signal } = input;
+    const running = await this.sessionsWithRunningTurns({
+      sessionIds: [sessionId],
+    });
+    if (running.size > 0) return;
+    await this.withdrawFromSessionSandbox({ identity, projectId, sessionId });
+    signal.throwIfAborted();
+    const row = await this.db.transaction().execute(async (trx) => {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .where("status", "=", "closed")
+        .forUpdate()
+        .executeTakeFirst();
+      if (!session) return undefined;
+      const busy = await this.sessionsWithRunningTurns({
+        sessionIds: [sessionId],
+        executor: trx,
+      });
+      if (busy.size > 0) return undefined;
+      if (session.allocation_id)
+        await this.executionAllocations.release({
+          identity,
+          allocationId: session.allocation_id,
+          transaction: trx,
+        });
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", sessionId)
+        .execute();
+      return session;
+    });
+    if (!row) return;
+    signal.throwIfAborted();
+    await this.releaseClosedResources({ identity, projectId, session: row });
+  }
+
+  /**
+   * Finish closing chats whose last turn ran in a process that died before
+   * it could (ADR 0193): closed, still holding an active Allocation, and no
+   * live turn. A sweep claim per chat checks each once a minute; the
+   * finishing itself runs under the chat's `close:<id>` claim.
+   */
+  private async finishAbandonedClosings(input: { limit?: number } = {}) {
+    const rows = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin("projects", "projects.id", "session.project_id")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .select(["session.id", "session.project_id", "projects.tenant_id"])
+      .where("session.status", "=", "closed")
+      .where("session.authority_host_id", "=", this.hostId)
+      .where("allocation.status", "=", "active")
+      .where(({ exists, not, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef("agent_turns.session_id", "=", "session.id")
+              .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+              .where("agent_turns.lease_expires_at", ">", sql<Date>`now()`),
+          ),
+        ),
+      )
+      .limit(input.limit ?? 50)
+      .execute();
+    for (const row of rows) {
+      if (
+        !(await takeReplicaClaim({
+          db: this.db,
+          name: `close-sweep:${row.id}`,
+          holder: this.turnWorkerId,
+          ttlSeconds: 60,
+        }))
+      )
+        continue;
+      const identity: Identity = {
+        tenantId: row.tenant_id,
+        externalUserId: PROJECT_PRINCIPAL_ID,
+        scope: [],
+      };
+      try {
+        // Its turn's process died: the turn settles as interrupted first.
+        await this.db.transaction().execute(async (trx) => {
+          const abandoned = await trx
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("session_id", "=", row.id)
+            .where("status", "in", [...ACTIVE_TURN_STATUSES])
+            .where("lease_expires_at", "<=", sql<Date>`now()`)
+            .execute();
+          const now = new Date().toISOString();
+          if (abandoned.length === 0) return;
+          await this.log.append(trx, {
+            sessionId: row.id,
+            events: abandoned.map(
+              (turnRow): SessionEvent => ({
+                type: "turn.changed",
+                turn: {
+                  ...turnFromRow(turnRow),
+                  status: "interrupted",
+                  activity: null,
+                  activityAt: null,
+                  error: {
+                    message: "The host stopped while this turn was running.",
+                  },
+                  completedAt: now,
+                  updatedAt: now,
+                },
+              }),
+            ),
+          });
+          for (const turnRow of abandoned)
+            await this.queue.release(trx, { turnId: turnRow.id });
+        });
+        // A chat another process is finishing is left to it: the sweep
+        // never waits.
+        await this.finishClosing({
+          identity,
+          projectId: row.project_id,
+          sessionId: row.id,
+          waitMs: 0,
+        });
+      } catch (error) {
+        console.warn(
+          `[catamorphic] Could not finish closing session ${row.id}`,
+          error,
+        );
+      }
+    }
+  }
+
+  /** A resting chat gives back its native checkout (ADR 0215). */
+  private async releaseNativeCheckout(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    await this.nativeAgentCheckout
+      ?.release?.(input)
+      .catch((error: unknown) =>
+        console.warn(
+          `[catamorphic] Could not put away the checkout of session ${input.sessionId}`,
+          error,
+        ),
+      );
+  }
+
+  /**
+   * What a closed chat still holds outside its row: its connection grants,
+   * its native checkout (ADR 0215), and on hosts that keep session
+   * workspaces, the `sessions/<id>` branch and `session-<id>` copy. Safe
+   * to repeat.
+   */
+  private async releaseClosedResources(input: {
+    identity: Identity;
+    projectId: string;
+    session: Pick<
+      SessionRow,
+      "id" | "agent_id" | "allocation_id" | "workspace"
+    >;
+  }): Promise<void> {
+    const { session } = input;
+    if (session.allocation_id)
+      await this.connectionGrants
+        ?.revokeAllocation({ allocationId: session.allocation_id })
+        .catch(() => {});
+    this.stopGrantRenewal(session.id);
+    await this.workspaces
+      ?.release({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        sessionId: session.id,
+      })
+      .catch(() => {});
+    await this.releaseNativeCheckout({
+      projectId: input.projectId,
+      sessionId: session.id,
+    });
+    if (this.usesSessionCopy(session))
+      await this.projectManager
+        .deleteSession({
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          sessionId: session.id,
+        })
+        .catch((error) =>
+          console.warn(
+            `[catamorphic] Could not delete the workspace of closed session ${session.id}`,
+            error,
+          ),
+        );
   }
 
   async archiveImpact(
@@ -4782,13 +10949,10 @@ export class AgentSessionsService {
       .select("session_id")
       .distinct()
       .where("session_id", "in", sessionIds)
-      .where("status", "in", ["queued", "held", "running"])
+      .where("status", "in", ["queued", "held", ...ACTIVE_TURN_STATUSES])
       .execute();
     const runningSessionIds = [
-      ...new Set([
-        ...sessionIds.filter((id) => this.runningTurns.has(id)),
-        ...activeTurns.map((turn) => turn.session_id),
-      ]),
+      ...new Set(activeTurns.map((turn) => turn.session_id)),
     ];
     const watcherRows = await this.db
       .selectFrom("watchers")
@@ -4838,7 +11002,11 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { confirmStop?: boolean; origin?: SessionOperationOrigin } = {},
+    input: {
+      confirmStop?: boolean;
+      origin?: SessionOperationOrigin;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<{ impact: AgentSessionArchiveImpact; sessions: AgentSession[] }> {
     const impact = await this.archiveImpact(identity, projectId, sessionId);
     if (impact.requiresConfirmation && !input.confirmStop) {
@@ -4853,36 +11021,27 @@ export class AgentSessionsService {
 
     // Cancel waiting work before interrupting the current turns so a drainer
     // cannot claim another queued turn during shutdown.
-    await this.db
-      .updateTable("agent_turns")
-      .set({
-        status: "cancelled",
-        error: "Session archived",
-        completed_at: new Date(),
-        lease_owner: null,
-        lease_token: null,
-        lease_expires_at: null,
-        updated_at: new Date(),
-      })
-      .where("session_id", "in", impact.sessionIds)
-      .where("status", "in", ["queued", "held"])
-      .execute();
-    for (const id of impact.sessionIds) {
-      await this.cancelAutoRetry(id);
-      await this.interrupt(identity, projectId, id, { notifyParent: false });
-    }
+    await this.db.transaction().execute((trx) =>
+      this.stopSessionTurns(trx, {
+        sessionIds: impact.sessionIds,
+        reason: "Session archived",
+        signal: input.signal,
+      }),
+    );
     await this.archiveResources?.stop({
       identity,
       projectId,
       sessionIds: impact.sessionIds,
     });
-    await this.waitForTurnsToStop(impact.sessionIds);
+    // Running turns stop through their leases, on whichever replica runs
+    // them (ADR 0193).
+    await this.waitForTurnsToStop(impact.sessionIds, { timeoutMs: 30_000 });
 
     const { archivedRows, resourceRows } = await this.db
       .transaction()
       .execute(async (transaction) => {
         if (input.origin)
-          await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+          await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
             transaction,
           );
         await transaction
@@ -4895,21 +11054,41 @@ export class AgentSessionsService {
           .selectFrom("agent_sessions")
           .selectAll()
           .where("id", "in", impact.sessionIds)
+          .forUpdate()
           .execute();
-        const archived = await transaction
-          .updateTable("agent_sessions")
-          .set({
-            provider_session_id: null,
-            sandbox_id: null,
-            activity: null,
-            updated_at: new Date(),
-          })
-          .where("id", "in", impact.sessionIds)
-          .returningAll()
-          .execute();
+        // A turn that did not stop keeps its workspace: it is never taken
+        // from under a running turn, on any replica. Idle release gives it
+        // back once the chat rests (ADR 0193).
+        const busy = await this.sessionsWithRunningTurns({
+          sessionIds: impact.sessionIds,
+          executor: transaction,
+        });
+        const idle = impact.sessionIds.filter((id) => !busy.has(id));
+        const archived = [
+          ...(idle.length > 0
+            ? await transaction
+                .updateTable("agent_sessions")
+                .set({
+                  sandbox_id: null,
+                  activity: null,
+                  updated_at: new Date(),
+                })
+                .where("id", "in", idle)
+                .returningAll()
+                .execute()
+            : []),
+          ...(busy.size > 0
+            ? await transaction
+                .updateTable("agent_sessions")
+                .set({ updated_at: new Date() })
+                .where("id", "in", [...busy])
+                .returningAll()
+                .execute()
+            : []),
+        ];
         const now = new Date();
         for (const row of archived) {
-          if (row.allocation_id) {
+          if (row.allocation_id && !busy.has(row.id)) {
             const allocation = await transaction
               .selectFrom("execution_allocations")
               .select("worker_node_id")
@@ -4944,8 +11123,12 @@ export class AgentSessionsService {
             )
             .execute();
         }
-        return { archivedRows: archived, resourceRows: resources };
+        return {
+          archivedRows: archived,
+          resourceRows: resources.filter((row) => !busy.has(row.id)),
+        };
       });
+    this.chatsChanged();
 
     // A watcher may finish admission while the first cleanup is stopping work.
     // Admission locks the session row and rechecks visibility, so after this
@@ -4957,38 +11140,28 @@ export class AgentSessionsService {
     });
 
     for (const row of resourceRows) {
-      if (row.provider_session_id) {
-        const agent = await this.resolveAgent(row.agent_id, projectId).catch(
-          () => undefined,
-        );
-        await agent?.provider
-          .dispose({
-            providerSessionId: row.provider_session_id,
-            sessionId: row.id,
-            projectId,
-            sandboxId: row.sandbox_id ?? "",
-            workingDirectory: "",
-          })
-          .catch(() => {});
-      }
       if (row.allocation_id) {
         await this.connectionGrants
           ?.revokeAllocation({ allocationId: row.allocation_id })
           .catch(() => {});
       }
+      await this.releaseNativeCheckout({ projectId, sessionId: row.id });
     }
     if (
       sourceDelegation &&
       !impact.sessionIds.includes(sourceDelegation.source_session_id)
     ) {
-      await this.deliver(
+      const title = await this.subsessionTitle(sessionId);
+      await this.notify(
         identity,
         projectId,
         sourceDelegation.source_session_id,
         {
-          content: `Subsession ${sessionId} was archived by the user.`,
-          author: { kind: "system", code: "subsession_archived" },
-          mode: "next_turn",
+          task: { type: "subsession", id: sessionId, title, status: "stopped" },
+          summary: `${title} was archived`,
+          detail:
+            "Its chat was archived: its work stopped, and it will not report a result.",
+          source: { kind: "session", sessionId },
           idempotencyKey: `delegation:${sourceDelegation.id}:archived`,
         },
       );
@@ -5005,21 +11178,32 @@ export class AgentSessionsService {
     };
   }
 
+  /**
+   * Wait until no turn runs in these sessions on any replica, or the
+   * timeout passes: a turn's lease in Postgres says whether it runs
+   * (ADR 0193).
+   */
   private async waitForTurnsToStop(
     sessionIds: readonly string[],
+    options: { timeoutMs: number },
   ): Promise<void> {
-    while (sessionIds.some((id) => this.runningTurns.has(id))) {
-      // Do not attach another reaction to each still-pending drainer on
-      // every tick. Polling the running set already supplies the wake-up.
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    }
+    const deadline = Date.now() + options.timeoutMs;
+    while (
+      Date.now() < deadline &&
+      (
+        await this.sessionsWithRunningTurns({
+          sessionIds,
+        })
+      ).size > 0
+    )
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
 
   async unarchive(
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { origin?: SessionOperationOrigin } = {},
+    input: { origin?: SessionOperationOrigin; signal?: AbortSignal } = {},
   ): Promise<AgentSession[]> {
     await this.requireSession(identity, projectId, sessionId);
     const sessionIds = await this.descendantSessionIds(projectId, sessionId);
@@ -5038,13 +11222,15 @@ export class AgentSessionsService {
     for (const row of retired) {
       await this.update(identity, projectId, row.id, {
         environment: row.environment_name ?? undefined,
+        signal: input.signal,
       });
     }
     await this.db.transaction().execute(async (transaction) => {
       if (input.origin)
-        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+        await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
+      input.signal?.throwIfAborted();
       await transaction
         .updateTable("agent_session_views")
         .set(({ ref }) => ({
@@ -5056,7 +11242,9 @@ export class AgentSessionsService {
         .where("external_user_id", "=", identity.externalUserId)
         .where("session_id", "in", sessionIds)
         .execute();
+      input.signal?.throwIfAborted();
     });
+    this.chatsChanged();
     const rows = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -5120,8 +11308,8 @@ export class AgentSessionsService {
         agent.id,
         {
           id: agent.id,
-          name: agent.id,
-          description: undefined as string | undefined,
+          name: agent.name ?? agent.id,
+          description: agent.description,
         },
       ]),
     );
@@ -5142,6 +11330,27 @@ export class AgentSessionsService {
         description: unqualified?.description,
       });
     }
+    // Other host agents a registry also serves project-qualified (the Work
+    // server's personal harnesses, ADR 0184) are listed that way, so a
+    // member's role can name them; a committed definition of the same
+    // slug stays the project's own.
+    for (const agent of this.codingAgents.list()) {
+      if (parseProjectAgentId(agent.id)) continue;
+      const qualified = formatProjectAgentId(args.projectId, agent.id);
+      if (
+        candidates.has(agent.id) &&
+        !entries.some((entry) => entry.slug === agent.id) &&
+        this.codingAgents.get(qualified)?.id === qualified
+      ) {
+        const listed = candidates.get(agent.id);
+        candidates.delete(agent.id);
+        candidates.set(qualified, {
+          id: qualified,
+          name: listed?.name ?? agent.id,
+          description: listed?.description,
+        });
+      }
+    }
     for (const entry of entries)
       candidates.set(formatProjectAgentId(args.projectId, entry.slug), {
         id: formatProjectAgentId(args.projectId, entry.slug),
@@ -5155,6 +11364,10 @@ export class AgentSessionsService {
       available: boolean;
       reason: string | null;
       environments: import("./execution-environments-service.js").EnvironmentDiscovery;
+      /** What may leave its sandbox, when the host or definition says (ADR 0182). */
+      sandboxing?: Sandboxing;
+      /** Its harness's own permission settings, as declared. */
+      harnessPermissions?: HarnessPermissions;
     }> = [];
     for (const candidate of candidates.values()) {
       try {
@@ -5171,9 +11384,19 @@ export class AgentSessionsService {
             workload: "agent",
             topology: agent.topology,
           },
+          ...(agent.signIn ? { signIn: agent.signIn } : {}),
           allowed: agent.environment?.allowed,
           preferred: agent.environment?.preferred,
         });
+        // A harness on its member's own sign-in is offered only in projects
+        // with an Environment that allows personal credentials (ADR 0199).
+        if (
+          agent.signIn &&
+          !environments.items.some(
+            (item) => item.personalCredentials !== undefined,
+          )
+        )
+          continue;
         items.push({
           ...candidate,
           available: environments.items.some(
@@ -5181,6 +11404,10 @@ export class AgentSessionsService {
           ),
           environments,
           reason: null,
+          ...(agent.sandboxing ? { sandboxing: agent.sandboxing } : {}),
+          ...(agent.defaults?.harnessPermissions
+            ? { harnessPermissions: agent.defaults.harnessPermissions }
+            : {}),
         });
       } catch (error) {
         items.push({
@@ -5197,11 +11424,7 @@ export class AgentSessionsService {
       args.identity.tenantId,
       args.projectId,
       async (repo, ref) => {
-        const text = await readProgramFile(
-          repo,
-          ref,
-          ".catamorphic/project.json",
-        );
+        const text = await readProgramFile(repo, ref, PROJECT_MANIFEST_PATH);
         try {
           return text ? JSON.parse(text) : {};
         } catch {
@@ -5225,10 +11448,7 @@ export class AgentSessionsService {
             prompt: z.string().min(1).max(20000),
             agent: z.string().optional(),
             when: z
-              .object({
-                builder: z.boolean().optional(),
-                permissions: z.array(z.string()).optional(),
-              })
+              .object({ permissions: z.array(z.string()).optional() })
               .strict()
               .optional(),
           })
@@ -5236,19 +11456,9 @@ export class AgentSessionsService {
         if (!action.success) return [];
         const { when, ...value } = action.data;
         if (
-          when?.builder !== undefined &&
-          when.builder !== isBuilder(args.identity, args.projectId)
-        )
-          return [];
-        if (
           when?.permissions?.some(
             (permission) =>
-              args.identity.scope !== undefined &&
-              !args.identity.projectPermissions?.some(
-                (grant) =>
-                  grant.projectId === args.projectId &&
-                  grant.permission === permission,
-              ),
+              !hasProjectPermission(args.identity, args.projectId, permission),
           )
         )
           return [];
@@ -5332,27 +11542,141 @@ export class AgentSessionsService {
       if (!entry?.definition) throw new AgentNotConfiguredError(id);
       const resolved = await this.codingAgents.projectAgent({ id, entry });
       if (!resolved) throw new AgentNotConfiguredError(id);
-      return resolved;
+      return withDefinitionPolicy(resolved, entry.definition);
     }
     const agent = this.codingAgents.get(id);
     if (!agent) throw new AgentNotConfiguredError(id);
     return agent;
   }
 
-  private delegationPrompt(
+  private async delegationPrompt(
     identity: Identity,
     projectId: string,
     sourceAgent: RegisteredCodingAgent,
     allowFurtherDelegation: boolean | undefined,
-  ): string {
+  ): Promise<string> {
+    // Only an agent this host gives spawn_subsession hears about it: one
+    // without it (a server's agent keeps its harness's own subagents)
+    // would be pointed at a tool it does not have.
+    const offered =
+      sourceAgent.harness.placement === "host" &&
+      (sourceAgent.harness.hostTools ?? []).some(
+        (tool) => tool.name === "spawn_subsession",
+      );
+    if (!offered) return "";
     if (allowFurtherDelegation === false) {
       return "Delegation is disabled for this subsession. Do not call spawn_subsession.";
     }
     const policy = delegationPolicy(sourceAgent.delegation);
-    if (!policy.enabled || policy.routes.length === 0) {
+    if (!policy.enabled || policy.agents.length === 0) {
       return "Delegation is disabled for this agent. Do not call spawn_subsession.";
     }
-    const accessibleAgents = this.codingAgents.list().filter((candidate) => {
+    return [
+      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
+      await this.delegationChoices(identity, projectId, sourceAgent),
+    ].join("\n");
+  }
+
+  /**
+   * The harness catalog of an agent's models, or undefined when the host
+   * has none or it takes longer than a spawn should wait: the harness then
+   * checks the model at the child's first turn.
+   */
+  private async modelCatalog(input: {
+    agentId: string;
+    projectId: string;
+  }): Promise<readonly AgentModelChoice[] | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), MODEL_CATALOG_WAIT_MS);
+      timer.unref?.();
+    });
+    const lookup = Promise.resolve()
+      .then(() => this.codingAgents.models?.(input))
+      .catch(() => undefined);
+    try {
+      return await Promise.race([lookup, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Whom the source agent may start and with what, as it reads it. */
+  private async delegationChoices(
+    identity: Identity,
+    projectId: string,
+    sourceAgent: RegisteredCodingAgent,
+    header = "You may start:",
+  ): Promise<string> {
+    const policy = delegationPolicy(sourceAgent.delegation);
+    const accessible = await this.delegationCandidates(
+      identity,
+      projectId,
+      policy,
+    );
+    return [
+      header,
+      ...delegationMenu({
+        policy,
+        projectId,
+        wildcardAgents: accessible
+          .filter(
+            (candidate) =>
+              sandboxingRank(candidate.sandboxing) <=
+                sandboxingRank(sourceAgent.sandboxing) &&
+              // One name per agent: the project's, where it has one.
+              !accessible.some(
+                (other) =>
+                  other.id === formatProjectAgentId(projectId, candidate.id),
+              ),
+          )
+          .map((candidate) => ({
+            id: candidate.id,
+            ...(candidate.name ? { name: candidate.name } : {}),
+          })),
+        nameOf: (agentId) =>
+          accessible.find((candidate) => candidate.id === agentId)?.name,
+      }),
+    ].join("\n");
+  }
+
+  /**
+   * The agents a grant can reach (ADR 0271): those the host lists, and the
+   * project's committed agents where a grant reaches them, that this
+   * identity may use. The menu names them, and a wildcard admits no other:
+   * an id the host resolves but does not list needs a grant naming it.
+   */
+  private async delegationCandidates(
+    identity: Identity,
+    projectId: string,
+    policy: AgentDelegationPolicy,
+  ): Promise<RegisteredCodingAgent[]> {
+    const listed = this.codingAgents.list();
+    const reached = policy.agents.some(
+      (grant) => grant.agent === "*" || grant.agent.startsWith("project:"),
+    );
+    const committed = reached ? await this.committedAgents(projectId) : [];
+    // A host may serve a listed agent by its project id too (a built-in
+    // with no definition), the way `resolveAgent` falls back.
+    const qualified = reached
+      ? listed.flatMap((agent) => {
+          const id = formatProjectAgentId(projectId, agent.id);
+          if (
+            parseProjectAgentId(agent.id) ||
+            committed.some((candidate) => candidate.id === id)
+          )
+            return [];
+          try {
+            const served = this.codingAgents.get(id);
+            return served && !served.unavailable
+              ? [{ ...served, id, name: served.name ?? agent.name }]
+              : [];
+          } catch {
+            return [];
+          }
+        })
+      : [];
+    return [...listed, ...committed, ...qualified].filter((candidate) => {
       try {
         this.assertAgentAccess(identity, projectId, candidate.id);
         return true;
@@ -5360,32 +11684,56 @@ export class AgentSessionsService {
         return false;
       }
     });
-    const routes = policy.routes.map((route) => {
-      let target: string;
-      if (route.target === "self") {
-        target = sourceAgent.id;
-      } else if (route.target === "*") {
-        const allowed = accessibleAgents
-          .filter(
-            (candidate) =>
-              privilegeRank(candidate.privilege) <=
-              privilegeRank(sourceAgent.privilege),
-          )
-          .map((candidate) => candidate.id);
-        target =
-          allowed.length > 0 ? allowed.join(", ") : "no accessible agents";
-      } else {
-        const relative = route.target.match(/^project:([^:]+)$/);
-        target = relative
-          ? formatProjectAgentId(projectId, relative[1] ?? "")
-          : route.target;
-      }
-      return `- ${route.id}: ${target}${route.description ? ` (${route.description})` : ""}; onward delegation ${route.allowFurtherDelegation ? "allowed" : "disabled"}`;
-    });
-    return [
-      `You may run at most ${policy.maxConcurrentChildren} active subsessions. Call spawn_subsession with one of these route ids and, for a route listing several agents, the exact agent_id:`,
-      ...routes,
-    ].join("\n");
+  }
+
+  /**
+   * The project's committed agents that resolve, for the delegation menu:
+   * one that does not is left out, never failing the prompt.
+   */
+  private async committedAgents(
+    projectId: string,
+  ): Promise<RegisteredCodingAgent[]> {
+    // A host without a project-agent factory resolves them by id, the
+    // way `resolveAgent` falls back.
+    const projectAgent = this.codingAgents.projectAgent?.bind(
+      this.codingAgents,
+    );
+    try {
+      const project = await this.db
+        .selectFrom("projects")
+        .select("tenant_id")
+        .where("id", "=", projectId)
+        .executeTakeFirstOrThrow();
+      const entries = await new AgentDefinitionsService(
+        this.db,
+        this.projectManager,
+      ).listCommitted({ tenantId: project.tenant_id, projectId });
+      const resolved = await Promise.all(
+        entries.map(async (entry) => {
+          const { definition } = entry;
+          if (!definition) return null;
+          const id = formatProjectAgentId(projectId, entry.slug);
+          try {
+            const agent = projectAgent
+              ? await projectAgent({ id, entry })
+              : this.codingAgents.get(id);
+            // One that cannot run now (unapproved, broken) is no choice.
+            if (!agent || agent.unavailable) return null;
+            return {
+              ...(projectAgent
+                ? withDefinitionPolicy(agent, definition)
+                : agent),
+              name: agent.name ?? definition.name,
+            };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return resolved.filter((agent) => agent !== null);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -5401,7 +11749,7 @@ export class AgentSessionsService {
     agent: RegisteredCodingAgent,
   ): Promise<AgentExecutionRuntime> {
     if (!session.allocation_id)
-      throw new Error("Session has no execution Allocation");
+      throw new Error("This chat is waiting for a machine");
     const allocation = await this.executionAllocations.get({
       identity,
       allocationId: session.allocation_id,
@@ -5412,6 +11760,8 @@ export class AgentSessionsService {
     const admitted = await this.executionEnvironments.admit({
       identity,
       projectId,
+      // The session owner's work, whoever sends this turn (ADR 0167).
+      owner: placementOwner(session.external_user_id),
       environment: allocation.environmentName,
       workerNodeId: allocation.workerNodeId ?? undefined,
       allocationBindingId: allocation.bindingId,
@@ -5421,6 +11771,7 @@ export class AgentSessionsService {
         workload: "agent",
         topology: agent.topology,
       },
+      ...(agent.signIn ? { signIn: agent.signIn } : {}),
     });
     for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
       const required = admitted.effectiveRequirements.resources?.[key];
@@ -5440,176 +11791,211 @@ export class AgentSessionsService {
       return {
         bindingId: allocation.bindingId,
         environmentName: allocation.environmentName,
+        // A checkout the chat owns sets up like a new workspace (ADR 0215).
+        ...(admitted.setup ? { setup: admitted.setup } : {}),
+        personalCredentials: admitted.personalCredentials,
       };
     }
-    const selectedProvider = admitted.runtime.sandboxProvider;
-    const provider =
-      selectedProvider &&
-      allocation.workerNodeId &&
-      allocation.policy.binding.trust === "managed"
-        ? allocationSandboxProvider({
-            db: this.db,
-            allocation,
-            provider: selectedProvider,
-            workerLeaseToken: admitted.runtime.workerLeaseToken,
-          })
-        : selectedProvider;
-    if (!provider)
+    const selected = admitted.runtime.sandboxProvider;
+    const provider = this.workspaceProvider(allocation, selected);
+    if (!provider || !selected)
       throw new Error("The selected Environment has no execution provider");
+    const commandTimeoutSeconds =
+      allocation.policy.requirements.resources?.commandTimeoutSeconds;
+    // The owner's own sign-in, when the placed machine reports it (ADR
+    // 0199): the sandbox mounts that one home from the machine's disk.
+    const owner = placementOwner(session.external_user_id);
+    const signIn =
+      agent.signIn &&
+      owner &&
+      admitted.binding.capabilities.includes(
+        signInCapability({ harness: agent.signIn, member: owner }),
+      )
+        ? { harness: agent.signIn, member: owner }
+        : undefined;
     return {
       provider,
       bindingId: allocation.bindingId,
       environmentName: allocation.environmentName,
+      allocation,
+      ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
+      ...(admitted.setup ? { setup: admitted.setup } : {}),
+      // A managed machine's Allocation only stops its sandbox; the
+      // machine's own provider destroys it (ADR 0257).
+      destroySandbox: (sandboxId) =>
+        this.managedWorkspace(allocation)
+          ? replaceAllocationSandbox({
+              db: this.db,
+              allocation,
+              provider: selected,
+              sandboxId,
+              ...this.localFence(allocation),
+            })
+          : provider.destroySandbox(sandboxId),
+      personalCredentials: admitted.personalCredentials,
+      isolated: admitted.isolated,
+      ...(signIn
+        ? {
+            signInHome: signInHomePath({
+              workspaceRoot: provider.workspaceRoot,
+              harness: signIn.harness,
+            }),
+          }
+        : {}),
       devSandboxes: new DevSandboxService({
         projectManager: this.projectManager,
         provider,
         store: new DbSandboxStore(this.db, allocation.id),
         resources: allocation.policy.requirements.resources,
-        ...(this.workerNode ? { sessionId: session.id } : {}),
+        ...(this.usesSessionCopy(session) ? { sessionId: session.id } : {}),
+        ...(signIn ? { signIns: [signIn] } : {}),
       }),
     };
   }
 
-  private async ensureAnchor(
+  /**
+   * How a chat's workspace is reached: through its Allocation on a managed
+   * machine, else with its Environment's sandbox policy (ADR 0176).
+   */
+  private workspaceProvider(
+    allocation: ExecutionAllocation,
+    selected: SandboxProvider | undefined,
+  ): SandboxProvider | undefined {
+    if (!selected) return undefined;
+    return this.managedWorkspace(allocation)
+      ? allocationSandboxProvider({
+          db: this.db,
+          allocation,
+          provider: selected,
+          // A local node's lease fences each call here; a remote node's
+          // provider fences its own operations (ADR 0192).
+          ...this.localFence(allocation),
+        })
+      : withAllocationSandboxPolicy({
+          db: this.db,
+          allocation,
+          provider: selected,
+        });
+  }
+
+  /** A workspace on a managed machine, reached through its Allocation. */
+  private managedWorkspace(allocation: ExecutionAllocation): boolean {
+    return Boolean(
+      allocation.workerNodeId && allocation.policy.binding.trust === "managed",
+    );
+  }
+
+  /**
+   * Make sure the session has its workspace for the agent (ADR 0198): the
+   * checkout a native agent works in, or the session's sandbox, created
+   * and seeded on first use or after it was given back. The native thread
+   * the harness runs on is the engine's (provider threads), not this.
+   */
+  private async ensureWorkspace(
     identity: Identity,
     projectId: string,
     session: SessionRow,
     agent: RegisteredCodingAgent,
     runtime: AgentExecutionRuntime,
+    options: {
+      /** Put the session's files in a new sandbox (default); see DevSandboxService. */
+      populate?: boolean;
+    } = {},
   ): Promise<{
-    providerSession: ProviderSession;
+    workingDirectory: string;
     sandboxProviderId?: string;
-    /**
-     * The provider session was created just now from the persisted
-     * transcript (host restart, credential/config rebuild) instead of
-     * resuming a live in-memory session. A fresh anchor does NOT hold
-     * the in-flight turn — its user message is excluded from resurrection
-     * history — so a retry cannot use the harness's native re-run.
-     */
-    reanchored: boolean;
+    /** This call made the sandbox. */
+    created?: boolean;
+    /** The checkout a native agent works in. */
+    checkout?: NativeCheckout;
   }> {
-    if (agent.topology === "contained" || agent.topology === "external") {
-      throw new UnsupportedAgentTopologyError(agent.topology);
-    }
-    const anchored =
-      session.provider_session_id !== null &&
-      session.provider === agent.provider.name &&
-      // In-memory harness sessions die with a host restart or a provider
-      // rebuild (credential/config edits drop the cached instance). When
-      // the harness can tell us the session is gone, re-anchor with the
-      // persisted transcript instead of running into a dead session.
-      (agent.provider.hasSession?.(session.provider_session_id) ?? true);
-
     if (agent.topology === "native") {
-      const workingDirectory = await this.resolveNativePath(
+      const checkout = await this.resolveNativePath(
         projectId,
-        session.id,
+        session,
         runtime,
+        identity,
       );
-      if (anchored && session.provider_session_id) {
-        return {
-          providerSession: {
-            providerSessionId: session.provider_session_id,
-            sessionId: session.id,
-            projectId,
-            sandboxId: "",
-            workingDirectory,
-          },
-          reanchored: false,
-        };
-      }
-      const providerSession = await agent.provider.startSession({
-        projectId,
-        userId: identity.externalUserId,
-        sandboxId: "",
-        workingDirectory,
-        sessionId: session.id,
-        systemPrompt: buildAgentSystemPrompt({
-          systemPrompt:
-            [agent.systemPrompt, session.system_prompt]
-              .filter(Boolean)
-              .join("\n\n") || undefined,
-          standingPrompt: this.standingAgentPrompt,
-        }),
-        attachedPlugins: await this.loadAttachedPlugins(projectId),
-        history: await this.transcriptHistory(session.id),
-        mcpServers: await this.connectionMcpServers(identity, session),
-        ...(await this.callerOpts(identity, projectId, session.agent_id)),
-      });
-      await this.db
-        .updateTable("agent_sessions")
-        .set({
-          provider: agent.provider.name,
-          provider_session_id: providerSession.providerSessionId,
-        })
-        .where("id", "=", session.id)
-        .execute();
-      return { providerSession, reanchored: true };
+      return { workingDirectory: checkout.path, checkout };
     }
-
-    if (!runtime.provider || !runtime.devSandboxes) {
+    if (!runtime.provider || !runtime.devSandboxes)
       throw new Error(
         "The selected Environment has no agent workspace provider",
       );
-    }
-
-    if (anchored && session.provider_session_id && session.sandbox_id) {
-      const sandboxProviderId = await this.resolveSandboxProviderId(
+    if (session.sandbox_id) {
+      const replaced = await this.replacedSandbox({
         session,
-        runtime.provider,
-      );
-      return {
-        providerSession: {
-          providerSessionId: session.provider_session_id,
-          sessionId: session.id,
-          projectId,
-          sandboxId: sandboxProviderId,
+        sandboxId: session.sandbox_id,
+        runtime,
+      });
+      if (!replaced) {
+        const sandboxProviderId = await this.resolveSandboxProviderId(
+          session,
+          runtime.provider,
+        );
+        return {
           workingDirectory: this.projectDir(runtime.provider),
-        },
-        sandboxProviderId,
-        reanchored: false,
-      };
+          sandboxProviderId,
+        };
+      }
+      // An earlier preparation stopped while replacing it (ADR 0257).
+      await this.finishReplacingSandbox({
+        session,
+        runtime,
+        sandboxId: session.sandbox_id,
+        providerId: replaced.providerId,
+      });
     }
-
     const { handle, baseCommitSha } = await this.prepareDevSandbox(
       { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
+      session,
+      options.populate ?? true,
     );
-    const providerSession = await agent.provider.startSession({
-      sandboxProvider: runtime.provider,
-      projectId,
-      userId: identity.externalUserId,
-      sandboxId: handle.providerId,
-      workingDirectory: this.projectDir(runtime.provider),
-      sessionId: session.id,
-      systemPrompt: buildAgentSystemPrompt({
-        systemPrompt:
-          [agent.systemPrompt, session.system_prompt]
-            .filter(Boolean)
-            .join("\n\n") || undefined,
-        standingPrompt: this.standingAgentPrompt,
-      }),
-      attachedPlugins: await this.loadAttachedPlugins(projectId),
-      history: await this.transcriptHistory(session.id),
-      mcpServers: await this.connectionMcpServers(identity, session),
-      ...(await this.callerOpts(identity, projectId, session.agent_id)),
-    });
     await this.db
       .updateTable("agent_sessions")
-      .set({
-        provider: agent.provider.name,
-        provider_session_id: providerSession.providerSessionId,
-        sandbox_id: handle.id,
-        base_commit_sha: baseCommitSha,
-      })
+      .set({ sandbox_id: handle.id, base_commit_sha: baseCommitSha })
       .where("id", "=", session.id)
       .execute();
     return {
-      providerSession,
+      workingDirectory: this.projectDir(runtime.provider),
       sandboxProviderId: handle.providerId,
-      reanchored: true,
+      created: true,
     };
+  }
+
+  /**
+   * The session's sandbox when an earlier preparation stopped while
+   * replacing it (ADR 0257): marked for replacing, or one its managed
+   * Allocation no longer owns. Undefined for a sandbox in use.
+   */
+  private async replacedSandbox(input: {
+    session: Pick<SessionRow, "id">;
+    sandboxId: string;
+    runtime: AgentExecutionRuntime;
+  }): Promise<{ providerId: string } | undefined> {
+    const row = await this.db
+      .selectFrom("project_sandboxes")
+      .select(["provider_id", "status"])
+      .where("id", "=", input.sandboxId)
+      .executeTakeFirst();
+    if (!row) return undefined;
+    if (row.status === REPLACING_SANDBOX)
+      return { providerId: row.provider_id };
+    const allocation = input.runtime.allocation;
+    if (!allocation || !this.managedWorkspace(allocation)) return undefined;
+    const owner = await this.db
+      .selectFrom("execution_allocations")
+      .select(["sandbox_provider_id", "sandbox_creation_started"])
+      .where("id", "=", allocation.id)
+      .executeTakeFirst();
+    // The Allocation gave this sandbox up, and has not started another.
+    return owner &&
+      owner.sandbox_provider_id === null &&
+      !owner.sandbox_creation_started
+      ? { providerId: row.provider_id }
+      : undefined;
   }
 
   private async connectionMcpServers(
@@ -5624,7 +12010,13 @@ export class AgentSessionsService {
       identity,
       allocationId: session.allocation_id,
     });
-    const bindings = allocation?.policy.connections ?? [];
+    // An alias that only serves Git or a model is reached from the
+    // sandbox through the gateway, not as tools (ADRs 0175, 0180).
+    const bindings = (allocation?.policy.connections ?? []).filter((binding) =>
+      binding.capabilities.some(
+        (capability) => !isProtocolCapability(capability),
+      ),
+    );
     if (bindings.length === 0) return {};
     if (!this.connectionMcpUrl) {
       throw new Error(
@@ -5658,73 +12050,45 @@ export class AgentSessionsService {
     return servers;
   }
 
-  /**
-   * The session's settled conversation, shaped for
-   * {@link StartSessionOpts.history}: completed user/assistant turns only —
-   * no markers, no failed/in-progress rows, and NOT the current turn (its
-   * user row is persisted before anchoring and travels as the message
-   * itself). Capped so resurrection never ships an unbounded transcript.
-   */
-  private async transcriptHistory(
-    sessionId: string,
-  ): Promise<Array<{ role: "user" | "assistant"; content: string }>> {
-    const rows = await this.db
-      .selectFrom("agent_messages")
-      .where("session_id", "=", sessionId)
-      .select(["role", "content", "metadata"])
-      .orderBy("seq", "asc")
-      .execute();
-    // Everything from the current turn's user row onward is in flight.
-    let lastUserIndex = -1;
-    for (let index = rows.length - 1; index >= 0; index -= 1) {
-      if (rows[index]?.role === "user") {
-        lastUserIndex = index;
-        break;
-      }
-    }
-    const settled = lastUserIndex === -1 ? rows : rows.slice(0, lastUserIndex);
-    const history = settled.flatMap(
-      (row): Array<{ role: "user" | "assistant"; content: string }> => {
-        if (row.role !== "user" && row.role !== "assistant") return [];
-        if (row.content.trim().length === 0) return [];
-        const status = (row.metadata as JsonObject | null)?.status;
-        if (
-          row.role === "assistant" &&
-          status !== "completed" &&
-          status !== "awaiting_input"
-        ) {
-          return [];
-        }
-        return [{ role: row.role, content: row.content }];
-      },
-    );
-    const capped: typeof history = [];
-    let totalChars = 0;
-    for (const turn of history.reverse()) {
-      totalChars += turn.content.length;
-      if (capped.length >= 40 || totalChars > 32_000) break;
-      capped.unshift(turn);
-    }
-    return capped;
-  }
-
   private async resolveNativePath(
     projectId: string,
-    sessionId: string,
+    session: SessionRow,
     runtime: AgentExecutionRuntime,
-  ): Promise<string> {
-    const path = await this.nativeAgentCheckout?.resolve({
+    identity: Identity,
+  ): Promise<NativeCheckout> {
+    // A pending move chooses the checkout (ADR 0178): a chat still in the
+    // person's own folder first gets its own worktree at the new base, so
+    // the move never touches that folder.
+    const move = parseWorkspaceMove(session.workspace_move);
+    const base = parseWorkspaceBase(session.workspace);
+    const start = base
+      ? { ref: base.ref, commit: base.commit, pin: basePin(session.id) }
+      : move
+        ? { ref: move.ref, commit: move.commit, pin: movePin(session.id) }
+        : undefined;
+    const checkout = await this.nativeAgentCheckout?.resolve({
       projectId,
-      sessionId,
+      sessionId: session.id,
       bindingId: runtime.bindingId,
       environmentName: runtime.environmentName,
+      ...(start && this.workspaces
+        ? {
+            workspace: {
+              ...start,
+              repository: this.workspaces.mirrorPath({
+                tenantId: identity.tenantId,
+                projectId,
+              }),
+            },
+          }
+        : {}),
     });
-    if (!path) {
+    if (!checkout) {
       throw new Error(
         "This agent uses native execution, but the Environment has no WorkerNode directory",
       );
     }
-    return path;
+    return checkout;
   }
 
   // --- Dev sandbox lifecycle ---
@@ -5735,15 +12099,17 @@ export class AgentSessionsService {
 
   /**
    * Ensure the (project, user) dev sandbox exists and reflects the user's
-   * current dev working copy. New sandboxes clone from the project origin
-   * when the working copy is clean and in sync with it (the Artifacts-native
-   * path); otherwise the working copy files are uploaded. Reused sandboxes
+   * current draft. New sandboxes clone from the project origin
+   * when the draft is clean and in sync with it (the Artifacts-native
+   * path); otherwise the draft's files are uploaded. Reused sandboxes
    * are refreshed by upload so the agent always sees the user's drafts.
    */
   private async prepareDevSandbox(
     runtime: { provider: SandboxProvider; devSandboxes: DevSandboxService },
     identity: Identity,
     projectId: string,
+    session: SessionRow,
+    populate: boolean,
   ): Promise<{
     handle: { id: string; providerId: string };
     baseCommitSha: string | null;
@@ -5752,37 +12118,21 @@ export class AgentSessionsService {
       identity,
       projectId,
       refresh: true,
+      populate,
     });
-    await this.ensureGitBaseline(runtime.provider, prepared.providerId);
+    // A workspace at a ref is seeded with its real history before the turn
+    // (prepareSandboxGit); any other sandbox gets a local baseline.
+    if (!parseWorkspaceBase(session.workspace))
+      await ensureSandboxBaseline({
+        provider: runtime.provider,
+        sandboxId: prepared.providerId,
+        projectDir: this.projectDir(runtime.provider),
+        originUrl: await this.linkedRemoteUrl(identity, projectId),
+      });
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
     };
-  }
-
-  /**
-   * Make sure the sandbox project dir is a git repo with a committed
-   * baseline, so post-turn change detection (`git status --porcelain`) sees
-   * exactly what the agent modified.
-   */
-  private async ensureGitBaseline(
-    provider: SandboxProvider,
-    sandboxProviderId: string,
-  ): Promise<void> {
-    const dir = this.projectDir(provider);
-    const command = [
-      "(git rev-parse --git-dir >/dev/null 2>&1 || git init -b main >/dev/null)",
-      "git add -A",
-      `(git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m baseline --quiet || true)`,
-    ].join(" && ");
-    const result = await provider.executeCommand(sandboxProviderId, command, {
-      cwd: dir,
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `Failed to prepare sandbox git baseline: ${result.result}`,
-      );
-    }
   }
 
   private async resolveSandboxProviderId(
@@ -5810,7 +12160,7 @@ export class AgentSessionsService {
 
   /**
    * Diff the sandbox project dir against its git baseline and mirror every
-   * change into the user's dev working copy (as an uncommitted draft). The
+   * change into the user's draft. The
    * sandbox baseline is then advanced so the next turn diffs incrementally.
    */
   private async syncBackChanges(
@@ -5832,13 +12182,10 @@ export class AgentSessionsService {
   }
 
   /**
-   * Commit the dev tree as this turn's checkpoint (ADR 0044). Returns the
-   * commit sha (stamped on the assistant message), null when the tree was
-   * clean or the commit failed — a checkpoint must never break a turn.
-   */
-  /**
-   * The folder whose `.catamorphic/app-data/store/` mirrors the caller's store view: the caller's
-   * own dev copy, which sandbox agents' edits sync back into. Host-execution
+   * The folder whose `.work/app-data/store/` mirrors the caller's store
+   * view: the session's copy, the caller's local folder, or for a server
+   * draft (which has no folder) a disposable folder the host keeps for the
+   * caller (ADR 0191). Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by
    * the next member's agent, and ships would carry the wrong author) —
@@ -5848,29 +12195,42 @@ export class AgentSessionsService {
   private async storeSyncDir(
     identity: Identity,
     projectId: string,
-    anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
+    workspace: { sandboxProviderId?: string },
     sessionId: string,
+    sessionCopy: boolean,
   ): Promise<string | null> {
     if (!this.storeSync) return null;
-    if (!anchor.sandboxProviderId) return null;
-    const repo = this.workerNode
+    if (!workspace.sandboxProviderId) return null;
+    const repo = sessionCopy
       ? await this.projectManager.openSession({
           tenantId: identity.tenantId,
           projectId,
           sessionId,
         })
-      : await this.projectManager.openDev(
-          identity.tenantId,
+      : await this.projectManager.openDraft({
+          tenantId: identity.tenantId,
           projectId,
-          identity.externalUserId,
-        );
+          externalUserId: identity.externalUserId,
+        });
     try {
-      return repo.repoPath;
+      return await draftStoreFolder({
+        projectManager: this.projectManager,
+        repo,
+        tenantId: identity.tenantId,
+        projectId,
+        externalUserId: identity.externalUserId,
+      });
     } finally {
       await repo.dispose();
     }
   }
 
+  /**
+   * This turn's checkpoint (ADR 0044): the session copy's commit, a local
+   * folder's commit, or a server draft's tip (ADR 0191). Returns the commit
+   * sha (stamped on the assistant message), null when nothing changed or
+   * the checkpoint failed; a checkpoint must never break a turn.
+   */
   private async checkpointTurn(
     identity: Identity,
     projectId: string,
@@ -5879,6 +12239,7 @@ export class AgentSessionsService {
       sessionId: string;
       workingDirectory: string;
       nativeExecution: boolean;
+      sessionCopy: boolean;
     },
   ): Promise<string | null> {
     return withSpan(
@@ -5904,7 +12265,7 @@ export class AgentSessionsService {
               message: checkpointMessage(userMessage),
             });
           }
-          if (this.workerNode)
+          if (execution.sessionCopy)
             return await this.projectManager.checkpointSession({
               tenantId: identity.tenantId,
               projectId,
@@ -5912,18 +12273,17 @@ export class AgentSessionsService {
               message: checkpointMessage(userMessage),
               author: CHECKPOINT_AUTHOR,
             });
-          const repo = await this.projectManager.openDev(
-            identity.tenantId,
+          const repo = await this.projectManager.openDraft({
+            tenantId: identity.tenantId,
             projectId,
-            identity.externalUserId,
-          );
+            externalUserId: identity.externalUserId,
+          });
           try {
-            const status = await repo.status();
-            if (!status.dirty) return null;
-            return await repo.commit(
-              checkpointMessage(userMessage),
-              CHECKPOINT_AUTHOR,
-            );
+            return await checkpointDraft({
+              repo,
+              message: checkpointMessage(userMessage),
+              author: CHECKPOINT_AUTHOR,
+            });
           } finally {
             await repo.dispose();
           }
@@ -5937,7 +12297,7 @@ export class AgentSessionsService {
               error instanceof Error ? error.message : String(error)
             }`,
           );
-          if (this.workerNode)
+          if (execution.sessionCopy)
             throw new Error(
               "Session checkpoint could not be saved. Recover the workspace before retrying.",
               { cause: error },
@@ -5979,16 +12339,18 @@ export class AgentSessionsService {
   }
 
   /**
-   * The session surface admits builders and — ADR 0055 — scoped callers
-   * whose scope names at least one of this project's agents. Everything
-   * such a caller does is then checked against those agent refs.
+   * The session surface admits `sessions:read` holders and scoped callers
+   * whose scope reaches at least one of this project's agents (ADR 0055,
+   * 0158). Everything such a caller does is then checked against those
+   * agent refs.
    */
   private async requireProject(
     identity: Identity,
     projectId: string,
   ): Promise<void> {
     if (
-      !isBuilder(identity, projectId) &&
+      !this.readsAllSessions(identity, projectId) &&
+      !this.coversEveryAgent(identity, projectId) &&
       !scopeCoversSessions(identity, projectId) &&
       this.coveredAgentIds(identity, projectId).length === 0
     ) {
@@ -5997,14 +12359,42 @@ export class AgentSessionsService {
     await requireTenantProject(this.db, identity.tenantId, projectId);
   }
 
-  /** Registry ids of the project agents a scoped identity's refs name. */
+  /** Named project agents the scope covers (`*` is `coversEveryAgent`). */
   private coveredAgentIds(identity: Identity, projectId: string): string[] {
     return (identity.scope ?? [])
       .filter(
         (ref): ref is AgentRef =>
-          ref.kind === "agent" && ref.projectId === projectId,
+          ref.kind === "agent" &&
+          ref.projectId === projectId &&
+          ref.name !== EVERY_ARTIFACT,
       )
       .map((ref) => `project:${projectId}:${ref.name}`);
+  }
+
+  /** Root, or `agents: ["*"]`: every agent the project offers. */
+  private coversEveryAgent(identity: Identity, projectId: string): boolean {
+    return (
+      identity.scope === undefined ||
+      identity.scope.some(
+        (ref) =>
+          ref.kind === "agent" &&
+          ref.projectId === projectId &&
+          ref.name === EVERY_ARTIFACT,
+      )
+    );
+  }
+
+  /** The caller's own chats on every agent. */
+  private ownOnAnyAgent(identity: Identity, projectId: string): boolean {
+    return (
+      this.coversEveryAgent(identity, projectId) ||
+      scopeCoversSessions(identity, projectId)
+    );
+  }
+
+  /** Everyone's chats (`sessions:read`, ADR 0158). */
+  private readsAllSessions(identity: Identity, projectId: string): boolean {
+    return hasProjectPermission(identity, projectId, "sessions:read");
   }
 
   /** Every scope entry that covers this agent id, for a scoped caller. */
@@ -6013,17 +12403,26 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): AgentRef[] {
-    if (!agentId || !identity.scope) return [];
-    const parsed = parseProjectAgentId(agentId);
-    if (!parsed || parsed.projectId !== projectId) return [];
-    const ref: AgentRef = { kind: "agent", projectId, name: parsed.slug };
-    if (!scopeCovers(identity.scope, ref)) return [];
-    return identity.scope.filter(
+    if (!identity.scope) return [];
+    const every = identity.scope.filter(
       (entry): entry is AgentRef =>
         entry.kind === "agent" &&
         entry.projectId === projectId &&
-        entry.name === parsed.slug,
+        entry.name === EVERY_ARTIFACT,
     );
+    const parsed = agentId ? parseProjectAgentId(agentId) : undefined;
+    // `*` also reaches the host's own agents (and an unset agent).
+    if (!parsed) return every;
+    if (parsed.projectId !== projectId) return [];
+    return [
+      ...identity.scope.filter(
+        (entry): entry is AgentRef =>
+          entry.kind === "agent" &&
+          entry.projectId === projectId &&
+          entry.name === parsed.slug,
+      ),
+      ...every,
+    ];
   }
 
   private coveringAgentRef(
@@ -6035,7 +12434,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * A builder may use any agent; a scoped caller only a project agent its
+   * The root identity may use any agent; a scoped caller only an agent its
    * scope names — never the host's default or personal agents (a
    * `null` agent id), which are not project artifacts.
    */
@@ -6048,7 +12447,7 @@ export class AgentSessionsService {
     if (projectAgent && projectAgent.projectId !== projectId) {
       throw new AccessDeniedError();
     }
-    if (isBuilder(identity, projectId)) return;
+    if (identity.scope === undefined) return;
     if (!this.coveringAgentRef(identity, projectId, agentId)) {
       throw new AccessDeniedError();
     }
@@ -6056,7 +12455,7 @@ export class AgentSessionsService {
 
   /**
    * The caller's tool-policy layers for a session (ADR 0055), or undefined
-   * for builders. Two sources, both narrowing only:
+   * for the root identity. Two sources, both narrowing only:
    *  - the project's tools server (`catamorphic`): everything off except
    *    the tools whose workflows the caller's scope resolves to (plus the
    *    shared poll tool — run reads are scope-checked at the endpoint);
@@ -6070,7 +12469,7 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): Promise<Record<string, McpToolPolicyLayers> | undefined> {
-    if (isBuilder(identity, projectId)) return undefined;
+    if (identity.scope === undefined) return undefined;
     const refs = this.coveringAgentRefs(identity, projectId, agentId);
     if (refs.length === 0) throw new AccessDeniedError();
     const layers: Record<string, McpToolPolicyLayers> = {};
@@ -6125,6 +12524,8 @@ export class AgentSessionsService {
     sessionId: string;
   }): Promise<{
     agentId: string | null;
+    /** The chat only reads: its connectors' tools that write are off (ADR 0271). */
+    readOnly: boolean;
     toolPolicies?: Record<string, McpToolPolicyLayers>;
   }> {
     // Tool discovery needs the assignment and caller ceiling, never the transcript.
@@ -6135,32 +12536,67 @@ export class AgentSessionsService {
     );
     return {
       agentId: session.agent_id,
-      toolPolicies: await this.callerToolPolicies(
-        args.identity,
-        args.projectId,
-        session.agent_id,
+      readOnly: session.read_only,
+      toolPolicies: withAgentLayers(
+        await this.callerToolPolicies(
+          args.identity,
+          args.projectId,
+          session.agent_id,
+        ),
+        await this.resolveAgent(session.agent_id, args.projectId).catch(
+          () => undefined,
+        ),
       ),
     };
   }
 
-  /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */
-  private async callerOpts(
-    identity: Identity,
-    projectId: string,
-    agentId: string | null,
-  ): Promise<{
-    caller: Identity;
-    toolPolicies?: Record<string, McpToolPolicyLayers>;
-  }> {
-    const toolPolicies = await this.callerToolPolicies(
-      identity,
-      projectId,
-      agentId,
-    );
-    // Builders send an EMPTY map, not none: a turn's layers replace the
-    // session's, so a builder continuing a viewer's session sheds the
-    // viewer's narrowing instead of inheriting it.
-    return { caller: identity, toolPolicies: toolPolicies ?? {} };
+  /**
+   * Name who answers this chat's escalations while no one watches it (ADR
+   * 0176). The latest delivery that names approvers replaces them.
+   */
+  async setApprovers(args: {
+    signal?: AbortSignal;
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    approvers: { members?: string[]; roles?: string[] };
+  }): Promise<void> {
+    await this.requireSession(args.identity, args.projectId, args.sessionId);
+    args.signal?.throwIfAborted();
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("agent_sessions")
+        .set({ approvers: args.approvers })
+        .where("id", "=", args.sessionId)
+        .execute();
+      args.signal?.throwIfAborted();
+    });
+  }
+
+  /**
+   * What may leave the session agent's sandbox (ADR 0182): its
+   * sandboxing, or undefined when the host declared none.
+   */
+  async agentSandboxing(args: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<Sandboxing | undefined> {
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .select(["agent_id", "read_only"])
+      .where("id", "=", args.sessionId)
+      .where("project_id", "=", args.projectId)
+      .executeTakeFirst();
+    if (!session) return undefined;
+    // A read-only chat acts as contained: capabilities and connections it
+    // reaches only read (ADR 0271).
+    if (session.read_only) return "contained";
+    // An agent that no longer resolves cannot act; the narrowest level holds.
+    const agent = await this.resolveAgent(
+      session.agent_id,
+      args.projectId,
+    ).catch(() => undefined);
+    return agent ? agent.sandboxing : "contained";
   }
 
   /** Ownership check without loading messages: throws when the session
@@ -6210,6 +12646,7 @@ export class AgentSessionsService {
         )
         .execute();
     });
+    this.chatsChanged();
     const row = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -6220,7 +12657,9 @@ export class AgentSessionsService {
     );
     return mapSession(
       row,
-      this.runningTurns.has(sessionId),
+      (await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })).has(
+        sessionId,
+      ),
       this.hostId,
       this.authorityLeaseMs,
       presentation,
@@ -6249,47 +12688,47 @@ export class AgentSessionsService {
       ])
       .where("agent_delegations.status", "=", "running")
       .where("agent_sessions.authority_host_id", "=", this.hostId)
-      .where(({ not, exists, selectFrom }) =>
-        not(
-          exists(
-            selectFrom("agent_turns")
-              .select("id")
-              .whereRef("agent_turns.session_id", "=", "agent_sessions.id")
-              .where("status", "in", ["queued", "running", "held"]),
-          ),
-        ),
-      )
       .execute();
     for (const child of children) {
       try {
+        // A child's latest turn says where its work stands: still working,
+        // waiting on its person, or settled with a result.
+        const latest = await this.db
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", child.id)
+          .orderBy("ordinal", "desc")
+          .limit(1)
+          .executeTakeFirst();
+        if (!latest) continue;
+        const turn = turnFromRow(latest);
+        const status: AgentTurnSettledEvent["status"] | null =
+          turn.status === "waiting"
+            ? "awaiting_input"
+            : turn.status === "completed"
+              ? "completed"
+              : turn.status === "failed"
+                ? "failed"
+                : null;
+        if (!status) continue;
         const identity = await resolveIdentity({
           tenantId: child.tenant_id,
           projectId: child.project_id,
           externalUserId: child.external_user_id,
         });
         if (!identity) continue;
-        const message = await this.db
-          .selectFrom("agent_messages")
-          .selectAll()
-          .where("session_id", "=", child.id)
-          .where("role", "=", "assistant")
-          .orderBy("seq", "desc")
-          .executeTakeFirst();
-        const status = (message?.metadata as JsonObject | null)?.status;
-        if (
-          message &&
-          (status === "completed" ||
-            status === "failed" ||
-            status === "awaiting_input")
-        )
-          await this.settleDelegation({
-            identity,
-            projectId: child.project_id,
-            sessionId: child.id,
-            resultMessageId: message.id,
-            status,
-            content: message.content,
-          });
+        const reply = await readReply({ db: this.db, turn });
+        await this.settleDelegation({
+          identity,
+          projectId: child.project_id,
+          sessionId: child.id,
+          resultMessageId: reply?.id ?? turn.inputItemId ?? turn.id,
+          status,
+          content:
+            reply?.kind === "assistant_message" && reply.text
+              ? reply.text
+              : (turn.error?.message ?? ""),
+        });
       } catch (error) {
         console.warn(
           `[catamorphic] Subsession result delivery failed for ${child.id}`,
@@ -6335,9 +12774,14 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!delegation) return;
 
+    const child = await this.db
+      .selectFrom("agent_sessions")
+      .select("title")
+      .where("id", "=", input.sessionId)
+      .executeTakeFirst();
     if (input.status === "awaiting_input") {
       const delivered = await this.db
-        .selectFrom("agent_messages")
+        .selectFrom("agent_items")
         .select("id")
         .where("session_id", "=", delegation.source_session_id)
         .where(
@@ -6352,18 +12796,22 @@ export class AgentSessionsService {
         input.projectId,
         input.sessionId,
       );
-      await this.deliver(
+      const title = child?.title ?? "Subsession";
+      await this.notify(
         input.identity,
         input.projectId,
         delegation.source_session_id,
         {
-          content: `Subsession ${input.sessionId} needs user input.`,
-          author: {
-            kind: "agent",
-            sessionId: input.sessionId,
-            agentId: null,
+          task: {
+            type: "subsession",
+            id: input.sessionId,
+            title,
+            status: "needs_input",
           },
-          mode: "next_turn",
+          summary: `${title} needs the person's input`,
+          detail:
+            "It waits on a question or an approval. The person answers it in that chat.",
+          source: { kind: "session", sessionId: input.sessionId },
           idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
         },
       );
@@ -6377,35 +12825,27 @@ export class AgentSessionsService {
         input.projectId,
         input.sessionId,
       );
-    const result =
-      input.content.trim() || `Subsession ${input.sessionId} ${status}.`;
-    await this.deliver(
+    const title = child?.title ?? "Subsession";
+    // Like a subagent's: the result joins the parent's turn while it still
+    // works (it may be waiting on it), and wakes the parent when it does not.
+    await this.notify(
       input.identity,
       input.projectId,
       delegation.source_session_id,
       {
-        content: result,
-        author: {
-          kind: "agent",
-          sessionId: input.sessionId,
-          agentId: null,
-        },
-        mode: "next_turn",
+        task: { type: "subsession", id: input.sessionId, title, status },
+        summary:
+          status === "completed" ? `${title} finished` : `${title} failed`,
+        detail: input.content.trim(),
+        source: { kind: "session", sessionId: input.sessionId },
         idempotencyKey: `delegation:${delegation.id}:result`,
-        metadata: {
-          delegation: {
-            id: delegation.id,
-            childSessionId: input.sessionId,
-            status,
-          },
-        },
       },
     );
     await this.db
       .updateTable("agent_delegations")
       .set({
         status,
-        result_message_id: input.resultMessageId,
+        result_item_id: input.resultMessageId,
         completed_at: new Date(),
       })
       .where("id", "=", delegation.id)
@@ -6418,6 +12858,24 @@ export class AgentSessionsService {
    * goes through the default `change` intent; only readers pass `read`, so
    * an app's sessions ref (ADR 0148) can never reach a mutation by omission.
    */
+  /** A session of the caller's tenant, without checking their access to it. */
+  private async sessionInTenant(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<SessionRow> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .selectAll("agent_sessions")
+      .where("agent_sessions.id", "=", sessionId)
+      .where("agent_sessions.project_id", "=", projectId)
+      .where("projects.tenant_id", "=", identity.tenantId)
+      .executeTakeFirst();
+    if (!row) throw new AgentSessionNotFoundError(sessionId);
+    return row;
+  }
+
   private async requireSession(
     identity: Identity,
     projectId: string,
@@ -6439,6 +12897,15 @@ export class AgentSessionsService {
       agentId: row.agent_id,
       intent,
     });
+    if (identity.externalUserId === row.external_user_id) {
+      const key = `${identity.tenantId}:${projectId}:${identity.externalUserId}`;
+      this.knownOwners.delete(key);
+      this.knownOwners.set(key, identity);
+      if (this.knownOwners.size > 1_000) {
+        const oldest = this.knownOwners.keys().next().value;
+        if (oldest !== undefined) this.knownOwners.delete(oldest);
+      }
+    }
     return row;
   }
 
@@ -6488,171 +12955,28 @@ export class AgentSessionsService {
           })),
       )
       .execute();
+    this.chatsChanged();
+  }
+
+  /**
+   * Tell this process's chat lists a chat changed outside the session log
+   * (its visibility, attention or icon), once the change is committed
+   * (ADR 0229). What the log records hints by itself.
+   */
+  private chatsChanged(): void {
+    this.wakeups?.notify("chats");
   }
 }
 
-function progressMetadata(events: AgentEvent[]): JsonObject {
-  const partialContent = [...events]
-    .reverse()
-    .find((event) => event.type === "text")?.content;
-  return {
-    status: "in_progress",
-    events: stepLogEvents(events),
-    ...(partialContent ? { partialContent } : {}),
-  };
-}
-
-/**
- * Events serialized into a message's step log. Usage events are accounting
- * (ADR 0057) — stamped on the settled message as `metadata.usage`, never
- * rendered as activity rows — so they are filtered out here.
- */
-function stepLogEvents(events: AgentEvent[]): JsonObject[] {
-  const steps: AgentEvent[] = [];
-  const invocations = new Map<string, number>();
-  for (const event of events) {
-    if (event.type === "usage") continue;
-    // Providers send cumulative invocation updates. Keep the started action
-    // visible if it never finishes, and enrich that row when its result arrives.
-    const key =
-      event.toolUseId &&
-      (event.type === "command" || event.type === "tool_call")
-        ? `${event.type}:${event.toolUseId}`
-        : undefined;
-    const existing = key ? invocations.get(key) : undefined;
-    if (existing !== undefined)
-      steps[existing] = { ...steps[existing], ...event };
-    else {
-      if (key) invocations.set(key, steps.length);
-      steps.push(event);
-    }
-  }
-  return JSON.parse(JSON.stringify(steps)) as JsonObject[];
-}
-
-export function activityLabel(event: AgentEvent): string {
-  if (event.type === "file_edit") {
-    // Deliberately no file name: the live line stays calm and human; the
-    // full path is in the turn's event log for anyone who expands it.
-    return "Editing files...";
-  }
-  if (event.type === "command") {
-    return commandLabel(event.content);
-  }
-  if (event.type === "tool_call") {
-    // Tool names are technical (harness- and MCP-speak); the expanded
-    // event log carries them, the live line stays plain.
-    return "Working...";
-  }
-  if (event.type === "subagent") {
-    if (event.status === "ended") return "Subagent finished...";
-    return event.content
-      ? `Delegating: ${event.content}`
-      : "Delegating to a subagent...";
-  }
-  if (event.type === "background") {
-    if (event.status === "ended") return "Stopped a background process...";
-    return event.content
-      ? `Running in background: ${event.content}`
-      : "Started a background process...";
-  }
-  if (event.type === "question") return "Waiting for your answer...";
-  if (event.type === "title") return "Thinking...";
-  if (event.type === "error") return event.content ?? "Agent failed";
-  // Never the text itself: a preamble held on the in-progress row would
-  // show on the live activity line and then land again as the flushed
-  // message — the same words twice. The prose belongs to the message; the
-  // live line stays a calm verb.
-  if (event.type === "text") return "Writing...";
-  return "Thinking...";
-}
-
-/**
- * Human labels for well-known shell commands. The live activity line never
- * shows a raw command (long, technical, sometimes noisy); a recognized
- * program gets a friendly verb and everything else is just "Working...".
- */
-const COMMAND_LABELS: Record<string, string> = {
-  sleep: "Waiting...",
-  find: "Searching files...",
-  grep: "Searching files...",
-  rg: "Searching files...",
-  ag: "Searching files...",
-  ls: "Looking around...",
-  tree: "Looking around...",
-  pwd: "Looking around...",
-  cat: "Reading files...",
-  head: "Reading files...",
-  tail: "Reading files...",
-  wc: "Reading files...",
-  mkdir: "Creating files...",
-  touch: "Creating files...",
-  cp: "Copying files...",
-  mv: "Moving files...",
-  git: "Working with git...",
-  curl: "Fetching a URL...",
-  wget: "Fetching a URL...",
-  make: "Building...",
-  cargo: "Building...",
-  tsc: "Building...",
-  npm: "Running scripts...",
-  npx: "Running scripts...",
-  pnpm: "Running scripts...",
-  yarn: "Running scripts...",
-  bun: "Running scripts...",
-  bunx: "Running scripts...",
-  node: "Running code...",
-  python: "Running code...",
-  python3: "Running code...",
-  vitest: "Running tests...",
-  jest: "Running tests...",
-  pytest: "Running tests...",
-};
-
-function commandLabel(command: string | undefined): string {
-  if (!command) return "Working...";
-  // First program of the first pipeline segment, skipping env assignments
-  // and trivial wrappers; compound commands classify by what runs first.
-  const segment = command.split(/\s*(?:&&|\|\||[;|])\s*/, 1)[0] ?? "";
-  const words = segment.trim().split(/\s+/);
-  let program: string | undefined;
-  for (const word of words) {
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue; // env assignment
-    if (word === "env" || word === "sudo" || word === "command") continue;
-    program = word.split("/").pop();
-    break;
-  }
-  return (program && COMMAND_LABELS[program]) ?? "Working...";
-}
-
-/**
- * Changed files for a host-execution turn: there is no sandbox baseline to
- * diff, so the provider's `file_edit` events are the record. Paths are
- * relativized to the working directory so chips read like repo paths.
- */
-export function hostChangedFiles(
-  events: AgentEvent[],
-  workingDirectory: string,
-): SyncedFileChange[] {
-  const root = workingDirectory.endsWith("/")
-    ? workingDirectory
-    : `${workingDirectory}/`;
-  const seen = new Set<string>();
-  const changes: SyncedFileChange[] = [];
-  for (const event of events) {
-    if (event.type !== "file_edit" || !event.filePath) continue;
-    const path = event.filePath.startsWith(root)
-      ? event.filePath.slice(root.length)
-      : event.filePath;
-    if (seen.has(path)) continue;
-    seen.add(path);
-    changes.push({ path, kind: "modified" });
-  }
-  return changes;
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+/** One calm line from an agent-written status: no newlines, no trailing period, bounded. */
+export function liveStatusLine(value: string | undefined): string | undefined {
+  const line = value
+    ?.replace(/[*_`#]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.:]+$/, "");
+  if (!line) return undefined;
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }
 
 function hostOf(serverUrl: string): string {
@@ -6679,24 +13003,26 @@ function mapSession(
     row.handoff_status === "none" &&
     row.authority_host_id !== "unassigned" &&
     row.authority_host_id !== hostId &&
-    row.mirror_message_count > 0 &&
+    Number(row.mirror_sequence) > 0 &&
     leaseExpiresAt.getTime() <= Date.now();
   return {
     id: row.id,
     projectId: row.project_id,
     externalUserId: row.external_user_id,
-    provider: row.provider,
+    owner: isProjectPrincipal(row.external_user_id) ? "project" : "member",
     source: parseSessionSource(row.source),
-    providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
     environment: row.environment_name,
     allocationId: row.allocation_id,
     agentId: row.agent_id,
+    harness: row.harness,
     model: row.model,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
+    readOnly: row.read_only,
     title: row.title,
     icon: row.icon,
     forkedFromSessionId: row.forked_from_session_id,
+    imported: importedSessionFromRow(row.imported),
     parentSessionId: row.parent_session_id,
     visibility: presentation?.visibility ?? "promoted",
     archivedAt: presentation?.archivedAt?.toISOString() ?? null,
@@ -6707,7 +13033,7 @@ function mapSession(
     authorityHostId: row.authority_host_id,
     authorityRevision: Number(row.authority_revision),
     authoritySeenAt: row.authority_seen_at.toISOString(),
-    mirrorMessageCount: row.mirror_message_count,
+    mirrorSequence: Number(row.mirror_sequence),
     handoffStatus: parseHandoffStatus(row.handoff_status),
     handoffDestinationHostId: row.handoff_destination_host_id,
     resumable,
@@ -6718,9 +13044,83 @@ function mapSession(
     attentionRequired:
       Number(row.attention_revision) > Number(row.attention_seen_revision),
     status: row.status as "active" | "closed",
+    key: row.chat_key,
+    keyWorkflows: stringList(row.chat_workflows),
+    placement: parsePlacement(row.placement),
+    workspace: parseWorkspaceBase(row.workspace),
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+/**
+ * Admission failed for a reason no machine coming online fixes: the chat's
+ * Environment is gone, invalid, not allowed, or cannot run it (ADR 0258).
+ */
+function isPlacementRefusal(error: unknown): error is Error {
+  return (
+    error instanceof EnvironmentNotFoundError ||
+    error instanceof EnvironmentPolicyInvalidError ||
+    error instanceof EnvironmentAccessDeniedError ||
+    error instanceof EnvironmentIncompatibleError ||
+    error instanceof NoCompatibleEnvironmentError
+  );
+}
+
+/** Since when a wait for a machine still counts (ADR 0258). */
+function waitFresh() {
+  return sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`;
+}
+
+/** Why a chat's turn did not run: it waited for a machine as long as allowed. */
+function placementWaitExpired(wait: PlacementWait): string {
+  const minutes = wait.limitMinutes ?? 0;
+  const span = `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return wait.reason === "capacity"
+    ? `No machine for Environment '${wait.environmentName}' had room for this chat within ${span}, so this turn did not run. The next message waits again.`
+    : `No machine for Environment '${wait.environmentName}' came online for this chat within ${span}, so this turn did not run. The next message waits again.`;
+}
+
+function toPlacementJson(placement: SessionPlacement): Json {
+  return {
+    environment: placement.environment,
+    reason: placement.reason,
+    machine: { id: placement.machine.id, label: placement.machine.label },
+  };
+}
+
+function stringList(value: Json): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+const PLACEMENT_REASONS: readonly PlacementReason[] = [
+  "requested",
+  "agent_preferred",
+  "project_default",
+  "available",
+];
+
+function parsePlacement(value: Json | null): SessionPlacement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { environment, reason, machine } = value;
+  const known = PLACEMENT_REASONS.find((candidate) => candidate === reason);
+  if (typeof environment !== "string" || !known) return null;
+  if (!machine || typeof machine !== "object" || Array.isArray(machine))
+    return null;
+  const { id, label } = machine;
+  if (typeof id !== "string" || typeof label !== "string") return null;
+  return { environment, reason: known, machine: { id, label } };
+}
+
+/** The placement an admission records on its chat. */
+function placementOf(admission: EnvironmentAdmission): SessionPlacement {
+  return {
+    environment: admission.environmentName,
+    reason: admission.reason,
+    machine: { id: admission.binding.id, label: admission.binding.label },
   };
 }
 
@@ -6731,91 +13131,88 @@ function sessionVisibility(value: string): SessionVisibility {
   throw new Error(`Invalid session visibility '${value}'`);
 }
 
-const DEFAULT_DELEGATION_POLICY: AgentDelegationPolicy = {
-  enabled: true,
-  maxConcurrentChildren: 10,
-  routes: [
-    {
-      id: "same-agent",
-      target: "self",
-      allowFurtherDelegation: true,
-    },
-  ],
-};
+/**
+ * The host's subsession tools: a read-only chat's children read only.
+ * Replica memory (c): fixed names, the same on every replica.
+ */
+const SUBSESSION_TOOLS = new Set([
+  "spawn_subsession",
+  "wait_for_subsessions",
+  "interrupt_subsession",
+]);
 
-function delegationPolicy(
-  policy: AgentDelegationPolicy | undefined,
-): AgentDelegationPolicy {
-  return policy ?? DEFAULT_DELEGATION_POLICY;
-}
+/** What a read-only chat is told about itself (ADR 0271). */
+const READ_ONLY_NOTE =
+  "This chat runs read-only: read, search and report, but change nothing. Any subsession it starts reads only too.";
 
-function privilegeRank(
-  privilege: "read-only" | "edit" | "full-access" | undefined,
-): number {
-  if (privilege === "full-access") return 2;
-  if (privilege === "edit") return 1;
-  return 0;
-}
+/** How long a spawn waits on a harness's model catalog (ADR 0271). */
+const MODEL_CATALOG_WAIT_MS = 5_000;
 
-function resolveDelegationTarget(input: {
-  target: string;
-  requestedAgentId?: string;
-  sourceAgentId: string | undefined;
-  projectId: string;
-}): string {
-  if (input.target === "self") {
-    if (!input.sourceAgentId) {
-      throw new AgentNotConfiguredError(undefined);
-    }
-    if (
-      input.requestedAgentId &&
-      input.requestedAgentId !== input.sourceAgentId
-    ) {
-      throw new AgentDelegationDeniedError(
-        "The selected route only permits the source agent",
-      );
-    }
-    return input.sourceAgentId;
-  }
-  if (input.target === "*") {
-    if (!input.requestedAgentId) {
-      throw new AgentDelegationDeniedError(
-        "This route requires an explicit target agent",
-      );
-    }
-    return input.requestedAgentId;
-  }
-  const relativeProject = input.target.match(/^project:([^:]+)$/);
-  const resolved = relativeProject
-    ? formatProjectAgentId(input.projectId, relativeProject[1] ?? "")
-    : input.target;
-  if (input.requestedAgentId && input.requestedAgentId !== resolved) {
-    throw new AgentDelegationDeniedError(
-      `The selected route only permits agent '${resolved}'`,
-    );
-  }
-  return resolved;
-}
+/** How often a running turn renews its sandbox grants (they live an hour). */
+const GRANT_RENEWAL_MS = 20 * 60_000;
 
-function workflowNotification(
-  metadata: JsonObject | null | undefined,
-): { title?: string; body?: string } | undefined {
-  const value = metadata?.workflowNotification;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const title =
-    typeof value.title === "string" && value.title.trim()
-      ? value.title.trim()
-      : undefined;
-  const body =
-    typeof value.body === "string" && value.body.trim()
-      ? value.body.trim()
-      : undefined;
+/**
+ * A committed definition's own narrowing (ADR 0054 agent scope), sandboxing
+ * and harness permission mode, applied by core whatever harness the host
+ * built, so they hold on every host (ADR 0176, ADR 0182). The permission
+ * mode travels as a turn default the harness reads. Aliases name the
+ * Environment's connection servers.
+ */
+function withDefinitionPolicy(
+  agent: RegisteredCodingAgent,
+  definition: AgentDefinition,
+): RegisteredCodingAgent {
+  const layers = Object.fromEntries(
+    Object.entries(definition.toolPolicies ?? {}).map(([alias, policy]) => [
+      alias === PROJECT_TOOLS_SERVER_KEY
+        ? alias
+        : connectionMcpServerName(alias),
+      [
+        narrowingLayer({
+          ...(policy.default ? { default: policy.default } : {}),
+          ...(policy.tools ? { tools: { ...policy.tools } } : {}),
+        }),
+      ],
+    ]),
+  );
+  const sandboxing = agent.sandboxing ?? definition.sandboxing;
+  const harnessPermissions =
+    agent.defaults?.harnessPermissions ?? definition.harnessPermissions;
   return {
-    ...(title ? { title } : {}),
-    ...(body ? { body } : {}),
+    ...agent,
+    ...(sandboxing ? { sandboxing } : {}),
+    ...(harnessPermissions
+      ? { defaults: { ...agent.defaults, harnessPermissions } }
+      : {}),
+    ...(Object.keys(layers).length > 0
+      ? { toolPolicies: { ...agent.toolPolicies, ...layers } }
+      : {}),
   };
+}
+
+/** The caller's layers and the agent's own, intersected per server. */
+function withAgentLayers(
+  caller: Record<string, McpToolPolicyLayers> | undefined,
+  agent: RegisteredCodingAgent | undefined,
+): Record<string, McpToolPolicyLayers> | undefined {
+  const own = agent?.toolPolicies;
+  if (!own || Object.keys(own).length === 0) return caller;
+  const merged: Record<string, McpToolPolicyLayers> = { ...caller };
+  for (const [server, layers] of Object.entries(own))
+    merged[server] = [...(merged[server] ?? []), ...layers];
+  return merged;
+}
+
+function sandboxingRank(sandboxing: Sandboxing | undefined): number {
+  return sandboxing ? SANDBOXING_LEVELS.indexOf(sandboxing) : 0;
+}
+
+/** Whether a forwarded action names one this host runs. */
+function isSessionActionOperation<T extends object>(input: {
+  operation: string;
+  schemas: T;
+}): input is { operation: Extract<keyof T, string>; schemas: T } {
+  return Object.hasOwn(input.schemas, input.operation);
 }
 
 function parseSessionSource(value: string): AgentSessionSource {
@@ -6858,6 +13255,9 @@ function agentTodos(value: unknown): AgentTodo[] {
         title: item.title,
         description: item.description,
         status: item.status,
+        ...(typeof item.activeForm === "string" && item.activeForm
+          ? { activeForm: item.activeForm }
+          : {}),
       },
     ];
   });
@@ -6867,100 +13267,176 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function agentTodosJson(value: readonly AgentTodoInput[]) {
-  return sql<Json>`${JSON.stringify(value)}::jsonb`;
+/** Who an input names as the actor of workflow-facing events (ADR 0090). */
+function inputActor(input: SessionInput): Record<string, unknown> {
+  switch (input.kind) {
+    case "user_message":
+      return { ...input.author };
+    case "inbound_message":
+      return { ...input.from };
+    case "task_notification":
+      return { kind: "system", code: input.task.type };
+  }
 }
 
-function mapMessage(row: MessageRow): AgentMessage {
+/** A protocol JSON object from any JSON-able value (database rows, reports). */
+export function protocolJson(value: unknown): ProtocolJsonObject {
+  const parsed: unknown = JSON.parse(JSON.stringify(value ?? {}));
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as ProtocolJsonObject)
+    : {};
+}
+
+function parseDispatch(value: string | null): DispatchMode {
+  return value === "steer" || value === "interrupt" || value === "message_only"
+    ? value
+    : "queue";
+}
+
+/** A host tool for the runner: its JSON Schema, from the tool's zod shape. */
+function hostToolDescriptor(tool: ExtraTool): HostToolDescriptor {
+  const shape = z.object(tool.parameters as z.ZodRawShape);
   return {
-    id: row.id,
-    sessionId: row.session_id,
-    role: row.role as "user" | "assistant" | "system",
-    content: row.content,
-    commitSha: row.commit_sha,
-    metadata: row.metadata as Record<string, unknown> | null,
-    author: parseMessageAuthor(row),
-    deliveryMode: parseMessageDeliveryMode(row.delivery_mode),
-    idempotencyKey: row.idempotency_key,
-    createdAt: row.created_at.toISOString(),
+    name: tool.name,
+    description: tool.description,
+    inputSchema: protocolJson(z.toJSONSchema(shape)),
   };
 }
 
-export function modelVisibleDelivery(
-  content: string,
-  author: SessionMessageAuthor,
-): string {
-  switch (author.kind) {
-    case "user":
-      return content;
-    case "agent":
-      return `[Catamorphic agent message from session ${author.sessionId}${author.agentId ? ` using ${author.agentId}` : ""}. This message was not written by the user.]\n\n${content}`;
-    case "workflow":
-      return `[Catamorphic workflow message from ${author.workflowName}, run ${author.runId}. This message was not written by the user.]\n\n${content}`;
-    case "watcher":
-      return `[Catamorphic watcher message from ${author.watcherId}${author.runId ? `, run ${author.runId}` : ""}. This message was not written by the user.]\n\n${content}`;
-    case "system":
-      return `[Catamorphic system message: ${author.code}. This message was not written by the user.]\n\n${content}`;
-  }
+/** MCP content from what a host tool returned. */
+function hostToolResult(
+  value: ReturnType<typeof extraToolResult>,
+): HostToolResult {
+  const content = (value.content ?? []).flatMap(
+    (part): HostToolResult["content"] =>
+      part.type === "text"
+        ? [{ type: "text", text: part.text }]
+        : part.type === "image"
+          ? [{ type: "image", data: part.data, mimeType: part.mimeType }]
+          : [],
+  );
+  return { content, ...(value.isError ? { isError: true } : {}) };
 }
 
-function parseMessageDeliveryMode(value: string): SessionDeliveryMode {
-  if (
-    value !== "message_only" &&
-    value !== "next_turn" &&
-    value !== "interrupt"
-  ) {
-    throw new Error(`Invalid agent message delivery mode '${value}'`);
-  }
-  return value;
+function protocolPolicies(
+  policies: Record<string, McpToolPolicyLayers>,
+): Record<string, PolicyLayer[]> {
+  return Object.fromEntries(
+    Object.entries(policies).map(([server, layers]) => [
+      server,
+      layers.map((layer) => ({
+        ...(layer.default ? { default: layer.default } : {}),
+        ...(layer.tools ? { tools: { ...layer.tools } } : {}),
+      })),
+    ]),
+  );
 }
 
-function parseMessageAuthor(row: MessageRow): SessionMessageAuthor {
-  const payload = row.author_payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error(`Agent message '${row.id}' has an invalid author payload`);
-  }
-  if (
-    row.author_kind === "user" &&
-    typeof payload.externalUserId === "string"
-  ) {
-    return { kind: "user", externalUserId: payload.externalUserId };
-  }
-  if (
-    row.author_kind === "agent" &&
-    typeof payload.sessionId === "string" &&
-    (typeof payload.agentId === "string" || payload.agentId === null)
-  ) {
-    return {
-      kind: "agent",
-      sessionId: payload.sessionId,
-      agentId: payload.agentId,
-    };
-  }
-  if (
-    row.author_kind === "workflow" &&
-    typeof payload.runId === "string" &&
-    typeof payload.workflowName === "string"
-  ) {
-    return {
-      kind: "workflow",
-      runId: payload.runId,
-      workflowName: payload.workflowName,
-    };
-  }
-  if (
-    row.author_kind === "watcher" &&
-    typeof payload.watcherId === "string" &&
-    (payload.runId === undefined || typeof payload.runId === "string")
-  ) {
-    return {
-      kind: "watcher",
-      watcherId: payload.watcherId,
-      ...(typeof payload.runId === "string" ? { runId: payload.runId } : {}),
-    };
-  }
-  if (row.author_kind === "system" && typeof payload.code === "string") {
-    return { kind: "system", code: payload.code };
-  }
-  throw new Error(`Agent message '${row.id}' has an invalid author payload`);
+function protocolMcpServers(
+  servers: Record<string, AgentMcpServerConfig>,
+): Record<string, McpServerSpec> {
+  return Object.fromEntries(
+    Object.entries(servers).map(([name, server]): [string, McpServerSpec] => [
+      name,
+      server.transport === "stdio"
+        ? {
+            transport: "stdio",
+            command: server.command,
+            ...(server.args ? { args: [...server.args] } : {}),
+            ...(server.env ? { env: { ...server.env } } : {}),
+          }
+        : {
+            transport: server.transport,
+            url: server.url,
+            ...(server.headers ? { headers: { ...server.headers } } : {}),
+            ...(server.defaultToolsApprovalMode
+              ? { defaultToolsApprovalMode: server.defaultToolsApprovalMode }
+              : {}),
+            ...(server.timeouts ? { timeouts: { ...server.timeouts } } : {}),
+          },
+    ]),
+  );
+}
+
+const SIGN_IN_HARNESS_NAMES: Record<SignInHarness, string> = {
+  codex: "Codex",
+};
+
+/** A deterministic id for a notice Work writes at most once per session. */
+function derivedNoticeId(sessionId: string, code: string): string {
+  const hex = createHash("sha256")
+    .update(`notice ${sessionId} ${code}`)
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** How many native records an import has stored (ADR 0233). */
+function importedNativeEntries(value: Json | null): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const count = value.nativeEntries;
+  return typeof count === "number" && count >= 0 ? count : 0;
+}
+
+type QuestionResponse = Extract<RuntimeRequestResponse, { kind: "question" }>;
+
+/**
+ * An answer's pills ride beside it, as a message's do (ADR 0244): one list
+ * per answer, each answer holding one marker per pill (a stray one goes).
+ * Answers with none carry no lists.
+ */
+function withAnswerPills(response: QuestionResponse): QuestionResponse {
+  const lists = response.answers.map(
+    (_answer, index) => response.attachments?.[index] ?? [],
+  );
+  const answers = response.answers.map((answer, index) =>
+    withMarkerCount(answer, lists[index]?.length ?? 0),
+  );
+  return lists.some((list) => list.length > 0)
+    ? { kind: "question", answers, attachments: lists }
+    : { kind: "question", answers };
+}
+
+/**
+ * What the asking agent reads: each answer as text, its pills in it, and
+ * its media numbered as the message that follows the answers numbers them.
+ */
+function agentResponse(
+  response: RuntimeRequestResponse,
+): RuntimeRequestResponse {
+  if (response.kind !== "question" || !response.attachments) return response;
+  const { answers, attachments } = response;
+  const mediaBefore = (index: number) =>
+    attachments.slice(0, index).flat().filter(isMediaAttachment).length;
+  return {
+    kind: "question",
+    answers: answers.map((answer, index) =>
+      renderQuestionAnswer(answer, attachments[index], 1 + mediaBefore(index)),
+    ),
+  };
+}
+
+/**
+ * The answers' images and documents as the message that follows them, each
+ * beside the question it answers; null when they have none.
+ */
+function answerMedia(
+  questions: AgentQuestion[],
+  response: QuestionResponse,
+): { text: string; attachments: AgentAttachment[] } | null {
+  const groups = (response.attachments ?? [])
+    .map((list, index) => ({
+      question: questions[index]?.question ?? `Question ${index + 1}`,
+      media: list.filter(isMediaAttachment),
+    }))
+    .filter((group) => group.media.length > 0);
+  if (groups.length === 0) return null;
+  return {
+    text: groups
+      .map(
+        ({ question, media }) =>
+          `With my answer to "${question}": ${ATTACHMENT_MARKER.repeat(media.length)}`,
+      )
+      .join("\n"),
+    attachments: groups.flatMap(({ media }) => media),
+  };
 }

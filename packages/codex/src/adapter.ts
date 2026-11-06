@@ -1,0 +1,1526 @@
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type {
+  AgentAttachment,
+  AgentErrorKind,
+  AgentQuestion,
+  AgentTurnUsage,
+  JsonObject,
+  JsonValue,
+  TurnError,
+} from "@catamorphic/agent-protocol";
+import {
+  type AttemptControl,
+  type AttemptHost,
+  type AttemptStart,
+  type HarnessAdapter,
+  type HarnessCapabilities,
+  type HostToolDescriptor,
+  RequestClosedError,
+  type RequestDraft,
+} from "@catamorphic/agent-protocol/runner";
+import {
+  positiveTokenCount,
+  renderUserMessage,
+  type WarmSession,
+  WarmSessions,
+  type WarmSessionsOptions,
+} from "@catamorphic/sandbox";
+import {
+  CodexAppServer,
+  type CodexServerRequest,
+  isObject,
+  type JsonRpcId,
+} from "./app-server.js";
+import { type CodexLaunch, codexLaunch } from "./config.js";
+import { CodexItems } from "./items.js";
+import {
+  ancestorFile,
+  ancestorSubpath,
+  fileSize,
+  ROLLOUT_SUBPATH,
+  RolloutMirror,
+  readRollout,
+  rolloutPath,
+  statePathOf,
+  writeRollout,
+} from "./rollout.js";
+import type { CodexTransportFactory } from "./transport.js";
+
+/**
+ * What the Codex adapter can do (ADR 0198). Rollback is a fork through the
+ * turn to keep; native state is the thread's rollout file.
+ */
+export const CODEX_CAPABILITIES: HarnessCapabilities = {
+  steer: true,
+  interrupt: true,
+  retry: false,
+  fork: true,
+  rollback: true,
+  questions: true,
+  approvals: true,
+  elicitations: true,
+  // Tool search (or code mode's ALL_TOOLS) finds MCP tools on demand.
+  toolSearch: true,
+  subagents: true,
+  streamsText: true,
+  streamsReasoning: true,
+  nativeState: "file",
+  ids: { thread: "strong", turn: "strong", item: "strong" },
+};
+
+export interface CodexAdapterOptions {
+  /**
+   * Replaces the `codex app-server` process. Tests pass a replay peer from
+   * `@catamorphic/codex/testing`; hosts leave it unset.
+   */
+  transport?: CodexTransportFactory;
+  /**
+   * Keep each thread's Codex up between attempts (ADR 0222). Only for
+   * hosts that keep the adapter for their lifetime and call `dispose` when
+   * they stop: a runner that exits with its attempt leaves it unset, and
+   * every attempt's Codex exits when the attempt settles.
+   */
+  warm?: WarmSessionsOptions;
+}
+
+/**
+ * The Codex harness adapter (`codex`): a pinned `codex app-server` process
+ * beside the workspace it edits (ADR 0198), one per attempt, or with `warm`
+ * one per thread while nothing it started with changes (ADR 0222).
+ * Per-agent settings arrive with each attempt, never here.
+ */
+export function createCodexAdapter(
+  options: CodexAdapterOptions = {},
+): HarnessAdapter {
+  const sessions = options.warm
+    ? new WarmSessions<CodexSession>(options.warm)
+    : undefined;
+  return {
+    id: "codex",
+    capabilities: () => CODEX_CAPABILITIES,
+    start: (attempt, host) =>
+      new CodexAttempt(attempt, host, options.transport, sessions).control(),
+    ...(sessions ? { dispose: () => sessions.dispose() } : {}),
+  };
+}
+
+/** How long an interrupted turn may take to say so before Codex is stopped. */
+const INTERRUPT_GRACE_MS = 10_000;
+const THREAD_TIMEOUT_MS = 120_000;
+/** How long a warm Codex's settled turn waits for its rollout to be written. */
+const TURN_STORED_MS = 3_000;
+const CODEX_ORIGIN = {
+  kind: "provider",
+  id: "codex",
+  displayName: "Codex",
+} as const;
+
+interface ThreadInfo {
+  id: string;
+  path: string | null;
+  model: string | null;
+}
+
+/** JSON with every object's keys sorted, so equal settings read the same. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : inner,
+  );
+}
+
+/**
+ * One `codex app-server` with its thread loaded, serving that thread's
+ * attempts one at a time (ADR 0222). Its notifications and requests reach
+ * the attempt it serves now; between attempts it is idle, and what it
+ * reports then reaches nobody.
+ */
+class CodexSession implements WarmSession {
+  client?: CodexAppServer;
+  thread?: ThreadInfo;
+  mirror?: RolloutMirror;
+  /** The native turn its last attempt ended on. */
+  lastTurn?: string;
+  private serving?: CodexAttempt;
+  private exited = false;
+
+  constructor(
+    /** Everything Codex and its thread started with. */
+    readonly signature: string,
+    readonly launch: CodexLaunch,
+  ) {}
+
+  get alive(): boolean {
+    return !this.exited && this.client !== undefined;
+  }
+
+  get attempt(): CodexAttempt | undefined {
+    return this.serving;
+  }
+
+  serve(attempt: CodexAttempt, host: AttemptHost): void {
+    this.serving = attempt;
+    if (this.mirror) this.mirror.host = host;
+  }
+
+  release(attempt: CodexAttempt): void {
+    if (this.serving !== attempt) return;
+    this.serving = undefined;
+    if (this.mirror) this.mirror.host = undefined;
+  }
+
+  /** Codex's process ended: it serves nobody again. */
+  ended(): void {
+    this.exited = true;
+  }
+
+  async close(): Promise<void> {
+    this.exited = true;
+    await this.client?.close();
+  }
+}
+
+class CodexAttempt {
+  private client?: CodexAppServer;
+  private session?: CodexSession;
+  private launch?: CodexLaunch;
+  private thread?: ThreadInfo;
+  private turnId?: string;
+  private turnStartedEmitted = false;
+  /** Codex itself ended the turn, without failing (or never began one). */
+  private turnFinished = false;
+  private finishing = false;
+  private completed = false;
+  private interruptRequested = false;
+  private hostStopped = false;
+  private interruptTimer?: ReturnType<typeof setTimeout>;
+  private mirror?: RolloutMirror;
+  private readonly usage: AgentTurnUsage[] = [];
+  private contextWindow?: number;
+  private lastError?: JsonObject;
+  private providerRetrying = false;
+  private readonly steered = new Set<string>();
+  /** Open server requests by JSON-RPC id → the request key Work knows them by. */
+  private readonly requestKeys = new Map<JsonRpcId, string>();
+  /** MCP approvals waiting on a person, withdrawn when Codex resolves them. */
+  private readonly approvals = new Map<JsonRpcId, AbortController>();
+  private readonly fileChangePaths = new Map<string, string[]>();
+  private readonly hostTools = new Map<string, HostToolDescriptor>();
+  private readonly items: CodexItems;
+  private inputDirectory?: string;
+  /** The working directory as given and as Codex reports it (resolved). */
+  private workRoots: string[] = [];
+  /** A fork's ancestors' rollouts, stored with the fork once it exists. */
+  private ancestors: Array<{ subpath: string; entries: JsonValue[] }> = [];
+  private resolveTurn!: () => void;
+  private readonly turnDone = new Promise<void>((resolve) => {
+    this.resolveTurn = resolve;
+  });
+  private resolveTurnReady!: () => void;
+  /** Settles once the native turn id is known, or the attempt is ending. */
+  private readonly turnReady = new Promise<void>((resolve) => {
+    this.resolveTurnReady = resolve;
+  });
+
+  constructor(
+    private readonly attempt: AttemptStart,
+    private readonly host: AttemptHost,
+    private readonly transport: CodexTransportFactory | undefined,
+    private readonly sessions: WarmSessions<CodexSession> | undefined,
+  ) {
+    for (const tool of attempt.hostTools) {
+      const taken = this.hostTools.has(tool.name);
+      this.hostTools.set(
+        taken ? `${tool.server ?? "workspace"}__${tool.name}` : tool.name,
+        tool,
+      );
+    }
+    this.items = new CodexItems({
+      emit: (event) => this.host.emit(event),
+      serverName: (key) => this.launch?.serverKeys.get(key) ?? key,
+      hostToolServer: (tool) => this.hostTools.get(tool)?.server ?? "workspace",
+      filePath: (file) => this.workspacePath(file),
+    });
+  }
+
+  /** A path inside the working directory, relative to it; others as given. */
+  private workspacePath(file: string): string {
+    for (const root of this.workRoots) {
+      const relative = path.relative(root, file);
+      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+        return relative;
+    }
+    return file;
+  }
+
+  control(): AttemptControl {
+    // A dead host cannot answer tools or store native state. Close its
+    // process before a continuation tries to open the same thread.
+    const onAbort = () => {
+      if (this.completed) return;
+      this.hostStopped = true;
+      this.interruptRequested = true;
+      this.complete({ status: "interrupted" });
+      void this.client?.close();
+    };
+    this.host.signal.addEventListener("abort", onAbort, { once: true });
+    if (this.host.signal.aborted) onAbort();
+    const finished = this.run().finally(() =>
+      this.host.signal.removeEventListener("abort", onAbort),
+    );
+    return {
+      steer: (input) => this.steer(input),
+      interrupt: () => this.interrupt(),
+      finished,
+    };
+  }
+
+  private async run(): Promise<void> {
+    try {
+      await this.execute();
+    } catch (error) {
+      this.complete({
+        status: this.interruptRequested ? "interrupted" : "failed",
+        ...(this.interruptRequested
+          ? {}
+          : { error: { message: errorMessage(error) } }),
+      });
+    } finally {
+      const session = this.session;
+      const thread = session?.thread;
+      // Only a turn Codex itself finished leaves its thread ready for the
+      // next one; anything else ends this Codex.
+      if (
+        this.sessions &&
+        session?.alive &&
+        thread &&
+        this.turnFinished &&
+        !this.hostStopped
+      ) {
+        session.release(this);
+        this.sessions.release(thread.id, session);
+        await this.removeInputs();
+      } else {
+        await this.shutdown();
+        session?.release(this);
+      }
+    }
+  }
+
+  private async execute(): Promise<void> {
+    const attempt = this.attempt;
+    const input = attempt.input;
+    if (!input) {
+      this.complete({
+        status: "failed",
+        error: {
+          message:
+            "Codex cannot re-run a turn by itself; send the turn's input again.",
+        },
+      });
+      return;
+    }
+    const launch = codexLaunch(attempt);
+    if (typeof launch === "string") {
+      this.complete({ status: "failed", error: { message: launch } });
+      return;
+    }
+    this.launch = launch;
+    await mkdir(launch.home, { recursive: true });
+    const home = await realpath(launch.home).catch(() => launch.home);
+    this.workRoots = [
+      ...new Set([
+        attempt.workingDirectory,
+        await realpath(attempt.workingDirectory).catch(
+          () => attempt.workingDirectory,
+        ),
+      ]),
+    ];
+    const signature = this.launchSignature(launch);
+    const warm = await this.warmSession(signature);
+    const thread = warm
+      ? await this.joinSession(warm, home)
+      : await this.startSession(signature, launch, home);
+    if (!thread) return;
+    const client = this.client;
+    if (!client) throw new Error("Codex was not started.");
+    if (this.interruptRequested) {
+      // No turn started: the loaded thread is as ready as it was.
+      this.turnFinished = true;
+      this.complete({ status: "interrupted" });
+      return;
+    }
+    const started = await client.request(
+      "turn/start",
+      {
+        threadId: thread.id,
+        clientUserMessageId: input.itemId,
+        input: await this.userInput(input),
+        cwd: attempt.workingDirectory,
+        ...(attempt.model ? { model: attempt.model } : {}),
+        ...(attempt.effort ? { effort: attempt.effort } : {}),
+        ...(attempt.context.trim()
+          ? {
+              // Per-turn context (ADR 0152) rides Codex's own channel
+              // beside the prompt, never inside the person's words.
+              additionalContext: {
+                "catamorphic.context": {
+                  value: attempt.context,
+                  kind: "application",
+                },
+              },
+            }
+          : {}),
+      },
+      { timeoutMs: THREAD_TIMEOUT_MS },
+    );
+    const turn =
+      isObject(started) && isObject(started.turn) ? started.turn : {};
+    if (typeof turn.id !== "string")
+      throw new Error("Codex returned an invalid turn.");
+    this.turnId ??= turn.id;
+    this.resolveTurnReady();
+    if (this.interruptRequested) this.sendInterrupt();
+    await this.turnDone;
+  }
+
+  /**
+   * Everything Codex and its thread start with, as one string: an idle
+   * Codex serves another attempt only when it is the same (ADR 0222). The
+   * model and effort travel with each turn, so they are not in it.
+   */
+  private launchSignature(launch: CodexLaunch): string {
+    return stableJson({
+      spawn: launch.spawn,
+      home: launch.home,
+      sandbox: launch.sandbox,
+      approvalPolicy: launch.approvalPolicy,
+      threadConfig: launch.threadConfig,
+      cwd: this.attempt.workingDirectory,
+      developerInstructions: this.developerInstructions(),
+      dynamicTools: [...this.hostTools.entries()],
+    });
+  }
+
+  /** The thread's idle Codex, when nothing it started with changed since. */
+  private async warmSession(
+    signature: string,
+  ): Promise<CodexSession | undefined> {
+    const binding = this.attempt.thread;
+    if (
+      !this.sessions ||
+      (binding.mode !== "resume" && binding.mode !== "restore")
+    )
+      return undefined;
+    return this.sessions.take(
+      binding.nativeRef.id,
+      (candidate) =>
+        candidate.signature === signature &&
+        candidate.thread?.id === binding.nativeRef.id &&
+        candidate.lastTurn === binding.lastTurnRef?.id,
+    );
+  }
+
+  /** Serve this attempt on a live Codex whose thread is loaded already. */
+  private async joinSession(
+    session: CodexSession,
+    home: string,
+  ): Promise<ThreadInfo | undefined> {
+    this.session = session;
+    this.client = session.client;
+    this.thread = session.thread;
+    this.mirror = session.mirror;
+    session.serve(this, this.host);
+    const thread = session.thread;
+    if (!thread) throw new Error("Codex has no thread loaded.");
+    this.host.emit({
+      type: "thread",
+      ref: { id: thread.id, strength: "strong" },
+      ...(thread.path && statePathOf({ home, file: thread.path })
+        ? { statePath: statePathOf({ home, file: thread.path }) }
+        : {}),
+    });
+    // Whatever it wrote since its last turn ended belongs to the thread.
+    await this.mirror?.poll();
+    return thread;
+  }
+
+  /** A new Codex for this attempt's thread, from Work's copy of it. */
+  private async startSession(
+    signature: string,
+    launch: CodexLaunch,
+    home: string,
+  ): Promise<ThreadInfo | undefined> {
+    const binding = await this.prepareThread(home);
+    if (this.interruptRequested) {
+      this.complete({ status: "interrupted" });
+      return undefined;
+    }
+    const session = new CodexSession(signature, launch);
+    const own = this.attempt.thread;
+    // A resumed thread's history ends where Work last recorded it.
+    if (own.mode === "resume" || own.mode === "restore")
+      session.lastTurn = own.lastTurnRef?.id;
+    this.session = session;
+    session.serve(this, this.host);
+    const client = new CodexAppServer({
+      spawn: launch.spawn,
+      ...(this.transport ? { transport: this.transport } : {}),
+      onNotification: (method, params) =>
+        session.attempt?.onNotification(method, params),
+      onRequest: (request) =>
+        session.attempt
+          ? session.attempt.onRequest(request)
+          : Promise.reject(
+              new Error("Codex asked for something between turns."),
+            ),
+      onWithdrawn: (id) => session.attempt?.onWithdrawn(id),
+    });
+    session.client = client;
+    this.client = client;
+    const sessions = this.sessions;
+    void client.exited.then((exit) => {
+      session.ended();
+      if (session.thread) sessions?.forget(session.thread.id, session);
+      session.attempt?.codexExited(exit);
+    });
+    await client.initialize();
+    const thread = await this.openThread(client, binding);
+    this.thread = thread;
+    session.thread = thread;
+    this.host.emit({
+      type: "thread",
+      ref: { id: thread.id, strength: "strong" },
+      ...(thread.path && statePathOf({ home, file: thread.path })
+        ? { statePath: statePathOf({ home, file: thread.path }) }
+        : {}),
+    });
+    // A fork keeps its ancestors' rollouts, so it restores anywhere.
+    for (const ancestor of this.ancestors)
+      await this.host.nativeState.append(ancestor);
+    if (thread.path) {
+      this.mirror = new RolloutMirror({
+        file: thread.path,
+        host: this.host,
+        offset:
+          binding.mode === "fresh" || binding.mode === "fork"
+            ? 0
+            : (binding.restoredBytes ?? (await fileSize(thread.path)) ?? 0),
+      });
+      session.mirror = this.mirror;
+    }
+    return thread;
+  }
+
+  /** Codex's process ended while this attempt was its own. */
+  private codexExited(exit: Awaited<CodexAppServer["exited"]>): void {
+    if (this.completed || this.finishing) return;
+    if (exit.stderr.trim())
+      this.host.emit({
+        type: "diagnostic",
+        level: "error",
+        message: exit.stderr.trim().slice(-2_000),
+      });
+    this.items.closeOpen(this.interruptRequested ? "interrupted" : "failed");
+    this.complete(
+      this.interruptRequested
+        ? { status: "interrupted" }
+        : {
+            status: "failed",
+            error: {
+              message:
+                "Codex stopped before it finished the turn. Retry the turn.",
+            },
+          },
+    );
+  }
+
+  /**
+   * Make the binding's native state present in this home before Codex
+   * opens it: the thread's stored rollout, and its ancestors' when it is a
+   * fork (a fork's history starts in its source's file).
+   */
+  private async prepareThread(home: string): Promise<{
+    mode: "fresh" | "resume" | "restore" | "fork";
+    path?: string;
+    restoredBytes?: number;
+  }> {
+    const binding = this.attempt.thread;
+    if (binding.mode === "fresh" || binding.mode === "resume")
+      return { mode: binding.mode };
+    const statePath = binding.statePath ? { statePath: binding.statePath } : {};
+    if (binding.mode !== "fork") {
+      await this.writeAncestors(home, await this.loadAncestors());
+      const file = rolloutPath({
+        home,
+        threadId: binding.nativeRef.id,
+        ...statePath,
+      });
+      const entries = await this.host.nativeState.load({
+        subpath: ROLLOUT_SUBPATH,
+      });
+      if (entries && entries.length > 0)
+        return {
+          mode: "restore",
+          path: file,
+          restoredBytes: await writeRollout({ file, entries }),
+        };
+      // Nothing stored: the thread may still be in this home already.
+      const existing = await fileSize(file);
+      return existing !== null
+        ? { mode: "restore", path: file, restoredBytes: existing }
+        : { mode: "resume" };
+    }
+    const source = binding.source.id;
+    const file = rolloutPath({ home, threadId: source, ...statePath });
+    const ancestors = await this.loadAncestors(source);
+    await this.writeAncestors(home, ancestors);
+    let entries: JsonValue[] | null;
+    if ((await fileSize(file)) !== null) entries = await readRollout(file);
+    else {
+      entries = await this.host.nativeState.load({
+        thread: source,
+        subpath: ROLLOUT_SUBPATH,
+      });
+      if (!entries || entries.length === 0) return { mode: "fork" };
+      await writeRollout({ file, entries });
+    }
+    this.ancestors = [
+      {
+        subpath: ancestorSubpath(
+          statePathOf({ home, file }) ?? path.basename(file),
+        ),
+        entries,
+      },
+      ...ancestors,
+    ];
+    return { mode: "fork", path: file };
+  }
+
+  private async loadAncestors(
+    thread?: string,
+  ): Promise<Array<{ subpath: string; entries: JsonValue[] }>> {
+    const scope = thread ? { thread } : {};
+    const subpaths = await this.host.nativeState.subpaths(scope);
+    return Promise.all(
+      subpaths
+        .filter((subpath) => subpath !== ROLLOUT_SUBPATH)
+        .map(async (subpath) => ({
+          subpath,
+          entries:
+            (await this.host.nativeState.load({ ...scope, subpath })) ?? [],
+        })),
+    );
+  }
+
+  private async writeAncestors(
+    home: string,
+    ancestors: Array<{ subpath: string; entries: JsonValue[] }>,
+  ): Promise<void> {
+    for (const ancestor of ancestors) {
+      const file = ancestorFile({ home, subpath: ancestor.subpath });
+      if (
+        file &&
+        (await fileSize(file)) === null &&
+        ancestor.entries.length > 0
+      )
+        await writeRollout({ file, entries: ancestor.entries });
+    }
+  }
+
+  private async openThread(
+    client: CodexAppServer,
+    binding: { mode: "fresh" | "resume" | "restore" | "fork"; path?: string },
+  ): Promise<ThreadInfo> {
+    const attempt = this.attempt;
+    const launch = this.launch;
+    if (!launch) throw new Error("Codex was not launched.");
+    const common = {
+      cwd: attempt.workingDirectory,
+      ...(attempt.model ? { model: attempt.model } : {}),
+      sandbox: launch.sandbox,
+      approvalPolicy: launch.approvalPolicy,
+      developerInstructions: this.developerInstructions(),
+      config: launch.threadConfig,
+    };
+    const thread = attempt.thread;
+    let response: JsonValue;
+    if (thread.mode === "fresh") {
+      response = await client.request(
+        "thread/start",
+        {
+          ...common,
+          ...(this.hostTools.size > 0
+            ? {
+                dynamicTools: [...this.hostTools].map(([name, tool]) => ({
+                  type: "function",
+                  name,
+                  description: tool.description,
+                  inputSchema: tool.inputSchema,
+                })),
+              }
+            : {}),
+        },
+        { timeoutMs: THREAD_TIMEOUT_MS },
+      );
+    } else if (thread.mode === "fork") {
+      response = await client.request(
+        "thread/fork",
+        {
+          threadId: thread.source.id,
+          ...(binding.path ? { path: binding.path } : {}),
+          ...(thread.throughTurnRef
+            ? { lastTurnId: thread.throughTurnRef.id }
+            : {}),
+          excludeTurns: true,
+          ...common,
+        },
+        { timeoutMs: THREAD_TIMEOUT_MS },
+      );
+    } else {
+      response = await client.request(
+        "thread/resume",
+        {
+          threadId: thread.nativeRef.id,
+          ...(binding.path ? { path: binding.path } : {}),
+          excludeTurns: true,
+          ...common,
+        },
+        { timeoutMs: THREAD_TIMEOUT_MS },
+      );
+    }
+    const info =
+      isObject(response) && isObject(response.thread) ? response.thread : {};
+    if (typeof info.id !== "string")
+      throw new Error("Codex returned an invalid thread.");
+    return {
+      id: info.id,
+      path: typeof info.path === "string" && info.path ? info.path : null,
+      model:
+        isObject(response) && typeof response.model === "string"
+          ? response.model
+          : null,
+    };
+  }
+
+  private developerInstructions(): string {
+    const plugins = this.attempt.plugins;
+    return [
+      this.attempt.systemPrompt,
+      plugins.length > 0
+        ? [
+            "Plugins installed for this agent (read a plugin's files before using it):",
+            ...plugins.map((plugin) => `- ${plugin.name}: ${plugin.path}`),
+          ].join("\n")
+        : "",
+    ]
+      .filter((part) => part.trim())
+      .join("\n\n");
+  }
+
+  /** The person's words with text attachments inline; media as local files. */
+  private async userInput(input: {
+    itemId: string;
+    text: string;
+    attachments: AgentAttachment[];
+  }): Promise<JsonValue[]> {
+    const parts: JsonValue[] = [
+      {
+        type: "text",
+        text: renderUserMessage(input.text, input.attachments),
+        text_elements: [],
+      },
+    ];
+    const media = input.attachments.filter(
+      (attachment) => attachment.kind !== "text",
+    );
+    if (media.length === 0) return parts;
+    this.inputDirectory ??= path.join(
+      this.attempt.stateDirectory,
+      "codex-input",
+      this.attempt.attemptId,
+    );
+    const directory = path.join(this.inputDirectory, input.itemId);
+    await mkdir(directory, { recursive: true });
+    for (const [index, attachment] of media.entries()) {
+      const file = path.join(
+        directory,
+        `${index}.${EXTENSIONS[attachment.mediaType] ?? "bin"}`,
+      );
+      await writeFile(file, Buffer.from(attachment.dataBase64, "base64"));
+      parts.push(
+        attachment.kind === "image"
+          ? { type: "localImage", path: file }
+          : {
+              type: "text",
+              text: `Attached document ${JSON.stringify(attachment.name)} (${attachment.mediaType}) is at ${JSON.stringify(file)} for this turn. Read it with your file or shell tools.`,
+              text_elements: [],
+            },
+      );
+    }
+    return parts;
+  }
+
+  private async steer(input: {
+    itemId: string;
+    text: string;
+    attachments: AgentAttachment[];
+  }): Promise<boolean> {
+    if (this.finishing || this.completed) return false;
+    await this.turnReady;
+    const client = this.client;
+    const thread = this.thread;
+    const turnId = this.turnId;
+    if (!client || !thread || !turnId || this.finishing || this.completed)
+      return false;
+    this.steered.add(input.itemId);
+    try {
+      await client.request("turn/steer", {
+        threadId: thread.id,
+        expectedTurnId: turnId,
+        clientUserMessageId: input.itemId,
+        input: await this.userInput(input),
+      });
+      return true;
+    } catch {
+      // The turn finished first, or Codex cannot take input now.
+      this.steered.delete(input.itemId);
+      return false;
+    }
+  }
+
+  private interrupt(): void {
+    if (this.completed || this.interruptRequested) return;
+    this.interruptRequested = true;
+    this.resolveTurnReady();
+    if (this.turnId) this.sendInterrupt();
+  }
+
+  private sendInterrupt(): void {
+    const client = this.client;
+    const thread = this.thread;
+    if (!client || !thread || !this.turnId || this.completed) return;
+    client
+      .request("turn/interrupt", { threadId: thread.id, turnId: this.turnId })
+      .catch(() => {});
+    this.interruptTimer ??= setTimeout(() => {
+      this.complete({ status: "interrupted" });
+    }, INTERRUPT_GRACE_MS);
+    this.interruptTimer.unref?.();
+  }
+
+  private onNotification(method: string, params: JsonObject): void {
+    const thread = this.thread;
+    if (!thread) return;
+    if (
+      method === "thread/started" &&
+      isObject(params.thread) &&
+      params.thread.parentThreadId === thread.id &&
+      typeof params.thread.id === "string"
+    ) {
+      this.items.adoptChild(params.thread.id);
+      return;
+    }
+    const threadId =
+      typeof params.threadId === "string" ? params.threadId : undefined;
+    if (threadId && threadId !== thread.id) {
+      // A native subagent's thread: its items nest under the spawn.
+      const parentKey = this.items.childThreads.get(threadId);
+      if (!parentKey) return;
+      this.itemNotification(method, params, parentKey);
+      return;
+    }
+    if (
+      typeof params.turnId === "string" &&
+      this.turnId &&
+      params.turnId !== this.turnId
+    )
+      return;
+    switch (method) {
+      case "turn/started": {
+        const turn = isObject(params.turn) ? params.turn : {};
+        if (typeof turn.id !== "string") return;
+        this.turnId ??= turn.id;
+        this.resolveTurnReady();
+        if (turn.id !== this.turnId || this.turnStartedEmitted) return;
+        this.turnStartedEmitted = true;
+        this.host.emit({
+          type: "turn.started",
+          ref: { id: turn.id, strength: "strong" },
+        });
+        return;
+      }
+      case "turn/plan/updated":
+        this.items.plan(
+          typeof params.turnId === "string"
+            ? params.turnId
+            : (this.turnId ?? ""),
+          params.plan ?? [],
+        );
+        return;
+      case "thread/tokenUsage/updated": {
+        if (
+          typeof params.turnId === "string" &&
+          this.turnId &&
+          params.turnId !== this.turnId
+        )
+          return;
+        const usage = isObject(params.tokenUsage) ? params.tokenUsage : {};
+        if (isObject(usage.last)) this.usage.push(turnUsage(usage.last));
+        if (typeof usage.modelContextWindow === "number")
+          this.contextWindow = usage.modelContextWindow;
+        return;
+      }
+      case "error": {
+        const error = isObject(params.error) ? params.error : {};
+        if (params.turnId !== this.turnId || !this.turnId) return;
+        if (params.willRetry === true) {
+          this.providerRetrying = true;
+          const { message, kind } = classifyTurnError(error, {
+            workStarted: true,
+          });
+          this.host.emit({
+            type: "provider.retrying",
+            error: { message, ...(kind ? { kind } : {}) },
+            attempt: null,
+            maxAttempts: null,
+            retryAt: null,
+          });
+        } else this.lastError = error;
+        return;
+      }
+      case "warning":
+      case "configWarning":
+        if (typeof params.message === "string")
+          this.host.emit({
+            type: "diagnostic",
+            level: "warn",
+            message: params.message,
+          });
+        return;
+      case "turn/completed": {
+        const turn = isObject(params.turn) ? params.turn : {};
+        if (this.turnId && turn.id !== this.turnId) return;
+        void this.finishTurn(turn);
+        return;
+      }
+      default:
+        this.itemNotification(method, params);
+    }
+  }
+
+  private itemNotification(
+    method: string,
+    params: JsonObject,
+    parentKey?: string,
+  ): void {
+    const itemId = typeof params.itemId === "string" ? params.itemId : "";
+    const delta = typeof params.delta === "string" ? params.delta : "";
+    if (!parentKey && this.providerRetrying) {
+      const item = isObject(params.item) ? params.item : undefined;
+      const modelDelta =
+        delta.length > 0 &&
+        [
+          "item/agentMessage/delta",
+          "item/reasoning/summaryTextDelta",
+          "item/reasoning/textDelta",
+        ].includes(method);
+      const modelItem =
+        method === "item/started" &&
+        item &&
+        [
+          "commandExecution",
+          "fileChange",
+          "mcpToolCall",
+          "dynamicToolCall",
+          "webSearch",
+          "collabAgentToolCall",
+        ].includes(String(item.type));
+      const completedText =
+        method === "item/completed" &&
+        item?.type === "agentMessage" &&
+        typeof item.text === "string" &&
+        item.text.length > 0;
+      const completedReasoning =
+        method === "item/completed" &&
+        item?.type === "reasoning" &&
+        Array.isArray(item.summary) &&
+        item.summary.some(
+          (part) => typeof part === "string" && part.length > 0,
+        );
+      if (modelDelta || modelItem || completedText || completedReasoning) {
+        this.providerRetrying = false;
+        this.host.emit({ type: "provider.resumed" });
+      }
+    }
+    switch (method) {
+      case "item/started": {
+        const item = isObject(params.item) ? params.item : undefined;
+        if (!item) return;
+        if (item.type === "userMessage") {
+          const clientId =
+            typeof item.clientId === "string" ? item.clientId : "";
+          if (!parentKey && this.steered.delete(clientId))
+            this.host.emit({ type: "input.consumed", itemIds: [clientId] });
+          return;
+        }
+        if (item.type === "fileChange" && typeof item.id === "string")
+          this.fileChangePaths.set(
+            item.id,
+            (Array.isArray(item.changes) ? item.changes : [])
+              .filter(isObject)
+              .map((change) => this.workspacePath(String(change.path ?? ""))),
+          );
+        this.items.itemStarted(item, parentKey);
+        return;
+      }
+      case "item/completed": {
+        const item = isObject(params.item) ? params.item : undefined;
+        if (item && item.type !== "userMessage")
+          this.items.itemCompleted(item, parentKey);
+        void this.mirror?.poll();
+        return;
+      }
+      case "item/agentMessage/delta":
+        this.items.agentDelta(itemId, delta);
+        return;
+      case "item/reasoning/summaryTextDelta":
+        this.items.reasoningDelta(
+          itemId,
+          delta,
+          typeof params.summaryIndex === "number" ? params.summaryIndex : 0,
+        );
+        return;
+      case "item/commandExecution/outputDelta":
+        this.items.commandDelta(itemId, delta);
+        return;
+    }
+  }
+
+  private async finishTurn(turn: JsonObject): Promise<void> {
+    if (this.finishing || this.completed) return;
+    this.finishing = true;
+    this.resolveTurnReady();
+    const status =
+      turn.status === "completed"
+        ? "completed"
+        : turn.status === "interrupted"
+          ? "interrupted"
+          : "failed";
+    this.items.closeOpen(status);
+    const usage = this.turnUsage();
+    if (usage) this.host.emit({ type: "usage", usage });
+    // The turn's rollout lines are stored before it settles. A Codex kept
+    // warm is not stopped, so nothing flushes them later: wait for the
+    // turn's own end to be written.
+    if (this.sessions) await this.mirror?.turnStored(TURN_STORED_MS);
+    else await this.mirror?.poll();
+    // A failed turn's Codex ends: whatever failed it (an expired sign-in,
+    // a broken connection) should not meet the retry.
+    this.turnFinished = status !== "failed";
+    const error =
+      status === "failed"
+        ? classifyTurnError(
+            isObject(turn.error) ? turn.error : (this.lastError ?? {}),
+            { workStarted: this.items.workStarted },
+          )
+        : undefined;
+    this.complete({
+      status,
+      ...(error ? { error } : {}),
+      ...(typeof turn.id === "string"
+        ? { ref: { id: turn.id, strength: "strong" as const } }
+        : {}),
+    });
+  }
+
+  private turnUsage(): AgentTurnUsage | undefined {
+    if (this.usage.length === 0) return undefined;
+    const sum = (field: keyof AgentTurnUsage) =>
+      this.usage.reduce((total, usage) => {
+        const value = usage[field];
+        return total + (typeof value === "number" ? value : 0);
+      }, 0);
+    const last = this.usage.at(-1);
+    const model = this.attempt.model ?? this.thread?.model ?? undefined;
+    return {
+      ...(model ? { model } : {}),
+      inputTokens: sum("inputTokens"),
+      cachedInputTokens: sum("cachedInputTokens"),
+      outputTokens: sum("outputTokens"),
+      reasoningTokens: sum("reasoningTokens"),
+      ...(last?.contextTokens !== undefined
+        ? { contextTokens: last.contextTokens }
+        : {}),
+      ...(this.contextWindow ? { contextWindow: this.contextWindow } : {}),
+    };
+  }
+
+  private complete(event: {
+    status: "completed" | "failed" | "interrupted";
+    error?: TurnError;
+    ref?: { id: string; strength: "strong" };
+  }): void {
+    if (this.completed) return;
+    this.completed = true;
+    this.finishing = true;
+    clearTimeout(this.interruptTimer);
+    if (event.ref && this.session) this.session.lastTurn = event.ref.id;
+    this.host.emit({ type: "turn.completed", ...event });
+    this.resolveTurnReady();
+    this.resolveTurn();
+  }
+
+  /** Stop Codex, then store the rollout lines it wrote on its way out. */
+  private async shutdown(): Promise<void> {
+    await (this.session ? this.session.close() : this.client?.close());
+    await this.mirror?.poll();
+    await this.removeInputs();
+  }
+
+  /** The turn's media files, written for Codex to read. */
+  private async removeInputs(): Promise<void> {
+    if (this.inputDirectory)
+      await rm(this.inputDirectory, { recursive: true, force: true }).catch(
+        () => {},
+      );
+  }
+
+  // -------------------------------------------------------------------------
+  // Requests from Codex
+
+  private onWithdrawn(id: JsonRpcId): void {
+    this.approvals.get(id)?.abort();
+    const key = this.requestKeys.get(id);
+    if (!key) return;
+    this.requestKeys.delete(id);
+    this.host.emit({
+      type: "request.closed",
+      key,
+      reason: "Codex no longer needs an answer.",
+    });
+  }
+
+  /** Ask Work, and wait for the answer or for why there will be none. */
+  private async ask(
+    id: JsonRpcId,
+    key: string,
+    request: RequestDraft,
+  ): Promise<{
+    response?: Awaited<ReturnType<AttemptHost["request"]>>;
+    closed?: string;
+  }> {
+    this.requestKeys.set(id, key);
+    try {
+      return { response: await this.host.request(key, request) };
+    } catch (error) {
+      if (error instanceof RequestClosedError) return { closed: error.reason };
+      throw error;
+    } finally {
+      this.requestKeys.delete(id);
+    }
+  }
+
+  private async onRequest(request: CodexServerRequest): Promise<JsonValue> {
+    const { id, method, params } = request;
+    switch (method) {
+      case "item/commandExecution/requestApproval":
+        return this.commandApproval(id, params);
+      case "item/fileChange/requestApproval":
+        return this.fileChangeApproval(id, params);
+      case "item/permissions/requestApproval":
+        return this.permissionsApproval(id, params);
+      case "item/tool/requestUserInput":
+        return this.userInputRequest(id, params);
+      case "mcpServer/elicitation/request":
+        return this.elicitation(id, params);
+      case "item/tool/call":
+        return this.toolCall(params);
+      default:
+        throw new Error(`Unsupported client request: ${method}`);
+    }
+  }
+
+  private async commandApproval(
+    id: JsonRpcId,
+    params: JsonObject,
+  ): Promise<JsonValue> {
+    const command = typeof params.command === "string" ? params.command : "";
+    const decisions = Array.isArray(params.availableDecisions)
+      ? params.availableDecisions
+      : undefined;
+    const { response } = await this.ask(
+      id,
+      `approval:${String(params.approvalId ?? params.itemId ?? id)}`,
+      {
+        kind: "approval",
+        blocking: true,
+        title: "Run this command?",
+        ...(typeof params.reason === "string" && params.reason
+          ? { description: params.reason }
+          : {}),
+        origin: CODEX_ORIGIN,
+        approval: {
+          action: "Run a command",
+          details: command,
+          tool: {
+            server: null,
+            name: "shell",
+            input: {
+              command,
+              ...(typeof params.cwd === "string" ? { cwd: params.cwd } : {}),
+            },
+          },
+        },
+      },
+    );
+    return { decision: approvalDecision(response, decisions) };
+  }
+
+  private async fileChangeApproval(
+    id: JsonRpcId,
+    params: JsonObject,
+  ): Promise<JsonValue> {
+    const itemId = typeof params.itemId === "string" ? params.itemId : "";
+    const paths = this.fileChangePaths.get(itemId) ?? [];
+    const { response } = await this.ask(
+      id,
+      `approval:${itemId || String(id)}`,
+      {
+        kind: "approval",
+        blocking: true,
+        title: "Apply these file changes?",
+        ...(typeof params.reason === "string" && params.reason
+          ? { description: params.reason }
+          : {}),
+        origin: CODEX_ORIGIN,
+        approval: {
+          action: "Change files",
+          ...(paths.length > 0 ? { details: paths.join("\n") } : {}),
+          tool: { server: null, name: "apply_patch", input: { paths } },
+        },
+      },
+    );
+    return { decision: approvalDecision(response, undefined) };
+  }
+
+  private async permissionsApproval(
+    id: JsonRpcId,
+    params: JsonObject,
+  ): Promise<JsonValue> {
+    const requested = isObject(params.permissions) ? params.permissions : {};
+    const { response } = await this.ask(
+      id,
+      `permissions:${String(params.itemId ?? id)}`,
+      {
+        kind: "approval",
+        blocking: true,
+        title: "Allow more access?",
+        ...(typeof params.reason === "string" && params.reason
+          ? { description: params.reason }
+          : {}),
+        origin: CODEX_ORIGIN,
+        approval: {
+          action: "Widen the sandbox",
+          details: JSON.stringify(requested),
+          tool: { server: null, name: "permissions", input: requested },
+        },
+      },
+    );
+    const approved =
+      response?.kind === "approval" && response.decision === "approved";
+    return {
+      permissions: approved
+        ? Object.fromEntries(
+            Object.entries(requested).filter(([, value]) => value !== null),
+          )
+        : {},
+      scope:
+        approved && response?.kind === "approval" && response.remember
+          ? "session"
+          : "turn",
+    };
+  }
+
+  private async userInputRequest(
+    id: JsonRpcId,
+    params: JsonObject,
+  ): Promise<JsonValue> {
+    const native = (
+      Array.isArray(params.questions) ? params.questions : []
+    ).filter(isObject);
+    const questions: AgentQuestion[] = native.map((question) => ({
+      question: String(question.question ?? ""),
+      header: String(question.header ?? ""),
+      multiSelect: false,
+      options: (Array.isArray(question.options) ? question.options : [])
+        .filter(isObject)
+        .map((option) => ({
+          label: String(option.label ?? ""),
+          description: String(option.description ?? ""),
+        })),
+    }));
+    const { response, closed } = await this.ask(
+      id,
+      `question:${String(params.itemId ?? id)}`,
+      {
+        kind: "question",
+        // Codex waits for this reply whatever its `isBlocking` says: Work
+        // answers a non-blocking question with a message instead, which
+        // would leave the turn waiting forever.
+        blocking: true,
+        title: questions[0]?.header || "Question",
+        origin: CODEX_ORIGIN,
+        questions,
+      },
+    );
+    const answers = response?.kind === "question" ? response.answers : [];
+    return {
+      answers: Object.fromEntries(
+        native.map((question, index) => {
+          const answer = answers[index];
+          return [
+            String(question.id ?? index),
+            {
+              // Closed without an answer (the person wrote in the chat, or
+              // the turn stopped): Codex's own free-text form says why
+              // once, as other harnesses hear it.
+              answers:
+                answer !== undefined
+                  ? [answer]
+                  : closed && index === 0
+                    ? [
+                        `user_note: The question was closed without an answer: ${closed}`,
+                      ]
+                    : [],
+            },
+          ];
+        }),
+      ),
+    };
+  }
+
+  private async elicitation(
+    id: JsonRpcId,
+    params: JsonObject,
+  ): Promise<JsonValue> {
+    const codexServer = String(params.serverName ?? "");
+    const server = this.launch?.serverKeys.get(codexServer) ?? codexServer;
+    const meta = isObject(params._meta) ? params._meta : {};
+    const message = String(params.message ?? "");
+    if (meta.codex_approval_kind === "mcp_tool_call") {
+      // An MCP tool asks before it runs (`default_tools_approval_mode =
+      // prompt`): the attempt's tool policy decides, asking only for `ask`.
+      const call = this.items.mcpCall(codexServer);
+      const tool =
+        call?.tool ?? message.match(/run tool "([^"]+)"/)?.[1] ?? "tool";
+      // Codex may withdraw the elicitation while its person decides.
+      const withdrawn = new AbortController();
+      this.approvals.set(id, withdrawn);
+      const verdict = await this.host
+        .authorize({
+          server,
+          tool,
+          input: call?.input ?? meta.tool_params ?? {},
+          ...(call ? { itemKey: call.key } : {}),
+          signal: withdrawn.signal,
+        })
+        .finally(() => this.approvals.delete(id));
+      return verdict.allowed
+        ? { action: "accept", content: {}, _meta: null }
+        : { action: "decline", content: null, _meta: null };
+    }
+    const schema = isObject(params.requestedSchema)
+      ? params.requestedSchema
+      : undefined;
+    const { response } = await this.ask(
+      id,
+      `elicitation:${server}:${String(id)}`,
+      {
+        kind: "elicitation",
+        blocking: true,
+        title: `${server} needs your input`,
+        ...(message ? { description: message } : {}),
+        origin: { kind: "mcp", id: server, displayName: server },
+        elicitation: {
+          server,
+          message,
+          ...(schema ? { schema } : {}),
+          ...(typeof params.url === "string" ? { url: params.url } : {}),
+        },
+      },
+    );
+    if (response?.kind !== "elicitation")
+      return { action: "cancel", content: null, _meta: null };
+    return {
+      action: response.action,
+      content: response.action === "accept" ? (response.content ?? {}) : null,
+      _meta: null,
+    };
+  }
+
+  /** A host tool Codex called as a dynamic tool (ADR 0198: a host call). */
+  private async toolCall(params: JsonObject): Promise<JsonValue> {
+    const name = String(params.tool ?? "");
+    const callId =
+      typeof params.callId === "string" ? params.callId : undefined;
+    const tool = this.hostTools.get(name);
+    const input = params.arguments ?? {};
+    const failure = (text: string) => ({
+      contentItems: [{ type: "inputText", text }],
+      success: false,
+    });
+    if (!tool) return failure(`There is no tool named ${name}.`);
+    const server = tool.server ?? "workspace";
+    if (this.attempt.toolPolicies[server]) {
+      const verdict = await this.host.authorize({
+        server,
+        tool: tool.name,
+        input,
+        ...(callId ? { itemKey: callId } : {}),
+      });
+      if (!verdict.allowed) return failure(verdict.message);
+    }
+    try {
+      const result = await this.host.callTool({
+        name: tool.name,
+        input,
+        ...(callId ? { itemKey: callId } : {}),
+      });
+      return {
+        contentItems: result.content.map(
+          (part): JsonObject =>
+            part.type === "text"
+              ? { type: "inputText", text: part.text }
+              : {
+                  type: "inputImage",
+                  imageUrl: `data:${part.mimeType};base64,${part.data}`,
+                },
+        ),
+        success: result.isError !== true,
+      };
+    } catch (error) {
+      return failure(errorMessage(error));
+    }
+  }
+}
+
+const EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "application/pdf": "pdf",
+};
+
+/**
+ * A Codex approval decision for the person's answer. "Always" is Codex's
+ * own per-session grant when it offers one. A denial declines, so the
+ * agent continues and can say what it could not do; a request that ended
+ * unanswered cancels, which stops the turn.
+ */
+function approvalDecision(
+  response: Awaited<ReturnType<AttemptHost["request"]>> | undefined,
+  available: JsonValue[] | undefined,
+): JsonValue {
+  if (response?.kind !== "approval") return "cancel";
+  if (response.decision !== "approved") return "decline";
+  return response.remember === "always" &&
+    (!available || available.includes("acceptForSession"))
+    ? "acceptForSession"
+    : "accept";
+}
+
+/**
+ * One response's usage (ADR 0057). Codex counts input inclusive of the
+ * cached portion, so the uncached figure is the difference; reasoning is
+ * a subset of output.
+ */
+function turnUsage(last: JsonObject): AgentTurnUsage {
+  const input = positiveTokenCount(last.inputTokens);
+  const cached = positiveTokenCount(last.cachedInputTokens);
+  const output = positiveTokenCount(last.outputTokens);
+  return {
+    inputTokens: Math.max(0, input - cached),
+    cachedInputTokens: cached,
+    outputTokens: output,
+    reasoningTokens: Math.min(
+      output,
+      positiveTokenCount(last.reasoningOutputTokens),
+    ),
+    contextTokens: positiveTokenCount(last.totalTokens) || input + output,
+  };
+}
+
+/**
+ * A failed turn's error, classified from Codex's `codexErrorInfo`. Retrying
+ * is safe only when the provider turned the turn away before any work.
+ */
+export function classifyTurnError(
+  error: JsonObject,
+  context: { workStarted: boolean },
+): TurnError {
+  const message =
+    typeof error.message === "string" && error.message
+      ? error.message
+      : "Codex could not finish the turn.";
+  const info = error.codexErrorInfo;
+  // A custom provider's HTTP failure is `other`; its status is in the text.
+  const status =
+    (isObject(info)
+      ? Object.values(info)
+          .filter(isObject)
+          .map((detail) => detail.httpStatusCode)
+          .find((code): code is number => typeof code === "number")
+      : undefined) ??
+    numberOrUndefined(message.match(/\bstatus:? (\d{3})\b/)?.[1]);
+  const name =
+    typeof info === "string"
+      ? info
+      : isObject(info)
+        ? Object.keys(info)[0]
+        : undefined;
+  let kind: AgentErrorKind | undefined;
+  if (name === "unauthorized" || status === 401 || status === 403)
+    kind = "auth";
+  else if (
+    name === "usageLimitExceeded" ||
+    name === "rateLimitExceeded" ||
+    status === 429
+  )
+    kind = "rate_limit";
+  else if (
+    name === "serverOverloaded" ||
+    name === "internalServerError" ||
+    name === "httpConnectionFailed" ||
+    name === "responseStreamConnectionFailed" ||
+    name === "responseStreamDisconnected" ||
+    name === "responseTooManyFailedAttempts" ||
+    (status !== undefined && status >= 500) ||
+    /\bworkspace routing discovery failed\b/i.test(message)
+  )
+    kind = "unavailable";
+  else if (name === "badRequest" && /reasoning|encrypted/i.test(message))
+    kind = "model_incompat";
+  return {
+    message,
+    ...(kind ? { kind } : {}),
+    ...(kind && kind !== "model_incompat" && !context.workStarted
+      ? { retrySafe: true }
+      : {}),
+  };
+}
+
+function numberOrUndefined(text: string | undefined): number | undefined {
+  return text ? Number(text) : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

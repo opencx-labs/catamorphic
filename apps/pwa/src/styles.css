@@ -74,6 +74,8 @@
   --radius-lg: 10px;
 
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Bare transition utilities take the one easing too (desktop DESIGN.md). */
+  --default-transition-timing-function: var(--ease-standard);
 }
 
 * {

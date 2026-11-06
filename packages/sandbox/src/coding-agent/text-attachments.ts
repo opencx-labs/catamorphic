@@ -47,21 +47,41 @@ export function describeTextSource(attachment: AgentTextAttachment): string {
       return `Selected in ${source.filePath}${range}`;
     }
     case "url":
-      return `URL: ${source.url}`;
+      return describeLink(source.url);
     case "path":
-      return `File path: ${source.path}`;
+      return source.path.endsWith("/")
+        ? `Folder: ${source.path}`
+        : `File path: ${source.path}`;
     case "tab": {
       const where = source.url ?? source.filePath;
       return `Open ${source.kind} tab "${source.title}"${where ? ` (${where})` : ""} — key ${source.key}; read it with read_tab`;
     }
+    case "skill":
+      return source.path
+        ? `Skill "${source.name}" at ${JSON.stringify(source.path)}: follow it for this message`
+        : `Skill "${source.name}": use it for this message`;
   }
+}
+
+/**
+ * A link the person mentioned: a project's workflow, app or chat reads as
+ * what it is, any other address as a URL.
+ */
+function describeLink(url: string): string {
+  const [, scheme, name] = /^(workflow|app|session):(.+)$/.exec(url) ?? [];
+  if (scheme === "workflow") return `Workflow ${name} (link ${url})`;
+  if (scheme === "app") return `App ${name} (link ${url})`;
+  if (scheme === "session")
+    return `Chat session ${name} in this project; read it with read_project_session`;
+  return `URL: ${url}`;
 }
 
 /** Sources whose text IS the reference: no fence needed. */
 const isBareReference = (attachment: AgentTextAttachment): boolean =>
   attachment.source.type === "url" ||
   attachment.source.type === "path" ||
-  attachment.source.type === "tab";
+  attachment.source.type === "tab" ||
+  attachment.source.type === "skill";
 
 /** The minimal attachment shape the marker helpers need: a display name. */
 interface NamedAttachment {
@@ -92,6 +112,32 @@ export function inlineAttachmentReferences<T extends NamedAttachment>(
     next += 1;
     return attachment ? render(index, attachment) : "";
   });
+}
+
+/**
+ * A sent message as prose runs and attachment slots, in order: the
+ * timeline draws each slot as its attachment's pill.
+ */
+export function splitAttachmentMarkers(
+  message: string,
+): Array<{ type: "text"; text: string } | { type: "pill"; index: number }> {
+  const parts: Array<
+    { type: "text"; text: string } | { type: "pill"; index: number }
+  > = [];
+  let index = 0;
+  let cursor = 0;
+  for (let at = message.indexOf(ATTACHMENT_MARKER); at !== -1; ) {
+    if (at > cursor)
+      parts.push({ type: "text", text: message.slice(cursor, at) });
+    parts.push({ type: "pill", index });
+    index += 1;
+    cursor = at + ATTACHMENT_MARKER.length;
+    at = message.indexOf(ATTACHMENT_MARKER, cursor);
+  }
+  if (cursor < message.length) {
+    parts.push({ type: "text", text: message.slice(cursor) });
+  }
+  return parts;
 }
 
 /** Message text with markers replaced by `[name]` — for titles and labels. */
@@ -149,4 +195,42 @@ export function renderUserMessage(
           : `[attachment ${index + 1}: ${attachment.name} (${attachment.kind} not delivered; this agent reads text only)]`
     : undefined;
   return `${inlineAttachmentReferences(message, list, render)}${renderTextAttachments(list)}`;
+}
+
+/**
+ * Text that keeps one inline marker per attachment: markers past the
+ * attachments go, and attachments without one get theirs at the end, so
+ * the n-th marker always names the n-th attachment.
+ */
+export function withMarkerCount(text: string, attachments: number): string {
+  let kept = 0;
+  const placed = text.replace(new RegExp(ATTACHMENT_MARKER, "g"), () => {
+    kept += 1;
+    return kept <= attachments ? ATTACHMENT_MARKER : "";
+  });
+  return placed + ATTACHMENT_MARKER.repeat(Math.max(0, attachments - kept));
+}
+
+/**
+ * A question's answer as the agent reads it (ADR 0244): the person's words
+ * with inline references and each text pill's block after them, as a
+ * message renders. An answer is text to every harness (Claude Code and
+ * Codex take nothing else), so its images and documents follow the answers
+ * as a message in the same turn; the answer names each one where it sat by
+ * its number in that message, `firstFollowing` being this answer's first.
+ */
+export function renderQuestionAnswer(
+  answer: string,
+  attachments: AgentAttachment[] | undefined,
+  firstFollowing = 1,
+): string {
+  const list = attachments ?? [];
+  const following = (index: number) =>
+    firstFollowing + list.slice(0, index).filter(isMediaAttachment).length;
+  const prose = inlineAttachmentReferences(answer, list, (index, attachment) =>
+    isTextAttachment(attachment)
+      ? inlineReference(index, attachment)
+      : `[attachment ${index + 1}: ${attachment.name}, attachment ${following(index)} of the message after these answers]`,
+  );
+  return `${prose}${renderTextAttachments(list)}`;
 }

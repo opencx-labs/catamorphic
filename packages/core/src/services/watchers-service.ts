@@ -4,14 +4,17 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
-import type { GithubService } from "./github-service.js";
-import { ProjectEventDispatcher } from "./project-event-dispatcher.js";
-import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
+import type {
+  EventSourcePlacement,
+  ProjectEventMonitorsService,
+  ProjectEventSourceProvider,
+} from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
 import { nextScheduledTime } from "./schedules-service.js";
 import { SessionArtifactsService } from "./session-artifacts-service.js";
 import type { TriggersService } from "./triggers-service.js";
+import type { WorkWakeups } from "./work-wakeups.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 type WatcherRow = Selectable<DB["watchers"]>;
@@ -46,7 +49,13 @@ interface WatchersDeps {
   events: ProjectEventsService;
   monitors: ProjectEventMonitorsService;
   sessions: AgentSessionsService;
-  github?: GithubService;
+  /** Host-registered polled event sources a watcher may start (ADR 0177). */
+  eventSources?: readonly ProjectEventSourceProvider[];
+  /**
+   * Tells this process a session's watchers changed, and that a monitor a
+   * new watcher observes may be due (ADR 0229).
+   */
+  wakeups?: WorkWakeups;
 }
 
 const tracer = getTracer("@catamorphic/core");
@@ -61,6 +70,11 @@ export class WatchersService {
   }
   private readonly artifacts: SessionArtifactsService;
 
+  /**
+   * Start a temporary workflow for a session. With `eventSource`, a
+   * host-registered polled source (for example a desktop's code-host poller)
+   * observes the project for this watcher, from now on.
+   */
   async create(input: {
     identity: Identity;
     projectId: string;
@@ -69,69 +83,63 @@ export class WatchersService {
     source: string;
     environment?: string;
     expiresInSeconds?: number;
+    eventSource?: {
+      kind: string;
+      placement?: EventSourcePlacement;
+      pollIntervalSeconds?: number;
+    };
   }): Promise<Watcher> {
     await this.deps.sessions.assertSession(
       input.identity,
       input.projectId,
       input.sessionId,
     );
-    return this.createPinned({
-      ...input,
-      monitorId: null,
-      cursorSequence: await this.latestProjectSequence(input.projectId),
-    });
-  }
-
-  async createGithub(input: {
-    identity: Identity;
-    projectId: string;
-    sessionId: string;
-    workflowName: string;
-    source: string;
-    environment?: string;
-    placement?: "local" | "remote" | "any";
-    expiresInSeconds?: number;
-    pollIntervalSeconds?: number;
-  }): Promise<Watcher> {
-    await this.deps.sessions.assertSession(
-      input.identity,
-      input.projectId,
-      input.sessionId,
+    const { eventSource, ...rest } = input;
+    if (!eventSource) {
+      return this.createPinned({
+        ...rest,
+        monitorId: null,
+        cursorSequence: await this.latestProjectSequence(input.projectId),
+      });
+    }
+    const provider = this.deps.eventSources?.find(
+      (candidate) => candidate.kind === eventSource.kind,
     );
-    if (!this.deps.github) throw new Error("GitHub is not configured");
-
-    // Verify the caller's current GitHub credential can read the linked repo,
-    // seed the provider cursor, and make pre-existing activity invisible to
-    // this new watcher. A watcher observes changes after creation by default.
-    const initial = await this.deps.github.pollProjectEvents(
-      input.identity,
-      input.projectId,
-    );
+    if (!provider) {
+      throw new Error(
+        `Unknown event source '${eventSource.kind}'. Available: ${
+          (this.deps.eventSources ?? []).map((item) => item.kind).join(", ") ||
+          "none"
+        }`,
+      );
+    }
+    // Check access and seed the cursor, so pre-existing activity stays
+    // invisible to the new watcher.
+    const started = provider.start
+      ? await provider.start({
+          identity: input.identity,
+          projectId: input.projectId,
+          config: {},
+          signal: AbortSignal.timeout(45_000),
+        })
+      : { cursor: null };
     const monitor = await this.deps.monitors.ensure({
       identity: input.identity,
       projectId: input.projectId,
-      sourceKind: "github",
+      sourceKind: provider.kind,
       sourceKey: input.projectId,
-      placement: input.placement ?? "local",
+      placement: eventSource.placement ?? "local",
       config: {},
-      cursor: initial.nextCursor
-        ? { externalId: initial.nextCursor }
-        : undefined,
-      pollIntervalSeconds: input.pollIntervalSeconds ?? 30,
+      ...(started.cursor !== null ? { cursor: started.cursor } : {}),
+      pollIntervalSeconds: eventSource.pollIntervalSeconds ?? 30,
     });
     return this.createPinned({
-      identity: input.identity,
-      projectId: input.projectId,
-      sessionId: input.sessionId,
-      workflowName: input.workflowName,
-      source: input.source,
-      ...(input.environment ? { environment: input.environment } : {}),
-      ...(input.expiresInSeconds !== undefined
-        ? { expiresInSeconds: input.expiresInSeconds }
-        : {}),
+      ...rest,
       monitorId: monitor.id,
       cursorSequence: await this.latestProjectSequence(input.projectId),
-      requiredTriggerPrefix: "github.",
+      ...(provider.eventKinds?.length
+        ? { requiredTriggerKinds: provider.eventKinds }
+        : {}),
     });
   }
 
@@ -145,7 +153,7 @@ export class WatchersService {
     expiresInSeconds?: number;
     monitorId: string | null;
     cursorSequence: number;
-    requiredTriggerPrefix?: string;
+    requiredTriggerKinds?: readonly string[];
   }): Promise<Watcher> {
     return withSpan(
       {
@@ -171,7 +179,7 @@ export class WatchersService {
     expiresInSeconds?: number;
     monitorId: string | null;
     cursorSequence: number;
-    requiredTriggerPrefix?: string;
+    requiredTriggerKinds?: readonly string[];
   }): Promise<Watcher> {
     const session = await this.assertWatcherSession(input, this.db);
     input = {
@@ -204,15 +212,13 @@ export class WatchersService {
           `Watcher workflow '${input.workflowName}' must declare at least one trigger`,
         );
       }
-      const requiredTriggerPrefix = input.requiredTriggerPrefix;
+      const required = input.requiredTriggerKinds;
       if (
-        requiredTriggerPrefix &&
-        !bindings.some((binding) =>
-          binding.kind.startsWith(requiredTriggerPrefix),
-        )
+        required &&
+        !bindings.some((binding) => required.includes(binding.kind))
       ) {
         throw new Error(
-          `Watcher workflow '${input.workflowName}' must declare at least one ${requiredTriggerPrefix} trigger`,
+          `Watcher workflow '${input.workflowName}' must declare a trigger its event source fires (${required.join(", ")})`,
         );
       }
       const triggerKinds = [
@@ -299,6 +305,8 @@ export class WatchersService {
         },
       });
       if (!row) throw new Error("Watcher ownership was not recorded");
+      this.deps.wakeups?.notify("chats");
+      if (row.monitor_id) this.deps.wakeups?.notify("events");
       return mapWatcher(row, triggerKinds);
     } catch (error) {
       await this.artifacts.discard({
@@ -408,6 +416,7 @@ export class WatchersService {
   }
 
   async stop(input: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     sessionId: string;
@@ -426,20 +435,29 @@ export class WatchersService {
       .where("session_id", "=", input.sessionId)
       .executeTakeFirst();
     if (!watcher) return false;
+    input.signal?.throwIfAborted();
     if (watcher.workflow_enablement_id) {
       await this.deps.workflowEnablements.disable({
         identity: input.identity,
+        signal: input.signal,
         enablementId: watcher.workflow_enablement_id,
       });
     }
-    const result = await this.db
-      .updateTable("watchers")
-      .set({ status: "stopped", updated_at: new Date() })
-      .where("id", "=", input.watcherId)
-      .where("project_id", "=", input.projectId)
-      .where("session_id", "=", input.sessionId)
-      .where("status", "in", ["active", "paused"])
-      .executeTakeFirst();
+    const result = await this.db.transaction().execute(async (trx) => {
+      // Disabling the enablement already accepted this stop; finish cleanup.
+      if (!watcher.workflow_enablement_id) input.signal?.throwIfAborted();
+      const result = await trx
+        .updateTable("watchers")
+        .set({ status: "stopped", updated_at: new Date() })
+        .where("id", "=", input.watcherId)
+        .where("project_id", "=", input.projectId)
+        .where("session_id", "=", input.sessionId)
+        .where("status", "in", ["active", "paused"])
+        .executeTakeFirst();
+      if (!watcher.workflow_enablement_id) input.signal?.throwIfAborted();
+      return result;
+    });
+    if (result.numUpdatedRows > 0n) this.deps.wakeups?.notify("chats");
     await this.cleanupRetired();
     return result.numUpdatedRows === 1n;
   }
@@ -476,6 +494,7 @@ export class WatchersService {
         .where("id", "=", row.id)
         .execute();
     }
+    if (discarded.length > 0) this.deps.wakeups?.notify("chats");
     await this.artifacts.cleanup();
   }
 
@@ -503,15 +522,14 @@ export class WatchersService {
     }
   }
 
-  async dispatchPending(input: { limit?: number } = {}): Promise<number> {
-    return withSpan({ tracer, name: "watcher.dispatch" }, () =>
-      this.dispatchPendingInner(input),
+  /** Disable watchers past their expiry. Event delivery is core's (see `dispatchEvents`). */
+  async expireDue(input: { limit?: number } = {}): Promise<void> {
+    return withSpan({ tracer, name: "watcher.expire" }, () =>
+      this.expireDueInner(input),
     );
   }
 
-  private async dispatchPendingInner(
-    input: { limit?: number } = {},
-  ): Promise<number> {
+  private async expireDueInner(input: { limit?: number } = {}): Promise<void> {
     await this.cleanupRetired();
     const rows = await this.db
       .selectFrom("watchers")
@@ -543,6 +561,7 @@ export class WatchersService {
             .set({ status: "expired", updated_at: new Date() })
             .where("id", "=", row.id)
             .execute();
+          this.deps.wakeups?.notify("chats");
         }
       } catch (error) {
         await this.recordFailure(
@@ -551,11 +570,6 @@ export class WatchersService {
         );
       }
     }
-    return new ProjectEventDispatcher(
-      this.db,
-      this.deps.triggers,
-      this.deps.workflowEnablements,
-    ).dispatch(input);
   }
 
   private async latestProjectSequence(projectId: string): Promise<number> {
@@ -575,32 +589,6 @@ export class WatchersService {
       .where("id", "=", watcherId)
       .execute();
   }
-}
-
-export function startWatcherDispatcher(input: {
-  watchers: WatchersService;
-  pollEveryMs?: number;
-}): { stop: () => Promise<void> } {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const tick = async () => {
-    await input.watchers.dispatchPending().catch((error) => {
-      console.warn("[catamorphic] Watcher dispatch failed", error);
-    });
-    if (stopped) return;
-    timer = setTimeout(() => {
-      pending = tick();
-    }, input.pollEveryMs ?? 1_000);
-    timer.unref?.();
-  };
-  let pending = tick();
-  return {
-    stop: async () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      await pending;
-    },
-  };
 }
 
 function watcherStatus(value: string): Watcher["status"] {

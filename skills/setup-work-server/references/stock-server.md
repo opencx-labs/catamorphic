@@ -1,0 +1,243 @@
+# Work server
+
+A Work server is a deployment built on `@catamorphic/work-server`; there is
+no prebuilt Work server image (ADR 0294). `apps/server` supplies reference
+process source. Read `apps/server/AGENTS.md`, `apps/server/README.md`, the
+[deployment guide](../../../packages/work-server/README.md#your-own-image),
+and the deployment's actual entry point before proposing commands. For a first
+install from nothing, follow [A first brain on one machine](first-brain.md).
+For more than one machine, read [Machines: control plane, replicas, and workers](cluster-deployment.md).
+
+## What it is
+
+One process, zero external services by default: PGlite, bare Git origins,
+and local-process execution under one data directory (`/data` in the image).
+It is **single-tenant only**: local-process execution gives processes the
+host's filesystem and network (ADR 0047). It serves the API at `/api`, sign-in
+at `/login`, the mobile PWA at `/`, `/readyz` (503 while the machine's
+lease is not renewing, or the machine is disabled), and `/healthz` (503 only
+once a replica's lease is lost for good, when the process also exits; run it
+under a restart policy).
+
+## Configuration
+
+Environment variables parsed by `workServerConfigFromEnv` in
+`packages/work-server/src/config.ts` (verify against the installed version):
+
+| Variable | Purpose |
+| --- | --- |
+| `PORT` | Public listener (default 4700). |
+| `WORK_DATA_DIR` | Data directory (default `/data`). Back up all of it. |
+| `WORK_PUBLIC_URL` | Public origin for OAuth, invitations, and webhook URLs. Must be HTTPS unless loopback. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. Claude Code and Codex agents never see these; they use model connections ([Harnesses on the server](harnesses.md)). |
+| `WORK_AUTH_CONFIG` | Path to the sign-in config (default `<data>/auth-config.json`), read at boot. |
+| `WORK_TRUSTED_PROXIES` | Addresses or CIDR ranges of the load balancers and proxies in front of the server (`10.0.0.0/8,fd00::/8`). Their `x-forwarded-for` entries name the client; without it, the connection's peer is the client. See [sign-in limits](#sign-in-limits). |
+| `WORK_AUTH_RATE_LIMIT` | `on` (default) or `off`. Turn the sign-in limits off only for tests that sign in many times. |
+| `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
+| `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. Required with `DATABASE_URL`: every replica answers the same one. |
+| `WORK_MDNS` | `off`, or a hostname (default a unique `work-<id>.local`). |
+| `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, `WORK_OPERATOR_SECRET`, and a public URL are required, and the server is a disposable replica (see [replicas](cluster-deployment.md#add-a-control-plane-replica)). |
+| `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
+| `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
+| `WORK_GATEWAY_CONFIG` | Connections the gateway brokers (MCP, HTTP APIs, databases, Git hosts, model APIs); see [secrets and the gateway](secrets-and-gateway.md). Guards are host hooks. |
+| `WORK_SANDBOX` and budget variables | `auto` (default), `microsandbox`, `container`, or trusted `local-process`; see the machines reference. |
+| `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
+| `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
+| `WORK_PERSONAL_CREDENTIALS` | Local-process: `accept` lets members' own files reach their chats although this machine runs other people's work as processes, and makes a single server a person's own machine for one member's Codex sign-in, made from the Work app (a single person's server, development); see [members' own sign-ins](harnesses.md#members-own-sign-ins). |
+| `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
+| `WORK_WEBHOOK_MAX_BYTES` | Largest webhook body any endpoint may accept (default 1 MiB, at most 64 MiB); a binding opts in with `maxBodyBytes`. |
+| `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
+| `WORK_MACHINES_CONFIG` | Path to the machine classes file that machine rules name: Hetzner Cloud servers, pools of enrolled machines; see [a machine for every person or team](cluster-deployment.md#a-machine-for-every-person-or-team). |
+| `WORK_HETZNER_TOKEN` | Hetzner Cloud API token (read and write) for `hetzner-cloud` classes. Never in the classes file. |
+| `WORK_WORKER_IMAGE` | Your pinned worker image, required explicitly when using machine installation or provisioning. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
+
+### Sign-in methods
+
+The auth config is JSON. Local username/password is on unless disabled;
+OIDC providers are listed explicitly. For a company, use the
+`google-workspace` kind described in [company identity](company-identity.md);
+providers with `"audience": "guests"` sign customers in to shares only
+([sharing](sharing.md)). A generic provider:
+
+```json
+{
+  "local": { "enabled": false },
+  "providers": [
+    {
+      "id": "google",
+      "label": "Google",
+      "discoveryUrl": "https://accounts.google.com/.well-known/openid-configuration",
+      "clientId": "...",
+      "clientSecret": "...",
+      "allowedDomains": ["example.com"]
+    }
+  ]
+}
+```
+
+Register the provider's redirect URI as
+`<WORK_PUBLIC_URL>/api/auth/callback/<id>`. `scopes` defaults to
+`openid email profile`. Keep client secrets out of the repository.
+
+When upgrading a server from Better Auth 1.6 to 1.7, update existing provider
+registrations from `/api/auth/oauth2/callback/<id>` to the callback above.
+Back up the server's databases before starting the upgraded server: startup
+converts OAuth clients, tokens and approved consent in one transaction, while
+preserving users, browser sessions and existing Work refresh families. Saved
+token URLs continue to work. Restart any authorization flow that was in progress
+during the upgrade. The schema conversion is forward-only; rolling back the
+server version also requires restoring its database backup.
+Remote OAuth sign-in also requires the PWA's own callback origin to use HTTPS
+or exact loopback HTTP. Serve the PWA over HTTPS for phone or LAN sign-in;
+plain HTTP hostnames and LAN addresses cannot be OAuth callback URLs.
+
+### Sign-in limits
+
+Sign-in is limited per client address: three password attempts every 10
+seconds, 30 provider sign-in starts every 10 seconds (the identity provider
+authenticates, so an office behind one address is not held up), and 100
+requests every 10 seconds on the other `/api/auth` endpoints, such as the
+OAuth token endpoint and the provider's return. A refused attempt gets `429`,
+and the sign-in page says to wait. Counts live in the auth schema of the
+database, so replicas share one budget (ADR 0189). `WORK_AUTH_RATE_LIMIT=off`
+logs a warning at boot.
+
+The client address is the connection's peer unless that peer is listed in
+`WORK_TRUSTED_PROXIES`. Behind a load balancer or CDN, list every proxy hop
+between the internet and the server (the load balancer's private range,
+and the CDN's published ranges when it connects to the balancer), and
+make sure each appends to `x-forwarded-for`. The server then walks that
+header from the nearest hop and takes the first address no trusted proxy
+owns, so a client cannot choose its own. Leave it unset when clients connect
+directly. If it is missing behind a proxy, every person shares the proxy's
+address and one budget, and the server logs a warning the first time a
+private address forwards a request; a range that includes client addresses
+lets those clients pick theirs.
+
+## A custom server
+
+Company code (guards, directories, connection providers, routes) goes in a
+deployment-owned entry point and image built on the pinned
+`@catamorphic/work-server` library (ADRs 0160, 0294; see
+[its README](../../../packages/work-server/README.md)). Its `config` is typed
+data and its `hooks` are code (ADR 0183):
+
+- `workServerConfigFromEnv(process.env)` is the only code that reads `WORK_*`
+  variables and files. It turns the sign-in file into `config.auth` and
+  `WORK_GATEWAY_CONFIG` into `config.gateway`, with the secrets the file names
+  by variable resolved into values. `createWorkServer` reads no config file.
+- A server that keeps configuration in a secret manager builds `config.auth`
+  and `config.gateway` in code instead, in the same shape as the files, and
+  they are validated by the same rules at boot. A Google Workspace directory
+  then takes its service account key inline (`"credentials": { "key": … }`)
+  rather than as a file.
+- Guards, directories, and providers go in `hooks`; see
+  [Guards are host code](secrets-and-gateway.md#guards-are-host-code).
+- Generated state stays under the data directory: the vault key, generated
+  secrets, the host id, and worker credentials. A server on `DATABASE_URL`
+  generates none of these: its configuration supplies every secret, and its
+  machine identity lasts one process (ADR 0190).
+
+## Provisioning the first project and person
+
+The server exposes machine-local operations on a separate listener bound to
+`127.0.0.1` (port 4701). The public listener never registers them, and the
+deployment must not expose that port. They are building blocks for a setup agent,
+not a human CLI.
+
+1. Settle with the person: sign-in method, explicit role definitions,
+   admission policy, and the first ordinary member.
+2. Read the operator credential without displaying it.
+3. `POST /_work/operator/projects` with `name`, `roles`
+   (`[{ slug, definition }]`), `admission` (`mode`: `invitation_only`,
+   `approved_domain`, `request`, or `open`; `defaultRole`;
+   `approvedDomains`), and optionally `repository: "owner/repo"` (a GitHub
+   repository, attached through the `github` service connection).
+   `roles` is required unless the repository already defines them. The
+   response carries `project` and `roles.source`: `committed` (a project the
+   server created), `repository` (the repository's own roles, used as they
+   are), or `proposed` (with `branch` and `pullRequest.url`, see below).
+4. For local sign-in, `POST /_work/operator/users` with `username`,
+   `name`, `password`, optional `email`, optional `administrator: true` (an
+   organization administrator, who manages service connections), and
+   `memberships` (`[{ projectId, roles, grants? }]`).
+5. Verify sign-in, OAuth discovery, membership, and revocation through the
+   normal application paths.
+
+Schemas live in `packages/work-server/src/setup/`. With company sign-in and
+no local passwords, map an administrators directory group to the managing role
+in `admission.directoryRoles`, or grant a signed-in person by email with
+`POST /_work/operator/memberships` (`{ email, projectId, roles }`). Inside a container, run the request
+from inside it (`docker exec ... bun -e` with `fetch`; use the tools your image supplies).
+Never echo credentials into history, open PGlite from a second process, hash
+a password, or write Better Auth rows.
+
+Grant execution as well as agents: a role needs `environments: ["default"]`
+(the Environment every project has) to run agents and workflows. Permissions
+alone grant no execution. A member-device target needs an Environment with
+`device: "member"`, a
+role grant for it, and a connected desktop. Never describe server-side output
+as a file saved on the member's device.
+
+## Clients and invitations
+
+A credential-free invitation is the onboarding object. Members with
+`memberships:write` create them with
+`POST /api/projects/:projectId/admission/invitations`. Desktop and PWA
+clients discover OAuth, sign in with PKCE, and redeem it. MCP clients use the
+same protected-resource discovery against
+`/api/projects/:projectId/mcp` and get the member's whole working loop there
+([working from your own agent](members-over-mcp.md)). Do not mint separate
+tokens.
+
+## GitHub-backed projects
+
+Connect the company's GitHub App first ([Connect GitHub](connect-github.md)):
+its installation is the `github` service connection, distinct from the
+people who review, and members never receive its tokens. An imported
+repository is attached (ADR 0170): Work never
+commits or pushes to its default branch or to any branch it did not create.
+Everything Work originates there arrives as a `work/` branch and a pull
+request, reviewed like any other change. A direct deploy to such a project is
+refused; propose the change instead. The server takes what the default branch
+accepts every minute; if its copy ever diverges from that branch, the project
+reports `remoteDivergedAt` and the server logs that it stopped receiving
+updates until the two histories are reconciled.
+
+Provisioning with `repository` imports the source through that connection. When the default
+branch already has `.work/roles/*.json`, those roles are used as they are and
+the supplied `roles` are not written. Otherwise the supplied roles are
+proposed as a pull request; give the person `roles.pullRequest.url` to
+review and merge. The admission policy is recorded immediately and may name
+the proposed roles, but nobody can join with a role until the pull request
+merges, because admission reads committed roles. The server syncs the
+linked repository every minute, so the merged roles, and every later merged
+pull request, reach the server and its members without further steps. If
+sync reports divergence, preserve both histories and resolve through review;
+never force-push one over the other.
+
+## Webhooks and project automations
+
+The Work server library receives webhooks and runs project automations while nobody
+is signed in (ADR 0156). Set `WORK_PUBLIC_URL` to an origin senders can
+reach; webhook URLs are `/api/hooks/<projectId>/<name>/<token>` under it.
+Someone with `automations:write` plus every permission the workflow declares
+enables it for the project; holders of `webhooks:read` copy its URL from the
+workflow's **Automatic** view, and `webhooks:write` rotates it. Signed senders
+use a project secret named in the trigger's `verify`; declared handshakes
+(Slack URL verification, GET subscription challenges) are answered at once.
+Other requests are answered 202 once stored; failures show in the workflow's
+runs. Bodies over 1 MiB need a binding's `maxBodyBytes` and, beyond the
+server's default, `WORK_WEBHOOK_MAX_BYTES` (ADR 0171). A sender's retry of
+one event is stored once (its delivery-id header, or the binding's
+`deliveryId`). [Connect Slack](connect-slack.md) walks through a complete
+integration.
+
+## Boundaries
+
+- The operator credential proves machine access. It is not a user, role,
+  session, or invitation.
+- Local auth does not grow an admin UI, first-run wizard, password reset, MFA,
+  or custom hashing. If the installed version has one, stop and simplify.
+- Never expose the setup port, distribute signing secrets, or print them.

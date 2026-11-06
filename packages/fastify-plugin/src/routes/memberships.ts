@@ -23,11 +23,11 @@ import {
 
 /**
  * Roles and memberships (ADR 0055). Roles are committed files
- * (`.catamorphic/roles/<slug>.json`) — read here, edited through the project file
+ * (`.work/roles/<slug>.json`) — read here, edited through the project file
  * routes like any other file. Memberships are the stock `user → roles +
  * grants` table: what a host's invite writes and its identity resolver
- * reads (`core.memberships.identityFor`). All builder-only, except a
- * member reading their own row.
+ * reads (`core.memberships.identityFor`). Reads need `memberships:read`
+ * (a member may read their own row); changes `memberships:write`.
  */
 export function registerMembershipRoutes(
   app: FastifyInstance,

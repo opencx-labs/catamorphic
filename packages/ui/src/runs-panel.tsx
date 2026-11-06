@@ -51,7 +51,7 @@ const STATUS_COLORS: Record<RunStatus, string> = {
 
 const PHASE_LABELS: Record<RunPhase, string> = {
   execute: "Workflow",
-  boundary: "Retry scope",
+  boundary: "Running a step",
   source: "Batch processing",
   process: "Batch processing",
   sink: "Batch processing",
@@ -494,9 +494,7 @@ export function RunDetail({ runId }: { runId: string }) {
                 }}
               >
                 <span>
-                  {attempt.executor === "batch"
-                    ? "Batch processing"
-                    : "Retry scope"}
+                  {attempt.executor === "batch" ? "Batch processing" : "Step"}
                 </span>
                 <span>
                   Attempt {attempt.attempt}, {attempt.status}

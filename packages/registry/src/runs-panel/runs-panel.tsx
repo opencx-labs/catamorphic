@@ -3,6 +3,7 @@ import { PendingButton } from "@catamorphic/ui";
 ("use client");
 
 import {
+  type JsonValue,
   useCancelRun,
   useEnvironments,
   usePauseRunProcessing,
@@ -183,7 +184,9 @@ export function RunDetail({ runId }: { runId: string }) {
             ) ? (
               <p className="mt-1 text-[11px] capitalize text-fg-muted">
                 {run.phase === "boundary"
-                  ? "Retry scope"
+                  ? run.currentStepIndex === null
+                    ? "Running"
+                    : `Step ${run.currentStepIndex + 1}`
                   : ["source", "process", "sink"].includes(run.phase)
                     ? "Batch processing"
                     : label(run.phase)}
@@ -363,7 +366,7 @@ export function RunsPanel({
   const [inputError, setInputError] = useState(false);
 
   const startRun = () => {
-    let parsed: Record<string, unknown> | undefined;
+    let parsed: JsonValue | undefined;
     try {
       parsed = inputDraft.trim() ? JSON.parse(inputDraft) : undefined;
     } catch {

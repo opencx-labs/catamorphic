@@ -2,6 +2,14 @@ import {
   normalizeTerminalMacros,
   type TerminalMacro,
 } from "./terminal-macros.js";
+import {
+  DEFAULT_VOICE,
+  type VoiceId,
+  type Voiceprint,
+  type VoiceSessionRef,
+  voiceIdOf,
+  voiceprintOf,
+} from "./voice.js";
 
 export const CODE_THEMES = [
   "github",
@@ -12,6 +20,12 @@ export const CODE_THEMES = [
   "vitesse",
 ] as const;
 export type CodeTheme = (typeof CODE_THEMES)[number];
+
+/** How long a browser tab is out of sight before it sleeps (ADR 0194). */
+export const BROWSER_TAB_SLEEP = ["15m", "30m", "1h", "2h", "never"] as const;
+export type BrowserTabSleep = (typeof BROWSER_TAB_SLEEP)[number];
+export const BROWSER_TAB_SLEEP_MINUTES: Record<BrowserTabSleep, number | null> =
+  { "15m": 15, "30m": 30, "1h": 60, "2h": 120, never: null };
 
 /**
  * Per-profile app preferences, stored as plain JSON at
@@ -28,12 +42,25 @@ export interface AppPrefs {
   /** Where open chats and their bubble strip sit while expanded. */
   dockPlacement: "left" | "center" | "right";
   /**
-   * An agent turn is work (notes between tool calls, plus the tool steps)
-   * followed by an answer. Two independent choices cover how the work
-   * reads: while the turn runs, and once the answer has landed.
+   * The person folded the bubble strip into one bubble (its arrows), and
+   * it stays folded, in every window and across launches, until they open
+   * it again. Runtime state, not a setting.
    */
-  chatWorkLive: "all" | "latest";
+  dockCollapsed: boolean;
+  /**
+   * An agent turn is work (notes between tool calls, plus the tool steps)
+   * followed by an answer. Two choices cover how the work reads: while the
+   * turn runs, and once the answer has landed. "notes" (Notes only) keeps
+   * steps folded in both phases.
+   */
+  chatWorkLive: "all" | "latest" | "notes";
   chatWorkSettled: "keep" | "collapse";
+  /**
+   * A message sent while the agent works waits for its turn to end,
+   * editable until then. Off: the agent reads it at its next step, and the
+   * person can interrupt it to read it at once (ADR 0240).
+   */
+  chatQueueMessages: boolean;
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -51,12 +78,22 @@ export interface AppPrefs {
    */
   contentFrame: boolean;
   sidebarDividers: boolean;
+  /**
+   * The macOS close, minimize and full screen buttons in a workspace
+   * window's top-left corner, and the space the chrome keeps for them.
+   */
+  windowButtons: boolean;
   contentPadding: number;
   contentRadius: number;
-  /** Profile-wide favorites can be compact tiles or labeled rows. */
-  pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
+  /**
+   * Opening a page already open in a tab (a link, a bookmark, a link from
+   * another app) goes to that tab; a new tab asked for on purpose stays new.
+   */
+  switchToOpenTab: boolean;
+  /** How long a browser tab stays out of sight before it sleeps. */
+  browserTabSleep: BrowserTabSleep;
   terminalMacros: TerminalMacro[];
   terminalAppearance: "app" | "ghostty";
   codeTheme: CodeTheme;
@@ -65,19 +102,54 @@ export interface AppPrefs {
   githubCliEnabled: boolean;
   reviewStartView: "overview" | "guide" | "diff";
   reviewGrouping: "purpose" | "directory" | "flat";
-  changesFileLayout: "tree" | "flat";
-  prDefaultView: "for-you" | "created" | "all";
   rightSidebarOpen: boolean;
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
   /** Sessions this profile has explicitly or implicitly marked unread. */
   unreadSessionIds: string[];
   /**
-   * Apps this profile allowed to read its chats, as `<projectId>/<app>`
-   * (ADR 0148). Asked once per app; a rebuilt version that drops the
-   * declaration needs no new answer because it gains no access.
+   * The assistant's chat (ADR 0216): where the dock's microphone sends what
+   * it hears, until a reset (or another assistant) closes it and the next
+   * start makes another.
    */
-  appAccessApprovals: string[];
+  assistantSession: VoiceSessionRef | null;
+  /** The last assistant reply spoken to the person (ADR 0216). */
+  assistantHeardThrough: string | null;
+  /**
+   * The agent the assistant is: one of the person's own; null is Work's
+   * built-in assistant, on their default agent.
+   */
+  voiceAssistant: string | null;
+  /** The voice agents speak in, unless they have their own. */
+  voiceId: VoiceId;
+  /** Agents' own voices, by agent id. */
+  agentVoices: Record<string, VoiceId>;
+  /** The microphone voice listens with; null follows the system's. */
+  voiceMicrophone: string | null;
+  /**
+   * The person's voice, taught on purpose: voice ignores everyone else,
+   * however near (ADR 0216, 0236).
+   */
+  voiceprint: Voiceprint | null;
+  /** The microphone in the dock; voice still works by its shortcut. */
+  voiceInDock: boolean;
+  /** A microphone in every chat's composer, to talk to that chat's agent. */
+  voiceInChats: boolean;
+  /**
+   * Where voice's bubble rests along the bottom of the screen while Work is
+   * behind other apps: dragged there (ADR 0236).
+   */
+  voiceBubbleSpot: "left" | "center" | "right";
+  /**
+   * Dictation only: a microphone's click dictates into the text field the
+   * person is in, rather than talking with an agent (ADR 0236).
+   */
+  voiceDictation: boolean;
+  /**
+   * macOS was asked, once, to let voice's shortcuts work in other apps
+   * (Accessibility); Settings asks again.
+   */
+  voiceShortcutsAsked: boolean;
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
@@ -85,8 +157,10 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockDetached: false,
   dockSide: "right",
   dockPlacement: "center",
-  chatWorkLive: "latest",
+  dockCollapsed: true,
+  chatWorkLive: "all",
   chatWorkSettled: "collapse",
+  chatQueueMessages: false,
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
@@ -95,11 +169,13 @@ export const DEFAULT_PREFS: AppPrefs = {
   headerPlacement: "top",
   contentFrame: false,
   sidebarDividers: false,
+  windowButtons: true,
   contentPadding: 6,
   contentRadius: 14,
-  pinnedBookmarks: "tiles",
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
+  switchToOpenTab: true,
+  browserTabSleep: "1h",
   terminalMacros: [],
   terminalAppearance: "app",
   codeTheme: "github",
@@ -108,11 +184,20 @@ export const DEFAULT_PREFS: AppPrefs = {
   githubCliEnabled: false,
   reviewStartView: "overview",
   reviewGrouping: "purpose",
-  changesFileLayout: "tree",
-  prDefaultView: "for-you",
   rightSidebarOpen: false,
   unreadSessionIds: [],
-  appAccessApprovals: [],
+  assistantSession: null,
+  assistantHeardThrough: null,
+  voiceAssistant: null,
+  agentVoices: {},
+  voiceId: DEFAULT_VOICE,
+  voiceMicrophone: null,
+  voiceprint: null,
+  voiceInDock: true,
+  voiceInChats: true,
+  voiceBubbleSpot: "center",
+  voiceDictation: false,
+  voiceShortcutsAsked: false,
 };
 
 function dimension(value: unknown, fallback: number, max: number): number {
@@ -122,6 +207,26 @@ function dimension(value: unknown, fallback: number, max: number): number {
     value <= max
     ? value
     : fallback;
+}
+
+function agentVoicesOf(value: unknown): Record<string, VoiceId> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([agentId, voice]) =>
+      typeof voice === "string" && voiceIdOf(voice) === voice
+        ? [[agentId, voice]]
+        : [],
+    ),
+  );
+}
+
+function voiceSessionRef(value: unknown): VoiceSessionRef | null {
+  if (typeof value !== "object" || value === null) return null;
+  const projectId: unknown = Reflect.get(value, "projectId");
+  const sessionId: unknown = Reflect.get(value, "sessionId");
+  return typeof projectId === "string" && typeof sessionId === "string"
+    ? { projectId, sessionId }
+    : null;
 }
 
 function stringList(value: unknown): string[] {
@@ -142,8 +247,13 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
-    chatWorkLive: record.chatWorkLive === "all" ? "all" : "latest",
+    dockCollapsed: record.dockCollapsed !== false,
+    chatWorkLive:
+      record.chatWorkLive === "latest" || record.chatWorkLive === "notes"
+        ? record.chatWorkLive
+        : "all",
     chatWorkSettled: record.chatWorkSettled === "keep" ? "keep" : "collapse",
+    chatQueueMessages: record.chatQueueMessages === true,
     dockPlacement:
       record.dockPlacement === "left" || record.dockPlacement === "right"
         ? record.dockPlacement
@@ -169,9 +279,9 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
     contentFrame: record.contentFrame === true,
     sidebarDividers: record.sidebarDividers === true,
+    windowButtons: record.windowButtons !== false,
     contentPadding: dimension(record.contentPadding, 6, 48),
     contentRadius: dimension(record.contentRadius, 14, 48),
-    pinnedBookmarks: record.pinnedBookmarks === "list" ? "list" : "tiles",
     codeTheme:
       CODE_THEMES.find((name) => name === record.codeTheme) ?? "github",
     diffLayout: record.diffLayout === "unified" ? "unified" : "split",
@@ -187,11 +297,6 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       record.reviewGrouping === "directory" || record.reviewGrouping === "flat"
         ? record.reviewGrouping
         : "purpose",
-    changesFileLayout: record.changesFileLayout === "flat" ? "flat" : "tree",
-    prDefaultView:
-      record.prDefaultView === "created" || record.prDefaultView === "all"
-        ? record.prDefaultView
-        : "for-you",
     terminalAppearance:
       record.terminalAppearance === "ghostty" ? "ghostty" : "app",
     linkOpenMode: record.linkOpenMode === "floating" ? "floating" : "tab",
@@ -199,11 +304,41 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.previewLinksWithAlt === "boolean"
         ? record.previewLinksWithAlt
         : true,
+    switchToOpenTab:
+      typeof record.switchToOpenTab === "boolean"
+        ? record.switchToOpenTab
+        : DEFAULT_PREFS.switchToOpenTab,
+    browserTabSleep:
+      BROWSER_TAB_SLEEP.find((value) => value === record.browserTabSleep) ??
+      DEFAULT_PREFS.browserTabSleep,
     terminalMacros: normalizeTerminalMacros(record.terminalMacros),
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }
       : {}),
     unreadSessionIds: stringList(record.unreadSessionIds),
-    appAccessApprovals: stringList(record.appAccessApprovals),
+    assistantSession: voiceSessionRef(record.assistantSession),
+    assistantHeardThrough:
+      typeof record.assistantHeardThrough === "string"
+        ? record.assistantHeardThrough
+        : null,
+    voiceAssistant:
+      typeof record.voiceAssistant === "string" && record.voiceAssistant
+        ? record.voiceAssistant
+        : null,
+    voiceId: voiceIdOf(record.voiceId),
+    agentVoices: agentVoicesOf(record.agentVoices),
+    voiceprint: voiceprintOf(record.voiceprint),
+    voiceMicrophone:
+      typeof record.voiceMicrophone === "string" && record.voiceMicrophone
+        ? record.voiceMicrophone
+        : null,
+    voiceInDock: record.voiceInDock !== false,
+    voiceInChats: record.voiceInChats !== false,
+    voiceBubbleSpot:
+      record.voiceBubbleSpot === "left" || record.voiceBubbleSpot === "right"
+        ? record.voiceBubbleSpot
+        : "center",
+    voiceDictation: record.voiceDictation === true,
+    voiceShortcutsAsked: record.voiceShortcutsAsked === true,
   };
 }

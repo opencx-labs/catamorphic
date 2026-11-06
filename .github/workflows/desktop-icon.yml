@@ -1,0 +1,59 @@
+name: Desktop icon
+
+# Packaging compiles the Icon Composer icon with actool; this catches a
+# broken icon before a release does, and keeps the compiled catalog for review.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/desktop/build/icon.icon/**
+      - .github/actions/xcode-26/**
+      - .github/workflows/desktop-icon.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Compile the macOS app icon
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/xcode-26
+      - name: Compile with electron-builder's arguments
+        shell: bash
+        run: |
+          out="${RUNNER_TEMP}/icon"
+          mkdir -p "${out}"
+          cp -R apps/desktop/build/icon.icon "${RUNNER_TEMP}/Icon.icon"
+          # app-builder-lib/out/util/macosIconComposer.js
+          actool "${RUNNER_TEMP}/Icon.icon" --compile "${out}" \
+            --output-format human-readable-text --notices --warnings \
+            --output-partial-info-plist "${out}/assetcatalog_generated_info.plist" \
+            --app-icon Icon --include-all-app-icons --accent-color AccentColor \
+            --enable-on-demand-resources NO --development-region en \
+            --target-device mac --minimum-deployment-target 26.0 --platform macosx \
+            | tee "${RUNNER_TEMP}/actool.txt"
+          # A layer it could not read is a warning, not a failure.
+          if grep -E 'com\.apple\.actool\.[a-z.-]*(warnings|errors)' "${RUNNER_TEMP}/actool.txt"; then
+            echo "actool reported warnings or errors" >&2
+            exit 1
+          fi
+          test -s "${out}/Assets.car"
+          test -s "${out}/Icon.icns"
+      - name: macOS 15 reads the catalog's icons for earlier systems
+        shell: bash
+        run: |
+          # /usr/bin/assetutil is the system's own, not an Xcode shim: it
+          # reads the catalog with this runner's macOS 15.
+          env -u DEVELOPER_DIR /usr/bin/assetutil --info "${RUNNER_TEMP}/icon/Assets.car" > "${RUNNER_TEMP}/assets.json"
+          jq -e 'any(.[]; .AssetType == "MultiSized Image")' "${RUNNER_TEMP}/assets.json"
+          jq -e 'any(.[]; .AssetType == "Icon Image" and .PixelWidth == 1024)' "${RUNNER_TEMP}/assets.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-icon
+          path: ${{ runner.temp }}/icon
+          if-no-files-found: error
+          retention-days: 14

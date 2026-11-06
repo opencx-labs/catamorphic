@@ -78,6 +78,9 @@ export function ThemePicker({
   );
 }
 
+/** A theme layer's own keys, as its file holds them. */
+type AuthoredTheme = Awaited<ReturnType<typeof desktopApi.themeConfig>>;
+
 function ThemeEditor({
   projectId,
   destination,
@@ -102,7 +105,15 @@ function ThemeEditor({
   const revealedDestination = useRef<string | undefined>(undefined);
   const generation = useRef(0);
   const [reload, setReload] = useState(0);
-  const saveTheme = (next: Parameters<typeof desktopApi.setTheme>[0]) => {
+  // Build each edit on the latest authored values, including a save that
+  // has not returned yet, so quick edits cannot undo one another.
+  const configRef = useRef(config);
+  const saveTheme = (
+    update: (current: AuthoredTheme) => AuthoredTheme | null,
+  ) => {
+    const next = update(configRef.current);
+    configRef.current = next ?? {};
+    setConfig(configRef.current);
     const request = ++generation.current;
     void desktopApi
       .setTheme(next, projectId, scope)
@@ -110,6 +121,7 @@ function ThemeEditor({
         const authored = await desktopApi.themeConfig(projectId, scope);
         if (request !== generation.current) return;
         setTheme(resolved);
+        configRef.current = authored;
         setConfig(authored);
         setSaveError("");
       })
@@ -131,6 +143,7 @@ function ThemeEditor({
         .then(([resolved, authored, file, settings, presets]) => {
           if (request !== generation.current) return;
           setTheme(resolved);
+          configRef.current = authored;
           setConfig(authored);
           setFile(file);
           setProjectAvailable(settings.projectAvailable);
@@ -243,7 +256,7 @@ function ThemeEditor({
           <button
             type="button"
             className="text-xs text-fg-muted hover:text-fg"
-            onClick={() => saveTheme(null)}
+            onClick={() => saveTheme(() => null)}
           >
             Use inherited theme
           </button>
@@ -263,11 +276,7 @@ function ThemeEditor({
         <button
           type="button"
           onClick={() =>
-            void saveTheme({
-              fonts: config.fonts,
-              ...(config.selection ? { selection: config.selection } : {}),
-              overrides: {},
-            })
+            void saveTheme((current) => ({ ...current, overrides: {} }))
           }
           className="mb-3 flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
         >
@@ -279,11 +288,11 @@ function ThemeEditor({
       <button
         type="button"
         onClick={() =>
-          void saveTheme({
+          void saveTheme((current) => ({
+            ...current,
             selection: "system",
             overrides: {},
-            fonts: config.fonts,
-          })
+          }))
         }
         data-setting-control
         aria-pressed={systemSelected}
@@ -325,13 +334,13 @@ function ThemeEditor({
               aria-pressed={active}
               data-theme-preset={preset.id}
               onClick={() =>
-                void saveTheme({
-                  fonts: config.fonts,
+                void saveTheme((current) => ({
+                  ...current,
                   selection: preset.id,
                   overrides: {},
-                })
+                }))
               }
-              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
                 active
                   ? "border-accent bg-accent/10"
                   : "border-border bg-bg-raised/40 hover:border-border-strong"
@@ -422,16 +431,13 @@ function ThemeEditor({
                     type="color"
                     value={toHex6(theme.colors[token])}
                     onChange={(event) =>
-                      void saveTheme({
-                        fonts: config.fonts,
-                        ...(config.selection
-                          ? { selection: config.selection }
-                          : {}),
+                      void saveTheme((current) => ({
+                        ...current,
                         overrides: {
-                          ...config.overrides,
+                          ...current.overrides,
                           [token]: event.target.value,
                         },
-                      })
+                      }))
                     }
                     aria-label={`${TOKEN_LABELS[token]} color`}
                     className="size-5 cursor-pointer appearance-none border-none bg-transparent p-0"
@@ -450,12 +456,10 @@ function ThemeEditor({
                   type="button"
                   className="cursor-pointer text-xs text-fg-muted hover:text-fg"
                   onClick={() =>
-                    void saveTheme({
-                      ...(config.selection
-                        ? { selection: config.selection }
-                        : {}),
-                      overrides: config.overrides,
-                    })
+                    void saveTheme((current) => ({
+                      ...current,
+                      fonts: undefined,
+                    }))
                   }
                 >
                   Reset fonts
@@ -495,13 +499,10 @@ function ThemeEditor({
                     const font = value || DEFAULT_THEME_FONTS[token];
                     event.currentTarget.value = font;
                     if (font === theme.fonts[token]) return;
-                    void saveTheme({
-                      ...(config.selection
-                        ? { selection: config.selection }
-                        : {}),
-                      overrides: config.overrides,
-                      fonts: { ...config.fonts, [token]: font },
-                    });
+                    void saveTheme((current) => ({
+                      ...current,
+                      fonts: { ...current.fonts, [token]: font },
+                    }));
                   }}
                 />
               </label>

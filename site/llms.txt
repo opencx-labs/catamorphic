@@ -8,18 +8,24 @@
 > without Git until an operation requires it), git-native work tracking (per-turn agent checkpoint commits,
 > automatic remote sync with rescue branches, GitHub through a
 > provider-neutral CodeHost seam), multi-harness coding agents (built-in
-> AI SDK loop, Claude Code, Codex; durable sessions; MCP in both
+> AI SDK loop, Claude Code, Codex, ACP agents such as Hermes; durable sessions; MCP in both
 > directions), durable TypeScript workflows rendered as a visual graph and
 > executed on Postgres, and sandboxed user-built apps wired to workflows
 > through typed contracts. The host owns auth, tenancy, database, and
 > deployment. The framework is embedded in-process; the stock server is a
 > reference host, not a required hosted service.
 > Every dependency is an axis: network Postgres or embedded pglite; cloud
-> sandboxes (Cloudflare, Daytona), local sandboxes (microsandbox), plain
-> local processes for trusted single-tenant hosts, or none; S3-compatible
-> storage or plain directories; multi-tenant identity or one fixed user.
+> sandboxes (Cloudflare), local sandboxes (microsandbox, gVisor
+> containers), plain local processes for trusted single-tenant hosts, or
+> none; S3-compatible storage or plain directories; multi-tenant identity
+> or one fixed user.
 > The desktop app runs the lightest column (pglite, local sandboxes, no
 > server) as proof.
+
+Libraries publish as public `@catamorphic/*` npm packages with the same version
+as Work. Preview releases use the `alpha` tag (`bun add
+@catamorphic/server-sdk@alpha`); Stable releases use `latest`. Keep all framework
+dependencies on one release version.
 
 Capabilities are co-equal: projects, git-native tracking, coding agents,
 workflows, apps, and embedder sovereignty. Do not describe Catamorphic as
@@ -28,7 +34,7 @@ equals. Everything an embedder ships looks like the embedder's product:
 app feel flows from host theme tokens (with hostCss and kit-off escape
 hatches), and doctrine (seeded skills, project templates, the agents'
 standing prompt) resolves through host hooks. Agents can also be work
-products: committed .catamorphic/agents/<slug>.json definitions with a persona file,
+products: committed .work/agents/<slug>.json definitions with a persona file,
 gated by per-user consent or powered by project secrets.
 
 Use cases it is built for: a company brain (a shared project holding a
@@ -49,7 +55,7 @@ embedding architecture.
 
 ## Integration references
 
-- [Setup skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-catamorphic-server/SKILL.md): use for the stock server or an existing/custom host; it inspects visible auth, database, deployment, and application structure before routing to focused references
+- [Setup skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-work-server/SKILL.md): use for the stock server or an existing/custom host; it inspects visible auth, database, deployment, and application structure before routing to focused references
 - [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins and capability providers, custom trigger kinds, doctrine hooks, operational notes
 - [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): the capability map, use cases, package map, workflow code format, local development
 
@@ -61,11 +67,11 @@ embedding architecture.
 
 ## For agents working inside a Catamorphic project
 
-- Project capability skills live under .catamorphic/skills/: catamorphic-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
-- A project is general-purpose: never assume it is about code. The capability workspace (.catamorphic/contracts/, .catamorphic/workflows/, .catamorphic/apps/*) is installed only when the first automation or app is wanted, following the catamorphic-projects skill.
+- Project capability skills live under .work/skills/: work-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
+- A project is general-purpose: never assume it is about code. The capability workspace (.work/contracts/, .work/workflows/, .work/apps/*) is installed only when the first automation or app is wanted, following the work-projects skill.
 - Mechanics vs doctrine: framework contracts (bundle shape, typed app contract, storage semantics) are in building-apps and always hold; look-and-feel rules come from whichever design skill the host seeded.
-- Committed agent definitions live in .catamorphic/agents/<slug>.json with an optional .catamorphic/agents/<slug>.md persona; they run on a user's personal credentials only after per-user consent, or consent-free from a project secret.
-- Once the workspace exists, `bun run --cwd .catamorphic check` validates the project (parse, trigger bindings, generated-type drift); `bun run --cwd .catamorphic check -- --write` regenerates the typed app-api projections.
+- Committed agent definitions live in .work/agents/<slug>.json with an optional .work/agents/<slug>.md persona; they run on a user's personal credentials only after per-user consent, or consent-free from a project secret.
+- Once the workspace exists, `bun run --cwd .work check` validates the project (parse, trigger bindings, generated-type drift); `bun run --cwd .work check -- --write` regenerates the typed app-api projections.
 
 ## Reference
 
@@ -75,7 +81,7 @@ embedding architecture.
 
 ## Roadmap (direction, not shipped)
 
-- ACP harness: project agent definitions already accept kind "acp"; the Agent Client Protocol client is the planned harness behind it
+- ACP beyond the desktop: the desktop runs a project's local ACP agents (kind "acp", such as Hermes); the remote endpoint transport and ACP agents on the Work server are next
 - TS defineAgent authoring layer compiling to the committed agents/*.json substrate
 - Review-mode collaboration: PR-first sync, invites, native PR review depth
 - User-connected remote blob storage for large binaries beside git-tracked text
@@ -85,7 +91,7 @@ embedding architecture.
 
 - `apps/server` is the self-hostable reference host: PGlite by default, PostgreSQL optional, bare git origins, local-process execution, and no required external services.
 - Better Auth provides built-in local username and password sign-in plus optional OAuth and OIDC providers. Desktop, PWA, and MCP clients use authorization code with S256 PKCE and refresh tokens.
-- Project invitations are credential-free locators. Ordinary project roles control admission, membership, and builder access. Initial users and roles are provisioned by a local setup agent through machine-local operator operations, not an admin UI or privileged product user.
+- Project invitations are credential-free locators. Ordinary project roles grant agents, workflows, apps, documents, and read, write or publish permissions. Initial users and roles are provisioned by a local setup agent through machine-local operator operations, not an admin UI or privileged product user.
 
 ## Optional
 

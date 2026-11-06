@@ -56,21 +56,31 @@ export interface Pause {
   <Value extends JsonValue, State extends JsonValue>(options: { timeout?: never; signal?: string; state: State }): WorkflowTransition<ResumedPauseResult<Value, State>>;
 }
 
+export interface Carried<Result, State> { result: Result; state: State }
+export interface TransitionCall<Input, Output> {
+  <State>(input: Input, options: { state: State }): WorkflowTransition<Carried<Output, State>>;
+  (input: Input): WorkflowTransition<Output>;
+}
+
 export interface CallWorkflow {
+  <Input, Output, State>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input; state: State }): WorkflowTransition<Carried<Output, State>>;
   <Input, Output>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input }): WorkflowTransition<Output>;
 }
 
 export interface WorkflowCaller { readonly externalUserId: string; readonly scope?: ReadonlyArray<{ readonly kind: string; readonly projectId: string; readonly [key: string]: unknown }> }
-export type HostCall<Result = unknown> = <Args>(args: Args) => WorkflowTransition<Result>;
+export interface HostCall<Result = unknown> {
+  <Args, State>(args: Args, options: { state: State }): WorkflowTransition<Carried<Result, State>>;
+  <Args>(args: Args): WorkflowTransition<Result>;
+}
 export interface HostNamespace { readonly [name: string]: HostNamespace & HostCall }
 export interface DocumentEntry { path: string; source: "program" | "store"; contentType: string; size: number; version?: number; writtenBy?: string; writtenAt?: string }
 export interface DocumentsCalls {
-  list(args: { prefix?: string; source?: "program" | "store" }): WorkflowTransition<DocumentEntry[]>;
-  read(args: { path: string; version?: number }): WorkflowTransition<DocumentEntry & { text?: string }>;
-  write(args: { path: string; text: string; contentType?: string; ifVersion?: number }): WorkflowTransition<DocumentEntry>;
-  delete(args: { path: string; ifVersion?: number }): WorkflowTransition<{ version: number }>;
-  history(args: { path: string }): WorkflowTransition<Array<{ version: number; deleted: boolean; contentType: string; size: number; writtenBy: string; writtenAt: string }>>;
-  search(args: { query: string; mode?: "grep" | "text"; prefix?: string; limit?: number }): WorkflowTransition<Array<{ path: string; source: "program" | "store"; lines: Array<{ line: number; text: string }> }>>;
+  list: TransitionCall<{ prefix?: string; source?: "program" | "store" }, DocumentEntry[]>;
+  read: TransitionCall<{ path: string; version?: number }, DocumentEntry & { text?: string }>;
+  write: TransitionCall<{ path: string; text: string; contentType?: string; ifVersion?: number }, DocumentEntry>;
+  delete: TransitionCall<{ path: string; ifVersion?: number }, { version: number }>;
+  history: TransitionCall<{ path: string }, Array<{ version: number; deleted: boolean; contentType: string; size: number; writtenBy: string; writtenAt: string }>>;
+  search: TransitionCall<{ query: string; mode?: "grep" | "text"; prefix?: string; limit?: number }, Array<{ path: string; source: "program" | "store"; lines: Array<{ line: number; text: string }> }>>;
 }
 
 export interface BoundaryContext<Input> {

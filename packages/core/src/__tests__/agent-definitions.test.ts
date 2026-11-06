@@ -111,6 +111,95 @@ describe("validateAgentDefinition", () => {
     ).toBe(true);
   });
 
+  it("takes sandboxing and each harness's own permission settings (ADR 0182)", () => {
+    expect(
+      validateAgentDefinition({
+        ...base,
+        sandboxing: "contained",
+        harnessPermissions: { permissionMode: "bypassPermissions" },
+      }),
+    ).toMatchObject({
+      definition: {
+        sandboxing: "contained",
+        harnessPermissions: { permissionMode: "bypassPermissions" },
+      },
+    });
+    for (const permissionMode of [
+      "default",
+      "acceptEdits",
+      "plan",
+      "auto",
+      "dontAsk",
+      "bypassPermissions",
+    ]) {
+      expect(
+        "definition" in
+          validateAgentDefinition({
+            ...base,
+            harnessPermissions: { permissionMode },
+          }),
+      ).toBe(true);
+    }
+    expect(
+      validateAgentDefinition({
+        ...base,
+        kind: "codex",
+        harnessPermissions: { sandbox: "read-only", approvals: "untrusted" },
+      }),
+    ).toMatchObject({
+      definition: {
+        harnessPermissions: { sandbox: "read-only", approvals: "untrusted" },
+      },
+    });
+    expect(validateAgentDefinition({ ...base, sandboxing: "edit" })).toEqual({
+      error: expect.stringContaining('at "sandboxing"'),
+    });
+  });
+
+  it("refuses permission settings the harness does not have", () => {
+    expect(
+      validateAgentDefinition({
+        ...base,
+        harnessPermissions: { sandbox: "workspace-write" },
+      }),
+    ).toEqual({
+      error:
+        "A claude-code agent takes 'permissionMode', not 'sandbox' at \"harnessPermissions.sandbox\"",
+    });
+    expect(
+      validateAgentDefinition({
+        ...base,
+        kind: "codex",
+        harnessPermissions: { permissionMode: "auto" },
+      }),
+    ).toEqual({
+      error: expect.stringContaining('at "harnessPermissions.permissionMode"'),
+    });
+    expect(
+      validateAgentDefinition({
+        ...base,
+        kind: "builtin",
+        harnessPermissions: { approvals: "never" },
+      }),
+    ).toEqual({
+      error: expect.stringContaining("has no harness permission settings"),
+    });
+    expect(
+      validateAgentDefinition({
+        ...base,
+        harnessPermissions: { permissionMode: "yolo" },
+      }),
+    ).toEqual({
+      error: expect.stringContaining('at "harnessPermissions.permissionMode"'),
+    });
+    expect(
+      validateAgentDefinition({
+        ...base,
+        harnessPermissions: { unknown: true },
+      }),
+    ).toEqual({ error: expect.stringContaining('"harnessPermissions"') });
+  });
+
   it("strips unknown top-level keys (forward compatibility)", () => {
     const result = validateAgentDefinition({ ...base, futureKnob: true });
     expect("definition" in result).toBe(true);
@@ -184,14 +273,41 @@ describe("definitionHash", () => {
     ).not.toBe(definitionHash(def, "p"));
   });
 
-  it("covers mode (ADR 0056) — widening access re-earns consent; the narrowing knobs don't", () => {
-    expect(definitionHash({ ...def, mode: "full-access" })).not.toBe(
+  it("covers sandboxing and the harness permission mode (ADR 0182); the narrowing knobs don't", () => {
+    expect(definitionHash({ ...def, sandboxing: "publish" })).not.toBe(
       definitionHash(def),
     );
-    // Hosts choose different defaults, so explicit edit and omission must
-    // invalidate cached authority independently.
-    expect(definitionHash({ ...def, mode: "edit" })).not.toBe(
+    // Hosts choose different defaults, so an explicit value and omission
+    // must invalidate cached authority independently.
+    expect(definitionHash({ ...def, sandboxing: "propose" })).not.toBe(
       definitionHash(def),
+    );
+    const bypass = definitionHash({
+      ...def,
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+    expect(bypass).not.toBe(definitionHash(def));
+    expect(bypass).not.toBe(
+      definitionHash({
+        ...def,
+        harnessPermissions: { permissionMode: "acceptEdits" },
+      }),
+    );
+    expect(
+      definitionHash({
+        ...def,
+        kind: "codex",
+        harnessPermissions: { sandbox: "danger-full-access" },
+      }),
+    ).not.toBe(
+      definitionHash({
+        ...def,
+        kind: "codex",
+        harnessPermissions: {
+          sandbox: "danger-full-access",
+          approvals: "never",
+        },
+      }),
     );
     // Memory and skills stay outside: nothing personal is widened.
     expect(definitionHash({ ...def, memory: true })).toBe(definitionHash(def));

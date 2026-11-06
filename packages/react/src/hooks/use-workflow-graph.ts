@@ -128,25 +128,20 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
         };
       });
 
-      const rfEdges: Edge[] = layouted.edges.map((edge) => {
-        const strokeColor =
-          edge.type === "branch-true"
-            ? "#22c55e"
-            : edge.type === "branch-false"
-              ? "#ef4444"
-              : edge.type === "parallel"
-                ? "#3b82f6"
-                : "#737373";
-        return {
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          label: edge.label,
-          type: "default",
-          animated: true,
-          style: { stroke: strokeColor, strokeDasharray: "6 3" },
-        };
-      });
+      // Edges are calm, solid token lines; only a decision's outcome is
+      // tinted. Themes restyle them through `.react-flow__edge-path`.
+      const rfEdges: Edge[] = layouted.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        type: "default",
+        ...(edge.type === "branch-true"
+          ? { style: { stroke: "var(--color-success, #4ade80)" } }
+          : edge.type === "branch-false"
+            ? { style: { stroke: "var(--color-danger, #f87171)" } }
+            : {}),
+      }));
 
       setNodes(rfNodes);
       setEdges(rfEdges);

@@ -6,6 +6,15 @@ directories:
   buildResources: build
   output: release
 afterPack: ./scripts/after-pack.mjs
+# These bits are changed before signing and checked in the actual release binary.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
 files:
   - out/**
   - package.json
@@ -18,6 +27,9 @@ files:
   - "!**/node_modules/@openai/codex-darwin-*/**"
   - "!**/node_modules/@openai/codex-linux-*/**"
   - "!**/node_modules/@openai/codex-win32-*/**"
+  # Only ASRT's Linux seccomp helper is used; no Windows or Java wrappers.
+  - "!**/node_modules/@anthropic-ai/sandbox-runtime/vendor/srt-win/**"
+  - "!**/node_modules/@anthropic-ai/sandbox-runtime/vendor/java-proxy-agent/**"
 extraResources:
   - from: ../pwa/dist
     to: pwa
@@ -40,30 +52,88 @@ publish:
   publishAutoUpdate: true
 # Packages that load assets or native code from disk at runtime must escape
 # the asar archive: pglite (wasm), microsandbox (NAPI addon + platform
-# binaries), catamorphic db migrations (.sql read via fs), and the runtime
-# dist files the stdio provider uploads into sandboxes.
+# binaries), sherpa-onnx (NAPI speech addon + onnxruntime libraries),
+# catamorphic db migrations (.sql read via fs), and the runtime dist files
+# the stdio provider uploads into sandboxes.
 asarUnpack:
+  - "**/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/**"
   - "**/node_modules/@electric-sql/pglite/**"
   - "**/node_modules/@lydell/node-pty*/**"
   - "**/node_modules/microsandbox/**"
   - "**/node_modules/@superradcompany/**"
+  - "**/node_modules/sherpa-onnx-*/**"
   - "**/node_modules/@catamorphic/db/migrations/**"
   - "**/node_modules/@catamorphic/runtime/dist/**"
 mac:
   extraFiles:
     - from: native/browser-import/bin/browser-keychain
       to: MacOS/browser-keychain
+    - from: native/voice-keys/bin/voice-keys
+      to: MacOS/voice-keys
+    - from: native/voice-quiet/bin/voice-quiet
+      to: MacOS/voice-quiet
   binaries:
     - Contents/MacOS/browser-keychain
+    - Contents/MacOS/voice-keys
+    - Contents/MacOS/voice-quiet
   category: public.app-category.developer-tools
-  icon: build/icon.icns
+  # Icon Composer source: packaging compiles it with Xcode 26's actool into
+  # the Assets.car macOS 26 draws, plus the icns earlier versions show.
+  icon: build/icon.icon
   minimumSystemVersion: "13.0"
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
   notarize: true
+  # Finder's Open With lists Work for what a tab renders and text the editor
+  # opens (BROWSER_FILE_TYPES and TEXT_FILE_TYPES in
+  # src/shared/surface-link.ts). Alternate: never the default unless the
+  # person picks it.
+  fileAssociations:
+    - name: PDF document
+      ext: [pdf]
+      role: Viewer
+      rank: Alternate
+    - name: Web page
+      ext: [html, htm]
+      role: Viewer
+      rank: Alternate
+    - name: Image
+      ext: [png, jpg, jpeg, gif, webp, avif, svg, ico]
+      role: Viewer
+      rank: Alternate
+    - name: Video
+      ext: [mp4, webm, mov]
+      role: Viewer
+      rank: Alternate
+    - name: Audio
+      ext: [mp3, wav, ogg, m4a]
+      role: Viewer
+      rank: Alternate
+    - name: Text
+      ext: [txt, log]
+      role: Editor
+      rank: Alternate
+    - name: Markdown
+      ext: [md, markdown]
+      role: Editor
+      rank: Alternate
+    - name: Data
+      ext: [json, csv, tsv, xml, yaml, yml, toml, ini]
+      role: Editor
+      rank: Alternate
+    - name: Source code
+      ext: [js, mjs, cjs, ts, tsx, jsx, css, sh, py, rb, go, rs, java, c, h, cpp, sql]
+      role: Editor
+      rank: Alternate
+    - name: Patch
+      ext: [diff, patch]
+      role: Editor
+      rank: Alternate
   extendInfo:
     NSLocalNetworkUsageDescription: Work uses your local network so your phone can continue this workspace.
+    NSMicrophoneUsageDescription: Work uses your microphone when you talk to it, and when a site you allow asks for it, such as a video call.
+    NSCameraUsageDescription: Work uses your camera when a site you allow asks for it, such as a video call.
   target:
     - target: dmg
       arch:

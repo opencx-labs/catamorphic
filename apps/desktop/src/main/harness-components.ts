@@ -3,6 +3,13 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { findPackageJSON } from "node:module";
 import path from "node:path";
+import type { ClaudeCodeInstallStatus } from "../shared/claude-code-install.js";
+import {
+  compareVersions,
+  type InstalledClaudeCodeFinder,
+} from "./installed-claude-code.js";
+
+export type { ClaudeCodeInstallStatus };
 
 export type DownloadableHarness = "claude-code" | "codex";
 export type DownloadableComponent = DownloadableHarness | "bun";
@@ -11,7 +18,11 @@ export interface HarnessExecutable {
   executablePath: string;
   /** Directories the Codex SDK normally prepends when resolving its package. */
   pathEntries: readonly string[];
-  source: "installed" | "downloaded";
+  /**
+   * `system`: the person's own install (ADR 0196); `installed`: a package
+   * beside the app (development); `downloaded`: Work's pinned copy.
+   */
+  source: "system" | "installed" | "downloaded";
 }
 
 /** Environment additions needed beside an explicitly selected executable. */
@@ -45,6 +56,10 @@ interface HarnessComponentStoreOptions {
   artifacts?: Partial<Record<DownloadableComponent, HarnessArtifact>>;
   fetchImpl?: typeof fetch;
   preferInstalled?: boolean;
+  /** The person's own Claude Code, preferred when new enough (ADR 0196). */
+  installedClaudeCode?: Pick<InstalledClaudeCodeFinder, "find" | "update">;
+  /** How long a download may go without a byte before it gives up. */
+  stallTimeoutMs?: number;
 }
 
 /** One tick of a first-use component download, for "Downloading… 42%" UI. */
@@ -56,6 +71,32 @@ export interface HarnessDownloadProgress {
   totalBytes: number;
 }
 
+/**
+ * A chat's activity line while its turn waits for first-use downloads,
+ * all of them at once, by the megabyte so a slow link still moves:
+ * "Downloading Claude Code and Bun: 63 of 124 MB", then "Setting up
+ * Claude Code and Bun" while the archives unpack.
+ */
+export function harnessDownloadLine(
+  downloads: readonly HarnessDownloadProgress[],
+): string {
+  const names = downloads.map((download) => download.displayName).join(" and ");
+  const received = downloads.reduce(
+    (sum, download) => sum + download.receivedBytes,
+    0,
+  );
+  const known = downloads.every((download) => download.totalBytes > 0);
+  const total = downloads.reduce(
+    (sum, download) => sum + download.totalBytes,
+    0,
+  );
+  if (known && received >= total) return `Setting up ${names}`;
+  const megabytes = (bytes: number) => Math.floor(bytes / 1_000_000);
+  return known
+    ? `Downloading ${names}: ${megabytes(received)} of ${Math.round(total / 1_000_000)} MB`
+    : `Downloading ${names}: ${megabytes(received)} MB`;
+}
+
 interface PlatformRelease {
   rustTarget: string;
   claudeIntegrity: `sha512-${string}`;
@@ -63,72 +104,84 @@ interface PlatformRelease {
   bunIntegrity: `sha512-${string}`;
 }
 
-const CLAUDE_VERSION = "0.3.263";
-const CODEX_VERSION = "0.153.4";
-const BUN_VERSION = "1.3.14";
+const CLAUDE_VERSION = "0.3.311";
+/**
+ * The Claude Code CLI release the bundled Agent SDK ships with: an installed
+ * Claude Code at this version or newer runs instead of Work's own copy
+ * (ADR 0196). scripts/harness-bump.ts moves it with CLAUDE_VERSION.
+ */
+export const CLAUDE_CODE_MIN_VERSION = "2.1.311";
+const CODEX_VERSION = "0.166.0";
+const BUN_VERSION = "1.4.4";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+/**
+ * A download that receives nothing for this long has stalled: a slow link
+ * still delivers bytes, a dropped one never errors by itself.
+ */
+const STALL_TIMEOUT_MS = 60_000;
 
 const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "darwin-arm64": {
     rustTarget: "aarch64-apple-darwin",
     claudeIntegrity:
-      "sha512-H4eLd4Tkx3rJkt739CHb+9AcaKiiOpibU4tYsmma47mV+2zAPjUyFxpuE2N57VSmpAgbLQxu44du0TFN+UH5dg==",
+      "sha512-pzlXQGLh3pH/oIAliApR79OIkTFTAGpWJpf1HLt5MocWPBxox/aoHVWOKHqbnYnmGrr54LwdG+E4V1boaQzyvA==",
     codexIntegrity:
-      "sha512-B1qhN3fa1ay0R0wGziXqgwSkB5icpYChNKHhtBHff/0UtSTC7z+l8aTtvMlGjH3E8HEvY3+njIJelM9CAAoVWg==",
+      "sha512-5fWH6qqUInACcRADIewjlnRxDb4QLe0uriwehiZz0+viuAAB8I+WWefqw4xwHvyKaxeiGX4uK56+vrgfvFk3FQ==",
     bunIntegrity:
-      "sha512-Omj20SuiHBOUjUBIyqtkNjSUIjOtEOJwmbix/ZyFH4BaQ6OZTaaRWIR4TjHVz0yadHgli6lLTiAh1uarnvD49A==",
+      "sha512-zW/hxwc8sJAILGwB5eTC4i48ouGXf0V4lrxmEOk3JIE6JkYVW1TZh1E2pIempqsezgW1sckTIIDudFON8bJ2Mw==",
   },
   "darwin-x64": {
     rustTarget: "x86_64-apple-darwin",
     claudeIntegrity:
-      "sha512-jKwmfkem1s/TcK7u83cJf2zLHMz846irV4vqYGUlo74uX2qfX57R4UsrCMlcTUMou/U9vQyNCc/Kk0s+zSxYRg==",
+      "sha512-xVoQD+ZwScwbPitYBmedm1/j3dUIyyLFB1zgk3q99YQXac6r6wAKR4HP+QTrrEwsQa0slePbE/Ljj/5u2z14nw==",
     codexIntegrity:
-      "sha512-vnSbbPzfoDZmmyzsxswsDDXQ06IVFBzkQU7/hroB3ji93Ok2utcsq8Psfk2tjF5r9mEx8RWFJhzuTGHG26/NDA==",
+      "sha512-Vj5wXJPizKmrzNtnRNQf9PP6FJkG3iJU/UO3NE4WvkENZGoQfmImdwf4MVRI5NgwjSuC6LT0HbBRHPVVnwGHuw==",
     bunIntegrity:
-      "sha512-FFj3QdU/OhlDyZOJ8CWfN5eWLpRlT4qjZg7lMQi7jA6GuoY5ajlO1zWLP/MuHYRSbXQUvV52RejNi8DVnAp13w==",
+      "sha512-oKGcxLsvh4oHjAo28nPm8c/xN0o/OmGyj1IHYc94vprkWsW2hNg2keEZt5f40cI5Hvu4jDlSRTR0UNpv1UIAxw==",
   },
   "linux-arm64": {
     rustTarget: "aarch64-unknown-linux-musl",
     claudeIntegrity:
-      "sha512-2KPY1wu1hdjpVsw+Tg3i50uhxhhetO1fB24wjUJAQJ8YPSogqO32UbtYPJ6I3F17lBNHb/Mq3nRYGAuSU5yjtg==",
+      "sha512-iCic3eanG/Cb6MZan0uiGzBExwVu3ZDABih5uR0iBQ/bVF0yXiG79EwwJC7DPzgu2RQghtECR+q6wx/+Z2YUHg==",
     codexIntegrity:
-      "sha512-QKdjYLYV4hXIuUQDP3P6F4NXuWFoKo9WUoV4nAREIx55kiUyi8UsYdsVobkeXir5n/maEQgYMCKLHVma4rNPiw==",
+      "sha512-w0ScAsBr9aZKtIFrh6HN6KU2yjKKeSCzYfbb7DB0Ccj4BYPzeZtUeQprbycLCwuX3AFQdbdjapmLho2iot74jQ==",
     bunIntegrity:
-      "sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw==",
+      "sha512-ZTVtpf9zmHSBVPX1sBwe5agGb/rN34yPGg/Hby8e2Ax2uCUA2URZKlZH7qLntK7qaFJCMXh9v0GWNYN2zINz1w==",
   },
   "linux-x64": {
     rustTarget: "x86_64-unknown-linux-musl",
     claudeIntegrity:
-      "sha512-un7HJzTT+DSQLgM33emQ0qHAwIY3CXIwe8JXoD9PaT7pdLepK4Ffa4r5j84pHTVS5uoGqxcf196tBgqb5/Z7FA==",
+      "sha512-yq7zMyESMnznCLTre5NRmyfedDp24I2c94DdCq9TCMRUQEhhW1Zb2UC9QAQP28ZzncP2dSs70EM8Nvp2+VBSqg==",
     codexIntegrity:
-      "sha512-x1EcwBlY3AObM1VTUHNM2AzAJQsyreGdagpF+qFiYi/Oa30VBktvvG0C6tLtCzqW6hjZNWkGZQWmeVk7MuJKWg==",
+      "sha512-CxDm3+D1cpbGJeHrdzINoG+3wn9BVncP4qpZaaNYkxe8iPtRJOYyCJnnPoVjWRIBvI9vPKbRoifsMSA5xDaUpw==",
     bunIntegrity:
-      "sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw==",
+      "sha512-CHbbkmHVM28T1GFq+6GL4Ao4ujwwYwj1CxFFwEFzLanPfNsId9AhbIP0Q4reWuWBkGimUkoQygrK7Rgjtj3vog==",
   },
   "win32-arm64": {
     rustTarget: "aarch64-pc-windows-msvc",
     claudeIntegrity:
-      "sha512-n8owOwNSSi7/KpONb/ut+uXRjBIp9N6EjwADiB+YygPwGRtpWP+PR/qFsGdTVBE5cpPwhgKVAf27xEZEfNvcSQ==",
+      "sha512-DEWpHyDg86ffG3I0hHxLTfrOshzGBea4mrhNxj43jpbyO1vl9de8KYlnazhruNPi6u6mxL5ly5ihhxeWuutE1A==",
     codexIntegrity:
-      "sha512-/FBh42976ltF1kxDoPQBg1Q6+hwChRU5/sm5dfeC8kFVQMvOCGoGeY5d8rRZGVJE8XojlXo74VQb0sHowcfgBw==",
+      "sha512-LWO1cyGlxbKgeUM7QJ1a6QMSsJi++3PqgIi6BmIUBoj/kzZqRIR69UDMQgeU/9izzJFYMSbwt++lHnUFyjQXlA==",
     bunIntegrity:
-      "sha512-T7s3x/BsVKQObGU6QDkZeI6wKynzqGbBH1yI77jrrj5siElclxr3DQrDIk8CV4G5/SJq2HHq4kpLyYY2DKCSmA==",
+      "sha512-n0ep5ZRPCZY1+dqFJpnnRUZB1wy4GYU6At8RF+pyzySCLjkN9R4rFh2PtBHAgF/lg1vOl3/CeER3pDM+p40ATA==",
   },
   "win32-x64": {
     rustTarget: "x86_64-pc-windows-msvc",
     claudeIntegrity:
-      "sha512-EwqzsOLxIJTX6RIXtQ21ekOKmYBNfwbtGtqaPqdWZGzpMbHaie8kGsM630h9RFaoxeytS/jbg8B3fPCdUKfhPw==",
+      "sha512-I92TwBhMkpc9pLwu1SwLiz6wqXkcmMPAdz4LgpwKAeyB5rum2GyZgYPIDTRYEpo3cX0nEP2qmyxtKEO/tLFfoA==",
     codexIntegrity:
-      "sha512-lMkB43kJZH0VFr+hoXc11qqR7QtQIbkr07ALgj4urKL1osNyUyuy1iXd3Vzz2iCYvBUCSw7I0l/W1cEPGx9euQ==",
+      "sha512-NS8Ps5oG5r19pCrMCUXwUqOui6odnUIoBlQkrjCJ+h1k6KiwCzC/+mI9d3nSZCqFoVONPBTmqyq8NYq3YaFGyA==",
     bunIntegrity:
-      "sha512-mUFWL3BoYkNpjd8e9PqROiFF/1Xeotq20mABJsiQH62jM1g5zqWh4khw1RZ6bX8Q8fWvlPaxG1PjofkmjUi3vg==",
+      "sha512-a3LNctBVO8PjePsFZfwDleF2JXYf2BfQ1u/PLRnBDLnC2Riml+4+LgJpKj4xRGhB92KweGyQI5PXaTkP9qypMQ==",
   },
 };
 
 /**
  * App-owned store for the large native payloads behind the Claude Code and
  * Codex SDKs. The TypeScript SDKs remain packaged and audited with the app;
- * only their exact, platform-specific executables arrive on first use.
+ * only their exact, platform-specific executables arrive on first use, and
+ * Claude Code's not at all when the person's own install is new enough.
  */
 export class HarnessComponentStore {
   private readonly rootDir: string;
@@ -137,6 +190,11 @@ export class HarnessComponentStore {
   >;
   private readonly fetchImpl: typeof fetch;
   private readonly preferInstalled: boolean;
+  private readonly installedClaudeCode?: Pick<
+    InstalledClaudeCodeFinder,
+    "find" | "update"
+  >;
+  private readonly stallTimeoutMs: number;
   private readonly pending = new Map<
     DownloadableComponent,
     Promise<HarnessExecutable>
@@ -151,6 +209,42 @@ export class HarnessComponentStore {
     this.artifacts = options.artifacts ?? platformArtifacts();
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.preferInstalled = options.preferInstalled ?? true;
+    this.installedClaudeCode = options.installedClaudeCode;
+    this.stallTimeoutMs = options.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+  }
+
+  /**
+   * Which Claude Code runs: the person's own when it is at least the
+   * version the bundled SDK ships with, else Work's pinned copy.
+   */
+  async claudeCodeStatus(): Promise<ClaudeCodeInstallStatus> {
+    const installed =
+      (await this.installedClaudeCode?.find().catch(() => null)) ?? null;
+    return {
+      using:
+        installed &&
+        compareVersions(installed.version, CLAUDE_CODE_MIN_VERSION) >= 0
+          ? "installed"
+          : "work",
+      installed,
+      minVersion: CLAUDE_CODE_MIN_VERSION,
+    };
+  }
+
+  /** Update the person's own Claude Code with its updater, when they ask. */
+  async updateInstalledClaudeCode(): Promise<{
+    output: string;
+    status: ClaudeCodeInstallStatus;
+  }> {
+    const before = await this.claudeCodeStatus();
+    if (!before.installed || !this.installedClaudeCode)
+      throw new Error("Claude Code is not installed on this computer.");
+    const output = await this.installedClaudeCode
+      .update(before.installed)
+      .catch((error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+      );
+    return { output, status: await this.claudeCodeStatus() };
   }
 
   /** Watch first-use downloads; silent when the component is already here. */
@@ -165,8 +259,17 @@ export class HarnessComponentStore {
     const artifact = this.artifacts[harness];
     if (!artifact) {
       throw new Error(
-        `${displayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
+        `${componentDisplayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
       );
+    }
+    if (harness === "claude-code") {
+      const status = await this.claudeCodeStatus();
+      if (status.using === "installed" && status.installed)
+        return {
+          executablePath: status.installed.executablePath,
+          pathEntries: [],
+          source: "system",
+        };
     }
     if (this.preferInstalled) {
       const installed = resolveInstalled(artifact);
@@ -225,9 +328,18 @@ export class HarnessComponentStore {
     );
     const archive = path.join(stagingDir, "component.tgz");
     const payload = path.join(stagingDir, "payload");
+    // Every byte restarts the clock, from the request until the body ends.
+    const stall = new AbortController();
+    let watchdog: NodeJS.Timeout | undefined;
+    const alive = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => stall.abort(), this.stallTimeoutMs);
+    };
     try {
+      alive();
       const response = await this.fetchImpl(artifact.tarballUrl, {
         redirect: "error",
+        signal: stall.signal,
       });
       if (!response.ok || !response.body) {
         throw new Error(`download returned HTTP ${response.status}`);
@@ -237,16 +349,26 @@ export class HarnessComponentStore {
         archive,
         artifact.integrity,
         (receivedBytes, totalBytes) => {
+          alive();
           for (const listener of this.progressListeners) {
-            listener({
-              harness,
-              displayName: artifact.displayName,
-              receivedBytes,
-              totalBytes,
-            });
+            // A watcher's mistake never fails the download others wait on.
+            try {
+              listener({
+                harness,
+                displayName: artifact.displayName,
+                receivedBytes,
+                totalBytes,
+              });
+            } catch (error) {
+              console.warn(
+                "[desktop] Download progress listener failed",
+                error,
+              );
+            }
           }
         },
       );
+      clearTimeout(watchdog);
       await fsPromises.mkdir(payload);
       const { x: extract } = await import("tar");
       await extract({
@@ -274,12 +396,17 @@ export class HarnessComponentStore {
       );
       return executableAt(finalDir, artifact, "downloaded");
     } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
+      const reason = stall.signal.aborted
+        ? `The download received nothing for ${Math.round(this.stallTimeoutMs / 1000)} seconds`
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
       throw new Error(
         `${artifact.displayName} needs a one-time component download. ${reason}. Check your internet connection and try again.`,
         { cause },
       );
     } finally {
+      clearTimeout(watchdog);
       await fsPromises.rm(stagingDir, { recursive: true, force: true });
     }
   }
@@ -451,7 +578,51 @@ async function writeVerifiedArchive(
   }
 }
 
-function displayName(harness: DownloadableComponent): string {
+/**
+ * What a turn waiting on `harness` hears while it gets ready: its first-use
+ * downloads (the harness's and Bun's), a line a second at most, and then
+ * that the harness is starting, which still takes a moment after a first
+ * download. Returns the function that ends the watch.
+ */
+export function watchHarnessDownloads({
+  store,
+  harness,
+  report,
+  now = Date.now,
+}: {
+  store: Pick<HarnessComponentStore, "onProgress">;
+  harness: DownloadableHarness;
+  report: (activity: string) => void;
+  now?: () => number;
+}): (ready: boolean) => void {
+  const downloads = new Map<DownloadableComponent, HarnessDownloadProgress>();
+  let reported = { line: "", at: Number.NEGATIVE_INFINITY };
+  const stop = store.onProgress((progress) => {
+    if (progress.harness !== harness && progress.harness !== "bun") return;
+    downloads.set(progress.harness, progress);
+    // The harness first, then Bun, whichever started first.
+    const line = harnessDownloadLine(
+      [...downloads.values()].sort(
+        (a, b) => Number(a.harness === "bun") - Number(b.harness === "bun"),
+      ),
+    );
+    if (
+      line === reported.line ||
+      (now() - reported.at < 1000 && !line.startsWith("Setting up"))
+    )
+      return;
+    reported = { line, at: now() };
+    report(line);
+  });
+  return (ready) => {
+    stop();
+    if (ready && reported.line)
+      report(`Starting ${componentDisplayName(harness)}`);
+  };
+}
+
+/** What the person calls a harness or component. */
+export function componentDisplayName(harness: DownloadableComponent): string {
   if (harness === "claude-code") return "Claude Code";
   return harness === "codex" ? "Codex" : "Bun";
 }

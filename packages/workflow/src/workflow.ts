@@ -10,6 +10,8 @@ import type {
   JsonValue,
   WorkflowTypeError,
 } from "./json.js";
+import type { WorkflowPermission } from "./permissions.js";
+import type { SecretHostOperations } from "./secret-operations.js";
 import type { SessionHostOperations } from "./session-operations.js";
 
 export interface RetryBackoff {
@@ -133,17 +135,20 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
   readonly controls?: WorkflowControls;
   readonly triggers?: readonly TriggerBinding<unknown>[];
   readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
+  readonly permissions?: readonly WorkflowPermission[];
 
   constructor(args: {
     steps: Steps;
     controls?: WorkflowControls;
     triggers?: readonly TriggerBinding<unknown>[];
     connections?: readonly (string | WorkflowConnectionRequirement)[];
+    permissions?: readonly WorkflowPermission[];
   }) {
     this.steps = args.steps;
     this.controls = args.controls;
     this.triggers = args.triggers;
     this.connections = args.connections;
+    this.permissions = args.permissions;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
   }
 }
@@ -177,10 +182,52 @@ export interface Pause {
   }): WorkflowTransition<ResumedPauseResult<Value, State>>;
 }
 
-export type CallWorkflow = <Input, Output>(
-  workflow: WorkflowDefinition<Input, Output>,
-  options: { input: Input },
-) => WorkflowTransition<Output>;
+/**
+ * What the next step receives from a call that carried state (ADR 0260):
+ * the call's result beside the state the boundary handed it. Without
+ * state, the next step receives the result alone.
+ */
+export interface Carried<Result, State> {
+  result: Result;
+  state: State;
+}
+
+/**
+ * `{ state }` handed to a returned call: JSON-compatible, checked at the
+ * call as `pause` checks its state, and at most {@link MAX_CARRIED_STATE_BYTES}
+ * once serialized.
+ */
+export type CarriedState<State> = { state: State } & AssertJsonCompatible<
+  State,
+  "Carried state must be JSON-compatible"
+>;
+
+/** The largest state a call carries, serialized as JSON (ADR 0260). */
+export const MAX_CARRIED_STATE_BYTES = 256 * 1024;
+
+/**
+ * A returned call (ADR 0260): pass `{ state }` as a second argument and
+ * the next step receives `{ result, state }`. State is JSON, persisted with
+ * the run; a retried step runs the call again with its state.
+ */
+export interface TransitionCall<Input, Output> {
+  <State>(
+    input: Input,
+    options: CarriedState<State>,
+  ): WorkflowTransition<Carried<Output, State>>;
+  (input: Input): WorkflowTransition<Output>;
+}
+
+export interface CallWorkflow {
+  <Input, Output, State>(
+    workflow: WorkflowDefinition<Input, Output>,
+    options: { input: Input } & CarriedState<State>,
+  ): WorkflowTransition<Carried<Output, State>>;
+  <Input, Output>(
+    workflow: WorkflowDefinition<Input, Output>,
+    options: { input: Input },
+  ): WorkflowTransition<Output>;
+}
 
 /**
  * Who triggered the run (ADR 0055): stamped by the host at trigger time from
@@ -200,12 +247,17 @@ export interface WorkflowCaller {
 /**
  * A host-executed call, returned from a boundary like `callWorkflow`
  * (ADR 0055): the boundary ends, the host runs the function with the run's
- * caller attached, and the result becomes the next step's input. Retries
- * of the step re-run the call — at-least-once, like any step IO.
+ * caller attached, and the result becomes the next step's input, or with
+ * `{ state }` its `result` beside that state (ADR 0260). Retries of the
+ * step re-run the call — at-least-once, like any step IO.
  */
-export type HostCall<Result = unknown> = <Args>(
-  args: Args,
-) => WorkflowTransition<Result>;
+export interface HostCall<Result = unknown> {
+  <Args, State>(
+    args: Args,
+    options: CarriedState<State>,
+  ): WorkflowTransition<Carried<Result, State>>;
+  <Args>(args: Args): WorkflowTransition<Result>;
+}
 
 /** `context.host.<capability…>.<fn>(args)`: dotted capability namespaces. */
 export interface HostNamespace {
@@ -241,25 +293,24 @@ export interface DocumentEntry {
  * as `callWorkflow`: return the call, receive the result in the next step.
  */
 export interface DocumentsCalls {
-  list(args: {
-    prefix?: string;
-    source?: "program" | "store";
-  }): WorkflowTransition<DocumentEntry[]>;
-  read(args: {
-    path: string;
-    version?: number;
-  }): WorkflowTransition<DocumentEntry & { text?: string }>;
-  write(args: {
-    path: string;
-    text: string;
-    contentType?: string;
-    ifVersion?: number;
-  }): WorkflowTransition<DocumentEntry>;
-  delete(args: {
-    path: string;
-    ifVersion?: number;
-  }): WorkflowTransition<{ version: number }>;
-  history(args: { path: string }): WorkflowTransition<
+  list: TransitionCall<
+    { prefix?: string; source?: "program" | "store" },
+    DocumentEntry[]
+  >;
+  read: TransitionCall<
+    { path: string; version?: number },
+    DocumentEntry & { text?: string }
+  >;
+  write: TransitionCall<
+    { path: string; text: string; contentType?: string; ifVersion?: number },
+    DocumentEntry
+  >;
+  delete: TransitionCall<
+    { path: string; ifVersion?: number },
+    { version: number }
+  >;
+  history: TransitionCall<
+    { path: string },
     Array<{
       version: number;
       deleted: boolean;
@@ -269,12 +320,13 @@ export interface DocumentsCalls {
       writtenAt: string;
     }>
   >;
-  search(args: {
-    query: string;
-    mode?: "grep" | "text";
-    prefix?: string;
-    limit?: number;
-  }): WorkflowTransition<
+  search: TransitionCall<
+    {
+      query: string;
+      mode?: "grep" | "text";
+      prefix?: string;
+      limit?: number;
+    },
     Array<{
       path: string;
       source: "program" | "store";
@@ -292,6 +344,7 @@ export interface BoundaryContext<Input> {
   /** Host-executed capability calls, caller-bound (ADR 0055). */
   readonly host: HostNamespace & {
     readonly "catamorphic.sessions": SessionHostOperations;
+    readonly "catamorphic.secrets": SecretHostOperations;
   };
   /** The documents surface, caller-bound (ADR 0055). */
   readonly documents: DocumentsCalls;
@@ -508,6 +561,12 @@ export function defineWorkflow<
     readonly controls?: WorkflowControls;
     readonly triggers?: Triggers;
     readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
+    /**
+     * Project permissions this workflow's runs need (ADR 0158), shown when
+     * it is turned on: e.g. `sessions:read` to read everyone's chats. A run
+     * gets only what it declares, and only while its owner may grant it.
+     */
+    readonly permissions?: readonly WorkflowPermission[];
   } & ValidateSteps<Steps> &
     ValidateTriggers<
       Triggers,
@@ -525,5 +584,6 @@ export function defineWorkflow<
     controls: definition.controls,
     triggers: definition.triggers,
     connections: definition.connections,
+    permissions: definition.permissions,
   });
 }

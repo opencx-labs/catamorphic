@@ -1,78 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { SEED_SKILLS } from "../seeds.js";
 import {
-  activityLabel,
   buildAgentSystemPrompt,
-  modelVisibleDelivery,
+  checkpointMessage,
+  liveStatusLine,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
 
-describe("modelVisibleDelivery", () => {
-  it("preserves human text and labels non-user input for the model", () => {
-    expect(
-      modelVisibleDelivery("Please continue", {
-        kind: "user",
-        externalUserId: "alice",
-      }),
-    ).toBe("Please continue");
-    expect(
-      modelVisibleDelivery("Checks failed", {
-        kind: "watcher",
-        watcherId: "watcher-1",
-        runId: "run-1",
-      }),
-    ).toBe(
-      "[Catamorphic watcher message from watcher-1, run run-1. This message was not written by the user.]\n\nChecks failed",
+describe("liveStatusLine", () => {
+  it("turns an agent's own words into one calm line", () => {
+    expect(liveStatusLine("**Reviewing database migrations**")).toBe(
+      "Reviewing database migrations",
     );
-  });
-});
-
-describe("activityLabel", () => {
-  it("keeps the live line calm: no paths, no raw commands, no tool names", () => {
-    expect(activityLabel({ type: "done" })).toBe("Thinking...");
-    // File names never surface on the live line — the event log has them.
-    expect(
-      activityLabel({ type: "file_edit", filePath: "src/workflow.ts" }),
-    ).toBe("Editing files...");
-    expect(activityLabel({ type: "tool_call", toolName: "read" })).toBe(
-      "Working...",
+    expect(liveStatusLine("Run the test suite.\nThen fix it")).toBe(
+      "Run the test suite. Then fix it",
     );
-    // Preamble text never rides the live line — it lands as the message
-    // itself when the segment flushes; showing it here would duplicate it.
-    expect(
-      activityLabel({
-        type: "text",
-        content: "I'll start by reviewing the schema.",
-      }),
-    ).toBe("Writing...");
-  });
-
-  it("pretty-prints well-known commands and hides the rest", () => {
-    expect(activityLabel({ type: "command", content: "sleep 5" })).toBe(
-      "Waiting...",
-    );
-    expect(
-      activityLabel({ type: "command", content: "find . -name '*.ts'" }),
-    ).toBe("Searching files...");
-    expect(activityLabel({ type: "command", content: "bun test" })).toBe(
-      "Running scripts...",
-    );
-    // Wrappers and env assignments don't hide the real program.
-    expect(
-      activityLabel({ type: "command", content: "FOO=1 env git status" }),
-    ).toBe("Working with git...");
-    // Compound commands classify by what runs first.
-    expect(
-      activityLabel({ type: "command", content: "ls -la && ./deploy.sh" }),
-    ).toBe("Looking around...");
-    // Unknown programs stay generic instead of leaking the command line.
-    expect(
-      activityLabel({
-        type: "command",
-        content: "./scripts/migrate.sh --force",
-      }),
-    ).toBe("Working...");
-    expect(activityLabel({ type: "command" })).toBe("Working...");
+    expect(liveStatusLine("   ")).toBeUndefined();
+    expect(liveStatusLine(undefined)).toBeUndefined();
+    expect(liveStatusLine("x".repeat(200))?.length).toBe(80);
   });
 });
 
@@ -121,8 +66,8 @@ describe("parsePorcelain", () => {
 describe("seed skill set", () => {
   // Workflow authoring is exercised in workflow-skill-recipes.test.ts.
   it("splits app mechanics from app doctrine (ADR 0049)", () => {
-    const mechanics = SEED_SKILLS[".catamorphic/skills/building-apps/SKILL.md"];
-    const doctrine = SEED_SKILLS[".catamorphic/skills/designing-apps/SKILL.md"];
+    const mechanics = SEED_SKILLS[".work/skills/building-apps/SKILL.md"];
+    const doctrine = SEED_SKILLS[".work/skills/designing-apps/SKILL.md"];
     expect(mechanics).toBeDefined();
     expect(doctrine).toBeDefined();
 
@@ -188,5 +133,17 @@ describe("buildAgentSystemPrompt", () => {
       }),
     ).toBe("Use the host's billing plugin.");
     expect(buildAgentSystemPrompt({ standingPrompt: false })).toBe("");
+  });
+});
+
+describe("checkpointMessage", () => {
+  it("names a turn by the first line of its request", () => {
+    expect(checkpointMessage("Fix the login page\nIt 500s")).toBe(
+      "Agent: Fix the login page",
+    );
+    expect(checkpointMessage("  Deploy is live: done")).toBe(
+      "Agent: Deploy is live: done",
+    );
+    expect(checkpointMessage("")).toBe("Agent checkpoint");
   });
 });

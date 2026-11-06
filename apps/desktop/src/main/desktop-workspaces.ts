@@ -1,29 +1,73 @@
+import { randomUUID } from "node:crypto";
 import {
   app,
   autoUpdater,
   BrowserWindow,
-  ipcMain,
-  Menu,
+  dialog,
   screen,
   type WebContents,
 } from "electron";
 import { z } from "zod";
+import type { ChatSessionAction } from "../shared/chat-session-actions.js";
 import type {
   ChatDraft,
+  DockAction,
   DockCommand,
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceInitial,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
+import { SHELL_WINDOW_CLOSE_CHANNEL } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
   type DockRegion,
   type DockSize,
+  dockLanding,
   dockPosition,
+  fitDockSize,
 } from "../shared/dock-position.js";
+import type { MenuItem } from "../shared/menu.js";
+import { dockClicks } from "./dock-clicks.js";
 import type { WindowProfileRegistry } from "./index.js";
+import { popupNativeMenu } from "./native-menu.js";
 import type { ProfileConfigManager } from "./profile-config.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
+import type { WindowStateStore, WorkspaceWindowState } from "./window-state.js";
+
+const dockShapeSchema = z
+  .array(
+    z.object({
+      x: z.number().int().min(0),
+      y: z.number().int().min(0),
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+    }),
+  )
+  .max(256)
+  .nullable();
+
+/** How long focus may be in no window while it passes between two. */
+const FOCUS_SETTLE_MS = 150;
+
+/**
+ * How long a window may take to let a project go before that window comes
+ * forward, so the request is seen to land; a later answer still moves it.
+ */
+const RELEASE_SLOW_MS = 3_000;
+/** A window that never answers keeps the project. */
+const RELEASE_ABANDON_MS = 30_000;
+/** How long agent calls for a moving project wait for its new window. */
+const ARRIVAL_TIMEOUT_MS = 15_000;
+/** Chat verbs that show something in the chat's window, not in the dock. */
+const WINDOW_VERBS: ReadonlySet<ChatSessionAction> = new Set([
+  "rename",
+  "new-subsession",
+  "archive",
+  "open-terminal",
+  "open-preview",
+]);
 
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
@@ -36,12 +80,29 @@ export class DesktopWorkspaces {
   private readonly activeChats = new Map<string, string>();
   private readonly floating = new Map<string, BrowserWindow>();
   private readonly lastWindows = new Map<string, BrowserWindow>();
+  private readonly workspaces = new WeakSet<BrowserWindow>();
   private readonly dockExpanded = new Map<string, boolean>();
   private readonly dockDrags = new Map<
     string,
     { x: number; left: number; side: "left" | "right" }
   >();
   private quitting = false;
+  private quitGeneration = 0;
+  private preparingQuit: Promise<void> | undefined;
+  private flushing: Promise<void> | undefined;
+  private readonly renderers = new Set<number>();
+  private readonly flushRequests = new Map<
+    number,
+    {
+      requestId: string;
+      finish: (error?: string) => void;
+    }
+  >();
+  /**
+   * Focus left the app, not just passed between its windows; so too at
+   * launch, until a window first has it.
+   */
+  private focusLeftApp = true;
   // Detaching is a session choice; the `dockDetached` preference is only
   // the state a fresh launch starts in. Closing the detached window or
   // picking "Return dock to the window" never rewrites that default.
@@ -50,30 +111,98 @@ export class DesktopWorkspaces {
   // one of them is in front, the detached dock rests inside its region.
   private readonly dockRegions = new Map<number, DockRegion>();
   private readonly drafts = new Map<string, ChatDraft>();
-  private readonly initialProjects = new Map<number, string>();
+  /** Projects on their way to a window of their own, by project id. */
+  private readonly releases = new Map<
+    string,
+    { owner: WebContents; settle: (released: boolean) => void }
+  >();
+  /**
+   * What a moving project's workspace was as its old window let it go,
+   * shells and unsent chats included, for its new window alone to open
+   * once. Kept here, never on disk: a restart opens the saved workspace.
+   */
+  private readonly handoffs = new Map<string, unknown>();
+  /** Moves under way, settled once the project shows somewhere again. */
+  private readonly arrivals = new Map<
+    string,
+    { promise: Promise<void>; arrive: () => void }
+  >();
 
   constructor(
     private readonly options: {
       windows: WindowProfileRegistry;
       config: ProfileConfigManager;
+      windowState: WindowStateStore;
       profileForProject: (projectId: string) => string;
+      projectExists: (projectId: string) => Promise<boolean>;
+      onQuitCancelled: () => void;
       createWindow: (
         profileId: string,
         dock?: boolean,
         projectId?: string,
+        placement?: {
+          cascadeFrom?: BrowserWindow;
+          restored?: WorkspaceWindowState;
+          focus?: boolean;
+        },
       ) => BrowserWindow;
+      /**
+       * A project's old window let it go: its shells there wait for the
+       * new window to take them over (terminal.ts handOff).
+       */
+      onReleased?: (projectId: string, from: WebContents) => void;
     },
   ) {
-    app.on("before-quit", () => {
-      this.quitting = true;
+    ipcMain.on(SHELL_WINDOW_CLOSE_CHANNEL, (event) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (
+        !window ||
+        window.webContents !== event.sender ||
+        (!this.isWorkspace(window) && !this.isDock(window))
+      )
+        return;
+      // The native close event owns hiding retained work and returning the dock.
+      window.close();
+    });
+    app.on("before-quit", (event) => {
+      if (this.quitting) return;
+      event.preventDefault();
+      if (this.preparingQuit) return;
+      const generation = this.quitGeneration;
+      void this.prepareQuit()
+        .then(() => {
+          // Electron commits its native quit state after the JS callback's
+          // microtasks. Reentering Quit there can close every guest/window
+          // and then have the cancelled outer attempt clear that state.
+          setImmediate(() => {
+            if (generation === this.quitGeneration && this.quitting) app.quit();
+          });
+        })
+        .catch((error: unknown) => {
+          if (generation !== this.quitGeneration) return;
+          this.resume();
+          dialog.showErrorBox(
+            "Work could not save its workspace",
+            error instanceof Error ? error.message : "Try quitting again.",
+          );
+        });
     });
     // An update restart closes every window without a before-quit; the
     // hide-on-close below would cancel it and the app would sit on
     // "Preparing to restart" forever.
     autoUpdater.on("before-quit-for-update", () => {
+      options.windowState.freeze();
       this.quitting = true;
     });
+    // Focus passes between windows through none at all for a moment (on
+    // X11, from the workspace to the dock): only focus still gone a moment
+    // after a blur left the app, and any window taking it, the dock's own
+    // included, means it did not.
+    let leftApp: ReturnType<typeof setTimeout> | undefined;
     app.on("browser-window-focus", (_event, window) => {
+      if (!this.isWorkspace(window) && !this.isDock(window)) return;
+      clearTimeout(leftApp);
+      this.focusLeftApp = false;
       const profileId = options.windows.profileFor(window.webContents);
       if (this.floating.get(profileId) === window) return;
       this.lastWindows.delete(profileId);
@@ -83,13 +212,15 @@ export class DesktopWorkspaces {
       this.syncFloating(profileId);
     });
     app.on("browser-window-blur", () => {
-      // Focus settles a tick later; when it left the app, the dock returns
-      // to the display's work area.
-      setTimeout(() => {
-        if (BrowserWindow.getFocusedWindow()) return;
+      // When focus left the app, the dock returns to the display's work
+      // area.
+      clearTimeout(leftApp);
+      leftApp = setTimeout(() => {
+        if (this.quitting || BrowserWindow.getFocusedWindow()) return;
+        this.focusLeftApp = true;
         for (const profileId of this.floating.keys())
           this.syncFloating(profileId);
-      }, 0);
+      }, FOCUS_SETTLE_MS);
     });
     options.config.onPrefsChanged((profileId, prefs) => {
       // A changed default wins over the session choice made before it.
@@ -103,30 +234,11 @@ export class DesktopWorkspaces {
     // the picked action.
     ipcMain.handle(
       "catamorphic:dock-menu",
-      (
-        event,
-        entries: Array<{ label: string; action: string; danger?: boolean }>,
-      ) => {
+      (event, entries: readonly MenuItem[]) => {
         const profileId = options.windows.profileFor(event.sender);
         const window = this.floating.get(profileId);
         if (!window || window.webContents !== event.sender) return null;
-        return new Promise<string | null>((resolve) => {
-          let picked: string | null = null;
-          Menu.buildFromTemplate(
-            entries.map((entry) => ({
-              label: entry.label,
-              click: () => {
-                picked = entry.action;
-              },
-            })),
-          ).popup({
-            // At the cursor: window-relative coordinates land off target on
-            // the transparent strip, and a right-click puts the cursor here.
-            window,
-            // Closing fires before click on some platforms; settle after both.
-            callback: () => setTimeout(() => resolve(picked), 0),
-          });
-        });
+        return popupNativeMenu(window, entries);
       },
     );
     ipcMain.handle(
@@ -148,8 +260,22 @@ export class DesktopWorkspaces {
       const profileId = options.windows.profileFor(event.sender);
       this.setDetached(profileId, detached === true);
     });
-    ipcMain.handle("catamorphic:workspace-initial", (event) =>
-      this.initialProjects.get(event.sender.id),
+    ipcMain.handle("catamorphic:workspace-initial", async (event) => {
+      // A project may have been removed while Work was not running. The
+      // saved claim reserves it until the real project record is checked.
+      const initial = this.workspace(event.sender);
+      for (const projectId of initial.projectIds)
+        if (!(await options.projectExists(projectId))) this.forget(projectId);
+      this.renderers.add(event.sender.id);
+      return this.workspace(event.sender);
+    });
+    ipcMain.handle(
+      "catamorphic:workspace-flushed",
+      (event, requestId: unknown, error?: unknown) => {
+        const pending = this.flushRequests.get(event.sender.id);
+        if (!pending || pending.requestId !== requestId) return;
+        pending.finish(typeof error === "string" ? error : undefined);
+      },
     );
     ipcMain.handle("catamorphic:dock-draft-get", (event, localId: string) => {
       const chat = this.chats.get(localId);
@@ -176,7 +302,8 @@ export class DesktopWorkspaces {
     );
     ipcMain.handle(
       "catamorphic:workspace-claim",
-      (event, projectId: string) => {
+      async (event, projectId: string) => {
+        if (!(await options.projectExists(projectId))) return false;
         if (
           options.profileForProject(projectId) !==
           options.windows.profileFor(event.sender)
@@ -184,34 +311,79 @@ export class DesktopWorkspaces {
           return false;
         const owner = this.owner(projectId);
         if (owner && owner !== event.sender) return false;
+        // On its way to a window of its own, it is nobody else's meanwhile.
+        if (this.releases.has(projectId)) return false;
         this.owners.set(projectId, event.sender);
+        options.windowState.changed();
         return true;
       },
     );
-    ipcMain.handle("catamorphic:workspace-navigate", (event, raw: unknown) => {
-      const input = z
-        .object({
-          projectId: z.string(),
-          newWindow: z.boolean().optional(),
-          surface: z
-            .object({
-              url: z.string().max(8192),
-              title: z.string().max(4096),
-              mode: z.enum(["replace", "tab", "side", "floating"]),
-              nonce: z.string().max(128),
-              open: z.enum(["page", "browser"]).optional(),
-            })
-            .optional(),
-        })
-        .parse(raw);
-      this.navigate({ ...input, sender: event.sender });
-    });
+    ipcMain.handle(
+      "catamorphic:workspace-handoff-put",
+      (event, projectId: unknown, snapshot: unknown) => {
+        if (typeof projectId !== "string") return;
+        if (this.releases.get(projectId)?.owner !== event.sender) return;
+        this.handoffs.set(projectId, snapshot);
+      },
+    );
+    ipcMain.handle(
+      "catamorphic:workspace-handoff-take",
+      (event, projectId: unknown) => {
+        if (typeof projectId !== "string") return null;
+        if (this.owner(projectId) !== event.sender) return null;
+        const snapshot = this.handoffs.get(projectId) ?? null;
+        this.handoffs.delete(projectId);
+        return snapshot;
+      },
+    );
+    ipcMain.handle(
+      "catamorphic:workspace-navigate",
+      async (event, raw: unknown) => {
+        const input = z
+          .object({
+            projectId: z.string(),
+            newWindow: z.boolean().optional(),
+            surface: z
+              .object({
+                url: z.string().max(8192),
+                title: z.string().max(4096),
+                mode: z.enum(["replace", "tab", "side", "floating"]),
+                nonce: z.string().max(128),
+                open: z.enum(["page", "browser"]).optional(),
+              })
+              .optional(),
+          })
+          .parse(raw);
+        if (await options.projectExists(input.projectId))
+          this.navigate({ ...input, sender: event.sender });
+      },
+    );
+    ipcMain.handle(
+      "catamorphic:workspace-release",
+      (event, projectId: unknown, released: unknown) => {
+        if (typeof projectId !== "string") return;
+        const pending = this.releases.get(projectId);
+        if (pending?.owner !== event.sender) return;
+        pending.settle(released === true);
+      },
+    );
     ipcMain.handle(
       "catamorphic:workspace-active",
       (event, projectId: string) => {
         if (this.owner(projectId) !== event.sender) return;
         this.activeProjects.set(event.sender.id, projectId);
+        options.windowState.changed();
         this.broadcast(options.windows.profileFor(event.sender));
+      },
+    );
+    // A window has opened a project's workspace (restored, a move's
+    // hand-off taken): agent calls for it can go there now.
+    ipcMain.handle(
+      "catamorphic:workspace-ready",
+      (event, projectId: unknown) => {
+        if (typeof projectId !== "string") return;
+        if (this.owner(projectId) !== event.sender) return;
+        this.arrivals.get(projectId)?.arrive();
       },
     );
     ipcMain.handle("catamorphic:dock-publish", (event, data: DockData) => {
@@ -243,7 +415,9 @@ export class DesktopWorkspaces {
       (event, projectId: string, localId: string) => {
         if (this.owner(projectId) !== event.sender) return;
         this.chats.delete(localId);
-        this.drafts.delete(localId);
+        // A chat leaving with its project for another window keeps what
+        // was typed in it.
+        if (!this.releases.has(projectId)) this.drafts.delete(localId);
         const profileId = options.windows.profileFor(event.sender);
         if (this.activeChats.get(profileId) === localId)
           this.activeChats.delete(profileId);
@@ -268,7 +442,10 @@ export class DesktopWorkspaces {
           ["surface", "mcpApp", "link", "file", "focus", "unsplit"].includes(
             action.kind,
           ) ||
-          (action.kind === "entry" && action.entry.mode === "tab")
+          (action.kind === "entry" && action.entry.mode === "tab") ||
+          // A verb that shows something in the chat's window (a rename or
+          // subsession dialog, a terminal) brings that window forward.
+          (action.kind === "menu" && WINDOW_VERBS.has(action.entry.action))
         ) {
           this.navigate({
             sender: event.sender,
@@ -311,33 +488,41 @@ export class DesktopWorkspaces {
       else this.activeChats.delete(profileId);
       this.broadcast(profileId);
     });
-    ipcMain.handle("catamorphic:dock-new-chat", (event) => {
+    ipcMain.handle("catamorphic:dock-new-chat", (event, input: unknown) => {
       const snapshot = this.snapshot(event.sender);
       const owner = snapshot.activeProjectId
         ? this.owner(snapshot.activeProjectId)
         : undefined;
+      // Cmd+N in a workspace window is that window's Cmd+N: a New Tab in
+      // front takes the chat. The dock's + and the detached dock keep it.
+      const shortcut =
+        z.object({ shortcut: z.literal(true) }).safeParse(input).success &&
+        !snapshot.detached;
       if (owner && snapshot.activeProjectId)
         owner.send("catamorphic:workspace-event", {
           kind: "newChat",
           projectId: snapshot.activeProjectId,
+          ...(shortcut ? { shortcut: true } : {}),
         } satisfies WorkspaceEvent);
     });
     ipcMain.handle(
       "catamorphic:dock-action",
-      (
-        event,
-        localId: string,
-        action: "close" | "minimize" | "send",
-        message?: string,
-      ) => {
+      (event, localId: string, action: DockAction, message?: string) => {
         const chat = this.chats.get(localId);
         if (!chat || !this.sameProfile(event.sender, chat.owner)) return;
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
-        const target =
-          floating && this.detached(profileId)
-            ? floating.webContents
-            : event.sender;
+        // The detached dock shows floating chats; a chat in a tab is shown
+        // by its workspace window, which the action goes to instead.
+        const inDock =
+          floating &&
+          this.detached(profileId) &&
+          chat.data.entry.mode !== "tab";
+        const target = inDock ? floating.webContents : event.sender;
+        // Keys follow the chips or composer an action focuses: the detached
+        // dock's window takes the keyboard first.
+        if (inDock && (action === "focusChips" || action === "focusComposer"))
+          floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",
           localId,
@@ -348,16 +533,58 @@ export class DesktopWorkspaces {
     );
     // The detached dock carries transparent headroom above its strip so
     // hints can open above bubbles. The renderer reports whether the pointer
-    // is over content; over empty space the window lets clicks through.
+    // is over content; over empty space the window lets clicks through where
+    // the platform keeps forwarding pointer moves to it (macOS, Windows).
+    // Linux does not forward: an ignoring window loses the pointer at once,
+    // its leave restores input, and the next move ignores again, dozens of
+    // times a second while the pointer rests. There the window is shaped to
+    // its content instead (dock-shape below; see dockClicks). Answers
+    // whether clicks now pass through.
     ipcMain.handle(
       "catamorphic:dock-ignore-mouse",
       (event, ignore: boolean) => {
         const profileId = options.windows.profileFor(event.sender);
         const window = this.floating.get(profileId);
-        if (!window || window.webContents !== event.sender) return;
-        window.setIgnoreMouseEvents(ignore === true, { forward: true });
+        if (!window || window.webContents !== event.sender) return false;
+        const passThrough = ignore === true && dockClicks() === "pass-through";
+        window.setIgnoreMouseEvents(passThrough, { forward: true });
+        return passThrough;
       },
     );
+    // Where clicks cannot pass through (Linux on X11), the window takes the
+    // shape of what the dock draws, so its empty space is simply not the
+    // dock's: clicks there reach whatever is behind, and nothing flickers.
+    // Wayland has no window shapes in Electron, so there the dock keeps its
+    // clicks. Answers whether the shape was applied. The renderer measures
+    // in CSS pixels; the window is shaped in window pixels.
+    ipcMain.handle("catamorphic:dock-shape", (event, raw: unknown) => {
+      if (dockClicks() !== "shape") return false;
+      const profileId = options.windows.profileFor(event.sender);
+      const window = this.floating.get(profileId);
+      if (!window || window.webContents !== event.sender) return false;
+      const rects = dockShapeSchema.parse(raw);
+      const zoom = window.webContents.getZoomFactor();
+      const scaled = rects?.map((rect) => {
+        const x = Math.floor(rect.x * zoom);
+        const y = Math.floor(rect.y * zoom);
+        return {
+          x,
+          y,
+          width: Math.ceil((rect.x + rect.width) * zoom) - x,
+          height: Math.ceil((rect.y + rect.height) * zoom) - y,
+        };
+      });
+      // An empty list restores the whole window, so "nothing drawn" is one
+      // transparent pixel in the corner.
+      window.setShape(
+        scaled === undefined
+          ? []
+          : scaled.length > 0
+            ? scaled
+            : [{ x: 0, y: 0, width: 1, height: 1 }],
+      );
+      return true;
+    });
     ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {
       const profileId = options.windows.profileFor(event.sender);
       const window = this.floating.get(profileId);
@@ -369,14 +596,7 @@ export class DesktopWorkspaces {
       )
         return;
       const area = this.dockArea(profileId, window);
-      const nextHeight = Math.max(
-        64,
-        Math.min(Math.round(size.height), area.height),
-      );
-      const nextWidth = Math.max(
-        100,
-        Math.min(Math.round(size.width), area.width),
-      );
+      const { width: nextWidth, height: nextHeight } = fitDockSize(size, area);
       this.dockExpanded.set(profileId, size.expanded === true);
       const prefs = options.config.forProfile(profileId).prefs.load();
       window.setBounds({
@@ -432,27 +652,66 @@ export class DesktopWorkspaces {
         return;
       }
       if (input.phase !== "end" && input.phase !== "cancel") return;
+      const landing =
+        input.size &&
+        Number.isFinite(input.size.width) &&
+        Number.isFinite(input.size.height)
+          ? { ...fitDockSize(input.size, area), expanded: input.size.expanded }
+          : null;
+      if (landing) this.dockExpanded.set(profileId, landing.expanded === true);
+      const { width, height } = landing ?? bounds;
       // Collapsed drags pick a corner; expanded drags pick where open chats
-      // sit: left, center or right thirds of the display.
+      // sit: left, center or right. The strip lands on the spot nearest its
+      // centre, as in a workspace window (shared/dock-position.ts).
       const expanded = this.dockExpanded.get(profileId) === true;
       const current = prefs.load();
+      // Where the strip is let go, not where the last move left it: a
+      // coalesced final move must not skew the landing.
+      const centre =
+        Math.max(
+          area.x,
+          Math.min(
+            area.x + area.width - bounds.width,
+            drag.left + input.screenX - drag.x,
+          ),
+        ) +
+        bounds.width / 2;
+      const restsAt = (spot: "left" | "center" | "right") =>
+        dockPosition({
+          area,
+          width: bounds.width,
+          height: bounds.height,
+          side: spot === "right" ? "right" : "left",
+          centered: spot === "center",
+        }).x +
+        bounds.width / 2;
       const side =
         input.phase === "cancel"
           ? drag.side
-          : input.screenX < area.x + area.width / 2
-            ? "left"
-            : "right";
+          : (dockLanding({
+              from: drag.side,
+              centre,
+              spots: [
+                { spot: "left", at: restsAt("left") },
+                { spot: "right", at: restsAt("right") },
+              ],
+            }) ?? drag.side);
       const placement =
         input.phase === "cancel"
           ? current.dockPlacement
-          : input.screenX < area.x + area.width / 3
-            ? "left"
-            : input.screenX > area.x + (area.width * 2) / 3
-              ? "right"
-              : "center";
+          : (dockLanding({
+              from: current.dockPlacement,
+              centre,
+              spots: [
+                { spot: "left", at: restsAt("left") },
+                { spot: "center", at: restsAt("center") },
+                { spot: "right", at: restsAt("right") },
+              ],
+            }) ?? current.dockPlacement);
       const position = dockPosition({
         area,
-        ...bounds,
+        width,
+        height,
         side: expanded && placement !== "center" ? placement : side,
         centered: expanded && placement === "center",
       });
@@ -463,9 +722,115 @@ export class DesktopWorkspaces {
         } else if (current.dockSide !== side) prefs.save({ dockSide: side });
       } finally {
         this.dockDrags.delete(profileId);
-        window.setPosition(position.x, position.y, !input.reducedMotion);
+        window.setBounds({ ...position, width, height }, !input.reducedMotion);
       }
     });
+  }
+
+  /** Flush the current per-project savers in every initialized workspace. */
+  flush(): Promise<void> {
+    if (this.flushing) return this.flushing;
+    const requests = BrowserWindow.getAllWindows()
+      .filter(
+        (window) =>
+          this.isWorkspace(window) &&
+          !window.isDestroyed() &&
+          this.renderers.has(window.webContents.id),
+      )
+      .map(
+        (window) =>
+          new Promise<void>((resolve, reject) => {
+            const contents = window.webContents;
+            const contentsId = contents.id;
+            const requestId = randomUUID();
+            const gone = () =>
+              finish(
+                "A workspace closed before its changes were saved. Try quitting again.",
+              );
+            const finish = (error?: string) => {
+              clearTimeout(timer);
+              contents.removeListener("destroyed", gone);
+              if (this.flushRequests.get(contentsId)?.requestId === requestId)
+                this.flushRequests.delete(contentsId);
+              if (error) reject(new Error(error));
+              else resolve();
+            };
+            const timer = setTimeout(
+              () =>
+                finish(
+                  "A workspace did not finish saving. Try quitting again.",
+                ),
+              15_000,
+            );
+            contents.once("destroyed", gone);
+            this.flushRequests.set(contentsId, { requestId, finish });
+            contents.send("catamorphic:workspace-event", {
+              kind: "flush",
+              requestId,
+            } satisfies WorkspaceEvent);
+          }),
+      );
+    const flushing = Promise.all(requests)
+      .then(() => {})
+      .finally(() => {
+        for (const pending of this.flushRequests.values())
+          pending.finish("Workspace saving was cancelled.");
+        if (this.flushing === flushing) this.flushing = undefined;
+      });
+    this.flushing = flushing;
+    return flushing;
+  }
+
+  /** Native teardown starts only after current renderer saves are acknowledged. */
+  prepareQuit(): Promise<void> {
+    if (this.quitting) return Promise.resolve();
+    if (this.preparingQuit) return this.preparingQuit;
+    const generation = this.quitGeneration;
+    const preparing = this.flush()
+      .then(() => {
+        if (generation !== this.quitGeneration)
+          throw new Error("Quitting was cancelled.");
+        this.options.windowState.freeze();
+        this.quitting = true;
+      })
+      .finally(() => {
+        if (this.preparingQuit === preparing) this.preparingQuit = undefined;
+      });
+    this.preparingQuit = preparing;
+    return preparing;
+  }
+
+  /** A real native abort leaves the live collection writable for the next try. */
+  resume(): void {
+    this.quitGeneration += 1;
+    this.quitting = false;
+    this.preparingQuit = undefined;
+    this.options.windowState.resume();
+    this.options.onQuitCancelled();
+  }
+
+  /** Remove a deleted project's ownership and its retained presentation. */
+  forget(projectId: string): void {
+    const owner = this.owner(projectId);
+    this.owners.delete(projectId);
+    this.releases.get(projectId)?.settle(false);
+    this.handoffs.delete(projectId);
+    this.arrivals.get(projectId)?.arrive();
+    for (const [id, active] of this.activeProjects)
+      if (active === projectId) this.activeProjects.delete(id);
+    for (const [localId, chat] of this.chats)
+      if (chat.data.projectId === projectId) {
+        this.chats.delete(localId);
+        this.drafts.delete(localId);
+      }
+    if (owner && !owner.isDestroyed()) {
+      owner.send("catamorphic:workspace-event", {
+        kind: "forget",
+        projectId,
+      } satisfies WorkspaceEvent);
+      this.broadcast(this.options.windows.profileFor(owner));
+    }
+    this.options.windowState.changed();
   }
 
   /** Empty windows may change profiles; their previous claims cannot follow. */
@@ -473,7 +838,6 @@ export class DesktopWorkspaces {
     for (const [projectId, owner] of this.owners)
       if (owner === sender) this.owners.delete(projectId);
     this.activeProjects.delete(sender.id);
-    this.initialProjects.delete(sender.id);
     if (this.lastWindows.get(previousProfileId)?.webContents === sender)
       this.lastWindows.delete(previousProfileId);
     const window = BrowserWindow.fromWebContents(sender);
@@ -482,6 +846,7 @@ export class DesktopWorkspaces {
       this.lastWindows.set(profileId, window);
       this.syncFloating(profileId);
     }
+    this.options.windowState.changed();
     this.broadcast(previousProfileId);
     this.broadcast(this.options.windows.profileFor(sender));
   }
@@ -490,9 +855,27 @@ export class DesktopWorkspaces {
     return [...this.floating.values()].includes(window);
   }
 
+  /** A workspace window: not the dock, a sign-in popup or an extension's. */
+  isWorkspace(window: BrowserWindow): boolean {
+    return this.workspaces.has(window);
+  }
+
   activateProfile(profileId: string): boolean {
-    const window = this.lastWindows.get(profileId);
-    if (!window || window.isDestroyed()) return false;
+    const candidates = this.options.windows
+      .windowsFor(profileId)
+      .filter((window) => this.isWorkspace(window) && !window.isDestroyed());
+    const last = this.lastWindows.get(profileId);
+    const occupied = candidates.filter((window) =>
+      [...this.owners.values()].includes(window.webContents),
+    );
+    // An empty duplicate must not hide the profile's retained work. The
+    // last window may also have closed or switched to a different profile.
+    const window =
+      occupied.find((window) => window === last) ??
+      occupied[0] ??
+      candidates.find((window) => window === last) ??
+      candidates[0];
+    if (!window) return false;
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();
@@ -519,22 +902,69 @@ export class DesktopWorkspaces {
   target(projectId?: string): WebContents | undefined {
     if (projectId) return this.owner(projectId);
     const focused = BrowserWindow.getFocusedWindow();
-    const profileId = focused
-      ? this.options.windows.profileFor(focused.webContents)
-      : [...this.lastWindows.keys()].at(-1);
+    const profileId =
+      focused && (this.isWorkspace(focused) || this.isDock(focused))
+        ? this.options.windows.profileFor(focused.webContents)
+        : [...this.lastWindows.keys()].at(-1);
     const dock = profileId ? this.floating.get(profileId) : undefined;
     if (dock && profileId && this.detached(profileId)) return dock.webContents;
     return (profileId ? this.lastWindows.get(profileId) : undefined)
       ?.webContents;
   }
 
-  track(window: BrowserWindow, dock = false) {
+  /** The ownership metadata saved beside this window's native placement. */
+  private workspace(sender: WebContents): WorkspaceInitial {
+    const projectIds = [...this.owners]
+      .filter(([, owner]) => owner === sender)
+      .map(([projectId]) => projectId);
+    const active = this.activeProjects.get(sender.id);
+    return {
+      projectIds,
+      activeProjectId:
+        active && projectIds.includes(active) ? active : projectIds[0],
+    };
+  }
+
+  track(window: BrowserWindow, dock = false, initial?: WorkspaceWindowState) {
     const profileId = this.options.windows.profileFor(window.webContents);
     if (dock) return;
+    this.workspaces.add(window);
     this.lastWindows.set(profileId, window);
     const contentsId = window.webContents.id;
+    window.webContents.on("did-start-loading", () =>
+      this.renderers.delete(contentsId),
+    );
+    window.webContents.on("will-prevent-unload", () => {
+      if (this.quitting) this.resume();
+    });
+    // Reserve the complete group before its renderer can claim or monitor
+    // attention. A fresh window likewise owns its requested project now.
+    for (const projectId of initial?.projectIds ?? []) {
+      if (
+        this.options.profileForProject(projectId) !== profileId ||
+        this.owner(projectId)
+      )
+        continue;
+      this.owners.set(projectId, window.webContents);
+    }
+    if (
+      initial?.activeProjectId &&
+      this.owner(initial.activeProjectId) === window.webContents
+    )
+      this.activeProjects.set(contentsId, initial.activeProjectId);
+    if (initial)
+      this.options.windowState.track({
+        window,
+        initial,
+        workspace: () => ({
+          ...this.workspace(window.webContents),
+          profileId: this.options.windows.profileFor(window.webContents),
+        }),
+      });
     window.on("closed", () => {
       this.dockRegions.delete(contentsId);
+      this.activeProjects.delete(contentsId);
+      this.renderers.delete(contentsId);
       for (const [projectId, owner] of this.owners)
         if (owner.isDestroyed()) this.owners.delete(projectId);
       for (const [localId, chat] of this.chats)
@@ -547,7 +977,12 @@ export class DesktopWorkspaces {
       this.broadcast(profileId);
     });
     window.on("close", (event) => {
-      if (this.quitting) return;
+      if (this.quitting) {
+        setImmediate(() => {
+          if (event.defaultPrevented) this.resume();
+        });
+        return;
+      }
       // Explicit Quit owns teardown. Closing a workspace only hides its presentation.
       if ([...this.owners.values()].includes(window.webContents)) {
         event.preventDefault();
@@ -564,7 +999,7 @@ export class DesktopWorkspaces {
     );
   }
 
-  private navigate(input: WorkspaceNavigation & { sender: WebContents }) {
+  navigate(input: WorkspaceNavigation & { sender: WebContents }) {
     const profileId = this.options.windows.profileFor(input.sender);
     if (this.options.profileForProject(input.projectId) !== profileId) return;
     const owner = this.owner(input.projectId);
@@ -572,13 +1007,148 @@ export class DesktopWorkspaces {
     const source =
       this.lastWindows.get(profileId) ??
       BrowserWindow.fromWebContents(input.sender);
+    // Already moving: the request is under way.
+    if (input.newWindow && this.releases.has(input.projectId)) return;
+    // A window keeps every project it has shown alive behind the one in
+    // front. Asked for a window of its own, such a project moves to one; a
+    // project in front of a window (or about to be, in one still loading)
+    // is already in one, which comes forward.
+    if (
+      owner &&
+      input.newWindow &&
+      this.activeProjects.get(owner.id) !== input.projectId
+    ) {
+      void this.moveToNewWindow({ ...input, owner, profileId });
+      return;
+    }
     const target = owner
       ? BrowserWindow.fromWebContents(owner)
       : input.newWindow || !source
-        ? this.options.createWindow(profileId, false, input.projectId)
+        ? this.newWindow(profileId, input.projectId, source)
         : source;
     if (!target) return;
-    this.initialProjects.set(target.webContents.id, input.projectId);
+    this.present(target, input);
+  }
+
+  /**
+   * A new window for one project, owned by it from the start: the window
+   * it came from, should it reach for the project in the meantime (its
+   * chats needing attention), finds it taken. It opens a step down and to
+   * the right of that window, as macOS cascades a new document window, so
+   * it reads as another window rather than the same one changing.
+   */
+  private newWindow(
+    profileId: string,
+    projectId: string,
+    from: BrowserWindow | null | undefined,
+  ) {
+    const window = this.options.createWindow(profileId, false, projectId, {
+      cascadeFrom: from && !from.isDestroyed() ? from : undefined,
+    });
+    return window;
+  }
+
+  /**
+   * The owner lets the project go once nothing of it is mounted (its
+   * workspace saved, its shells left running, its chats off the dock),
+   * then the project opens in a window of its own, which takes them over.
+   * A window that keeps it (showing it, or holding unsaved edits of it,
+   * which it explains) or that does not answer comes forward instead.
+   */
+  private async moveToNewWindow(
+    input: WorkspaceNavigation & {
+      sender: WebContents;
+      owner: WebContents;
+      profileId: string;
+    },
+  ) {
+    const { owner, projectId } = input;
+    const keeper = () => {
+      const window = BrowserWindow.fromWebContents(
+        this.owner(projectId) ?? owner,
+      );
+      if (!window || window.isDestroyed()) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    };
+    let arrive = () => {};
+    const promise = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ARRIVAL_TIMEOUT_MS);
+      arrive = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+    const arrival = { promise, arrive };
+    this.arrivals.set(projectId, arrival);
+    void promise.then(() => {
+      if (this.arrivals.get(projectId) === arrival)
+        this.arrivals.delete(projectId);
+    });
+    const released = await new Promise<boolean>((resolve) => {
+      // Slow to answer: the window comes forward so the request is seen to
+      // land, and a later answer still moves the project.
+      const slow = setTimeout(keeper, RELEASE_SLOW_MS);
+      const abandon = setTimeout(() => settle(false), RELEASE_ABANDON_MS);
+      const settle = (released: boolean) => {
+        clearTimeout(slow);
+        clearTimeout(abandon);
+        if (this.releases.get(projectId)?.owner === owner)
+          this.releases.delete(projectId);
+        resolve(released);
+      };
+      const gone = () => settle(false);
+      this.releases.set(projectId, {
+        owner,
+        settle: (released) => {
+          owner.removeListener("destroyed", gone);
+          settle(released);
+        },
+      });
+      owner.once("destroyed", gone);
+      owner.send("catamorphic:workspace-event", {
+        kind: "release",
+        projectId,
+      } satisfies WorkspaceEvent);
+    });
+    if (owner.isDestroyed() || !released || this.owner(projectId) !== owner) {
+      this.handoffs.delete(projectId);
+      arrive();
+      keeper();
+      return;
+    }
+    // It opens beside the window it was asked from.
+    const from =
+      (!input.sender.isDestroyed() &&
+        BrowserWindow.fromWebContents(input.sender)) ||
+      BrowserWindow.fromWebContents(owner);
+    this.owners.delete(projectId);
+    this.options.windowState.changed();
+    this.options.onReleased?.(projectId, owner);
+    // Its chats leave this window's dock; what was typed in them waits
+    // for the new window (`drafts`, by chat).
+    for (const [localId, chat] of this.chats)
+      if (chat.owner === owner && chat.data.projectId === projectId)
+        this.chats.delete(localId);
+    this.broadcast(input.profileId);
+    this.present(this.newWindow(input.profileId, projectId, from), input);
+  }
+
+  /**
+   * Agent calls for a project wait while it moves to a window of its own,
+   * until that window shows it: the old window has let it go and the new
+   * one is still loading.
+   */
+  arrival(projectId: string | undefined): Promise<void> {
+    return (
+      (projectId && this.arrivals.get(projectId)?.promise) || Promise.resolve()
+    );
+  }
+
+  /** Shows `projectId` in `target` and brings that window forward. */
+  private present(target: BrowserWindow, input: WorkspaceNavigation) {
+    const profileId = this.options.windows.profileFor(target.webContents);
     const send = () =>
       target.webContents.send("catamorphic:workspace-event", {
         kind: "navigate",
@@ -613,6 +1183,7 @@ export class DesktopWorkspaces {
       multiProject: prefs.dockMultiProject,
       side: prefs.dockSide,
       placement: prefs.dockPlacement,
+      collapsed: prefs.dockCollapsed,
     };
   }
 
@@ -634,7 +1205,12 @@ export class DesktopWorkspaces {
    */
   private dockArea(profileId: string, dock: BrowserWindow) {
     const focused = BrowserWindow.getFocusedWindow();
-    const anchor = focused === dock ? this.lastWindows.get(profileId) : focused;
+    // While focus is on the dock, or passing between windows, the dock
+    // keeps to the workspace it last sat in.
+    const anchor =
+      focused === dock || (!focused && !this.focusLeftApp)
+        ? this.lastWindows.get(profileId)
+        : focused;
     if (
       anchor &&
       anchor !== dock &&
@@ -659,6 +1235,27 @@ export class DesktopWorkspaces {
     return screen.getDisplayMatching(dock.getBounds()).workArea;
   }
 
+  /** The project a workspace window shows now, if it shows one. */
+  activeProject(window: BrowserWindow): string | null {
+    return this.activeProjects.get(window.webContents.id) ?? null;
+  }
+
+  /**
+   * Where the person is (ADR 0265): the project in front of the profile's
+   * workspace window they were last in, whichever window the dock floats
+   * over or wherever its chat lives.
+   */
+  personProject(profileId: string): string | null {
+    const window = this.lastWindows.get(profileId);
+    if (!window || window.isDestroyed()) return null;
+    return this.activeProject(window);
+  }
+
+  /** Whether a profile's dock floats detached now, as the person left it. */
+  dockDetached(profileId: string): boolean {
+    return this.detached(profileId);
+  }
+
   private detached(profileId: string): boolean {
     return (
       this.detachOverrides.get(profileId) ??
@@ -677,6 +1274,9 @@ export class DesktopWorkspaces {
   }
 
   private syncFloating(profileId: string) {
+    // Quitting closes the dock first: a workspace taking focus after that
+    // would build a new one, which keeps the app from quitting.
+    if (this.quitting) return;
     const prefs = this.options.config.forProfile(profileId).prefs.load();
     const existing = this.floating.get(profileId);
     if (!this.detached(profileId)) {
@@ -734,6 +1334,12 @@ export class DesktopWorkspaces {
       // restart (or a killed dev instance) comes back with the chosen default.
       event.preventDefault();
       this.setDetached(profileId, false);
+    });
+    // Teardown closes the dock before the workspaces: a workspace taking
+    // focus after that must not reach the destroyed window.
+    window.on("closed", () => {
+      if (this.floating.get(profileId) === window)
+        this.floating.delete(profileId);
     });
   }
 }

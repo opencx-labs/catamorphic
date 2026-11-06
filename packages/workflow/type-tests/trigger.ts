@@ -6,7 +6,7 @@ import {
   trigger,
 } from "../src/index.js";
 
-// Mirrors the generated catamorphic-triggers.d.ts a host projects into a
+// Mirrors the generated work-triggers.d.ts a host projects into a
 // project workspace.
 declare module "../src/index.js" {
   interface TriggerKinds {

@@ -11,11 +11,20 @@ import type { McpToolInfo } from "@catamorphic/mcp";
 import {
   agentToolResult,
   resolveToolPermissionAcross,
-  ToolGate,
   type ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
 import { z } from "zod";
+import {
+  assertConnectorCallUnchanged,
+  assertConnectorTool,
+  connectorCallSnapshot,
+  liveConnectorContext,
+} from "../mcp-app-view-authorization.js";
 import type { McpAppsService } from "../mcp-apps.js";
+import {
+  connectorToolPermitted,
+  decideHostToolCall,
+} from "./agent-mcp-policy.js";
 import type { DesktopAgentRegistry } from "./agent-registry.js";
 
 /** Desktop, project and connection operations enter core's single live registry. */
@@ -69,14 +78,15 @@ export function desktopCapabilitySource(deps: {
       invocation: AgentCapabilityInvocation;
       annotations?: ToolPolicyAnnotations;
     }) => {
-      const verdict = await new ToolGate(surface.ask).decide({
+      const verdict = await decideHostToolCall({
+        core,
+        sessionId: context.sessionId,
         server: args.server,
         tool: args.name,
         input: z.record(z.string(), z.unknown()).parse(args.input),
-        sessionId: context.sessionId,
         layers: layers(args.server),
         annotations: args.annotations,
-        abortSignal: args.invocation.signal,
+        signal: args.invocation.signal,
       });
       if (!verdict.allowed) throw new Error(verdict.message);
     };
@@ -96,12 +106,15 @@ export function desktopCapabilitySource(deps: {
             ),
             outputSchema: z.unknown(),
             authorize: () => true,
-            execute: async (_invocation, input) => {
+            execute: async (invocation, input) => {
               const value = await tool.execute(input, {
                 projectId: context.projectId,
                 sessionId: context.sessionId,
                 caller: context.identity,
                 workingDirectory: await deps.workingDirectory(context),
+                // The waiting tools are eager, served beside the gateway
+                // with their turn's signal; one here waits while it is asked.
+                stopWaiting: invocation.signal ?? new AbortController().signal,
               });
               return JSON.parse(JSON.stringify(value ?? null));
             },
@@ -117,10 +130,14 @@ export function desktopCapabilitySource(deps: {
           revision,
           consent: ({ name, effect }) =>
             consent("catamorphic", name, { readOnlyHint: effect === "read" }),
+          // The workspace's own tools cover these for desktop chats.
           allow: ({ name, effect }) =>
-            !["list_skills", "read_skill", "send_agent_message"].includes(
-              name,
-            ) &&
+            ![
+              "list_skills",
+              "read_skill",
+              "send_agent_message",
+              "set_session_metadata",
+            ].includes(name) &&
             (!surface.readOnly || effect === "read") &&
             allowed("catamorphic", name, { readOnlyHint: effect === "read" }),
           beforeCall: ({ name, effect, input, invocation }) =>
@@ -135,8 +152,11 @@ export function desktopCapabilitySource(deps: {
       );
     }
     const mcpApps = deps.mcpApps;
+    // A harness that searches its tools has the connectors mounted as MCP
+    // servers of their own (ADR 0225); the catalog serves the others.
     if (
       mcpApps &&
+      !surface.connectorsMounted &&
       (!selection.name || selection.name.startsWith("connections."))
     ) {
       for (const [server, connectionId] of Object.entries(
@@ -153,34 +173,165 @@ export function desktopCapabilitySource(deps: {
         // Stateful native computer use belongs to the initiating Codex process.
         // Its REPL, media and consent must not run in the profile-wide tool pool.
         if (surface.mcp.nativeServers?.[server]) continue;
-        const make = (tool: McpToolInfo): AgentCapability =>
-          defineAgentCapability({
-            revision: JSON.stringify([revision, connectionId, tool]),
-            consent: consent(server, tool.name, tool.annotations),
+        const connectionIdentity = (() => {
+          try {
+            return mcpApps.connectionIdentity(
+              surface.profileId,
+              server,
+              connectionId,
+            );
+          } catch {
+            return undefined;
+          }
+        })();
+        if (!connectionIdentity) continue;
+        const connectionRevision = JSON.stringify([
+          revision,
+          connectionId,
+          connectionIdentity,
+        ]);
+        const assertIdentity = () => {
+          if (
+            mcpApps.connectionIdentity(
+              surface.profileId,
+              server,
+              connectionId,
+            ) !== connectionIdentity
+          )
+            throw new Error(
+              "The connection changed. Discover its tools again and retry.",
+            );
+        };
+        const live = async () => {
+          assertIdentity();
+          const current = await liveConnectorContext({
+            core,
+            agents: deps.agents,
+            identity: context.identity,
+            projectId: context.projectId,
+            sessionId: context.sessionId,
+            server,
+          });
+          if (
+            current.profileId !== surface.profileId ||
+            current.connectionId !== connectionId ||
+            current.agentId !== agentId ||
+            current.mounted
+          )
+            throw new Error(
+              "The chat connector changed. Discover its tools again and retry.",
+            );
+          assertIdentity();
+          return { ...current, connectionIdentity };
+        };
+        const make = (tool: McpToolInfo): AgentCapability => {
+          // The definition's authority is immutable across approval and every
+          // awaited lookup in execute. A later Ask must not become a new baseline.
+          const snapshot = connectorCallSnapshot(
+            {
+              agentId,
+              profileId: surface.profileId,
+              connectionId,
+              connectionIdentity,
+              mounted: surface.connectorsMounted,
+              readOnly: surface.readOnly || session?.readOnly === true,
+              layers: layers(server),
+            },
+            tool,
+          );
+          return defineAgentCapability({
+            revision: JSON.stringify([connectionRevision, tool]),
+            consent:
+              consent(server, tool.name, tool.annotations) === undefined
+                ? undefined
+                : JSON.stringify([
+                    connectionIdentity,
+                    consent(server, tool.name, tool.annotations),
+                  ]),
             name: `${prefix}${encodeURIComponent(tool.name)}`,
             description: `${server}: ${tool.description}`,
             effect: tool.annotations?.readOnlyHint ? "read" : "write",
             inputSchema: z.fromJSONSchema(tool.inputSchema),
             outputSchema: z.unknown(),
-            authorize: () =>
-              (!surface.readOnly || tool.annotations?.readOnlyHint === true) &&
-              allowed(server, tool.name, tool.annotations),
-            beforeInvoke: (invocation, input) =>
-              approve({
+            authorize: async () => {
+              try {
+                return connectorToolPermitted({ ...(await live()), tool });
+              } catch {
+                return false;
+              }
+            },
+            beforeInvoke: async (invocation, input) => {
+              const current = await live();
+              assertConnectorTool({
+                context: current,
+                tool,
+                args: z.record(z.string(), z.unknown()).parse(input),
+              });
+              assertConnectorCallUnchanged({
+                before: snapshot,
+                after: current,
+                currentTool: tool,
+              });
+              await approve({
                 server,
                 name: tool.name,
                 input,
                 invocation,
                 annotations: tool.annotations,
-              }),
+              });
+            },
             execute: async (invocation, input) => {
               invocation.signal?.throwIfAborted();
+              const args = z.record(z.string(), z.unknown()).parse(input);
+              const before = await live();
+              assertConnectorTool({ context: before, tool, args });
+              assertConnectorCallUnchanged({
+                before: snapshot,
+                after: before,
+                currentTool: tool,
+              });
               const raw = await mcpApps.callTool(
                 surface.profileId,
                 `${server}/${tool.name}`,
                 tool.name,
-                z.record(z.string(), z.unknown()).parse(input),
+                args,
+                {
+                  connectionId,
+                  connectionIdentity,
+                  beforeCall: async (currentTool) => {
+                    invocation.signal?.throwIfAborted();
+                    const after = await live();
+                    assertConnectorTool({
+                      context: after,
+                      tool: currentTool,
+                      args,
+                    });
+                    assertConnectorCallUnchanged({
+                      before: snapshot,
+                      after,
+                      currentTool,
+                    });
+                  },
+                },
               );
+              const roster = await mcpApps.tools(
+                surface.profileId,
+                server,
+                connectionId,
+                connectionIdentity,
+              );
+              const after = await live();
+              invocation.signal?.throwIfAborted();
+              const currentTool = roster.find(
+                (entry) => entry.name === tool.name,
+              );
+              if (!currentTool) throw new Error(`Unknown tool: ${tool.name}`);
+              assertConnectorTool({ context: after, tool: currentTool, args });
+              assertConnectorCallUnchanged({
+                before: snapshot,
+                after,
+                currentTool,
+              });
               if (raw.isError) throw new Error(JSON.stringify(raw.content));
               // Preserve image content and structured app output together. Other
               // resource blocks remain readable data rather than failing a union.
@@ -226,12 +377,20 @@ export function desktopCapabilitySource(deps: {
               return raw.structuredContent ?? raw;
             },
           });
-        const load = async () =>
-          (await mcpApps.tools(surface.profileId, server)).filter(
-            (tool) =>
-              allowed(server, tool.name, tool.annotations) &&
-              (!surface.readOnly || tool.annotations?.readOnlyHint === true),
+        };
+        const load = async () => {
+          assertIdentity();
+          const roster = await mcpApps.tools(
+            surface.profileId,
+            server,
+            connectionId,
+            connectionIdentity,
           );
+          const current = await live();
+          return roster.filter((tool) =>
+            connectorToolPermitted({ ...current, tool }),
+          );
+        };
         // An empty/global discovery never connects every installed service.
         // Service-specific discovery (or a previously discovered invocation) loads its roster.
         const specific = selection.name
@@ -246,7 +405,7 @@ export function desktopCapabilitySource(deps: {
         if (specific) capabilities.push(...(await load()).map(make));
         capabilities.push(
           defineAgentCapability({
-            revision,
+            revision: connectionRevision,
             name: catalogName,
             description: `List permitted tools and schemas for the ${server} connection. Search by topic before calling one.`,
             effect: "read",
@@ -256,7 +415,14 @@ export function desktopCapabilitySource(deps: {
               limit: z.number().int().min(1).max(20).default(10),
             }),
             outputSchema: z.unknown(),
-            authorize: () => Boolean(connectionId),
+            authorize: async () => {
+              try {
+                await live();
+                return true;
+              } catch {
+                return false;
+              }
+            },
             execute: async (_invocation, input) => {
               const matches = (await load())
                 .filter(

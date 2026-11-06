@@ -98,7 +98,7 @@ authorization.
                            └────────┬────────────────────────────────────────┘
                                     ▼
                            ┌─────────────────────────────────────────────────┐
-                           │ Cloudflare / Daytona sandbox                    │
+                           │ Cloudflare / microsandbox / container sandbox   │
                            │   /workspace/project/                           │
                            │     harness.ts                                  │
                            │     src/untitled-workflow.ts                    │
@@ -252,12 +252,11 @@ CREATE INDEX idx_project_plugins_project ON project_plugins(project_id);
 
 CREATE TABLE project_secrets (
   project_id    uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  stage         varchar(20) NOT NULL DEFAULT 'production',
   name          varchar(255) NOT NULL,
   value         text NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (project_id, stage, name)
+  PRIMARY KEY (project_id, name)
 );
 CREATE INDEX idx_project_secrets_project ON project_secrets(project_id);
 ```
@@ -301,14 +300,13 @@ table.
 
 Owns `project_secrets`.
 
-- `list({ identity, projectId, stage })`: returns `SecretStatus[]`:
+- `list({ identity, projectId })`: returns `SecretStatus[]`:
   `{ name, source, label, description, required, hasValue, updatedAt }`.
   Never returns the plaintext value.
-- `upsert({ identity, projectId, stage, name, value })`: validates builder
-  authority and that `name` is declared by project code or an attached plugin,
-  then upserts that stage's value.
-- `delete({ identity, projectId, stage, name })`: drops one stage's row.
-- `loadForRun({ identity, projectId, stage })`: resolves every declared secret, applying
+- `upsert({ identity, projectId, name, value })`: needs `secrets:write` and a
+  `name` declared by project code or an attached plugin, then stores the value.
+- `delete({ identity, projectId, name })`: needs `secrets:write`.
+- `loadForRun({ identity, projectId })`: resolves every declared secret, applying
   `default` when the row is missing. Returns
   `{ values: Record<string, string>, missingRequired: string[] }`. Run
   enrollment rejects missing required values before execution.
@@ -322,7 +320,6 @@ class RunPluginsLoader {
   async load(args: {
     identity: Identity;
     projectId: string;
-    stage: "test" | "production";
     workflowName?: string;
   }): Promise<{
     plugins: RunPluginPayload[];       // packageName + files map
@@ -430,14 +427,12 @@ const env = {
   CATAMORPHIC_RUN_ID,
   CATAMORPHIC_WORKFLOW_NAME,
   CATAMORPHIC_WORKFLOW_FILE,
-  CATAMORPHIC_TRIGGER_DATA,
   ...invocation.env,        // EXAMPLE_API_KEY, EXAMPLE_API_URL, …
 };
 ```
 
-Secret declarations may not use the reserved `CATAMORPHIC_` prefix. The API
-still keeps stage-specific records, but immutable deployed Runs consume only
-the production stage.
+Secret declarations may not use the reserved `CATAMORPHIC_` prefix. A project
+has one value per secret, and every run reads it.
 
 ### Execution flow
 
@@ -455,9 +450,10 @@ there is no mutable-source test execution path.
 
 Two LLMs need to know what's attached:
 
-### 1. Workflow-builder (host-side OpenAI call)
+### 1. A host's own authoring prompt
 
-The host app owns the workflow-builder prompt. Its flow:
+A host that runs its own workflow-authoring model call (outside the coding
+agents below) owns that prompt. Its flow:
 
 - Hits `GET /api/projects/:projectId/agent-context` on the mounted
   `@catamorphic/fastify-plugin` (via `@catamorphic/api-client`).
@@ -465,24 +461,23 @@ The host app owns the workflow-builder prompt. Its flow:
   prompt. If the fetch fails or returns empty the call continues without
   context (the agent is still usable, just blind to attached packages).
 
-Before this wiring the builder was a pure OpenAI call with a hardcoded
-system prompt, which is exactly why early demos hallucinated SDK calls.
 
-### 2. Coding agent (`CodingAgentProvider` implementations)
+### 2. Coding agent (every harness adapter)
 
-`startSession({ attachedPlugins })` on every provider:
+Core prepares each attempt of a turn with the project's attached plugins, so
+every harness adapter gets them the same way (ADR 0198):
 
 - The shared staging helpers (`stagedPluginFiles` / `stagePluginDocs` in
   `packages/sandbox/src/coding-agent/plugin-staging.ts`) write each plugin's
-  README + d.ts into `<pluginDirectory>/_plugins/<slug>/`, where the agent
-  can read them directly. Hosts may supply `pluginDirectory` on any harness;
-  it defaults to the working directory. The desktop supplies a host-owned
-  directory outside the project for all three harnesses.
+  README + d.ts into `_plugins/<slug>/` in the agent's working directory,
+  where the agent can read them directly: uploaded through the sandbox
+  provider for a sandbox, written to disk for a local checkout.
 - `buildPluginsPreamble()` generates a Markdown block listing each plugin
-  and the absolute on-disk path of its staged docs.
-- The preamble is prepended to the first message passed to
-  the selected `@catamorphic/ai-sdk`, `@catamorphic/claude-code`, or
-  `@catamorphic/codex` provider.
+  and the path of its staged docs.
+- The preamble is appended to the attempt's system prompt
+  (`AttemptStart.systemPrompt`), which the `@catamorphic/ai-sdk`,
+  `@catamorphic/claude-code`, or `@catamorphic/codex` adapter hands its
+  harness.
 
 ---
 
@@ -508,25 +503,26 @@ Mounted inside the host's project page.
 
 End-to-end steps to go from zero to a workflow that calls a host API.
 
-### 1. Host environment
+### 1. Give the host a plugin resolver
 
-```bash
-# Enables the local plugin resolver. Point at any directory whose immediate
-# subdirectories are plugin packages (each with a `package.json` that carries
-# a `catamorphic` field).
-CATAMORPHIC_LOCAL_PLUGINS_DIR=/Users/you/workspace/host-app/packages
+Catamorphic reads no environment of its own: the host constructs the resolver
+and passes it at boot. Point `LocalPluginResolver` at a directory whose
+immediate subdirectories are plugin packages (each `package.json` carries a
+`catamorphic` field):
 
-# Cloudflare sandbox (production bridge or local wrangler)
-CLOUDFLARE_SANDBOX_API_URL=https://<your-worker>.workers.dev
-CLOUDFLARE_SANDBOX_API_KEY=…
+```ts
+import { LocalPluginResolver } from "@catamorphic/plugins";
 
-# OpenAI for the workflow builder
-OPENAI_API_KEY=…
+const catamorphic = createCatamorphic({
+  // …database, storage, environmentProvider, sandboxProvider…
+  pluginResolver: new LocalPluginResolver({
+    rootDir: process.env.ACME_PLUGINS_DIR!, // the host's own setting
+  }),
+});
 ```
 
-The host process (e.g. the host backend) owns the env. `CATAMORPHIC_LOCAL_PLUGINS_DIR`
-must be set in the host's `.env`, not inside the catamorphic repo — catamorphic is
-embed-only and has no dev server of its own.
+Without a `pluginResolver` the plugin routes answer `503 Plugins not
+configured`. The desktop and the stock server configure none.
 
 ### 2. Build the plugin package
 
@@ -537,20 +533,13 @@ cd host-app/packages/example-sdk
 npm run build        # produces dist/index.cjs, .mjs, .d.ts
 ```
 
-### 3. Run migrations for `project_plugins` + `project_secrets`
+### 3. Start the host
 
-```bash
-cd catamorphic
-bun run --filter @catamorphic/db build
-<host> exec catamorphic-db migrate   # from the host repo
-```
+Run `await catamorphic.migrate()` at boot or in a deploy step: it applies the
+schema-scoped migrations, `project_plugins` and `project_secrets` included.
+Then mount `@catamorphic/fastify-plugin` as usual.
 
-### 4. Start the host
-
-Boot the host app with `CATAMORPHIC_ENABLED=true` + the env vars above so
-`@catamorphic/fastify-plugin` mounts inside it. For Acme: `cd host-app/backend && <your host dev command>`.
-
-### 5. Attach the plugin and set secrets
+### 4. Attach the plugin and set secrets
 
 1. Open a project in the host's Catamorphic UI.
 2. Scroll to **Plugins**. `@acme/example-sdk` shows up in the catalog.
@@ -559,7 +548,7 @@ Boot the host app with `CATAMORPHIC_ENABLED=true` + the env vars above so
    `Settings → API Tokens` in the host dashboard).
 5. For local development, override `EXAMPLE_API_URL` — see below.
 
-### 6. Point the SDK at the right backend
+### 5. Point the SDK at the right backend
 
 `@acme/example-sdk` defaults to `https://api.example.com`. That host is
 the SDK's default gateway and does **not** expose the `/records/:id`
@@ -588,7 +577,7 @@ curl -s -H "Authorization: Bearer $EXAMPLE_API_KEY" \
   "$EXAMPLE_API_URL/records/<uuid>" | jq .
 ```
 
-### 7. Run the workflow
+### 6. Run the workflow
 
 Ask the workflow builder to generate code. It has the SDK's README + d.ts in
 its system prompt, so it should import symbols that actually exist:
@@ -668,16 +657,16 @@ app.register(fastifyCors, {
 });
 ```
 
-### 4. `.env` location for `bun --env-file`
+### 4. Plugins answer 503
 
-**Symptom.** After setting `CATAMORPHIC_LOCAL_PLUGINS_DIR=...` the Plugins
-panel kept returning `503 Plugins not configured`.
+**Symptom.** The Plugins panel kept returning `503 Plugins not configured`.
 
-**Root cause.** The env var wasn't present in the **host process's**
-environment — catamorphic runs in-process inside the host, so only the host's
-env matters.
+**Root cause.** The host never passed a `pluginResolver`, or read the plugins
+directory from an env file its process did not load. Catamorphic runs
+in-process inside the host, so only the host's own configuration matters.
 
-**Fix.** Put the env var in the host's `.env`, restart the host.
+**Fix.** Construct `LocalPluginResolver` from the host's config and restart
+the host.
 
 ### 5. Workflow builder hallucinating SDK calls
 

@@ -1,10 +1,77 @@
 // Provider
 
-// Atoms
-export type { PanelTab, PanelVisibility } from "./atoms.js";
+export type {
+  AgentAttachment,
+  AgentMediaAttachment,
+  AgentQuestion,
+  AgentQuestionOption,
+  AgentTextAttachment,
+  AgentTextSource,
+  AgentTodo,
+  AgentTurnUsage,
+  AssistantMessageItem,
+  Attempt,
+  CommandItem,
+  CommandReceipt,
+  ContextHandoffItem,
+  FileChangeItem,
+  InboundMessageItem,
+  InboundSender,
+  InputItem,
+  InputSource,
+  Item,
+  ItemCommon,
+  ItemKind,
+  ItemStatus,
+  JsonObject,
+  JsonValue,
+  NoticeItem,
+  PlanItem,
+  ProviderRetry,
+  ReasoningItem,
+  RequestItem,
+  RuntimeRequest,
+  RuntimeRequestResponse,
+  SessionCommand,
+  SessionMessageAuthor,
+  SessionSnapshot,
+  SessionState,
+  StoredSessionEvent,
+  SubagentItem,
+  TaskNotificationItem,
+  TaskNotificationStatus,
+  ToolCallItem,
+  Turn,
+  TurnError,
+  TurnStatus,
+  UserMessageItem,
+} from "@catamorphic/agent-protocol";
+// The session model every chat client renders (ADR 0197), re-exported so a
+// copied registry component needs only this package.
 export {
-  activePanelTabAtom,
-  aiLoadingAtom,
+  activeTurn,
+  commandActivity,
+  isActiveTurnStatus,
+  isInputItem,
+  isSettledTurnStatus,
+  isUnreadSteer,
+  isWorking,
+  itemActivity,
+  itemsOfTurn,
+  orderedTurns,
+  pendingRequests,
+  queuedTurns,
+  SESSION_PROTOCOL_VERSION,
+} from "@catamorphic/agent-protocol";
+// The marker helpers live beside the harness renderers in the sandbox
+// package (its browser-safe subpath) so pills mean the same on both sides.
+export {
+  ATTACHMENT_MARKER,
+  messageWithAttachmentNames,
+  splitAttachmentMarkers,
+} from "@catamorphic/sandbox/attachments";
+// Atoms
+export {
   codeAtom,
   codeEditorReadOnlyAtom,
   collapsedNodeIdsAtom,
@@ -12,10 +79,8 @@ export {
   graphAtom,
   graphParseStateAtom,
   lastTriggerDataAtom,
-  panelVisibilityAtom,
   reactFlowEdgesAtom,
   reactFlowNodesAtom,
-  rightPanelOpenAtom,
   selectedNodeAtom,
   selectedNodeIdAtom,
   showRunDialogAtom,
@@ -27,14 +92,28 @@ export {
 } from "./hooks/use-agent-catalog.js";
 export {
   type AgentAuthenticationRequired,
+  type AgentChatAttachment,
   authenticationRequiredFrom,
-  type OptimisticAgentMessage,
-  type PendingAgentTurn,
+  type PendingAgentMessage,
+  type SendOptions,
+  turnActivity,
   type UseAgentChatOptions,
   type UseAgentChatResult,
   useAgentChat,
 } from "./hooks/use-agent-chat.js";
-export { useAgentSession } from "./hooks/use-agent-session.js";
+export {
+  type AgentSessionConnection,
+  type AgentSessionData,
+  type AgentSessionInfo,
+  agentSessionQueryKey,
+  reconnectDelayMs,
+  type UseAgentSessionFieldsOptions,
+  type UseAgentSessionFieldsResult,
+  type UseAgentSessionOptions,
+  type UseAgentSessionResult,
+  useAgentSession,
+  useAgentSessionFields,
+} from "./hooks/use-agent-session.js";
 // Agent (Track A)
 export {
   type AgentSessionsList,
@@ -42,7 +121,6 @@ export {
   useAgentAttention,
   useAgentSessions,
 } from "./hooks/use-agent-sessions.js";
-export { useAnswerAgentQuestion } from "./hooks/use-answer-agent-question.js";
 export { useAppPresentations } from "./hooks/use-app-presentations.js";
 export {
   type ArchiveAgentSessionInput,
@@ -58,12 +136,19 @@ export {
   type AuthorizationChallenge,
   useAuthorizeConnection,
 } from "./hooks/use-authorize-connection.js";
-export { useCheckoutBranch } from "./hooks/use-checkout-branch.js";
 export type {
   CodeEditorRevealRequest,
   UseCodeEditorLinkResult,
 } from "./hooks/use-code-editor-link.js";
 export { useCodeEditorLink } from "./hooks/use-code-editor-link.js";
+export {
+  type CodeHostRepositorySummary,
+  type CodeHostSummary,
+  type ImportRepositoryInput,
+  useCodeHostRepositories,
+  useCodeHosts,
+  useImportRepository,
+} from "./hooks/use-code-hosts.js";
 export {
   type CommitChangesInput,
   useCommitChanges,
@@ -74,10 +159,6 @@ export {
   type CreateAgentSessionInput,
   useCreateAgentSession,
 } from "./hooks/use-create-agent-session.js";
-export {
-  type CreateBranchInput,
-  useCreateBranch,
-} from "./hooks/use-create-branch.js";
 export {
   type CreateProjectInput,
   useCreateProject,
@@ -108,15 +189,13 @@ export {
   type ForkAgentSessionInput,
   useForkAgentSession,
 } from "./hooks/use-fork-agent-session.js";
-// Project hooks
+// Secrets (Track A); members' own values (ADR 0206)
 export {
-  type GithubRepoSummary,
-  type GithubStatus,
-  type ImportGithubRepoInput,
-  useGithubRepos,
-  useGithubStatus,
-  useImportGithubRepo,
-} from "./hooks/use-github.js";
+  type DeleteMemberSecretInput,
+  type SetMemberSecretInput,
+  useDeleteMemberSecret,
+  useSetMemberSecret,
+} from "./hooks/use-member-secret.js";
 export { type UseOnParseOptions, useOnParse } from "./hooks/use-on-parse.js";
 export type {
   ParseWorkflowRequest,
@@ -126,7 +205,6 @@ export { useParseWorkflow } from "./hooks/use-parse-workflow.js";
 // Plugins (Track A)
 export { usePluginCatalog } from "./hooks/use-plugin-catalog.js";
 export { useProject } from "./hooks/use-project.js";
-export { useProjectBranches } from "./hooks/use-project-branches.js";
 export {
   type UseProjectCommitsOptions,
   useProjectCommits,
@@ -148,7 +226,6 @@ export {
 } from "./hooks/use-project-git.js";
 // Phase-2 hook (re-homed but still accepts a host-injected git api adapter)
 export type {
-  BranchInfo,
   CommitInfo,
   ConflictEntry,
   ProjectGitApi,
@@ -158,9 +235,12 @@ export type {
 } from "./hooks/use-project-git-state.js";
 export { useProjectGitState } from "./hooks/use-project-git-state.js";
 export { useProjectPlugins } from "./hooks/use-project-plugins.js";
-// Secrets (Track A)
 export { useProjectSecrets } from "./hooks/use-project-secrets.js";
 export { type UseProjectsOptions, useProjects } from "./hooks/use-projects.js";
+export {
+  type RenameAgentSessionInput,
+  useRenameAgentSession,
+} from "./hooks/use-rename-agent-session.js";
 // Runs
 export {
   runKeys,
@@ -185,23 +265,11 @@ export {
   useTriggerRun,
 } from "./hooks/use-runs.js";
 export { useSelectedNode } from "./hooks/use-selected-node.js";
-export {
-  type AgentChatAttachment,
-  type AgentChatMediaAttachment,
-  type AgentChatTextAttachment,
-  type AgentChatTextSource,
-  ATTACHMENT_MARKER,
-  messageWithAttachmentNames,
-  type SendAgentMessageInput,
-  useSendAgentMessage,
-} from "./hooks/use-send-agent-message.js";
 export { useSessionArtifacts } from "./hooks/use-session-artifacts.js";
 export {
-  type PendingToolPermission,
-  type ToolPermissionAnswer,
-  type UseToolPermissionsOptions,
-  useToolPermissions,
-} from "./hooks/use-tool-permissions.js";
+  type SetAgentSessionMetadataInput,
+  useSetAgentSessionMetadata,
+} from "./hooks/use-set-agent-session-metadata.js";
 export {
   type UpdateAgentSessionInput,
   useUpdateAgentSession,
@@ -216,6 +284,12 @@ export {
 } from "./hooks/use-upsert-project-secret.js";
 export { useWatchers, watcherKeys } from "./hooks/use-watchers.js";
 export {
+  useRotateWebhook,
+  useWebhooks,
+  type Webhook,
+  webhookKeys,
+} from "./hooks/use-webhooks.js";
+export {
   type UseWorkflowOptions,
   useWorkflow,
 } from "./hooks/use-workflow.js";
@@ -226,6 +300,7 @@ export {
   useWorkflowEnablements,
   type WorkflowEnablement,
   type WorkflowEnablementInput,
+  type WorkflowEnablementList,
   type WorkflowEnablementPreview,
   workflowEnablementKeys,
 } from "./hooks/use-workflow-enablements.js";
@@ -269,6 +344,29 @@ export {
 } from "./lib/match-workflow-nodes.js";
 export type { ResourcePreview } from "./lib/resource-preview.js";
 export {
+  type SessionCommandInput,
+  sendSessionCommand,
+} from "./lib/session-commands.js";
+export {
+  AGENT_SESSION_PROTOCOL,
+  readSessionStream,
+  SESSION_PROTOCOL_MISMATCH_MESSAGE,
+  speaksSessionProtocol,
+} from "./lib/session-stream.js";
+export {
+  answerRows,
+  itemText,
+  QUESTIONS_DISMISSED_MESSAGE,
+  type QueuedMessage,
+  sessionQueue,
+  sessionTimeline,
+  startingTurn,
+  type TimelineEntry,
+  type TimelineTurn,
+  type WorkItem,
+  waitsToRun,
+} from "./lib/session-timeline.js";
+export {
   buildUntitledWorkflowName,
   displayNameFromWorkflowName,
   ensurePrimaryWorkflowExportName,
@@ -288,7 +386,6 @@ export {
 } from "./provider.js";
 // Shared domain types (also available as subpath import `@catamorphic/react/types`)
 export type {
-  AgentMessage,
   AgentSession,
   AgentSessionDetail,
   AttachedPlugin,
@@ -296,7 +393,6 @@ export type {
   CancelRunByKeyInput,
   CancelRunInput,
   CommitsList,
-  CreatedBranch,
   DeployResult,
   DiffEntry,
   FilesAtRef,
@@ -313,12 +409,14 @@ export type {
   RunItemsList,
   RunPause,
   RunPhase,
+  RunSignalReceipt,
   RunStatus,
   RunStep,
   RunsList,
   Secret,
+  SecretMemberValue,
   SecretStatus,
-  SessionDeliveryReceipt,
+  SecretValueChange,
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,

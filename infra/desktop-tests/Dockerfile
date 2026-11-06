@@ -1,6 +1,6 @@
-FROM node:24.13.0-bookworm-slim@sha256:4660b1ca8b28d6d1906fd644abe34b2ed81d15434d26d845ef0aced307cf4b6f AS node
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS node
 # Debian 13 supplies the glibc >= 2.39 required by microsandbox's ARM binding.
-FROM oven/bun:1.3.14-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f
+FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e
 
 RUN apt-get update && apt-get install --yes --no-install-recommends \
     ca-certificates git openssh-client python3 make g++ \
@@ -8,18 +8,23 @@ RUN apt-get update && apt-get install --yes --no-install-recommends \
     libgbm1 libdrm2 libxss1 libxtst6 libatk-bridge2.0-0 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=node /usr/local/ /usr/local/
+# Tests run unprivileged, as on CI runners: Electron refuses its sandboxed
+# renderers as root, and extension service workers get Work's APIs only in
+# those (ADR 0203). The base image's `bun` user (uid 1000) owns the tree.
+RUN mkdir -p /workspace /artifacts && chown bun:bun /workspace /artifacts
+USER bun
 WORKDIR /workspace
 # A separate manifest layer keeps Linux dependencies cached across source edits.
-COPY manifests/ ./
+COPY --chown=bun:bun manifests/ ./
 ARG TARGETARCH
-RUN --mount=type=cache,id=catamorphic-desktop-bun-${TARGETARCH},target=/root/.bun/install/cache,sharing=locked \
-    --mount=type=cache,id=catamorphic-desktop-npm-${TARGETARCH},target=/root/.npm,sharing=locked \
+RUN --mount=type=cache,id=catamorphic-desktop-user-bun-${TARGETARCH},target=/home/bun/.bun/install/cache,uid=1000,gid=1000,sharing=locked \
     bun install --frozen-lockfile \
     && cd apps/desktop && node -e "require('electron')"
-COPY source/ ./
-RUN --mount=type=cache,id=catamorphic-desktop-turbo-${TARGETARCH},target=/workspace/.turbo/cache,sharing=locked \
+COPY --chown=bun:bun source/ ./
+RUN --mount=type=cache,id=catamorphic-desktop-user-turbo-${TARGETARCH},target=/workspace/.turbo/cache,uid=1000,gid=1000,sharing=locked \
     bun scripts/tool-runtime.ts turbo run build --no-daemon --concurrency=2 \
-    --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+    --filter=catamorphic-desktop... --filter=catamorphic-pwa... \
+    --filter=catamorphic-server...
 ENV CI=true
 ENV SHELL=/bin/bash
 ENV CATAMORPHIC_E2E_ARTIFACTS_DIR=/artifacts

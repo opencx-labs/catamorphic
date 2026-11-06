@@ -1,10 +1,10 @@
 # Observability
 
 Catamorphic emits traces, metrics, and structured diagnostic logs through the
-OpenTelemetry APIs. The desktop and stock server include an optional Node SDK
+OpenTelemetry APIs. The desktop and Work server include an optional Node SDK
 bootstrap. Nothing is exported until an endpoint or exporter is configured.
 
-## Stock server and desktop environment
+## Work server and desktop environment
 
 Set standard OpenTelemetry variables before starting the host:
 
@@ -12,7 +12,7 @@ Set standard OpenTelemetry variables before starting the host:
 OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4318
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20YOUR_TOKEN
-OTEL_SERVICE_NAME=catamorphic-server
+OTEL_SERVICE_NAME=work-server
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=production,service.namespace=my-team
 ```
 
@@ -43,7 +43,7 @@ The official exporters handle these standard settings:
 
 Signal-specific configuration overrides generic configuration according to the
 SDK. Standard resource environment settings override the default service names
-`catamorphic-desktop` and `catamorphic-server`. Exporters batch and retry using
+`catamorphic-desktop` and `work-server`. Exporters batch and retry using
 the official SDK behavior. Shutdown drains all providers with a five-second
 host budget; an unavailable collector cannot hold the app open indefinitely.
 
@@ -55,7 +55,7 @@ their isolated userData paths. The process environment takes precedence. Only
 
 ## Desktop project defaults and local overrides
 
-A project can commit a `telemetry` section in `.catamorphic/project.json`:
+A project can commit a `telemetry` section in `.work/project.json`:
 
 ```json
 {
@@ -160,7 +160,7 @@ error log and exception type. Sandbox nonzero exit codes are errors even when
 the provider returns normally. Successful callbacks never overwrite an error
 status set by the operation.
 
-Both `AiSdkCodingAgent` and `AiSdkAgentRuntime` use the OpenTelemetry GenAI
+The AI SDK harness adapter (`createAiSdkAdapter`) uses the OpenTelemetry GenAI
 Development conventions: `invoke_agent`, `chat`, and `execute_tool`, with
 `gen_ai.*` attributes. Metrics cover model duration, input/output tokens,
 time to first output, agent duration, model/tool call counts, and tool duration.

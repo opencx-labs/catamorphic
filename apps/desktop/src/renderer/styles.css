@@ -78,6 +78,20 @@
   --radius-lg: 10px;
 
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Bare transition utilities (transition, transition-colors, ...) take the
+     one easing too, so a class without an ease-* never falls back to
+     Tailwind's own curve. */
+  --default-transition-timing-function: var(--ease-standard);
+}
+
+/* Every element rests with the accent as its outline color, so a focus ring
+   never fades in from the text color (see "Focus rings" below). */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    outline-color: var(--color-accent);
+  }
 }
 
 /* A quiet, tab-sized tour. Only the page track moves; navigation stays put. */
@@ -252,7 +266,7 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.onboarding-progress button span {
+.onboarding-progress-dot {
   height: 5px;
   width: 5px;
   border-radius: 999px;
@@ -261,13 +275,12 @@
     background-color 150ms var(--ease-standard),
     width 200ms var(--ease-standard);
 }
-.onboarding-progress button[aria-current="step"] span {
+.onboarding-progress button[aria-current="step"] .onboarding-progress-dot {
   width: 16px;
   background: var(--color-fg-muted);
 }
 .onboarding-progress button:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 .onboarding-workspace-preview {
   position: relative;
@@ -305,19 +318,38 @@
   min-width: 0;
   overflow: clip;
   white-space: nowrap;
-  animation: onboarding-sidebars 6000ms var(--ease-standard) infinite;
+  animation: onboarding-sidebar-left 6000ms var(--ease-standard) infinite;
 }
-@keyframes onboarding-sidebars {
+.onboarding-workspace-preview[data-preview-sidebars] .onboarding-preview-right {
+  animation-name: onboarding-sidebar-right;
+}
+@keyframes onboarding-sidebar-left {
   0%,
-  15%,
+  10%,
   65%,
   100% {
     flex-basis: 0;
     padding-inline: 0;
     opacity: 0;
   }
-  20%,
+  15%,
   60% {
+    flex-basis: 175px;
+    padding-inline: 8px;
+    opacity: 1;
+  }
+}
+@keyframes onboarding-sidebar-right {
+  0%,
+  25%,
+  80%,
+  100% {
+    flex-basis: 0;
+    padding-inline: 0;
+    opacity: 0;
+  }
+  30%,
+  75% {
     flex-basis: 175px;
     padding-inline: 8px;
     opacity: 1;
@@ -329,6 +361,8 @@
     animation: none;
   }
 }
+.onboarding-workspace-preview[data-preview-sidebars][data-preview-active="false"]
+  .onboarding-preview-sidebar,
 [data-workspace-visible="false"]
   .onboarding-workspace-preview[data-preview-sidebars]
   .onboarding-preview-sidebar {
@@ -455,9 +489,7 @@
   color: var(--color-fg);
 }
 .theme-agent-link:focus-visible {
-  outline: 2px solid var(--color-accent);
   border-radius: 4px;
-  outline-offset: 4px;
 }
 @container (max-width: 520px) {
   .onboarding-page {
@@ -489,10 +521,6 @@
    peek, not a workspace: no scrollbars and no message navigation. */
 :where([data-lurking]) * {
   scrollbar-width: none;
-}
-[data-lurking] button[aria-label="Scroll to latest message"],
-[data-lurking] button[aria-label="Jump to your previous message"] {
-  display: none;
 }
 
 /* Framed content is a preference, off by default: content sits flush with
@@ -589,28 +617,68 @@ textarea,
   user-select: text;
 }
 
+/* Selected text takes the theme's accent, not the OS highlight. Monaco
+   and the terminal tint their own selection from the same token; web
+   pages get it injected ahead of their own styles (lib/page-theme.ts),
+   so a page's own selection color wins. */
+::selection {
+  background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
 code,
 pre,
 kbd {
   font-family: var(--font-mono);
 }
 
-/* Keyboard focus ring on the accent token (Chromium's outline:auto default
-   is an amber that clashes with the palette). Excluded: .field elements and
-   text controls inside one — the field carries its own border+glow focus
-   treatment (via :focus-within for wrappers like the chat composer), and
-   this rule would stack a second ring inside it. Buttons inside a field
-   (e.g. the composer's send button) keep the ring. */
+/* Focus rings (DESIGN.md "Focus rings"). There is one ring: 2px of the
+   accent, outside a standalone control (--focus-ring-offset) and inside a
+   row, tile or anything stacked or clipped (--focus-ring-inset, which covers
+   a 1px border instead of doubling it). Every rule draws it as
+   `outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent)`.
+
+   Rings follow keyboard navigation. Chromium turns :focus-visible on after
+   any key, so Escape after a right-click lit the row focus returned to.
+   lib/focus-modality.ts marks the root while the pointer leads, and the
+   ring style resolves to none until Tab or an arrow key takes over.
+
+   A ring appears at once. Every element rests with the accent as its
+   outline color, so a transition that includes outline-color (Tailwind's
+   transition-colors does) has nothing to fade from. */
+:root {
+  --focus-ring-width: 2px;
+  --focus-ring-style: solid;
+  --focus-ring-offset: 1px;
+  --focus-ring-inset: -1px;
+}
+:root[data-focus-modality="pointer"] {
+  --focus-ring-style: none;
+}
+
+/* Text fields are excluded: a .field carries its own border and glow
+   (via :focus-within for wrappers like the chat composer), and this rule
+   would stack a second ring inside it. Buttons inside a field (the
+   composer's send button) keep the ring. */
 :focus-visible:not(
   .field,
   .field textarea,
   .field input,
   .field select,
   .field [contenteditable],
+  [data-palette] textarea,
+  [data-palette] [contenteditable],
+  [data-settings-target="true"],
   [role="dialog"]
 ) {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* The inset placement, for controls whose ring a neighbour or a scrolling
+   ancestor would otherwise cover. The doubled class matches the global
+   rule's (0,3,0), which its :not() list carries, and wins by order. */
+.focus-ring-inset.focus-ring-inset:focus-visible {
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* Modal panels receive programmatic focus for containment and restoration.
@@ -622,6 +690,17 @@ kbd {
 /* macOS traffic-light drag region */
 .app-drag {
   -webkit-app-region: drag;
+}
+/* A project the window keeps in the background is still laid out under
+   the visible one, only transparent and inert, and Chromium takes the
+   window's drag areas from every element whatever its opacity, inertness
+   or pointer events, each over the ones before it. Its title row and its
+   tab strip's spare room would drag the window from under the visible
+   tabs, so only the visible project draws drag areas. `initial`, not
+   `none`: Blink reads every keyword but `drag` as `no-drag`, which would
+   cancel the visible project's drag areas instead. */
+[data-workspace-visible="false"] :is(.app-drag, .app-no-drag) {
+  -webkit-app-region: initial;
 }
 
 /* New chat bubble pop-in (width reveal + scale, one shot on mount) */
@@ -769,6 +848,94 @@ kbd {
   position: relative;
 }
 
+/* Dictation's words while they are still being said (voice): muted until
+   the stretch of speech ends. Then they take the text's colour, or fade
+   when nothing was said, as the dot goes, and are typed. Chat's motion:
+   one easing, 200ms. */
+.cat-composer [data-dictation] {
+  color: var(--color-fg-muted);
+  transition:
+    color 200ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.cat-composer [data-dictation][data-settling] {
+  color: inherit;
+}
+
+.cat-composer [data-dictation][data-settling="unsaid"] {
+  opacity: 0;
+}
+
+/* Each new word fades in as it is heard, as an agent's prose does. */
+.cat-composer [data-dictation-word] {
+  animation: dictation-word-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes dictation-word-in {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+}
+
+/* Voice still hearing: a soft dot where the words will go on. It grows in
+   and breathes (scale and filter), and shrinks away (opacity and
+   transform) as the words settle, so the two never fight. */
+.cat-composer [data-dictation]::after {
+  content: "";
+  display: inline-block;
+  width: 0.4em;
+  height: 0.4em;
+  margin-left: 0.3em;
+  vertical-align: middle;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  transition:
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1),
+    transform 200ms cubic-bezier(0.2, 0, 0, 1);
+  animation:
+    dictation-dot-in 200ms cubic-bezier(0.2, 0, 0, 1),
+    dictation-pulse 1.1s ease-in-out 200ms infinite;
+}
+
+.cat-composer [data-dictation][data-settling]::after {
+  opacity: 0;
+  transform: scale(0.3);
+}
+
+@keyframes dictation-dot-in {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+}
+
+/* From where the dot grew in: bright and whole, then softer, and back. */
+@keyframes dictation-pulse {
+  0%,
+  100% {
+    filter: opacity(1);
+    scale: 1;
+  }
+  50% {
+    filter: opacity(0.45);
+    scale: 0.8;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cat-composer [data-dictation],
+  .cat-composer [data-dictation]::after {
+    transition-duration: 0.01ms;
+  }
+
+  .cat-composer [data-dictation-word],
+  .cat-composer [data-dictation]::after {
+    animation: none;
+  }
+}
+
 .cat-composer[data-empty]::before {
   content: attr(data-placeholder);
   position: absolute;
@@ -789,7 +956,7 @@ kbd {
 }
 
 /* Popover surfaces anchored to a control (surface-rail popovers, the
-   composer's slash menu): a quick rise + settle in, the reverse on the
+   downloads bubble): a quick rise + settle in, the reverse on the
    way out. Exit holds its final frame until React unmounts on
    animationend. */
 @keyframes pop-in {
@@ -1013,6 +1180,38 @@ kbd {
   }
 }
 
+/* A press on a surface the agent holds shows its veil for a moment: a sheet
+   of tinted plastic, invisible until touched, that gives a little from
+   where it was pressed and clears. */
+@keyframes veil-touch {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  14% {
+    opacity: 1;
+    transform: scale(0.988);
+  }
+  32% {
+    transform: scale(1.006);
+  }
+  50% {
+    transform: scale(0.997);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.001);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.animate-veil-touch {
+  animation: veil-touch 760ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Content crossfade when modal sections swap (paired with a height tween) */
 @keyframes fade-in {
   from {
@@ -1229,43 +1428,63 @@ kbd {
   animation: bubble-ask 280ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Workspace tab arrival (new tab opened, incl. chat promoted to a tab) */
-@keyframes sidebar-tab-in {
-  from {
-    height: 0;
-    opacity: 0;
-    margin-bottom: -4px;
-  }
-  to {
-    height: 32px;
-    opacity: 1;
-    margin-bottom: 0;
-  }
+/* A sidebar tab joining or leaving its strip (a contextual tab such as This
+   session, ADR 0226): its place grows from nothing while its neighbours
+   slide, and shrinks away the way it came. Transitions, not keyframes: a
+   quick change back reverses from wherever it is. At no width the place
+   gives back its flex gap. */
+.sidebar-tab-slot {
+  width: 28px;
+  flex-shrink: 0;
+  transition-property: width, margin-inline-end, opacity, scale;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-standard);
 }
-
-@keyframes sidebar-tab-out {
-  from {
-    height: 32px;
-    opacity: 1;
-    margin-bottom: 0;
-  }
-  to {
-    height: 0;
-    opacity: 0;
-    margin-bottom: -4px;
-  }
+.sidebar-tab-slot.sidebar-tab-slot-leaving {
+  width: 0;
+  margin-inline-end: -4px;
+  opacity: 0;
+  scale: 0.6;
+  pointer-events: none;
 }
-
-.animate-sidebar-tab-in {
-  animation: sidebar-tab-in 200ms cubic-bezier(0.2, 0, 0, 1);
+.sidebar-tab-slot-arriving,
+.sidebar-tab-slot-leaving {
   overflow: hidden;
 }
-
-.animate-sidebar-tab-out {
-  animation: sidebar-tab-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
-  overflow: hidden;
+@starting-style {
+  .sidebar-tab-slot.sidebar-tab-slot-arriving {
+    width: 0;
+    margin-inline-end: -4px;
+    opacity: 0;
+    scale: 0.6;
+  }
 }
 
+/* The tab strip opening as a second tab arrives, and folding as the count
+   drops to one: the panel below follows its height. */
+.sidebar-strip {
+  transition-property: height, opacity;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-standard);
+}
+.sidebar-strip.sidebar-strip-folding {
+  height: 0;
+  opacity: 0;
+}
+.sidebar-strip-arriving,
+.sidebar-strip-folding {
+  overflow: hidden;
+}
+@starting-style {
+  .sidebar-strip.sidebar-strip-arriving {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+/* Workspace tab arrival: its width grows from nothing to the widest a tab
+   gets (a 160px title, its icon and padding; the close button takes no
+   room), so the neighbours slide aside. */
 @keyframes tab-in {
   from {
     max-width: 0;
@@ -1273,7 +1492,7 @@ kbd {
     transform: translateY(3px);
   }
   to {
-    max-width: 220px;
+    max-width: 202px;
     opacity: 1;
     transform: translateY(0);
   }
@@ -1289,11 +1508,10 @@ kbd {
    fully instead of leaving a 4px hole. */
 @keyframes tab-out {
   from {
-    max-width: 220px;
+    max-width: 202px;
     opacity: 1;
     transform: translateY(0);
     margin-left: 0;
-    padding-inline: 4px;
     border-width: 1px;
   }
   to {
@@ -1301,7 +1519,6 @@ kbd {
     opacity: 0;
     transform: translateY(3px);
     margin-left: -4px;
-    padding-inline: 0;
     border-width: 0;
   }
 }
@@ -1311,8 +1528,33 @@ kbd {
   overflow: hidden;
 }
 
+/* Every section's refresh indicator gives back its place as it fades.
+   Keeping display until exit finishes also stops the hidden spinner. */
+.sidebar-refresh {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  opacity: 1;
+  transition:
+    width 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    display 150ms var(--ease-standard);
+  transition-behavior: allow-discrete;
+}
+.sidebar-refresh[hidden] {
+  display: none;
+  width: 0;
+  opacity: 0;
+}
+@starting-style {
+  .sidebar-refresh {
+    width: 0;
+    opacity: 0;
+  }
+}
+
 /* The one loading placeholder for sidebar sections: still bars at row
-   height, no shimmer. The section header's spinner carries the motion. */
+   height, no shimmer. Its Collapsible owns paired height and opacity. */
 .sidebar-skeleton {
   display: flex;
   flex-direction: column;
@@ -1338,6 +1580,50 @@ kbd {
 .sidebar-skeleton-bar {
   height: 8px;
 }
+/* A paginated tree branch's end (the shared Tree's next page): the same
+   still bars, the failed page with Retry in the chrome's error voice, or
+   Show more where the tree stopped reading on its own. */
+[data-tree-more] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline-end: 8px;
+  box-sizing: border-box;
+}
+[data-tree-more="placeholder"] > span {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-fg) 7%, transparent);
+}
+[data-tree-more="placeholder"] > span:first-child {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+[data-tree-more="placeholder"] > span:last-child {
+  height: 8px;
+}
+[data-tree-more="error"],
+[data-tree-more="paused"] {
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+}
+[data-tree-more="error"] > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-tree-end] > button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
+}
 
 /* Controls that belong to a hovered row (overflow dots, close, open-in-window)
    share one reveal: hidden until the row is hovered or holds keyboard focus,
@@ -1353,9 +1639,123 @@ kbd {
 .row-reveal[aria-expanded="true"] {
   opacity: 1;
 }
+/* A copy button beside a value (a path, an address, a command) rests
+   hidden in its place until its copyable item, the nearest
+   [data-copyable], is hovered or holds keyboard focus, so a card of values
+   reads as values. It stays while it says how the copy went, so the
+   outcome is not cut off when the pointer leaves. Its place is kept:
+   nothing moves when it shows. */
+.copy-reveal {
+  opacity: 0;
+  transition:
+    opacity 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    background-color 150ms var(--ease-standard);
+}
+[data-copyable]:hover .copy-reveal,
+[data-copyable]:has(:focus-visible) .copy-reveal,
+.copy-reveal:focus-visible,
+.copy-reveal[data-copied],
+.copy-reveal[data-copy-failed] {
+  opacity: 1;
+}
 @media (prefers-reduced-motion: reduce) {
-  .row-reveal {
+  .row-reveal,
+  .copy-reveal {
     transition: none;
+  }
+}
+
+/* What a chat is doing, on its icon's lower corner (SignalGlyph: the
+   working spinner, or what it waits on), cuts a gap out of the icon under
+   it, so it reads on any row background. The gap opens and closes with the
+   mark, centred where it sits. */
+@property --signal-cutout {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.signal-cutout {
+  mask-image: radial-gradient(
+    circle at calc(100% - 2px) calc(100% - 2px),
+    transparent calc(var(--signal-cutout) - 0.5px),
+    #000 var(--signal-cutout)
+  );
+  transition: --signal-cutout 200ms var(--ease-standard);
+}
+.signal-cutout[data-cut] {
+  --signal-cutout: 5.5px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .signal-cutout {
+    transition: none;
+  }
+}
+
+/* A workspace tab's close button takes no room in the strip, so the tab is
+   only as wide as its icon and title. The button rides over the end of the
+   label, where the title's padding was: its X covers the title's last 12px,
+   which clear, and the 16px before them fade, so the title runs on under it
+   instead of moving. It shows while the tab is hovered or holds keyboard
+   focus (the row reveal's rule, led by the keyboard as rings are), on one
+   reversible transition of opacity and scale, so a pointer crossing the
+   strip turns each back from where it is and nothing beside it moves.
+   Hidden, it lets presses through to the tab; a dragged tab hides them all.
+   Without hover the tab in front keeps its button. */
+@property --tab-title-end {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #000;
+}
+.workspace-tab-close {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 6px;
+  height: 20px;
+  margin-block: auto;
+  opacity: 0;
+  scale: 0.8;
+  pointer-events: none;
+  transition:
+    opacity 150ms var(--ease-standard),
+    scale 150ms var(--ease-standard);
+}
+.workspace-tab-title {
+  mask-image: linear-gradient(to left, var(--tab-title-end) 12px, #000 28px);
+  transition: --tab-title-end 150ms var(--ease-standard);
+}
+[data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:hover
+  .workspace-tab-close,
+:root:not([data-focus-modality="pointer"])
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:has(:focus-visible)
+  .workspace-tab-close {
+  opacity: 1;
+  scale: 1;
+  pointer-events: auto;
+}
+[data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:hover
+  .workspace-tab-title,
+:root:not([data-focus-modality="pointer"])
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:has(:focus-visible)
+  .workspace-tab-title {
+  --tab-title-end: transparent;
+}
+@media (hover: none) {
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+    .workspace-tab[data-tab-active]
+    .workspace-tab-close {
+    opacity: 1;
+    scale: 1;
+    pointer-events: auto;
+  }
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+    .workspace-tab[data-tab-active]
+    .workspace-tab-title {
+    --tab-title-end: transparent;
   }
 }
 
@@ -1363,18 +1763,49 @@ kbd {
    neighbours and the panel's edges never cut it. */
 [data-sidebar-section] button:focus-visible:not([hidden]),
 [data-sidebar-section] a:focus-visible:not([hidden]) {
-  outline-offset: -2px;
+  outline-offset: var(--focus-ring-inset);
 }
 
 /* A sidebar row or tile is one rounded box. When keyboard focus lands on
    the control inside it, the ring is drawn on that box with its radius and
-   over its border; the inner control never draws its own square ring. */
-[data-sidebar-item-id]:has(:focus-visible) {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -1px;
+   over its border; the inner control never draws its own square ring. A
+   tree's rows wear the tree's one gliding ring instead (below). */
+[data-sidebar-item-id]:has(:focus-visible):not(
+  [data-tree-viewport] [data-sidebar-item-id]
+) {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
 }
 /* Outranks the global ring rule's :not() specificity. */
 [data-sidebar-item-id] :focus-visible:not([hidden]) {
+  outline: none;
+}
+
+/* A chip is one rounded box, like a sidebar row: keyboard focus on its main
+   button rings the box over its border, with its radius; its own buttons
+   keep their rings. A group's member rows do the same. */
+[data-chip-root]:has(> [data-chip-main]:focus-visible),
+[data-member]:has(> [data-member-main]:focus-visible) {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
+}
+[data-chip-root] > [data-chip-main]:focus-visible:not([hidden]),
+[data-member] > [data-member-main]:focus-visible:not([hidden]) {
+  outline: none;
+}
+
+/* A top-strip tab's label fills the tab, so the tab wears the label's ring
+   inside its border, with its own corners (a split pair's merged ones
+   included), above its neighbours; its close and expand buttons keep
+   their own. */
+[data-tab-orientation="horizontal"]
+.workspace-tab:has(.workspace-tab-label:focus-visible) {
+  z-index: 1;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
+}
+[data-tab-orientation="horizontal"]
+  .workspace-tab-label:focus-visible:not([hidden]) {
   outline: none;
 }
 
@@ -1382,10 +1813,51 @@ kbd {
    rows are absolutely stacked, so an outside ring was covered top and
    bottom by the neighbours and clipped left and right by the tree. */
 [role="tree"] [role="treeitem"]:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
   border-radius: var(--radius-md);
   z-index: 1;
+}
+/* The app kit's trees (every sidebar list) draw one ring instead: on the
+   focused row's own indented box, wholly inside it so it never reaches a
+   neighbour, gliding from row to row as the keyboard moves rather than
+   going out on one row and coming on at the next. It arrives at once where
+   focus enters, as every ring does. */
+[data-tree-viewport] [role="treeitem"]:focus-visible {
+  outline: none;
+}
+[data-tree-focus] {
+  border-radius: var(--radius-md);
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+[data-tree-focus][data-glide] {
+  transition:
+    top 150ms var(--ease-standard),
+    left 150ms var(--ease-standard);
+}
+
+/* Menus carry one keyboard ring between rows on the sidebar's curve.
+   Each scroller owns its ring, so a submenu and a long menu stay aligned. */
+[data-sidebar-menu] [data-item-id][role]:focus-visible {
+  outline: none;
+}
+[data-menu-focus] {
+  border-radius: var(--radius-md);
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+  visibility: hidden;
+  transition:
+    top 200ms var(--ease-standard),
+    left 200ms var(--ease-standard);
+}
+div:has(> button:focus-visible) > [data-menu-focus] {
+  visibility: visible;
+}
+[data-menu-focus][data-glide] {
+  transition:
+    top 150ms var(--ease-standard),
+    left 150ms var(--ease-standard);
 }
 
 /* Expanding or collapsing a branch moves the rows below it and resizes the
@@ -1396,21 +1868,31 @@ kbd {
 [role="tree"] [role="treeitem"] {
   transition: top 200ms var(--ease-standard);
 }
-[role="tree"][data-dragging] [role="treeitem"] {
-  transition: none;
-}
-/* Drop cues ease in and out alike. */
+/* Drop cues ease in and out alike. The row being dragged (and the one just
+   dropped, until the reorder lands) dims so the insertion line reads as
+   where it is going. */
 [role="tree"] [role="treeitem"] > *,
 [data-drop-zone] > li {
-  transition-property: box-shadow, background-color, color;
+  transition-property: box-shadow, background-color, color, opacity;
   transition-duration: 150ms;
   transition-timing-function: var(--ease-standard);
+}
+[role="tree"] [data-tree-dragging] > * {
+  opacity: 0.4;
+}
+/* A dropped row fades into its new slot while its neighbours slide. */
+[role="tree"] [data-tree-settling] > * {
+  opacity: 0;
+  transition: none;
 }
 @media (prefers-reduced-motion: reduce) {
   [role="tree"],
   [role="tree"] [role="treeitem"],
   [role="tree"] [role="treeitem"] > *,
-  [data-drop-zone] > li {
+  [data-tree-focus],
+  [data-menu-focus],
+  [data-drop-zone] > li,
+  [data-tree-drop-line] {
     transition: none;
   }
 }
@@ -1424,6 +1906,8 @@ kbd {
   border-radius: 1px;
   z-index: 1;
   animation: fade-in 120ms var(--ease-standard);
+  /* Moving between slots glides instead of blinking from row to row. */
+  transition: top 100ms var(--ease-standard);
 }
 [data-tree-drop-line]::before {
   content: "";
@@ -1438,6 +1922,11 @@ kbd {
 [role="treeitem"][data-drop="inside"] > * {
   border-radius: var(--radius-md);
   box-shadow: inset 0 0 0 1px var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+/* A chat's tab in the strip takes a dragged tab inside, as a tree row does. */
+.workspace-tab[data-tab-drop="inside"] {
+  border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 /* Tiles in a grid mark their slot on the side the drop will land. */
@@ -1466,10 +1955,12 @@ kbd {
   color: var(--color-fg-muted);
 }
 
-/* Keyboard tab cycling (Cmd+[ / Cmd+]): the persistent content pane
-   nudges in from the direction of travel — a content-changed signal on
+/* Keyboard tab cycling (Cmd+[ / Cmd+]), and an agent's open or close
+   changing the tab in front: the persistent content pane nudges in from
+   the direction of travel along the strip, a content-changed signal on
    a wrapper that never unmounts (so no exit pair), like title-change.
-   Click-switching stays instant; only deliberate cycling narrates. */
+   A person's click stays instant: their own press is the cue. Only
+   deliberate cycling and swaps nobody pressed for narrate. */
 @keyframes pane-in-left {
   from {
     transform: translateX(-14px);
@@ -1526,27 +2017,88 @@ kbd {
 }
 
 /* Agent pointer: the agent directing the user's attention at an element
-   (point_at tool). A soft accent ring with a gentle breathing pulse — a
-   waiting state, like the question badge's pulse: it loops only until the
-   user interacts with the element or the agent points elsewhere. */
+   (point_at tool). A soft accent ring fades in and holds, steady, until
+   the user interacts with the element or the agent points elsewhere, then
+   fades out the way it came (components/agent-pointers.tsx). Nothing
+   loops: a waiting glow is not progress (motion contract, rule 3). The
+   ring is held by the entrance's fill, which beats the element's own
+   box-shadow while it glows. */
 .agent-pointer {
   position: relative;
   border-radius: 6px;
-  animation: agent-pointer-pulse 2s ease-in-out infinite;
 }
 
-@keyframes agent-pointer-pulse {
-  0%,
-  100% {
+@keyframes agent-pointer-in {
+  from {
+    box-shadow:
+      0 0 0 2px transparent,
+      0 0 12px transparent;
+  }
+  to {
     box-shadow:
       0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
-      0 0 10px color-mix(in srgb, var(--color-accent) 30%, transparent);
+      0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent);
   }
-  50% {
+}
+
+@keyframes agent-pointer-out {
+  from {
     box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent),
-      0 0 16px color-mix(in srgb, var(--color-accent) 45%, transparent);
+      0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
+      0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent);
   }
+  to {
+    box-shadow:
+      0 0 0 2px transparent,
+      0 0 12px transparent;
+  }
+}
+
+.animate-agent-pointer-in {
+  animation: agent-pointer-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+/* A fade a className rewrite interrupted resumes where it was
+   (components/agent-pointers.tsx). */
+.animate-agent-pointer-out {
+  animation: agent-pointer-out 200ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation-delay: var(--agent-pointer-elapsed, 0ms);
+}
+
+/* A glow put back after React rewrote its element's classes: the ring the
+   entrance holds, steady, with nothing replayed. Unlayered, so it beats
+   the element's own shadow utilities. */
+.agent-pointer-held {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
+    0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+@keyframes agent-pointer-note-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes agent-pointer-note-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-agent-pointer-in[data-agent-pointer-note]::after {
+  animation: agent-pointer-note-in 200ms var(--ease-standard) both;
+}
+
+.animate-agent-pointer-out[data-agent-pointer-note]::after {
+  animation: agent-pointer-note-out 200ms var(--ease-standard) both;
+  animation-delay: var(--agent-pointer-elapsed, 0ms);
 }
 
 /* The agent's short note, floated above the pointed element. */
@@ -1639,6 +2191,13 @@ kbd {
   background: color-mix(in srgb, var(--color-bg-raised) 30%, transparent);
 }
 
+/* A search destination may fill a clipped list or already have a border.
+   Keep its highlight wholly inside its box, on every Settings category. */
+[data-settings-target="true"] {
+  outline: var(--focus-ring-width) solid var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
 /* One button vocabulary. A rectangular action picks a role instead of a
    private accent or border recipe: primary for the action a surface asks
    for (every "Add" and "Save"), secondary for peers, ghost for Cancel, danger
@@ -1714,31 +2273,104 @@ kbd {
   }
 }
 
-/* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
+/* Bare icon tabs. Both sidebars share the same quiet chrome and motion: the
+   panel slides with a transform (closing from open, once its items have
+   started to leave), and the aside
+   holds the sidebar's place beside the content (its width, once docked),
+   which changes only once the panel is still (lib/sidebar-motion.ts). */
 .tabbed-sidebar {
   position: relative;
   flex-shrink: 0;
-  overflow: hidden;
-  background: var(--color-sidebar);
-  transition: width 200ms var(--ease-standard);
 }
-[data-sidebar-dividers="on"] .tabbed-sidebar[data-sidebar="left"] {
-  border-right: 1px solid var(--color-border);
-}
-[data-sidebar-dividers="on"] .tabbed-sidebar[data-sidebar="right"] {
-  border-left: 1px solid var(--color-border);
-}
-.tabbed-sidebar[aria-hidden="true"] {
-  border-width: 0;
+.tabbed-sidebar:not([data-docked="true"]) {
+  z-index: 40;
 }
 .tabbed-sidebar[data-resizing] {
-  transition: none;
   user-select: none;
 }
 .sidebar-inner {
+  position: absolute;
+  inset-block: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  overflow: hidden;
+  background: var(--color-sidebar);
+  /* The theme's picture (ThemeBackdrop) sits between this and the items. */
+  isolation: isolate;
+  /* Under reduced motion the global near-zero duration still ends the slide
+     through its transition, which the phase follows. */
+  transition: transform 200ms var(--ease-standard);
+}
+[data-sidebar="left"] > .sidebar-inner {
+  left: 0;
+}
+[data-sidebar="right"] > .sidebar-inner {
+  right: 0;
+}
+[data-sidebar="left"]:is([data-motion="closed"], [data-motion="closing"])
+  > .sidebar-inner {
+  transform: translateX(-100%);
+}
+[data-sidebar="right"]:is([data-motion="closed"], [data-motion="closing"])
+  > .sidebar-inner {
+  transform: translateX(100%);
+}
+/* Hidden, not only off screen: an overlay's shadow would reach in. */
+[data-motion="closed"] > .sidebar-inner {
+  visibility: hidden;
+}
+/* Closing from open, the items leave first and the panel follows a beat
+   later, carrying the threads they leave (lib/sidebar-leave.ts animates
+   both). The items sweep out from the top over 60ms; the last is on its
+   way when the panel starts. A close that reverses an opening panel
+   doesn't wait. */
+.tabbed-sidebar[data-items-lead] > .sidebar-inner {
+  transition-delay: 100ms;
+}
+/* Beside content that lays out cheaply, the sidebar's place grows and
+   shrinks with the panel's slide (same duration, easing and wait), so the
+   content's edge rides the panel's (lib/sidebar-motion.ts, push). */
+.tabbed-sidebar[data-push] {
+  transition: width 200ms var(--ease-standard);
+}
+.tabbed-sidebar[data-push][data-items-lead] {
+  transition-delay: 100ms;
+}
+/* Pages kept laid out behind the tab in front hold their width through a
+   push (lib/sidebar-transition.ts sets it) and take the new one once, at
+   rest: a page resizes in its own process and holds the window until it
+   has repainted. */
+[data-sidebar="left"][data-push]
+  ~ .workspace-surface
+  [data-surface-key^="browser:"]:not([data-workspace-slot]),
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  [data-surface-key^="browser:"]:not([data-workspace-slot]) {
+  right: auto;
+  width: var(--push-pinned-width);
+}
+.sidebar-traces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* A row's thread grows from where the row ended in step with it, so its
+   free end stays on the row's trailing edge. */
+.sidebar-trace {
+  position: absolute;
+  height: 1.5px;
+  margin-top: -0.75px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--trace-color) 40%, transparent);
+  transform-origin: right;
+}
+[data-sidebar="right"] .sidebar-trace {
+  transform-origin: left;
+}
+[data-sidebar-dividers="on"] [data-sidebar="left"] > .sidebar-inner {
+  border-right: 1px solid var(--color-border);
+}
+[data-sidebar-dividers="on"] [data-sidebar="right"] > .sidebar-inner {
+  border-left: 1px solid var(--color-border);
 }
 .sidebar-tab {
   display: grid;
@@ -1757,25 +2389,23 @@ kbd {
 .sidebar-tab:hover {
   color: var(--color-fg);
 }
-.sidebar-tab[aria-selected="true"] {
+.sidebar-tab[aria-selected="true"],
+.sidebar-tab[data-selected="true"] {
   color: var(--color-accent);
 }
 .sidebar-tab:active {
   transform: scale(0.92);
 }
-.sidebar-tab:focus-visible,
-.sidebar-resizer:focus-visible {
-  outline: 1px solid var(--color-accent);
-  outline-offset: -2px;
+.sidebar-tab.sidebar-tab:focus-visible,
+.sidebar-resizer.sidebar-resizer:focus-visible {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
   border-radius: 4px;
 }
 .sidebar-tab-panel {
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  /* Reserve the scrollbar's column so expanding a long section never
-     narrows every other section by a scrollbar width. */
-  scrollbar-gutter: stable;
   padding: 0 8px;
   opacity: 1;
   translate: 0;
@@ -1785,6 +2415,72 @@ kbd {
     translate 200ms var(--ease-standard),
     display 200ms;
   transition-behavior: allow-discrete;
+}
+/* The sidebar's lists (the panel, a section's own list) keep no scrollbar
+   and no column for one, so rows sit evenly and nothing narrows when a
+   section grows. Each fades the edge it continues past (cat-edge-fade).
+   Thin overlay thumbs stand in while they scroll, in lanes of the panel's
+   padding from the outer edge in (components/overlay-scrollbar.tsx, ADR
+   0248): the panel's on the edge; a section's that asks for one (scrollbar:
+   true) a lane in, the panel's outer padding widened for it. Neither ever
+   lies over a row. */
+.sidebar-tab-panel,
+.sidebar-tab-panel * {
+  scrollbar-width: none;
+}
+/* The thumb stands in for scrolling up and down only: a code block in a
+   note keeps its sideways scrollbar. */
+.sidebar-tab-panel :is(pre, table) {
+  scrollbar-width: thin;
+}
+.overlay-scrollbar {
+  position: absolute;
+  top: 4px;
+  z-index: 1;
+  width: 5px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms var(--ease-standard);
+}
+.overlay-scrollbar[data-lane="panel"][data-edge="left"] {
+  left: 1px;
+}
+.overlay-scrollbar[data-lane="panel"][data-edge="right"] {
+  right: 1px;
+}
+/* The section lane: 2px past the panel's thumb, 3px before the rows,
+   whose outer padding grows from 8px to 16px to keep it. */
+.overlay-scrollbar[data-lane="section"][data-edge="left"] {
+  left: 8px;
+}
+.overlay-scrollbar[data-lane="section"][data-edge="right"] {
+  right: 8px;
+}
+[data-sidebar="left"] [data-section-thumbs] > .sidebar-tab-panel {
+  padding-left: 16px;
+}
+[data-sidebar="right"] [data-section-thumbs] > .sidebar-tab-panel {
+  padding-right: 16px;
+}
+.overlay-scrollbar[data-shown="true"] {
+  opacity: 1;
+}
+.overlay-scrollbar-thumb {
+  width: 100%;
+  border-radius: 2.5px;
+  background: color-mix(in srgb, var(--color-fg) 22%, transparent);
+  transition: background-color 150ms var(--ease-standard);
+}
+/* Panel wheels reach the native scroller beneath the visual thumb. Its
+   drag starts from the sidebar's capture listener without intercepting wheels. */
+.overlay-scrollbar[data-lane="section"][data-shown="true"]
+.overlay-scrollbar-thumb {
+  pointer-events: auto;
+}
+.overlay-scrollbar-thumb:hover,
+.overlay-scrollbar[data-hovered] .overlay-scrollbar-thumb,
+.overlay-scrollbar[data-dragging] .overlay-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-fg) 38%, transparent);
 }
 .sidebar-tab-panel[hidden] {
   display: none;
@@ -1797,7 +2493,8 @@ kbd {
     translate: 0 6px;
   }
 }
-/* First paint stays still. User tab changes enable the paired transition. */
+/* First paint stays still. Any later change of the tab in front (a click,
+   or the tab in front leaving) enables the paired transition. */
 .tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
   transition: none;
 }
@@ -1815,17 +2512,29 @@ kbd {
   cursor: col-resize;
   touch-action: none;
 }
-[data-sidebar="left"] > .sidebar-resizer {
+[data-sidebar="left"] > .sidebar-inner > .sidebar-resizer {
   right: 0;
 }
-[data-sidebar="right"] > .sidebar-resizer {
+[data-sidebar="right"] > .sidebar-inner > .sidebar-resizer {
   left: 0;
 }
 .sidebar-resizer:hover,
 .sidebar-resizer:active {
   background: color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
-/* Config reload snapshots crossfade only the sidebars; the live workspace stays put. */
+/* Config reload snapshots crossfade only the sidebars; the live workspace
+   stays put. Every open project renders a workspace (inactive ones are
+   transparent), and names must be unique, so only the visible one is named. */
+[data-workspace-visible="true"]
+  [data-sidebar="left"][data-motion="open"]
+  > .sidebar-inner {
+  view-transition-name: sidebar-left;
+}
+[data-workspace-visible="true"]
+  [data-sidebar="right"][data-motion="open"]
+  > .sidebar-inner {
+  view-transition-name: sidebar-right;
+}
 ::view-transition-group(sidebar-left),
 ::view-transition-group(sidebar-right),
 ::view-transition-old(sidebar-left),
@@ -1835,6 +2544,11 @@ kbd {
   animation-duration: 200ms;
   animation-timing-function: var(--ease-standard);
 }
+/* The content moves under the sidebars, never over them. */
+::view-transition-group(sidebar-left),
+::view-transition-group(sidebar-right) {
+  z-index: 1;
+}
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -1842,8 +2556,50 @@ kbd {
 ::view-transition {
   pointer-events: none;
 }
+/* The content taking or giving back a still sidebar's space
+   (lib/sidebar-transition.ts) cross-fades in place: its box takes its new
+   place at once, the old snapshot stays where the content was (a rule the
+   transition writes) and fades out as the new one fades in. Neither is
+   scaled or moved, so nothing in the content slides or stretches. A chat
+   tab over the content does the same from its own place. Linear over
+   300ms (a sanctioned exception, DESIGN.md): the standard curve does most
+   of a fade in its first quarter, which reads as a snap. The pair blends
+   plus-lighter, as a browser cross-fade does, so the content never dims
+   toward what is behind it midway (a custom animation drops that). */
+::view-transition-group(workspace-content),
+::view-transition-group(*.dock-tab) {
+  animation: none;
+}
+::view-transition-old(workspace-content),
+::view-transition-new(workspace-content),
+::view-transition-old(*.dock-tab),
+::view-transition-new(*.dock-tab) {
+  inline-size: auto;
+  block-size: auto;
+  mix-blend-mode: plus-lighter;
+  animation-duration: 300ms;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+::view-transition-old(workspace-content),
+::view-transition-old(*.dock-tab) {
+  animation-name: content-fade-out;
+}
+::view-transition-new(workspace-content),
+::view-transition-new(*.dock-tab) {
+  animation-name: content-fade-in;
+}
+@keyframes content-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes content-fade-in {
+  from {
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .tabbed-sidebar,
   .sidebar-tab,
   .sidebar-tab-panel {
     transition: none;
@@ -1882,12 +2638,7 @@ kbd {
    of the full or right pane. Keep that corner clear of content actions. */
 [data-header-placement="sidebar"]
   :is([data-workspace-slot="full"], [data-workspace-slot="right"])
-  :is(
-    [data-editor-toolbar],
-    [data-browser-toolbar],
-    .workflow-header,
-    [data-settings] > header
-  ) {
+  :is([data-editor-toolbar], [data-browser-toolbar], [data-settings] > header) {
   padding-right: 52px;
 }
 
@@ -1898,22 +2649,37 @@ kbd {
 }
 
 [data-floating-surface] [data-browser-toolbar],
-[data-floating-surface] [data-editor-toolbar],
-[data-floating-surface] .workflow-header {
+[data-floating-surface] [data-editor-toolbar] {
   padding-right: 148px;
 }
 [data-floating-surface] [data-terminal-appearance] {
   padding-top: 44px;
 }
 
+/* A workflow's status controls float in its canvas corner. Keep them clear
+   of the sidebar toggle and of a floating surface's own controls; an open
+   workflow panel takes that corner instead, its header making the room. */
+[data-header-placement="sidebar"]
+  :where([data-workspace-slot="full"], [data-workspace-slot="right"])
+  .workflow-controls {
+  right: 52px;
+}
+[data-floating-surface] .workflow-stage .workflow-controls {
+  right: 148px;
+}
+[data-floating-surface]
+  .workflow-stage[data-panel-open="true"]
+  .workflow-controls {
+  right: 8px;
+}
+[data-floating-surface] .workflow-panel-header {
+  padding-right: 148px;
+}
+
 /* Native non-overlay scrollbars reduce the tab row's height on Linux and
    Windows. Keep the header aligned while retaining trackpad/key scrolling. */
 [data-tab-orientation="horizontal"] {
   scrollbar-width: none;
-}
-
-.tabbed-sidebar[data-overlay="true"] {
-  position: absolute;
 }
 
 /* Keep disclosure labels and their marker on one clear, keyboard-focusable row,
@@ -1928,8 +2694,8 @@ kbd {
   background: var(--color-bg-overlay);
 }
 .cat-markdown summary:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
 }
 .cat-markdown summary > :is(h1, h2, h3, h4, h5, h6, p) {
   display: inline;
@@ -2022,8 +2788,47 @@ kbd {
   }
 }
 
+/* The in-window dock rests on the visible workspace's chat region wherever
+   layout puts it: anchored, it moves in the same frame as the region (a
+   sidebar settling, a split, a window resize). With no region yet it
+   covers the window. */
+[data-workspace-visible="true"] [data-workspace-chat-region] {
+  anchor-name: --workspace-chat-region;
+}
+[data-dock-host]:not([data-dock-native]) {
+  position-anchor: --workspace-chat-region;
+  /* The chats stay visible whatever clips the region. */
+  position-visibility: always;
+  top: anchor(top, 0px);
+  right: anchor(right, 0px);
+  bottom: anchor(bottom, 0px);
+  left: anchor(left, 0px);
+}
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
+}
+/* A chat in a tab lies over the content from outside its frame, which
+   clips nothing of it: it takes the frame's corners where they meet
+   (--content-frame-radius, 0 with the frame off). Below, always; above,
+   only when nothing sits over the content (the header in the sidebar). A
+   split's side by the divider stays square. */
+[data-dock-host]:not([data-dock-native])
+[data-chat-tab]:not([data-split-slot="right"]) {
+  border-bottom-left-radius: var(--content-frame-radius, 0px);
+}
+[data-dock-host]:not([data-dock-native])
+  [data-chat-tab]:not([data-split-slot="left"]) {
+  border-bottom-right-radius: var(--content-frame-radius, 0px);
+}
+[data-chat-header-in-sidebar]
+  [data-dock-host]:not([data-dock-native])
+  [data-chat-tab]:not([data-split-slot="right"]) {
+  border-top-left-radius: var(--content-frame-radius, 0px);
+}
+[data-chat-header-in-sidebar]
+  [data-dock-host]:not([data-dock-native])
+  [data-chat-tab]:not([data-split-slot="left"]) {
+  border-top-right-radius: var(--content-frame-radius, 0px);
 }
 [data-dock-placement="left"] [data-floating-chat] {
   align-self: flex-start;
@@ -2032,16 +2837,70 @@ kbd {
   align-self: flex-end;
 }
 
-[data-native-drag] {
-  -webkit-app-region: drag;
+/* The strip's chats are as wide as they are, up to a ceiling: most of the
+   window, or the detached window less the strip's own controls. Folded,
+   none. The ceiling is part of the width, never a max-width: folding
+   interpolates from the width shown, so even a strip held at its ceiling
+   narrows from the fold's first frame instead of after the interpolated
+   width has fallen below the ceiling. */
+[data-bubble-items] {
+  width: calc-size(auto, min(size, 60vw));
+}
+[data-dock-native] [data-bubble-items] {
+  width: calc-size(auto, min(size, 100vw - 60px));
+}
+[data-bubble-items][aria-hidden="true"] {
+  width: 0;
 }
 
-/* A detached rail sizes to its contents rather than a workspace viewport. */
-[data-dock-native] [data-bubble-items][aria-hidden="false"] {
-  max-width: calc(100vw - 60px);
+/* Voice's bubble comes and goes as a popover does, and changes colour with
+   the window it talks for. The window hides once it has gone. */
+.voice-bubble {
+  opacity: 0;
+  transform: translateY(6px) scale(0.85);
+  transition:
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1),
+    transform 200ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 220ms var(--ease-standard),
+    border-color 220ms var(--ease-standard);
 }
 
-html[data-surface="dock"] body {
+.voice-bubble[data-shown] {
+  opacity: 1;
+  transform: none;
+}
+
+/* Dragged, it holds on to the pointer. */
+.voice-button[data-dragging] {
+  cursor: grabbing;
+}
+
+/* Where it can rest while dragged: each spot eases in as the drag starts
+   and out as it lands, as the bubble itself comes and goes. */
+.voice-bubble-spots > span {
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    opacity 150ms cubic-bezier(0.2, 0, 0, 1),
+    transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.voice-bubble-spots[data-shown] > span {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bubble,
+  .voice-bubble-spots > span {
+    transition-duration: 0.01ms;
+  }
+}
+
+html[data-surface="dock"] body,
+html[data-surface="passkey"] body,
+html[data-surface="voice"] body,
+html[data-surface="bubble-spots"] body {
   background: transparent;
 }
 
@@ -2061,8 +2920,260 @@ html[data-surface="dock"] #root {
   }
 }
 
-/* Shared button roles own color and hover states. Browser setup actions keep
-   their footprint as status rows and use the same native-style cursor. */
+/* Chats live in the dock, outside the content, so the content's snapshot
+   would cover them for the whole settle. While it settles they get layers
+   of their own: a floating chat and the bubble strip glide from where they
+   were to where they land, and a chat tab fades as the content does (the
+   transition names it, lib/sidebar-transition.ts). Names are per element
+   (match-element) because several chats can be on screen while one
+   leaves. */
+:root[data-content-settling]
+  [data-dock-host]:not([data-dock-native])
+  [data-floating-chat] {
+  view-transition-name: match-element;
+  view-transition-class: dock-float;
+}
+:root[data-content-settling]
+  [data-dock-host]:not([data-dock-native])
+  [data-dock-rail] {
+  view-transition-name: match-element;
+  view-transition-class: dock-rail;
+}
+::view-transition-group(*.dock-float),
+::view-transition-group(*.dock-rail),
+::view-transition-old(*.dock-float),
+::view-transition-new(*.dock-float),
+::view-transition-old(*.dock-rail),
+::view-transition-new(*.dock-rail) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+/* The strip stays above a sliding sidebar, as it is live; a floating chat
+   stays under it, as it is live too. */
+::view-transition-group(*.dock-rail) {
+  z-index: 2;
+}
+/* A chat whose width changes keeps its text unscaled: its snapshots keep
+   their own size, resting on the chat's bottom edge, centred. */
+::view-transition-old(*.dock-float),
+::view-transition-new(*.dock-float) {
+  inline-size: auto;
+  block-size: auto;
+  inset-block: auto 0;
+  inset-inline: 0;
+  margin-inline: auto;
+}
+/* The tab strip (or, with tabs in the sidebar, the page's title) starts
+   at the left sidebar's edge, so it moves with the panel: while the panel
+   slides, the strip slides in step (same duration, easing and wait for the
+   items) to where the content's settle puts it, the chrome's own sidebar
+   toggle taking the row's start once the sidebar has gone. Centred tabs
+   move half as far: the strip's far end stays. Its translate drops, with
+   no transition, in the commit the content takes or gives back the space
+   (the sidebar's data-settled, lib/sidebar-motion.ts), so it lands without
+   a jump. The toggle's slot is its button (size-7) and the row's gap
+   (gap-1), plus the corner kept for the window buttons when they show. */
+.workspace-chrome {
+  --chrome-toggle-slot: 32px;
+}
+[data-window-buttons="on"] .workspace-chrome {
+  --chrome-toggle-slot: 102px;
+}
+.workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  --tab-strip-shift: calc(
+    var(--left-sidebar-width, 0px) -
+    var(--chrome-toggle-slot)
+  );
+  /* At rest it clips nothing (the address bar's suggestions hang below the
+     title row, focus rings reach past its start); opening, only its far
+     end moves. A clip there is what the opening moves from. */
+  clip-path: inset(-100vh 0 -100vh -100vw);
+  transition:
+    translate 200ms var(--ease-standard),
+    clip-path 200ms var(--ease-standard);
+}
+.workspace-chrome > [data-tab-alignment="center"] {
+  --tab-strip-shift: calc(
+    (var(--left-sidebar-width, 0px) - var(--chrome-toggle-slot)) /
+    2
+  );
+}
+[data-sidebar="left"][data-items-lead]
+  ~ .workspace-surface
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  transition-delay: 100ms;
+}
+/* Closing, the content still sits where it was and clips what leaves its
+   left edge, so it lets the strip out sideways (never down) over where the
+   sidebar was. Framed content keeps its rounded clip; there the strip
+   glides during the settle instead (below). */
+[data-sidebar="left"][data-docked="true"]:is(
+  [data-motion="closing"],
+  [data-motion="closed"]
+) ~ .workspace-surface:not([data-content-frame="on"]) {
+  overflow-x: visible;
+  overflow-y: clip;
+}
+[data-sidebar="left"][data-docked="true"]:is(
+    [data-motion="closing"],
+    [data-motion="closed"]
+  )
+  ~ .workspace-surface:not([data-content-frame="on"])
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  translate: calc(-1 * var(--tab-strip-shift)) 0;
+}
+/* Opening, its far end stays where it rests, clear of the right sidebar's
+   toggle, as the content gives the strip's start to the sidebar. */
+[data-sidebar="left"][data-docked="false"]:is(
+    [data-motion="opening"],
+    [data-motion="open"]
+  )
+  ~ .workspace-surface
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  translate: var(--tab-strip-shift) 0;
+  clip-path: inset(-100vh var(--tab-strip-shift) -100vh -100vw);
+}
+[data-sidebar="left"][data-settled="true"]
+  ~ .workspace-surface
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  transition: none;
+}
+/* When the content moves with the panel (push), nothing above slides by a
+   translate: the chrome is laid out with the content. Its sidebar toggle
+   folds away as the panel arrives, its gap with it, and unfolds as the
+   panel leaves (arriving folded), with the panel's timing, so the tabs
+   after it move with the content's edge and never jump. The right sidebar
+   follows the content in the row, so it is found with :has(). */
+[data-sidebar="left"][data-push]
+  ~ .workspace-surface
+  .chrome-toggle-slot[data-chrome-toggle="left"],
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-slot[data-chrome-toggle="right"] {
+  width: calc(var(--chrome-toggle-slot) - 4px);
+  overflow: clip;
+  transition:
+    width 200ms var(--ease-standard),
+    margin 200ms var(--ease-standard),
+    opacity 200ms var(--ease-standard);
+}
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-slot[data-chrome-toggle="right"] {
+  width: 28px;
+  /* Not auto: the strip before it fills the row, and a margin tweens from
+     a length, not from auto. */
+  margin-inline-start: 0;
+}
+[data-sidebar="left"][data-push][data-items-lead]
+  ~ .workspace-surface
+  .chrome-toggle-slot[data-chrome-toggle="left"],
+.workspace-surface:has(~ [data-sidebar="right"][data-push][data-items-lead])
+  .chrome-toggle-slot[data-chrome-toggle="right"] {
+  transition-delay: 100ms;
+}
+[data-sidebar="left"][data-push]
+  ~ .workspace-surface
+  .chrome-toggle-slot[data-chrome-toggle="left"][data-folded],
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-slot[data-chrome-toggle="right"][data-folded] {
+  width: 0;
+  opacity: 0;
+}
+[data-sidebar="left"][data-push]
+  ~ .workspace-surface
+  .chrome-toggle-slot[data-chrome-toggle="left"][data-folded] {
+  margin-inline-end: -4px;
+}
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-slot[data-chrome-toggle="right"][data-folded] {
+  margin-inline-start: -4px;
+}
+/* A chat shown as a tab floats its controls in the same corner: while the
+   toggle is there, they stand beside it instead of under it. */
+/* The visible workspace publishes the toggle's space on the shared frame.
+   A :root:has lookup here invalidates styles across every retained chat. */
+[data-chat-controls-inset]
+  [data-chat-tab]
+  > [data-testid="chat-status-chrome"]
+  > [data-chat-controls] {
+  right: calc(0.5rem + 1.75rem + 0.375rem);
+  transition: right 200ms var(--ease-standard);
+}
+
+/* With the header in the sidebar, the right sidebar's toggle floats over
+   the content's corner: pushing, it fades as the panel's own arrives. */
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+.chrome-toggle-float {
+  transition: opacity 200ms var(--ease-standard);
+}
+.workspace-surface:has(~ [data-sidebar="right"][data-push][data-items-lead])
+  .chrome-toggle-float {
+  transition-delay: 100ms;
+}
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-float[data-folded] {
+  opacity: 0;
+}
+@starting-style {
+  [data-sidebar="left"][data-push]
+    ~ .workspace-surface
+    .chrome-toggle-slot[data-chrome-toggle="left"] {
+    width: 0;
+    margin-inline-end: -4px;
+    opacity: 0;
+  }
+  .workspace-surface:has(~ [data-sidebar="right"][data-push])
+    .chrome-toggle-slot[data-chrome-toggle="right"] {
+    width: 0;
+    margin-inline-start: -4px;
+    opacity: 0;
+  }
+  .workspace-surface:has(~ [data-sidebar="right"][data-push])
+    .chrome-toggle-float {
+    opacity: 0;
+  }
+}
+
+/* Should the strip land off by a little (a slot it did not know), it takes
+   a layer of its own while the content settles and glides the rest of the
+   way, as the bubble strip does, instead of fading in place. Its width
+   changes with the content's, so its snapshots keep their own size (tabs
+   never stretch), resting where the tabs align. */
+:root[data-content-settling]
+  [data-workspace-visible="true"]
+  .workspace-chrome
+  > [data-tab-orientation="horizontal"] {
+  view-transition-name: workspace-tabs;
+}
+:root[data-content-settling]
+  [data-workspace-visible="true"]
+  .workspace-chrome
+  > [data-tab-alignment="center"] {
+  view-transition-class: centered;
+}
+::view-transition-group(workspace-tabs),
+::view-transition-old(workspace-tabs),
+::view-transition-new(workspace-tabs) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+::view-transition-old(workspace-tabs),
+::view-transition-new(workspace-tabs) {
+  inline-size: auto;
+  block-size: auto;
+}
+/* Centred by translation: auto margins stop centring a snapshot wider than
+   the strip, the new one on a collapse. */
+::view-transition-old(workspace-tabs.centered),
+::view-transition-new(workspace-tabs.centered) {
+  inset-inline-start: 50%;
+  translate: -50% 0;
+}
+/* Browser setup actions keep their footprint when they become status rows. */
 .browser-setup-action {
   width: 100%;
   height: 36px;
@@ -2090,4 +3201,174 @@ html[data-surface="dock"] #root {
     --color-bg, --color-bg-raised, --color-bg-overlay, --color-bg-inset, --color-sidebar, --color-border, --color-border-strong, --color-fg, --color-fg-muted, --color-fg-faint, --color-accent, --color-accent-fg, --color-success, --color-warning, --color-danger, --color-info, --color-user-tint, --color-agent-tint;
   transition-duration: 200ms;
   transition-timing-function: var(--ease-standard);
+}
+
+/* A microphone (ADR 0216), the dock's or a composer's. One fixed control
+   whose state is its data attributes: every layer is always present and only fades, scales
+   or turns, so a change of state never moves anything around it. */
+.voice-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border);
+  background-color: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition:
+    background-color 220ms var(--ease-standard),
+    border-color 220ms var(--ease-standard),
+    color 220ms var(--ease-standard),
+    box-shadow 220ms var(--ease-standard),
+    scale 120ms var(--ease-standard);
+}
+/* A composer's microphone: the same control, the size of Send beside it. */
+.voice-button[data-place="composer"] {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+}
+.voice-button:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-fg);
+}
+.voice-button:active {
+  scale: 0.95;
+}
+.voice-button[data-loading] {
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  color: var(--color-accent);
+}
+.voice-button[data-lit] {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent);
+  color: var(--color-accent-fg);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+/* Not listening yet: an arc turns around the rim until it is. */
+.voice-button .voice-ring {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease-standard);
+}
+.voice-button[data-loading] .voice-ring {
+  opacity: 1;
+}
+.voice-button[data-loading]:not([data-progress]) .voice-ring {
+  animation: voice-spin 900ms linear infinite;
+}
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Hearing: a soft wave spreads from the button. */
+.voice-button .voice-ripple {
+  position: absolute;
+  inset: -1px;
+  border-radius: 9999px;
+  background-color: var(--color-accent);
+  opacity: 0;
+  pointer-events: none;
+}
+.voice-button[data-phase="hearing"] .voice-ripple {
+  animation: voice-ripple 1200ms cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+@keyframes voice-ripple {
+  from {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  to {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+.voice-button .voice-icon {
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  transition:
+    opacity 160ms var(--ease-standard),
+    transform 160ms var(--ease-standard);
+}
+.voice-button .voice-icon[data-shown="false"] {
+  opacity: 0;
+  transform: scale(0.75);
+}
+/*
+ * Working, then speaking: dots a wave passes over until the agent is
+ * heard, then a bar per band of its voice.
+ */
+.voice-button .voice-bars {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 1.25rem;
+}
+.voice-button .voice-bars > span {
+  width: 2px;
+  height: calc(2px + var(--level, 0) * 14px);
+  border-radius: 9999px;
+  background-color: currentColor;
+}
+/* News waiting (accent) or a failed start (red), on the corner. */
+.voice-button .voice-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px;
+  border: 2px solid var(--color-bg-raised);
+  background-color: var(--color-accent);
+  transform: scale(0);
+  transition: transform 200ms var(--ease-standard);
+}
+.voice-button .voice-badge[data-kind="error"] {
+  background-color: var(--color-danger);
+}
+.voice-button .voice-badge[data-shown="true"] {
+  transform: scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-button,
+  .voice-button .voice-ring,
+  .voice-button .voice-icon,
+  .voice-button .voice-badge {
+    transition: none;
+  }
+  .voice-button[data-loading]:not([data-progress]) .voice-ring,
+  .voice-button[data-phase="hearing"] .voice-ripple {
+    animation: none;
+  }
+  /* Still dots while it works, still bars while it speaks. */
+  .voice-button[data-phase="speaking"] .voice-bars > span {
+    --level: 0.35;
+  }
+  .voice-button[data-phase="speaking"] .voice-bars > span:nth-child(2n) {
+    --level: 0.65;
+  }
+  .voice-button[data-phase="speaking"] .voice-bars > span:nth-child(3) {
+    --level: 0.9;
+  }
+}
+
+/* A theme picture behind a sidebar or the chat (ADR 0263). It fades in once
+   loaded; its mask, blur and pixelation are set inline from the theme. */
+.theme-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+  transition: opacity 600ms var(--ease-standard);
 }

@@ -2,17 +2,18 @@ import type { ConnectionPrincipalKind } from "./connection-types.js";
 
 export type WorkflowEnablementStatus = "active" | "suspended" | "disabled";
 
+/**
+ * Who an enablement acts for (ADR 0156, 0158): one member, with what they
+ * hold of the workflow's declared permissions, or the project itself,
+ * running as the project principal with the connections and permissions
+ * consented to when it was turned on.
+ */
 export type WorkflowEnablementOwner =
   | { type: "member"; externalUserId: string }
-  | {
-      type: "service";
-      principalKind: "project_service" | "tenant_service";
-      connectionId: string;
-    };
+  | { type: "project" };
 
 export interface WorkflowEnablementConnection {
   alias: string;
-  bindingId: string;
   connectionId: string;
   providerKind: string;
   principalKind: ConnectionPrincipalKind;
@@ -22,8 +23,11 @@ export interface WorkflowEnablementConnection {
 export interface WorkflowEnablementTrigger {
   id: string;
   definitionId: string;
+  /** The host kind that fires it. */
   kind: string;
   config: unknown;
+  /** The project trigger kind the workflow bound (ADR 0171). */
+  projectKind?: string;
   status: "active" | "paused";
 }
 
@@ -38,6 +42,8 @@ export interface WorkflowEnablement {
   owner: WorkflowEnablementOwner;
   connections: WorkflowEnablementConnection[];
   capabilities: string[];
+  /** The project permissions the workflow declares, as consented to. */
+  permissions: string[];
   consentDigest: string;
   status: WorkflowEnablementStatus;
   suspensionReason: string | null;
@@ -61,9 +67,11 @@ export interface WorkflowEnablementPreview {
   owner: WorkflowEnablementOwner;
   connections: WorkflowEnablementConnection[];
   capabilities: string[];
+  /** The project permissions the workflow declares (ADR 0158). */
+  permissions: string[];
   consentDigest: string;
   triggerCount: number;
-  triggers: Array<{ kind: string; config: unknown }>;
+  triggers: Array<{ kind: string; config: unknown; projectKind?: string }>;
   connectionLabels: Record<string, string>;
 }
 
@@ -71,9 +79,11 @@ export type WorkflowEnablementSuspensionReason =
   | "member_removed"
   | "workflow_denied"
   | "environment_denied"
+  | "environment_policy_invalid"
   | "connection_unavailable"
   | "connection_permission_denied"
   | "connection_capability_changed"
+  | "permission_revoked"
   | "expired";
 
 export interface RevalidatedWorkflowEnablement {

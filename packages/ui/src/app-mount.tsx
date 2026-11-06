@@ -12,7 +12,7 @@ import {
   isGuestMessage,
 } from "@catamorphic/app";
 import { useCatamorphic } from "@catamorphic/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const MIN_HEIGHT_PX = 240;
 const MAX_HEIGHT_PX = 2000;
@@ -66,6 +66,8 @@ export interface AppMountProps {
   viewportHeight?: number | "fill";
   /** Reload only when a newer successful build is available. */
   refreshIntervalMs?: number;
+  /** Hosts may serve untrusted documents on a separate, unprivileged origin. */
+  resolveGuestDocument?: (input: { url: string }) => Promise<string>;
 }
 
 interface ViewStateReady {
@@ -86,7 +88,8 @@ type ViewState =
  * Mounts a published app in a sandboxed iframe and brokers its workflow
  * calls.
  *
- * Isolation model: the iframe navigates to the API's served guest document
+ * Isolation model: the iframe navigates to the served guest document
+ * (or its host-owned resolveGuestDocument capability)
  * (never `srcdoc` — a local-scheme document inherits the host shell's CSP,
  * which can block the bundle's inline script outright) with
  * `sandbox="allow-scripts"` and **no** `allow-same-origin` — an opaque
@@ -105,26 +108,35 @@ export function AppMount({
   context,
   renderState,
   channel,
-  theme,
+  theme: themeProp,
+  resolveGuestDocument,
   className,
-  display = { mode: "full", visible: true },
+  display: displayProp = { mode: "full", visible: true },
   viewportHeight,
   refreshIntervalMs,
   collections,
   onContentState,
 }: AppMountProps) {
+  // Hosts pass these inline, a new object each render; the guest hears of
+  // them only when their value changes.
+  const theme = useByValue(themeProp);
+  const display = useByValue(displayProp);
+  // Likewise the callback: a host is told of each state once, not again
+  // whenever its callback is new (it would re-render the host forever).
+  const onContentStateRef = useRef(onContentState);
+  onContentStateRef.current = onContentState;
   const { apiClient } = useCatamorphic();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [view, setView] = useState<ViewState>({ state: "loading" });
   useEffect(() => {
-    onContentState?.(
+    onContentStateRef.current?.(
       view.state === "ready"
         ? "ready"
         : view.state === "loading"
           ? "loading"
           : "error",
     );
-  }, [view.state, onContentState]);
+  }, [view.state]);
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
   const inFlightCalls = useRef(0);
   const inFlightPolls = useRef(0);
@@ -198,10 +210,14 @@ export function AppMount({
         if (cancelled) return;
         const data = response.data;
         if (data?.state === "ready") {
+          const guestUrl = resolveGuestDocument
+            ? await resolveGuestDocument({ url: data.guestUrl })
+            : data.guestUrl;
+          if (cancelled) return;
           setView((current) =>
             current.state === "ready" && current.versionId === data.versionId
               ? current
-              : data,
+              : { ...data, guestUrl },
           );
         } else {
           setView({
@@ -231,6 +247,7 @@ export function AppMount({
     channel,
     refreshIntervalMs,
     display.visible,
+    resolveGuestDocument,
   ]);
 
   const handleGuestMessage = useCallback(
@@ -250,7 +267,7 @@ export function AppMount({
             message.state,
           )
         )
-          onContentState?.(message.state);
+          onContentStateRef.current?.(message.state);
         return;
       }
       if (message.kind === "collection") {
@@ -571,7 +588,7 @@ export function AppMount({
         }
       }
     },
-    [apiClient, projectId, appName, channel, view, collections, onContentState],
+    [apiClient, projectId, appName, channel, view, collections],
   );
 
   const sendDisplay = useCallback(() => {
@@ -650,11 +667,13 @@ export function AppMount({
   );
 }
 
-/**
- * The served guest document URL, with the mount-time theme riding along as
- * JSON so the first paint is already in the host's colors. The server
- * validates the theme and the browser cache key varies with it naturally.
- */
+/** `value`, keeping one identity for as long as it stays equal by value. */
+function useByValue<T>(value: T): T {
+  const key = JSON.stringify(value);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: compared by value, through its key
+  return useMemo(() => value, [key]);
+}
+
 /** Only flat string entries cross to the server; the guest is untrusted. */
 function sanitizeStorageSnapshot(raw: unknown): Record<string, string> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
@@ -665,6 +684,11 @@ function sanitizeStorageSnapshot(raw: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * The served guest document URL, with the mount-time theme riding along as
+ * JSON so the first paint is already in the host's colors. The server
+ * validates the theme and the browser cache key varies with it naturally.
+ */
 function guestSrc(guestUrl: string, theme?: AppHostTheme): string {
   if (!theme) return guestUrl;
   const url = new URL(guestUrl);

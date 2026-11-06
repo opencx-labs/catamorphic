@@ -1,3 +1,6 @@
+import packageJson from "../package.json" with { type: "json" };
+import type { Where } from "./where.js";
+
 export type {
   BatchConsistency,
   BatchDefinition,
@@ -36,18 +39,37 @@ export {
   validateKeyedBatchOutcomes,
 } from "./batch.js";
 export type { Hole } from "./holes.js";
+export {
+  PROJECT_PERMISSIONS,
+  type ProjectPermissionName,
+  type WorkflowPermission,
+} from "./permissions.js";
 export type {
   SecretDeclaration,
   SecretDeclarations,
   Secrets,
 } from "./secrets.js";
-export { defineSecrets, MissingSecretError } from "./secrets.js";
+export {
+  defineSecrets,
+  MissingSecretError,
+  WebhookOnlySecretError,
+} from "./secrets.js";
+export type {
+  Narrow,
+  Where,
+  WhereAny,
+  WhereExists,
+  WherePrefix,
+  WherePrimitive,
+} from "./where.js";
 export type {
   BoundaryContext,
   BoundaryDefinition,
   BoundaryOptions,
   BoundaryRateLimit,
   CallWorkflow,
+  Carried,
+  CarriedState,
   ConnectionNamespace,
   DefineBoundary,
   DocumentEntry,
@@ -59,6 +81,7 @@ export type {
   PauseResult,
   RetryBackoff,
   RetryPolicy,
+  TransitionCall,
   WorkflowBuilderContext,
   WorkflowCaller,
   WorkflowConnectionRequirement,
@@ -68,6 +91,7 @@ export type {
 } from "./workflow.js";
 export {
   defineWorkflow,
+  MAX_CARRIED_STATE_BYTES,
   RateLimitedError,
   rateLimited,
 } from "./workflow.js";
@@ -80,7 +104,7 @@ export {
 
 /**
  * The catalog of trigger kinds the embedding host registers. Augmented
- * per-project by the generated `catamorphic-triggers.d.ts`. Until that file
+ * per-project by the generated `work-triggers.d.ts`. Until that file
  * exists, `trigger()` is uncallable — a workflow cannot bind to a kind the
  * host never registered.
  */
@@ -134,15 +158,34 @@ export type TriggerBinding<Payload, Output = unknown> = TriggerBindingImpl<
   Output
 >;
 
-type ConfigArg<Kind extends TriggerKindName> =
-  Record<string, never> extends TriggerConfig<Kind>
-    ? [config?: TriggerConfig<Kind>]
-    : [config: TriggerConfig<Kind>];
+/** A kind without config (`Record<string, never>`) contributes no keys. */
+type OwnConfig<Config> = string extends keyof Config
+  ? [Config[string & keyof Config]] extends [never]
+    ? unknown
+    : Config
+  : Config;
 
 /**
- * Binds the enclosing workflow to a host-defined trigger kind. Only valid
- * inside `defineWorkflow`'s `triggers` list; the config argument must be a
- * constant expression.
+ * What a binding writes: the kind's own config plus `where`, the filter
+ * every binding may add (ADR 0171). The host removes `where` before it
+ * validates the kind's config and evaluates it before a run starts.
+ */
+export type TriggerBindingConfig<Kind extends TriggerKindName> = OwnConfig<
+  TriggerConfig<Kind>
+> & {
+  readonly where?: Where<TriggerPayload<Kind>>;
+};
+
+type ConfigArg<Kind extends TriggerKindName> =
+  Record<string, never> extends TriggerConfig<Kind>
+    ? [config?: TriggerBindingConfig<Kind>]
+    : [config: TriggerBindingConfig<Kind>];
+
+/**
+ * Binds the enclosing workflow to a trigger kind: one the host registers or
+ * one the project defines with `defineTrigger`. Only valid inside
+ * `defineWorkflow`'s `triggers` list or a `defineTrigger`'s `from`; the
+ * config argument must be a constant expression.
  */
 export function trigger<Kind extends TriggerKindName>(
   kind: Kind,
@@ -151,8 +194,86 @@ export function trigger<Kind extends TriggerKindName>(
   return new TriggerBindingImpl({ kind, config: args[0] ?? {} });
 }
 
-export const WORKFLOW_PACKAGE_VERSION = "0.0.3";
+/** The payload a binding delivers. */
+export type BindingPayload<Binding> =
+  Binding extends TriggerBinding<infer Payload, unknown> ? Payload : never;
 
+class ProjectTriggerImpl<Payload> {
+  private declare readonly payload: Payload;
+
+  readonly name: string;
+  readonly description: string | undefined;
+  readonly from: TriggerBinding<unknown, unknown>;
+  readonly where: unknown;
+
+  constructor(args: {
+    name: string;
+    description?: string;
+    from: TriggerBinding<unknown, unknown>;
+    where?: unknown;
+  }) {
+    this.name = args.name;
+    this.description = args.description;
+    this.from = args.from;
+    this.where = args.where;
+  }
+}
+
+/**
+ * A trigger kind the project defines on top of another kind (ADR 0171).
+ * The host reads it statically from `.work/triggers/`; nothing about it
+ * runs. Workflows bind it by name like any host kind.
+ */
+export type ProjectTrigger<Payload> = ProjectTriggerImpl<Payload>;
+
+/** The payload a project trigger kind delivers to its workflows. */
+export type PayloadOf<Kind> =
+  Kind extends ProjectTrigger<infer Payload> ? Payload : never;
+
+interface ProjectTriggerDefinition<From, Filtered> {
+  /** The name workflows bind, e.g. "github.pull_request". A string literal. */
+  readonly name: string;
+  /** Shown to workflow authors in the generated types. */
+  readonly description?: string;
+  /** The kind this one narrows: a direct `trigger(...)` call. */
+  readonly from: From;
+  /** What the underlying event must hold for this kind to fire. */
+  readonly where?: Where<Filtered>;
+}
+
+/**
+ * Defines a project trigger kind: another kind's binding narrowed by a
+ * declarative `where`. Pass a type argument to type the payload more
+ * precisely than the underlying kind does (a webhook's parsed body, say);
+ * it is the author's claim about what the filtered events carry. Write it in
+ * `.work/triggers/<name>.ts` as an exported constant.
+ */
+export function defineTrigger<
+  const From extends TriggerBinding<unknown, unknown>,
+>(
+  definition: ProjectTriggerDefinition<From, BindingPayload<From>>,
+): ProjectTrigger<BindingPayload<From>>;
+export function defineTrigger<Payload = never>(
+  definition: ProjectTriggerDefinition<
+    TriggerBinding<unknown, unknown>,
+    NoInfer<Payload>
+  >,
+): ProjectTrigger<Payload>;
+export function defineTrigger(
+  definition: ProjectTriggerDefinition<
+    TriggerBinding<unknown, unknown>,
+    unknown
+  >,
+): ProjectTrigger<unknown> {
+  return new ProjectTriggerImpl(definition);
+}
+
+export const WORKFLOW_PACKAGE_VERSION = packageJson.version;
+
+export type {
+  SecretHostOperations,
+  SecretStatusEntry,
+} from "./secret-operations.js";
 export type {
   SessionHistoryMessage,
   SessionHostOperations,

@@ -1,11 +1,14 @@
-import type {
-  CatamorphicCore,
-  ConnectionProvider,
-  Identity,
+import {
+  type CatamorphicCore,
+  type ConnectionProvider,
+  DEFAULT_ENVIRONMENT,
+  type EnvironmentConnectionBinding,
+  type Identity,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
-import { connectMcpServer } from "@catamorphic/mcp";
+import { connectMcpServer, mcpToolActions } from "@catamorphic/mcp";
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
+import { z } from "zod";
 import {
   connectionServerKeys,
   type McpConnection,
@@ -20,23 +23,19 @@ export const DESKTOP_PROFILE_MCP_PROVIDER_KIND = "desktop-profile-mcp";
 export const desktopProfileMcpProvider: ConnectionProvider = {
   kind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
   displayName: "Desktop MCP connection",
+  mcp: true,
   async listActions(input) {
     const server = await connectMcpServer(decodeServer(input.material));
     try {
-      return server.tools
-        .filter((tool) => input.capabilities.includes(tool.name))
-        .map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: JSON.parse(JSON.stringify(tool.inputSchema)) as Json,
-          ...(tool.annotations
-            ? {
-                annotations: JSON.parse(
-                  JSON.stringify(tool.annotations),
-                ) as Record<string, Json>,
-              }
-            : {}),
-        }));
+      return mcpToolActions({
+        tools: server.tools,
+        capabilities: input.capabilities,
+      }).map(({ inputSchema, outputSchema, annotations, ...action }) => ({
+        ...action,
+        inputSchema: z.json().parse(inputSchema),
+        ...(outputSchema ? { outputSchema: z.json().parse(outputSchema) } : {}),
+        ...(annotations ? { annotations: z.json().parse(annotations) } : {}),
+      }));
     } finally {
       await server.close().catch(() => {});
     }
@@ -71,14 +70,35 @@ export function workflowMcpConnectionEntries(
   connection: McpConnection;
   server: AgentMcpServerConfig;
 }> {
-  const configured = connections.filter(
-    (connection) => connection.enabled && toAgentMcpServer(connection),
-  );
-  return [...connectionServerKeys(configured)].flatMap(
+  return [...connectionServerKeys([...connections])].flatMap(
     ([alias, connection]) => {
       const server = toAgentMcpServer(connection);
       return server ? [{ alias, connection, server }] : [];
     },
+  );
+}
+
+/**
+ * The aliases this desktop offers in a project's default Environment: its
+ * profile's enabled MCP servers, each the member's own connection (ADR
+ * 0086). A host binding beside the committed ones (ADR 0172); a project
+ * that commits the same alias decides it instead.
+ */
+export function profileMcpConnectionBindings(input: {
+  profiles: ProfilesStore;
+  profileConfig: ProfileConfigManager;
+  projectId: string;
+  environment: string;
+}): Record<string, EnvironmentConnectionBinding> {
+  if (input.environment !== DEFAULT_ENVIRONMENT) return {};
+  const profile = input.profiles.profileForProject(input.projectId);
+  return Object.fromEntries(
+    workflowMcpConnectionEntries(
+      input.profileConfig.forProfile(profile.id).connections.list(),
+    ).map(({ alias }) => [
+      alias,
+      { provider: DESKTOP_PROFILE_MCP_PROVIDER_KIND, principal: "member" },
+    ]),
   );
 }
 
@@ -129,7 +149,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
         await service.detachMember({
           identity: input.identity,
           projectId: project.id,
-          environment: "local",
+          environment: DEFAULT_ENVIRONMENT,
           alias: previousAlias,
         });
       }
@@ -147,25 +167,17 @@ export async function syncProfileMcpWorkflowConnections(input: {
             identity: input.identity,
             projectId: project.id,
             providerKind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
-            principalKind: "member",
             label: connection.name,
             material,
             account,
             capabilities,
           });
-      await service.bind({
-        identity: input.identity,
-        projectId: project.id,
-        environment: "local",
-        alias,
-        providerKind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
-        principalKinds: ["member"],
-        capabilities,
-      });
+      // The alias is offered by `profileMcpConnectionBindings`; attaching
+      // makes this account the member's authority behind it.
       await service.attachMember({
         identity: input.identity,
         projectId: project.id,
-        environment: "local",
+        environment: DEFAULT_ENVIRONMENT,
         alias,
         connectionId: adopted.id,
       });
@@ -188,7 +200,7 @@ export async function syncProfileMcpWorkflowConnections(input: {
         await service.detachMember({
           identity: input.identity,
           projectId: project.id,
-          environment: "local",
+          environment: DEFAULT_ENVIRONMENT,
           alias,
         });
       }

@@ -7,10 +7,11 @@ function setup() {
   const finalQuit = vi.fn();
   const app = {
     on: (
-      name: "will-quit",
+      name: "before-quit" | "will-quit",
       listener: (event: { preventDefault(): void }) => void,
     ) => events.on(name, listener),
     quit: () => {
+      events.emit("before-quit", { preventDefault: vi.fn() });
       const event = { preventDefault: vi.fn() };
       events.emit("will-quit", event);
       if (event.preventDefault.mock.calls.length === 0) finalQuit();
@@ -20,8 +21,17 @@ function setup() {
   const shutdown = vi.fn(async () => {});
   const onError = vi.fn();
   const signals = new EventEmitter();
-  registerDesktopShutdown({ app, shutdown, onError, signals });
-  return { app, events, signals, shutdown, onError, finalQuit };
+  const pending = { requests: [] as string[] };
+  registerDesktopShutdown({
+    app,
+    shutdown,
+    onError,
+    signals,
+    pendingRequests: () => pending.requests,
+    openWindows: () => ["window 2 (?surface=dock) hidden"],
+    quitWaitMs: 50,
+  });
+  return { app, events, signals, shutdown, onError, finalQuit, pending };
 }
 
 describe("desktop shutdown", () => {
@@ -41,6 +51,39 @@ describe("desktop shutdown", () => {
     expect(finalQuit).not.toHaveBeenCalled();
   });
 
+  it("names the windows still open when closing them holds Quit", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const { events, shutdown } = setup();
+      events.emit("before-quit", { preventDefault: vi.fn() });
+      await vi.waitFor(() =>
+        expect(info).toHaveBeenCalledWith(
+          "[desktop] Quit still waiting on windows after 50ms: window 2 (?surface=dock) hidden",
+        ),
+      );
+      expect(shutdown).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("names nothing when the windows close in time", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const { app, finalQuit } = setup();
+      app.quit();
+      await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledWith(0));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(
+        info.mock.calls.some(([line]) =>
+          String(line).includes("still waiting"),
+        ),
+      ).toBe(false);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("waits for one shutdown before allowing the final quit", async () => {
     const { app, shutdown, finalQuit } = setup();
     let finish = () => {};
@@ -56,6 +99,20 @@ describe("desktop shutdown", () => {
     expect(finalQuit).not.toHaveBeenCalled();
     finish();
     await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledOnce());
+  });
+
+  it("names native requests still in flight when shutdown completes", async () => {
+    const { app, finalQuit, pending } = setup();
+    pending.requests = ["GetAddrInfoReqWrap×1"];
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    app.quit();
+    await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledWith(0));
+    expect(info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[desktop\] Shutdown complete in \d+ms; still in flight: GetAddrInfoReqWrap×1$/,
+      ),
+    );
+    info.mockRestore();
   });
 
   it("reports a cleanup failure and still completes quit", async () => {

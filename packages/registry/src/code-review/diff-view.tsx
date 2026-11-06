@@ -226,7 +226,7 @@ export function DiffView({
           {toolbar}
           <input
             aria-keyshortcuts={findShortcut}
-            data-search-action="search-diff"
+            data-search-action="find"
             ref={searchInput}
             aria-label="Find in diff"
             onKeyDown={(event) => {

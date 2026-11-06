@@ -108,6 +108,45 @@ describeIf("lease expiry attempt neutrality", () => {
     expect(reclaimed.attempt).toBe(1);
   });
 
+  it("tells an idle worker when a parked job falls due or a lease lapses", async () => {
+    // Its own kind: other tests here hold batch items.
+    const kinds = ["durable_pause_timeout"] as const;
+    expect(await jobs.nextDueAt({ kinds })).toBeNull();
+    const runId = await createRun();
+    const inAMinute = new Date(Date.now() + 60_000);
+    const parked = await jobs.enqueue({
+      tenantId,
+      workflowRunId: runId,
+      kind: "durable_pause_timeout",
+      payload: {},
+      availableAt: inAMinute,
+    });
+    expect((await jobs.nextDueAt({ kinds }))?.getTime()).toBe(
+      inAMinute.getTime(),
+    );
+    const running = await jobs.enqueue({
+      tenantId,
+      workflowRunId: runId,
+      kind: "durable_pause_timeout",
+      payload: {},
+    });
+    await claimOne("worker-a", running.id);
+    // A lease that lapses before the parked job is due wakes it first.
+    // (Not lapsed yet: the other tests here requeue every lapsed lease.)
+    const lapses = new Date(Date.now() + 30_000);
+    await db
+      .updateTable("execution_jobs")
+      .set({ lease_expires_at: lapses })
+      .where("id", "=", running.id)
+      .execute();
+    expect((await jobs.nextDueAt({ kinds }))?.getTime()).toBe(lapses.getTime());
+    await db
+      .deleteFrom("execution_jobs")
+      .where("id", "in", [parked.id, running.id])
+      .execute();
+    expect(await jobs.nextDueAt({ kinds })).toBeNull();
+  });
+
   it("survives more expiries than max_attempts", async () => {
     const runId = await createRun();
     const job = await jobs.enqueue({

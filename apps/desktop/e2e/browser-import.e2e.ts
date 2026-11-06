@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createBrowserProfile } from "./fixtures/browser-profile.js";
-import { type AppHandle, launchApp, openOnboardingStep } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  openOnboardingStep,
+} from "./harness.js";
 
 let app: AppHandle;
 let directory: string;
@@ -12,7 +17,10 @@ let profileId: string;
 let origin: string;
 let receivedCookie = "";
 const server = http.createServer((request, response) => {
-  receivedCookie = request.headers.cookie ?? "";
+  // The page's own request carries the imported session. Work fetches a
+  // site's icon itself, without cookies (ADR 0277), and that is not it.
+  if (request.url !== "/favicon.ico")
+    receivedCookie = request.headers.cookie ?? "";
   response.setHeader("Content-Type", "text/html");
   response.end(
     "<title>Fixture signed-in page</title><h1>Imported browser session</h1>",
@@ -20,26 +28,29 @@ const server = http.createServer((request, response) => {
 });
 const input = `[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0)`;
 async function click(selector: string) {
+  // A preceding app can leave this window inactive. The control must be
+  // ready before the pointer is sent through Chromium's one input queue.
+  await focusWindow(app);
+  await app.waitFor("document.hasFocus()");
   await app.waitFor(
     `document.getAnimations().every(animation => animation.playState !== "running" || animation.effect?.getTiming().iterations === Infinity)`,
   );
   const point = await app.waitFor<{ x: number; y: number }>(
-    `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return false; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); return r.width && {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
+    `(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el || el.disabled || el.closest('[inert]')) return false; el.scrollIntoView({block:'center',behavior:'instant'}); const r=el.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; return r.width && el.contains(document.elementFromPoint(x,y)) ? {x,y} : false;})()`,
+    { label: `ready control: ${selector}` },
   );
-  await app.movePointer(point);
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    ...point,
-    button: "left",
-    clickCount: 1,
-  });
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    ...point,
-    button: "left",
-    clickCount: 1,
-  });
+  // These controls use Chromium's themed picker. An OS hover flag is not
+  // a readiness signal for it; test the real opening and keyboard behavior.
+  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
 }
+
 async function palette() {
   await app.waitFor(`!${input}`);
   await app.press("p", process.platform === "darwin" ? 4 : 2);
@@ -288,8 +299,9 @@ describe("shared browser import and personal history", () => {
       "window.catamorphicDesktop.profilesCreate('Fresh import profile')",
     );
     await click('[aria-label="Switch profile: Default Profile"]');
+    // A menu row reads as its avatar's initial, then the profile's name.
     await app.eval(
-      `[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Fresh import profile' && !button.getAttribute('aria-label')).click()`,
+      `[...document.querySelectorAll('button')].find(button => button.textContent.trim().endsWith('Fresh import profile') && !button.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Fresh import profile"]')`,
@@ -313,7 +325,7 @@ describe("shared browser import and personal history", () => {
     );
     await click('[aria-label="Switch profile: Fresh import profile"]');
     await app.eval(
-      `[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Default Profile' && !button.getAttribute('aria-label')).click()`,
+      `[...document.querySelectorAll('button')].find(button => button.textContent.trim().endsWith('Default Profile') && !button.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
       `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'done'`,
@@ -384,8 +396,8 @@ describe("shared browser import and personal history", () => {
     await palette();
     await app.insertText(`${origin}/session-check`);
     await app.press("Enter");
-    const deadline = Date.now() + 15000;
-    while (!receivedCookie && Date.now() < deadline)
+    const deadline = performance.now() + 15000;
+    while (!receivedCookie && performance.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 100));
     expect(receivedCookie).toContain("fixture_session=signed-in-fixture");
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
@@ -423,8 +435,11 @@ describe("shared browser import and personal history", () => {
     await app.press("Space");
     await app.waitFor(`${input}?.placeholder==='Search history…'`);
     await app.insertText("field-notes.md");
+    // Enter opens the highlighted row, so wait for the document to be that
+    // row, not merely listed while the history search settles.
     await app.waitFor(
-      `[...((${input})?.closest('[role="dialog"]')?.querySelectorAll('[role="option"]') ?? [])].some(el=>el.textContent.includes('field-notes.md') && el.textContent.includes('History documents'))`,
+      `[...(${input}?.closest('[role="dialog"]')?.querySelectorAll('[role="option"][aria-selected="true"]') ?? [])].some(el=>el.textContent.includes('field-notes.md') && el.textContent.includes('History documents'))`,
+      { label: "document highlighted" },
     );
     await app.press("Enter");
     await app.waitFor(

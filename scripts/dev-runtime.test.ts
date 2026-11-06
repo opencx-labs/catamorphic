@@ -373,30 +373,24 @@ describe("acquireDevPortAllocatorLock", () => {
       pid: process.pid,
       timeoutMs: 250,
     });
-    const waiting = acquireDevPortAllocatorLock({
-      lockPath,
-      pid: process.pid,
-      timeoutMs: 25,
-    });
-
-    const outcome = await Promise.race([
-      waiting.then(
-        () => "unexpected acquisition",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("allocator wait did not stop"), 100),
-      ),
-    ]);
-    await owner.release();
-    if (outcome === "allocator wait did not stop") {
-      await (await waiting).release();
+    // The deadline is wall time; filesystem work need not finish within
+    // 100 ms on a busy host. Advance only Date while retaining real IO.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(0);
+      const waiting = acquireDevPortAllocatorLock({
+        lockPath,
+        pid: process.pid,
+        timeoutMs: 25,
+      });
+      vi.setSystemTime(25);
+      await expect(waiting).rejects.toThrow(
+        `Timed out after 25ms waiting for global development port allocator ${lockPath}. Another development launcher may still be allocating ports; retry after it reaches readiness or exits.`,
+      );
+    } finally {
+      vi.useRealTimers();
+      await owner.release();
     }
-
-    expect(outcome).toBe(
-      `Timed out after 25ms waiting for global development port allocator ${lockPath}. Another development launcher may still be allocating ports; retry after it reaches readiness or exits.`,
-    );
   });
 
   it("aborts an allocator wait on a launcher signal", async () => {
@@ -415,24 +409,13 @@ describe("acquireDevPortAllocatorLock", () => {
     });
     abort.abort(new Error("Development startup interrupted by SIGTERM"));
 
-    const outcome = await Promise.race([
-      waiting.then(
-        () => "unexpected acquisition",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("allocator wait did not abort"), 100),
-      ),
-    ]);
-    await owner.release();
-    if (outcome === "allocator wait did not abort") {
-      await (await waiting).release();
+    try {
+      await expect(waiting).rejects.toThrow(
+        `Stopped waiting for global development port allocator ${lockPath}: Development startup interrupted by SIGTERM`,
+      );
+    } finally {
+      await owner.release();
     }
-
-    expect(outcome).toBe(
-      `Stopped waiting for global development port allocator ${lockPath}: Development startup interrupted by SIGTERM`,
-    );
   });
 });
 
@@ -643,20 +626,17 @@ describe("stopDevProcessGroup", () => {
       pid: process.pid,
     });
     await lock.bindProcessGroup(processGroupId);
-    let groupObservable = true;
+    const killed = Promise.withResolvers<void>();
     const signals: Array<string | number | undefined> = [];
     const kill = vi
       .spyOn(process, "kill")
       .mockImplementation((_pid, signal) => {
         signals.push(signal);
-        if (signal === 0 && !groupObservable) {
-          const error = new Error("gone") as NodeJS.ErrnoException;
-          error.code = "ESRCH";
-          throw error;
-        }
+        if (signal === "SIGKILL") killed.resolve();
         return true;
       });
 
+    vi.useFakeTimers();
     const stopping = settleDevProcessGroup({
       processGroupId,
       signal: "SIGTERM",
@@ -664,23 +644,16 @@ describe("stopDevProcessGroup", () => {
       killWaitMs: 25,
       lock,
     });
-    const outcome = await Promise.race([
-      stopping.then(
-        () => "unexpected shutdown",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("shutdown did not stop"), 100),
-      ),
-    ]);
-    if (outcome === "shutdown did not stop") {
-      groupObservable = false;
-      await stopping;
-    }
+    const outcome = stopping.then(
+      () => "unexpected shutdown",
+      (error: unknown) =>
+        error instanceof Error ? error.message : String(error),
+    );
 
     try {
-      expect(outcome).toBe(
+      await killed.promise;
+      await vi.advanceTimersByTimeAsync(40);
+      expect(await outcome).toBe(
         `Development process groups ${processGroupId} remained observable after SIGKILL for 25ms. Stop them manually before retrying development; the instance lock was retained.`,
       );
       expect(signals).toContain("SIGTERM");
@@ -690,6 +663,7 @@ describe("stopDevProcessGroup", () => {
         processGroupId,
       });
     } finally {
+      vi.useRealTimers();
       kill.mockRestore();
       await lock.release();
     }

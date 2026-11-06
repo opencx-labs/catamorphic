@@ -1,4 +1,5 @@
 import { Handle, type NodeProps, Position } from "@xyflow/react";
+import { DatabaseZap } from "lucide-react";
 
 export function SourceNode({ data }: NodeProps) {
   const executionStatus =
@@ -15,7 +16,9 @@ export function SourceNode({ data }: NodeProps) {
           data-status={executionStatus}
         />
       )}
-      <div className="catamorphic-node-icon">◉</div>
+      <div className="catamorphic-node-icon">
+        <DatabaseZap aria-hidden="true" size={18} strokeWidth={1.8} />
+      </div>
       <div className="catamorphic-node-content">
         <div className="catamorphic-node-label">Batch source</div>
         <div className="catamorphic-node-description">Loads Items in pages</div>

@@ -19,7 +19,8 @@ export type GithubCliCommandRunner = (
 /**
  * Read the github.com credential already held by `gh`. The CLI is only a
  * credential source: repository checks, cloning, sync, and pull requests all
- * continue through GithubService and the shared git engine.
+ * continue through the code host, the GitHub connection, and the shared git
+ * engine (ADR 0177).
  */
 export async function githubCliToken(
   options: { run?: GithubCliCommandRunner } = {},

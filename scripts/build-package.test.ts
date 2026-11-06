@@ -1,0 +1,106 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  bundleConfigs,
+  externalsOf,
+  relocateSources,
+  splits,
+} from "./build-package.js";
+
+const root = path.resolve(import.meta.dirname, "..");
+
+describe("package bundles", () => {
+  it("keep declared dependencies and their subpaths as imports", () => {
+    const manifest = {
+      name: "@catamorphic/example",
+      bundle: { entry: ["src/index.ts"], external: ["react"] },
+      dependencies: { kysely: "^0.29.0" },
+      peerDependencies: { "react-dom": "^19.0.0" },
+      optionalDependencies: { "@catamorphic/otel": "workspace:*" },
+    };
+    expect(externalsOf(manifest, manifest.bundle).sort()).toEqual(
+      [
+        "@catamorphic/otel",
+        "@catamorphic/otel/*",
+        "kysely",
+        "kysely/*",
+        "react",
+        "react-dom",
+        "react-dom/*",
+        "react/*",
+      ].sort(),
+    );
+  });
+
+  it("split only builds whose entries can share code, unless told", () => {
+    expect(splits({ entry: ["src/index.ts"] })).toBe(false);
+    expect(splits({ entry: ["src/index.ts", "src/testing/index.ts"] })).toBe(
+      true,
+    );
+    expect(
+      splits({ entry: ["src/index.ts", "src/cli.ts"], splitting: false }),
+    ).toBe(false);
+  });
+
+  it("refuse a missing bundle and entries outside src/", () => {
+    expect(() => bundleConfigs({ name: "x" })).toThrow('has no "bundle"');
+    expect(() =>
+      bundleConfigs({ name: "x", bundle: { entry: ["scripts/a.ts"] } }),
+    ).toThrow("is not a file under src/");
+    expect(() => bundleConfigs({ name: "x", bundle: { entry: [] } })).toThrow(
+      "lists source files",
+    );
+  });
+
+  it("are declared by every package that builds with them", () => {
+    for (const name of readdirSync(path.join(root, "packages"))) {
+      const file = path.join(root, "packages", name, "package.json");
+      const manifest = JSON.parse(readFileSync(file, "utf8"));
+      const build: string | undefined = manifest.scripts?.build;
+      if (!build?.includes("scripts/build-package.ts")) continue;
+      expect(() => bundleConfigs(manifest), name).not.toThrow();
+    }
+  });
+
+  it("ship React's production JSX runtime, never the development one", () => {
+    const shipped = (directory: string): string[] =>
+      readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory())
+          return entry.name === "__tests__" ? [] : shipped(file);
+        return entry.name.endsWith(".js") ? [file] : [];
+      });
+    for (const name of readdirSync(path.join(root, "packages"))) {
+      const dist = path.join(root, "packages", name, "dist");
+      if (!existsSync(dist)) continue;
+      for (const file of shipped(dist))
+        expect(readFileSync(file, "utf8"), file).not.toContain(
+          "react/jsx-dev-runtime",
+        );
+    }
+  });
+
+  it("point a nested output's map at the sources it means", () => {
+    const files = new Set(["/p/src/testing/index.ts", "/p/src/shared.ts"]);
+    expect(
+      relocateSources({
+        // Bun writes these relative to dist/, not to dist/testing/.
+        sources: ["../src/testing/index.ts", "../../src/shared.ts", "virtual"],
+        mapDirectory: "/p/dist/testing",
+        outdir: "/p/dist",
+        exists: (file) => files.has(file),
+      }),
+    ).toEqual(["../../src/testing/index.ts", "../../src/shared.ts", "virtual"]);
+  });
+
+  it("build every file that sandboxes receive one by one without chunks", () => {
+    for (const name of ["runtime", "workflow"]) {
+      const manifest = JSON.parse(
+        readFileSync(path.join(root, "packages", name, "package.json"), "utf8"),
+      );
+      for (const config of bundleConfigs(manifest))
+        expect(splits(config), name).toBe(false);
+    }
+  });
+});

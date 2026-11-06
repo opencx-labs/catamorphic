@@ -65,7 +65,7 @@ describe("ProjectManager.create with cloneFrom", () => {
     const commits = await repo.log();
     expect(commits[0]?.message.trim()).toBe("Imported from remote");
 
-    // History must land on the internal origin so openDev seeding works.
+    // History must land on the internal origin so drafts and checkouts read it.
     const sha = await repo.resolveRef("HEAD");
     const remote = manager.remoteBackend;
     const originSha = await remote?.withOrigin(TENANT, PROJECT, (origin) =>

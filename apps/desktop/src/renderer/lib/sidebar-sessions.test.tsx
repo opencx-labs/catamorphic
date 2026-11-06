@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
 import { createApiClient } from "@catamorphic/api-client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act } from "react";
-import { createRoot } from "react-dom/client";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   readSidebarSessionPage,
-  useSidebarSessions,
+  subscribeSidebarSessions,
 } from "./sidebar-sessions.js";
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  fetch: vi.fn(),
+  hints: new Set<() => void>(),
+}));
 const apiClient = createApiClient({
   baseUrl: "http://sidebar.test",
   fetch: mocks.fetch,
@@ -17,8 +18,15 @@ const apiClient = createApiClient({
 vi.mock("@catamorphic/react", () => ({
   useCatamorphic: () => ({ apiClient }),
 }));
+vi.mock("./desktop-api.js", () => ({
+  desktopApi: {
+    onSessionsChanged: (listener: () => void) => {
+      mocks.hints.add(listener);
+      return () => mocks.hints.delete(listener);
+    },
+  },
+}));
 afterEach(() => {
-  vi.useRealTimers();
   mocks.fetch.mockReset();
 });
 
@@ -54,141 +62,72 @@ it("shares session page IO and lets one consumer cancel without canceling anothe
   client.clear();
 });
 
-it("refreshes one hidden page and restores the visible loaded depth", async () => {
-  vi.useFakeTimers();
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+it("reads the lists again when they are invalidated, not when one chat's snapshot is", async () => {
+  const client = new QueryClient();
+  const listener = vi.fn();
+  const stop = subscribeSidebarSessions({
+    client,
+    projectId: "project",
+    listener,
   });
-  const requests: URL[] = [];
-  mocks.fetch.mockImplementation(async (request: Request) => {
-    const url = new URL(request.url);
-    requests.push(url);
-    const child = url.searchParams.has("parentSessionId");
-    const more = url.searchParams.get("offset") === "1";
-    return Response.json({
-      items: [
-        {
-          id: child ? "child" : more ? "second" : "parent",
-          title: "Chat",
-          visibility: "promoted",
-          childCount: child || more ? 0 : 1,
-        },
-      ],
-      total: child ? 1 : 2,
-    });
-  });
-  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-  const node = document.createElement("div");
-  const root = createRoot(node);
-  let state: ReturnType<typeof useSidebarSessions> | undefined;
-  function Probe({ visible }: { visible: boolean }) {
-    state = useSidebarSessions({
-      projectId: "project",
-      section: {
-        id: "chats",
-        type: "chats",
-        source: { type: "chats", pageSize: 1 },
-      },
-      visible,
-      relevant: true,
-    });
-    return null;
-  }
-  const show = (visible: boolean) =>
-    act(async () =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <Probe visible={visible} />
-        </QueryClientProvider>,
-      ),
+  try {
+    // A chat's stream handing over reads its snapshot again.
+    client.setQueryData(
+      ["cat", "project", "project", "agent", "session", "s1"],
+      {},
     );
-  await show(true);
-  if (!state) throw new Error("Missing session store");
-  const collection = state.collection;
-  let releaseRoot = () => {};
-  let releaseChild = () => {};
-  await act(async () => {
-    releaseRoot = collection.acquire();
-  });
-  await vi.waitFor(() =>
-    expect(collection.getBranch(null).status).toBe("ready"),
-  );
-  await act(async () => {
-    await collection.load({ more: true });
-    releaseChild = collection.acquire({ parentId: "parent" });
-  });
-  await vi.waitFor(() =>
-    expect(collection.getBranch("parent").status).toBe("ready"),
-  );
-  act(() => {
-    releaseChild();
-    releaseRoot();
-  });
-  await show(false);
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(1);
-  });
-  expect(state?.root.status).toBe("ready");
-  expect(collection.isAcquired()).toBe(true);
-  expect(collection.getBranch(null).ids).toEqual(["parent"]);
-  expect(collection.getItem("second")).toBeDefined();
-  requests.length = 0;
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_001);
-  });
-  expect(requests).toHaveLength(1);
-  expect(requests[0]?.searchParams.get("offset")).toBe("0");
-  expect(requests[0]?.searchParams.has("parentSessionId")).toBe(false);
-  await show(true);
-  await act(async () => {
-    releaseRoot = collection.acquire();
-  });
-  await vi.waitFor(() =>
-    expect(collection.getBranch(null).ids).toEqual(["parent", "second"]),
-  );
-  releaseRoot();
-  await act(async () => root.unmount());
-  client.clear();
+    await client.invalidateQueries({
+      queryKey: ["cat", "project", "project", "agent", "session", "s1"],
+    });
+    expect(listener).not.toHaveBeenCalled();
+    // Archiving a chat invalidates the lists.
+    client.setQueryData(["cat", "project", "project", "agent", "sessions"], {});
+    await client.invalidateQueries({
+      queryKey: ["cat", "project", "project", "agent", "sessions"],
+    });
+    expect(listener).toHaveBeenCalledWith("loaded", false);
+  } finally {
+    stop();
+    client.clear();
+  }
 });
 
-it("keeps a hidden empty section empty while its availability request is pending", async () => {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+it("catches up once on what a hidden window missed, and not at all on focus", async () => {
+  const client = new QueryClient();
+  const listener = vi.fn();
+  let hidden = false;
+  const visibility = vi
+    .spyOn(document, "hidden", "get")
+    .mockImplementation(() => hidden);
+  const stop = subscribeSidebarSessions({
+    client,
+    projectId: "project",
+    listener,
   });
-  mocks.fetch.mockResolvedValueOnce(Response.json({ items: [], total: 0 }));
-  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-  const root = createRoot(document.createElement("div"));
-  let state: ReturnType<typeof useSidebarSessions> | undefined;
-  function Probe({ visible }: { visible: boolean }) {
-    state = useSidebarSessions({
-      projectId: "empty",
-      section: { id: "chats", type: "chats" },
-      visible,
-      relevant: true,
-    });
-    return null;
-  }
-  const show = (visible: boolean) =>
-    act(async () =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <Probe visible={visible} />
-        </QueryClientProvider>,
-      ),
-    );
+  const hint = () => {
+    for (const notify of mocks.hints) notify();
+  };
   try {
-    await show(true);
-    if (!state) throw new Error("Missing store");
-    await act(async () => {
-      await state?.collection.load();
-    });
-    await client.invalidateQueries({ refetchType: "none" });
-    mocks.fetch.mockImplementation(() => new Promise(() => {}));
-    await show(false);
-    expect(state.root.status).toBe("ready");
-    expect(state.root.ids).toEqual([]);
+    // Shown again with nothing missed, or only focused: nothing to read.
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    expect(listener).not.toHaveBeenCalled();
+    // A hint while hidden is dropped and remembered.
+    hidden = true;
+    hint();
+    hint();
+    expect(listener).not.toHaveBeenCalled();
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith("loaded", false);
+    // Caught up: showing again reads nothing more.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(listener).toHaveBeenCalledTimes(1);
   } finally {
-    await act(async () => root.unmount());
+    stop();
+    visibility.mockRestore();
     client.clear();
   }
 });

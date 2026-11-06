@@ -4,7 +4,7 @@ They are retained as customization compatibility tests, not generated during CI.
 
 The first exercise asked for a nested Docs section, independent inline/overflow/
 right-click actions, a filtered working-chat source, and contextual subsessions.
-`agent-sidebar.cjs` is the resulting whole-document configuration.
+`agent-workspace.cjs` is the resulting whole-document configuration.
 
 The follow-up asked for a sandboxed live widget built with the public collection
 and item primitives. `agent-sidebar-widget.tsx` is the result (formatting only),
@@ -12,6 +12,7 @@ and `agent-sidebar-widget-entry.tsx` supplies its test mount.
 
 `sidebar-contributions.e2e.ts` runs both in the actual Electron host, creates real
 session records, verifies context changes and menus, and executes advertised
-collection actions across the sandbox bridge. The widget is compiled from source;
-only the app view-state lookup is intercepted to serve that built fixture. This
-test covers customization and the host bridge, not the app deployment pipeline.
+collection actions across the sandbox bridge. The widget is compiled from source
+and published through a real project preview build. Its document uses the host's
+normal guest admission and isolated origin. This test covers customization and
+the host bridge; the dedicated app suite covers deployment behavior in depth.

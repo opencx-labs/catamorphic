@@ -1,9 +1,10 @@
 import path from "node:path";
+import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import type { ProfileConfigManager } from "../profile-config.js";
 import {
-  projectLocalSidebarFile,
-  projectSidebarFile,
-} from "../sidebar-config.js";
+  projectLocalWorkspaceFile,
+  projectWorkspaceFile,
+} from "../workspace-config.js";
 
 /** Host metadata, refreshed per turn; it grants no filesystem permissions. */
 export function desktopSettingsContext({
@@ -26,13 +27,18 @@ export function desktopSettingsContext({
     };
   const stores = config.forProfile(profileId);
   const preferences = config.settingsFiles(profileId, project);
+  const sharedSettings = config.sharedSettings(profileId);
   return {
     access,
     projectId: project.id,
     profileId,
+    // Parts whose files this profile shares, with the other profiles' names.
+    sharedSettings: Object.keys(sharedSettings).length
+      ? sharedSettings
+      : undefined,
     personalFilesDirectory:
       access === "native" && project.rootPath
-        ? path.join(project.rootPath, ".catamorphic", "personal", profileId)
+        ? path.join(project.rootPath, PROJECT_PERSONAL_DIR, profileId)
         : undefined,
     files: {
       preferences,
@@ -42,14 +48,16 @@ export function desktopSettingsContext({
         personal: preferences.personal,
       },
       shortcuts: stores.keybindings.file,
-      sidebar: {
-        profile: stores.sidebar.file,
-        personal: projectLocalSidebarFile(
-          path.dirname(stores.sidebar.file),
+      // Bookmarks: byProject[projectId] and pinnedByProfile[profileId].
+      bookmarks: config.bookmarksFile(),
+      workspace: {
+        profile: stores.workspace.file,
+        personal: projectLocalWorkspaceFile(
+          config.profileDir(profileId),
           project.id,
         ),
         ...(project.rootPath
-          ? { project: projectSidebarFile(project.rootPath) }
+          ? { project: projectWorkspaceFile(project.rootPath) }
           : {}),
       },
     },
@@ -57,7 +65,7 @@ export function desktopSettingsContext({
     skill: "configuring-catamorphic-desktop",
     note:
       access === "read-only"
-        ? "Inspect only. This agent is read-only; do not edit host configuration."
+        ? "Inspect only. This agent's sandboxing is contained; do not edit host configuration."
         : "These are host paths for the initiating project's owning profile, independent of the foreground window and any session worktree. Edit files directly with ordinary file or shell facilities. Native harness permissions still apply, especially outside the checkout; these paths do not grant access. Load the configuration skill for schemas, precedence and reset. Read affected files before and after editing. Validation errors appear here on the next turn and in Settings; valid changes apply live.",
   };
 }

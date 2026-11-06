@@ -16,7 +16,8 @@
   grid-area: 1 / 1;
   white-space: nowrap;
   opacity: 1;
-  visibility: visible;
+  /* Inherited, so a label in a hidden surface (a background tab) stays hidden. */
+  visibility: inherit;
   transition:
     opacity 150ms ease-out,
     visibility 150ms;
@@ -429,64 +430,55 @@
   font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
 }
 
-/* Toolbar */
-.catamorphic-toolbar {
+/* Corner controls float over the canvas's top-right corner. */
+.catamorphic-editor-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--color-border, #262626);
-  background: var(--color-bg-raised, #0f0f0f);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border, #262626);
+  border-radius: 8px;
+  background: var(--color-bg-raised, #101012);
 }
 
-.catamorphic-toolbar-left,
-.catamorphic-toolbar-right {
-  display: flex;
-  gap: 8px;
-}
-
-.catamorphic-toolbar-center {
-  display: flex;
-  flex: 1;
-  justify-content: center;
-  align-items: center;
-  min-width: 0;
-  padding: 0 16px;
-}
-
-.catamorphic-toolbar-btn {
-  padding: 6px 12px;
+.catamorphic-editor-control {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
   border-radius: 6px;
-  border: 1px solid var(--color-border-strong, #333);
-  background: var(--color-bg-overlay, #1a1a1a);
+  background: transparent;
   color: var(--color-fg-muted, #a3a3a3);
-  font-size: 13px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition:
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.catamorphic-toolbar-btn:hover {
-  background: var(--color-border, #262626);
+.catamorphic-editor-control:hover,
+.catamorphic-editor-control[aria-pressed="true"] {
+  background: var(--color-bg-overlay, #16161a);
   color: var(--color-fg, #fafafa);
 }
 
-.catamorphic-toolbar-btn-active {
-  background: #1e293b;
-  border-color: #334155;
-  color: #94a3b8;
-}
-
-.catamorphic-toolbar-run {
+.catamorphic-editor-control-primary {
   background: var(--color-accent, #f95225);
-  border-color: var(--color-accent, #f95225);
   color: var(--color-accent-fg, #fff);
 }
 
-.catamorphic-toolbar-run:hover {
+.catamorphic-editor-control-primary:hover {
+  background: var(--color-accent, #f95225);
+  color: var(--color-accent-fg, #fff);
   opacity: 0.9;
 }
 
-.catamorphic-toolbar-btn:disabled {
+.catamorphic-editor-control:disabled {
   opacity: 0.45;
   cursor: default;
 }
@@ -533,28 +525,33 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  border-radius: 10px;
-  border: 1.5px solid var(--color-border-strong, #333);
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-strong, #333);
   background: var(--color-bg-raised, #171717);
   width: 240px;
   box-sizing: border-box;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  text-align: left;
   transition:
-    border-color 0.2s,
-    box-shadow 0.2s,
-    opacity 0.2s;
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 150ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 150ms cubic-bezier(0.2, 0, 0, 1);
   cursor: pointer;
+}
+
+/* A node fills the height its layout reserved (the start node's triggers). */
+.react-flow__node > .catamorphic-node {
+  min-height: 100%;
 }
 
 .catamorphic-node:hover {
   border-color: var(--color-fg-faint, #525252);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
 .catamorphic-node-icon {
-  font-size: 18px;
+  display: inline-flex;
   flex-shrink: 0;
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-node-content {
@@ -600,14 +597,13 @@
 .catamorphic-param-badge {
   font-size: 10px;
   padding: 2px 6px;
-  background: var(--color-border, #262626);
+  background: var(--color-bg-inset, #060607);
   border-radius: 4px;
   color: var(--color-fg-muted, #a3a3a3);
 }
 
-.catamorphic-input-node {
-  border-color: #ca8a04;
-  background: color-mix(in srgb, #ca8a04 6%, var(--color-bg-raised, #171717));
+.catamorphic-input-node .catamorphic-node-icon {
+  color: var(--color-accent, #f95225);
 }
 
 .catamorphic-node-triggers {
@@ -623,8 +619,7 @@
   gap: 4px;
   font-size: 10px;
   padding: 2px 6px;
-  background: var(--color-border, #262626);
-  border-left: 2px solid var(--catamorphic-trigger-accent, transparent);
+  background: var(--color-bg-inset, #060607);
   border-radius: 4px;
   color: var(--color-fg-muted, #a3a3a3);
   white-space: nowrap;
@@ -645,49 +640,36 @@
 }
 
 .catamorphic-source-node {
-  border-color: #0891b2;
-  background: color-mix(in srgb, #0891b2 6%, var(--color-bg-raised, #171717));
   min-height: 56px;
 }
 
 .catamorphic-sink-node {
-  border-color: #16a34a;
-  background: color-mix(in srgb, #16a34a 6%, var(--color-bg-raised, #171717));
   min-height: 56px;
 }
 
 .catamorphic-batch-step-node {
-  border-color: #7c3aed;
-  background: color-mix(in srgb, #7c3aed 6%, var(--color-bg-raised, #171717));
   min-height: 56px;
 }
 
-.catamorphic-step-node {
-  border-color: var(--color-accent, #f95225);
-  background: color-mix(
-    in srgb,
-    var(--color-accent, #f95225) 6%,
-    var(--color-bg-raised, #171717)
-  );
-}
-
-.catamorphic-pause-node {
-  border-color: #d97706;
-  background: color-mix(in srgb, #d97706 6%, var(--color-bg-raised, #171717));
+.catamorphic-pause-node .catamorphic-node-icon {
+  color: var(--color-warning, #d4a13a);
 }
 
 .catamorphic-call-workflow-scope {
   position: relative;
   box-sizing: border-box;
-  border: 1.5px dashed rgba(99, 102, 241, 0.48);
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
   border-radius: 12px;
-  background:
-    linear-gradient(135deg, rgba(99, 102, 241, 0.07), transparent 55%),
-    color-mix(in srgb, var(--color-bg-inset, #0a0a0a) 22%, transparent);
+  background: transparent;
   transition:
-    border-color 180ms ease,
-    background 180ms ease,
-    box-shadow 180ms ease;
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .catamorphic-call-workflow-header {
@@ -699,7 +681,7 @@
   align-items: center;
   gap: 7px;
   overflow: hidden;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #a5b4fc);
+  color: var(--color-fg-muted, #a3a3a3);
   font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -708,23 +690,9 @@
 
 .catamorphic-container-collapsed {
   border-style: solid;
-  border-radius: 10px;
-  background:
-    radial-gradient(
-      circle at 12% 10%,
-      rgba(148, 163, 184, 0.12),
-      transparent 42%
-    ),
-    var(--color-bg-raised, #171717);
-  box-shadow:
-    0 10px 30px rgba(0, 0, 0, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.035);
-}
-
-.catamorphic-call-workflow-scope.catamorphic-container-collapsed {
-  background:
-    radial-gradient(circle at 12% 10%, rgba(99, 102, 241, 0.2), transparent 44%),
-    var(--color-bg-raised, #171717);
+  border-radius: 8px;
+  border-color: var(--color-border-strong, #333);
+  background: var(--color-bg-raised, #171717);
 }
 
 .catamorphic-container-toggle {
@@ -738,11 +706,16 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--color-border, #262626);
   border-radius: 6px;
   background: var(--color-bg-overlay, #16161a);
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #94a3b8);
+  color: var(--color-fg-muted, #a3a3a3);
   cursor: pointer;
+  transition: color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.catamorphic-container-toggle:hover {
+  color: var(--color-fg, #fafafa);
 }
 
 .catamorphic-container-toggle svg {
@@ -753,13 +726,33 @@
   transform: rotate(-90deg);
 }
 
+/* Nesting depth strengthens a container's outline. */
+.catamorphic-workflow-canvas [data-depth="1"] {
+  --catamorphic-depth: 1;
+}
+.catamorphic-workflow-canvas [data-depth="2"] {
+  --catamorphic-depth: 2;
+}
+.catamorphic-workflow-canvas [data-depth="3"] {
+  --catamorphic-depth: 3;
+}
+
 /* Branch container (if/else branch) */
 .catamorphic-branch-node {
-  border: 1.5px dashed rgba(168, 85, 247, 0.3);
-  border-radius: 12px;
-  background: rgba(168, 85, 247, 0.03);
   position: relative;
   box-sizing: border-box;
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
+  border-radius: 12px;
+  background: transparent;
+  transition:
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .catamorphic-branch-header {
@@ -781,19 +774,18 @@
   letter-spacing: 0.5px;
   padding: 2px 8px;
   border-radius: 4px;
-  background: rgba(168, 85, 247, 0.15);
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #c084fc);
+  background: var(--color-bg-overlay, #16161a);
+  color: var(--color-fg-muted, #a3a3a3);
   flex-shrink: 0;
 }
 
 .catamorphic-branch-badge-else {
-  background: rgba(161, 161, 170, 0.12);
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #a1a1aa);
+  color: var(--color-fg-faint, #717171);
 }
 
 .catamorphic-branch-condition {
   font-size: 11px;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #a1a1aa);
+  color: var(--color-fg-muted, #a3a3a3);
   font-family: var(
     --font-mono,
     "Fira Code",
@@ -808,11 +800,20 @@
 
 /* Loop-block container */
 .catamorphic-loop-block-node {
-  border: 1.5px dashed rgba(249, 115, 22, 0.3);
-  border-radius: 12px;
-  background: rgba(249, 115, 22, 0.03);
   position: relative;
   box-sizing: border-box;
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
+  border-radius: 12px;
+  background: transparent;
+  transition:
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .catamorphic-loop-block-header {
@@ -828,13 +829,14 @@
 }
 
 .catamorphic-loop-block-icon {
-  font-size: 12px;
+  display: inline-flex;
   flex-shrink: 0;
+  color: var(--color-fg-faint, #717171);
 }
 
 .catamorphic-loop-block-label {
   font-size: 11px;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #fb923c);
+  color: var(--color-fg-muted, #a3a3a3);
   font-family: var(
     --font-mono,
     "Fira Code",
@@ -847,68 +849,8 @@
   text-overflow: ellipsis;
 }
 
-.catamorphic-parallel-node {
-  border-color: #06b6d4;
-  background: color-mix(in srgb, #06b6d4 6%, var(--color-bg-raised, #171717));
-}
-
-.catamorphic-delay-node {
-  border-color: var(--color-fg-muted, #737373);
-  background: var(--color-bg-raised, #171717);
-}
-
-.catamorphic-return-node {
-  border-color: #22c55e;
-  background: color-mix(in srgb, #22c55e 6%, var(--color-bg-raised, #171717));
-}
-
-/* AI Bar */
-.catamorphic-ai-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--color-border, #262626);
-  background: var(--color-bg-raised, #0f0f0f);
-}
-
-.catamorphic-ai-input {
-  flex: 1;
-  padding: 10px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border-strong, #333);
-  background: var(--color-bg-overlay, #1a1a1a);
-  color: var(--color-fg, #fafafa);
-  font-size: 14px;
-  outline: none;
-}
-
-.catamorphic-ai-input:focus {
-  border-color: var(--color-fg-faint, #525252);
-}
-
-.catamorphic-ai-input::placeholder {
-  color: var(--color-fg-faint, #525252);
-}
-
-.catamorphic-ai-send {
-  padding: 10px 20px;
-  border-radius: 8px;
-  border: none;
-  background: var(--color-accent, #f95225);
-  color: #fff;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.catamorphic-ai-send:hover {
-  background: var(--color-accent, #f95225);
-}
-
-.catamorphic-ai-send:disabled {
-  background: #1e3a5f;
-  cursor: not-allowed;
+.catamorphic-return-node .catamorphic-node-icon {
+  color: var(--color-success, #4ade80);
 }
 
 /* Hide handle dots on all nodes */
@@ -931,55 +873,80 @@
 }
 
 .react-flow__edge-path {
-  stroke: var(--color-fg-muted, #737373);
+  stroke: var(--color-border-strong, #3a3a3a);
   stroke-width: 1.5;
+  transition: stroke 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-.react-flow__edge.animated .react-flow__edge-path {
-  animation: catamorphic-dash 0.6s linear infinite;
+.react-flow__edge-textbg {
+  fill: var(--color-bg, #0a0a0a);
 }
 
-@keyframes catamorphic-dash {
-  to {
-    stroke-dashoffset: -18;
-  }
+.react-flow__edge-text {
+  fill: var(--color-fg-muted, #a3a3a3);
+  font-size: 11px;
 }
 
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 2.5;
-  filter: brightness(1.3);
+  stroke: var(--color-fg, #fafafa);
 }
 
 .react-flow__controls {
+  overflow: hidden;
   background: var(--color-bg-raised, #171717);
-  border: 1px solid var(--color-border-strong, #333);
+  border: 1px solid var(--color-border, #262626);
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: none;
 }
 
 .react-flow__controls-button {
   background: var(--color-bg-raised, #171717);
   color: var(--color-fg-muted, #a3a3a3);
+  fill: currentColor;
   border-bottom: 1px solid var(--color-border, #262626);
+  transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .react-flow__controls-button:hover {
-  background: var(--color-border, #262626);
+  background: var(--color-bg-overlay, #16161a);
+  color: var(--color-fg, #fafafa);
 }
 
 .react-flow__minimap {
   background: var(--color-bg-raised, #0f0f0f);
-  border: 1px solid var(--color-border-strong, #333);
+  border: 1px solid var(--color-border, #262626);
   border-radius: 8px;
+}
+
+.react-flow__minimap-mask {
+  fill: color-mix(in srgb, var(--color-bg, #0a0a0a) 60%, transparent);
+}
+
+.catamorphic-minimap-node {
+  fill: var(--color-fg-faint, #525252);
+}
+
+.catamorphic-minimap-container {
+  fill: transparent;
+  stroke: var(--color-border-strong, #333);
 }
 
 /* Parallel block container */
 .catamorphic-parallel-block-node {
-  border: 1.5px dashed rgba(6, 182, 212, 0.3);
-  border-radius: 12px;
-  background: rgba(6, 182, 212, 0.03);
   position: relative;
   box-sizing: border-box;
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
+  border-radius: 12px;
+  background: transparent;
+  transition:
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .catamorphic-parallel-block-header {
@@ -995,13 +962,14 @@
 }
 
 .catamorphic-parallel-block-icon {
-  font-size: 12px;
+  display: inline-flex;
   flex-shrink: 0;
+  color: var(--color-fg-faint, #717171);
 }
 
 .catamorphic-parallel-block-label {
   font-size: 11px;
-  color: #22d3ee;
+  color: var(--color-fg-muted, #a3a3a3);
   font-family: var(
     --font-mono,
     "Fira Code",
@@ -1016,11 +984,20 @@
 
 /* Scope block container (bare blocks, IIFEs) */
 .catamorphic-scope-block-node {
-  border: 1.5px dashed rgba(148, 163, 184, 0.3);
-  border-radius: 12px;
-  background: rgba(148, 163, 184, 0.03);
   position: relative;
   box-sizing: border-box;
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
+  border-radius: 12px;
+  background: transparent;
+  transition:
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .catamorphic-scope-block-header {
@@ -1036,14 +1013,14 @@
 }
 
 .catamorphic-scope-block-icon {
-  font-size: 12px;
+  display: inline-flex;
   flex-shrink: 0;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #94a3b8);
+  color: var(--color-fg-faint, #717171);
 }
 
 .catamorphic-scope-block-label {
   font-size: 11px;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #94a3b8);
+  color: var(--color-fg-muted, #a3a3a3);
   font-family: var(
     --font-mono,
     "Fira Code",
@@ -1058,17 +1035,20 @@
 
 /* Retry scope container */
 .catamorphic-boundary-node {
-  border: 1.5px dashed rgba(148, 163, 184, 0.32);
-  border-radius: 12px;
-  background:
-    linear-gradient(135deg, rgba(148, 163, 184, 0.035), transparent 55%),
-    color-mix(in srgb, var(--color-bg-inset, #0a0a0a) 20%, transparent);
   position: relative;
   box-sizing: border-box;
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
+  border-radius: 12px;
+  background: transparent;
   transition:
-    border-color 0.2s,
-    box-shadow 0.2s,
-    background 0.2s;
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Our custom input renderer owns its box. React Flow also uses "input" for
@@ -1095,7 +1075,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #cbd5e1);
+  color: var(--color-fg-muted, #a3a3a3);
   pointer-events: auto;
   z-index: 1;
 }
@@ -1133,31 +1113,31 @@
 
 /* Selected node highlight */
 .react-flow__node.selected .catamorphic-node {
-  box-shadow:
-    0 0 0 2px var(--color-accent, #f95225),
-    0 4px 16px rgba(59, 130, 246, 0.2);
+  border-color: var(--color-accent, #f95225);
+  box-shadow: 0 0 0 1px var(--color-accent, #f95225);
 }
 
 .react-flow__node.selected .catamorphic-boundary-node {
-  border-color: rgba(96, 165, 250, 0.9);
-  background: rgba(59, 130, 246, 0.035);
-  box-shadow:
-    0 0 0 2px rgba(59, 130, 246, 0.65),
-    0 4px 18px rgba(59, 130, 246, 0.12);
+  border-color: var(--color-accent, #f95225);
+  background: color-mix(in srgb, var(--color-accent, #f95225) 4%, transparent);
 }
 
 /* Batch processing container */
 .catamorphic-batch-node {
   position: relative;
   box-sizing: border-box;
-  border: 1.5px dashed rgba(20, 184, 166, 0.46);
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      var(--color-fg-faint, #525252)
+        calc(55% + var(--catamorphic-depth, 0) * 15%),
+      transparent
+    );
   border-radius: 12px;
-  background:
-    linear-gradient(135deg, rgba(13, 148, 136, 0.08), transparent 55%),
-    color-mix(in srgb, var(--color-bg-inset, #0a0a0a) 24%, transparent);
+  background: transparent;
   transition:
-    border-color 180ms ease,
-    background 180ms ease;
+    border-color 150ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .catamorphic-batch-header {
@@ -1169,7 +1149,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  color: color-mix(in srgb, var(--color-fg, #fafafa) 65%, #5eead4);
+  color: var(--color-fg-muted, #a3a3a3);
 }
 
 .catamorphic-batch-icon {
@@ -1186,45 +1166,32 @@
   white-space: nowrap;
 }
 
-.catamorphic-batch-node.catamorphic-container-collapsed {
-  background:
-    radial-gradient(circle at 12% 10%, rgba(20, 184, 166, 0.2), transparent 44%),
-    var(--color-bg-raised, #171717);
-}
-
 .catamorphic-container-collapsed .catamorphic-batch-header {
   top: 50%;
   transform: translateY(-50%);
 }
 
 .react-flow__node.selected .catamorphic-batch-node {
-  border-color: rgba(45, 212, 191, 0.95);
-  box-shadow:
-    0 0 0 2px rgba(20, 184, 166, 0.5),
-    0 4px 18px rgba(13, 148, 136, 0.14);
+  border-color: var(--color-accent, #f95225);
+  background: color-mix(in srgb, var(--color-accent, #f95225) 4%, transparent);
 }
 
 .react-flow__node.selected .catamorphic-call-workflow-scope {
-  border-color: rgba(129, 140, 248, 0.95);
-  box-shadow:
-    0 0 0 2px rgba(99, 102, 241, 0.55),
-    0 4px 18px rgba(99, 102, 241, 0.14);
+  border-color: var(--color-accent, #f95225);
+  background: color-mix(in srgb, var(--color-accent, #f95225) 4%, transparent);
 }
 
 /* --- Node Execution Status --- */
 .catamorphic-node[data-execution-status="running"] {
-  animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
   border-color: var(--color-accent, #f95225);
 }
 
 .catamorphic-node[data-execution-status="completed"] {
-  border-color: #22c55e;
-  box-shadow: 0 0 12px rgba(34, 197, 94, 0.2);
+  border-color: var(--color-success, #4ade80);
 }
 
 .catamorphic-node[data-execution-status="failed"] {
-  border-color: #ef4444;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.2);
+  border-color: var(--color-danger, #f87171);
 }
 
 .catamorphic-node[data-execution-status="pending"] {
@@ -1233,20 +1200,20 @@
 
 .catamorphic-node-exec-indicator {
   position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 10px;
-  height: 10px;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  border: 2px solid #171717;
+  box-shadow: 0 0 0 2px var(--color-bg, #0a0a0a);
 }
 
 .catamorphic-node-exec-indicator[data-status="completed"] {
-  background: #22c55e;
+  background: var(--color-success, #4ade80);
 }
 
 .catamorphic-node-exec-indicator[data-status="failed"] {
-  background: #ef4444;
+  background: var(--color-danger, #f87171);
 }
 
 .catamorphic-node-exec-indicator[data-status="running"] {
@@ -1254,13 +1221,20 @@
   animation: catamorphic-node-pulse 1.2s ease-in-out infinite;
 }
 
+/* Running is indeterminate; the dot breathes until the step settles. */
 @keyframes catamorphic-node-pulse {
   0%,
   100% {
-    box-shadow: 0 0 4px rgba(59, 130, 246, 0.3);
+    opacity: 1;
   }
   50% {
-    box-shadow: 0 0 16px rgba(59, 130, 246, 0.6);
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catamorphic-node-exec-indicator[data-status="running"] {
+    animation: none;
   }
 }
 
@@ -2058,8 +2032,339 @@
   background-clip: padding-box;
 }
 
+/* --- Overflow hints -----------------------------------------------------
+   Where a scroller's content continues past its top or bottom, it fades
+   out over the last --cat-edge-fade of that edge instead of being cut
+   there, and only while there is more to see that way: at the top of a
+   list, its top edge is sharp. A mask, so it needs no knowledge of the
+   surface behind. The registry's edge-fade (fadeEdges) keeps the two
+   lengths it reads as the list scrolls and changes size; without it the
+   edges stay sharp. Its scroll padding keeps what focus or a jump brings
+   into view clear of the fade; a list that anchors its end (the chat's
+   conversation) takes none, since anchoring looks only inside it. */
+
+/* Any length, read as pixels by the script; set it on the scroller or
+   around it. */
+@property --cat-edge-fade {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 24px;
+}
+@property --cat-edge-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --cat-edge-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.cat-edge-fade {
+  scroll-padding-block: var(--cat-edge-fade);
+}
+/* Only while an edge fades: a mask costs the compositor a pass per frame. */
+.cat-edge-fade[data-edge-faded] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--cat-edge-fade-top),
+    #000 calc(100% - var(--cat-edge-fade-bottom)),
+    transparent
+  );
+}
+/* The conversation holds its latest words still by scroll anchoring to a
+   pixel at its very end, and the browser only anchors to what lies inside
+   the scroll padding: there, the edge takes none. */
+.cat-timeline .cat-edge-fade {
+  scroll-padding-block: 0;
+}
+
 .catamorphic-run-section-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--color-fg-muted);
+}
+
+/* --- Chat motion (the chat-timeline registry item) ----------------------
+   One easing, 150 to 220ms, nothing loops. The timeline also moves on with
+   timers, so a host without these rules shows the same states unanimated. */
+
+/* Keep :has on its owning row. Tailwind's group-has variant puts the
+   descendant relation inside :is(... *), which makes Chromium invalidate
+   the document's styles on unrelated insertions and inline style changes. */
+[data-user-message]:focus-visible .cat-sent-time,
+[data-user-message]:has(:focus-visible) .cat-sent-time,
+.cat-webhook-url:has(:focus-visible) .cat-webhook-copy {
+  opacity: 1;
+}
+
+/* What appears in place: an outcome, prose born live, a timer. */
+@keyframes catamorphic-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.cat-fade-in {
+  animation: catamorphic-fade-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* A note folding into its answer's steps as the turn settles: its row
+   closes up and fades while the steps take it in. The negative margin
+   cancels the timeline's 0.75rem gap, so nothing snaps when it unmounts. */
+@keyframes catamorphic-fold-away {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    margin-top: 0;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    margin-top: -0.75rem;
+  }
+}
+
+.cat-fold-away {
+  display: grid;
+  animation: catamorphic-fold-away 220ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.cat-fold-away > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The mirror of fold-away for a step joining a running turn's list (and a
+   block of steps joining the turn, or the list under a steps line that
+   took the turn line's place): the row opens its own height, and its
+   margins, while it fades in, so the list grows at its end instead of
+   jumping. It clips only
+   vertically, so a turn's clock past the line's end stays in view. The
+   class is dropped once it has played, so a settled row never clips its
+   focus ring. */
+@keyframes catamorphic-step-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+.cat-step-in {
+  display: grid;
+  animation: catamorphic-step-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.cat-step-in > * {
+  min-height: 0;
+  overflow-x: visible;
+  overflow-y: clip;
+}
+
+/* A row joining the conversation's column as its writing or work opens
+   (see cat-step-in and cat-grow): it opens the column's 0.75rem gap above
+   it in the same beat, so what is below slides rather than jumping by the
+   gap first. */
+@keyframes catamorphic-gap-in {
+  from {
+    margin-top: -0.75rem;
+  }
+}
+
+.cat-gap-in {
+  animation: catamorphic-gap-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Text that changes in place (the activity line, a step count and its
+   word) changes on one beat: the old text fades away from the opacity it
+   had (the activity line's breath, or full), the new one fades in. Opacity
+   only, so the beat runs on the compositor. See ActivityText and SwapText. */
+@keyframes catamorphic-swap-out {
+  from {
+    opacity: var(--cat-swap-from, 1);
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes catamorphic-swap-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.cat-swap-out {
+  animation: catamorphic-swap-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.cat-swap-in {
+  animation: catamorphic-swap-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* A swapping label's place: it takes a width only while the label swaps,
+   so what follows slides to the new width instead of jumping there. The
+   coming text is measured from CSS content, never read as the label. */
+.cat-swap-slot {
+  position: relative;
+  display: inline-block;
+  white-space: pre;
+  transition: width 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.cat-swap-next {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+}
+
+.cat-swap-next::before {
+  content: attr(data-text);
+}
+
+.cat-swap-text {
+  display: inline-block;
+  white-space: pre;
+}
+
+/* Prose being written: its box follows the text's height on a short
+   transition, so each new line opens its place instead of pushing what is
+   below it down at once. Only while the text streams (data-growing). */
+.cat-grow[data-growing] {
+  overflow-x: visible;
+  overflow-y: clip;
+  transition: height 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Something that opens its own height in the timeline's column and closes
+   it again (the activity line, the turn line above it): one transition both
+   ways on one element, so a quick change back reverses from where it is.
+   Closed, it gives back the column's gap (--cat-reveal-gap). It opens from
+   nothing only as it appears in a chat on screen (data-entering, which the
+   timeline drops once it has opened): a chat shown again mid-turn, which
+   lays it out anew, has it open already. Its line is clipped only while it
+   moves (data-moving, data-closed), so a focus ring in it shows whole. */
+.cat-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 200ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1),
+    margin-top 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.cat-reveal[data-closed] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-top: var(--cat-reveal-gap, 0px);
+}
+
+@starting-style {
+  .cat-reveal[data-entering] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    margin-top: var(--cat-reveal-gap, 0px);
+  }
+}
+
+.cat-reveal > * {
+  min-height: 0;
+}
+
+.cat-reveal:is([data-moving], [data-closed]) > * {
+  overflow-x: visible;
+  overflow-y: clip;
+}
+
+/* A conversation in view only, from first to last. Every row out of
+   view skips style, layout and paint, including earlier rows of a live turn.
+   Each row remembers its last laid-out size, so a
+   row coming into view keeps its height for the frame before the
+   browser finds it in view (a guess there could collapse the conversation
+   for a frame and drop the scroll to the top), and one coming back into
+   view takes the size it left with. Only a row never laid out guesses.
+   Only where the browser anchors scrolling: a placeholder taking its real
+   size as it comes into view moves what the person reads unless anchoring
+   makes up for it (Safari has no overflow-anchor). Skipping paint clips at
+   the row's padding box, so 4px of padding, given back by the margin,
+   keeps focus rings and a deep-linked message's outline whole without
+   moving a pixel. */
+.cat-row {
+  contain-intrinsic-size: auto 80px;
+}
+
+@supports (overflow-anchor: auto) {
+  .cat-row {
+    content-visibility: auto;
+    padding: 4px;
+    margin: -4px;
+  }
+  /* Current work, entrances and folding notes retain their actual size. */
+  .cat-row:is(.cat-gap-in, .cat-uncontained) {
+    content-visibility: visible;
+  }
+}
+
+/* While the chat follows its latest message (data-pinned), only the anchor
+   at the conversation's end takes part in scroll anchoring: the browser
+   keeps it where it is as anything above it grows or shrinks, so the
+   latest words and the activity line hold still, frame by frame, with no
+   script. */
+/* Every descendant, not only the column's children: overflow-anchor is not
+   inherited, and the live turn's rows sit in display: contents wrappers. */
+[data-pinned] * {
+  overflow-anchor: none;
+}
+
+.cat-scroll-anchor {
+  height: 1px;
+  /* Takes no room: its own pixel and the column's gap above it. */
+  margin-top: calc(-0.75rem - 1px);
+}
+
+[data-pinned] > .cat-scroll-anchor {
+  overflow-anchor: auto;
+}
+
+/* Loops stop where nobody sees them: an inert (hidden) chat, or an activity
+   line scrolled out of view. */
+:is(
+  [inert] .cat-timeline,
+  .cat-timeline [inert],
+  .cat-timeline [data-offscreen]
+) :is(.animate-spin, .animate-pulse) {
+  animation-play-state: paused;
+}
+
+/* Near-instant rather than none: the timeline drops these classes when
+   their animations end, so the end events must still fire. */
+@media (prefers-reduced-motion: reduce) {
+  .cat-fade-in,
+  .cat-fold-away,
+  .cat-step-in,
+  .cat-gap-in,
+  .cat-swap-out,
+  .cat-swap-in {
+    animation-duration: 0.01ms;
+  }
+
+  .cat-swap-slot,
+  .cat-reveal,
+  .cat-grow[data-growing] {
+    transition-duration: 0.01ms;
+  }
 }

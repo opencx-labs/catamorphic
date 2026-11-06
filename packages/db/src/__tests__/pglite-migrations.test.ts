@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -32,6 +34,47 @@ afterAll(async () => {
 const PGLITE_TIMEOUT = 60_000;
 
 describe("PGlite migrations", () => {
+  it("refuses a plaintext secret upgrade without discarding the value", async () => {
+    await sql.raw("CREATE SCHEMA secret_storage_upgrade").execute(db);
+    await sql
+      .raw(`CREATE TABLE secret_storage_upgrade.project_secrets (
+      value text,
+      credential_ref text,
+      CONSTRAINT chk_project_secret_storage CHECK ((value IS NULL) <> (credential_ref IS NULL))
+    )`)
+      .execute(db);
+    await sql`INSERT INTO secret_storage_upgrade.project_secrets (value) VALUES (${"plaintext-before-upgrade"})`.execute(
+      db,
+    );
+    const migration = fs.readFileSync(
+      path.join(
+        import.meta.dirname,
+        "../../migrations/069_encrypted_project_secrets_only.sql",
+      ),
+      "utf8",
+    );
+    const apply = () =>
+      db.transaction().execute(async (trx) => {
+        await sql
+          .raw("SET LOCAL search_path TO secret_storage_upgrade")
+          .execute(trx);
+        for (const statement of splitSqlStatements(migration))
+          await sql.raw(statement).execute(trx);
+      });
+    await expect(apply()).rejects.toThrow();
+    const preserved = await sql<{
+      value: string;
+    }>`SELECT value FROM secret_storage_upgrade.project_secrets`.execute(db);
+    expect(preserved.rows).toEqual([{ value: "plaintext-before-upgrade" }]);
+    await sql`UPDATE secret_storage_upgrade.project_secrets SET value = null, credential_ref = ${"sealed-reference"}`.execute(
+      db,
+    );
+    await apply();
+    const sealed = await sql<{
+      credential_ref: string;
+    }>`SELECT * FROM secret_storage_upgrade.project_secrets`.execute(db);
+    expect(sealed.rows).toEqual([{ credential_ref: "sealed-reference" }]);
+  });
   it("applies the schema baseline on an in-memory PGlite", {
     timeout: PGLITE_TIMEOUT,
   }, async () => {
@@ -56,6 +99,59 @@ describe("PGlite migrations", () => {
       "016_app_icons.sql",
       "017_session_workflow_events.sql",
       "018_session_actions.sql",
+      "019_project_automations.sql",
+      "020_single_secret_stage.sql",
+      "021_work_host_tables.sql",
+      "022_work_company_identity.sql",
+      "023_sealed_project_secrets.sql",
+      "024_remote_workers.sql",
+      "025_work_shares.sql",
+      "026_remote_ownership.sql",
+      "027_committed_connection_bindings.sql",
+      "028_keyed_chat_lifecycle.sql",
+      "029_trigger_filters.sql",
+      "030_client_runner_processes.sql",
+      "031_session_approvers.sql",
+      "032_personal_connections.sql",
+      "033_session_workspaces_and_sandbox_grants.sql",
+      "034_session_event_keys.sql",
+      "035_model_usage.sql",
+      "036_project_remote_divergence.sql",
+      "037_work_github_app_registrations.sql",
+      "038_personal_environments.sql",
+      "039_client_runner_capabilities.sql",
+      "040_remote_operations.sql",
+      "041_disposable_worker_nodes.sql",
+      "043_worker_owned_leases.sql",
+      "044_no_replica_memory_state.sql",
+      "045_agent_session_log.sql",
+      "046_session_rewind.sql",
+      "047_session_log_reference_indexes.sql",
+      "048_machine_classes_and_pools.sql",
+      "049_member_secret_values.sql",
+      "050_executor_keys.sql",
+      "051_workspace_setup_and_volumes.sql",
+      "052_session_terminals.sql",
+      "053_directory_events.sql",
+      "054_directory_announcements.sql",
+      "055_session_secrets_held.sql",
+      "056_session_workspace_use.sql",
+      "057_worker_rotation_order.sql",
+      "058_machine_teardown_and_rule_failures.sql",
+      "059_sealed_receipts.sql",
+      "060_session_harness.sql",
+      "061_session_input_kinds.sql",
+      "062_typed_deliveries.sql",
+      "063_native_state_verbatim.sql",
+      "064_session_metadata.sql",
+      "065_imported_sessions.sql",
+      "066_placement_waits.sql",
+      "067_step_call_state.sql",
+      "068_subsession_grants.sql",
+      "069_encrypted_project_secrets_only.sql",
+      "072_workflow_signal_inbox.sql",
+      "074_turn_bound_model_grants.sql",
+      "075_provider_retry_state.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -81,7 +177,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(75);
+    expect(tables.rows[0]?.count).toBe(101);
   });
 
   it("supports the runtime primitives core relies on", {

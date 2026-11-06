@@ -1,5 +1,4 @@
 import {
-  type CSSProperties,
   type PointerEvent,
   useEffect,
   useLayoutEffect,
@@ -13,9 +12,14 @@ import type {
   DockData,
   DockSnapshot,
 } from "../../shared/desktop-workspace.js";
+import { parseDockClicks } from "../../shared/dock-clicks.js";
+import { dockLanding } from "../../shared/dock-position.js";
 import { fileUrlFor } from "../../shared/downloads.js";
+import { VOICE_ACTIONS } from "../../shared/voice.js";
 import { localPresentations } from "../lib/chat-presentations.js";
+import { useAnswerChipsWork } from "../lib/chips-work.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { drawnDockRects } from "../lib/dock-shape.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import {
   applyTheme,
@@ -23,11 +27,18 @@ import {
   themeStyle,
   useProjectTheme,
 } from "../lib/theme.js";
+import { useAppPreference } from "../lib/use-app-preferences.js";
 import { chatTabKey } from "../lib/workspace-state.js";
-import { ChatBubbles } from "./chat-bubbles.js";
+import { ChatBubbles, useStripFold } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
 import { DownloadsBubble } from "./downloads-bubble.js";
+import { useVoiceStatus, VoiceButton } from "./voice-button.js";
+
+/** How this window lets clicks through, as the main process decided. */
+const DOCK_CLICKS = parseDockClicks(
+  new URLSearchParams(location.search).get("clicks"),
+);
 
 const EMPTY: DockSnapshot = {
   chats: [],
@@ -35,6 +46,7 @@ const EMPTY: DockSnapshot = {
   multiProject: false,
   side: "right",
   placement: "center",
+  collapsed: false,
 };
 
 /** One presentation vocabulary, mounted in a workspace or in the native dock. */
@@ -46,6 +58,8 @@ export function DockHost({
   detachedWindow?: boolean;
 }) {
   const keybindings = useKeybindings();
+  // A chat's chips module asks Work for its chips beside the chat.
+  useAnswerChipsWork();
   const [remoteSnapshot, setSnapshot] = useState(EMPTY);
   const local = useSyncExternalStore(
     localPresentations.subscribe,
@@ -59,28 +73,38 @@ export function DockHost({
     ],
     activeChatId: local.pendingActivation ?? remoteSnapshot.activeChatId,
   };
-  useEffect(
-    () => localPresentations.acknowledge(remoteSnapshot.activeChatId),
-    [remoteSnapshot.activeChatId],
-  );
+  useEffect(() => {
+    // Main can confirm the activation before the local opening publishes.
+    if (local.pendingActivation)
+      localPresentations.acknowledge(remoteSnapshot.activeChatId);
+  }, [remoteSnapshot.activeChatId, local.pendingActivation]);
   const [signals, setSignals] = useState<Record<string, ChatSignals>>({});
   const dragStart = useRef<{
     x: number;
     left: number;
-    middle: number;
     max: number;
+    /** The strip's width and the region's, for where it would land. */
+    width: number;
+    hostWidth: number;
     moved: boolean;
   } | null>(null);
   const suppressClick = useRef(false);
   const [dragLeft, setDragLeft] = useState<number | null>(null);
+  // A drag is under way (past the click threshold). The detached window
+  // holds its size until it lands: the open chat collapses as the drag
+  // starts, and resizing then would move the window out from under the
+  // pointer.
+  const [dragging, setDragging] = useState(false);
+  // The strip's handle is held: a shield covers the window so pages and
+  // app frames under a quick drag never take the pointer's moves.
+  const [held, setHeld] = useState(false);
   const [dragTarget, setDragTarget] = useState<
     "left" | "center" | "right" | null
   >(null);
   const positionRevision = useRef(0);
   const [positionError, setPositionError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [region, setRegion] = useState<CSSProperties>({ inset: 0 });
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
   const actions = useRef(
     new Map<
       string,
@@ -88,11 +112,19 @@ export function DockHost({
         close?: () => void;
         minimize?: () => void;
         send?: (message: string) => void;
+        skill?: (message: string) => void;
+        focusComposer?: () => void;
+        focusChips?: () => boolean;
+        previousMessage?: (repeat?: boolean) => void;
+        nextMessage?: (repeat?: boolean) => void;
       }
     >(),
   );
   const showing = useRef(new Set<string>());
   const currentProjectId = activeProjectId ?? snapshot.activeProjectId;
+  const voiceStatus = useVoiceStatus();
+  const [voiceInDock, setVoiceInDock, voiceInDockLoaded] =
+    useAppPreference("voiceInDock");
   // The downloads bubble opens things in the workspace: through the
   // workspaces service when this is the detached dock window, straight
   // to this window's app otherwise (it needs no project for that).
@@ -100,7 +132,8 @@ export function DockHost({
     url: string;
     title: string;
     mode: "replace" | "tab" | "side" | "floating";
-    open: "page" | "browser";
+    /** Absent: a linked surface, such as a chat. */
+    open?: "page" | "browser";
   }) => {
     const nonce = crypto.randomUUID();
     if (detachedWindow && currentProjectId) {
@@ -123,17 +156,46 @@ export function DockHost({
   const isPresentation = detachedWindow
     ? snapshot.detached
     : !snapshot.detached;
+  // What the dock shows, for the broadcasts below to compare against.
+  const shownSnapshot = useRef(remoteSnapshot);
+  shownSnapshot.current = remoteSnapshot;
   useEffect(() => {
-    void desktopApi.dockSnapshot().then(setSnapshot);
-    return desktopApi.onDockSnapshot(setSnapshot);
+    // A broadcast that repeats what the dock shows (the echo of its own
+    // fold or corner, saved as the motion starts) sets nothing: rendering
+    // every chat again for it would land mid-motion, and React may call the
+    // dock for an unchanged state before it skips the chats.
+    const same = (current: DockSnapshot, next: DockSnapshot) =>
+      current !== EMPTY && JSON.stringify(current) === JSON.stringify(next);
+    const receive = (next: DockSnapshot) => {
+      if (same(shownSnapshot.current, next)) return;
+      setSnapshot((current) => (same(current, next) ? current : next));
+    };
+    void desktopApi.dockSnapshot().then(receive);
+    return desktopApi.onDockSnapshot(receive);
   }, []);
+  // The strip waits for the real snapshot and its microphone choice: drawn
+  // from the placeholder or the default, a folded strip would show open,
+  // then slide shut, and a microphone kept out would shrink away, on every
+  // launch, whichever answer came back first.
+  const snapshotLoaded = remoteSnapshot !== EMPTY && voiceInDockLoaded;
+  // In the window, the dock rests on the visible workspace's chat region by
+  // CSS anchoring (styles.css), so it moves in the same frame as the region
+  // (a sidebar settling, a split) without measuring. While the dock floats
+  // in its own window, this workspace tells the main process where that
+  // region sits so the dock can rest inside it whenever this window is in
+  // front.
   useLayoutEffect(() => {
-    if (detachedWindow || !activeProjectId) return;
+    if (detachedWindow) return;
+    if (!activeProjectId || !snapshot.detached) {
+      void desktopApi.dockRegion(null);
+      return;
+    }
     const selector = `[data-project-runtime="${CSS.escape(activeProjectId)}"] [data-workspace-chat-region]`;
     // The region mounts after the project does (and remounts with it), so
-    // one lookup is not enough: giving up here left chats laid out over the
-    // whole window, their tab-mode controls buried under the tab bar.
+    // one lookup is not enough.
     let target: HTMLElement | null = null;
+    let reported: DOMRect | null = null;
+    let afterPush = 0;
     const observer = new ResizeObserver(() => measure());
     const resolve = () => {
       if (target?.isConnected) return target;
@@ -146,20 +208,30 @@ export function DockHost({
     const measure = () => {
       const current = resolve();
       if (!current) return;
+      // A sidebar pushing the content moves the region on every frame of
+      // its slide; the dock's window moves once, where it lands.
+      cancelAnimationFrame(afterPush);
+      if (
+        document.querySelector('[data-workspace-visible="true"] [data-push]')
+      ) {
+        afterPush = requestAnimationFrame(measure);
+        return;
+      }
       const bounds = current.getBoundingClientRect();
-      setRegion((previous) =>
-        previous.left === bounds.left &&
-        previous.top === bounds.top &&
-        previous.width === bounds.width &&
-        previous.height === bounds.height
-          ? previous
-          : {
-              left: bounds.left,
-              top: bounds.top,
-              width: bounds.width,
-              height: bounds.height,
-            },
-      );
+      if (
+        reported?.left === bounds.left &&
+        reported.top === bounds.top &&
+        reported.width === bounds.width &&
+        reported.height === bounds.height
+      )
+        return;
+      reported = bounds;
+      void desktopApi.dockRegion({
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      });
     };
     measure();
     // Mounts and sidebar toggles move the region without resizing anything
@@ -170,31 +242,12 @@ export function DockHost({
     mutations.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", measure);
     return () => {
+      cancelAnimationFrame(afterPush);
       observer.disconnect();
       mutations.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [activeProjectId, detachedWindow]);
-  // While the dock floats in its own window, this workspace tells the main
-  // process where its chat region sits so the dock can rest inside it
-  // whenever this window is in front.
-  useEffect(() => {
-    if (detachedWindow) return;
-    const reported =
-      snapshot.detached &&
-      typeof region.left === "number" &&
-      typeof region.top === "number" &&
-      typeof region.width === "number" &&
-      typeof region.height === "number"
-        ? {
-            left: region.left,
-            top: region.top,
-            width: region.width,
-            height: region.height,
-          }
-        : null;
-    void desktopApi.dockRegion(reported);
-  }, [detachedWindow, snapshot.detached, region]);
+  }, [activeProjectId, detachedWindow, snapshot.detached]);
   useEffect(() => {
     if (detachedWindow) return;
     return () => {
@@ -209,17 +262,22 @@ export function DockHost({
         const action = actions.current.get(event.localId);
         if (event.action === "send" && event.message)
           action?.send?.(event.message);
+        else if (event.action === "skill" && event.message)
+          action?.skill?.(event.message);
         else if (event.action === "close") action?.close?.();
         else if (event.action === "minimize") action?.minimize?.();
+        else if (event.action === "focusChips") action?.focusChips?.();
+        else if (event.action === "focusComposer") action?.focusComposer?.();
+        else if (event.action === "previousMessage")
+          action?.previousMessage?.();
+        else if (event.action === "nextMessage") action?.nextMessage?.();
       }),
     [],
   );
   const scoped = snapshot.chats.filter(
-    (chat) =>
-      snapshot.multiProject ||
-      chat.projectId === currentProjectId ||
-      chat.attention,
+    (chat) => snapshot.multiProject || chat.projectId === currentProjectId,
   );
+  const mainChats = scoped.filter((chat) => !chat.fork);
   const active =
     scoped.find((chat) => chat.entry.localId === snapshot.activeChatId) ??
     (!snapshot.multiProject
@@ -232,38 +290,96 @@ export function DockHost({
       chat.tabActive,
   );
   const expanded = isPresentation && active && active.entry.mode === "partial";
+  // A chat on its way out, minimizing or closing however it was asked (the
+  // strip's arrows, Escape, its own controls, its bubble, a shortcut): the
+  // strip folds while it leaves, one motion, never after it has gone. The
+  // detached window keeps its open size until the chat has gone, so there
+  // the strip still waits for it.
+  const [leavingId, setLeavingId] = useState<string | null>(null);
+  const openChatId = expanded ? active.entry.localId : undefined;
+  if (leavingId !== null && leavingId !== openChatId) setLeavingId(null);
+  const strip = useStripFold({
+    // A detached dock is its own window; the main window's tab focus must
+    // not fold it and move it between corner and spot.
+    autoCollapse: !detachedWindow && Boolean(tabbed),
+    folded: snapshot.collapsed,
+    chatOpen:
+      openChatId !== undefined && (detachedWindow || openChatId !== leavingId),
+  });
+  // Only where the strip shows: a workspace whose dock floats in its own
+  // window keeps its chat tabs clear of an open strip.
+  const collapsed = isPresentation && strip.collapsed;
+  // The trailing microphone and downloads buttons sit beside the strip.
   const railWidth = collapsed
-    ? 100
+    ? 142
     : Math.min(
         780,
-        scoped.filter((chat) => chat.entry.mode !== "tab").length * 42 + 132,
+        mainChats.filter((chat) => chat.entry.mode !== "tab").length * 42 + 174,
       );
   // Transparent headroom above the strip gives hints room to open above a
   // bubble instead of being clamped onto it.
   const DOCK_HEADROOM = 48;
+  // Dialogs and the downloads popover need more room than the strip.
+  const roomy = expanded || dialogOpen || downloadsOpen;
+  const windowWidth = roomy ? 780 : railWidth;
+  const windowHeight = roomy ? 560 : 76 + DOCK_HEADROOM;
+  // Collapsing the strip with a chat open plays the chat's exit first; the
+  // window keeps the open placement until that chat has minimized, then
+  // moves to the collapsed corner with the bubble.
+  const windowExpanded = !collapsed || Boolean(expanded);
+  // The size main last applied: a drag lands with its size (nativeDrag), and
+  // sending it again would cut the landing's motion short.
+  const sentSizeRef = useRef("");
+  const sizeKey = `${windowWidth}x${windowHeight}:${windowExpanded}`;
   useEffect(() => {
-    if (detachedWindow)
-      void desktopApi.dockResize({
-        width: expanded || dialogOpen ? 780 : railWidth,
-        height: expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM,
-        // Collapsing the strip with a chat open plays the chat's exit first;
-        // the window keeps the open placement until that chat has minimized,
-        // then moves to the collapsed corner with the bubble.
-        expanded: !collapsed || Boolean(expanded),
-      });
-  }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
+    // Never while the handle is held: main took the window's bounds when
+    // the press began, and resizing would move it from under the pointer.
+    if (!detachedWindow || dragging || held || sentSizeRef.current === sizeKey)
+      return;
+    sentSizeRef.current = sizeKey;
+    void desktopApi.dockResize({
+      width: windowWidth,
+      height: windowHeight,
+      expanded: windowExpanded,
+    });
+  }, [
+    detachedWindow,
+    windowWidth,
+    windowHeight,
+    windowExpanded,
+    sizeKey,
+    dragging,
+    held,
+  ]);
   // Over the headroom, the margins around the chat, or any other empty
-  // space, the window lets clicks through to whatever is behind it. Only
+  // space, the window lets clicks through to whatever is behind it (where
+  // the platform allows; the main process answers whether it did). Only
   // dock content answers a hit test there: the app root and the body are
   // pointer-transparent (styles.css), so a hit on either is empty space.
+  // `data-dock-pass-through` on the root says what the window does with a
+  // click right now, once the main process has applied it; while a change
+  // is in flight it is absent, never stale. A click that races the change
+  // lands on the other side (the native pointer tests wait for this).
+  const passThroughRequest = useRef(0);
   useEffect(() => {
     if (!detachedWindow) return;
+    const root = document.documentElement;
+    delete root.dataset.dockPassThrough;
     let ignoring = false;
     let last: { x: number; y: number } | null = null;
     const update = (interactive: boolean) => {
       if (ignoring === !interactive) return;
       ignoring = !interactive;
-      void desktopApi.dockIgnoreMouse(ignoring).catch(() => {});
+      const requested = ignoring;
+      const request = ++passThroughRequest.current;
+      delete root.dataset.dockPassThrough;
+      void desktopApi
+        .dockIgnoreMouse(requested)
+        .then((passesThrough) => {
+          if (passThroughRequest.current === request)
+            root.dataset.dockPassThrough = String(passesThrough);
+        })
+        .catch(() => {});
     };
     const hitTest = () => {
       if (!last) return;
@@ -297,7 +413,81 @@ export function DockHost({
       document.removeEventListener("mousemove", move);
       document.documentElement.removeEventListener("mouseleave", leave);
       window.removeEventListener("resize", resized);
+      // Earlier answers no longer describe this window's state.
+      passThroughRequest.current += 1;
+      delete root.dataset.dockPassThrough;
       update(true);
+    };
+  }, [detachedWindow]);
+  // Where the window cannot let clicks through (Linux on X11), it takes the
+  // shape of what it draws, re-measured on the frame after anything changes
+  // (DOM, a drawn surface's size, the pointer arriving over it) and on every
+  // frame while something moves. `data-dock-shape` on the root is the shape
+  // the main process applied (JSON; "null" is the whole window): absent
+  // while a change is in flight, and never set when it was not applied.
+  const shapeRequest = useRef(0);
+  useEffect(() => {
+    if (!detachedWindow || DOCK_CLICKS !== "shape") return;
+    const root = document.documentElement;
+    delete root.dataset.dockShape;
+    let frame = 0;
+    let sent: string | undefined;
+    const moving = () =>
+      document
+        .getAnimations()
+        .some(
+          (animation) =>
+            animation.playState === "running" &&
+            animation.effect?.getTiming().iterations !== Infinity,
+        );
+    const sizes = new ResizeObserver(() => schedule());
+    const measure = () => {
+      frame = 0;
+      const rects = drawnDockRects(document.body, (element) =>
+        sizes.observe(element),
+      );
+      const key = JSON.stringify(rects);
+      if (key !== sent) {
+        sent = key;
+        const request = ++shapeRequest.current;
+        delete root.dataset.dockShape;
+        void desktopApi
+          .dockShape(rects)
+          .then((applied) => {
+            if (applied && shapeRequest.current === request)
+              root.dataset.dockShape = key;
+          })
+          .catch(() => {});
+      }
+      if (moving()) schedule();
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    window.addEventListener("resize", schedule);
+    document.addEventListener("transitionrun", schedule, true);
+    document.addEventListener("animationstart", schedule, true);
+    // Hover-only changes (a revealed action, a grown card) move no DOM.
+    document.addEventListener("pointerover", schedule, true);
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      mutations.disconnect();
+      sizes.disconnect();
+      window.removeEventListener("resize", schedule);
+      document.removeEventListener("transitionrun", schedule, true);
+      document.removeEventListener("animationstart", schedule, true);
+      document.removeEventListener("pointerover", schedule, true);
+      shapeRequest.current += 1;
+      delete root.dataset.dockShape;
+      void desktopApi.dockShape(null).catch(() => {});
     };
   }, [detachedWindow]);
 
@@ -332,6 +522,19 @@ export function DockHost({
   if (active) lastActive.current = active.entry.localId;
   const keyboard = useRef<(event: KeyboardEvent) => void>(() => {});
   keyboard.current = (event) => {
+    // Voice's keys are the main process's (ADR 0236): in the detached dock
+    // no window swallows them, so they would type there.
+    if (
+      detachedWindow &&
+      VOICE_ACTIONS.some((action) => {
+        const binding = keybindings[action];
+        return !!binding && matchesBinding(event, binding);
+      })
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (!isPresentation || event.defaultPrevented) return;
     const chat =
       active ??
@@ -347,7 +550,9 @@ export function DockHost({
       if (direction) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        const entries = scoped.filter((chat) => chat.entry.mode !== "tab");
+        const entries = scoped.filter(
+          (chat) => chat.entry.mode !== "tab" && !chat.fork,
+        );
         const index = entries.findIndex(
           (item) => item.entry.localId === chat?.entry.localId,
         );
@@ -364,10 +569,31 @@ export function DockHost({
     if (matchesBinding(event, keybindings["new-floating-chat"])) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      void desktopApi.dockNewChat();
+      void desktopApi.dockNewChat({ shortcut: true });
       return;
     }
     if (!chat) return;
+    if (
+      chat.entry.sessionId &&
+      document.activeElement?.closest<HTMLElement>("[data-chat-local-id]")
+        ?.dataset.chatLocalId === chat.entry.localId &&
+      matchesBinding(event, keybindings["new-terminal-tab"])
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      invoke(chat, {
+        kind: "menu",
+        entry: { label: "Open terminal", action: "open-terminal" },
+      });
+      return;
+    }
+    if (matchesBinding(event, keybindings["focus-chips"])) {
+      if (actions.current.get(chat.entry.localId)?.focusChips?.()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
     if (matchesBinding(event, keybindings["toggle-chat-minimized"])) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -402,6 +628,15 @@ export function DockHost({
       actions.current.get(active.entry.localId)?.close?.();
   };
   useEffect(() => desktopApi.onCloseSurface(() => closeFromMenu.current()), []);
+  // The person's fold of the strip, shown at once and kept in prefs, where
+  // every window (and the next launch) reads it from.
+  const saveFolded = (collapsed: boolean) => {
+    const previous = snapshot.collapsed;
+    setSnapshot((state) => ({ ...state, collapsed }));
+    void desktopApi.setPrefs({ dockCollapsed: collapsed }).catch(() => {
+      setSnapshot((state) => ({ ...state, collapsed: previous }));
+    });
+  };
   const saveSide = (side: "left" | "right") => {
     const revision = ++positionRevision.current;
     const previous = snapshot.side;
@@ -432,12 +667,23 @@ export function DockHost({
     phase: "start" | "move" | "end" | "cancel",
     screenX: number,
   ) => {
+    const lands = phase === "end" || phase === "cancel";
+    if (lands) sentSizeRef.current = sizeKey;
     void desktopApi
       .dockDrag({
         phase,
         screenX,
         reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
           .matches,
+        ...(lands
+          ? {
+              size: {
+                width: windowWidth,
+                height: windowHeight,
+                expanded: windowExpanded,
+              },
+            }
+          : {}),
       })
       .catch(() =>
         setPositionError("Could not move the dock. Try dragging it again."),
@@ -448,8 +694,34 @@ export function DockHost({
       nativeDrag("cancel", dragStart.current.x);
     suppressClick.current = dragStart.current?.moved ?? false;
     dragStart.current = null;
+    setHeld(false);
+    setDragging(false);
     setDragLeft(null);
     setDragTarget(null);
+  };
+  /**
+   * Where the strip lands if let go now: the spot nearest its centre, past
+   * 40% of the way from the one it left (shared with the detached dock).
+   */
+  const landing = (
+    start: NonNullable<typeof dragStart.current>,
+    delta: number,
+    intent: "side" | "placement",
+  ) => {
+    const left = Math.max(32, Math.min(start.max, start.left + delta));
+    const centre = left + start.width / 2;
+    const corners = [
+      { spot: "left", at: 32 + start.width / 2 },
+      { spot: "right", at: start.hostWidth - 32 - start.width / 2 },
+    ] as const;
+    return intent === "side"
+      ? (dockLanding({ from: snapshot.side, centre, spots: corners }) ??
+          snapshot.side)
+      : (dockLanding({
+          from: snapshot.placement,
+          centre,
+          spots: [...corners, { spot: "center", at: start.hostWidth / 2 }],
+        }) ?? snapshot.placement);
   };
   /**
    * Dragging the collapsed bubble picks its corner; dragging the arrows of
@@ -471,12 +743,14 @@ export function DockHost({
       dragStart.current = {
         x: detachedWindow ? event.screenX : event.clientX,
         left: rail.left - host.left,
-        middle: host.left + host.width / 2,
         max: Math.max(32, host.width - rail.width - 32),
+        width: rail.width,
+        hostWidth: host.width,
         moved: false,
       };
       if (detachedWindow) nativeDrag("start", event.screenX);
       event.currentTarget.setPointerCapture(event.pointerId);
+      setHeld(true);
     },
     onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
       const start = dragStart.current;
@@ -484,47 +758,44 @@ export function DockHost({
         return;
       const delta = (detachedWindow ? event.screenX : event.clientX) - start.x;
       if (!start.moved && Math.abs(delta) < 5) return;
+      if (!start.moved) {
+        setDragging(true);
+        // Dragging the open strip's arrows is using it open: a fold the
+        // person made earlier (the strip only open beside a chat) gives
+        // way, or minimizing the chat below would fold it mid-drag.
+        if (intent === "placement" && snapshot.collapsed) saveFolded(false);
+        // The open chat would sit still while the strip moves, then snap
+        // to its new place on release: it collapses as the drag starts,
+        // exactly as the collapse button does.
+        if (expanded && active)
+          actions.current.get(active.entry.localId)?.minimize?.();
+      }
       start.moved = true;
       event.preventDefault();
       if (detachedWindow) nativeDrag("move", event.screenX);
       else setDragLeft(Math.max(32, Math.min(start.max, start.left + delta)));
-      const host = event.currentTarget
-        .closest("[data-dock-host]")
-        ?.getBoundingClientRect();
-      const x = detachedWindow ? event.screenX : event.clientX;
-      if (intent === "side" || !host)
-        setDragTarget(x < start.middle ? "left" : "right");
-      else
-        setDragTarget(
-          x < host.left + host.width / 3
-            ? "left"
-            : x > host.left + (host.width * 2) / 3
-              ? "right"
-              : "center",
-        );
+      setDragTarget(landing(start, delta, intent));
     },
     onPointerUp: (event: PointerEvent<HTMLButtonElement>) => {
       const start = dragStart.current;
       if (!start) return;
       dragStart.current = null;
       suppressClick.current = start.moved;
+      // The click a drag's release makes arrives in this same task; one
+      // that never comes must not swallow the next real click.
+      if (start.moved)
+        setTimeout(() => {
+          suppressClick.current = false;
+        });
       if (detachedWindow)
         nativeDrag(start.moved ? "end" : "cancel", event.screenX);
       else if (start.moved) {
-        const host = event.currentTarget
-          .closest("[data-dock-host]")
-          ?.getBoundingClientRect();
-        if (intent === "side" || !host)
-          saveSide(event.clientX < start.middle ? "left" : "right");
-        else
-          savePlacement(
-            event.clientX < host.left + host.width / 3
-              ? "left"
-              : event.clientX > host.left + (host.width * 2) / 3
-                ? "right"
-                : "center",
-          );
+        const spot = landing(start, event.clientX - start.x, intent);
+        if (intent === "side") saveSide(spot === "left" ? "left" : "right");
+        else savePlacement(spot);
       }
+      setHeld(false);
+      setDragging(false);
       setDragLeft(null);
       setDragTarget(null);
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -566,6 +837,8 @@ export function DockHost({
     },
   });
   showing.current = new Set();
+  // Where the strip rests: a corner while collapsed, its placement open.
+  const railSpot = collapsed ? snapshot.side : snapshot.placement;
   return (
     <div
       data-dock-host
@@ -573,7 +846,7 @@ export function DockHost({
       data-dock-side={snapshot.side}
       data-dock-placement={snapshot.placement}
       className={`pointer-events-none absolute ${detachedWindow ? "inset-0" : ""}`}
-      style={{ ...themeStyle(currentTheme), ...(detachedWindow ? {} : region) }}
+      style={themeStyle(currentTheme)}
     >
       {detachedWindow && <DockDialogs onOpenChange={setDialogOpen} />}
       {snapshot.chats.map((chat) => {
@@ -585,24 +858,33 @@ export function DockHost({
           (isTab && chat.tabActive) ||
           (isPresentation && chat === active && chat.entry.mode === "partial");
         // The owning workspace keeps a headless/minimized surface mounted for
-        // signals and queued sends; other projects are ordinary session subscribers.
+        // signals and queued sends; other projects are ordinary session
+        // subscribers. A tab chat behind another tab stays a tab: showing
+        // it again is a tab switch, not a chat opening.
         const entry = {
           ...chat.entry,
-          mode: visible
-            ? isTab
-              ? ("tab" as const)
-              : ("partial" as const)
-            : ("min" as const),
+          mode: isTab
+            ? ("tab" as const)
+            : visible
+              ? ("partial" as const)
+              : ("min" as const),
           pendingMessage:
             detachedWindow || !chat.local
               ? undefined
               : chat.entry.pendingMessage,
+          draftMessage:
+            detachedWindow || !chat.local ? undefined : chat.entry.draftMessage,
         };
         if (visible) showing.current.add(entry.localId);
         const register = (patch: {
           close?: () => void;
           minimize?: () => void;
           send?: (message: string) => void;
+          skill?: (message: string) => void;
+          focusComposer?: () => void;
+          focusChips?: () => boolean;
+          previousMessage?: (repeat?: boolean) => void;
+          nextMessage?: (repeat?: boolean) => void;
         }) =>
           actions.current.set(entry.localId, {
             ...actions.current.get(entry.localId),
@@ -634,13 +916,25 @@ export function DockHost({
                         chat.local && !detachedWindow
                           ? next.pendingMessage
                           : chat.entry.pendingMessage,
+                      draftMessage:
+                        chat.local && !detachedWindow
+                          ? next.draftMessage
+                          : chat.entry.draftMessage,
                     },
                   });
                 }}
                 onClose={() => invoke(chat, { kind: "close" })}
                 onCloseStarted={() => invoke(chat, { kind: "closing" })}
+                onLeaveStarted={
+                  entry.mode === "partial"
+                    ? () => setLeavingId(entry.localId)
+                    : undefined
+                }
                 onSessionCreated={(_id, sessionId) =>
                   invoke(chat, { kind: "session", sessionId })
+                }
+                onSessionAgent={(_id, session) =>
+                  invoke(chat, { kind: "sessionAgent", ...session })
                 }
                 onSignalsChange={(_id, next) => {
                   setSignals((old) =>
@@ -671,8 +965,12 @@ export function DockHost({
                 }
                 onForkCurrent={() => invoke(chat, { kind: "forkCurrent" })}
                 onArchive={() => invoke(chat, { kind: "archive" })}
+                onEditAgent={() => invoke(chat, { kind: "editAgent" })}
                 onEditModel={() => invoke(chat, { kind: "editModel" })}
                 onEditEffort={() => invoke(chat, { kind: "editEffort" })}
+                onEditPermissionMode={() =>
+                  invoke(chat, { kind: "editPermissionMode" })
+                }
                 onOpenParent={
                   chat.fork ? () => invoke(chat, { kind: "parent" }) : undefined
                 }
@@ -688,125 +986,189 @@ export function DockHost({
                 registerClose={(close) => register({ close })}
                 registerMinimize={(minimize) => register({ minimize })}
                 registerSend={(send) => register({ send })}
+                registerSkill={(skill) => register({ skill })}
+                registerComposerFocus={(focusComposer) =>
+                  register({ focusComposer })
+                }
+                registerFocusChips={(focusChips) => register({ focusChips })}
+                registerMessageNavigation={(navigation) =>
+                  register({
+                    previousMessage: navigation?.previous,
+                    nextMessage: navigation?.next,
+                  })
+                }
+                onCustomizeChips={() =>
+                  invoke(chat, { kind: "customizeChips" })
+                }
               />
             </div>
           </ThemeScope>
         );
       })}
-      {isPresentation && (currentProjectId || scoped.length > 0) && (
-        <>
-          <ChatBubbles
-            attention={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.attention]),
-            )}
-            menus={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.menu]),
-            )}
-            onMenuAction={(id, entry) => {
-              const chat = scoped.find((chat) => chat.entry.localId === id);
-              if (chat) invoke(chat, { kind: "menu", entry });
-            }}
-            dragLeft={dragLeft}
-            // The detached window moves natively with the drag, so resting
-            // spots drawn inside it would travel with the pointer.
-            dragTarget={detachedWindow ? null : dragTarget}
-            detached={snapshot.detached}
-            nativeMenus={detachedWindow}
-            onToggleDetached={() => {
-              void desktopApi.dockDetach(!snapshot.detached);
-            }}
-            placement={snapshot.placement}
-            dragHandlers={dragHandlersFor("side")}
-            placementDragHandlers={dragHandlersFor("placement")}
-            newChatProjectName={
-              snapshot.chats.find((chat) => chat.projectId === currentProjectId)
-                ?.projectName
-            }
-            entries={scoped.map((chat) => chat.entry)}
-            labels={Object.fromEntries(
-              scoped.map((chat) => [
-                chat.entry.localId,
-                `${chat.title} · ${chat.projectName}`,
-              ]),
-            )}
-            icons={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.icon]),
-            )}
-            forks={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.fork]),
-            )}
-            signals={signals}
-            unread={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.unread]),
-            )}
-            themes={Object.fromEntries(
-              scoped.map((chat) => [
-                chat.entry.localId,
-                themeStyle(chat.theme),
-              ]),
-            )}
-            side={snapshot.side}
-            activeLocalId={active?.entry.localId}
-            // A detached dock is its own window; the main window's tab
-            // focus must not fold it and move it between corner and spot.
-            autoCollapse={!detachedWindow && Boolean(tabbed)}
-            onCollapsedChange={setCollapsed}
-            onToggle={toggle}
-            onOpenAs={(id, mode) => {
-              const chat = scoped.find((chat) => chat.entry.localId === id);
-              if (!chat) return;
-              // The side transition promotes the chat to a tab itself and
-              // splits it against the tab that is active now; changing the
-              // entry first would make the chat the active tab and leave
-              // nothing to split against.
-              if (mode === "side") {
-                invoke(chat, { kind: "surface", key: chatTabKey(id), mode });
-                return;
-              }
-              invoke(chat, {
-                kind: "entry",
-                entry: { ...chat.entry, mode: "tab" },
-              });
-            }}
-            onClose={(id) => actions.current.get(id)?.close?.()}
-            trailing={
-              <DownloadsBubble
-                onOpenAll={() =>
-                  navigateSurface({
-                    url: "downloads",
-                    title: "Downloads",
-                    mode: "tab",
-                    open: "page",
-                  })
-                }
-                onOpenFile={(record) =>
-                  navigateSurface({
-                    url: fileUrlFor(record.savePath),
-                    title: record.filename,
-                    mode: "tab",
-                    open: "browser",
-                  })
-                }
+      {isPresentation &&
+        snapshotLoaded &&
+        (currentProjectId || scoped.length > 0) && (
+          <>
+            {/* A browser page or app frame under the pointer would take its
+              moves despite the pointer capture, stranding the drag short
+              of the resting spot it was headed for. The detached window
+              moves with the pointer instead. */}
+            {held && !detachedWindow && (
+              <div
+                aria-hidden="true"
+                data-dock-drag-shield
+                className="pointer-events-auto fixed inset-0 z-30 cursor-grabbing"
               />
-            }
-            onNewChat={() => {
-              void desktopApi.dockNewChat();
-            }}
-            onCollapse={() => {
-              if (active)
-                actions.current.get(active.entry.localId)?.minimize?.();
-            }}
-          />
-          {positionError && (
-            <p
-              role="alert"
-              className="pointer-events-auto absolute bottom-16 right-3 rounded-md border border-danger/30 bg-bg-raised px-3 py-2 text-xs text-danger"
-            >
-              {positionError}
-            </p>
-          )}
-        </>
-      )}
+            )}
+            <ChatBubbles
+              attention={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.attention]),
+              )}
+              menus={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.menu]),
+              )}
+              onMenuAction={(id, entry) => {
+                const chat = scoped.find((chat) => chat.entry.localId === id);
+                if (chat) invoke(chat, { kind: "menu", entry });
+              }}
+              dragLeft={dragLeft}
+              // The detached window moves natively with the drag, so resting
+              // spots drawn inside it would travel with the pointer.
+              dragTarget={detachedWindow ? null : dragTarget}
+              detached={snapshot.detached}
+              nativeMenus={detachedWindow}
+              onToggleDetached={() => {
+                void desktopApi.dockDetach(!snapshot.detached);
+              }}
+              placement={snapshot.placement}
+              dragHandlers={dragHandlersFor("side")}
+              placementDragHandlers={dragHandlersFor("placement")}
+              newChatProjectName={
+                snapshot.chats.find(
+                  (chat) => chat.projectId === currentProjectId,
+                )?.projectName
+              }
+              entries={mainChats.map((chat) => chat.entry)}
+              labels={Object.fromEntries(
+                scoped.map((chat) => [
+                  chat.entry.localId,
+                  `${chat.title} · ${chat.projectName}`,
+                ]),
+              )}
+              icons={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.icon]),
+              )}
+              forks={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.fork]),
+              )}
+              signals={signals}
+              unread={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.unread]),
+              )}
+              themes={Object.fromEntries(
+                scoped.map((chat) => [
+                  chat.entry.localId,
+                  themeStyle(chat.theme),
+                ]),
+              )}
+              side={snapshot.side}
+              activeLocalId={active?.entry.localId}
+              collapsed={collapsed}
+              onFoldedChange={(folded) => {
+                strip.choose(folded);
+                saveFolded(folded);
+              }}
+              onToggle={toggle}
+              onOpenAs={(id, mode) => {
+                const chat = scoped.find((chat) => chat.entry.localId === id);
+                if (!chat) return;
+                // The side transition promotes the chat to a tab itself and
+                // splits it against the tab that is active now; changing the
+                // entry first would make the chat the active tab and leave
+                // nothing to split against.
+                if (mode === "side") {
+                  invoke(chat, { kind: "surface", key: chatTabKey(id), mode });
+                  return;
+                }
+                invoke(chat, {
+                  kind: "entry",
+                  entry: { ...chat.entry, mode: "tab" },
+                });
+              }}
+              onClose={(id) => actions.current.get(id)?.close?.()}
+              // Kept out of the dock, the microphone still shows while
+              // voice talks to the assistant or dictates, started by a
+              // shortcut (ADR 0236).
+              voiceShown={
+                voiceInDock ||
+                (voiceStatus.phase !== "off" &&
+                  (voiceStatus.target?.kind === "assistant" ||
+                    voiceStatus.target?.kind === "dictation"))
+              }
+              voiceInDock={voiceInDock}
+              onVoiceInDockChange={(inDock) => void setVoiceInDock(inDock)}
+              voice={
+                <VoiceButton
+                  projectId={currentProjectId}
+                  nativeMenus={detachedWindow}
+                  onCreateAssistant={() =>
+                    navigateSurface({
+                      url: "new-assistant",
+                      title: "New agent",
+                      mode: "floating",
+                      open: "page",
+                    })
+                  }
+                />
+              }
+              trailing={
+                <DownloadsBubble
+                  // The bubble ends the strip: at a side of the screen its
+                  // popover opens toward the middle.
+                  align={
+                    railSpot === "right"
+                      ? "end"
+                      : railSpot === "left"
+                        ? "start"
+                        : "center"
+                  }
+                  onOpenChange={setDownloadsOpen}
+                  onOpenAll={() =>
+                    navigateSurface({
+                      url: "downloads",
+                      title: "Downloads",
+                      mode: "tab",
+                      open: "page",
+                    })
+                  }
+                  onOpenFile={(record) =>
+                    navigateSurface({
+                      url: fileUrlFor(record.savePath),
+                      title: record.filename,
+                      mode: "tab",
+                      open: "browser",
+                    })
+                  }
+                />
+              }
+              onNewChat={() => {
+                void desktopApi.dockNewChat();
+              }}
+              onCollapse={() => {
+                if (active?.entry.mode === "partial")
+                  actions.current.get(active.entry.localId)?.minimize?.();
+              }}
+            />
+            {positionError && (
+              <p
+                role="alert"
+                className="pointer-events-auto absolute bottom-16 right-3 rounded-md border border-danger/30 bg-bg-raised px-3 py-2 text-xs text-danger"
+              >
+                {positionError}
+              </p>
+            )}
+          </>
+        )}
     </div>
   );
 }

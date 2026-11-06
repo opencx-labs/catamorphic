@@ -3,7 +3,7 @@
   "name": "plugins-settings",
   "type": "registry:component",
   "description": "Attach/detach plugins and edit per-plugin secrets. Uses usePluginCatalog, useProjectPlugins, useAttachPlugin, useDetachPlugin and useUpsertProjectSecret.",
-  "dependencies": ["@catamorphic/react"],
+  "dependencies": ["@catamorphic/react", "@catamorphic/ui"],
   "registryDependencies": ["@catamorphic/catamorphic-provider"],
   "files": [
     {

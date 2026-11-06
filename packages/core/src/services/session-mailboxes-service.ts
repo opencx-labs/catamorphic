@@ -1,16 +1,22 @@
 import { randomUUID } from "node:crypto";
-import type { DB, JsonObject } from "@catamorphic/db";
+import {
+  type DispatchMode,
+  dispatchModeSchema,
+  type JsonValue,
+  type SessionInput,
+  type SessionMessageAuthor,
+  sessionInputSchema,
+  sessionMessageAuthorSchema,
+} from "@catamorphic/agent-protocol";
+import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable } from "kysely";
+import { z } from "zod";
 import type { Identity } from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
-import {
-  parseSessionMessageAuthor,
-  type SessionDeliveryMode,
-  type SessionDeliveryReceipt,
-  type SessionMessageAuthor,
-} from "./agent-turns-service.js";
+import type { SessionDeliveryReceipt } from "./agent-sessions-service.js";
 import { requireTenantProject } from "./projects-service.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 
 type MailboxRow = Selectable<DB["session_mailbox_items"]>;
 
@@ -19,7 +25,34 @@ export interface SessionAuthority {
   revision: number;
 }
 
-export interface SessionMailboxItem {
+/** A session action taken on another host, for the session's authority to run. */
+export interface ForwardedSessionAction {
+  operation: string;
+  args: JsonValue;
+  /** Who took it. */
+  actor: SessionMessageAuthor;
+}
+
+/** What crosses to the session's authority (ADR 0219): an input, or an action. */
+export type SessionMailboxDelivery =
+  | {
+      kind: "input";
+      /** What the delivery becomes in the session (ADR 0217). */
+      input: SessionInput;
+      mode: DispatchMode;
+      attention: boolean;
+      /** The member whose call delivered it. */
+      deliveredBy: string | null;
+      /**
+       * Whether the chat's owner wrote it, as the sending host found: the
+       * authority runs a turn on the owner's own machine only for that
+       * (ADR 0199).
+       */
+      ownerAuthored: boolean;
+    }
+  | { kind: "action"; action: ForwardedSessionAction };
+
+export type SessionMailboxItem = SessionMailboxDelivery & {
   id: string;
   projectId: string;
   sessionId: string;
@@ -27,13 +60,11 @@ export interface SessionMailboxItem {
   destinationHostId: string;
   authorityRevision: number;
   messageId: string;
-  content: string;
-  author: SessionMessageAuthor;
-  mode: SessionDeliveryMode;
   idempotencyKey: string | null;
-  metadata: JsonObject | null;
+  /** The enablements whose runs led to it, oldest first (ADR 0090). */
+  causation: string[];
   createdAt: string;
-}
+};
 
 export class SessionAuthorityMismatchError extends Error {
   constructor(readonly sessionId: string) {
@@ -65,14 +96,16 @@ export class SessionMailboxesService {
     projectId: string,
     sessionId: string,
     input: {
+      signal?: AbortSignal;
       destination: SessionAuthority;
-      content: string;
-      author: SessionMessageAuthor;
-      mode: SessionDeliveryMode;
+      delivery: SessionMailboxDelivery;
       idempotencyKey?: string;
-      metadata?: JsonObject;
+      causation?: string[];
     },
   ): Promise<SessionDeliveryReceipt> {
+    const { delivery } = input;
+    // An action runs on the authority and starts nothing.
+    const mode = delivery.kind === "input" ? delivery.mode : "message_only";
     return withSpan(
       {
         tracer,
@@ -80,7 +113,7 @@ export class SessionMailboxesService {
         attributes: {
           "catamorphic.project.id": projectId,
           "catamorphic.agent.session.id": sessionId,
-          "catamorphic.agent.delivery.mode": input.mode,
+          "catamorphic.agent.delivery.mode": mode,
         },
       },
       async () => {
@@ -106,49 +139,60 @@ export class SessionMailboxesService {
           throw new SessionAuthorityMismatchError(sessionId);
         }
 
-        const messageId = randomUUID();
-        const inserted = await this.db
-          .insertInto("session_mailbox_items")
-          .values({
-            project_id: projectId,
-            session_id: sessionId,
-            source_host_id: this.hostId,
-            destination_host_id: input.destination.hostId,
-            authority_revision: input.destination.revision,
-            message_id: messageId,
-            content: input.content,
-            author_kind: input.author.kind,
-            author_payload: JSON.parse(JSON.stringify(input.author)),
-            delivery_mode: input.mode,
-            idempotency_key: input.idempotencyKey ?? null,
-            metadata: input.metadata ?? null,
-          })
-          .onConflict((conflict) =>
-            conflict
-              .columns(["session_id", "idempotency_key"])
-              .where("idempotency_key", "is not", null)
-              .doNothing(),
-          )
-          .returning(["message_id"])
-          .executeTakeFirst();
+        const itemId = randomUUID();
+        const inserted = await this.db.transaction().execute(async (trx) => {
+          input.signal?.throwIfAborted();
+          const result = await trx
+            .insertInto("session_mailbox_items")
+            .values({
+              project_id: projectId,
+              session_id: sessionId,
+              source_host_id: this.hostId,
+              destination_host_id: input.destination.hostId,
+              authority_revision: input.destination.revision,
+              item_id: itemId,
+              kind: delivery.kind,
+              idempotency_key: input.idempotencyKey ?? null,
+              causation: jsonColumn(input.causation ?? []),
+              ...(delivery.kind === "input"
+                ? {
+                    input: jsonColumn(toJson(delivery.input)),
+                    delivery_mode: delivery.mode,
+                    attention: delivery.attention,
+                    delivered_by: delivery.deliveredBy,
+                    owner_authored: delivery.ownerAuthored,
+                  }
+                : { action: jsonColumn(toJson(delivery.action)) }),
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns(["session_id", "idempotency_key"])
+                .where("idempotency_key", "is not", null)
+                .doNothing(),
+            )
+            .returning(["item_id"])
+            .executeTakeFirst();
+          input.signal?.throwIfAborted();
+          return result;
+        });
         if (inserted) {
           return {
-            messageId: inserted.message_id,
+            messageId: inserted.item_id,
             turnId: null,
-            mode: input.mode,
+            mode,
             created: true,
           };
         }
         const existing = await this.db
           .selectFrom("session_mailbox_items")
-          .select("message_id")
+          .select("item_id")
           .where("session_id", "=", sessionId)
           .where("idempotency_key", "=", input.idempotencyKey ?? "")
           .executeTakeFirstOrThrow();
         return {
-          messageId: existing.message_id,
+          messageId: existing.item_id,
           turnId: null,
-          mode: input.mode,
+          mode,
           created: false,
         };
       },
@@ -190,7 +234,15 @@ export class SessionMailboxesService {
       .orderBy("session_mailbox_items.created_at", "asc")
       .limit(input.limit ?? 100)
       .execute();
-    return rows.map(mapMailboxItem);
+    // A delivery this host cannot read waits; it never holds up the rest.
+    return rows.flatMap((row) => {
+      const item = mapMailboxItem(row);
+      if (!item)
+        console.warn(
+          `[catamorphic] Mailbox item ${row.id} carries no input this host can read`,
+        );
+      return item ? [item] : [];
+    });
   }
 
   async acknowledge(
@@ -219,31 +271,46 @@ export class SessionMailboxesService {
   }
 }
 
-function mapMailboxItem(row: MailboxRow): SessionMailboxItem {
+const forwardedActionSchema = z.object({
+  operation: z.string(),
+  args: z.json(),
+  actor: sessionMessageAuthorSchema,
+});
+
+function mapMailboxItem(row: MailboxRow): SessionMailboxItem | null {
+  const delivery = deliveryOf(row);
+  if (!delivery) return null;
   return {
+    ...delivery,
     id: row.id,
     projectId: row.project_id,
     sessionId: row.session_id,
     sourceHostId: row.source_host_id,
     destinationHostId: row.destination_host_id,
     authorityRevision: Number(row.authority_revision),
-    messageId: row.message_id,
-    content: row.content,
-    author: parseSessionMessageAuthor(row.author_kind, row.author_payload),
-    mode: parseMode(row.delivery_mode),
+    messageId: row.item_id,
     idempotencyKey: row.idempotency_key,
-    metadata: row.metadata as JsonObject | null,
+    causation: Array.isArray(row.causation)
+      ? row.causation.filter((id): id is string => typeof id === "string")
+      : [],
     createdAt: row.created_at.toISOString(),
   };
 }
 
-function parseMode(value: string): SessionDeliveryMode {
-  if (
-    value === "message_only" ||
-    value === "next_turn" ||
-    value === "interrupt"
-  ) {
-    return value;
+function deliveryOf(row: MailboxRow): SessionMailboxDelivery | null {
+  if (row.kind === "action") {
+    const action = forwardedActionSchema.safeParse(row.action);
+    return action.success ? { kind: "action", action: action.data } : null;
   }
-  throw new Error(`Invalid session mailbox delivery mode '${value}'`);
+  const input = sessionInputSchema.safeParse(row.input);
+  const mode = dispatchModeSchema.safeParse(row.delivery_mode);
+  if (!input.success || !mode.success) return null;
+  return {
+    kind: "input",
+    input: input.data,
+    mode: mode.data,
+    attention: row.attention,
+    deliveredBy: row.delivered_by,
+    ownerAuthored: row.owner_authored,
+  };
 }

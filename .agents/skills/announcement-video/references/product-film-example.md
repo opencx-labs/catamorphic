@@ -17,4 +17,4 @@ A short single-feature silent desktop film can establish a real project, move in
 
 Preserve the accepted palette and copy across revisions. Never substitute an invented interface for footage of the real app.
 
-For the longer Work browse → ask → build → use story, follow [work-demo.md](work-demo.md). Its actual conversation and usable result take precedence over this older compact composition example.
+For the Work homepage film, [work-demo.md](work-demo.md) takes precedence over this example.

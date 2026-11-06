@@ -7,33 +7,44 @@ export {
 } from "@catamorphic/parser";
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
+export { startEventDispatcher } from "./event-dispatcher.js";
+export { GITHUB_TRIGGER_LIBRARY } from "./github-trigger-library.js";
 export {
   type AgentRef,
   type AgentRefToolPolicy,
   type AppRef,
   type ArtifactRef,
   authorFor,
-  CORE_PROJECT_PERMISSIONS,
   type ConnectionUseRef,
   type ControlPlanePermission,
+  confineIdentity,
   type DocumentRef,
   documentRefCovers,
+  EVERY_ARTIFACT,
   type ExecutionEnvironmentRef,
   type ExternalUserId,
+  effectiveProjectPermissions,
   hasControlPlanePermission,
   hasProjectPermission,
   type Identity,
   identityCovers,
   identityMayUseConnection,
   identityMayUseEnvironment,
-  isBuilder,
+  intersectProjectPermissions,
+  intersectScope,
+  isProjectPrincipal,
   isScoped,
   mayUseProject,
   narrowIdentity,
+  PROJECT_PERMISSION_GRANT_PATTERN,
   PROJECT_PERMISSION_PATTERN,
+  PROJECT_PERMISSIONS,
+  PROJECT_PRINCIPAL_ID,
   type ProjectPermission,
+  type ProjectPermissionName,
   type ProjectPermissionRef,
-  type ProjectRef,
+  permissionCovers,
+  projectPrincipalIdentity,
   SYSTEM_AUTHOR,
   sameArtifact,
   scopeCovers,
@@ -44,7 +55,6 @@ export {
   appScaffold,
   HOST_SKILLS,
   PROJECT_CHECK_SCRIPT,
-  PROJECT_CHECK_SCRIPT_PATH,
   SEED_SKILLS,
   workspaceFiles,
 } from "./seeds.js";
@@ -63,7 +73,6 @@ export { AgentContextService } from "./services/agent-context-service.js";
 export {
   AGENT_COORDINATION_STRATEGIES,
   AGENT_DEFINITION_KINDS,
-  AGENT_DEFINITIONS_DIR,
   type AgentCoordinationStrategy,
   type AgentDefinition,
   type AgentDefinitionCredentials,
@@ -71,9 +80,10 @@ export {
   type AgentDefinitionKind,
   AgentDefinitionSchema,
   AgentDefinitionsService,
+  type AgentDelegationGrant,
+  AgentDelegationGrantSchema,
   type AgentDelegationPolicy,
   AgentDelegationPolicySchema,
-  AgentDelegationRouteSchema,
   type AgentEnvironmentPolicy,
   agentDefinitionSchema,
   definitionHash,
@@ -85,19 +95,8 @@ export {
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
 export {
-  AgentRuntimeEventSequenceConflictError,
-  AgentRuntimeEventsService,
-  AgentRuntimeSessionNotFoundError,
-} from "./services/agent-runtime-events-service.js";
-export {
-  AgentRequestAlreadyResolvedError,
-  AgentRuntimeRequestConflictError,
-  AgentRuntimeRequestNotFoundError,
-  AgentRuntimeRequestsService,
-} from "./services/agent-runtime-requests-service.js";
-export {
   AgentDelegationDeniedError,
-  type AgentMessage,
+  AgentDelegationSettingsError,
   AgentNotConfiguredError,
   type AgentSession,
   AgentSessionArchiveConfirmationRequiredError,
@@ -108,30 +107,25 @@ export {
   AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
+  AgentSessionRewindingError,
   type AgentSessionSource,
   AgentSessionsService,
-  type AgentSessionWakeReceipt,
   type AgentSubsession,
   type AgentTodo,
   type AgentTodoInput,
   type AgentTodoStatus,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
+  AgentTurnUnsettledError,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
+  type SessionDeliveryReceipt,
+  type SessionPlacement,
   type SyncedFileChange,
+  type ToolAlwaysAllowedEvent,
+  type UnsettledTurnState,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
-export {
-  type AgentTurn,
-  type AgentTurnStatus,
-  AgentTurnsService,
-  type PendingSessionTurn,
-  parseSessionMessageAuthor,
-  type SessionDeliveryMode,
-  type SessionDeliveryReceipt,
-  type SessionMessageAuthor,
-} from "./services/agent-turns-service.js";
 export { cleanupWorkerAllocations } from "./services/allocation-sandbox-provider.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
@@ -163,8 +157,8 @@ export {
 } from "./services/apps-service.js";
 export {
   AccessDeniedError,
-  assertBuilder,
   assertMayManageRolePolicy,
+  assertProjectPermission,
   assertRootIdentity,
   assertScopeAllowsWorkflow,
   isRolePolicyPath,
@@ -184,35 +178,88 @@ export {
   UnfulfilledCapabilityError,
 } from "./services/capability-providers.js";
 export {
-  type ClientRunnerOperation,
-  ClientRunnerOperationSchema,
-  ClientRunnerResultSchema,
-  ClientRunnersService,
-} from "./services/client-runners-service.js";
+  type ChatAudience,
+  ChatKeySchema,
+  keyedChatOwnerId,
+  parseChatKey,
+  projectChatIdentity,
+} from "./services/chat-delivery.js";
+export { ClientRunnersService } from "./services/client-runners-service.js";
 export type {
   CodeHost,
+  CodeHostCredential,
+  CodeHostRepository,
   PullRequestComment,
   PullRequestDiscussion,
   PullRequestFile,
+  PullRequestStatus,
   PullRequestSummary,
 } from "./services/code-host.js";
 export {
+  CodeHostNotConnectedError,
+  type CodeHostPrincipal,
+  CodeHostsService,
+  CodeHostUnsupportedError,
+  ProjectAlreadyLinkedError,
+  ProjectHasNoRemoteError,
+  ProjectNotDeployedError,
+} from "./services/code-hosts-service.js";
+export {
+  type AgentHarness,
+  type AgentModelChoice,
+  type AgentRetry,
+  type AgentTurnContext,
   type CodingAgentRegistry,
+  harnessIdOf,
   isCodingAgentRegistry,
   type RegisteredCodingAgent,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
 export { ConnectionAdmissionService } from "./services/connection-admission.js";
-export { ConnectionBroker } from "./services/connection-broker.js";
-export { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
+export {
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
+  ConnectionBroker,
+  type ConnectionGateway,
+} from "./services/connection-broker.js";
+export {
+  ConnectionCapabilityGrantsService,
+  type ConnectionGrantChannel,
+  MAX_GRANT_TTL_SECONDS,
+  type ModelGrantFence,
+  type ValidConnectionGrant,
+} from "./services/connection-capability-grants.js";
+export {
+  type ConnectionActionContext,
+  type ConnectionActionGuard,
+  type ConnectionGuardRecord,
+  type ConnectionGuardVerdict,
+  type ConnectionReviewOutcome,
+  type ModelRequest,
+  type ModelRequestRewrite,
+  reviewConnectionAction,
+} from "./services/connection-guards.js";
 export {
   type AuthorizationChallenge,
+  type ConnectionActionDefinition,
+  ConnectionAuthorizationExpiredError,
   type ConnectionAuthorizationResult,
+  type ConnectionCredentialVersion,
+  type ConnectionGitRemotes,
+  type ConnectionHttpEndpoint,
+  type ConnectionModelEndpoint,
   type ConnectionProvider,
   ConnectionProviderRegistry,
+  type GitRemoteCredentials,
+  type ModelApi,
 } from "./services/connection-providers.js";
 export {
+  bindingPrincipalKinds,
   CONNECTION_ALIAS_PATTERN,
+  CONNECTION_NAME_PATTERN,
+  type ConnectionBindingSource,
+  type ConnectionGitPolicy,
+  type ConnectionModelPolicy,
   type ConnectionPrincipalKind,
   type ConnectionRecord,
   type ConnectionRequirement,
@@ -220,15 +267,23 @@ export {
   type ConnectionStatus,
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
+  GIT_CAPABILITIES,
+  HTTP_METHOD_CAPABILITIES,
+  isHttpMethodCapability,
+  isProtocolCapability,
+  MODEL_CAPABILITY,
   normalizeConnectionRequirement,
   type ResolvedConnectionBinding,
 } from "./services/connection-types.js";
 export {
   AuthenticationRequiredError,
+  type ConnectionBindingPrincipalStatus,
+  ConnectionNameTakenError,
   ConnectionNotFoundError,
   ConnectionPermissionDeniedError,
   ConnectionsService,
   ConnectionUnavailableError,
+  type EnvironmentConnectionStatus,
 } from "./services/connections-service.js";
 export {
   type CredentialMaterial,
@@ -238,6 +293,10 @@ export {
 } from "./services/credential-vault.js";
 export { DbSandboxStore } from "./services/db-sandbox-store.js";
 export {
+  DEFAULT_DELEGATION_POLICY,
+  delegationPolicy,
+} from "./services/delegation-grants.js";
+export {
   createDeploymentArtifactIdentity,
   type DeploymentArtifact,
   type DeploymentArtifactIdentity,
@@ -245,6 +304,7 @@ export {
   DeploymentArtifactsService,
 } from "./services/deployment-artifacts-service.js";
 export {
+  DeploymentPreparationError,
   type DeploymentRuntimeCleanupResult,
   type DeploymentRuntimeHealthResult,
   DeploymentRuntimeNotSupportedError,
@@ -257,7 +317,10 @@ export {
   type DeploymentRuntimeStore,
   KyselyDeploymentRuntimeStore,
 } from "./services/deployment-runtime-store.js";
-export { DeploymentService } from "./services/deployment-service.js";
+export {
+  DeploymentBlockedError,
+  DeploymentService,
+} from "./services/deployment-service.js";
 export {
   DevSandboxService,
   type PreparedDevSandbox,
@@ -281,10 +344,15 @@ export {
   normalizeDocumentPath,
   STORE_ROOT,
 } from "./services/documents-service.js";
-export { DurableToolPermissionBroker } from "./services/durable-tool-permission-broker.js";
-export { EncryptedCredentialVault } from "./services/encrypted-credential-vault.js";
 export {
+  EncryptedCredentialVault,
+  vaultKeyId,
+} from "./services/encrypted-credential-vault.js";
+export {
+  type AllocationReleaseReason,
   type EnvironmentAllocationPolicy,
+  type EnvironmentSandbox,
+  type EnvironmentSandboxVolume,
   type ExecutionAllocation,
   ExecutionAllocationConflictError,
   ExecutionAllocationsService,
@@ -292,11 +360,17 @@ export {
 export {
   EnvironmentAccessDeniedError,
   type EnvironmentAdmission,
+  type EnvironmentAdmitArgs,
   EnvironmentBindingUnavailableError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
   ExecutionEnvironmentsService,
   NoCompatibleEnvironmentError,
+  type PlacementReason,
+  personalCredentialsDecision,
+  placementIsolatesOwner,
+  signInPlacementDecision,
 } from "./services/execution-environments-service.js";
 export {
   type ExecutionJob,
@@ -311,23 +385,94 @@ export {
   type ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
-export { GithubProjectEventSource } from "./services/github-event-source.js";
 export {
-  type GithubConnectionStatus,
-  GithubNotConnectedError,
-  GithubService,
-  type GithubServiceConfig,
-  GithubTokenExpiredError,
-  githubEventKind,
-  type ImportGithubRepoInput,
-  ProjectNotLinkedToGithubError,
-} from "./services/github-service.js";
+  advertisedDefaultBranch,
+  DEFAULT_PUSH_PATTERNS,
+  GitGatewayError,
+  type GitGatewayOperation,
+  type GitGatewayRequest,
+  type GitGatewayResponse,
+  GitGatewayService,
+  normalizeRepositoryPath,
+  parseReceivePackCommands,
+  pktLine,
+  type RefUpdate,
+  readPktSection,
+  receivePackRefusal,
+  refMatches,
+  repositoryBelow,
+  reviewPush,
+} from "./services/git-gateway.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
+export {
+  dbHttpGatewayStore,
+  GRANT_HEADER,
+  HTTP_REQUEST_MAX_BYTES,
+  type HttpGatewayAdmitResult,
+  HttpGatewayError,
+  type HttpGatewayRequest,
+  type HttpGatewayResponse,
+  HttpGatewayService,
+  type HttpGatewayStore,
+  httpMethodCapability,
+  httpQueryInput,
+  httpUpstreamTarget,
+  type LiveHttpGrant,
+} from "./services/http-gateway.js";
 export {
   type GrantMembershipInput,
   type Membership,
   MembershipsService,
 } from "./services/memberships-service.js";
+export {
+  dbModelGatewayStore,
+  dotPathSegment,
+  type LiveModelGrant,
+  MODEL_REQUEST_MAX_BYTES,
+  type ModelCallUsage,
+  type ModelGatewayAdmitResult,
+  ModelGatewayError,
+  type ModelGatewayRequest,
+  type ModelGatewayResponse,
+  ModelGatewayService,
+  type ModelGatewayStore,
+  type ModelUsageRecord,
+  modelAllowed,
+  modelRequestPath,
+  SseUsageReader,
+  usageFromJson,
+} from "./services/model-gateway.js";
+export {
+  LOST_NODE_GRACE_MS,
+  type NodeRecoveryResult,
+  NodeRecoveryService,
+} from "./services/node-recovery-service.js";
+export {
+  gitignoreLiteral,
+  personalExcludeBlock,
+} from "./services/personal-environment-delivery.js";
+export {
+  PERSONAL_FILE_MAX_BYTES,
+  PERSONAL_FILES_MAX,
+  PERSONAL_SETUP_MAX_LENGTH,
+  type PersonalEnvironmentInput,
+  PersonalEnvironmentInvalidError,
+  PersonalEnvironmentService,
+  type PersonalEnvironmentStatus,
+  PersonalEnvironmentUnavailableError,
+  type PersonalFileStatus,
+  personalFilePathProblem,
+  personalFingerprint,
+  personalSetupProblem,
+  validatePersonalEnvironment,
+} from "./services/personal-environment-service.js";
+export {
+  PLACEMENT_WAIT_FRESH_SECONDS,
+  type PlacementWait,
+  type PlacementWaitReason,
+  PlacementWaitsService,
+  type PlacementWaitTarget,
+} from "./services/placement-waits.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,
@@ -335,8 +480,11 @@ export {
   PluginsService,
   UndeclaredSecretError,
 } from "./services/plugins-service.js";
-export { forgetProgramFetch } from "./services/program-reader.js";
 export {
+  DEFAULT_ENVIRONMENT,
+  DEFAULT_IDLE_RELEASE_MINUTES,
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
+  type EnvironmentSetup,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
@@ -358,7 +506,6 @@ export {
   ensureProjectWorkspace,
   isProjectDataPath,
   localDocumentRelativePath,
-  PROJECT_DATA_ROOT,
   projectDataDirectory,
 } from "./services/project-workspace.js";
 export {
@@ -381,6 +528,7 @@ export {
 } from "./services/projects-service.js";
 export {
   mayPropose,
+  PROPOSAL_BRANCH_PREFIX,
   type ProposalResult,
   ProposalsService,
   ProposalsUnsupportedError,
@@ -405,11 +553,49 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
-  ProjectHasNoRemoteError,
-  PullRequestsUnsupportedError,
+  defineRegistryCapability,
+  parseRegistryCatalog,
+  type RegistryItem,
+  RegistryItemSchema,
+} from "./services/registry-capability.js";
+export {
+  clientExecutor,
+  EXECUTOR_RESTARTED_ERROR,
+  ExecutorKeyMissingError,
+  ExecutorNotConnectedError,
+  executorKey,
+  forgetExecutorKey,
+  nodeExecutor,
+  OPERATION_NOT_OPENED_ERROR,
+  OperationWakeups,
+  openRemoteOperation,
+  RETIRED_KEY_RETENTION_MS,
+  type RemoteExecutorLease,
+  RemoteExecutorLeaseLostError,
+  type RemoteOperation,
+  RemoteOperationQueue,
+  RemoteOperationResultSchema,
+  RemoteOperationSchema,
+  RemoteReceiptRefusedError,
+  registerExecutorKey,
+  type SealedRemoteOperation,
+  SealedRemoteOperationSchema,
+  sealRemoteOperation,
+} from "./services/remote-operations.js";
+export {
   type RemoteSyncOutcome,
   RemoteSyncService,
+  ServerDraftError,
 } from "./services/remote-sync-service.js";
+export {
+  type HeldReplicaClaim,
+  ReplicaClaimBusyError,
+  ReplicaClaimLostError,
+  releaseReplicaClaim,
+  renewReplicaClaim,
+  takeReplicaClaim,
+  withReplicaClaim,
+} from "./services/replica-claims.js";
 export {
   DEFAULT_RUN_RETENTION_DAYS,
   type PurgeResult,
@@ -422,7 +608,6 @@ export {
   fillTemplate,
   type ProjectRoleEntry,
   type ResolveRolesInput,
-  ROLES_DIR,
   type RoleDefinition,
   RoleDefinitionSchema,
   type RoleGrants,
@@ -438,6 +623,16 @@ export {
   type RunPluginBundle,
   RunPluginsLoader,
 } from "./services/run-plugins-loader.js";
+export {
+  RUN_SIGNAL_MAX_BYTES,
+  RUN_SIGNAL_MAX_PENDING,
+  RUN_SIGNAL_MAX_RECEIPTS,
+  RunSignalInvalidError,
+  RunSignalLimitError,
+  RunSignalNotFoundError,
+  type RunSignalReceipt,
+  type SignalRunInput,
+} from "./services/run-signals.js";
 export {
   type BatchItem,
   type BatchItemStatus,
@@ -470,7 +665,6 @@ export {
   type RunPause,
   type RunPhase,
   type RunProvenance,
-  RunSignalNotFoundError,
   type RunStatus,
   type RunStep,
   type RunSuspensionReason,
@@ -482,16 +676,36 @@ export {
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
-export { SchedulesService } from "./services/schedules-service.js";
+export { httpAliasVariable } from "./services/sandbox-git.js";
 export {
-  type RunStage,
+  SANDBOX_GATEWAY_ENV_PATH,
+  SANDBOX_SECRETS_PATH,
+  sandboxEnvFiles,
+  sandboxSecretsFile,
+  sandboxSecretsPrelude,
+} from "./services/sandbox-secrets.js";
+export { parseSnapshot } from "./services/sandbox-sync.js";
+export { SchedulesService } from "./services/schedules-service.js";
+export { SECRETS_CAPABILITY } from "./services/secrets-capability.js";
+export {
+  type SandboxSecretGap,
+  type SandboxSecrets,
+  SECRET_VALUE_MAX_BYTES,
+  SecretDeclarationConflictError,
+  SecretMemberNotFoundError,
+  type SecretMemberValue,
   type SecretStatus,
   SecretsService,
+  SecretsUnavailableError,
+  type SecretValueChange,
+  SecretValueInvalidError,
+  secretFingerprint,
 } from "./services/secrets-service.js";
 export {
   SESSION_ACTION_SCHEMAS,
   type SessionActionOperation,
   SessionActionsService,
+  SessionKeyNotFoundError,
 } from "./services/session-actions-service.js";
 export type {
   SessionArtifact,
@@ -511,7 +725,19 @@ export {
   type SessionMailboxItem,
   SessionMailboxNotFoundError,
 } from "./services/session-mailboxes-service.js";
-export { SessionMirrorDivergedError } from "./services/session-mirror.js";
+export {
+  SessionMirrorBehindError,
+  SessionMirrorDivergedError,
+  type SessionMirrorInput,
+} from "./services/session-mirror.js";
+export {
+  PREVIEW_REQUEST_MAX_BYTES,
+  type PreviewRequest,
+  type PreviewResponse,
+  SessionPreviewError,
+  type SessionPreviewErrorReason,
+  SessionPreviewsService,
+} from "./services/session-previews-service.js";
 export {
   type SessionSyncIntent,
   SessionSyncLeaseError,
@@ -520,10 +746,51 @@ export {
   SessionSyncWatermarkError,
 } from "./services/session-sync-service.js";
 export {
+  type SessionTerminal,
+  SessionTerminalNotFoundError,
+  type SessionTerminalOutput,
+  SessionTerminalSecretsError,
+  SessionTerminalsService,
+} from "./services/session-terminals-service.js";
+export {
+  type SessionWorkspaceHandle,
+  SessionWorkspaceUnavailableError,
+  type SessionWorkspaceUnavailableReason,
+} from "./services/session-workspace.js";
+export {
+  basePin,
+  movePin,
+  parseWorkspaceRequest,
+  type SessionWorkspaceBase,
+  type SessionWorkspaceMove,
+  type SessionWorkspaceRequest,
+  SessionWorkspaceRequestSchema,
+  SessionWorkspaces,
+  workspaceMoveNote,
+} from "./services/session-workspaces.js";
+export {
+  STREAM_MAX_PENDING_BYTES,
+  STREAM_MAX_PENDING_EVENTS,
+} from "./services/sessions/session-feed.js";
+export {
+  ForeignSessionEventError,
+  REPLAY_MAX_BYTES,
+  REPLAY_MAX_EVENTS,
+  SessionCommandRejectedError,
+} from "./services/sessions/session-log.js";
+export {
+  HISTORY_PAGE_ITEMS,
+  SNAPSHOT_TURNS,
+  type TranscriptMessage,
+} from "./services/sessions/session-reads.js";
+export {
+  CONTINUATION_PROMPT,
+  steeredTurnId,
+} from "./services/sessions/turn-engine.js";
+export {
   humanizeSkillName,
   type ProjectSkill,
   parseSkillFrontmatter,
-  SKILLS_DIR,
   SkillsService,
 } from "./services/skills-service.js";
 export {
@@ -548,11 +815,6 @@ export {
   type TenantRateLimitOverride,
   type UpsertTenantExecutionPolicyInput,
 } from "./services/tenant-policies-service.js";
-export {
-  type PendingToolPermission,
-  ToolPermissionBroker,
-  type ToolPermissionChannel,
-} from "./services/tool-permission-broker.js";
 export {
   renderTriggerTypesModule,
   TRIGGER_TYPES_SOURCE_PATH,
@@ -588,19 +850,36 @@ export {
   type PushSubscriptionInput,
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
+export { type Watcher, WatchersService } from "./services/watchers-service.js";
 export {
-  startWatcherDispatcher,
-  type Watcher,
-  WatchersService,
-} from "./services/watchers-service.js";
+  type WebhookEndpoint,
+  WebhookMethodNotAllowedError,
+  WebhookNotFoundError,
+  type WebhookReceipt,
+  WebhookRejectedError,
+  WebhooksService,
+  WebhookTooLargeError,
+} from "./services/webhooks-service.js";
+export {
+  PollPacer,
+  type WorkTopic,
+  WorkWakeups,
+} from "./services/work-wakeups.js";
 export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,
   EnvironmentCapacityError,
+  WorkerCapacitySchema,
 } from "./services/worker-capacity.js";
 export {
+  REMOTE_EPOCH_PATTERN,
+  RemoteEpochSupersededError,
+  type RemoteNodeOffer,
+  RemoteNodeOfferSchema,
+  WORKER_NODE_LEASE_MS,
   type WorkerNode,
   type WorkerNodeLease,
+  WorkerNodeLeaseHeldError,
   WorkerNodesService,
 } from "./services/worker-nodes-service.js";
 export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";
@@ -627,3 +906,32 @@ export {
   type WorkflowSummary,
   WorkflowsService,
 } from "./services/workflows-service.js";
+export {
+  parseSetupRecord,
+  planWorkspaceSetup,
+  SETUP_LOG_TAIL_LINES,
+  type SetupPart,
+  type SetupRecord,
+  setupRecordAfter,
+  type WorkspaceSetupOutcome,
+} from "./services/workspace-setup.js";
+export {
+  checkWebhookToken,
+  matchWebhookHandshake,
+  verifyWebhookRequest,
+  WEBHOOK_DEFAULT_MAX_BYTES,
+  WEBHOOK_MAX_BYTES_LIMIT,
+  WEBHOOK_MAX_SIGNATURE_HEADER,
+  WEBHOOK_MIN_KEY_BYTES,
+  WEBHOOK_NAME_PATTERN,
+  type WebhookCheck,
+  type WebhookConfig,
+  type WebhookHandshake,
+  type WebhookRequest,
+  type WebhookVerify,
+  webhookConfig,
+  webhookHandshake,
+  webhookHmacVerify,
+  webhookSettingsKey,
+  webhookTokenVerify,
+} from "./webhook-ingress.js";

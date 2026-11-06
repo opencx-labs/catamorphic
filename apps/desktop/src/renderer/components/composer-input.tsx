@@ -19,6 +19,9 @@ import {
   type SerializedComposer,
   serializeComposer,
 } from "../lib/composer-serialize";
+import { DICTATION_PREVIEW_ATTR } from "../lib/field-dictation.js";
+import { motionMs } from "../lib/motion.js";
+import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height";
 import { ContextPill } from "./context-pill";
 
 /**
@@ -54,6 +57,8 @@ export interface ComposerState {
 
 export interface ComposerInputHandle {
   focus(): void;
+  /** Focus with the caret where it was, else at the end, ready to type. */
+  focusToType(): void;
   element(): HTMLDivElement | null;
   /** Insert pills at the caret (or the end when the caret is elsewhere). */
   insertPills(
@@ -86,7 +91,6 @@ export interface ComposerInputHandle {
 export interface ComposerInputProps {
   placeholder: string;
   ariaLabel: string;
-  suggestions?: { listId: string; activeId?: string };
   /** Layout classes for the height-animated frame around the editable. */
   wrapperClassName?: string;
   className?: string;
@@ -100,6 +104,13 @@ export interface ComposerInputProps {
   onOpenPath?: (path: string, mode: OpenMode) => void;
   /** Server-side cap, mirrored: inserts past it are dropped. */
   maxPills?: number;
+  /**
+   * The chat's own composer, the one the dock and drops look for
+   * (`data-composer-input`). Off for another input built on it, such as a
+   * question's Other answer.
+   */
+  chatComposer?: boolean;
+  testId?: string;
 }
 
 interface PillEntry {
@@ -192,7 +203,6 @@ export const ComposerInput = forwardRef<
   {
     placeholder,
     ariaLabel,
-    suggestions,
     wrapperClassName = "",
     className = "",
     onChange,
@@ -202,6 +212,8 @@ export const ComposerInput = forwardRef<
     onOpenTab,
     onOpenPath,
     maxPills = 32,
+    chatComposer = true,
+    testId = "composer-input",
   },
   ref,
 ) {
@@ -429,6 +441,9 @@ export const ComposerInput = forwardRef<
     ref,
     () => ({
       focus: () => rootRef.current?.focus(),
+      focusToType: () => {
+        if (rootRef.current) claimSelection(rootRef.current);
+      },
       element: () => rootRef.current,
       insertPills,
       insertText,
@@ -518,33 +533,84 @@ export const ComposerInput = forwardRef<
       }
     }
     onKeyDown?.(event);
+    // macOS gives keypad Enter a different native editing action. Use
+    // the same undo-aware line break as the editable's Shift+Return.
+    if (
+      !event.defaultPrevented &&
+      event.code === "NumpadEnter" &&
+      event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      document.execCommand("insertLineBreak");
+      sync();
+    }
   };
 
-  // Size changes glide instead of snapping: a frame around the editable
-  // tweens to the editable's measured height (Shift+Enter, a wrapping
-  // pill, recall of a longer draft, growth while typing). The editable
-  // itself stays auto-height (its own max-h + overflow handle scrolling);
-  // the frame just follows it via ResizeObserver.
+  // Size changes glide instead of snapping, a wrapping pill's included.
   const frameRef = useRef<HTMLDivElement>(null);
+  useGlidingHeight({ content: rootRef, frame: frameRef });
+
+  // Chromium reveals the caret during the edit, before a chip's width
+  // animation finishes rewrapping the prose. Follow that edit's reflow
+  // inside the editable alone; the gliding frames must never scroll.
   useEffect(() => {
     const root = rootRef.current;
-    const frame = frameRef.current;
-    if (!root || !frame) return;
-    const follow = () => {
-      const height = `${root.offsetHeight}px`;
-      if (frame.style.height !== height) frame.style.height = height;
+    if (!root) return;
+    let frame = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let editing = false;
+    const reveal = () => {
+      if (document.activeElement !== root) return;
+      const selection = document.getSelection();
+      if (!selection?.isCollapsed || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      if (!root.contains(range.startContainer)) return;
+      const caret = range.getBoundingClientRect();
+      if (!caret.height) return;
+      const viewport = root.getBoundingClientRect();
+      if (caret.top < viewport.top) root.scrollTop += caret.top - viewport.top;
+      else if (caret.bottom > viewport.bottom)
+        root.scrollTop += caret.bottom - viewport.bottom;
     };
-    follow();
-    const observer = new ResizeObserver(follow);
+    const schedule = () => {
+      if (!editing) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(reveal);
+    };
+    const edited = () => {
+      editing = true;
+      schedule();
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        schedule();
+        editing = false;
+      }, motionMs(200));
+    };
+    const cancel = () => {
+      editing = false;
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+    };
+    const observer = new ResizeObserver(schedule);
     observer.observe(root);
-    return () => observer.disconnect();
+    root.addEventListener("input", edited);
+    root.addEventListener("wheel", cancel, { passive: true });
+    root.addEventListener("pointerdown", cancel);
+    return () => {
+      cancel();
+      observer.disconnect();
+      root.removeEventListener("input", edited);
+      root.removeEventListener("wheel", cancel);
+      root.removeEventListener("pointerdown", cancel);
+    };
   }, []);
 
   return (
-    <div
-      ref={frameRef}
-      className={`overflow-hidden transition-[height] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${wrapperClassName}`}
-    >
+    <div ref={frameRef} className={`${GLIDING_FRAME} ${wrapperClassName}`}>
       {/* biome-ignore lint/a11y/useSemanticElements: a textarea cannot hold inline pills; this contenteditable is the multiline textbox */}
       <div
         ref={rootRef}
@@ -552,15 +618,14 @@ export const ComposerInput = forwardRef<
         tabIndex={0}
         aria-multiline="true"
         aria-label={ariaLabel}
-        aria-autocomplete={suggestions ? "list" : undefined}
-        aria-controls={suggestions?.listId}
-        aria-activedescendant={suggestions?.activeId}
         contentEditable
         suppressContentEditableWarning
         spellCheck
-        data-composer-input
+        data-composer-input={chatComposer || undefined}
+        // Dictation shows the words while they are said (voice).
+        {...{ [DICTATION_PREVIEW_ATTR]: "" }}
         data-placeholder={placeholder}
-        data-testid="composer-input"
+        data-testid={testId}
         className={`cat-composer whitespace-pre-wrap break-words outline-none ${className}`}
         onInput={sync}
         onKeyDown={handleKeyDown}

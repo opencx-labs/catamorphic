@@ -1,12 +1,16 @@
 import fs from "node:fs";
 
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: film scripts run outside turbo
 const port = process.env.CDP_PORT;
 if (!port) throw new Error("set CDP_PORT to the desktop's debugging port");
 const targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) =>
   r.json(),
 );
 const target = targets.find(
-  (t) => t.type === "page" && !String(t.url).includes("surface="),
+  (t) =>
+    t.type === "page" &&
+    !String(t.url).includes("surface=") &&
+    !String(t.url).startsWith("chrome-extension:"),
 );
 if (!target) throw Error("Desktop page not found");
 export const ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -27,11 +31,31 @@ ws.onmessage = (e) => {
     }
   } else events.get(m.method)?.(m.params);
 };
+// A reply that never comes (a closed socket, a page that went away) fails
+// the scene loudly instead of stalling the take.
 export const send = (method, params = {}) =>
   new Promise((resolve, reject) => {
-    pending.set(++seq, { resolve, reject });
-    ws.send(JSON.stringify({ id: seq, method, params }));
+    const id = ++seq;
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(Error(`CDP ${method} timed out`));
+    }, 20000);
+    pending.set(id, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    });
+    ws.send(JSON.stringify({ id, method, params }));
   });
+ws.addEventListener("close", () => {
+  for (const [, p] of pending) p.reject(Error("CDP socket closed"));
+  pending.clear();
+});
 export async function evaluate(expression) {
   const r = await send("Runtime.evaluate", {
     expression,
@@ -69,9 +93,11 @@ if (process.argv[1]?.endsWith("/cdp.mjs")) {
     await send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
       height: 800,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: Number(arg ?? 2),
       mobile: false,
     });
+  if (cmd === "clearViewport")
+    await send("Emulation.clearDeviceMetricsOverride");
   if (cmd === "shot") await shot(arg);
   if (cmd === "click") await click(arg);
   ws.close();

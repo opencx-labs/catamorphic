@@ -7,6 +7,13 @@ export interface SecretDeclaration {
   required?: boolean;
   /** Applied when no value is set for the run's environment. */
   default?: string;
+  /**
+   * `run` (the default): injected into every run of the project.
+   * `webhook`: only verifies incoming webhooks (a signing secret named by a
+   * webhook trigger's `verify`); it is stored and checked on the control
+   * plane and never reaches a run.
+   */
+  use?: "run" | "webhook";
 }
 
 export type SecretDeclarations = Record<string, SecretDeclaration>;
@@ -21,6 +28,15 @@ export class MissingSecretError extends Error {
       `Secret '${secretName}' has no value. Set it for this environment before running.`,
     );
     this.name = "MissingSecretError";
+  }
+}
+
+export class WebhookOnlySecretError extends Error {
+  constructor(readonly secretName: string) {
+    super(
+      `Secret '${secretName}' only verifies webhooks; runs never receive it.`,
+    );
+    this.name = "WebhookOnlySecretError";
   }
 }
 
@@ -59,6 +75,9 @@ export function defineSecrets<const T extends SecretDeclarations>(
       // Undefined (not a throw) so benign introspection (`then` during await,
       // `toJSON` during stringify) behaves like a plain object.
       if (!Object.hasOwn(declarations, property)) return undefined;
+      if (declarations[property]?.use === "webhook") {
+        throw new WebhookOnlySecretError(property);
+      }
       const value = process.env[property];
       if (value === undefined || value === "") {
         throw new MissingSecretError(property);

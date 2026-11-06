@@ -1,10 +1,3 @@
-import type {
-  AgentCapabilityGateway,
-  TurnContextFragment,
-} from "../agent-capabilities.js";
-import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
-import type { McpToolPolicyLayers } from "./tool-policy.js";
-
 /**
  * Who a session serves (ADR 0055). Structurally the host's `Identity`:
  * tenant, user and — for scoped callers — the artifact refs they may
@@ -21,10 +14,10 @@ export interface SessionCaller {
 }
 
 /**
- * Lightweight description of a plugin package attached to a project. Passed
- * into {@link CodingAgentProvider.startSession} so the agent can (1) stage
- * the plugin's docs inside the working directory for filesystem discovery,
- * and (2) prepend an "attached packages" preamble to the system prompt.
+ * Lightweight description of a plugin package attached to a project, so an
+ * attempt can (1) stage the plugin's docs inside the working directory for
+ * filesystem discovery, and (2) prepend an "attached packages" preamble to
+ * the system prompt.
  *
  * `files` is a map of paths relative to the plugin package root. Only docs
  * (README, `dist/index.d.ts`) are expected — not the full package contents.
@@ -34,65 +27,6 @@ export interface AttachedPluginForAgent {
   displayName: string;
   description: string;
   files: Record<string, string>;
-}
-
-export interface StartSessionOpts {
-  /** Host-only runtime selected by the Allocation. Never serialized on the wire. */
-  sandboxProvider?: SandboxProvider;
-  projectId: string;
-  userId: string;
-  sandboxId: string;
-  workingDirectory: string;
-  /**
-   * The host-side chat session id this provider session anchors (not the
-   * provider's own id). Lets host-supplied tools attribute the surfaces
-   * they create — e.g. a browser tab opened by an agent attaches to the
-   * chat that opened it.
-   */
-  sessionId: string;
-  systemPrompt?: string;
-  attachedPlugins?: AttachedPluginForAgent[];
-  /**
-   * Prior conversation turns to seed the new provider session with —
-   * how a host resurrects a chat whose in-memory harness state is gone
-   * (host restart, provider rebuild after a credential change). Harnesses
-   * with their own durable transcripts (Claude Code) ignore it.
-   */
-  history?: Array<{ role: "user" | "assistant"; content: string }>;
-  /** The identity this session serves; see {@link SessionCaller}. */
-  caller?: SessionCaller;
-  /**
-   * Per-session tool-policy layers by server key — the caller's narrowing
-   * (ADR 0055): what a scoped caller's role lets this agent reach, on top
-   * of the provider's own layers (connection ceiling, agent policy). Keys
-   * are normalized server keys ({@link serverKeyOf}). Intersected like
-   * every other layer; can only narrow. Also refreshed per turn through
-   * {@link TurnOptions.toolPolicies}, since a caller's scope can change
-   * between turns.
-   */
-  toolPolicies?: Record<string, McpToolPolicyLayers>;
-  /**
-   * Trusted control-plane MCP gateways minted for this session. Provider
-   * credentials never appear here; only short-lived Catamorphic grants do.
-   */
-  mcpServers?: Record<string, AgentMcpServerConfig>;
-}
-
-export interface ProviderSession {
-  /**
-   * The harness's native session id, or null when the harness only learns
-   * it once the first turn runs (Codex threads get their id from the CLI).
-   * Such harnesses report the id with a "session" {@link AgentEvent} on the
-   * first turn; the host persists it and passes it back on later turns. No
-   * harness may burn a model turn just to learn its own id.
-   */
-  providerSessionId: string | null;
-  /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
-  sessionId: string;
-  /** Project the session belongs to; stable for the session's lifetime. */
-  projectId: string;
-  sandboxId: string;
-  workingDirectory: string;
 }
 
 /**
@@ -128,6 +62,12 @@ export type AgentMcpServerConfig =
       headers?: Record<string, string>;
       /** Harness hint for servers whose tools are already host-authorized. */
       defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
+      /**
+       * How long the harness waits for the server to list its tools, and
+       * for one call: a host that asks the person inside a call needs the
+       * call's wait as long as the person may take (ADR 0225).
+       */
+      timeouts?: { startupSeconds?: number; callSeconds?: number };
     }
   | {
       transport: "stdio";
@@ -197,6 +137,15 @@ export type AgentTextSource =
       title: string;
       url?: string;
       filePath?: string;
+    }
+  | {
+      /**
+       * A skill the person put in the message: the agent uses it for this
+       * message. `path` names a harness's own skill file.
+       */
+      type: "skill";
+      name: string;
+      path?: string;
     };
 
 /** A media file sent along with a user message. */
@@ -224,49 +173,46 @@ export interface AgentTextAttachment {
 
 export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
-/** Per-turn overrides; anything unset falls back to the provider's defaults. */
-export interface TurnOptions {
-  /** Host-owned question persistence and answer delivery. */
-  askQuestion?: (input: {
-    requestId: string;
-    questions: AgentQuestion[];
-    blocking: boolean;
-    signal?: AbortSignal;
-  }) => Promise<string>;
-  /** Read durable input at a model-step boundary, without removing it. */
-  readPendingMessages?: () => Promise<Array<{ id: string; content: string }>>;
-  /** Acknowledge input only after the model step incorporating it completes. */
-  acknowledgeMessages?: (input: { ids: string[] }) => Promise<void>;
-
+/**
+ * A model reached through the connection gateway from inside a sandbox
+ * (ADR 0180). The harness process there sends the provider's own HTTP API
+ * to `baseUrl` with the session's grant, read from `grantDirectory` at each use,
+ * as its API key; the gateway forwards with the real key.
+ */
+export interface SandboxModelGateway {
+  /** The Environment binding alias of the model connection. */
+  alias: string;
+  /** Which HTTP API the connection's provider speaks. */
+  api: "anthropic" | "openai";
   /**
-   * Fresh facts for this turn, delivered beside the user's message through
-   * the harness's native context channel (ADR 0152).
+   * Where the provider's paths go: `<baseUrl>/v1/messages` for Anthropic
+   * (an `ANTHROPIC_BASE_URL`), `<baseUrl>/responses` for OpenAI (an
+   * `OPENAI_BASE_URL`).
    */
-  context?: TurnContextFragment[];
-  /** Live session-scoped gateway; remote hosts supply their own transport. */
-  capabilities?: AgentCapabilityGateway;
-  model?: string;
-  effort?: AgentEffort;
-  /** Media sent with this turn's user message. */
-  attachments?: AgentAttachment[];
-  /**
-   * The caller's tool-policy layers for this turn (see
-   * {@link StartSessionOpts.toolPolicies}). When present it REPLACES the
-   * session's stored layers — the host recomputes it from the caller's
-   * current scope every turn, so a revoked grant applies to the next call.
-   */
-  toolPolicies?: Record<string, McpToolPolicyLayers>;
+  baseUrl: string;
+  /** Absolute sandbox path of immutable grant files named by publication revision. */
+  grantDirectory: string;
 }
 
 /** What a host-supplied tool knows about the session it runs in. */
 export interface ExtraToolContext {
   projectId: string;
-  /** Host-side chat session id (see {@link StartSessionOpts.sessionId}). */
+  /** The chat session the tool's turn belongs to. */
   sessionId?: string;
+  /** The turn the tool runs in, when the host knows it. */
+  turnId?: string;
   /** Checkout or sandbox directory selected by the host for this turn. */
   workingDirectory?: string;
-  /** Who the session serves (see {@link StartSessionOpts.caller}). */
+  /** Who the session serves. */
   caller?: SessionCaller;
+  /**
+   * Fires when the agent should stop waiting (ADR 0264): something reached
+   * its turn that it reads only once this call returns (a message steered
+   * in, a task notification), or the turn is stopping. A tool that waits
+   * ends its wait and returns what it has (`waitUntil` waits this way); a tool
+   * doing work carries on, since this is never a cancellation.
+   */
+  stopWaiting: AbortSignal;
 }
 
 /**
@@ -284,56 +230,13 @@ export interface ExtraTool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  /**
+   * The tool only reads: a read-only chat (ADR 0271) keeps it, and loses
+   * every tool without it.
+   */
+  readOnly?: boolean;
   execute(
     input: Record<string, unknown>,
     context: ExtraToolContext,
   ): Promise<unknown>;
-}
-
-export interface CodingAgentProvider {
-  readonly name: string;
-
-  /**
-   * Prepare a session: stage plugin docs, compute instructions, allocate
-   * state. This must NOT talk to the model — the transcript begins with the
-   * user's first real message, sent via {@link sendMessage}.
-   */
-  startSession(opts: StartSessionOpts): Promise<ProviderSession>;
-
-  sendMessage(
-    session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent>;
-
-  /**
-   * Abort the in-flight turn for this provider session, if any. The
-   * running {@link sendMessage} stream ends (an error/done pair is fine);
-   * the session itself stays usable for the next turn.
-   */
-  interrupt?(providerSessionId: string): void;
-
-  /**
-   * Whether this provider still holds live state for the session. Only
-   * meaningful for harnesses whose sessions are in-memory (ai-sdk): a
-   * `false` tells the host the session died with a restart or provider
-   * rebuild, so it can re-anchor (passing {@link StartSessionOpts.history})
-   * instead of running into a dead session. Durable harnesses omit it.
-   */
-  hasSession?(providerSessionId: string): boolean;
-
-  /**
-   * Re-run the last (failed) turn WITHOUT appending a new user message —
-   * the harness already holds the conversation up to and including that
-   * user message. `sanitizeReasoning` asks the harness to strip prior
-   * reasoning/thinking output from its history first (recovery for
-   * model-switch incompatibilities). Hosts fall back to re-sending the
-   * last user message when a harness doesn't implement this.
-   */
-  retryTurn?(
-    session: ProviderSession,
-    opts?: TurnOptions & { sanitizeReasoning?: boolean },
-  ): AsyncIterable<AgentEvent>;
-
-  dispose(session: ProviderSession): Promise<void>;
 }

@@ -78,4 +78,19 @@ describe("custom shortcuts", () => {
     ).toBe("Cmd+Shift+Plus");
     expect(isValidBinding("Cmd++")).toBe(true);
   });
+
+  it("records and matches Option+Space, a no-break space on a Mac", () => {
+    const optionSpace = {
+      key: "\u00a0",
+      code: "Space",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: true,
+      shiftKey: false,
+    };
+    expect(bindingFromEvent(optionSpace)).toBe("Alt+Space");
+    expect(
+      matchesShortcut({ event: optionSpace, binding: "Alt+Space", mac: true }),
+    ).toBe(true);
+  });
 });

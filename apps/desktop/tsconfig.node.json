@@ -8,6 +8,7 @@
   "include": [
     "src/main",
     "src/shared",
+    "scripts/**/*.ts",
     "electron.vite.config.ts",
     "e2e",
     "vitest.e2e.config.ts",

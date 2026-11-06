@@ -1,6 +1,4 @@
 import {
-  Check,
-  Copy,
   Pencil,
   Plug,
   Plus,
@@ -11,7 +9,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { displayCommand } from "../../shared/acp-agents.js";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -28,17 +33,24 @@ import {
   type SettingsDestination,
 } from "../../shared/settings-catalog.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
+import { VOICES, voiceIdOf } from "../../shared/voice.js";
 import { BrowserImport } from "../components/browser-import.js";
+import { CopyButton } from "../components/copy-button.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
+import { DockIconSetting } from "../components/dock-icon-setting.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
+import { SyncedNote } from "../components/profile-settings-sync.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
+import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
 import {
   type AgentHarness,
   type AgentsData,
   type AppPrefs,
   type ConnectionInfo,
   desktopApi,
+  type Profile,
+  type ProfilesData,
 } from "../lib/desktop-api.js";
 import {
   DEFAULT_KEYBINDINGS,
@@ -48,6 +60,7 @@ import {
   useKeybindings,
 } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { useMicrophones } from "../lib/microphones.js";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
@@ -55,17 +68,25 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 export function SettingsScreen({
   projectId,
   destination,
+  profile,
+  profiles,
   onSearch,
   onAddAgent,
+  onCreateAssistant,
   onConfigureAgent,
   onManageConnectors,
   onChooseTheme,
 }: {
   projectId?: string;
   destination?: SettingsDestination;
+  /** The window's profile, to say which categories it shares (ADR 0272). */
+  profile?: Profile;
+  profiles?: ProfilesData | null;
   /** Opens the palette's settings scope: the one search surface (ADR 0123). */
   onSearch: () => void;
   onAddAgent: () => void;
+  /** The agent wizard, whose agent becomes the assistant (ADR 0216). */
+  onCreateAssistant: () => void;
   /** Open the configure-agent modal (ADR 0056) for one roster agent. */
   onConfigureAgent: (agentId: string) => void;
   onManageConnectors: () => void;
@@ -73,6 +94,7 @@ export function SettingsScreen({
 }) {
   const [selected, setSelected] = useState("agents");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const navigationFrame = useRef(0);
   const navigationMotion = useRef<Animation | null>(null);
   const navigationScrollTop = useRef<number | null>(null);
@@ -129,13 +151,6 @@ export function SettingsScreen({
         navigationScrollTop.current = root.scrollTop;
         setSelected(entry.category);
         target.dataset.settingsTarget = "true";
-        target.classList.add(
-          "outline",
-          "outline-1",
-          "outline-accent",
-          "outline-offset-4",
-          "rounded-lg",
-        );
         highlighted = target;
         keepInView(target);
         const control =
@@ -168,13 +183,6 @@ export function SettingsScreen({
       clearTimeout(anchorTimeout);
       if (highlighted) {
         delete highlighted.dataset.settingsTarget;
-        highlighted.classList.remove(
-          "outline",
-          "outline-1",
-          "outline-accent",
-          "outline-offset-4",
-          "rounded-lg",
-        );
       }
     };
   }, [destination]);
@@ -227,6 +235,7 @@ export function SettingsScreen({
             </button>
           </section>
           <TerminalSection />
+          {/Mac/.test(navigator.platform) && <DockIconSetting />}
         </>
       ),
     },
@@ -234,7 +243,7 @@ export function SettingsScreen({
       id: "workspace",
       label: "Workspace",
       keywords:
-        "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https chat responses steps reasoning notes collapse fold",
+        "layout sidebar tabs header address bookmarks links preview floating border frame window buttons traffic lights default browser http https sleep memory chat responses steps reasoning notes collapse fold queue steer interrupt messages",
       content: (
         <>
           <section className="settings-card mt-4">
@@ -244,7 +253,14 @@ export function SettingsScreen({
             </p>
             <DefaultBrowserButton className="mt-3 max-w-xs" />
           </section>
+          <LayoutSection
+            heading="Browser"
+            keys={["switchToOpenTab", "browserTabSleep"]}
+          />
           <LayoutSection projectId={projectId} />
+          {/Mac/.test(navigator.platform) && (
+            <LayoutSection heading="Window" keys={["windowButtons"]} />
+          )}
           <LayoutSection
             keys={[
               "dockMultiProject",
@@ -253,21 +269,20 @@ export function SettingsScreen({
               "dockPlacement",
               "chatWorkLive",
               "chatWorkSettled",
+              "chatQueueMessages",
             ]}
-            title="Chat dock"
+            heading="Chat dock"
           />
           <LayoutSection
-            title="Code review"
+            heading="Code review"
             keys={[
               "diffLayout",
               "diffWrap",
               "reviewStartView",
               "reviewGrouping",
-              "changesFileLayout",
-              "prDefaultView",
             ]}
           />
-          <SidebarSection />
+          <WorkspaceSection />
         </>
       ),
     },
@@ -290,6 +305,13 @@ export function SettingsScreen({
       content: <NotificationsSection />,
     },
     {
+      id: "voice",
+      label: "Voice",
+      keywords:
+        "assistant microphone speech talk listen push to talk dock composer voices",
+      content: <VoiceSection onCreateAssistant={onCreateAssistant} />,
+    },
+    {
       id: "import",
       label: "Import",
       keywords: "browser aside chrome arc bookmarks passwords history",
@@ -303,8 +325,9 @@ export function SettingsScreen({
     setSelected(id);
     navigationFrame.current = requestAnimationFrame(() => {
       const root = scrollRef.current;
+      const content = contentRef.current;
       const target = root?.querySelector(`#settings-${id}`);
-      if (!root || !target) return;
+      if (!root || !content || !target) return;
       const distance =
         target.getBoundingClientRect().top - root.getBoundingClientRect().top;
       root.scrollTo({
@@ -325,7 +348,7 @@ export function SettingsScreen({
         return;
       // Like workspace tab cycling: signal a new location on a persistent
       // surface, without scrolling through every intervening settings row.
-      navigationMotion.current = root.animate(
+      navigationMotion.current = content.animate(
         [
           {
             opacity: 0.3,
@@ -337,6 +360,7 @@ export function SettingsScreen({
       );
     });
   };
+  const findKeys = useKeybindings();
   return (
     <div
       className="@container/settings flex min-h-0 min-w-0 flex-1 flex-col"
@@ -350,7 +374,10 @@ export function SettingsScreen({
             Make this workspace your own.
           </p>
         </div>
-        <ShortcutHint label="Search settings">
+        <ShortcutHint
+          label="Search settings"
+          shortcut={formatBinding(findKeys.find)}
+        >
           <button
             type="button"
             aria-label="Search settings"
@@ -429,7 +456,11 @@ export function SettingsScreen({
               </button>
             ))}
           </nav>
-          <div className="min-w-0 flex-1 px-6 pb-10">
+          <div
+            ref={contentRef}
+            data-settings-content
+            className="min-w-0 flex-1 px-6 pb-10"
+          >
             {sections.map((section) => (
               <div
                 key={section.id}
@@ -442,6 +473,11 @@ export function SettingsScreen({
                   </h2>
                   {"action" in section ? section.action : null}
                 </div>
+                <SyncedNote
+                  profile={profile}
+                  data={profiles}
+                  part={section.id}
+                />
                 {section.content}
               </div>
             ))}
@@ -456,6 +492,7 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  acp: "ACP",
 };
 
 interface AgentLoginUi {
@@ -478,7 +515,6 @@ function AgentsSection({
   const [data, setData] = useState<AgentsData | null>(null);
   const [loginOk, setLoginOk] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Record<string, AgentLoginUi>>({});
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     void desktopApi.agentsList().then(setData);
@@ -538,15 +574,6 @@ function AgentsSection({
         [id]: { error: cause instanceof Error ? cause.message : String(cause) },
       }));
     }
-  };
-
-  const copyCommand = (id: string, command: string) => {
-    void navigator.clipboard.writeText(command);
-    setCopiedId(id);
-    window.setTimeout(
-      () => setCopiedId((current) => (current === id ? null : current)),
-      1500,
-    );
   };
 
   return (
@@ -630,39 +657,52 @@ function AgentsSection({
                 <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fg-faint">
                   <span>{HARNESS_LABELS[agent.harness]}</span>
                   <span>·</span>
-                  <span className={agent.model ? "font-mono" : ""}>
-                    {agent.model || "default model"}
-                  </span>
-                  <span>·</span>
-                  <span>{agent.effort} effort</span>
-                  <span>·</span>
-                  <span className={keyed && agent.hasApiKey ? "font-mono" : ""}>
-                    {authText}
-                  </span>
+                  {agent.harness === "acp" ? (
+                    // An ACP agent keeps these in its own configuration
+                    // (ADR 0241).
+                    <>
+                      <span className="font-mono">
+                        {displayCommand(agent.acp?.command ?? [])}
+                      </span>
+                      <span>·</span>
+                      <span>its own model and sign-in</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className={agent.model ? "font-mono" : ""}>
+                        {agent.model || "default model"}
+                      </span>
+                      <span>·</span>
+                      <span>{agent.effort} effort</span>
+                      <span>·</span>
+                      <span
+                        className={keyed && agent.hasApiKey ? "font-mono" : ""}
+                      >
+                        {authText}
+                      </span>
+                    </>
+                  )}
                 </div>
+                {agent.credentialError && (
+                  <p role="alert" className="mt-2 text-[11px] text-danger">
+                    {agent.credentialError}
+                  </p>
+                )}
                 {agent.auth === "account" && !connected && (
                   <div className="mt-2 flex flex-col gap-1.5">
                     {ui.command ? (
                       <>
-                        <div className="flex items-center gap-1.5">
+                        <div
+                          data-copyable
+                          className="flex items-center gap-1.5"
+                        >
                           <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
                             {ui.command}
                           </code>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              ui.command && copyCommand(agent.id, ui.command)
-                            }
-                            className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
-                            aria-label="Copy sign-in command"
-                            title="Copy command"
-                          >
-                            {copiedId === agent.id ? (
-                              <Check className="size-3 text-success" />
-                            ) : (
-                              <Copy className="size-3" />
-                            )}
-                          </button>
+                          <CopyButton
+                            value={ui.command}
+                            label="Copy sign-in command"
+                          />
                         </div>
                         <p className="text-[11px] text-fg-faint">
                           Finish sign-in in your terminal, then come back.
@@ -833,8 +873,277 @@ function NotificationsSection() {
   return (
     <LayoutSection
       keys={["notificationSounds", "desktopNotifications"]}
-      title="Agent activity"
+      heading="Agent activity"
     />
+  );
+}
+
+/** One labelled setting in a card: its words on the left, its control. */
+function SettingRow({
+  id,
+  label,
+  description,
+  stacked = false,
+  control = true,
+  children,
+}: {
+  id: string;
+  label: string;
+  description: string;
+  /** A wide control (a select) wraps under the words on narrow screens. */
+  stacked?: boolean;
+  /** Whether a control with the setting's id follows (a label needs one). */
+  control?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`-mx-2 flex justify-between rounded-lg p-2 ${stacked ? "flex-col items-stretch gap-2 @xl/settings:flex-row @xl/settings:items-center @xl/settings:gap-4" : "items-center gap-4"}`}
+      data-setting-id={id}
+    >
+      <div className="min-w-0">
+        {control ? (
+          <label htmlFor={`setting-${id}`} className="text-sm">
+            {label}
+          </label>
+        ) : (
+          <p className="text-sm">{label}</p>
+        )}
+        <p className="mt-1 text-xs text-fg-muted">{description}</p>
+      </div>
+      <div className="flex min-w-0 max-w-full shrink-0 items-center gap-3">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** The assistant picker's last option: not an agent (agent ids are UUIDs). */
+const CREATE_ASSISTANT = "create";
+
+/**
+ * Voice (ADR 0216): the assistant the dock's microphone talks to, how
+ * agents sound, and how voice listens. All of it is the profile's prefs; a
+ * live voice follows changes at once.
+ */
+function VoiceSection({
+  onCreateAssistant,
+}: {
+  onCreateAssistant: () => void;
+}) {
+  const { prefs, update, error } = useAppPreferences();
+  const agents = useProfileAgents();
+  const microphones = useMicrophones();
+  const bindings = useKeybindings();
+  const dictateKeys = formatBinding(bindings.dictate);
+  const talkKeys = formatBinding(bindings["talk-to-work"]);
+  const keys = useVoiceKeys();
+  const assistant =
+    agents.find((agent) => agent.id === prefs.voiceAssistant)?.id ?? "";
+  return (
+    <section className="settings-card flex flex-col gap-1">
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+      <SettingRow
+        id="voiceAssistant"
+        label="Assistant"
+        description="Who the dock's microphone talks to. The built-in assistant runs on your default agent at its default model; an agent of yours runs as you set it up. Either one can hand work to your other agents."
+        stacked
+      >
+        <select
+          id="setting-voiceAssistant"
+          value={assistant}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === CREATE_ASSISTANT) onCreateAssistant();
+            else void update({ voiceAssistant: value || null });
+          }}
+        >
+          <option value="">Built-in assistant</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+          <option value={CREATE_ASSISTANT}>Create agent…</option>
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voiceId"
+        label="Default voice"
+        description="Agents speak in this voice unless you give one its own, in the agent's settings."
+        stacked
+      >
+        <select
+          id="setting-voiceId"
+          value={prefs.voiceId}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) =>
+            void update({ voiceId: voiceIdOf(event.target.value) })
+          }
+        >
+          {VOICES.map((voice) => (
+            <option key={voice.id} value={voice.id}>
+              {voice.name} ({voice.description})
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voiceMicrophone"
+        label="Microphone"
+        description="What voice listens with."
+        stacked
+      >
+        <select
+          id="setting-voiceMicrophone"
+          value={prefs.voiceMicrophone ?? ""}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) =>
+            void update({ voiceMicrophone: event.target.value || null })
+          }
+        >
+          <option value="">System default</option>
+          {microphones.map((microphone) => (
+            <option key={microphone.id} value={microphone.id}>
+              {microphone.label}
+            </option>
+          ))}
+          {prefs.voiceMicrophone !== null &&
+            !microphones.some(
+              (microphone) => microphone.id === prefs.voiceMicrophone,
+            ) && (
+              <option value={prefs.voiceMicrophone}>
+                Chosen microphone (not connected)
+              </option>
+            )}
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voiceKeys"
+        label="Voice shortcuts"
+        control={keys === "needs-permission"}
+        description={`${[
+          dictateKeys && `${dictateKeys} dictates where you type`,
+          talkKeys && `${talkKeys} talks to Work`,
+        ]
+          .filter(Boolean)
+          .join(", ")
+          .replace(/^./, (first) => first.toUpperCase())}${
+          dictateKeys || talkKeys ? ". " : ""
+        }Tap one to start or stop; hold it to talk while you hold it. ${
+          keys === "everywhere"
+            ? "They work in any app."
+            : keys === "needs-permission"
+              ? "To use them in other apps, allow Work in System Settings, Privacy & Security, Accessibility."
+              : "They work in Work."
+        }`}
+      >
+        {keys === "needs-permission" && (
+          <button
+            id="setting-voiceKeys"
+            type="button"
+            className="btn rounded-md px-3 py-1.5 text-xs"
+            onClick={() => void desktopApi.voiceKeysAllow()}
+          >
+            Allow…
+          </button>
+        )}
+      </SettingRow>
+      <SettingRow
+        id="voiceDictation"
+        label="Dictation only"
+        description="A microphone's click dictates where you type, a chat's into its message box, instead of talking. Nothing is sent or read aloud: edit it and send it as you would typed text."
+      >
+        <input
+          id="setting-voiceDictation"
+          type="checkbox"
+          role="switch"
+          aria-checked={prefs.voiceDictation}
+          checked={prefs.voiceDictation}
+          onChange={(event) =>
+            void update({ voiceDictation: event.target.checked })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        id="voiceInDock"
+        label="Show voice in dock"
+        description="The assistant's microphone. Its shortcut works either way."
+      >
+        <input
+          id="setting-voiceInDock"
+          type="checkbox"
+          role="switch"
+          aria-checked={prefs.voiceInDock}
+          checked={prefs.voiceInDock}
+          onChange={(event) =>
+            void update({ voiceInDock: event.target.checked })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        id="voiceBubbleSpot"
+        label="Floating microphone"
+        description="Where the microphone floats over other apps while voice is on. Drag it to move it."
+      >
+        <select
+          id="setting-voiceBubbleSpot"
+          value={prefs.voiceBubbleSpot}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) => {
+            const spot = event.target.value;
+            if (spot === "left" || spot === "center" || spot === "right")
+              void update({ voiceBubbleSpot: spot });
+          }}
+        >
+          <option value="left">Left</option>
+          <option value="center">Middle</option>
+          <option value="right">Right</option>
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voiceInChats"
+        label="Show voice in chats"
+        description="A microphone in each chat's composer, to talk with that chat's agent and carry on typing after."
+      >
+        <input
+          id="setting-voiceInChats"
+          type="checkbox"
+          role="switch"
+          aria-checked={prefs.voiceInChats}
+          checked={prefs.voiceInChats}
+          onChange={(event) =>
+            void update({ voiceInChats: event.target.checked })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        id="voiceprint"
+        label="Only listen to me"
+        control={false}
+        description={
+          prefs.voiceprint
+            ? "Voice knows your voice and ignores other people's."
+            : "Learn your voice from a microphone's menu, and voice ignores other people's."
+        }
+      >
+        {prefs.voiceprint && (
+          <button
+            id="setting-voiceprint"
+            type="button"
+            className="btn rounded-md px-3 py-1.5 text-xs"
+            onClick={() => void update({ voiceprint: null })}
+          >
+            Forget my voice
+          </button>
+        )}
+      </SettingRow>
+    </section>
   );
 }
 
@@ -844,7 +1153,7 @@ function TerminalSection() {
   return (
     <LayoutSection
       keys={["codeTheme", "terminalAppearance"]}
-      title="Code and terminal"
+      heading="Code and terminal"
     >
       {source === "ghostty" && (
         <>
@@ -885,21 +1194,38 @@ function TerminalSection() {
 function LayoutSection({
   projectId,
   keys = WORKSPACE_SETTING_KEYS,
-  title = "Workspace layout",
+  heading = "Workspace layout",
   children,
 }: {
   projectId?: string;
   keys?: SettingKey[];
-  title?: string;
+  heading?: string;
   /** Extra rows that belong to the same card, after the settings. */
   children?: ReactNode;
 }) {
   const [scope, setScope] = useState<SettingsScope>("profile");
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Reads and scope changes: a stale read or a save for another scope never
+  // lands. Saves in flight are tracked separately (see `pending`).
   const generation = useRef(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Changes show at once and stay on screen until their own save settles:
+  // every snapshot that arrives meanwhile (an older save's answer, the
+  // refresh a save triggers) gets them layered back on top, so a quick
+  // second click never flickers back to the first value.
+  const pending = useRef(
+    new Map<SettingKey, { save: number; value: unknown }>(),
+  );
+  const server = useRef<SettingsSnapshot | null>(null);
+  const saves = useRef(0);
+  const showServer = useCallback((result: SettingsSnapshot) => {
+    server.current = result;
+    setSnapshot(withPending(result, pending.current));
+  }, []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Retry intentionally restarts a failed IPC read.
   useEffect(() => {
     let alive = true;
@@ -909,7 +1235,7 @@ function LayoutSection({
         .getSettings({ projectId, scope })
         .then((result) => {
           if (alive && request === generation.current) {
-            setSnapshot(result);
+            showServer(result);
             setError(null);
           }
         })
@@ -917,6 +1243,8 @@ function LayoutSection({
           if (alive && request === generation.current) setError(String(cause));
         });
     };
+    pending.current.clear();
+    server.current = null;
     setSnapshot(null);
     refresh();
     const unsubscribe = desktopApi.onPrefsChanged(refresh);
@@ -925,33 +1253,56 @@ function LayoutSection({
       generation.current++;
       unsubscribe();
     };
-  }, [projectId, scope, refreshKey]);
+  }, [projectId, scope, refreshKey, showServer]);
+  // Controls stay enabled while saving (a disabled checkbox dims for the
+  // length of the save). A reset waits for the answer: only it knows which
+  // layer the value falls back to.
   const save = async (patch: SettingsPatch) => {
-    const request = generation.current;
+    const forScope = scope;
+    const id = ++saves.current;
+    for (const [key, value] of Object.entries(patch) as [
+      SettingKey,
+      unknown,
+    ][]) {
+      if (value === null || value === undefined) pending.current.delete(key);
+      else pending.current.set(key, { save: id, value });
+    }
+    if (server.current)
+      setSnapshot(withPending(server.current, pending.current));
     setSaving(true);
     setError(null);
+    const settleOwn = () => {
+      for (const [key, entry] of pending.current)
+        if (entry.save === id) pending.current.delete(key);
+    };
     try {
       const result = await desktopApi.setSettings({ projectId, scope, patch });
-      if (request === generation.current) setSnapshot(result);
+      if (forScope !== scopeRef.current) return;
+      settleOwn();
+      showServer(result);
     } catch (cause) {
-      if (request === generation.current) setError(String(cause));
+      if (forScope !== scopeRef.current) return;
+      // Only this save's keys go back, to whatever the server holds now.
+      settleOwn();
+      if (server.current) showServer(server.current);
+      setError(String(cause));
     } finally {
-      setSaving(false);
+      if (id === saves.current) setSaving(false);
     }
   };
   return (
     <section
       className="settings-card mt-4 flex flex-col gap-3"
-      data-settings-layout={title === "Workspace layout" ? "" : undefined}
+      data-settings-layout={heading === "Workspace layout" ? "" : undefined}
+      aria-busy={saving || undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <h2 className="text-sm font-semibold">{heading}</h2>
         {projectId && (
           <select
             aria-label="Settings scope"
             className="field h-8 min-w-0 max-w-full rounded-md px-2 text-xs"
             value={scope}
-            disabled={saving}
             onChange={(event) => setScope(event.target.value as SettingsScope)}
           >
             <option value="profile">Profile</option>
@@ -1011,7 +1362,8 @@ function LayoutSection({
                 )}
                 <p className="mt-1 grid text-[11px] text-fg-muted">
                   {/* Reserve the longest source label so toggling an override
-                      cannot change the row's height when its text wraps. */}
+                      cannot change the row's height when its text wraps; the
+                      two labels cross-fade in that one cell. */}
                   <span
                     aria-hidden="true"
                     className="invisible col-start-1 row-start-1"
@@ -1019,10 +1371,20 @@ function LayoutSection({
                     {SETTING_SOURCE_LABELS[scope]} · From{" "}
                     {SETTING_SOURCE_LABELS.default.toLowerCase()}
                   </span>
-                  <span className="col-start-1 row-start-1">
-                    {overridden
-                      ? `Custom for ${SETTING_SOURCE_LABELS[scope].toLowerCase()}`
-                      : `${SETTING_SOURCE_LABELS[scope]} · From ${SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}`}
+                  <span
+                    aria-hidden={!overridden}
+                    data-source-current={overridden || undefined}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-standard ${overridden ? "opacity-100" : "opacity-0"}`}
+                  >
+                    Custom for {SETTING_SOURCE_LABELS[scope].toLowerCase()}
+                  </span>
+                  <span
+                    aria-hidden={overridden}
+                    data-source-current={!overridden || undefined}
+                    className={`col-start-1 row-start-1 transition-opacity duration-150 ease-standard ${overridden ? "opacity-0" : "opacity-100"}`}
+                  >
+                    {SETTING_SOURCE_LABELS[scope]} · From{" "}
+                    {SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}
                   </span>
                 </p>
               </div>
@@ -1036,17 +1398,18 @@ function LayoutSection({
                   >
                     Reset
                   </span>
-                  {overridden && (
-                    <button
-                      type="button"
-                      aria-label={`Reset ${definition.label} to inherited`}
-                      disabled={saving}
-                      className="col-start-1 row-start-1 text-xs text-fg-muted hover:text-fg disabled:opacity-40"
-                      onClick={() => void save({ [key]: null })}
-                    >
-                      Reset
-                    </button>
-                  )}
+                  {/* Always mounted: it fades in and out in its reserved cell. */}
+                  <button
+                    type="button"
+                    aria-label={`Reset ${definition.label} to inherited`}
+                    aria-hidden={!overridden}
+                    inert={!overridden}
+                    tabIndex={overridden ? undefined : -1}
+                    className={`col-start-1 row-start-1 text-xs text-fg-muted transition-[opacity,color] duration-150 ease-standard hover:text-fg ${overridden ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                    onClick={() => void save({ [key]: null })}
+                  >
+                    Reset
+                  </button>
                 </span>
                 {"range" in definition ? (
                   <input
@@ -1056,7 +1419,6 @@ function LayoutSection({
                     min={definition.range.min}
                     max={definition.range.max}
                     step={definition.range.step}
-                    disabled={saving}
                     value={Number(value)}
                     className="field h-8 w-20 rounded-md px-2 text-sm"
                     onChange={(event) => {
@@ -1068,7 +1430,6 @@ function LayoutSection({
                   <select
                     id={id}
                     name={key}
-                    disabled={saving}
                     value={String(value)}
                     className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
                     onChange={(event) =>
@@ -1088,9 +1449,7 @@ function LayoutSection({
                     id={id}
                     name={key}
                     type="checkbox"
-                    disabled={saving}
                     checked={value === true}
-                    className="size-4 accent-(--color-accent)"
                     onChange={(event) =>
                       void save({ [key]: event.target.checked })
                     }
@@ -1419,22 +1778,23 @@ function ImportSection() {
 }
 
 /**
- * The sidebar is defined by a JS file, not a settings form — this section
- * points at it and offers a way back from a bad edit.
+ * Sidebars and palette modes are defined by one JS file (workspace.js), not
+ * a settings form: this section points at it and offers a way back from a
+ * bad edit.
  */
-function SidebarSection() {
+function WorkspaceSection() {
   const [file, setFile] = useState("");
   useEffect(() => {
-    void desktopApi.sidebarConfigFile().then(setFile);
+    void desktopApi.workspaceConfigFile().then(setFile);
   }, []);
 
   return (
-    <section data-setting-id="sidebar" className="settings-card mt-4">
+    <section data-setting-id="workspace" className="settings-card mt-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Sidebar</h2>
+        <h2 className="text-sm font-semibold">Sidebars and palette</h2>
         <button
           type="button"
-          onClick={() => void desktopApi.sidebarConfigReset()}
+          onClick={() => void desktopApi.workspaceConfigReset()}
           className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
         >
           <RotateCcw className="size-3" />
@@ -1442,10 +1802,10 @@ function SidebarSection() {
         </button>
       </div>
       <p className="mt-1 text-xs leading-5 text-fg-muted">
-        The left sidebar's sections and items are defined in a JavaScript file.
-        Edit it directly, or ask the assistant to change it for you (&ldquo;hide
-        the workflows section&rdquo;, &ldquo;add a Docs section&rdquo;). Changes
-        apply live.
+        Both sidebars and your own palette modes are defined in one JavaScript
+        file. Edit it directly, or ask the assistant to change it for you
+        (&ldquo;hide the workflows section&rdquo;, &ldquo;add a palette mode for
+        my open tickets&rdquo;). Changes apply live.
       </p>
       <p className="mt-2 text-xs text-fg-faint">
         <span className="break-all font-mono">{file}</span>
@@ -1631,7 +1991,7 @@ function ConfigurationErrors({ projectId }: { projectId?: string }) {
       desktopApi.onPrefsChanged(refresh),
       desktopApi.onThemeChanged(refresh),
       desktopApi.onKeybindingsChanged(refresh),
-      desktopApi.onSidebarConfigChanged(refresh),
+      desktopApi.onWorkspaceConfigChanged(refresh),
     ];
     return () => {
       alive = false;
@@ -1652,4 +2012,19 @@ function ConfigurationErrors({ projectId }: { projectId?: string }) {
       ))}
     </div>
   );
+}
+
+/** A server snapshot with the changes still being saved laid over it. */
+function withPending(
+  snapshot: SettingsSnapshot,
+  pending: ReadonlyMap<SettingKey, { value: unknown }>,
+): SettingsSnapshot {
+  if (pending.size === 0) return snapshot;
+  const values = { ...snapshot.values };
+  const overrides = { ...snapshot.overrides };
+  for (const [key, { value }] of pending) {
+    Reflect.set(overrides, key, value);
+    Reflect.set(values, key, value);
+  }
+  return { ...snapshot, values, overrides };
 }

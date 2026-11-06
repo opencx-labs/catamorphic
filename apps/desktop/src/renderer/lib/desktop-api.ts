@@ -1,32 +1,64 @@
-import type { CollectionPage } from "@catamorphic/app";
 import { shareEvent } from "@catamorphic/app";
 import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
+import {
+  DESKTOP_DEFAULT_SANDBOXING,
+  effectiveHarnessPermissions,
+  type HarnessPermissions,
+  type Sandboxing,
+} from "../../shared/agent-permissions.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
+import type { BackgroundCommandView } from "../../shared/background-commands.js";
 import type {
+  BookmarkFolderRename,
   BookmarkMove,
   BookmarkPlacement,
+  BookmarkRemoval,
+  BookmarkUpdate,
 } from "../../shared/bookmark-target.js";
+import type {
+  BrowserHistory,
+  BrowserSleepBlocker,
+} from "../../shared/browser-history.js";
 import type {
   BrowserImportRequest,
   BrowserImportResult,
 } from "../../shared/browser-import.js";
+import type { ClaudeCodeInstallStatus } from "../../shared/claude-code-install.js";
 import type {
   ChatDraft,
   ChatDraftUpdate,
+  DockAction,
   DockCommand,
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceInitial,
   WorkspaceNavigation,
 } from "../../shared/desktop-workspace.js";
+import type { DockIconState } from "../../shared/dock-icon.js";
 import type {
   DockDrag,
   DockRegion,
   DockSize,
 } from "../../shared/dock-position.js";
 import type { DownloadRecord } from "../../shared/downloads.js";
+import type {
+  ExtensionActionResult,
+  ExtensionActionState,
+  ExtensionDebugging,
+  ExtensionInstalled,
+  ExtensionPrompt,
+  ExtensionPromptAnswer,
+  ExtensionSidePanel,
+  ExtensionSummary,
+  ExtensionsState,
+  ExtensionTabsReport,
+  ExtensionView,
+  ExtensionWindowRequestEnvelope,
+} from "../../shared/extensions.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type {
   FileSearchInput,
@@ -38,13 +70,37 @@ import type {
   HistoryQuery,
   HistoryVisit,
 } from "../../shared/history.js";
+import type { MenuItem, PageContextMenu } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type {
+  PageDialog,
+  PageDialogAnswer,
+  UnloadIntent,
+} from "../../shared/page-dialogs.js";
+import type {
+  PasskeyChoice,
+  PasskeyRequest,
+  PasskeyUseResult,
+} from "../../shared/passkeys.js";
+import type { PasswordFileImportResult } from "../../shared/password-import.js";
+import type { PersonalEnvironmentView } from "../../shared/personal-environment.js";
 import type {
   PrComment,
   PrCommentInput,
   PrDecisionInput,
   PrDetails,
+  PullRequestStatusRead,
 } from "../../shared/pr-details.js";
+import type {
+  ProfileSync,
+  ProfileSyncPart,
+} from "../../shared/profile-sync.js";
+import type {
+  CodexSignIn,
+  CodexSignInStatus,
+  RemoteMachine,
+} from "../../shared/remote-machines.js";
+import type { ResourceSnapshot } from "../../shared/resources.js";
 import type {
   ScreenShareAnswer,
   ScreenShareKind,
@@ -57,8 +113,8 @@ import type {
   SettingsSnapshot,
 } from "../../shared/settings.js";
 import type {
-  SidebarSourceItem,
   SidebarSourceRequest,
+  SidebarSourceWorkCall,
 } from "../../shared/sidebar-source.js";
 import type {
   SiteDetails,
@@ -68,11 +124,30 @@ import type {
   SitePermissionState,
   SitePermissions,
   SiteSummary,
+  SiteSystemRefusal,
 } from "../../shared/site-settings.js";
+import type { TerminalCreateInput } from "../../shared/terminal.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
+import type { TrustedHosts } from "../../shared/trusted-hosts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
+import type {
+  VoiceBubbleState,
+  VoiceDictation,
+  VoiceKeysState,
+  VoiceLevels,
+  VoicePress,
+  VoiceReadAloud,
+  VoiceStatus,
+  VoiceWindowChoice,
+} from "../../shared/voice.js";
+import type {
+  VoiceBubbleDrag,
+  VoiceSpotsState,
+} from "../../shared/voice-bubble.js";
+import type { WindowImageRequest } from "../../shared/window-images.js";
+import type { WorkspaceTabRef } from "../../shared/workspace-tab-ref.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
 
@@ -86,18 +161,35 @@ export interface SessionCheckoutInfo {
   path?: string;
   kind: "managed" | "external";
   branch: string | null;
+  /** The folder exists now; a chat's own worktree comes and goes (ADR 0215). */
+  present?: boolean;
+  /** The chat's title and start, when asked for (`titles`). */
+  title?: string | null;
+  createdAt?: string;
 }
 
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
+/** Where one chat works, for its status popup (ADR 0215). */
+export interface SessionCheckoutDetail {
+  kind: "primary" | "managed" | "external";
+  path: string;
+  branch: string | null;
+  present: boolean;
+  projectFolder: string;
+  worktreesAvailable: boolean;
+  /** False when an assigned folder is gone or no longer this repository. */
+  available: boolean;
+  /** Files the chat's own worktree changed; null for other checkouts. */
+  changedFiles: number | null;
+}
+
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "acp";
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
 
-/**
- * Normalized operating mode (ADR 0056), mapped per harness — Claude Code
- * permission modes, Codex sandbox modes. Not applicable to the sandboxed
- * built-in harness.
- */
-export type AgentMode = "read-only" | "edit" | "full-access";
+export type {
+  HarnessPermissions,
+  Sandboxing,
+} from "../../shared/agent-permissions.js";
 export type AgentCoordinationStrategy =
   | "shared-first"
   | "isolate-on-contention"
@@ -116,37 +208,56 @@ export type AgentSkillsSetting =
   | { mode: "all" }
   | { mode: "picked"; names: string[] };
 
-export interface AgentDelegationRoute {
-  id: string;
-  target: string;
+/** Who an agent may start, and what it may choose for them (ADR 0271). */
+export interface AgentDelegationGrant {
+  /** `self`, an agent id, `project:<slug>`, or `*`. */
+  agent: string;
   description?: string;
-  allowFurtherDelegation: boolean;
+  model: "any" | "fixed" | string[];
+  effort: "any" | "fixed" | "at-most-parent" | AgentEffort[];
+  delegate: boolean;
 }
 
 export interface AgentDelegationPolicy {
   enabled: boolean;
   maxConcurrentChildren: number;
-  routes: AgentDelegationRoute[];
+  agents: AgentDelegationGrant[];
 }
+
+/** No delegation set: copies of itself on any model and effort. */
+export const DEFAULT_AGENT_DELEGATION: AgentDelegationPolicy = {
+  enabled: true,
+  maxConcurrentChildren: 10,
+  agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
+};
 
 export interface AgentInfo {
   id: string;
   name: string;
   harness: AgentHarness;
   provider?: "anthropic" | "openai" | "openrouter";
+  /** What an ACP agent runs (ADR 0241). */
+  acp?: { command: string[] };
   model: string;
   effort: AgentEffort;
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** Saved ciphertext is retained; the affected agent cannot run until unlocked. */
+  credentialError?: string;
   /** Media kinds this agent's chat composer accepts. */
   accepts: Array<"image" | "document">;
   /** The agent's own main prompt ("" when none). */
   instructions: string;
-  mode: AgentMode;
+  /** What may leave the agent's sandbox (ADR 0182). */
+  sandboxing: Sandboxing;
+  /** The harness's own permission settings in effect (empty for built-in). */
+  harnessPermissions: HarnessPermissions;
   coordination: AgentCoordinationStrategy;
   /** Claude Code auto-memory — opt-in, default off (others ignore it). */
   memory: boolean;
+  /** Imports this tool's chats from outside Work (ADR 0233). */
+  syncSessions: boolean;
   connections: AgentConnectionsSetting;
   skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
@@ -162,7 +273,7 @@ export interface AgentsData {
 }
 
 /**
- * A PROJECT agent: a committed `.catamorphic/agents/<slug>.json` definition (ADR 0050),
+ * A PROJECT agent: a committed `.work/agents/<slug>.json` definition (ADR 0050),
  * listed for the active project. `consent` gates running it on the user's
  * own credentials; `invalid` marks unusable definitions (shown disabled).
  */
@@ -176,13 +287,15 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: AgentEffort | null;
-  /** Normalized operating mode; null = the local desktop default (full access). */
-  mode: AgentMode | null;
+  /** What may leave its sandbox (ADR 0182); null = the local default. */
+  sandboxing: Sandboxing | null;
+  /** The harness's own permission settings; null = the local defaults. */
+  harnessPermissions: HarnessPermissions | null;
   /** Checkout-coordination doctrine; null means shared-first. */
   coordination: AgentCoordinationStrategy | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
-  credentialsSource: "profile" | "secret" | "local";
+  credentialsSource: "profile" | "secret" | "local" | "connection" | "personal";
   secretName: string | null;
   /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
@@ -190,6 +303,10 @@ export interface ProjectAgentInfo {
   skills: string[] | null;
   delegation: AgentDelegationPolicy | null;
   promptPreview: string | null;
+  /** The command an ACP agent runs on this machine once approved. */
+  command: string[] | null;
+  /** The definition as listed, which approving binds and nothing else. */
+  definitionHash: string | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
 }
@@ -207,42 +324,41 @@ export interface ProjectAgentsData {
  */
 export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
   const harness: AgentHarness =
-    agent.kind === "claude-code"
-      ? "claude-code"
-      : agent.kind === "codex"
-        ? "codex"
-        : "ai-sdk";
+    agent.kind === "claude-code" ||
+    agent.kind === "codex" ||
+    agent.kind === "acp"
+      ? agent.kind
+      : "ai-sdk";
   return {
     id: agent.id,
     name: agent.name,
     harness,
     ...(harness === "ai-sdk" ? { provider: "anthropic" as const } : {}),
+    ...(harness === "acp" && agent.command
+      ? { acp: { command: agent.command } }
+      : {}),
     model: agent.model ?? "",
     effort: agent.effort ?? "medium",
     auth: agent.credentialsSource === "secret" ? "api-key" : "local",
     hasApiKey: false,
     apiKeyMasked: null,
-    accepts: ["image", "document"],
+    // ACP carries images; documents are named as not delivered.
+    accepts: harness === "acp" ? ["image"] : ["image", "document"],
     instructions: "",
-    mode: agent.mode ?? "full-access",
+    sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
+    harnessPermissions: effectiveHarnessPermissions({
+      harness,
+      permissions: agent.harnessPermissions,
+    }),
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
+    syncSessions: false,
     connections: { mode: "all" },
     skills: agent.skills
       ? { mode: "picked", names: agent.skills }
       : { mode: "all" },
     toolPolicies: {},
-    delegation: agent.delegation ?? {
-      enabled: true,
-      maxConcurrentChildren: 10,
-      routes: [
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ],
-    },
+    delegation: agent.delegation ?? DEFAULT_AGENT_DELEGATION,
   };
 }
 
@@ -250,14 +366,19 @@ export interface CreateAgentInput {
   name?: string;
   harness: AgentHarness;
   provider?: "anthropic" | "openai" | "openrouter";
+  /** What an ACP agent runs; required for one (ADR 0241). */
+  acp?: { command: string[] };
   model?: string;
   effort?: AgentEffort;
   auth?: AgentAuthMode;
   apiKey?: string | null;
   instructions?: string;
-  mode?: AgentMode;
+  sandboxing?: Sandboxing;
+  /** `{}` returns to the local defaults. */
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   delegation?: AgentDelegationPolicy;
@@ -273,9 +394,12 @@ export interface UpdateAgentInput {
   apiKey?: string | null;
   /** New instructions; "" clears them. */
   instructions?: string;
-  mode?: AgentMode;
+  sandboxing?: Sandboxing;
+  /** `{}` returns to the local defaults. */
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   /** Per-connection tool policies (null clears). */
@@ -375,6 +499,8 @@ export interface ConnectorSearchData {
     description: string;
     version?: string;
     repositoryUrl?: string;
+    /** The server's https home page, when the entry names one. */
+    websiteUrl?: string;
     iconUrl?: string;
     /** Published under a DNS-verified vendor namespace (not io.github.*). */
     official: boolean;
@@ -391,8 +517,16 @@ export interface ConnectorSearchData {
   }>;
   plugins: Array<{
     name: string;
+    /** The catalog's display name, e.g. "HubSpot Sales". */
+    displayName?: string;
     description: string;
     version?: string;
+    /** Who publishes it, e.g. "Anthropic". */
+    author?: string;
+    /** The marketplace's grouping, lowercase, e.g. "productivity". */
+    category?: string;
+    /** The plugin's or its vendor's web page. */
+    homepage?: string;
     marketplace: string;
     installed: boolean;
     /** From an Anthropic-maintained marketplace. */
@@ -412,6 +546,8 @@ export interface InstalledConnectorInfo {
 
 /** An MCP Apps view template, ready to mount in a sandboxed iframe. */
 export interface McpAppViewData {
+  mountId: string;
+  documentToken: string;
   toolKey: string;
   html: string;
   csp: { connectDomains: string[]; resourceDomains: string[] };
@@ -422,7 +558,8 @@ export interface McpAppViewData {
 
 export interface HarnessModelInfo {
   id: string;
-  name: string;
+  /** The harness's or provider's display name; absent when it gives none. */
+  name?: string;
   description?: string;
   /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
   resolvedId?: string;
@@ -432,7 +569,8 @@ export interface HarnessModelInfo {
 
 export interface OpenRouterModelInfo {
   id: string;
-  name: string;
+  /** OpenRouter's display name, when it gives one. */
+  name?: string;
   contextLength: number;
   free: boolean;
   created: number;
@@ -461,11 +599,12 @@ export interface ConnectLink {
   invitationId?: string;
 }
 export interface RemoteCapabilities {
-  builder: boolean;
   source: { remoteUrl: string; defaultBranch: string } | null;
   permissions: string[];
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
+  /** Manages the organization's service connections; absent on older links. */
+  administrator?: boolean;
   features: {
     publications: "public" | "members" | false;
     proposals: boolean;
@@ -475,6 +614,8 @@ export interface RemoteCapabilities {
     storeUploadMaxBytes: number;
   };
 }
+/** What a project's server offers (GET /me), for its dialogs. */
+export type RemoteFeatures = RemoteCapabilities["features"];
 export interface RemoteSyncReport {
   pulled: string[];
   removed: string[];
@@ -535,6 +676,25 @@ export interface RemoteProjectMember {
   roles: string[];
 }
 
+/**
+ * One project secret on the server (ADR 0206): where it is declared, which
+ * Environments receive it, and which values exist. Never a value.
+ */
+export interface RemoteProjectSecret {
+  name: string;
+  label?: string;
+  description?: string;
+  required: boolean;
+  source: "project" | "plugin";
+  environments: string[];
+  shared: boolean;
+  updatedAt: string | null;
+  setBy: string | null;
+  own: boolean;
+  ownUpdatedAt: string | null;
+  members: Array<{ member: string; updatedAt: string; setBy: string | null }>;
+}
+
 export interface RemoteProjectAccessRequest {
   id: string;
   externalUserId: string;
@@ -543,6 +703,48 @@ export interface RemoteProjectAccessRequest {
   status: string;
   requestedAt: string;
 }
+
+export interface RemoteConnectionProvider {
+  kind: string;
+  displayName: string;
+}
+
+export interface RemoteServiceConnection {
+  id: string;
+  projectId: string | null;
+  providerKind: string;
+  principalKind: "tenant_service" | "project_service" | "member";
+  name: string | null;
+  ownerExternalUserId: string | null;
+  label: string;
+  status: "pending" | "ready" | "expired" | "revoked";
+  account: unknown;
+  scopes: string[];
+  capabilities: string[];
+  expiresAt: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RemoteAuthorizationChallenge =
+  | {
+      kind: "form";
+      fields: Array<{
+        name: string;
+        label: string;
+        secret: boolean;
+        required: boolean;
+        multiline?: boolean;
+      }>;
+    }
+  | { kind: "url"; url: string; expiresAt?: string }
+  | {
+      kind: "device";
+      verificationUrl: string;
+      userCode: string;
+      expiresAt?: string;
+    };
 
 export type GithubConnectResult =
   | { connected: true; login: string }
@@ -556,6 +758,8 @@ export interface Profile {
   color: string;
   projectIds: string[];
   defaultProjectId?: string;
+  /** Part → the profile whose settings it shares (ADR 0277). */
+  syncedFrom?: ProfileSync;
 }
 
 export interface ProfilesData {
@@ -569,6 +773,16 @@ export interface SavedCredential {
   username: string;
   /** Notes are revealed like passwords; listings only say one exists. */
   hasNote: boolean;
+  updatedAt: number;
+}
+
+/** A passkey saved in the profile's vault. Its private key stays in main. */
+export interface SavedPasskey {
+  id: string;
+  rpId: string;
+  username: string;
+  credentialId: string;
+  discoverable: boolean;
   updatedAt: number;
 }
 
@@ -684,7 +898,6 @@ export interface PullRequestFile {
 
 export type {
   SidebarAction,
-  SidebarConfig,
   SidebarItem,
   SidebarMenuEntry,
   SidebarPreview,
@@ -693,20 +906,30 @@ export type {
   SidebarSide,
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
+export type { WorkspaceConfig } from "../../shared/workspace-config.js";
 
-import type { SidebarConfig } from "../../shared/sidebar.js";
+import type { ProfileConnection } from "../../shared/profile-connections.js";
+import type { WorkspaceConfig } from "../../shared/workspace-config.js";
+
+export type { ProfileConnection };
 
 /**
  * Which layer of the layered resolution produced the config: this user's
- * per-project override, the project's shared `.catamorphic/sidebar.js`,
- * the profile-global `sidebar.js`, or the built-in default.
+ * per-project override, the project's shared `.work/workspace.js`,
+ * the profile-global `workspace.js`, or the built-in default.
  */
-export type SidebarLayer = "project-local" | "project" | "profile" | "default";
+export type WorkspaceLayer =
+  | "project-local"
+  | "project"
+  | "profile"
+  | "default";
 
-export interface ResolvedSidebarConfig {
-  config: SidebarConfig;
+export interface ResolvedWorkspaceConfig {
+  config: WorkspaceConfig;
   error?: string;
-  layer: SidebarLayer;
+  layer: WorkspaceLayer;
+  /** The winning layer's file; absent for the built-in default. */
+  file?: string;
 }
 
 export type ThemeToken =
@@ -737,10 +960,21 @@ export interface ThemePreset {
   colors: ThemeColors;
 }
 
+export type ThemeSurface = "left" | "right" | "chat";
+
+export interface ThemeBackground {
+  image: string;
+  position: "top" | "center" | "bottom";
+  opacity: number;
+  blur: number;
+  pixelate: number;
+}
+
 export interface ThemeConfig {
   selection: string;
   overrides: Partial<ThemeColors>;
   fonts?: Partial<ThemeFonts>;
+  backgrounds?: Partial<Record<ThemeSurface, ThemeBackground>>;
 }
 
 export interface ResolvedTheme extends ThemeConfig {
@@ -754,6 +988,14 @@ export interface CatamorphicDesktopApi {
   /** Absolute path of a pasted/dropped File; "" when it has none. */
   pathForFile: (file: File) => string;
   filePreview: (input: FilePreviewInput) => Promise<ResourcePreview>;
+  /**
+   * An image inside the project (a path relative to it) as a data URL, for
+   * a document showing it; null for anything else.
+   */
+  projectImage: (input: {
+    projectId: string;
+    filePath: string;
+  }) => Promise<string | null>;
   composerFileSave: (input: {
     projectId: string;
     name: string;
@@ -839,6 +1081,12 @@ export interface CatamorphicDesktopApi {
     credentialEpoch: string;
   } | null>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
+  /** A remote chat's preview on its own loopback address (ADR 0209). */
+  remotePreviewOpen: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }) => Promise<{ url: string }>;
   remoteMembers: (projectId: string) => Promise<{
     roles: RemoteProjectRole[];
     members: RemoteProjectMember[];
@@ -864,6 +1112,98 @@ export interface CatamorphicDesktopApi {
     connectLinks: string[];
     webLinks: string[];
   }>;
+  /**
+   * The project's secrets (ADR 0206), and its members when `members` asks
+   * for them (needs `memberships:read`, else null).
+   */
+  remoteSecrets: (input: { projectId: string; members: boolean }) => Promise<{
+    secrets: RemoteProjectSecret[];
+    members: RemoteProjectMember[] | null;
+  }>;
+  /** Set a secret's shared value, or `member`'s own (`me` for yours). */
+  remoteSecretSet: (input: {
+    projectId: string;
+    name: string;
+    value: string;
+    member?: string;
+  }) => Promise<void>;
+  /** Clear a secret's shared value, or `member`'s own. */
+  remoteSecretDelete: (input: {
+    projectId: string;
+    name: string;
+    member?: string;
+  }) => Promise<void>;
+  /**
+   * The member's own machines on the project's server (ADR 0213), or null
+   * when the server has no such route.
+   */
+  remoteMachines: (projectId: string) => Promise<RemoteMachine[] | null>;
+  /** Start Codex's device code sign-in on one of those machines. */
+  remoteCodexSignIn: (input: {
+    projectId: string;
+    machineId: string;
+  }) => Promise<CodexSignIn>;
+  remoteCodexSignInStatus: (input: {
+    projectId: string;
+    machineId: string;
+    attempt: string;
+  }) => Promise<CodexSignInStatus>;
+  remoteCodexSignInCancel: (input: {
+    projectId: string;
+    machineId: string;
+    attempt: string;
+  }) => Promise<void>;
+  remoteCodexSignOut: (input: {
+    projectId: string;
+    machineId: string;
+  }) => Promise<{ signedOut: boolean }>;
+  /** Opens an https sign-in page in a browser tab of this window. */
+  openSignInLink: (url: string) => Promise<void>;
+  /** Organization service connections; administrators only (ADR 0172). */
+  remoteServiceConnections: (projectId: string) => Promise<{
+    providers: RemoteConnectionProvider[];
+    connections: RemoteServiceConnection[];
+  }>;
+  remoteServiceConnectionCreate: (input: {
+    projectId: string;
+    name: string;
+    providerKind: string;
+  }) => Promise<RemoteServiceConnection>;
+  /** Starts authorization; a url or device challenge opens in a browser tab. */
+  remoteServiceConnectionAuthorize: (input: {
+    projectId: string;
+    connectionId: string;
+  }) => Promise<{
+    authorizationId: string;
+    challenge: RemoteAuthorizationChallenge;
+  }>;
+  remoteServiceConnectionComplete: (input: {
+    projectId: string;
+    authorizationId: string;
+    callback: Record<string, string>;
+  }) => Promise<RemoteServiceConnection>;
+  remoteServiceConnectionRevoke: (input: {
+    projectId: string;
+    connectionId: string;
+  }) => Promise<void>;
+  /** The member's remote environment for a linked project (ADR 0184). */
+  personalEnvironment: (projectId: string) => Promise<PersonalEnvironmentView>;
+  personalEnvironmentSync: (
+    projectId: string,
+  ) => Promise<PersonalEnvironmentView>;
+  /** Opens a file picker in the project folder; null when cancelled. */
+  personalEnvironmentAddFiles: (
+    projectId: string,
+  ) => Promise<PersonalEnvironmentView | null>;
+  personalEnvironmentRemoveFile: (input: {
+    projectId: string;
+    path: string;
+  }) => Promise<PersonalEnvironmentView>;
+  /** Creates the config when absent; returns its project path. */
+  personalEnvironmentConfigFile: (projectId: string) => Promise<string>;
+  onPersonalEnvironmentChanged: (
+    listener: (change: { profileId: string; projectId: string }) => void,
+  ) => () => void;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
   remoteShip: (input: {
     projectId: string;
@@ -901,6 +1241,15 @@ export interface CatamorphicDesktopApi {
     branch: string;
     pullRequest?: { url: string; number: number };
   }>;
+  remotePublishProgram: (input: {
+    projectId: string;
+    message: string;
+    paths: string[];
+  }) => Promise<{
+    status: "deployed" | "nothing-to-deploy" | "conflict";
+    commitSha: string | null;
+    conflicts: Array<{ path: string }>;
+  }>;
   remoteReconnect: (projectId: string) => Promise<{ ok: true }>;
   remoteDisconnect: (projectId: string) => Promise<void>;
   remoteTakePendingLink: () => Promise<string | null>;
@@ -909,39 +1258,79 @@ export interface CatamorphicDesktopApi {
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
   updateState: () => Promise<DesktopUpdateState>;
   updateCheck: () => Promise<void>;
+  updateDismiss: (messageKey: string) => Promise<void>;
   updateDownload: () => Promise<void>;
   updateInstall: () => Promise<void>;
+  updateMove: () => Promise<void>;
   onUpdateStateChanged: (
     listener: (state: DesktopUpdateState) => void,
   ) => () => void;
 
-  workspaceInitial: () => Promise<string | undefined>;
+  workspaceInitial: () => Promise<WorkspaceInitial>;
   dockDraftGet: (localId: string) => Promise<ChatDraft | null>;
   dockDraftSet: (localId: string, draft: ChatDraft) => Promise<void>;
   onDockDraft: (listener: (update: ChatDraftUpdate) => void) => () => void;
+  workspaceFlushed: (requestId: string, error?: string) => Promise<void>;
   workspaceClaim: (projectId: string) => Promise<boolean>;
   workspaceNavigate: (input: WorkspaceNavigation) => Promise<void>;
+  /** Answers a `release` workspace event: whether the project was let go. */
+  workspaceRelease: (projectId: string, released: boolean) => Promise<void>;
+  /**
+   * A moving project's workspace as its old window let it go (shells and
+   * unsent chats included), held in the main process for its new window.
+   */
+  workspaceHandoffPut: (projectId: string, snapshot: unknown) => Promise<void>;
+  /** That workspace, once, for the window the project lives in now. */
+  workspaceHandoffTake: (projectId: string) => Promise<unknown>;
+  /** This window has opened `projectId`'s workspace (restored). */
+  workspaceReady: (projectId: string) => Promise<void>;
   workspaceActive: (projectId: string) => Promise<void>;
   dockPublish: (data: DockData) => Promise<void>;
   dockRemove: (projectId: string, localId: string) => Promise<void>;
   dockSnapshot: () => Promise<DockSnapshot>;
   dockCommand: (command: DockCommand) => Promise<void>;
   dockActivate: (localId?: string) => Promise<void>;
-  dockNewChat: () => Promise<void>;
+  /** `shortcut`: Cmd+N, not the dock's +. */
+  dockNewChat: (input?: { shortcut?: boolean }) => Promise<void>;
   dockAction: (
     localId: string,
-    action: "close" | "minimize" | "send",
+    action: DockAction,
     message?: string,
   ) => Promise<void>;
   dockDrag: (input: DockDrag) => Promise<void>;
   dockResize: (size: DockSize) => Promise<void>;
-  dockIgnoreMouse: (ignore: boolean) => Promise<void>;
+  /** Resolves with whether the window now lets clicks through. */
+  dockIgnoreMouse: (ignore: boolean) => Promise<boolean>;
+  /**
+   * The detached dock's drawn rectangles on platforms that shape it; null
+   * keeps the whole window. Resolves with whether the shape was applied.
+   */
+  dockShape: (
+    rects: Array<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }> | null,
+  ) => Promise<boolean>;
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
   /** Native context menu for the detached dock window; resolves the action. */
-  dockMenu: (
-    entries: Array<{ label: string; action: string; danger?: boolean }>,
-  ) => Promise<string | null>;
+  dockMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
+  /** Native context menu for voice's floating bubble; resolves the action. */
+  voiceBubbleMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
+  /** What voice's bubble shows: asked by the bubble's page as it starts. */
+  voiceBubbleState: () => Promise<VoiceBubbleState | null>;
+  /** The windows whose assistant the bubble can talk to. */
+  voiceBubbleWindows: () => Promise<VoiceWindowChoice[]>;
+  /** The bubble talks to this window's assistant from now. */
+  voiceBubbleWindow: (windowId: number) => Promise<void>;
+  onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => () => void;
+  /** The bubble's page moves it along the bottom of its screen. */
+  voiceBubbleDrag: (input: VoiceBubbleDrag) => Promise<void>;
+  /** What the bubble's resting spots show: asked by their page as it starts. */
+  voiceSpotsState: () => Promise<VoiceSpotsState | null>;
+  onVoiceSpots: (listener: (state: VoiceSpotsState) => void) => () => void;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
@@ -949,6 +1338,8 @@ export interface CatamorphicDesktopApi {
   windowProfile: () => Promise<string>;
   windowSetProfile: (profileId: string) => Promise<string>;
   openProfileWindow: (profileId: string) => Promise<void>;
+  /** Any profile's connections, for its preview card. */
+  profileConnections: (profileId: string) => Promise<ProfileConnection[]>;
 
   agentsList: () => Promise<AgentsData>;
   agentsCreate: (input: CreateAgentInput) => Promise<AgentInfo>;
@@ -972,11 +1363,25 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ models: HarnessModelInfo[]; error?: string }>;
   projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
+  /** Approves the definition the person reviewed, by its hash. */
   projectAgentApprove: (
     projectId: string,
     slug: string,
+    reviewedHash: string,
   ) => Promise<{ ok: boolean; error?: string }>;
-  agentSetupStatus: () => Promise<{ claudeCode: boolean; codex: boolean }>;
+  agentSetupStatus: () => Promise<{
+    claudeCode: boolean;
+    codex: boolean;
+    /** Where the person's Hermes is installed, if it is. */
+    hermes: string | null;
+  }>;
+  /** Which Claude Code runs: the person's own install or Work's copy. */
+  claudeCodeStatus: () => Promise<ClaudeCodeInstallStatus | null>;
+  /** Run the person's own Claude Code updater. */
+  claudeCodeUpdate: () => Promise<{
+    output: string;
+    status: ClaudeCodeInstallStatus;
+  }>;
   agentLogin: (
     id: string,
   ) => Promise<{ started: boolean; command?: string; error?: string }>;
@@ -984,12 +1389,33 @@ export interface CatamorphicDesktopApi {
   agentAuthHealth: (
     id: string,
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
+  /**
+   * A chat shows a turn that failed on its agent's sign-in: main runs it
+   * again once the sign-in works, however it comes back (ADR 0228).
+   */
+  agentAuthFailureShown: (failure: {
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+    agentId: string;
+  }) => Promise<void>;
   usageSummary: (days: number) => Promise<UsageSummary>;
   agentCommands: (input: {
     projectId: string;
     agentId: string;
     sessionId?: string;
   }) => Promise<AgentCommandsResult>;
+  /**
+   * The model the agent's harness runs in this project when neither the
+   * chat nor the agent pins one (Claude Code settings, Codex config, the
+   * built-in agent's resolved default). Spawns the harness CLI; cached
+   * briefly in main.
+   */
+  agentDefaultModel: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }) => Promise<AgentDefaultModelResult>;
   onAgentAuthMaybeChanged: (listener: () => void) => () => void;
   onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
   onAgentLoginFinished: (
@@ -1045,6 +1471,11 @@ export interface CatamorphicDesktopApi {
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,
   ) => () => void;
+  /**
+   * This computer's chats may have changed: logged session events or a
+   * change through its API, a burst arriving as one (ADR 0229).
+   */
+  onSessionsChanged: (listener: () => void) => () => void;
   /** Fired after a turn checkpoint moves a project's git state. */
   onGitChanged: (
     listener: (change: { projectId: string }) => void,
@@ -1057,10 +1488,25 @@ export interface CatamorphicDesktopApi {
   workspaceStateSet: (projectId: string, snapshot: unknown) => Promise<void>;
 
   /** "server/tool" → ui:// resource uri, for tools declaring app views. */
+  appGuestDocument: (input: {
+    url: string;
+    mountId: string;
+  }) => Promise<string>;
+  appGuestClose: (input: { url: string }) => Promise<void>;
+  pdfGuestDocument: (input: {
+    projectId: string;
+    filePath: string;
+  }) => Promise<string>;
   mcpAppsUiTools: () => Promise<Record<string, string>>;
-  mcpAppsView: (toolKey: string) => Promise<McpAppViewData>;
+  mcpAppsView: (input: {
+    projectId: string;
+    sessionId: string;
+    toolKey: string;
+    toolUseId: string;
+  }) => Promise<McpAppViewData>;
+  mcpAppsClose: (mountId: string) => Promise<void>;
   mcpAppsCall: (
-    viewToolKey: string,
+    mountId: string,
     toolName: string,
     args: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
@@ -1073,7 +1519,18 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   historyRemove: (id: string) => Promise<void>;
   historyClear: () => Promise<void>;
+  /** Learn from a palette pick or a surface visit (ADR 0186). */
+  paletteRecord: (
+    input: import("../../shared/palette.js").PaletteUse,
+  ) => Promise<void>;
+  paletteSignals: () => Promise<
+    import("../../shared/palette.js").PaletteSignals
+  >;
   onHistoryChanged: (listener: () => void) => () => void;
+  dockIconState: () => Promise<DockIconState>;
+  dockIconSet: (bytes: Uint8Array) => Promise<DockIconState>;
+  dockIconReset: () => Promise<DockIconState>;
+  onDockIconChanged: (listener: (state: DockIconState) => void) => () => void;
   defaultBrowserState: () => Promise<
     import("../../shared/default-browser.js").DefaultBrowserState
   >;
@@ -1086,10 +1543,21 @@ export interface CatamorphicDesktopApi {
   browserImportRun: (
     input: BrowserImportRequest,
   ) => Promise<BrowserImportResult>;
-  browserImportPasswords: (input: { profileId: string }) => Promise<{
-    imported: number;
-    cancelled: boolean;
-  }>;
+  /** Pick a CSV, Bitwarden JSON or KeePass file and import it. */
+  passwordFileImport: (input: {
+    profileId: string;
+  }) => Promise<PasswordFileImportResult>;
+  passwordFileUnlock: (input: {
+    profileId: string;
+    token: string;
+    password: string;
+  }) => Promise<PasswordFileImportResult>;
+  /** Choose (or `clear`) the key file for a locked database. */
+  passwordFileKeyFile: (input: {
+    token: string;
+    clear?: boolean;
+  }) => Promise<{ keyFile: string | null } | null>;
+  passwordFileForget: (input: { token: string }) => Promise<void>;
   onCloseSurface: (listener: () => void) => () => void;
   getSettings: (input?: {
     projectId?: string;
@@ -1137,6 +1605,13 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
+  /** Puts a file on the clipboard as itself, for Finder, Mail or Slack to paste. */
+  copyFileToClipboard: (filePath: string) => Promise<void>;
+  /** A sheet on the window saying a file action could not be done. */
+  sayFileActionFailed: (input: {
+    message: string;
+    detail: string;
+  }) => Promise<void>;
   editorFileRead: (input: { filePath: string }) => Promise<{ content: string }>;
   projectLocalFiles: (projectId: string) => Promise<Array<{ path: string }>>;
   editorFileWrite: (input: {
@@ -1144,14 +1619,22 @@ export interface CatamorphicDesktopApi {
     content: string;
     expectedContent: string;
   }) => Promise<void>;
+  /** Renames a file where it is; the new absolute path. */
+  editorFileRename: (input: {
+    filePath: string;
+    name: string;
+  }) => Promise<string>;
+  /** An empty `Untitled` file in the profile's personal folder; its project path. */
+  personalFileCreate: (input: {
+    projectId: string;
+    extension: string;
+  }) => Promise<string>;
   projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalGhosttyAppearance: () => Promise<TerminalAppearanceResult>;
-  terminalCreate: (input: {
-    projectId?: string;
-    cols?: number;
-    rows?: number;
-  }) => Promise<{ sessionId: string; cwd: string }>;
+  terminalCreate: (
+    input: TerminalCreateInput,
+  ) => Promise<{ sessionId: string; cwd: string }>;
   terminalWrite: (sessionId: string, data: string) => Promise<void>;
   terminalResize: (
     sessionId: string,
@@ -1159,12 +1642,26 @@ export interface CatamorphicDesktopApi {
     rows: number,
   ) => Promise<void>;
   terminalKill: (sessionId: string) => Promise<void>;
+  resourcesRead: () => Promise<ResourceSnapshot>;
+  resourcesEnd: (pid: number) => Promise<void>;
   terminalBuffer: (
     sessionId: string,
   ) => Promise<{ buffer: string; running: boolean } | null>;
   terminalRestoreBuffer: (
     sessionId: string,
   ) => Promise<{ buffer: string } | null>;
+  /**
+   * Takes over a shell another window of this profile started (its project
+   * moved here): it streams to this window from now on. Null once ended.
+   */
+  terminalAdopt: (
+    sessionId: string,
+    projectId: string,
+  ) => Promise<{ buffer: string } | null>;
+  backgroundCommands: () => Promise<BackgroundCommandView[]>;
+  onBackgroundCommands: (
+    listener: (commands: BackgroundCommandView[]) => void,
+  ) => () => void;
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ) => () => void;
@@ -1172,7 +1669,12 @@ export interface CatamorphicDesktopApi {
     listener: (payload: { sessionId: string; data: string }) => void,
   ) => () => void;
   onTerminalExit: (
-    listener: (payload: { sessionId: string; exitCode: number }) => void,
+    listener: (payload: {
+      sessionId: string;
+      exitCode: number;
+      /** Why it ended, when its shell did not exit: shown, not closed. */
+      message?: string;
+    }) => void,
   ) => () => void;
 
   onBridgeRequest: (
@@ -1186,7 +1688,11 @@ export interface CatamorphicDesktopApi {
   bridgeTakeover: (key: string) => void;
 
   webviewPreloadPath: () => Promise<string>;
-  browserPrepareProfile: (profileId: string) => Promise<string>;
+  /** The page session's partition: the profile's, or its incognito one. */
+  browserPrepareProfile: (
+    profileId: string,
+    incognito?: boolean,
+  ) => Promise<string>;
   siteSettingsGet: (input: { origin: string }) => Promise<SiteDetails>;
   siteSettingsSet: (input: {
     origin: string;
@@ -1221,6 +1727,121 @@ export interface CatamorphicDesktopApi {
   onScreenShareWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
   ) => () => void;
+  extensionsState: () => Promise<ExtensionsState>;
+  extensionsSetEnabled: (input: {
+    id: string;
+    enabled: boolean;
+  }) => Promise<void>;
+  extensionsSetPinned: (input: {
+    id: string;
+    pinned: boolean;
+  }) => Promise<void>;
+  /** Asks the person first; true when the extension went. */
+  extensionsRemove: (input: { id: string }) => Promise<boolean>;
+  extensionsDeveloperMode: (input: { enabled: boolean }) => Promise<void>;
+  extensionsLoadUnpacked: () => Promise<ExtensionSummary | null>;
+  extensionsReload: (input: { id: string }) => Promise<void>;
+  extensionsUpdateNow: () => Promise<void>;
+  extensionsReviewUpdate: (input: { id: string }) => Promise<void>;
+  extensionsOpenOptions: (input: { id: string }) => Promise<void>;
+  extensionsActions: (input: {
+    guestId: number | null;
+  }) => Promise<ExtensionActionState[]>;
+  extensionsActionClick: (input: {
+    id: string;
+    guestId: number | null;
+  }) => Promise<ExtensionActionResult>;
+  extensionsActionMenu: (input: {
+    id: string;
+    guestId: number | null;
+  }) => Promise<void>;
+  extensionsTabsReport: (input: ExtensionTabsReport) => Promise<void>;
+  extensionsWindowRespond: (payload: {
+    id: number;
+    result: { guestId?: number } | null;
+  }) => void;
+  extensionsViewAttached: (input: ExtensionView) => Promise<void>;
+  extensionsFocusPopup: (input: { guestId: number }) => Promise<void>;
+  extensionsSidePanels: () => Promise<ExtensionSidePanel[]>;
+  extensionsSidePanelClose: (input: { guestId: number }) => Promise<void>;
+  extensionsDebugging: () => Promise<ExtensionDebugging[]>;
+  extensionsDebuggerStop: (input: { guestId: number }) => Promise<void>;
+  extensionsPromptAnswer: (input: ExtensionPromptAnswer) => Promise<void>;
+  extensionsPrompts: () => Promise<ExtensionPrompt[]>;
+  onExtensionsChanged: (
+    listener: (payload: { profileId: string }) => void,
+  ) => () => void;
+  onExtensionActionsChanged: (
+    listener: (payload: { profileId: string }) => void,
+  ) => () => void;
+  onExtensionWindowRequest: (
+    listener: (envelope: ExtensionWindowRequestEnvelope) => void,
+  ) => () => void;
+  onExtensionPopupSize: (
+    listener: (size: {
+      guestId: number;
+      width: number;
+      height: number;
+    }) => void,
+  ) => () => void;
+  /** A page in this window was pressed or got Escape: popups close. */
+  onExtensionsClosePopups: (listener: () => void) => () => void;
+  onExtensionSidePanel: (
+    listener: (change: {
+      guestId: number;
+      panel: ExtensionSidePanel | null;
+    }) => void,
+  ) => () => void;
+  onExtensionDebuggingChanged: (
+    listener: (change: {
+      guestId: number;
+      debugging: ExtensionDebugging | null;
+    }) => void,
+  ) => () => void;
+  onExtensionPrompt: (
+    listener: (prompt: ExtensionPrompt) => void,
+  ) => () => void;
+  onExtensionPromptWithdrawn: (
+    listener: (payload: { id: string }) => void,
+  ) => () => void;
+  onExtensionInstalled: (
+    listener: (installed: ExtensionInstalled) => void,
+  ) => () => void;
+  /** The dialogs a browser tab's page waits on (ADR 0227). */
+  pageDialogs: (input: { guestId: number }) => Promise<PageDialog[]>;
+  pageDialogAnswer: (answer: PageDialogAnswer) => Promise<boolean>;
+  onPageDialogs: (
+    listener: (change: { guestId: number; dialogs: PageDialog[] }) => void,
+  ) => () => void;
+  /** What is about to leave a page, for its "Leave site?" to redo. */
+  browserUnloadIntent: (input: {
+    guestId: number;
+    intent: UnloadIntent;
+  }) => void;
+  /**
+   * Closing a tab asks its page first: "close" now, or "asking" while its
+   * beforeunload runs (the page closes, or "Leave site?" answers).
+   */
+  browserCloseAsk: (input: {
+    guestId: number;
+    requestId: string;
+    preserve: boolean;
+  }) => Promise<"close" | "asking" | "cancel">;
+  browserCloseCancel: (input: {
+    guestId: number;
+    requestId: string;
+  }) => Promise<void>;
+  browserCloseApproved: (input: {
+    guestId: number;
+    requestId: string;
+  }) => Promise<boolean>;
+  onBrowserCloseAnswer: (
+    listener: (answer: {
+      guestId: number;
+      requestId: string;
+      leave: boolean;
+    }) => void,
+  ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
     listener: (request: SitePermissionRequest) => void,
@@ -1228,9 +1849,49 @@ export interface CatamorphicDesktopApi {
   onSitePermissionWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
   ) => () => void;
+  onPasskeyRequest: (listener: (request: PasskeyRequest) => void) => () => void;
+  onPasskeySettled: (
+    listener: (payload: { ids: string[] }) => void,
+  ) => () => void;
+  /** The requests this window's sheet shows, for a sheet that loads late. */
+  passkeyRequests: () => Promise<PasskeyRequest[]>;
+  passkeyCancel: (input: { id: string }) => Promise<boolean>;
+  /** Sign in with a saved passkey the sheet offered (Touch ID first). */
+  passkeyUse: (input: {
+    id: string;
+    passkeyId: string;
+  }) => Promise<PasskeyUseResult>;
+  /** Save the passkey the sheet's site asked to create. */
+  passkeySave: (input: { id: string }) => Promise<PasskeyUseResult>;
+  /** The passkeys a tab's autofill request offers, if one is waiting. */
+  passkeyAutofill: (input: {
+    guestId: number;
+  }) => Promise<{ requestId: string; passkeys: PasskeyChoice[] } | null>;
+  passkeyAutofillUse: (input: {
+    guestId: number;
+    requestId: string;
+    passkeyId: string;
+  }) => Promise<PasskeyUseResult>;
+  onSiteSystemRefusal: (
+    listener: (notice: SiteSystemRefusal) => void,
+  ) => () => void;
   onSiteSettingsChanged: (
     listener: (change: { profileId: string; origin: string | null }) => void,
   ) => () => void;
+  /** A browser tab's back and forward list (null: nothing to go back to). */
+  browserNavigationHistory: (input: {
+    guestId: number;
+  }) => Promise<BrowserHistory | null>;
+  /** What keeps a hidden tab's page awake, or null when it may sleep. */
+  browserSleepBlocker: (input: {
+    guestId: number;
+  }) => Promise<BrowserSleepBlocker | null>;
+  /** Keeps the page's state for its wake; the snapshot id, if any. */
+  browserSleep: (input: { guestId: number }) => Promise<string | null>;
+  /** A minute of tab-sleep time in ms (shortened only in test runs). */
+  browserSleepMinute: () => Promise<number>;
+  /** Drops a sleep snapshot the tab will not wake into. */
+  browserSleepRelease: (input: { snapshotId: string }) => Promise<void>;
   browserRecordHistory: (input: {
     url: string;
     title: string;
@@ -1244,12 +1905,27 @@ export interface CatamorphicDesktopApi {
     url: string;
     faviconUrl: string;
   }) => Promise<void>;
+  /**
+   * An image from outside the window, as a data URL, or null when it may not
+   * show it (ADR 0277); use `renderer/lib/window-images.ts`, which caches.
+   */
+  windowImage: (input: WindowImageRequest) => Promise<string | null>;
   browserSuggest: (input: {
     profileId: string;
     query: string;
   }) => Promise<BrowserSuggestions>;
+  /** A right-click in one of this window's pages: the menu to show there. */
+  onBrowserContextMenu: (
+    listener: (menu: PageContextMenu) => void,
+  ) => () => void;
+  /** The entry picked from a page's menu, or null when it closed without one. */
+  browserContextMenuPick: (input: {
+    menuId: string;
+    action: string | null;
+  }) => Promise<void>;
+  /** `incognito`: an incognito page opened it, so its tab is incognito too. */
   onBrowserOpenUrl: (
-    listener: (url: string, mode?: OpenMode) => void,
+    listener: (url: string, mode?: OpenMode, incognito?: boolean) => void,
   ) => () => void;
   /** A notification of a page was clicked: bring that tab forward. */
   onBrowserRevealGuest: (
@@ -1275,6 +1951,8 @@ export interface CatamorphicDesktopApi {
     listener: (command: {
       webContentsId: number | null;
       direction: "back" | "forward";
+      /** A mouse side button (or app command), or a three-finger swipe. */
+      gesture: "button" | "swipe";
     }) => void,
   ) => () => void;
   onBrowserCredentialSaveOffer: (
@@ -1320,6 +1998,18 @@ export interface CatamorphicDesktopApi {
     patch: { name?: string; color?: string; defaultProjectId?: string },
   ) => Promise<Profile | undefined>;
   profilesSetDefault: (id: string) => Promise<void>;
+  /** Bring parts of another profile's settings in, shared or copied (ADR 0277). */
+  profilesSyncSettings: (input: {
+    profileId: string;
+    from: string;
+    parts: ProfileSyncPart[];
+    keepInSync: boolean;
+  }) => Promise<void>;
+  /** Stop sharing parts; the profile keeps what it shows now. */
+  profilesStopSyncing: (input: {
+    profileId: string;
+    parts: ProfileSyncPart[];
+  }) => Promise<void>;
   profilesRemove: (id: string) => Promise<boolean>;
   profilesClaimProject: (profileId: string, projectId: string) => Promise<void>;
   profilesForProject: (projectId: string) => Promise<Profile>;
@@ -1358,7 +2048,9 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     origin: string;
   }) => Promise<void>;
+  /** Removes a saved password or passkey. */
   vaultRemove: (input: { profileId: string; id: string }) => Promise<void>;
+  vaultPasskeys: (input: { profileId: string }) => Promise<SavedPasskey[]>;
   vaultCopyPassword: (input: {
     profileId: string;
     id: string;
@@ -1391,19 +2083,10 @@ export interface CatamorphicDesktopApi {
     label: string;
     parentId?: string;
   }) => Promise<BookmarkFolder>;
-  bookmarksUpdate: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label?: string;
-    url?: string;
-    folderId?: string | null;
-  }) => Promise<void>;
-  bookmarksRemove: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }) => Promise<void>;
+  /** Edit a bookmark where it lives: name, address and folder. */
+  bookmarksUpdate: (input: BookmarkUpdate) => Promise<void>;
+  /** Remove a bookmark, or a folder whose children move up one level. */
+  bookmarksRemove: (input: BookmarkRemoval) => Promise<void>;
   bookmarksPin: (input: {
     projectId: string;
     profileId: string;
@@ -1414,22 +2097,7 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     id: string;
   }) => Promise<void>;
-  bookmarksRemoveLibrary: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }) => Promise<void>;
-  bookmarksRemovePinned: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }) => Promise<void>;
-  bookmarksRename: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label: string;
-  }) => Promise<void>;
+  bookmarksRenameFolder: (input: BookmarkFolderRename) => Promise<void>;
   onBookmarksChanged: (listener: (data: BookmarksChange) => void) => () => void;
 
   getTheme: (
@@ -1459,8 +2127,28 @@ export interface CatamorphicDesktopApi {
     input: GitOverviewSubscription,
     listener: (snapshot: GitOverview) => void,
   ) => () => void;
-  sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
+  sessionCheckouts: (
+    projectId: string,
+    options?: { titles?: boolean },
+  ) => Promise<SessionCheckoutInfo[]>;
   sessionUseProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<void>;
+  sessionCheckout: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<SessionCheckoutDetail>;
+  projectWorktreesAvailable: (projectId: string) => Promise<boolean>;
+  sessionUseOwnWorktree: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<void>;
+  sessionBringToProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<{ files: string[] }>;
+  sessionDiscardWorktree: (input: {
     projectId: string;
     sessionId: string;
   }) => Promise<void>;
@@ -1472,6 +2160,8 @@ export interface CatamorphicDesktopApi {
   gitFileDiff: (input: GitDiffInput) => Promise<GitFileDiff>;
   cancelFileSearch: () => Promise<void>;
   fileSearch: (input: FileSearchInput) => Promise<FileSearchResult>;
+  /** The project's open tabs, as a composer's @ mention lists them. */
+  workspaceTabs: (projectId: string) => Promise<WorkspaceTabRef[]>;
   prComment: (input: PrCommentInput) => Promise<PrComment>;
   prDecision: (
     input: PrDecisionInput,
@@ -1482,11 +2172,27 @@ export interface CatamorphicDesktopApi {
     number: number,
   ) => Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
+  /** Where the pull request at a web address stands; null when unreadable. */
+  prStatus: (url: string) => Promise<PullRequestStatusRead>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
-  sidebarSourceRequest: (
-    input: SidebarSourceRequest,
-  ) => Promise<CollectionPage<SidebarSourceItem> | null>;
+  /** A page for load, a row or null for reveal, an effect or null for action. */
+  sidebarSourceRequest: (input: SidebarSourceRequest) => Promise<unknown>;
+  /**
+   * The person allowed what a module's section asked (ADR 0277); the
+   * fingerprint names the declaration they saw, so a changed one asks again.
+   */
+  sidebarSourceAllow: (input: {
+    projectId: string;
+    sectionId: string;
+    fingerprint: string;
+  }) => Promise<void>;
+  /** Whether the person allowed an app to read their chats (ADR 0148, 0272). */
+  appAccessApproved: (input: {
+    projectId: string;
+    app: string;
+  }) => Promise<boolean>;
+  appAccessAllow: (input: { projectId: string; app: string }) => Promise<void>;
   sidebarSourceCancel: (id: string) => Promise<void>;
   sidebarSourceSubscribe: (input: {
     projectId: string;
@@ -1494,15 +2200,88 @@ export interface CatamorphicDesktopApi {
     leaseId: string;
   }) => Promise<void>;
   sidebarSourceUnsubscribe: (id: string) => Promise<void>;
+  /**
+   * The hosts a chat opens and shows without asking (ADR 0277): Work's,
+   * the project's committed list, and the person's own.
+   */
+  trustedHosts: (projectId?: string) => Promise<TrustedHosts>;
+  /** The person trusts a host from now on; only Work's own windows may. */
+  trustHost: (host: string) => Promise<void>;
+  untrustHost: (host: string) => Promise<void>;
+  onTrustedHostsChanged: (listener: () => void) => () => void;
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => () => void;
-  sidebarConfigGet: (projectId?: string) => Promise<ResolvedSidebarConfig>;
-  sidebarConfigFile: () => Promise<string>;
-  sidebarConfigSource: () => Promise<string>;
-  sidebarConfigReset: () => Promise<void>;
+  onSidebarSourceWork: (
+    listener: (event: {
+      callId: string;
+      projectId: string;
+      sectionId: string;
+      /** The chat the asking request serves, for Work's chat-scoped lists. */
+      sessionId?: string;
+      call: SidebarSourceWorkCall;
+    }) => void,
+  ) => () => void;
+  sidebarSourceWorkResult: (input: {
+    callId: string;
+    ok: boolean;
+    value?: unknown;
+    error?: string;
+  }) => Promise<void>;
+  workspaceConfigGet: (projectId?: string) => Promise<ResolvedWorkspaceConfig>;
+  workspaceConfigFile: () => Promise<string>;
+  workspaceConfigSource: () => Promise<string>;
+  workspaceConfigReset: () => Promise<void>;
   /** Change signal only — refetch with the active project to resolve. */
-  onSidebarConfigChanged: (listener: () => void) => () => void;
+  onWorkspaceConfigChanged: (listener: () => void) => () => void;
+  /**
+   * Voice as this window's profile sees it (ADR 0216). Its settings are
+   * prefs (`voice*`, `agentVoices`): a live voice follows them.
+   */
+  voiceStatus: () => Promise<VoiceStatus>;
+  /**
+   * Read a reply aloud in its agent's voice, voice on or off (ADR 0268);
+   * pressed again for the same reply, it stops. `reading` in the status
+   * says which reply is being read.
+   */
+  voiceReadAloud: (input: VoiceReadAloud) => Promise<void>;
+  /**
+   * A microphone or a voice shortcut went down (ADR 0236): voice hears the
+   * person from now. Released soon after, it was a tap, and voice turns on
+   * there, or off when it already was; held, it talked while held.
+   */
+  voicePress: (press: VoicePress) => Promise<void>;
+  /** The press came up; `heldMs` is how long it was down, as measured here. */
+  voiceRelease: (input?: { heldMs?: number }) => Promise<void>;
+  /** The chat in front of this window, for "Talk to this chat". */
+  voiceFrontChat: (
+    chat: { projectId: string; sessionId: string } | null,
+  ) => void;
+  /** Close the assistant's chat; the next start makes a new one. */
+  voiceReset: () => Promise<void>;
+  /** Open the profile's assistant chat in its owning workspace window. */
+  voiceOpenChat: () => Promise<void>;
+  /** Learn the person's voice now, starting voice when it is off. */
+  voiceLearn: (input: {
+    projectId?: string;
+    sessionId?: string;
+  }) => Promise<void>;
+  onVoiceStatus: (listener: (status: VoiceStatus) => void) => () => void;
+  /** How each sentence voice says sounds, as it is scheduled. */
+  onVoiceLevels: (listener: (levels: VoiceLevels) => void) => () => void;
+  /** Dictation's words for this window's text field, as they are said. */
+  onVoiceDictation: (
+    listener: (dictation: VoiceDictation) => void,
+  ) => () => void;
+  /** A text field here has focus: dictation writes into this window. */
+  voiceFieldFocus: () => void;
+  /** What was dictated here was sent: listening on its own ends. */
+  voiceDictationSent: () => void;
+  /** Where voice's shortcuts work. */
+  voiceKeysStatus: () => Promise<VoiceKeysState>;
+  /** Asks macOS to let voice's shortcuts work in every app. */
+  voiceKeysAllow: () => Promise<void>;
+  onVoiceKeys: (listener: (state: VoiceKeysState) => void) => () => void;
 }
 
 declare global {
@@ -1514,11 +2293,46 @@ declare global {
 const nativeApi = window.catamorphicDesktop;
 export const desktopApi: CatamorphicDesktopApi = {
   ...nativeApi,
+  // Every browser tab's toolbar and page area follow these.
+  onExtensionsChanged: shareEvent((publish) =>
+    nativeApi.onExtensionsChanged(publish),
+  ),
+  onExtensionActionsChanged: shareEvent((publish) =>
+    nativeApi.onExtensionActionsChanged(publish),
+  ),
+  onExtensionPopupSize: shareEvent((publish) =>
+    nativeApi.onExtensionPopupSize(publish),
+  ),
+  onExtensionsClosePopups: shareEvent((publish) =>
+    nativeApi.onExtensionsClosePopups(() => publish(undefined)),
+  ),
+  onExtensionSidePanel: shareEvent((publish) =>
+    nativeApi.onExtensionSidePanel(publish),
+  ),
+  onExtensionDebuggingChanged: shareEvent((publish) =>
+    nativeApi.onExtensionDebuggingChanged(publish),
+  ),
+  onSessionsChanged: shareEvent((publish) =>
+    nativeApi.onSessionsChanged(() => publish(undefined)),
+  ),
   onGitChanged: shareEvent((publish) => nativeApi.onGitChanged(publish)),
   onBookmarksChanged: shareEvent((publish) =>
     nativeApi.onBookmarksChanged(publish),
   ),
-  onSidebarConfigChanged: shareEvent((publish) =>
-    nativeApi.onSidebarConfigChanged(() => publish(undefined)),
+  onWorkspaceConfigChanged: shareEvent((publish) =>
+    nativeApi.onWorkspaceConfigChanged(() => publish(undefined)),
+  ),
+  onVoiceStatus: shareEvent((publish) => nativeApi.onVoiceStatus(publish)),
+  onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
+  onVoiceDictation: shareEvent((publish) =>
+    nativeApi.onVoiceDictation(publish),
+  ),
+  onVoiceKeys: shareEvent((publish) => nativeApi.onVoiceKeys(publish)),
+  // Every chat's microphone and settings view reads prefs.
+  onPrefsChanged: shareEvent((publish) => nativeApi.onPrefsChanged(publish)),
+  // Every browser tab follows its page's dialogs and its close answers.
+  onPageDialogs: shareEvent((publish) => nativeApi.onPageDialogs(publish)),
+  onBrowserCloseAnswer: shareEvent((publish) =>
+    nativeApi.onBrowserCloseAnswer(publish),
   ),
 };

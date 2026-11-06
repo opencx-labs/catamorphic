@@ -48,7 +48,8 @@ Profile agents (`agents.json`) and committed definitions
   does not read AGENTS.md natively, and repo files belong to the project,
   not to one agent. The persona is the abstraction; per-harness delivery
   is a detail.
-- **`mode`** — `"read-only" | "edit" | "full-access"`, default `"edit"`.
+- **`mode`** (superseded by ADR 0182: Work's `sandboxing` and each
+  harness's own `harnessPermissions` replace it) — `"read-only" | "edit" | "full-access"`, default `"edit"`.
   One normalized operating mode, like effort, mapped per harness:
   Claude Code `plan | acceptEdits | bypassPermissions`; Codex
   `sandboxMode read-only | workspace-write | danger-full-access`. The

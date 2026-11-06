@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
+import { PROJECT_ROLES_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import {
@@ -7,23 +9,23 @@ import {
   type ConnectionUseRef,
   type ExecutionEnvironmentRef,
   type Identity,
-  PROJECT_PERMISSION_PATTERN,
+  PROJECT_PERMISSION_GRANT_PATTERN,
   type ProjectPermissionRef,
 } from "../identity.js";
-import { assertBuilder } from "./artifact-scope.js";
+import { assertProjectPermission } from "./artifact-scope.js";
 import {
-  forgetProgramFetch,
+  programRevision,
   readProgramFiles,
   withProgram,
 } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
-/**
- * Roles as committed files (ADR 0055): `.catamorphic/roles/<name>.json`, next to
- * `.catamorphic/agents/`. A role is a reviewable, agent-authorable statement of what a
- * class of member may reach — agents, workflows, apps, documents, and
- * whether they build the program — expressed in the one enforcement
- * vocabulary core has (`Identity.scope`). Membership (which user has which
+/*
+ * Roles as committed files (ADR 0055): `.work/roles/<name>.json`, next to
+ * `.work/agents/`. A role is a reviewable, agent-authorable statement of what a
+ * class of member may reach (agents, workflows, apps, documents,
+ * Environments, connections) and do (`permissions`, ADR 0158), expanded into
+ * the one enforcement vocabulary core has (`Identity`). Membership (which user has which
  * roles, with which grants) is the host's, or the stock
  * `MembershipsService`; core stores no policy.
  *
@@ -32,7 +34,6 @@ import { requireTenantProject } from "./projects-service.js";
  * ref per value; an entry whose placeholders are not all granted yields
  * nothing — never a wildcard.
  */
-export const ROLES_DIR = ".catamorphic/roles";
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -65,25 +66,29 @@ const ConnectionEntrySchema = z.object({
 });
 
 /**
- * Core reserves the names it enforces, while embedders and projects may add
- * namespaced capabilities for their own services and presentation rules.
+ * Core enforces the names in `PROJECT_PERMISSIONS`; embedders and projects
+ * may add namespaced capabilities for their own services and presentation
+ * rules. `thing:*` grants every action on a thing and `*` everything.
  */
 const ProjectPermissionSchema = z
   .string()
   .regex(
-    PROJECT_PERMISSION_PATTERN,
-    "Expected a namespaced capability such as memberships:manage",
+    PROJECT_PERMISSION_GRANT_PATTERN,
+    "Expected a permission such as program:read, program:*, or *",
   );
 
-/** The committed `.catamorphic/roles/<name>.json` schema, version 1. */
-export const RoleDefinitionSchema = z.object({
+/**
+ * The committed `.work/roles/<name>.json` schema, version 1. Strict:
+ * an unknown key (a typo, or the retired `builder`) is an error rather than
+ * a silently ignored grant. App, workflow, agent and Environment lists take
+ * `*` for every one.
+ */
+export const RoleDefinitionSchema = z.strictObject({
   version: z.literal(1),
   /** Display name. */
   name: z.string().min(1),
   description: z.string().optional(),
-  /** Full program access to the project (a `project` ref). */
-  builder: z.boolean().optional(),
-  /** Namespaced project capabilities, independent from builder access. */
+  /** What the member may do beyond using the listed artifacts (ADR 0158). */
   permissions: z.array(ProjectPermissionSchema).optional(),
   agents: z.array(AgentEntrySchema).optional(),
   workflows: z.array(z.string().min(1)).optional(),
@@ -165,7 +170,6 @@ export function expandRole(
   grants: RoleGrants,
 ): ArtifactRef[] {
   const refs: ArtifactRef[] = [];
-  if (definition.builder) refs.push({ kind: "project", projectId });
   for (const entry of definition.agents ?? []) {
     const name = typeof entry === "string" ? entry : entry.name;
     const toolPolicies =
@@ -317,21 +321,19 @@ export interface ResolveRolesInput {
   tenantId: string;
   projectId: string;
   externalUserId: string;
-  /** Role slugs (`.catamorphic/roles/<slug>.json`). Unknown slugs grant nothing. */
+  /** Role slugs (`.work/roles/<slug>.json`). Unknown slugs grant nothing. */
   roles: readonly string[];
   grants?: RoleGrants;
 }
 
-/** How long a project's parsed role set is trusted before re-reading. */
-const DEFAULT_TTL_MS = 10_000;
-
 interface CachedRoles {
-  loadedAt: number;
+  /** The program commit the roles were read at, or their files' hash. */
+  revision: string;
   entries: ProjectRoleEntry[];
 }
 
 /**
- * Read-only view over a project's committed `.catamorphic/roles/` directory, and the
+ * Read-only view over a project's committed `.work/roles/` directory, and the
  * expansion of a member's roles into an {@link Identity}. Mirrors
  * {@link AgentDefinitionsService}: never throws on a bad file (each is an
  * invalid entry). Reads the program as shared (see `program-reader`):
@@ -339,39 +341,25 @@ interface CachedRoles {
  * caller is anyone, so it never touches a caller's working copy.
  */
 export class RolesService {
+  /**
+   * Replica memory (b): each project's parsed roles, keyed by the program
+   * commit they were read at; a deploy on any replica is a new commit.
+   */
   private readonly cache = new Map<string, CachedRoles>();
-  private readonly ttlMs: number;
 
   constructor(
     private readonly db: Kysely<DB>,
     private readonly projectManager: ProjectManager,
-    opts?: { ttlMs?: number },
-  ) {
-    this.ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
-  }
+  ) {}
 
-  /** The project's roles, for its builders (the admin surface). */
+  /** The project's roles, for those who may read them (`roles:read`). */
   async list(
     identity: Identity,
     projectId: string,
   ): Promise<ProjectRoleEntry[]> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, "roles:read");
     await this.requireProject(identity.tenantId, projectId);
-    return this.load(identity.tenantId, projectId, { fresh: true });
-  }
-
-  /** Drop the cached role set (a checkpoint, a push, a deploy landed). */
-  invalidate(projectId: string): void {
-    for (const key of this.cache.keys()) {
-      if (key.endsWith(`:${projectId}`)) {
-        this.cache.delete(key);
-        forgetProgramFetch(
-          this.projectManager,
-          key.slice(0, -projectId.length - 1),
-          projectId,
-        );
-      }
-    }
+    return this.load(identity.tenantId, projectId);
   }
 
   /**
@@ -441,7 +429,7 @@ export class RolesService {
     });
   }
 
-  async assignedRolesRequireManagement(input: {
+  async assignedRolesCarryPermissions(input: {
     tenantId: string;
     projectId: string;
     roles: readonly string[];
@@ -456,20 +444,36 @@ export class RolesService {
     });
   }
 
+  /**
+   * The project's roles as its program says now (ADR 0193): read once per
+   * program commit, and at the current commit on every call, so a role a
+   * deploy just changed applies on every replica at once.
+   */
   private async load(
     tenantId: string,
     projectId: string,
-    opts?: { fresh?: boolean },
   ): Promise<ProjectRoleEntry[]> {
     const key = `${tenantId}:${projectId}`;
+    const revision = await programRevision(
+      this.projectManager,
+      tenantId,
+      projectId,
+    );
     const cached = this.cache.get(key);
-    if (!opts?.fresh && cached && Date.now() - cached.loadedAt < this.ttlMs) {
-      return cached.entries;
-    }
-    const files = await this.readRoleFiles(tenantId, projectId);
+    if (revision && cached?.revision === revision) return cached.entries;
+    const { files, ref } = await this.readRoleFiles(tenantId, projectId);
+    // A working tree has no commit: its role files, read from local disk,
+    // are their own key, so unchanged files are not parsed again.
+    const contentKey =
+      ref ??
+      `sha256:${createHash("sha256").update(JSON.stringify(files)).digest("hex")}`;
+    if (cached?.revision === contentKey) return cached.entries;
     const entries = Object.entries(files)
       .map(([file, content]): ProjectRoleEntry => {
-        const slug = file.slice(`${ROLES_DIR}/`.length, -".json".length);
+        const slug = file.slice(
+          `${PROJECT_ROLES_DIR}/`.length,
+          -".json".length,
+        );
         if (!NAME_PATTERN.test(slug)) {
           return {
             slug,
@@ -495,28 +499,34 @@ export class RolesService {
           : { slug, definition: result.definition };
       })
       .sort((a, b) => a.slug.localeCompare(b.slug));
-    this.cache.set(key, { loadedAt: Date.now(), entries });
+    this.cache.set(key, { revision: contentKey, entries });
     return entries;
   }
 
-  /** `.catamorphic/roles/*.json` (top level only) → content, from the program as shared. */
+  /** `.work/roles/*.json` (top level only) → content, from the program as shared. */
   private async readRoleFiles(
     tenantId: string,
     projectId: string,
-  ): Promise<Record<string, string>> {
-    const prefix = `${ROLES_DIR}/`;
-    const files = await withProgram(
+  ): Promise<{ files: Record<string, string>; ref: string | null }> {
+    const prefix = `${PROJECT_ROLES_DIR}/`;
+    const { files, ref } = await withProgram(
       this.projectManager,
       tenantId,
       projectId,
-      (repo, ref) => readProgramFiles(repo, ref, prefix),
+      async (repo, ref) => ({
+        files: await readProgramFiles(repo, ref, prefix),
+        ref,
+      }),
     );
-    return Object.fromEntries(
-      Object.entries(files).filter(
-        ([file]) =>
-          file.endsWith(".json") && !file.slice(prefix.length).includes("/"),
+    return {
+      files: Object.fromEntries(
+        Object.entries(files).filter(
+          ([file]) =>
+            file.endsWith(".json") && !file.slice(prefix.length).includes("/"),
+        ),
       ),
-    );
+      ref,
+    };
   }
 
   private requireProject(tenantId: string, projectId: string) {

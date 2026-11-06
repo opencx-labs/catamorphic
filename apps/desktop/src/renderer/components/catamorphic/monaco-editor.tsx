@@ -23,7 +23,11 @@ declare module "@catamorphic/workflow" {
     <Value, State>(options: { timeout?: string; state: State }): WorkflowTransition<PauseResult<Value, State>>;
   }
   export interface WorkflowDefinition<Input, Output> { readonly steps: readonly unknown[]; }
-  export type CallWorkflow = <Input, Output>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input }) => WorkflowTransition<Output>;
+  export interface Carried<Result, State> { result: Result; state: State; }
+  export interface CallWorkflow {
+    <Input, Output, State>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input; state: State }): WorkflowTransition<Carried<Output, State>>;
+    <Input, Output>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input }): WorkflowTransition<Output>;
+  }
   export interface BoundaryContext<Input> { readonly input: Input; readonly pause: Pause; readonly callWorkflow: CallWorkflow; }
   export interface BoundaryDefinition<Input, Output> { readonly run: (context: BoundaryContext<Input>) => unknown | Promise<unknown>; readonly retry?: RetryPolicy; }
   export interface BatchExecutionContext { invocationId: string; attempt: number; deadlineAt: string; signal: AbortSignal; }

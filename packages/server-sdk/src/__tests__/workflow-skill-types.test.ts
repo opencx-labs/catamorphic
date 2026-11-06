@@ -7,38 +7,68 @@ import {
   HOST_SKILLS,
   renderTriggerTypesModule,
   SEED_SKILLS,
+  TRIGGER_TYPES_SOURCE_PATH,
 } from "@catamorphic/core";
+import { checkProject, parseProject } from "@catamorphic/parser";
 import { expect, it } from "vitest";
+import { DIRECTORY_TRIGGER_KINDS } from "../directory-trigger-kinds.js";
 import { schedule } from "../schedule-trigger-kind.js";
 import { SESSION_TRIGGER_KINDS } from "../session-trigger-kinds.js";
+import { webhook } from "../webhook-trigger-kind.js";
 
-it("shipped workflow recipes typecheck against the public API and real host trigger schemas", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-types-"));
-  const root = path.resolve(import.meta.dirname, "../../../..");
-  try {
-    const skills = [
-      ...["writing-workflows", "durable-workflows", "batch-workflows"].map(
-        (name) => SEED_SKILLS[`.catamorphic/skills/${name}/SKILL.md`],
-      ),
-      HOST_SKILLS["session-workflows/SKILL.md"],
-    ];
-    let index = 0;
-    for (const skill of skills) {
-      if (!skill) throw new Error("Missing workflow skill");
-      for (const match of skill.matchAll(/```typescript\n([\s\S]*?)```/g)) {
-        await fs.writeFile(
-          path.join(directory, `recipe-${index++}.ts`),
-          match[1] ?? "",
-        );
-      }
+const root = path.resolve(import.meta.dirname, "../../../..");
+const HOST_KINDS = [
+  schedule,
+  webhook,
+  ...SESSION_TRIGGER_KINDS,
+  ...DIRECTORY_TRIGGER_KINDS,
+];
+
+/**
+ * Lay recipes out like a project: a trigger library or workflow source that
+ * names its file on its first line (`// .work/triggers/github.ts`) goes
+ * there; the rest are workflow sources beside the generated trigger types.
+ */
+function recipeFiles(documents: readonly (string | undefined)[]): {
+  files: Record<string, string>;
+  count: number;
+} {
+  const files: Record<string, string> = {};
+  let count = 0;
+  for (const document of documents) {
+    if (!document) throw new Error("Missing workflow skill");
+    for (const match of document.matchAll(/```typescript\n([\s\S]*?)```/g)) {
+      const source = match[1] ?? "";
+      const named = /^\/\/ (\.work\/\S+\.ts)\n/.exec(source)?.[1];
+      files[named ?? `.work/workflows/src/recipe-${count}.ts`] = source;
+      count += 1;
     }
-    expect(index).toBe(6);
+  }
+  return { files, count };
+}
+
+/** Type-check recipes against the public API and real host trigger schemas. */
+async function typecheck(files: Record<string, string>): Promise<void> {
+  const parsed = parseProject(files);
+  expect(parsed.errors).toEqual([]);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-types-"));
+  const sources = path.join(directory, path.dirname(TRIGGER_TYPES_SOURCE_PATH));
+  try {
+    for (const [file, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(directory, file)), {
+        recursive: true,
+      });
+      await fs.writeFile(path.join(directory, file), content);
+    }
     await fs.writeFile(
-      path.join(directory, "catamorphic-triggers.d.ts"),
-      renderTriggerTypesModule([schedule, ...SESSION_TRIGGER_KINDS]),
+      path.join(directory, TRIGGER_TYPES_SOURCE_PATH),
+      renderTriggerTypesModule({
+        kinds: HOST_KINDS,
+        projectKinds: parsed.triggerKinds,
+      }),
     );
     await fs.writeFile(
-      path.join(directory, "tsconfig.json"),
+      path.join(sources, "tsconfig.json"),
       JSON.stringify({
         compilerOptions: {
           target: "ES2022",
@@ -59,8 +89,8 @@ it("shipped workflow recipes typecheck against the public API and real host trig
       }),
     );
     const result = await promisify(execFile)(
-      path.join(root, "node_modules/.bin/tsgo"),
-      ["--project", path.join(directory, "tsconfig.json")],
+      path.join(root, "node_modules/.bin/tsc"),
+      ["--project", path.join(sources, "tsconfig.json")],
       { timeout: 30000 },
     );
     expect(result.stdout).toBe("");
@@ -72,4 +102,79 @@ it("shipped workflow recipes typecheck against the public API and real host trig
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+}
+
+/**
+ * A registry pack's TypeScript files at their project targets (ADR 0262),
+ * read from its source the way the registry build inlines them.
+ */
+async function packSources(pack: string): Promise<Record<string, string>> {
+  const directory = path.join(root, "packages/registry/src", pack);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(directory, "registry-item.json"), "utf8"),
+  ) as { files: { path: string; target?: string }[] };
+  const sources: Record<string, string> = {};
+  for (const file of manifest.files) {
+    const target = file.target ?? file.path;
+    if (!target.endsWith(".ts")) continue;
+    sources[target] = await fs.readFile(
+      path.join(directory, path.basename(file.path)),
+      "utf8",
+    );
+  }
+  return sources;
+}
+
+it("shipped workflow recipes typecheck against the public API and real host trigger schemas", async () => {
+  const skills = recipeFiles([
+    ...["writing-workflows", "durable-workflows", "batch-workflows"].map(
+      (name) => SEED_SKILLS[`.work/skills/${name}/SKILL.md`],
+    ),
+    HOST_SKILLS["session-workflows/SKILL.md"],
+  ]);
+  const packs = {
+    ...(await packSources("slack-threads")),
+    ...(await packSources("pull-request-reviews")),
+  };
+  // The review pack ships the GitHub library writing-workflows teaches.
+  expect(packs[".work/triggers/github.ts"]).toBe(
+    skills.files[".work/triggers/github.ts"],
+  );
+  const files = { ...skills.files, ...packs };
+  expect(skills.count).toBe(11);
+  expect(parseProject(files).triggerKinds.map((kind) => kind.name)).toEqual([
+    "github.delivery",
+    "github.issue_comment",
+    "github.pull_request",
+    "github.pull_request_review_comment",
+    "slack.event",
+    "slack.mention",
+    "slack.message",
+  ]);
+  await typecheck(files);
+});
+
+it("the onboarding automation in the Work server setup guide typechecks and passes the host's check", async () => {
+  const guide = await fs.readFile(
+    path.join(root, "skills/setup-work-server/references/company-identity.md"),
+    "utf8",
+  );
+  const { files, count } = recipeFiles([guide]);
+  expect(Object.keys(files)).toEqual([
+    ".work/workflows/src/clickhouse-keys.ts",
+  ]);
+  expect(count).toBe(1);
+  // The deploy rules too: directory kinds need memberships:read.
+  const check = checkProject(files, {
+    triggerKinds: HOST_KINDS.map((kind) => ({
+      name: kind.name,
+      configJsonSchema: kind.configJsonSchema,
+      payloadJsonSchema: kind.payloadJsonSchema,
+      ...(kind.requiredPermissions
+        ? { requiredPermissions: kind.requiredPermissions }
+        : {}),
+    })),
+  });
+  expect(check.findings).toEqual([]);
+  await typecheck(files);
 });

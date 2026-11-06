@@ -1,52 +1,95 @@
-# Stock server
+# Work server
 
-The self-hostable Catamorphic server (ADR 0059): zero external services,
+The Work server is a composable, single-tenant host. Deployments own their
+entry point and image, pin `@catamorphic/work-server`, and add hooks (ADR 0294).
+There is no stock Dockerfile or server-image publication workflow. Product
+names say Work; framework package names and storage contracts stay Catamorphic.
+
+The server itself lives in `packages/work-server` (`@catamorphic/work-server`,
+ADR 0160): `createWorkServer({ config, hooks })` plus
+`workServerConfigFromEnv`. This app supplies reference process source: env parsing,
+mDNS, listening, signals. Add server behavior to the package, configuration to
+`WorkServerConfig`, and extension points to `WorkServerHooks`. Host tables use
+the `work_` prefix.
+
+It has zero external services,
 everything under one data dir: PGlite database, bare git origins,
 local-process execution (the container IS the sandbox; single-tenant
-ONLY, per ADR 0047), and mDNS so the LAN reaches the server. The new stock
+ONLY, per ADR 0047), and mDNS so the LAN reaches the server. Its
 Better Auth, OAuth, admission, and agent-driven setup path are the only remote
 identity model. Do not reintroduce token files or privileged product users.
 
-The paragraph above describes the current standalone implementation. The accepted
-managed deployment model is multiple server instances sharing network Postgres
-and one authority, with enrolled machines exposed through Environment bindings
-([ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md)).
-Postgres mode shares authoritative objects, encrypted credentials, auth, approvals,
-and leased execution. Every machine has its own node identity and local working
-state. Follow the [cluster setup reference](../../skills/setup-catamorphic-server/references/cluster-deployment.md)
-and keep its enrollment and recovery instructions accurate. Preserve the local-process single-tenant boundary. For isolated remote development,
-configure `CATAMORPHIC_SANDBOX=microsandbox` and the machine workspace/CPU/memory
-budgets. Follow ADR 0100: an Allocation reserves a workspace until physical
-teardown, including idle development sessions. Operator inventory reports usage;
-expired leases alone never free capacity.
+Beyond one machine (ADR 0164): control-plane replicas share network Postgres,
+object storage, `WORK_SECRET`, `WORK_VAULT_KEY`, and `WORK_OPERATOR_SECRET`
+for availability. A replica is disposable (ADR 0190): its node lives one
+process, keeps nothing durable on disk, and any replica recovers the work of
+one that is gone; the image exits when its lease lapsed.
+Execution capacity comes from enrolled workers (`bun apps/server/src/worker.ts`)
+that hold only a machine credential and the private key their operations are
+sealed to, both rotated every 30 days (ADR 0207), and dial out to the control
+plane. A
+worker owns its node lease (ADR 0192): any replica runs its agents and
+forwards their sandbox operations, and no replica keeps a worker in memory. Workflow runs and credentials stay on the control plane. Never
+give a worker database, vault, or sign-in secrets, and never add a replica for
+capacity. Workers state their protocol on every call and get `426` when the
+control plane cannot drive them (ADR 0198).
+
+Members' subscription sign-ins stay on the machine they were made on (ADRs
+0199, 0213), and only Codex's: Claude Code subscriptions run only on a
+member's own computer, so `work worker sign-in claude-code` refuses. A member
+signs in to Codex from the Work app on a machine of their own (a worker whose
+access names only them, or a single server with
+`WORK_PERSONAL_CREDENTIALS=accept`): the machine runs `codex login
+--device-auth` into `<WORK_DATA_DIR>/sign-ins/codex/<member>` through sealed
+`machine.codexSignIn` operations, the app shows the code, and the member
+approves in their browser; `work worker sign-in codex --member <id>` does the
+same in a terminal. A machine holds one person's sign-in at most, reports
+only `sign-in:codex:<member>`, and a sandbox of that member's own chat mounts
+that one home. Never read, copy, upload, store, or forward a sign-in. An
+admin allows sign-ins with an Environment that has `"personalCredentials":
+true` plus members' own machines; otherwise companies use model
+connections through the gateway or a member's own API key. A Postgres control plane refuses plain-subprocess agents unless
+microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
+[machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
+and keep its enrollment and recovery instructions accurate. Preserve the
+local-process single-tenant boundary. Follow ADR 0100 for workspace budgets:
+an Allocation reserves a workspace until physical teardown; expired leases
+alone never free capacity.
 
 ## Run
 
 - From the repository root, `bun run dev` starts the combined desktop and
-  stock-server manual environment. `bun run dev:server` is the stock-server
+  reference-server manual environment. `bun run dev:server` is the server
   focused variant of the same development orchestrator. The orchestrator
   assigns worktree-local data directories and loopback ports; do not set
-  `CATAMORPHIC_DATA_DIR` manually for development.
-- Docker: see `Dockerfile` header. `--network host` for mDNS on Linux.
+  `WORK_DATA_DIR` manually for development.
+- Deployment images: see `packages/work-server/README.md#your-own-image`.
+  Build and verify your own; use host networking for mDNS on Linux.
 - Chat needs one of `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
-  `OPENAI_API_KEY` (`CATAMORPHIC_MODEL` overrides; anthropic defaults to
-  claude-opus-5). `CATAMORPHIC_FAKE_AGENT=1` = deterministic echo agent.
+  `OPENAI_API_KEY` (`WORK_MODEL` overrides; anthropic defaults to
+  claude-opus-5). `WORK_FAKE_AGENT=1` = deterministic echo agent (the
+  `EchoAdapter` on the host, plus workspace commands such as `run <shell>`,
+  see `packages/work-server/src/fake-agent.ts`).
+- Agents run on the agent runner (ADR 0198): the built-in assistant is the
+  AI SDK adapter on the control plane; Claude Code and Codex are the runner
+  bundle (`packages/runner-bundle/dist/runner.mjs`, built with the
+  packages) inside the chat's sandbox, run with Bun or Node.
 - Boot prints public API, documentation, and sign-in locations, never a
   credential.
-- Local setup agents inspect the schemas under `src/setup` and call the
-  `/_catamorphic/operator/*` operations on the dedicated loopback-only setup
+- Local setup agents inspect the schemas under `packages/work-server/src/setup` and call the
+  `/_work/operator/*` operations on the dedicated loopback-only setup
   listener (port 4701 by default) using the owner-only machine credential
   under the data directory. These operations bootstrap explicit
   roles, admission, and ordinary Better Auth users. They are not a human CLI,
   product UI, user role, or server-owner identity.
 - Project managers use their ordinary OAuth identity and committed
-  `memberships:manage` or `roles:manage` permissions for admission and
-  membership APIs under `/api/projects/:projectId`.
-- Ongoing company-brain configuration is project code: `.catamorphic/roles/*.json`,
-  `.catamorphic/agents/*`, `.catamorphic/sidebar.js`, and
-  `.catamorphic/project.json`. The stock server must not grow a parallel
-  bootstrap configuration file. Role presentation targets resolved builder
-  state and namespaced permissions, never hard-coded role names.
+  `memberships:read|write` or `roles:read|write` permissions (ADR 0158) for
+  admission and membership APIs under `/api/projects/:projectId`.
+- Ongoing company-brain configuration is project code: `.work/roles/*.json`,
+  `.work/agents/*`, `.work/workspace.js`, and
+  `.work/project.json`. The stock server must not grow a parallel
+  bootstrap configuration file. Role presentation targets resolved
+  permissions, never hard-coded role names.
 
 ## Shape rules
 
@@ -58,11 +101,11 @@ expired leases alone never free capacity.
   the registry serves that id and the bare `assistant` (root callers).
 - Never expose this server multi-tenant: local-process execution gives
   processes the host filesystem and network (ADR 0047).
-- `/_catamorphic/operator/*` is machine-local setup authority on a separate
+- `/_work/operator/*` is machine-local setup authority on a separate
   Fastify listener bound to `127.0.0.1`. Never register those routes on the
-  public app or expose the setup port from the container. `/healthz` and the
-  hosted PWA are public. Application administration belongs under `/api` and
-  uses ordinary project permissions.
+  public app or expose the setup port from the container. `/healthz`,
+  `/readyz`, and the hosted PWA are public. Application administration
+  belongs under `/api` and uses ordinary project permissions.
 
 ## Verify
 

@@ -1,21 +1,42 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  configureReviewSidebar,
-  REVIEW_SIDEBAR_CONFIG,
-} from "./fixtures/sidebar-config.js";
+import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
+import type { WorkspaceConfig } from "../src/shared/workspace-config.js";
 import {
   type AppHandle,
   createProjectWorkspace,
   launchApp,
 } from "./harness.js";
 
+/**
+ * Work's right sidebar starts empty (ADR 0234); the suite gives it two tabs
+ * over Work's lists to exercise the tab strip.
+ */
+const LAYOUT: WorkspaceConfig = {
+  sidebars: {
+    left: DEFAULT_WORKSPACE_CONFIG.sidebars.left,
+    right: [
+      {
+        id: "companion",
+        title: "Activity",
+        icon: "Activity",
+        sections: [{ id: "activity", source: "work:activity" }],
+      },
+      {
+        id: "reviews",
+        title: "Proposals",
+        icon: "GitPullRequest",
+        sections: [{ id: "prs", source: "work:prs" }],
+      },
+    ],
+  },
+};
+
 let app: AppHandle;
 let configFile: string;
 let projectId: string;
 beforeAll(async () => {
   app = await launchApp();
-  await configureReviewSidebar(app);
   await app.waitFor(
     `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')`,
   );
@@ -25,8 +46,9 @@ beforeAll(async () => {
     ),
   ).toBe("true");
   configFile = await app.eval<string>(
-    "window.catamorphicDesktop.sidebarConfigFile()",
+    "window.catamorphicDesktop.workspaceConfigFile()",
   );
+  writeConfig(LAYOUT);
   const project = await createProjectWorkspace({
     app,
     name: "Sidebar studio",
@@ -72,12 +94,12 @@ describe("tabbed sidebars", () => {
         `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"] [role="tablist"]')`,
       ),
     ).toBe(false);
-    const config = structuredClone(REVIEW_SIDEBAR_CONFIG);
-    config.left.push({
+    const config = structuredClone(LAYOUT);
+    config.sidebars.left.push({
       id: "extra",
       title: "Extra",
       icon: "Files",
-      sections: [{ id: "extra-files", type: "files" }],
+      sections: [{ id: "extra-files", source: "work:files" }],
     });
     writeConfig(config);
     await app.waitFor(
@@ -108,15 +130,15 @@ describe("tabbed sidebars", () => {
         `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [aria-label="Customize sidebar"]')`,
       ),
     ).toBe(false);
-    writeConfig(REVIEW_SIDEBAR_CONFIG);
+    writeConfig(LAYOUT);
     await app.waitFor(
       `!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"] [role="tablist"]')`,
     );
   });
 
   it("keeps the initial selection when config tabs are reordered before any click", async () => {
-    const config = structuredClone(REVIEW_SIDEBAR_CONFIG);
-    config.right.reverse();
+    const config = structuredClone(LAYOUT);
+    config.sidebars.right.reverse();
     writeConfig(config);
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Proposals'`,
@@ -126,7 +148,7 @@ describe("tabbed sidebars", () => {
         `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
       ),
     ).toBe("Activity");
-    writeConfig(REVIEW_SIDEBAR_CONFIG);
+    writeConfig(LAYOUT);
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Activity'`,
     );
@@ -170,9 +192,9 @@ describe("tabbed sidebars", () => {
   });
 
   it("reconciles live edits by identity and retains the layout on invalid saves", async () => {
-    const config = structuredClone(REVIEW_SIDEBAR_CONFIG);
-    config.right.reverse();
-    config.right.find((tab) => tab.id === "companion")!.title =
+    const config = structuredClone(LAYOUT);
+    config.sidebars.right.reverse();
+    config.sidebars.right.find((tab) => tab.id === "companion")!.title =
       "Work companion";
     writeConfig(config);
     await app.waitFor(
@@ -237,7 +259,7 @@ describe("tabbed sidebars", () => {
     );
     await app.waitFor(`(() => {
       const sides = [...document.querySelectorAll('[data-sidebar]')];
-      return sides.length === 2 && sides.every(side => side.getAnimations({subtree:true}).every(a => a.playState !== 'running'));
+      return sides.length === 2 && sides.every(side => side.dataset.settled === 'true' && side.getAnimations({subtree:true}).every(a => a.playState !== 'running')) && !document.getAnimations().some(a => a.effect?.pseudoElement?.startsWith('::view-transition'));
     })()`);
     if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
       await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);
@@ -265,8 +287,8 @@ describe("tabbed sidebars", () => {
       `window.catamorphicDesktop.createProject({name:'Empty sidebar project',rootPath:${JSON.stringify(root)}})`,
     );
     fs.writeFileSync(
-      `${root}/.catamorphic/sidebar.js`,
-      `module.exports = ${JSON.stringify({ ...REVIEW_SIDEBAR_CONFIG, right: [] })};\n`,
+      `${root}/.work/workspace.js`,
+      `module.exports = ${JSON.stringify(DEFAULT_WORKSPACE_CONFIG)};\n`,
     );
     // Navigate the live workspace before checking persisted sidebar state.
     // lastProjectId is only a fallback; changing it does not switch this window.
@@ -300,7 +322,7 @@ describe("tabbed sidebars", () => {
   });
 
   it("centers Customize sidebar in an empty right sidebar and opens customization", async () => {
-    writeConfig({ ...REVIEW_SIDEBAR_CONFIG, right: [] });
+    writeConfig(DEFAULT_WORKSPACE_CONFIG);
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
@@ -317,7 +339,7 @@ describe("tabbed sidebars", () => {
     await toggleRight();
     await waitRight(true);
     await app.waitFor(
-      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').getAnimations().every(a => a.playState !== 'running')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').dataset.motion === 'open' && document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').dataset.settled === 'true'`,
     );
     expect(
       await app.eval(`(() => {
@@ -332,10 +354,10 @@ describe("tabbed sidebars", () => {
       `[...document.querySelectorAll('[data-workspace-visible="true"] [data-sidebar="right"] button')].find(b => b.textContent.trim() === 'Customize sidebar').click()`,
     );
     await app.waitFor(
-      `document.body.innerText.includes('The live sidebar configuration file on this machine is')`,
+      `document.body.innerText.includes('The live workspace configuration file on this machine is')`,
     );
     expect(await app.eval("document.body.innerText")).toContain(configFile);
-    writeConfig(REVIEW_SIDEBAR_CONFIG);
+    writeConfig(LAYOUT);
     await app.waitFor(
       `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
     );
@@ -366,7 +388,7 @@ describe("tabbed sidebars", () => {
       `document.querySelector('[aria-label="Switch profile: Empty profile"]').click()`,
     );
     await app.eval(
-      `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Default Profile' && !b.getAttribute('aria-label')).click()`,
+      `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().endsWith('Default Profile') && !b.getAttribute('aria-label')).click()`,
     );
     await app.waitFor(
       `!!document.querySelector('[aria-label="Switch profile: Default Profile"]')`,

@@ -12,8 +12,6 @@ import {
   NodeTracerProvider,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-node";
-import { simulateReadableStream } from "ai";
-import { MockLanguageModelV4 } from "ai/test";
 import {
   afterAll,
   beforeAll,
@@ -23,8 +21,15 @@ import {
   it,
   vi,
 } from "vitest";
-import { AiSdkCodingAgent } from "../ai-sdk-agent.js";
-import { AiSdkAgentRuntime } from "../ai-sdk-runtime.js";
+import { createAiSdkAdapter } from "../adapter.js";
+import {
+  hangingCall,
+  replayModel,
+  replyCall,
+  streamErrorCall,
+  toolCallsCall,
+} from "../testing/index.js";
+import { attemptStart, FakeHost } from "./fake-host.js";
 
 const spans = new InMemorySpanExporter();
 const provider = new NodeTracerProvider({
@@ -52,10 +57,6 @@ afterAll(async () => {
   context.disable();
   metrics.disable();
 });
-const usage = {
-  inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
-  outputTokens: { total: 5, text: 5, reasoning: 0 },
-};
 function sandbox(): SandboxProvider {
   return {
     workspaceRoot: "/workspace",
@@ -76,44 +77,42 @@ function sandbox(): SandboxProvider {
   };
 }
 function model() {
-  return new MockLanguageModelV4({
-    doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: "stream-start" as const, warnings: [] },
-            {
-              type: "tool-call" as const,
-              toolCallId: "tool-one",
-              toolName: "bash",
-              input: '{"command":"PRIVATE_COMMAND"}',
-            },
-            {
-              type: "finish" as const,
-              finishReason: { unified: "tool-calls" as const, raw: undefined },
-              usage,
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: "stream-start" as const, warnings: [] },
-            { type: "text-start" as const, id: "text" },
-            { type: "text-delta" as const, id: "text", delta: "PRIVATE_REPLY" },
-            { type: "text-end" as const, id: "text" },
-            {
-              type: "finish" as const,
-              finishReason: { unified: "stop" as const, raw: undefined },
-              usage,
-            },
-          ],
-        }),
-      },
+  return replayModel({
+    modelId: "mock-model-id",
+    calls: [
+      toolCallsCall([
+        { id: "tool-one", name: "bash", input: { command: "PRIVATE_COMMAND" } },
+      ]),
+      replyCall("PRIVATE_REPLY"),
     ],
+  }).model;
+}
+
+function attempt(input: {
+  model: ReturnType<typeof model>;
+  sessionId: string;
+  turnId?: string;
+}) {
+  return new FakeHost({
+    adapter: createAiSdkAdapter({ model: input.model }),
+    attempt: attemptStart({
+      thread: { mode: "fresh", providerThreadId: input.sessionId },
+      sessionId: input.sessionId,
+      projectId: "project",
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+      input: { itemId: "item", text: "PRIVATE_PROMPT", attachments: [] },
+    }),
+    local: {
+      sandbox: {
+        provider: sandbox(),
+        sandboxId: "sandbox",
+        workingDirectory: "/workspace",
+      },
+      userId: "user",
+    },
   });
 }
+
 function assertTraces() {
   const finished = spans.getFinishedSpans();
   const root = finished.find((span) => span.name === "invoke_agent ai-sdk");
@@ -157,18 +156,7 @@ function assertTraces() {
   ).not.toContain("PRIVATE_");
 }
 describe("built-in agent telemetry", () => {
-  it("covers legacy harness turns, each model call, tools, nested work and usage without content", async () => {
-    const agent = new AiSdkCodingAgent({
-      model: model(),
-      sandboxProvider: sandbox(),
-    });
-    const session = await agent.startSession({
-      sessionId: "session",
-      projectId: "project",
-      userId: "user",
-      sandboxId: "sandbox",
-      workingDirectory: "/workspace",
-    });
+  it("covers turns, each model call, tools, nested work and usage without content", async () => {
     await withTelemetryContext(
       {
         attributes: {
@@ -177,12 +165,11 @@ describe("built-in agent telemetry", () => {
         },
       },
       async () => {
-        for await (const _event of agent.sendMessage(
-          session,
-          "PRIVATE_PROMPT",
-        )) {
-          /* consume */
-        }
+        await attempt({
+          model: model(),
+          sessionId: "session",
+          turnId: "durable-turn",
+        }).done;
       },
     );
     expect(
@@ -205,56 +192,15 @@ describe("built-in agent telemetry", () => {
       )?.dataPoints,
     ).toHaveLength(2);
     expect(JSON.stringify(exported)).not.toContain("PRIVATE_");
-    await agent.dispose(session);
-  });
-  it("covers long-lived runtime turns through the same telemetry integration", async () => {
-    const runtime = new AiSdkAgentRuntime({
-      model: model(),
-      sandboxProvider: sandbox(),
-    });
-    await runtime.startSession({
-      sessionId: "runtime",
-      projectId: "project",
-      allocationId: "allocation",
-      workingDirectory: "/workspace",
-    });
-    await runtime.startTurn({
-      sessionId: "runtime",
-      message: { role: "user", content: "PRIVATE_PROMPT" },
-    });
-    for await (const event of runtime.subscribe({ sessionId: "runtime" }))
-      if (event.type === "turn.completed" || event.type === "turn.failed")
-        break;
-    assertTraces();
-    await runtime.stopSession({ sessionId: "runtime" });
   });
   it("ends a failed streaming model span and records only the error type", async () => {
-    const agent = new AiSdkCodingAgent({
-      model: new MockLanguageModelV4({
-        doStream: {
-          stream: simulateReadableStream({
-            chunks: [
-              { type: "stream-start" as const, warnings: [] },
-              {
-                type: "error" as const,
-                error: new Error("PRIVATE_PROVIDER_BODY"),
-              },
-            ],
-          }),
-        },
-      }),
-      sandboxProvider: sandbox(),
-    });
-    const session = await agent.startSession({
+    await attempt({
+      model: replayModel({
+        modelId: "mock-model-id",
+        calls: [streamErrorCall("PRIVATE_PROVIDER_BODY")],
+      }).model,
       sessionId: "failed",
-      projectId: "project",
-      userId: "user",
-      sandboxId: "sandbox",
-      workingDirectory: "/workspace",
-    });
-    for await (const _event of agent.sendMessage(session, "PRIVATE_PROMPT")) {
-      /* consume */
-    }
+    }).done;
     const finished = spans.getFinishedSpans();
     expect(
       finished.find((span) => span.name === "invoke_agent ai-sdk")?.status.code,
@@ -271,47 +217,20 @@ describe("built-in agent telemetry", () => {
         })),
       ),
     ).not.toContain("PRIVATE_");
-    await agent.dispose(session);
   });
 });
 
-it("closes interrupted runtime and model spans without marking cancellation as failure", async () => {
-  let started: (() => void) | undefined;
-  const ready = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const runtime = new AiSdkAgentRuntime({
-    sandboxProvider: sandbox(),
-    model: new MockLanguageModelV4({
-      doStream: async ({ abortSignal }) => ({
-        stream: new ReadableStream<never>({
-          start(controller) {
-            abortSignal?.addEventListener(
-              "abort",
-              () => controller.error(new Error("cancelled")),
-              { once: true },
-            );
-            started?.();
-          },
-        }),
-      }),
-    }),
-  });
-  await runtime.startSession({
+it("closes interrupted turn and model spans without marking cancellation as failure", async () => {
+  const host = attempt({
+    model: replayModel({
+      modelId: "mock-model-id",
+      calls: [hangingCall("PRIVATE_PARTIAL")],
+    }).model,
     sessionId: "interrupted",
-    projectId: "project",
-    allocationId: "allocation",
-    workingDirectory: "/workspace",
   });
-  const turn = await runtime.startTurn({
-    sessionId: "interrupted",
-    message: { role: "user", content: "PRIVATE_PROMPT" },
-  });
-  await ready;
-  await runtime.interruptTurn({
-    sessionId: "interrupted",
-    turnId: turn.turnId,
-  });
+  await host.waitFor((event) => event.type === "item.delta");
+  host.send({ kind: "interrupt" });
+  await host.done;
   await vi.waitFor(() => {
     const root = spans
       .getFinishedSpans()
@@ -324,5 +243,4 @@ it("closes interrupted runtime and model spans without marking cancellation as f
         .find((span) => span.name === "chat mock-model-id")?.status.code,
     ).toBe(SpanStatusCode.UNSET);
   });
-  await runtime.stopSession({ sessionId: "interrupted" });
 });

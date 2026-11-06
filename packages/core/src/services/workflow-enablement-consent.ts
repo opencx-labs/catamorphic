@@ -22,6 +22,7 @@ export function workflowEnablementConsentDigest(input: {
   owner: WorkflowEnablementOwner;
   connections: readonly WorkflowEnablementConnection[];
   capabilities: readonly string[];
+  permissions: readonly string[];
 }): string {
   const value = {
     projectId: input.projectId,
@@ -33,13 +34,13 @@ export function workflowEnablementConsentDigest(input: {
       .sort((left, right) => left.alias.localeCompare(right.alias))
       .map((connection) => ({
         alias: connection.alias,
-        bindingId: connection.bindingId,
         connectionId: connection.connectionId,
         providerKind: connection.providerKind,
         principalKind: connection.principalKind,
         capabilities: [...connection.capabilities].sort(),
       })),
     capabilities: [...input.capabilities].sort(),
+    permissions: [...input.permissions].sort(),
   };
   return createHash("sha256").update(canonical(value)).digest("hex");
 }

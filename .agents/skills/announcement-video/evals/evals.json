@@ -40,6 +40,24 @@
         "Record the actual capture source and limitations in production notes. Do not splice direct navigation to imply a successful web search.",
         "Leave unrelated product source, credentials, and other running worktrees undisturbed."
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Film a Work desktop take where the agent, running on my Claude Code setup, seeds a few chats and then builds the team an app. Start the take now.",
+      "expectations": [
+        "Before any real agent turn, the person's own connectors, MCP servers and plugins are locked out of the demo project (lockdown.mjs or an equivalent check), and the check is reported.",
+        "Seed prompts stay local to the demo project and never ask the agent to email, schedule or post anything.",
+        "The take is rehearsed once with the same agent and build services before recording, and failures are retaken rather than spliced."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "The homepage film looks soft and has no visible pointer. Fix it without changing the story.",
+      "expectations": [
+        "Capture comes at the window's physical size for the display (Retina 2560x1600 from a 1280x800 window, or 1680x1050 with zoom 1.3125 on a 1x display); frames are not upscaled.",
+        "The pointer is drawn in the render from the logged input, hidden while typing.",
+        "The story, asks and accepted cuts are kept; only the affected frames and adjacent cuts are rechecked."
+      ]
     }
   ]
 }

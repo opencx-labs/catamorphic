@@ -1,0 +1,129 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import {
+  type AgentCapabilityOptions,
+  type CatamorphicCore,
+  defineAgentCapability,
+  defineRegistryCapability,
+  hasProjectPermission,
+  parseRegistryCatalog,
+} from "@catamorphic/core";
+import { projectToolCapabilities } from "@catamorphic/fastify-plugin";
+import { z } from "zod";
+import type { WorkAuth } from "./auth/work-auth-types.js";
+
+/**
+ * Project tools the server's own agents reach through discovery: proposing
+ * a change, and setting what their chat shows (its metadata, ADR 0226).
+ * Replica memory (c): a constant, the same on every replica.
+ */
+const SERVER_PROJECT_TOOLS = new Set([
+  "propose_change",
+  "set_session_metadata",
+]);
+
+/**
+ * The packs the server's agents can install into a project (ADR 0262): the
+ * `@catamorphic/registry` build, read when an agent asks.
+ */
+const registry = defineRegistryCapability({
+  catalog: async () =>
+    parseRegistryCatalog(
+      await readFile(
+        createRequire(import.meta.url).resolve(
+          "@catamorphic/registry/catalog.json",
+        ),
+        "utf8",
+      ),
+    ),
+});
+
+/** Work server profile and directory; no framework-owned identity model. */
+export function workAgentCapabilities(args: {
+  core(): CatamorphicCore;
+  auth(): WorkAuth;
+  custom?: AgentCapabilityOptions;
+}): AgentCapabilityOptions {
+  const directory = defineAgentCapability({
+    revision: "1",
+    name: "people.search",
+    description:
+      "Find project members by user ID and read their display names. Uses ordinary membership-management permission. No email addresses or tenant-wide directory are returned.",
+    effect: "read",
+    inputSchema: z
+      .object({
+        query: z.string().max(200).default(""),
+        cursor: z.string().optional(),
+        limit: z.number().int().min(1).max(20).default(10),
+      })
+      .strict(),
+    outputSchema: z.object({
+      items: z.array(
+        z.object({ id: z.string(), displayName: z.string().optional() }),
+      ),
+      nextCursor: z.string().optional(),
+    }),
+    authorize: ({ identity, projectId }) =>
+      hasProjectPermission(identity, projectId, "memberships:read"),
+    execute: async ({ identity, projectId }, input) => {
+      const members = await args
+        .core()
+        .memberships.list({ identity, projectId });
+      const found = members
+        .map((member) => member.externalUserId)
+        .sort()
+        .filter(
+          (id) =>
+            id.includes(input.query) && (!input.cursor || id > input.cursor),
+        );
+      const items = await Promise.all(
+        found.slice(0, input.limit).map(async (id) => {
+          const user = await args.auth().findUserById({ userId: id });
+          return { id, ...(user ? { displayName: user.name } : {}) };
+        }),
+      );
+      return {
+        items,
+        ...(found.length > input.limit
+          ? { nextCursor: found[input.limit - 1] }
+          : {}),
+      };
+    },
+  });
+  return {
+    ...args.custom,
+    currentUser:
+      args.custom?.currentUser ??
+      (async ({ identity }) => {
+        const user = await args
+          .auth()
+          .findUserById({ userId: identity.externalUserId });
+        return user ? { displayName: user.name } : {};
+      }),
+    sources: [
+      async (context, selection) => {
+        if (
+          selection.name &&
+          !SERVER_PROJECT_TOOLS.has(selection.name.replace(/^project\./, ""))
+        )
+          return [];
+        return projectToolCapabilities({
+          core: args.core(),
+          context,
+          allow: ({ name }) => SERVER_PROJECT_TOOLS.has(name),
+        });
+      },
+      ...(args.custom?.sources ?? []),
+    ],
+    capabilities: [
+      // A host's own capability of the same name replaces the built-in one.
+      ...[directory, registry].filter(
+        (builtIn) =>
+          !args.custom?.capabilities?.some(
+            (item) => item.name === builtIn.name,
+          ),
+      ),
+      ...(args.custom?.capabilities ?? []),
+    ],
+  };
+}

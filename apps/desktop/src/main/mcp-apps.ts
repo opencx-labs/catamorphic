@@ -1,7 +1,10 @@
+import { createHmac, randomBytes } from "node:crypto";
 import {
   type ConnectedMcpServer,
   connectMcpServer,
   type ElicitHandler,
+  type McpToolInfo,
+  mcpConnectionLost,
   uiResourceUri,
 } from "@catamorphic/mcp";
 import type { ConnectionsStore, McpConnection } from "./connections-store.js";
@@ -21,6 +24,9 @@ import { connectionServerKeys, toAgentMcpServer } from "./connections-store.js";
 
 export interface McpAppView {
   toolKey: string;
+  connectionId: string;
+  connectionIdentity: string;
+  resourceUri: string;
   /** The full document to render in the sandboxed iframe. */
   html: string;
   /**
@@ -34,6 +40,8 @@ export interface McpAppView {
 export class McpAppsService {
   /** Live client connections, keyed by profile + connection id. */
   private readonly closing = new Set<Promise<void>>();
+  private readonly identityKey = randomBytes(32);
+  private readonly poolIdentities = new Map<string, string>();
   private readonly pool = new Map<string, Promise<ConnectedMcpServer>>();
   private readonly watchedProfiles = new Map<string, () => void>();
 
@@ -44,6 +52,85 @@ export class McpAppsService {
       onElicit?: ElicitHandler;
     },
   ) {}
+
+  /** Opaque endpoint/account identity; policies and cached rosters are separate. */
+  connectionIdentity(
+    profileId: string,
+    serverKey: string,
+    connectionId?: string,
+  ): string {
+    const connection = this.keyed(profileId).get(serverKey);
+    if (!connection || (connectionId && connection.id !== connectionId))
+      throw new Error("The tool connection changed");
+    return this.identity(profileId, connection);
+  }
+
+  private identity(profileId: string, connection: McpConnection): string {
+    const config = toAgentMcpServer(connection);
+    if (!config) throw new Error(`Connection ${connection.name} is incomplete`);
+    const oauth = connection.oauth;
+    const stableConfig =
+      config.transport !== "stdio" && oauth?.tokens?.access_token
+        ? {
+            ...config,
+            headers: Object.fromEntries(
+              Object.entries(config.headers ?? {}).filter(
+                ([key]) => key.toLowerCase() !== "authorization",
+              ),
+            ),
+          }
+        : config;
+    return this.digest({
+      profileId,
+      id: connection.id,
+      securityRevision: this.deps
+        .connectionsFor(profileId)
+        .securityRevision(connection.id),
+      config: stableConfig,
+      headers: connection.headers,
+      env: connection.env,
+      oauthClient: connection.oauthClient,
+      oauth: oauth
+        ? {
+            clientInformation: oauth.clientInformation,
+            discovery: oauth.discovery,
+            authorized: Boolean(oauth.tokens?.access_token),
+          }
+        : undefined,
+      inheritedEnv:
+        connection.transport === "stdio"
+          ? Object.fromEntries(
+              (connection.envVars ?? []).map((key) => [key, process.env[key]]),
+            )
+          : undefined,
+    });
+  }
+
+  /** The pool reconnects on token rotation without revoking the mounted account. */
+  private transportIdentity(
+    profileId: string,
+    connection: McpConnection,
+  ): string {
+    return this.digest({
+      profileId,
+      id: connection.id,
+      accountIdentity: this.identity(profileId, connection),
+      config: toAgentMcpServer(connection),
+    });
+  }
+
+  private digest(value: unknown): string {
+    const snapshot = JSON.stringify(value, (_key, entry: unknown) =>
+      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        ? Object.fromEntries(
+            Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)),
+          )
+        : entry,
+    );
+    return createHmac("sha256", this.identityKey)
+      .update(snapshot)
+      .digest("base64url");
+  }
 
   /** `"server/tool"` → ui resource uri, for every enabled connection. */
   async uiTools(profileId: string): Promise<Record<string, string>> {
@@ -64,21 +151,79 @@ export class McpAppsService {
     return map;
   }
 
-  /** Reuse the authenticated host client without eagerly mounting its tool schemas. */
-  async tools(profileId: string, serverKey: string) {
+  /**
+   * The connection's tools on the authenticated host client, listed once
+   * more on a fresh connection when the first attempt fails.
+   */
+  async tools(
+    profileId: string,
+    serverKey: string,
+    connectionId?: string,
+    connectionIdentity?: string,
+  ) {
     const connection = this.keyed(profileId).get(serverKey);
-    if (!connection) throw new Error(`No connection for ${serverKey}`);
-    return (await this.connect(profileId, connection)).tools;
+    if (!connection || (connectionId && connection.id !== connectionId))
+      throw new Error(`No connection for ${serverKey}`);
+    const resolvedId = connection.id;
+    const identity = connectionIdentity ?? this.identity(profileId, connection);
+    const fetch = async () => {
+      const current = this.keyed(profileId).get(serverKey);
+      if (
+        !current ||
+        current.id !== resolvedId ||
+        this.identity(profileId, current) !== identity
+      )
+        throw new Error("The tool connection changed");
+      const pending = this.connect(profileId, current);
+      try {
+        const server = await pending;
+        const tools = server.refreshTools
+          ? await server.refreshTools()
+          : server.tools;
+        this.assertCurrent(
+          profileId,
+          `${serverKey}/_`,
+          resolvedId,
+          pending,
+          identity,
+        );
+        return tools;
+      } catch (error) {
+        // Listing is safe to retry, but the failed client must be retired
+        // before another attempt. Tool mutations are never replayed here.
+        this.drop(`${profileId}:${resolvedId}`, pending);
+        throw error;
+      }
+    };
+    try {
+      return await fetch();
+    } catch {
+      return fetch();
+    }
   }
 
   /** Fetch the `ui://` template behind a tool key. */
-  async view(profileId: string, toolKey: string): Promise<McpAppView> {
+  async view(
+    profileId: string,
+    toolKey: string,
+    connectionId?: string,
+  ): Promise<McpAppView> {
     const { connection, toolName } = this.resolve(profileId, toolKey);
-    const server = await this.connect(profileId, connection);
-    const tool = server.tools.find((entry) => entry.name === toolName);
+    if (connectionId && connection.id !== connectionId)
+      throw new Error("The app connection changed");
+    const identity = this.identity(profileId, connection);
+    const pending = this.connect(profileId, connection);
+    const server = await pending;
+    this.assertCurrent(profileId, toolKey, connection.id, pending, identity);
+    const tools = server.refreshTools
+      ? await server.refreshTools()
+      : server.tools;
+    this.assertCurrent(profileId, toolKey, connection.id, pending, identity);
+    const tool = tools.find((entry) => entry.name === toolName);
     const uri = tool ? uiResourceUri(tool) : undefined;
     if (!uri) throw new Error(`Tool ${toolKey} declares no app view`);
     const resource = await server.readResource(uri);
+    this.assertCurrent(profileId, toolKey, connection.id, pending, identity);
     const html =
       resource.text ??
       (resource.blob
@@ -94,6 +239,9 @@ export class McpAppsService {
         : undefined;
     return {
       toolKey,
+      connectionId: connection.id,
+      connectionIdentity: identity,
+      resourceUri: uri,
       html,
       csp: {
         connectDomains: onlyHttps(ui?.csp?.connectDomains),
@@ -104,19 +252,82 @@ export class McpAppsService {
   }
 
   /**
-   * A view-initiated tool call, on the host's own connection. Scoped to
-   * the SAME server the view came from — an embedded app can never reach
-   * another connection's tools.
+   * A tool call on the host's own connection: from an embedded view, the
+   * capability catalog or a mounted connector (ADR 0225). Scoped to the
+   * SAME server as `viewToolKey`, so an embedded app can never reach
+   * another connection's tools. A call that finds the connection gone
+   * drops that client, so the next one connects afresh; errors the server
+   * sent leave it in use.
    */
   async callTool(
     profileId: string,
     viewToolKey: string,
     toolName: string,
     args: Record<string, unknown>,
+    authorization?: {
+      connectionId: string;
+      connectionIdentity?: string;
+      beforeCall: (tool: McpToolInfo, tools: McpToolInfo[]) => Promise<void>;
+    },
   ): Promise<Record<string, unknown>> {
     const { connection } = this.resolve(profileId, viewToolKey);
-    const server = await this.connect(profileId, connection);
-    return server.callToolRaw(toolName, args);
+    const identity = this.identity(profileId, connection);
+    if (
+      authorization &&
+      (authorization.connectionId !== connection.id ||
+        (authorization.connectionIdentity &&
+          authorization.connectionIdentity !== identity))
+    )
+      throw new Error("The tool connection changed");
+    const pending = this.connect(profileId, connection);
+    const server = await pending;
+    try {
+      if (authorization) {
+        const tools = server.refreshTools
+          ? await server.refreshTools()
+          : server.tools;
+        const tool = tools.find((entry) => entry.name === toolName);
+        if (!tool) throw new Error(`Unknown tool: ${toolName}`);
+        await authorization.beforeCall(tool, tools);
+        this.assertCurrent(
+          profileId,
+          viewToolKey,
+          connection.id,
+          pending,
+          identity,
+        );
+      }
+      const result = await server.callToolRaw(toolName, args);
+      if (authorization)
+        this.assertCurrent(
+          profileId,
+          viewToolKey,
+          connection.id,
+          pending,
+          identity,
+        );
+      return result;
+    } catch (error) {
+      if (mcpConnectionLost(error))
+        this.drop(`${profileId}:${connection.id}`, pending);
+      throw error;
+    }
+  }
+
+  private assertCurrent(
+    profileId: string,
+    toolKey: string,
+    connectionId: string,
+    pending: Promise<ConnectedMcpServer>,
+    identity: string,
+  ): void {
+    const connection = this.resolve(profileId, toolKey).connection;
+    if (
+      connection.id !== connectionId ||
+      this.identity(profileId, connection) !== identity ||
+      this.pool.get(`${profileId}:${connectionId}`) !== pending
+    )
+      throw new Error("The tool connection changed");
   }
 
   private resolve(
@@ -152,8 +363,10 @@ export class McpAppsService {
     connection: McpConnection,
   ): Promise<ConnectedMcpServer> {
     const key = `${profileId}:${connection.id}`;
+    const identity = this.transportIdentity(profileId, connection);
     const existing = this.pool.get(key);
-    if (existing) return existing;
+    if (existing && this.poolIdentities.get(key) === identity) return existing;
+    if (existing) this.drop(key, existing);
     const config = toAgentMcpServer(connection);
     if (!config) {
       return Promise.reject(
@@ -165,11 +378,30 @@ export class McpAppsService {
       this.deps.onElicit ? { onElicit: this.deps.onElicit } : undefined,
     ).catch((error) => {
       // Failed connects must not poison the pool.
-      if (this.pool.get(key) === pending) this.pool.delete(key);
+      if (this.pool.get(key) === pending) {
+        this.pool.delete(key);
+        this.poolIdentities.delete(key);
+      }
       throw error;
     });
     this.pool.set(key, pending);
+    this.poolIdentities.set(key, identity);
     return pending;
+  }
+
+  /**
+   * Retire the client one call used, unless another call has already
+   * replaced it: concurrent calls on a dead connection drop it once.
+   */
+  private drop(key: string, pending: Promise<ConnectedMcpServer>): void {
+    if (this.pool.get(key) !== pending) return;
+    this.pool.delete(key);
+    this.poolIdentities.delete(key);
+    const closed: Promise<void> = pending
+      .then((server) => server.close())
+      .catch(() => {})
+      .finally(() => this.closing.delete(closed));
+    this.closing.add(closed);
   }
 
   async releaseProfile(profileId: string): Promise<void> {
@@ -192,6 +424,7 @@ export class McpAppsService {
     for (const [key, pending] of [...this.pool]) {
       if (!key.startsWith(`${profileId}:`)) continue;
       this.pool.delete(key);
+      this.poolIdentities.delete(key);
       const closed = pending
         .then((server) => server.close())
         .catch(() => {})
@@ -205,11 +438,16 @@ export class McpAppsService {
 
 /** Domains for CSP inclusion: https origins/hosts only, nothing clever. */
 function onlyHttps(domains: string[] | undefined): string[] {
-  return (domains ?? []).filter(
-    (domain) =>
-      typeof domain === "string" &&
-      /^(?:https:\/\/)?[a-z0-9.*-]+(?::\d+)?$/i.test(domain),
-  );
+  if (!Array.isArray(domains)) return [];
+  return domains.flatMap((domain) => {
+    if (typeof domain !== "string") return [];
+    const match =
+      /^(?:https:\/\/)?((?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?)$/i.exec(
+        domain,
+      );
+    if (!match) return [];
+    return [`https://${match[1]}`];
+  });
 }
 
 /**
@@ -245,5 +483,7 @@ export function mcpAppViewDocument(view: McpAppView): string {
     const at = headMatch.index + headMatch[0].length;
     return `${html.slice(0, at)}${meta}${html.slice(at)}`;
   }
-  return `${meta}${html}`;
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+  const at = doctype?.[0].length ?? 0;
+  return `${html.slice(0, at)}${meta}${html.slice(at)}`;
 }

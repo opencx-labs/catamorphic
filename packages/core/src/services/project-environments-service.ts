@@ -1,12 +1,21 @@
 import type { DB } from "@catamorphic/db";
-import { PROJECT_MANIFEST_PATH, type ProjectManager } from "@catamorphic/git";
-import type {
-  EnvironmentRequirements,
-  WorkloadKind,
+import type { ProjectManager } from "@catamorphic/git";
+import {
+  type EnvironmentNetworkPolicy,
+  type EnvironmentRequirements,
+  isEgressPattern,
+  VOLUME_NAME_PATTERN,
+  type WorkloadKind,
 } from "@catamorphic/sandbox";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
+import {
+  CONNECTION_ALIAS_PATTERN,
+  CONNECTION_NAME_PATTERN,
+  type EnvironmentConnectionBinding,
+} from "./connection-types.js";
 import { readProgramFile, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
@@ -17,29 +26,368 @@ const ResourcePolicySchema = z.object({
   memoryMb: z.number().int().positive().optional(),
   storageMb: z.number().int().positive().optional(),
   gpu: z.boolean().optional(),
-  timeoutSeconds: z.number().int().positive().optional(),
+  commandTimeoutSeconds: z.number().int().positive().optional(),
   maxConcurrency: z.number().int().positive().optional(),
 });
 
-const ProjectEnvironmentDefinitionSchema = z.object({
-  binding: z.string().min(1),
-  description: z.string().optional(),
-  workloads: z.array(z.enum(["agent", "workflow"])).min(1),
-  requirements: z
-    .object({
-      trust: z.enum(["local", "managed"]).optional(),
-      isolation: z.enum(["none", "process", "sandbox"]).optional(),
-      capabilities: z.array(z.string().min(1)).optional(),
-      resources: ResourcePolicySchema.optional(),
-    })
-    .optional(),
+const LABEL = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
+/**
+ * A connection alias the Environment offers (ADR 0172). Service authority
+ * comes from the named service connection an administrator authorized;
+ * member authority from each member's own connection.
+ */
+const EnvironmentConnectionBindingSchema = z
+  .strictObject({
+    provider: z.string().regex(CONNECTION_NAME_PATTERN),
+    principal: z.enum(["member", "service", "either"]),
+    service: z.string().regex(CONNECTION_NAME_PATTERN).optional(),
+    capabilities: z.array(z.string().min(1)).optional(),
+    /** Git through the gateway (ADR 0175): reachable repositories, push rules. */
+    git: z
+      .strictObject({
+        repositories: z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/),
+          )
+          .min(1)
+          .optional(),
+        push: z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[A-Za-z0-9._/*-]+$/),
+          )
+          .min(1)
+          .optional(),
+      })
+      .optional(),
+    /** Models through the gateway (ADR 0180): allowed model ids. */
+    model: z
+      .strictObject({
+        allow: z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(255)
+              .regex(/^[A-Za-z0-9._:/@*-]+$/),
+          )
+          .min(1)
+          .optional(),
+      })
+      .optional(),
+  })
+  .refine((binding) => binding.principal !== "member" || !binding.service, {
+    message: "A member binding does not name a service connection",
+    path: ["service"],
+  })
+  .refine((binding) => binding.principal !== "service" || binding.service, {
+    message: "A service binding names its service connection",
+    path: ["service"],
+  });
+
+/** A project file whose name marks it as a Dockerfile. */
+const DOCKERFILE_PATH =
+  /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[A-Za-z0-9._/-]*(^|\/|\.)[Dd]ockerfile$/;
+/** An OCI reference: registry/name[:tag][@digest], no whitespace. */
+const OCI_REFERENCE = /^[a-z0-9][a-z0-9._\-/:]*(@sha256:[a-f0-9]{64})?$/;
+
+const ImageSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => DOCKERFILE_PATH.test(value) || OCI_REFERENCE.test(value), {
+    message:
+      "image must be an OCI reference (e.g. node:22) or a project Dockerfile path (e.g. .work/images/review.Dockerfile)",
+  });
+
+const EgressAllowSchema = z
+  .array(
+    z.string().toLowerCase().refine(isEgressPattern, {
+      message: "allow entries are domains, *.suffix patterns, or IPv4",
+    }),
+  )
+  .min(1)
+  .max(200);
+
+const NetworkSchema = z.discriminatedUnion("egress", [
+  z.strictObject({ egress: z.literal("open") }),
+  z.strictObject({ egress: z.literal("gateway") }),
+  z.strictObject({ egress: z.literal("allowlist"), allow: EgressAllowSchema }),
+]);
+
+/** An Environment's workspace setup (ADRs 0208, 0257). */
+const SetupSchema = z.strictObject({
+  command: z.string().min(1).max(16_384),
+  timeoutMinutes: z.number().int().positive().max(240).optional(),
+  /** The only hosts the setup reaches, while it runs (ADR 0257). */
+  network: z.strictObject({ allow: EgressAllowSchema }).optional(),
+  /**
+   * The Environment's secrets a setup with its own network runs with (ADR
+   * 0257); it runs with no others.
+   */
+  secrets: z.array(z.string()).max(200).optional(),
 });
 
+/**
+ * A secret name an Environment may list or `project.json` may declare (ADR
+ * 0206): an environment variable name, outside the prefixes Work sets.
+ */
+export const ENVIRONMENT_SECRET_NAME =
+  /^(?!CATAMORPHIC_|WORK_)[A-Z][A-Z0-9_]*$/;
+
+const SecretNameSchema = z
+  .string()
+  .max(128)
+  .regex(
+    ENVIRONMENT_SECRET_NAME,
+    "Secret names are SCREAMING_SNAKE_CASE and do not start with CATAMORPHIC_ or WORK_",
+  );
+
+/** Where a volume mounts: absolute, or `~/...` under the sandbox user's home. */
+const VolumePathSchema = z
+  .string()
+  .min(1)
+  .max(1024)
+  .refine(
+    (path) =>
+      (path === "~" || path.startsWith("~/") || path.startsWith("/")) &&
+      !path.split("/").some((part) => part === ".." || part === ".") &&
+      !/[\0\n]/.test(path),
+    { message: "A volume path is absolute or starts with ~/" },
+  );
+
+const VolumeSchema = z.union([
+  VolumePathSchema,
+  z.strictObject({
+    path: VolumePathSchema,
+    /** Mounted into one sandbox at a time (ADR 0208). */
+    exclusive: z.boolean().optional(),
+    sizeMb: z
+      .number()
+      .int()
+      .positive()
+      .max(1024 * 1024)
+      .optional(),
+  }),
+]);
+
+/** `project.json`'s own secret declarations (ADR 0206). */
+const ProjectSecretDeclarationsSchema = z.record(
+  SecretNameSchema,
+  z.strictObject({
+    label: z.string().max(120).optional(),
+    description: z.string().max(2000).optional(),
+  }),
+);
+
+const ProjectEnvironmentDefinitionSchema = z
+  .strictObject({
+    description: z.string().optional(),
+    workloads: z.array(z.enum(["agent", "workflow"])).min(1),
+    /** Node labels that must all match (ADR 0167); none selects any node. */
+    pool: z
+      .record(z.string().regex(LABEL), z.string().min(1).max(128))
+      .optional(),
+    /** A member's own connected computer (ADR 0098). */
+    device: z.literal("member").optional(),
+    /** Never fall back past the narrowest nodes open to the owner. */
+    strict: z.boolean().optional(),
+    /**
+     * Minutes a chat may wait without a turn before its workspace gives back
+     * its slot and reservation (ADR 0173); `0` keeps it for the chat's life.
+     */
+    idleReleaseMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(60 * 24 * 30)
+      .optional(),
+    /**
+     * Minutes work may wait for a machine when none open to it has room or
+     * is online (ADR 0258): a new chat starts waiting and its turn fails
+     * after this. `0`, the default, fails a new chat at once.
+     */
+    waitMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(60 * 24)
+      .optional(),
+    requirements: z
+      .strictObject({
+        trust: z.enum(["local", "managed"]).optional(),
+        isolation: z.enum(["none", "process", "sandbox"]).optional(),
+        capabilities: z.array(z.string().min(1)).optional(),
+        resources: ResourcePolicySchema.optional(),
+        /** An isolated container runtime inside the sandbox (ADR 0176). */
+        containers: z.boolean().optional(),
+      })
+      .optional(),
+    /** The sandbox image: an OCI reference or a project Dockerfile (ADR 0176). */
+    image: ImageSchema.optional(),
+    /** Outbound reach of the sandbox (ADR 0176). Default open. */
+    network: NetworkSchema.optional(),
+    /**
+     * How long an unattended chat's escalation waits for a person before it
+     * is denied (ADR 0176).
+     */
+    approvals: z
+      .strictObject({
+        waitMinutes: z
+          .number()
+          .int()
+          .positive()
+          .max(7 * 24 * 60),
+      })
+      .optional(),
+    /**
+     * A member's own chats here may carry that member's personal
+     * credentials: harness logins and listed files (ADR 0184).
+     */
+    personalCredentials: z.boolean().optional(),
+    /** Project secrets this Environment's sandboxes receive (ADR 0206). */
+    secrets: z.array(SecretNameSchema).max(200).optional(),
+    /** Run in every new workspace's project folder (ADRs 0208, 0257). */
+    setup: SetupSchema.optional(),
+    /** Directories kept on the machine for each owner (ADR 0208). */
+    volumes: z
+      .record(
+        z
+          .string()
+          .regex(
+            VOLUME_NAME_PATTERN,
+            "Volume names are lowercase letters, digits and dashes",
+          ),
+        VolumeSchema,
+      )
+      .optional(),
+    /** Connection aliases, keyed by alias (ADR 0172). */
+    connections: z
+      .record(
+        z.string().regex(CONNECTION_ALIAS_PATTERN),
+        EnvironmentConnectionBindingSchema,
+      )
+      .optional(),
+  })
+  .refine((definition) => !(definition.device && definition.pool), {
+    message: "An Environment runs on a member's device or on a pool, not both",
+  })
+  .refine(
+    (definition) =>
+      !definition.setup?.network ||
+      (definition.network !== undefined &&
+        definition.network.egress !== "open"),
+    {
+      message:
+        "Open egress has nothing to widen: setup.network needs the Environment's network to be gateway or allowlist",
+      path: ["setup", "network"],
+    },
+  )
+  .refine(
+    (definition) =>
+      !definition.setup?.network ||
+      Object.keys(definition.volumes ?? {}).length === 0,
+    {
+      message:
+        "A volume would carry what agents wrote into the next setup's wider network: an Environment whose setup has its own network keeps no volumes, so bake caches into its image instead",
+      path: ["volumes"],
+    },
+  )
+  .refine(
+    (definition) =>
+      !definition.setup?.secrets ||
+      (definition.setup.network !== undefined &&
+        definition.setup.secrets.every((name) =>
+          definition.secrets?.includes(name),
+        )),
+    {
+      message:
+        "setup.secrets names secrets of the Environment's own secrets for a setup with its own network, which runs with no others",
+      path: ["setup", "secrets"],
+    },
+  );
+
+/** The Environment every project has unless its manifest declares others. */
+export const DEFAULT_ENVIRONMENT = "default";
+
+/** Minutes an idle chat keeps its workspace unless its Environment says otherwise. */
+export const DEFAULT_IDLE_RELEASE_MINUTES = 30;
+
+/** Minutes a workspace's setup may run unless its Environment says otherwise (ADR 0208). */
+export const DEFAULT_SETUP_TIMEOUT_MINUTES = 30;
+
+/** The image an Environment declares, before a Dockerfile is read. */
+export type EnvironmentImage =
+  | { kind: "oci"; reference: string }
+  | { kind: "dockerfile"; path: string };
+
 export interface ProjectEnvironmentDefinition {
-  binding: string;
   description?: string;
   workloads: readonly WorkloadKind[];
-  requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
+  pool?: Readonly<Record<string, string>>;
+  device?: "member";
+  strict?: boolean;
+  idleReleaseMinutes?: number;
+  /** Minutes work may wait for a machine (ADR 0258); 0 by default. */
+  waitMinutes?: number;
+  connections?: Readonly<Record<string, EnvironmentConnectionBinding>>;
+  requirements?: Omit<EnvironmentRequirements, "workload" | "topology"> & {
+    containers?: boolean;
+  };
+  image?: EnvironmentImage;
+  network?: EnvironmentNetworkPolicy;
+  approvals?: { waitMinutes: number };
+  /** Members' own chats here may carry their personal credentials (ADR 0184). */
+  personalCredentials?: boolean;
+  /** Project secrets this Environment's sandboxes receive (ADR 0206). */
+  secrets?: readonly string[];
+  /** Run in every new workspace's project folder (ADRs 0208, 0257). */
+  setup?: EnvironmentSetup;
+  /** Directories kept on the machine for each owner (ADR 0208). */
+  volumes?: Readonly<Record<string, EnvironmentVolume>>;
+}
+
+/**
+ * An Environment's workspace setup (ADR 0208): a shell command run in the
+ * project folder of every new workspace, again when it changes or the
+ * workspace's base moves, within `timeoutMinutes`. With `network` (ADR
+ * 0257) it reaches only those hosts while it runs, in a sandbox holding
+ * the base checkout alone, with only the `secrets` it names.
+ */
+export interface EnvironmentSetup {
+  command: string;
+  timeoutMinutes?: number;
+  network?: { allow: readonly string[] };
+  /** The Environment's secrets a setup with its own network runs with. */
+  secrets?: readonly string[];
+}
+
+/** One volume an Environment declares (ADR 0208). */
+export interface EnvironmentVolume {
+  path: string;
+  exclusive?: boolean;
+  sizeMb?: number;
+}
+
+/** A secret `project.json` declares for Environments (ADR 0206). */
+export interface ProjectSecretDeclaration {
+  label?: string;
+  description?: string;
+}
+
+/** Parse an Environment's `image`: a Dockerfile path or an OCI reference. */
+export function environmentImage(value: string): EnvironmentImage {
+  return DOCKERFILE_PATH.test(value)
+    ? { kind: "dockerfile", path: value }
+    : { kind: "oci", reference: value };
 }
 
 export interface ProjectEnvironmentEntry {
@@ -52,19 +400,21 @@ export interface ProjectEnvironmentPolicy {
   environments: Readonly<Record<string, ProjectEnvironmentDefinition>>;
   defaultEnvironment?: string;
   entries: readonly ProjectEnvironmentEntry[];
+  /** Secrets `project.json` declares for Environments (ADR 0206). */
+  secrets: Readonly<Record<string, ProjectSecretDeclaration>>;
   invalid?: { error: string };
 }
 
-function defaultLocalEnvironmentPolicy(): ProjectEnvironmentPolicy {
+function defaultEnvironmentPolicy(): ProjectEnvironmentPolicy {
   const definition: ProjectEnvironmentDefinition = {
-    binding: "local",
-    description: "Run on this machine",
+    description: "Run where this host places work",
     workloads: ["agent", "workflow"],
   };
   return {
-    environments: { local: definition },
-    defaultEnvironment: "local",
-    entries: [{ name: "local", definition }],
+    environments: { [DEFAULT_ENVIRONMENT]: definition },
+    defaultEnvironment: DEFAULT_ENVIRONMENT,
+    entries: [{ name: DEFAULT_ENVIRONMENT, definition }],
+    secrets: {},
   };
 }
 
@@ -75,13 +425,29 @@ export function parseProjectEnvironmentPolicy(
     return {
       environments: {},
       entries: [],
+      secrets: {},
       invalid: { error: "Project manifest must be a JSON object" },
     };
   }
   const manifest = raw as Record<string, unknown>;
+  const declared = ProjectSecretDeclarationsSchema.safeParse(
+    manifest.secrets ?? {},
+  );
+  if (!declared.success) {
+    const issue = declared.error.issues[0];
+    return {
+      environments: {},
+      entries: [],
+      secrets: {},
+      invalid: {
+        error: `secrets${issue?.path.length ? `.${issue.path.join(".")}` : ""}: ${issue?.message ?? "invalid"}`,
+      },
+    };
+  }
+  const secrets = declared.data;
   const rawEnvironments = manifest.environments;
   if (rawEnvironments === undefined) {
-    return defaultLocalEnvironmentPolicy();
+    return { ...defaultEnvironmentPolicy(), secrets };
   }
   if (
     typeof rawEnvironments !== "object" ||
@@ -91,6 +457,7 @@ export function parseProjectEnvironmentPolicy(
     return {
       environments: {},
       entries: [],
+      secrets,
       invalid: { error: "Project manifest must declare environments" },
     };
   }
@@ -114,7 +481,21 @@ export function parseProjectEnvironmentPolicy(
           },
         };
       }
-      const definition: ProjectEnvironmentDefinition = parsed.data;
+      const { image, volumes, ...rest } = parsed.data;
+      const definition: ProjectEnvironmentDefinition = {
+        ...rest,
+        ...(image ? { image: environmentImage(image) } : {}),
+        ...(volumes
+          ? {
+              volumes: Object.fromEntries(
+                Object.entries(volumes).map(([name, volume]) => [
+                  name,
+                  typeof volume === "string" ? { path: volume } : volume,
+                ]),
+              ),
+            }
+          : {}),
+      };
       return { name, definition };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -132,6 +513,7 @@ export function parseProjectEnvironmentPolicy(
     return {
       environments,
       entries,
+      secrets,
       invalid: {
         error: "defaultEnvironment must name a valid declared Environment",
       },
@@ -140,6 +522,7 @@ export function parseProjectEnvironmentPolicy(
   return {
     environments,
     entries,
+    secrets,
     ...(typeof defaultEnvironment === "string" ? { defaultEnvironment } : {}),
   };
 }
@@ -177,7 +560,7 @@ export class ProjectEnvironmentsService {
       },
     );
     if (!content) {
-      return defaultLocalEnvironmentPolicy();
+      return defaultEnvironmentPolicy();
     }
     try {
       return parseProjectEnvironmentPolicy(JSON.parse(content));
@@ -185,6 +568,7 @@ export class ProjectEnvironmentsService {
       return {
         environments: {},
         entries: [],
+        secrets: {},
         invalid: {
           error: `Project manifest is not valid JSON: ${
             cause instanceof Error ? cause.message : String(cause)
@@ -200,5 +584,35 @@ export class ProjectEnvironmentsService {
     name: string;
   }): Promise<ProjectEnvironmentDefinition | undefined> {
     return (await this.list(args)).environments[args.name];
+  }
+
+  /**
+   * An Environment's Dockerfile, read from the same program the manifest
+   * came from, so the image is exactly what was reviewed (ADR 0176).
+   */
+  async readProgramFile(args: {
+    identity: Identity;
+    projectId: string;
+    path: string;
+  }): Promise<string | null> {
+    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    const publishedOnly =
+      args.identity.scope !== undefined &&
+      Boolean(
+        await this.projectManager.localPath({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+        }),
+      );
+    return withProgram(
+      this.projectManager,
+      args.identity.tenantId,
+      args.projectId,
+      (repo, ref) =>
+        publishedOnly && ref === null
+          ? Promise.resolve(null)
+          : readProgramFile(repo, ref, args.path),
+      { workingTree: args.identity.scope === undefined, publishedOnly },
+    );
   }
 }

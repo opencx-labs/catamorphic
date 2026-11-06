@@ -1,0 +1,81 @@
+{
+  "name": "@catamorphic/work-server",
+  "version": "0.1.0-alpha.37",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
+    "typecheck": "bun check --project ./tsconfig.json",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ]
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.52",
+    "@ai-sdk/openai": "^4.0.65",
+    "@better-auth/mcp": "1.7.14",
+    "@better-auth/oauth-provider": "1.7.14",
+    "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/agent-runner": "workspace:*",
+    "@catamorphic/ai-sdk": "workspace:*",
+    "@catamorphic/app": "workspace:*",
+    "@catamorphic/container": "workspace:*",
+    "@catamorphic/core": "workspace:*",
+    "@catamorphic/db": "workspace:*",
+    "@catamorphic/fastify-plugin": "workspace:*",
+    "@catamorphic/hetzner": "workspace:*",
+    "@catamorphic/local-process": "workspace:*",
+    "@catamorphic/mcp": "workspace:*",
+    "@catamorphic/microsandbox": "workspace:*",
+    "@catamorphic/otel": "workspace:*",
+    "@catamorphic/registry": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*",
+    "@catamorphic/server-sdk": "workspace:*",
+    "@catamorphic/workflow": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4",
+    "@openai/codex": "0.166.0",
+    "better-auth": "1.7.14",
+    "fastify": "^5.12.7",
+    "kysely": "^0.29.3",
+    "micromark": "^4.0.2",
+    "pg": "8.16.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/pg": "8.15.5"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/work-server"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
+  ]
+}

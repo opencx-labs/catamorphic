@@ -8,9 +8,11 @@ import {
 import {
   type CSSProperties,
   type DOMAttributes,
+  Fragment,
   type MouseEvent,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -19,16 +21,79 @@ import { openModeFromEvent } from "../../shared/open-mode.js";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
-import { EASE_STANDARD, motionMs } from "../lib/motion.js";
+import {
+  EASE_STANDARD,
+  motionMs,
+  prefersReducedMotion,
+} from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
-import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
+import {
+  type ChatSignals,
+  combineSignals,
+  SignalBadge,
+  SignalGlyph,
+} from "./chat-signals";
+import { type MenuAt, MenuPortal, menuAtPointer } from "./menu.js";
 import { ShortcutHint } from "./shortcut-hint";
-import { MenuPortal } from "./sidebar-item-row.js";
 
 /** Bubbles identify themselves on hover without delay (unlike buttons,
     whose labels are usually inferable — a bubble is just an icon). */
 const BUBBLE_HINT_DELAY_MS = 100;
+/** What a bubble that is not shown signals: nothing. */
+const NO_SIGNALS: ChatSignals = {};
+
+/**
+ * The strip folding into its corner and opening again: its slide between
+ * resting spots and the width its chats give up or take (duration-250 on
+ * the folding parts) run together, so it lands as one motion.
+ */
+const FOLD_MS = 250;
+
+type Spot = "left" | "center" | "right";
+
+/** An ancestor's slide must not count as movement between the dock's spots. */
+function dockEdges({ rail }: { rail: HTMLElement }) {
+  const bounds = rail.getBoundingClientRect();
+  const origin = rail.parentElement?.getBoundingClientRect().left ?? 0;
+  return { left: bounds.left - origin, right: bounds.right - origin };
+}
+
+/**
+ * Whether the strip shows folded, derived where the dock renders so the
+ * fold and what it moves (a chat tab's clearance, the detached window's
+ * size) change in one render, never a second one a frame into the motion.
+ *
+ * A focused chat tab folds it (`autoCollapse`); opened by hand meanwhile,
+ * it stays open until such a tab gains focus again. Otherwise it is the
+ * person's fold (`folded`), shown open beside an open chat (a closed
+ * bubble beside a visible chat reads wrong); a chat on its way out no
+ * longer counts, so the strip folds while it leaves.
+ */
+export function useStripFold({
+  autoCollapse,
+  folded,
+  chatOpen,
+}: {
+  autoCollapse: boolean;
+  folded: boolean;
+  chatOpen: boolean;
+}): {
+  collapsed: boolean;
+  /** The person's own controls folded (true) or opened (false) it. */
+  choose: (folded: boolean) => void;
+} {
+  const [peeked, setPeeked] = useState(false);
+  const [wasAuto, setWasAuto] = useState(autoCollapse);
+  if (wasAuto !== autoCollapse) {
+    setWasAuto(autoCollapse);
+    if (autoCollapse) setPeeked(false);
+  }
+  return {
+    collapsed: autoCollapse ? !peeked : folded && !chatOpen,
+    choose: (next) => setPeeked(!next),
+  };
+}
 
 export interface ChatBubblesProps {
   dragLeft?: number | null;
@@ -48,7 +113,7 @@ export interface ChatBubblesProps {
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
-  /** All chats; tab-mode chats contribute indicators but no strip bubble. */
+  /** All chats; only main chats outside tabs get a strip bubble. */
   entries: ChatDockEntry[];
   labels: Record<string, string>;
   /** Agent-chosen conversation icons ("<name>:<color>") per chat. */
@@ -64,16 +129,29 @@ export interface ChatBubblesProps {
   /** Session actions shared verbatim with the matching sidebar row. */
   menus: Record<string, ChatSessionMenuEntry[]>;
   activeLocalId?: string;
+  /** Whether the strip shows folded into one bubble (`useStripFold`). */
+  collapsed: boolean;
   /**
-   * The focused workspace tab wants the bottom edge clear (e.g. a chat tab):
-   * the strip folds into one bubble docked at the right. The user can still
-   * pull it back open; the fold re-applies next time such a tab gains focus.
+   * The person's own fold (the arrows) or open (the folded bubble), kept
+   * across windows and launches (prefs `dockCollapsed`). Nothing else
+   * calls it.
    */
-  autoCollapse: boolean;
-  /** Reports the effective collapsed state so hosts can clear the bottom. */
-  onCollapsedChange?: (collapsed: boolean) => void;
-  /** Rendered at the rail's end, outside the chat strip: the downloads bubble. */
+  onFoldedChange: (folded: boolean) => void;
+  /** Rendered beside the chat strip, inside the arrows: the downloads bubble. */
   trailing?: ReactNode;
+  /**
+   * The voice microphone (ADR 0216): shown collapsed or not, right inside
+   * the arrows so they stay the outermost control.
+   */
+  voice?: ReactNode;
+  /** Whether the microphone is in the dock; it grows in and out. */
+  voiceShown?: boolean;
+  /**
+   * The person's choice to keep the microphone in the dock, offered in the
+   * arrows' menu whether it shows or not.
+   */
+  voiceInDock?: boolean;
+  onVoiceInDockChange?: (inDock: boolean) => void;
   onToggle: (localId: string) => void;
   /**
    * A bubble click with the app's open modifiers (⌘ = tab, ⌘⇧ = to the
@@ -138,45 +216,23 @@ function Bubble({
   onExited: (localId: string) => void;
 }) {
   const [asking, setAsking] = useState(false);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const prevAwaitingRef = useRef(signals.awaitingInput ?? false);
   if (prevAwaitingRef.current !== (signals.awaitingInput ?? false)) {
     prevAwaitingRef.current = signals.awaitingInput ?? false;
     if (signals.awaitingInput) setAsking(true);
   }
-  useEffect(() => {
-    if (!menuOpen) return;
-    const dismiss = (event: Event) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-sidebar-menu]")
-      ) {
-        return;
-      }
-      setMenuOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setMenuOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", dismiss, true);
-    };
-  }, [menuOpen]);
   return (
+    // Flex, like every dock slot: the hint's inline anchor in a block would
+    // sit on a text line, and its descender space would lift the bubble.
     <div
+      ref={rootRef}
       data-chat-bubble={entry.localId}
       data-session-id={entry.sessionId}
       style={theme}
-      className={`group relative ${
+      className={`group relative flex ${
         exiting
           ? "animate-bubble-out pointer-events-none"
           : fresh
@@ -212,12 +268,12 @@ function Bubble({
                     });
                     return;
                   }
-                  setMenuAt({ x: event.clientX, y: event.clientY });
+                  setMenuAt(menuAtPointer(event));
                   setMenuOpen(true);
                 }
               : undefined
           }
-          className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-95 ${
+          className={`relative grid size-9 cursor-pointer place-items-center rounded-full border transition-[background-color,border-color,scale] duration-150 ease-standard active:scale-95 ${
             asking ? "animate-bubble-ask " : ""
           }${
             expanded
@@ -227,11 +283,7 @@ function Bubble({
           aria-label={expanded ? `Minimize ${label}` : `Open ${label}`}
           aria-expanded={expanded}
         >
-          <SignalGlyph
-            working={signals.working}
-            awaitingInput={signals.awaitingInput}
-            className="size-4"
-          >
+          <SignalGlyph activity={signals.activity} className="size-4">
             <ChatGlyph icon={icon} fork={fork} className="size-4" />
           </SignalGlyph>
           <span className="absolute -right-0.5 -top-0.5">
@@ -252,12 +304,18 @@ function Bubble({
       {menuAt && menu && (
         <MenuPortal
           open={menuOpen}
-          position={menuAt}
+          at={menuAt}
+          // Only a scroll that carries the bubble detaches the menu from
+          // it. A streaming chat keeps its timeline following new output,
+          // and those scrolls must not close a menu the person just opened.
+          anchor={rootRef}
+          label={label}
           entries={menu}
           onPick={(action) => {
             setMenuOpen(false);
             onMenuAction(entry.localId, action);
           }}
+          onDismiss={() => setMenuOpen(false)}
           onExited={() => setMenuAt(null)}
         />
       )}
@@ -269,7 +327,8 @@ function Bubble({
  * Bottom-docked bubble per open chat. Clicking a bubble minimizes its chat
  * if it is the expanded one, otherwise restores it to its last size. The
  * whole strip can collapse into a single right-docked bubble that keeps
- * showing aggregate activity (spinner) and unread indicators.
+ * showing the docked chats' activity and unread indicators (chats in tabs
+ * show theirs on their tabs).
  */
 export function ChatBubbles({
   dragLeft = null,
@@ -292,9 +351,13 @@ export function ChatBubbles({
   attention,
   menus,
   activeLocalId,
-  autoCollapse,
-  onCollapsedChange,
+  collapsed,
+  onFoldedChange,
   trailing,
+  voice,
+  voiceShown = true,
+  voiceInDock,
+  onVoiceInDockChange,
   onToggle,
   onOpenAs,
   onClose,
@@ -305,88 +368,50 @@ export function ChatBubbles({
   const keybindings = useKeybindings();
   // Right-click on the collapsed bubble or the arrows: moves the dock
   // between the window and its own always-on-top window for this session.
-  const [dockMenuAt, setDockMenuAt] = useState<{ x: number; y: number } | null>(
-    null,
-  );
+  const [dockMenuAt, setDockMenuAt] = useState<MenuAt | null>(null);
   const [dockMenuOpen, setDockMenuOpen] = useState(false);
   const dockMenuEntries = [
-    {
-      label: detached
-        ? "Return dock to the window"
-        : "Float dock in its own window",
-      action: "detach",
-    },
+    ...(onToggleDetached
+      ? [
+          {
+            label: detached
+              ? "Return dock to the window"
+              : "Float dock in its own window",
+            action: "detach",
+          },
+        ]
+      : []),
+    ...(onVoiceInDockChange
+      ? [
+          {
+            label: "Show voice in dock",
+            action: "voice-in-dock",
+            checked: voiceInDock === true,
+            setting: true,
+          },
+        ]
+      : []),
   ];
-  const openDockMenu = onToggleDetached
-    ? (event: MouseEvent<HTMLElement>) => {
-        event.preventDefault();
-        if (nativeMenus) {
-          void desktopApi.dockMenu(dockMenuEntries).then((action) => {
-            if (action === "detach") onToggleDetached();
-          });
-          return;
+  const pickDockMenu = (action: string | null) => {
+    if (action === "detach") onToggleDetached?.();
+    if (action === "voice-in-dock") onVoiceInDockChange?.(!voiceInDock);
+  };
+  const openDockMenu =
+    dockMenuEntries.length > 0
+      ? (event: MouseEvent<HTMLElement>) => {
+          event.preventDefault();
+          if (nativeMenus) {
+            void desktopApi.dockMenu(dockMenuEntries).then(pickDockMenu);
+            return;
+          }
+          setDockMenuAt(menuAtPointer(event));
+          setDockMenuOpen(true);
         }
-        setDockMenuAt({ x: event.clientX, y: event.clientY });
-        setDockMenuOpen(true);
-      }
-    : undefined;
-  useEffect(() => {
-    if (!dockMenuOpen) return;
-    const dismiss = (event: Event) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-sidebar-menu]")
-      )
-        return;
-      setDockMenuOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setDockMenuOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [dockMenuOpen]);
-  // User override: true = collapsed, false = expanded, null = follow
-  // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
-  // focusing a chat tab folds the strip again even after a manual expand.
-  const [collapseOverride, setCollapseOverride] = useState<boolean | null>(
-    entries.some((entry) => entry.mode === "partial") ? null : true,
+      : undefined;
+  // Subsessions live with their parent; main chats outside tabs get bubbles.
+  const stripEntries = entries.filter(
+    (entry) => entry.mode !== "tab" && !forks[entry.localId],
   );
-  const prevAutoRef = useRef(autoCollapse);
-  if (prevAutoRef.current !== autoCollapse) {
-    prevAutoRef.current = autoCollapse;
-    setCollapseOverride(null);
-  }
-  // A chat opening (Cmd+N, the sidebar, a palette action) releases a manual
-  // collapse: the strip belongs with the open chat, otherwise a closed bubble
-  // would sit beside a visible chat. Auto-collapse behind a tab still applies.
-  const openLocalId = entries.find(
-    (entry) => entry.mode === "partial" && entry.localId === activeLocalId,
-  )?.localId;
-  const prevOpenRef = useRef(openLocalId);
-  if (prevOpenRef.current !== openLocalId) {
-    prevOpenRef.current = openLocalId;
-    if (openLocalId && collapseOverride === true) setCollapseOverride(null);
-  }
-  const collapsed = collapseOverride ?? autoCollapse;
-
-  // Tab-mode chats live in the tab bar; only docked/minimized chats get a
-  // bubble in the strip. The pill itself always renders so chats never
-  // silently vanish from the screen.
-  const stripEntries = entries.filter((entry) => entry.mode !== "tab");
-
-  const onCollapsedChangeRef = useRef(onCollapsedChange);
-  onCollapsedChangeRef.current = onCollapsedChange;
-  useEffect(() => {
-    onCollapsedChangeRef.current?.(collapsed);
-  }, [collapsed]);
 
   // Bubbles present on mount appear statically; bubbles added later pop in.
   // Once an id qualifies, the animation class sticks — removing it mid-run
@@ -452,22 +477,17 @@ export function ChatBubbles({
       exitingIds: current.exitingIds.filter((id) => id !== localId),
     }));
 
-  // Indicators aggregate across ALL chats (including tab-mode ones) so the
-  // collapsed bubble never hides activity.
   const signalsFor = (localId: string): ChatSignals => ({
     ...(signals[localId] ?? {}),
     unread: unread[localId] ?? false,
     attention: attention[localId] ?? false,
   });
-  const aggregate: ChatSignals = {
-    working: entries.some((entry) => signals[entry.localId]?.working),
-    unread: entries.some((entry) => unread[entry.localId]),
-    attention: entries.some((entry) => attention[entry.localId]),
-    draft: entries.some((entry) => signals[entry.localId]?.draft),
-    awaitingInput: entries.some(
-      (entry) => signals[entry.localId]?.awaitingInput,
-    ),
-  };
+  // The folded bubble speaks for the chats in the dock only: a chat put
+  // there (minimized) is one the person follows by its bubble, while a
+  // chat in a tab says what it is doing on its tab.
+  const aggregate = combineSignals(
+    stripEntries.map((entry) => signalsFor(entry.localId)),
+  );
 
   // The rail rests at a corner (collapsed) or at its placement (expanded),
   // anchored by its own edge so growing or shrinking never moves that edge.
@@ -484,44 +504,106 @@ export function ChatBubbles({
     observer.observe(rail);
     return () => observer.disconnect();
   }, []);
-  const spot = collapsed ? side : placement;
-  const lastRect = useRef<{ left: number; right: number } | null>(null);
-  const lastSpot = useRef(spot);
+  const spot: Spot = collapsed ? side : placement;
+  // The spot and drag the DOM shows: what this render may move it from.
+  const shownSpot = useRef(spot);
+  const shownDragged = useRef(false);
+  // The slide under way: the spot it left, and how much of a whole fold's
+  // time it was given.
+  const slide = useRef<{
+    animation: Animation;
+    from: Spot;
+    shortening: number;
+  } | null>(null);
+  // A dropped strip slides to its spot from where it was let go, the spot
+  // it started from included; a strip changing spots, from where it is
+  // drawn. Read before this render reaches the DOM, so it is where the
+  // strip is on screen now (mid-slide, mid-fold, after chats came and went
+  // or the region moved), never where it was when it last changed spots.
+  const slideFrom =
+    dragLeft === null && (shownSpot.current !== spot || shownDragged.current)
+      ? railRef.current
+        ? dockEdges({ rail: railRef.current })
+        : null
+      : null;
   useLayoutEffect(() => {
     const rail = railRef.current;
-    if (!rail) return;
-    const previous = lastRect.current;
-    // Resting spots belong to the dock's container. An ancestor can slide the
-    // whole surface (for example when entering a tutorial page) between these
-    // measurements; that movement must not become part of the dock's FLIP.
-    const bounds = rail.getBoundingClientRect();
-    const origin = rail.parentElement?.getBoundingClientRect().left ?? 0;
-    const rect = { left: bounds.left - origin, right: bounds.right - origin };
-    lastRect.current = rect;
-    if (lastSpot.current === spot || dragLeft !== null) {
-      lastSpot.current = spot;
+    const previous = shownSpot.current;
+    shownSpot.current = spot;
+    shownDragged.current = dragLeft !== null;
+    // A drag moves the strip from where the slide had drawn it (where the
+    // press measured it), so the slide stops rather than carry the dragged
+    // strip away from the pointer.
+    if (dragLeft !== null) {
+      slide.current?.animation.cancel();
+      slide.current = null;
       return;
     }
-    lastSpot.current = spot;
-    if (
-      !previous ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    )
-      return;
+    if (!rail || !slideFrom || prefersReducedMotion()) return;
+    // The slide under way, if any, is part of where the strip is drawn.
+    const running = slide.current;
+    slide.current = null;
+    // Turned back mid-way, the fold's transitions take only as long as the
+    // way back (CSS shortens a reversed transition by how far it had got,
+    // in eased progress); the slide back takes the same, so both land
+    // together. Anything else starts a whole fold from where it is drawn.
+    const progress = running?.animation.effect?.getComputedTiming().progress;
+    const shortening =
+      running && running.from === spot && progress != null
+        ? Math.min(
+            1,
+            Math.abs(progress * running.shortening + 1 - running.shortening),
+          )
+        : 1;
+    running?.animation.cancel();
+    const rect = dockEdges({ rail });
     // Compare the edge that anchors the new spot so a width change during
     // the same commit does not read as travel.
     const delta =
       spot === "right"
-        ? previous.right - rect.right
+        ? slideFrom.right - rect.right
         : spot === "left"
-          ? previous.left - rect.left
-          : (previous.left + previous.right - rect.left - rect.right) / 2;
+          ? slideFrom.left - rect.left
+          : (slideFrom.left + slideFrom.right - rect.left - rect.right) / 2;
     if (Math.abs(delta) < 1) return;
-    rail.animate(
-      [{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }],
-      { duration: motionMs(200), easing: EASE_STANDARD, composite: "add" },
-    );
-  }, [spot, dragLeft]);
+    slide.current = {
+      animation: rail.animate(
+        [
+          { transform: `translateX(${delta}px)` },
+          { transform: "translateX(0)" },
+        ],
+        {
+          duration: motionMs(FOLD_MS) * shortening,
+          easing: EASE_STANDARD,
+          // Hold the measured pose while playback is pending. Without it,
+          // the new resting spot can show for a frame before the slide.
+          fill: "backwards",
+        },
+      ),
+      from: previous,
+      shortening,
+    };
+  }, [spot, dragLeft, slideFrom]);
+  // Folding or opening makes the control pressed go inert. Read before this
+  // render reaches the DOM: when it held focus, the control that takes its
+  // place takes focus, so the keyboard keeps its place instead of falling
+  // to the page.
+  const arrowsRef = useRef<HTMLButtonElement>(null);
+  const expandRef = useRef<HTMLButtonElement>(null);
+  const focusedControl =
+    arrowsRef.current !== null && document.activeElement === arrowsRef.current
+      ? "arrows"
+      : expandRef.current !== null &&
+          document.activeElement === expandRef.current
+        ? "expand"
+        : null;
+  useLayoutEffect(() => {
+    if (collapsed && focusedControl === "arrows")
+      expandRef.current?.focus({ preventScroll: true });
+    else if (!collapsed && focusedControl === "expand")
+      arrowsRef.current?.focus({ preventScroll: true });
+  }, [collapsed, focusedControl]);
+  const itemsId = useId();
   const spotClass =
     spot === "left"
       ? "left-8"
@@ -533,15 +615,18 @@ export function ChatBubbles({
   const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
   const arrows = (
     <button
+      ref={arrowsRef}
       type="button"
       {...placementDragHandlers}
       onClick={() => {
-        setCollapseOverride(true);
+        onFoldedChange(true);
         onCollapse?.();
       }}
       onContextMenu={openDockMenu}
       className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
       aria-label="Collapse chat bubbles"
+      aria-expanded={!collapsed}
+      aria-controls={itemsId}
       aria-description="Drag to place open chats left, center or right. Arrow keys move them."
       aria-keyshortcuts="ArrowLeft ArrowRight"
       data-dock-arrows={side}
@@ -549,9 +634,9 @@ export function ChatBubbles({
       <Arrows className="size-4" />
     </button>
   );
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
-      {/* Resting spots the drag can choose. The one under the pointer glows. */}
+  // Resting spots the drag can choose. The one under the pointer glows.
+  const targets = (
+    <>
       {dragTarget !== null &&
         (collapsed
           ? (["left", "right"] as const)
@@ -562,7 +647,7 @@ export function ChatBubbles({
             aria-hidden="true"
             data-dock-target={target}
             data-active={target === dragTarget || undefined}
-            className={`pointer-events-none absolute bottom-3 h-11 rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`pointer-events-none absolute bottom-3 h-11 rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-standard ${
               target === "left"
                 ? "left-8"
                 : target === "right"
@@ -578,6 +663,175 @@ export function ChatBubbles({
             }}
           />
         ))}
+    </>
+  );
+  // Expanded strip content folds its width away when collapsed: from the
+  // width it shows to none and back (styles.css), so the strip narrows
+  // from the first frame as it slides into its corner.
+  const items = (
+    <div
+      key="items"
+      id={itemsId}
+      className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-standard ${
+        collapsed ? "pointer-events-none opacity-0" : "opacity-100"
+      }`}
+      data-bubble-items
+      aria-hidden={collapsed}
+      inert={collapsed ? true : undefined}
+    >
+      {display.entries.map((entry) => (
+        <Bubble
+          theme={themes?.[entry.localId]}
+          key={entry.localId}
+          entry={entry}
+          label={labels[entry.localId] ?? "Chat"}
+          icon={icons[entry.localId] ?? null}
+          fork={forks[entry.localId] ?? false}
+          signals={signalsFor(entry.localId)}
+          exiting={display.exitingIds.includes(entry.localId)}
+          fresh={freshIds.has(entry.localId)}
+          expanded={entry.mode !== "min" && entry.localId === activeLocalId}
+          onToggle={onToggle}
+          onOpenAs={onOpenAs}
+          onClose={onClose}
+          menu={menus[entry.localId]}
+          nativeMenus={nativeMenus}
+          onMenuAction={onMenuAction}
+          onExited={removeExited}
+        />
+      ))}
+      {/* The bubble + opens the floating aside, not a tab. */}
+      <ShortcutHint
+        label={
+          newChatProjectName ? `New chat in ${newChatProjectName}` : "New chat"
+        }
+        shortcut={formatBinding(keybindings["new-floating-chat"])}
+        side="top"
+      >
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="grid size-9 cursor-pointer place-items-center rounded-full border border-dashed border-border text-fg-faint transition-colors duration-150 hover:border-border-strong hover:text-fg"
+          aria-label="New chat"
+        >
+          <Plus className="size-4" />
+        </button>
+      </ShortcutHint>
+    </div>
+  );
+  // Downloads and the microphone sit between the chats and the arrows,
+  // the microphone next to the arrows; both stay when the strip folds.
+  // Kept out of the dock, the microphone shrinks to nothing in place and
+  // takes its gap with it: beside downloads, the gap between them; alone,
+  // the dock's gap around the tools, which leaves them empty. The slot is
+  // flex: a block would put the microphone's hint on a text line, whose
+  // descender space lifted it above the bubbles and grew the dock.
+  const voiceSlot = (
+    <div
+      key="voice"
+      data-dock-voice={voiceShown ? "shown" : "hidden"}
+      className={`flex transition-[max-width,margin,opacity,scale] duration-200 ease-standard ${
+        voiceShown
+          ? "max-w-9 opacity-100"
+          : `pointer-events-none max-w-0 overflow-hidden opacity-0 scale-40 ${side === "left" ? "-me-1.5" : "-ms-1.5"}`
+      }`}
+      aria-hidden={!voiceShown}
+      inert={!voiceShown ? true : undefined}
+    >
+      {voice}
+    </div>
+  );
+  const trailingSlot = <Fragment key="trailing">{trailing}</Fragment>;
+  const tools = (
+    <div
+      key="tools"
+      className={`flex items-center gap-1.5 transition-[margin] duration-200 ease-standard ${
+        side === "left"
+          ? collapsed
+            ? "ms-1 [&:has(>[data-dock-voice=hidden]:only-child)]:ms-0"
+            : "[&:has(>[data-dock-voice=hidden]:only-child)]:-ms-1.5"
+          : collapsed
+            ? "me-1 [&:has(>[data-dock-voice=hidden]:only-child)]:me-0"
+            : "[&:has(>[data-dock-voice=hidden]:only-child)]:-me-1.5"
+      }`}
+    >
+      {side === "left" ? [voiceSlot, trailingSlot] : [trailingSlot, voiceSlot]}
+    </div>
+  );
+  // The arrows fold away with the strip; the collapsed bubble takes their
+  // place as the outermost control.
+  const arrowsSlot = (
+    <div
+      key="arrows"
+      className={`flex overflow-hidden transition-[max-width,opacity] duration-250 ease-standard ${
+        collapsed
+          ? "pointer-events-none max-w-0 opacity-0"
+          : "max-w-9 opacity-100"
+      }`}
+      aria-hidden={collapsed}
+      inert={collapsed ? true : undefined}
+    >
+      {arrows}
+    </div>
+  );
+  const collapsedBubble = (
+    <button
+      key="expand"
+      ref={expandRef}
+      type="button"
+      {...dragHandlers}
+      onClick={() => onFoldedChange(false)}
+      onContextMenu={openDockMenu}
+      // Its edge is a ring, not a border: a border is never thinner than a
+      // pixel, so the strip would snap 2px as the bubble comes and goes.
+      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full bg-bg-overlay text-fg-muted inset-ring inset-ring-border transition-[max-width,opacity,background-color,box-shadow] duration-250 ease-standard hover:text-fg hover:inset-ring-border-strong ${
+        collapsed
+          ? "size-9 max-w-9 opacity-100"
+          : "pointer-events-none size-9 max-w-0 opacity-0"
+      }`}
+      aria-label="Expand chat bubbles"
+      aria-expanded={!collapsed}
+      aria-controls={itemsId}
+      aria-description="Drag to either bottom corner. Arrow keys move left or right."
+      aria-keyshortcuts="ArrowLeft ArrowRight"
+      aria-hidden={!collapsed}
+      inert={!collapsed ? true : undefined}
+    >
+      {/* Signals only while shown: the open strip keeps this bubble mounted
+          but invisible, and a spinner or pulse there would keep the
+          compositor drawing for nothing. */}
+      <SignalGlyph
+        activity={collapsed ? aggregate.activity : null}
+        className="size-4"
+      >
+        <MessageSquare className="size-4" />
+      </SignalGlyph>
+      {/* The count takes the lower-left corner: the icon's own lower
+          corner says what the chats are doing. */}
+      {stripEntries.length > 1 && (
+        <span className="absolute -bottom-0.5 -left-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
+          {stripEntries.length}
+        </span>
+      )}
+      <span className="absolute -right-0.5 -top-0.5">
+        <SignalBadge signals={collapsed ? aggregate : NO_SIGNALS} size="md" />
+      </span>
+    </button>
+  );
+  // The outer edge is one slot the arrows and the collapsed bubble share,
+  // so folding cross-fades them in place. The strip mirrors for its side
+  // by moving its controls, keyed, never by drawing them anew: drawn anew,
+  // downloads would vanish until it had read its profile again.
+  const edge = (
+    <div key="edge" className="flex">
+      {side === "left"
+        ? [collapsedBubble, arrowsSlot]
+        : [arrowsSlot, collapsedBubble]}
+    </div>
+  );
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
+      {targets}
       <div
         ref={railRef}
         data-dock-rail
@@ -588,109 +842,23 @@ export function ChatBubbles({
             ? undefined
             : { left: dragLeft, right: "auto", translate: "0" }
         }
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
-          collapsed ? "p-1" : "gap-1.5 p-1.5"
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-standard ${spotClass} ${
+          collapsed ? "gap-0 p-1" : "gap-1.5 p-1.5"
         }`}
       >
-        {/* Expanded strip content folds its width away when collapsed. */}
-        <div
-          className={`flex items-center overflow-hidden transition-[max-width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-            collapsed
-              ? "pointer-events-none max-w-0 opacity-0"
-              : "max-w-[60vw] gap-1.5 opacity-100"
-          }`}
-          data-bubble-items
-          aria-hidden={collapsed}
-          inert={collapsed ? true : undefined}
-        >
-          {side === "left" && arrows}
-          {display.entries.map((entry) => (
-            <Bubble
-              theme={themes?.[entry.localId]}
-              key={entry.localId}
-              entry={entry}
-              label={labels[entry.localId] ?? "Chat"}
-              icon={icons[entry.localId] ?? null}
-              fork={forks[entry.localId] ?? false}
-              signals={signalsFor(entry.localId)}
-              exiting={display.exitingIds.includes(entry.localId)}
-              fresh={freshIds.has(entry.localId)}
-              expanded={entry.mode !== "min" && entry.localId === activeLocalId}
-              onToggle={onToggle}
-              onOpenAs={onOpenAs}
-              onClose={onClose}
-              menu={menus[entry.localId]}
-              nativeMenus={nativeMenus}
-              onMenuAction={onMenuAction}
-              onExited={removeExited}
-            />
-          ))}
-          {/* The bubble + opens the floating aside, not a tab. */}
-          <ShortcutHint
-            label={
-              newChatProjectName
-                ? `New chat in ${newChatProjectName}`
-                : "New chat"
-            }
-            shortcut={formatBinding(keybindings["new-floating-chat"])}
-            side="top"
-          >
-            <button
-              type="button"
-              onClick={onNewChat}
-              className="grid size-9 cursor-pointer place-items-center rounded-full border border-dashed border-border text-fg-faint transition-colors duration-150 hover:border-border-strong hover:text-fg"
-              aria-label="New chat"
-            >
-              <Plus className="size-4" />
-            </button>
-          </ShortcutHint>
-          {side === "right" && arrows}
-        </div>
-
-        {/* Collapsed single bubble; carries aggregate indicators. */}
-        <button
-          type="button"
-          {...dragHandlers}
-          onClick={() => setCollapseOverride(false)}
-          onContextMenu={openDockMenu}
-          className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
-            collapsed
-              ? "size-9 max-w-9 opacity-100"
-              : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
-          }`}
-          aria-label="Expand chat bubbles"
-          aria-description="Drag to either bottom corner. Arrow keys move left or right."
-          aria-keyshortcuts="ArrowLeft ArrowRight"
-          aria-hidden={!collapsed}
-          inert={!collapsed ? true : undefined}
-        >
-          <SignalGlyph
-            working={aggregate.working}
-            awaitingInput={aggregate.awaitingInput}
-            className="size-4"
-          >
-            <MessageSquare className="size-4" />
-          </SignalGlyph>
-          {stripEntries.length > 1 && (
-            <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
-              {stripEntries.length}
-            </span>
-          )}
-          <span className="absolute -right-0.5 -top-0.5">
-            <SignalBadge signals={aggregate} size="md" />
-          </span>
-        </button>
-        {trailing}
+        {side === "left" ? [edge, tools, items] : [items, tools, edge]}
       </div>
-      {dockMenuAt && onToggleDetached && (
+      {dockMenuAt && (
         <MenuPortal
           open={dockMenuOpen}
-          position={dockMenuAt}
+          at={dockMenuAt}
+          label="Dock"
           entries={dockMenuEntries}
-          onPick={() => {
+          onPick={(entry) => {
             setDockMenuOpen(false);
-            onToggleDetached();
+            pickDockMenu(entry.action);
           }}
+          onDismiss={() => setDockMenuOpen(false)}
           onExited={() => setDockMenuAt(null)}
         />
       )}

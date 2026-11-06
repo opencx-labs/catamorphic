@@ -1,5 +1,7 @@
-import { createApiClient } from "@catamorphic/api-client";
+import { createApiClient, type paths } from "@catamorphic/api-client";
 import type {
+  PersonalEnvironmentInput,
+  PersonalEnvironmentStatus,
   PullRequestComment,
   PullRequestDiscussion,
   PullRequestFile,
@@ -8,6 +10,7 @@ import type {
   RemoteDocumentsClient,
   RemoteDocumentVersion,
 } from "@catamorphic/core";
+import { syncRemoteProject } from "@catamorphic/core";
 
 export {
   type LocalStatus,
@@ -56,6 +59,25 @@ export interface RemoteInvitation {
   webLinks: string[];
 }
 
+/**
+ * One project secret on the server (ADR 0206): where it is declared, which
+ * Environments receive it, and which values exist. Never a value.
+ */
+export interface RemoteSecret {
+  name: string;
+  label?: string;
+  description?: string;
+  required: boolean;
+  source: "project" | "plugin";
+  environments: string[];
+  shared: boolean;
+  updatedAt: string | null;
+  setBy: string | null;
+  own: boolean;
+  ownUpdatedAt: string | null;
+  members: Array<{ member: string; updatedAt: string; setBy: string | null }>;
+}
+
 export interface RemoteAccessRequest {
   id: string;
   externalUserId: string;
@@ -65,13 +87,68 @@ export interface RemoteAccessRequest {
   requestedAt: string;
 }
 
+/** A connection provider the server offers (`GET /connection-providers`). */
+export interface RemoteConnectionProvider {
+  kind: string;
+  displayName: string;
+}
+
+/** A named service connection on the server (ADR 0172). */
+export interface RemoteServiceConnection {
+  id: string;
+  projectId: string | null;
+  providerKind: string;
+  principalKind: "tenant_service" | "project_service" | "member";
+  name: string | null;
+  ownerExternalUserId: string | null;
+  label: string;
+  status: "pending" | "ready" | "expired" | "revoked";
+  account: unknown;
+  scopes: string[];
+  capabilities: string[];
+  expiresAt: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What a provider asks for to authorize a connection. */
+export type RemoteAuthorizationChallenge =
+  | {
+      kind: "form";
+      fields: Array<{
+        name: string;
+        label: string;
+        secret: boolean;
+        required: boolean;
+        multiline?: boolean;
+      }>;
+    }
+  | { kind: "url"; url: string; expiresAt?: string }
+  | {
+      kind: "device";
+      verificationUrl: string;
+      userCode: string;
+      expiresAt?: string;
+    };
+
+export interface RemoteServiceAuthorization {
+  authorizationId: string;
+  challenge: RemoteAuthorizationChallenge;
+}
+
 /** `GET /me` on the host (ADR 0055). */
 export interface RemoteMe {
   version: number;
-  identity: { externalUserId: string; root: boolean };
+  identity: {
+    externalUserId: string;
+    root: boolean;
+    /** Organization-wide grants; absent on older servers. */
+    controlPlanePermissions?: string[];
+  };
   projects: Array<{
     projectId: string;
-    builder: boolean;
+    name: string;
     source: { remoteUrl: string; defaultBranch: string } | null;
     permissions: string[];
     agents: string[];
@@ -88,6 +165,63 @@ export interface RemoteMe {
     mcp: boolean;
     agentSessions: boolean;
     storeUploadMaxBytes: number;
+  };
+}
+
+type DeployRoute = paths["/api/projects/{projectId}/deploy"];
+type DeployBody = NonNullable<
+  DeployRoute["post"]["requestBody"]
+>["content"]["application/json"];
+type DeployResult =
+  DeployRoute["post"]["responses"][200]["content"]["application/json"];
+/**
+ * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
+ * caller's own files for the project, contents as base64, and their own
+ * setup command (ADR 0208). Sign-ins are never sent (ADR 0199).
+ */
+export type RemotePersonalEnvironmentUpload = PersonalEnvironmentInput;
+
+/** `GET /projects/:projectId/personal-environment`: never any file contents. */
+export type RemotePersonalEnvironment = PersonalEnvironmentStatus;
+
+/** Reads the status defensively: sync decisions depend on it. */
+export function parseRemotePersonalEnvironment(
+  value: unknown,
+): RemotePersonalEnvironment {
+  const object = (item: unknown): Record<string, unknown> | null =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item))
+      : null;
+  const body = object(value);
+  if (!body || typeof body.allowed !== "boolean")
+    throw new Error("The server sent an unreadable remote environment");
+  const files = (Array.isArray(body.files) ? body.files : []).flatMap(
+    (item) => {
+      const entry = object(item);
+      if (!entry || typeof entry.path !== "string") return [];
+      return [
+        {
+          path: entry.path,
+          fingerprint:
+            typeof entry.fingerprint === "string" ? entry.fingerprint : "",
+          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
+          updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+        },
+      ];
+    },
+  );
+  const setup = object(body.setup);
+  return {
+    allowed: body.allowed,
+    files,
+    setup:
+      setup && typeof setup.command === "string"
+        ? {
+            command: setup.command,
+            updatedAt:
+              typeof setup.updatedAt === "string" ? setup.updatedAt : "",
+          }
+        : null,
   };
 }
 
@@ -126,6 +260,37 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     email?: string;
     roles: string[];
   }): Promise<RemoteInvitation>;
+  listConnectionProviders(): Promise<RemoteConnectionProvider[]>;
+  listServiceConnections(): Promise<RemoteServiceConnection[]>;
+  createServiceConnection(input: {
+    name: string;
+    providerKind: string;
+  }): Promise<RemoteServiceConnection>;
+  authorizeServiceConnection(
+    connectionId: string,
+  ): Promise<RemoteServiceAuthorization>;
+  completeConnectionAuthorization(input: {
+    authorizationId: string;
+    callback: Record<string, string>;
+  }): Promise<RemoteServiceConnection>;
+  revokeConnection(connectionId: string): Promise<void>;
+  /** The member's remote environment, or null on a server without it. */
+  personalEnvironment(): Promise<RemotePersonalEnvironment | null>;
+  putPersonalEnvironment(input: RemotePersonalEnvironmentUpload): Promise<void>;
+  deletePersonalEnvironment(): Promise<void>;
+  /** The project's secrets, without values (ADR 0206). */
+  listSecrets(): Promise<RemoteSecret[]>;
+  /**
+   * Set the shared value, or `member`'s own (`me` for the caller's). The
+   * value goes to the server only; nothing reads it back.
+   */
+  setSecret(input: {
+    name: string;
+    value: string;
+    member?: string;
+  }): Promise<void>;
+  /** Clear the shared value, or `member`'s own. */
+  deleteSecret(input: { name: string; member?: string }): Promise<void>;
   publish(input: {
     path: string;
     audience: "public" | "members";
@@ -135,6 +300,40 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
     body?: string;
     changes: Array<{ path: string; content?: string; delete?: boolean }>;
   }): Promise<RemoteProposalResult>;
+  /** Deploy program files directly; the member must hold `program:publish`. */
+  publishProgram(input: DeployBody): Promise<DeployResult>;
+}
+
+/**
+ * Publish a member's program edits from their folder (ADR 0191). The folder
+ * downloads first, so a file someone else published since its last sync is
+ * reconciled here and never overwritten; the publish then names the commit
+ * that download read as its base, so a change landing in between comes back
+ * as a conflict instead of being overwritten.
+ */
+export async function publishProgramFromFolder(input: {
+  root: string;
+  client: RemoteDocumentsClient & Pick<RemoteProjectClient, "publishProgram">;
+  message: string;
+  paths: readonly string[];
+  /** The selected files' contents, read after the download. */
+  readChanges: () => Array<{ path: string; content: string }>;
+}): Promise<DeployResult> {
+  const report = await syncRemoteProject(input.root, input.client);
+  const changedThere = report.conflicts
+    .map((conflict) => conflict.path)
+    .filter((conflicted) => input.paths.includes(conflicted));
+  if (changedThere.length > 0)
+    throw new Error(
+      `${changedThere.join(", ")} changed on the server since your last download. Compare your version with the server copy beside it, then publish again.`,
+    );
+  return input.client.publishProgram({
+    message: input.message,
+    files: Object.fromEntries(
+      input.readChanges().map((change) => [change.path, change.content]),
+    ),
+    ...(report.programCommit ? { base: report.programCommit } : {}),
+  });
 }
 
 /** Builder clones own program files; remote sync may only materialize store. */
@@ -183,6 +382,14 @@ export function httpDocumentsClient(args: {
 }): RemoteProjectClient {
   const doFetch = args.fetch ?? fetch;
   const base = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/documents`;
+  const personalEnvironmentUrl = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/personal-environment`;
+  // A secret's shared value, or one member's own (ADR 0206).
+  const secretsUrl = (target?: { name: string; member?: string }) =>
+    [
+      `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/secrets`,
+      ...(target ? [encodeURIComponent(target.name)] : []),
+      ...(target?.member ? ["members", encodeURIComponent(target.member)] : []),
+    ].join("/");
   const authorizedFetch = async (url: string, init: RequestInit = {}) => {
     const request = async (forceRefresh: boolean) =>
       doFetch(url, {
@@ -293,6 +500,115 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Inviting project member");
       return (await response.json()) as RemoteInvitation;
+    },
+    async listConnectionProviders() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/connection-providers`,
+      );
+      if (!response.ok) return fail(response, "Listing connection providers");
+      return (await response.json()) as RemoteConnectionProvider[];
+    },
+    async listServiceConnections() {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/service-connections`,
+      );
+      if (!response.ok) return fail(response, "Listing service connections");
+      return (await response.json()) as RemoteServiceConnection[];
+    },
+    async createServiceConnection(input) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/service-connections`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: input.name,
+            providerKind: input.providerKind,
+            principalKind: "tenant_service",
+          }),
+        },
+      );
+      if (!response.ok) return fail(response, "Adding the connection");
+      return (await response.json()) as RemoteServiceConnection;
+    },
+    async authorizeServiceConnection(connectionId) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/service-connections/${encodeURIComponent(connectionId)}/authorize`,
+        { method: "POST" },
+      );
+      if (!response.ok) return fail(response, "Connecting");
+      return (await response.json()) as RemoteServiceAuthorization;
+    },
+    async completeConnectionAuthorization(input) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/connection-authorizations/complete`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            state: input.authorizationId,
+            callback: input.callback,
+          }),
+        },
+      );
+      if (!response.ok) return fail(response, "Connecting");
+      return (await response.json()) as RemoteServiceConnection;
+    },
+    async revokeConnection(connectionId) {
+      const response = await authorizedFetch(
+        `${args.serverUrl.replace(/\/+$/, "")}/connections/${encodeURIComponent(connectionId)}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) return fail(response, "Revoking the connection");
+    },
+    async personalEnvironment() {
+      const response = await authorizedFetch(personalEnvironmentUrl);
+      if (response.status === 404) {
+        await response.body?.cancel();
+        return null;
+      }
+      if (!response.ok)
+        return fail(response, "Reading your remote environment");
+      return parseRemotePersonalEnvironment(await response.json());
+    },
+    async putPersonalEnvironment(input) {
+      const response = await authorizedFetch(personalEnvironmentUrl, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!response.ok)
+        return fail(response, "Sending your remote environment");
+      await response.body?.cancel();
+    },
+    async deletePersonalEnvironment() {
+      const response = await authorizedFetch(personalEnvironmentUrl, {
+        method: "DELETE",
+      });
+      if (!response.ok && response.status !== 404)
+        return fail(response, "Removing your remote environment");
+      await response.body?.cancel();
+    },
+    async listSecrets() {
+      const response = await authorizedFetch(secretsUrl());
+      if (!response.ok) return fail(response, "Listing the project's secrets");
+      return (await response.json()) as RemoteSecret[];
+    },
+    async setSecret(input) {
+      const response = await authorizedFetch(secretsUrl(input), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: input.value }),
+      });
+      if (!response.ok) return fail(response, `Saving ${input.name}`);
+      await response.body?.cancel();
+    },
+    async deleteSecret(input) {
+      const response = await authorizedFetch(secretsUrl(input), {
+        method: "DELETE",
+      });
+      if (!response.ok) return fail(response, `Clearing ${input.name}`);
+      await response.body?.cancel();
     },
     async list() {
       const response = await authorizedFetch(base);
@@ -408,6 +724,17 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Proposing changes");
       return (await response.json()) as RemoteProposalResult;
+    },
+    async publishProgram(input) {
+      const { data, response } = await proposalClient.POST(
+        "/api/projects/{projectId}/deploy",
+        {
+          params: { path: { projectId: args.projectId } },
+          body: input,
+        },
+      );
+      if (!data) return fail(response, "Publishing project files");
+      return data;
     },
     async proposalReview(number) {
       const { data, response } = await proposalClient.GET(

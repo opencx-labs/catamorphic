@@ -4,6 +4,14 @@ import type { WorkflowEdge, WorkflowNode } from "./types.js";
 const NODE_WIDTH = 240;
 const BASE_HEIGHT = 44;
 const DESCRIBED_NODE_HEIGHT = 56;
+/** The start node lists its triggers as badges under the label. */
+const TRIGGER_NODE_HEIGHT = 64;
+const TRIGGER_ROW_HEIGHT = 22;
+/** Room for badges beside the start node's icon, and a badge's estimated size. */
+const TRIGGER_ROW_WIDTH = 176;
+const TRIGGER_BADGE_BASE = 30;
+const TRIGGER_BADGE_CHAR = 6;
+const TRIGGER_BADGE_GAP = 4;
 const RANK_SEP = 32;
 const NODE_SEP = 36;
 const BRANCH_GAP = 28;
@@ -33,6 +41,24 @@ interface SizeInfo {
 }
 
 function estimateNodeHeight(node: WorkflowNode): number {
+  const triggers = node.type === "input" ? (node.triggerBindings ?? []) : [];
+  if (triggers.length > 0) {
+    // Badges wrap like words; estimate their rows from their label lengths.
+    let rows = 1;
+    let used = 0;
+    for (const trigger of triggers) {
+      const label = trigger.display?.label ?? trigger.kind;
+      const width = Math.min(
+        TRIGGER_ROW_WIDTH,
+        TRIGGER_BADGE_BASE + label.length * TRIGGER_BADGE_CHAR,
+      );
+      if (used > 0 && used + TRIGGER_BADGE_GAP + width > TRIGGER_ROW_WIDTH) {
+        rows += 1;
+        used = width;
+      } else used += (used > 0 ? TRIGGER_BADGE_GAP : 0) + width;
+    }
+    return TRIGGER_NODE_HEIGHT + (rows - 1) * TRIGGER_ROW_HEIGHT;
+  }
   if (
     node.type === "source" ||
     node.type === "sink" ||

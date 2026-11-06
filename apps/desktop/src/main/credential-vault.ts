@@ -3,21 +3,33 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CredentialRef, CredentialVault } from "@catamorphic/core";
 import { safeStorage } from "electron";
+import { z } from "zod";
+import {
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 
-interface VaultFile {
-  version: 1;
-  records: Record<string, string>;
-}
+const VaultFileSchema = z.strictObject({
+  version: z.literal(1),
+  records: z.record(z.string(), z.string().min(1)),
+});
+type VaultFile = z.infer<typeof VaultFileSchema>;
 
 export class DesktopCredentialVault implements CredentialVault {
   private data: VaultFile;
 
   constructor(private readonly file: string) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as VaultFile;
-      this.data = parsed.version === 1 ? parsed : { version: 1, records: {} };
-    } catch {
-      this.data = { version: 1, records: {} };
+      this.data = VaultFileSchema.parse(
+        JSON.parse(fs.readFileSync(file, "utf8")),
+      );
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        this.data = { version: 1, records: {} };
+      else
+        throw new Error("Credential vault could not be opened", {
+          cause: error,
+        });
     }
   }
 
@@ -35,11 +47,16 @@ export class DesktopCredentialVault implements CredentialVault {
     ref: CredentialRef;
     use: (material: Uint8Array) => Promise<T> | T;
   }): Promise<T> {
+    requireCredentialEncryption();
     const ciphertext = this.data.records[key(args.tenantId, args.ref)];
     if (!ciphertext) throw new Error("Credential not found");
-    const material = safeStorage.decryptString(
-      Buffer.from(ciphertext, "base64"),
-    );
+    const material = (() => {
+      try {
+        return safeStorage.decryptString(Buffer.from(ciphertext, "base64"));
+      } catch (cause) {
+        throw credentialUnlockError({ cause });
+      }
+    })();
     const bytes = Buffer.from(material, "base64");
     try {
       return await args.use(bytes);
@@ -58,9 +75,7 @@ export class DesktopCredentialVault implements CredentialVault {
     ref: CredentialRef,
     material: Uint8Array,
   ): void {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error("OS credential encryption is unavailable");
-    }
+    requireCredentialEncryption();
     this.data.records[key(tenantId, ref)] = safeStorage
       .encryptString(Buffer.from(material).toString("base64"))
       .toString("base64");
@@ -72,6 +87,7 @@ export class DesktopCredentialVault implements CredentialVault {
     const temporary = `${this.file}.${randomUUID()}.tmp`;
     fs.writeFileSync(temporary, `${JSON.stringify(this.data, null, 2)}\n`, {
       mode: 0o600,
+      flag: "wx",
     });
     fs.renameSync(temporary, this.file);
     fs.chmodSync(this.file, 0o600);
@@ -79,5 +95,5 @@ export class DesktopCredentialVault implements CredentialVault {
 }
 
 function key(tenantId: string, ref: CredentialRef): string {
-  return `${tenantId}:${ref.id}`;
+  return `${tenantId}:${z.uuid().parse(ref.id)}`;
 }

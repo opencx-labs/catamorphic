@@ -1,8 +1,10 @@
-import type { ProjectSummary } from "@catamorphic/react/types";
 import { Check, ChevronDown, Plus, Star } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
+import { ProfileAvatar } from "./profile-avatar";
 import { ProfileInspector } from "./profile-inspector";
 import { ResourceInspector } from "./resource-inspector";
 
@@ -14,13 +16,11 @@ import { ResourceInspector } from "./resource-inspector";
  */
 export function ProfileBar({
   data,
-  projects,
   activeProfileId,
   onSwitch,
   onOpenSettings,
 }: {
   data: ProfilesData;
-  projects: ProjectSummary[];
   activeProfileId: string;
   onSwitch: (profile: Profile) => void;
   onOpenSettings: (profileId: string) => void;
@@ -30,39 +30,47 @@ export function ProfileBar({
   const [newName, setNewName] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
 
   const active: Profile | undefined =
     data.profiles.find((profile) => profile.id === activeProfileId) ??
     data.profiles[0];
 
+  // A press anywhere else, a web page or an app's frame included, closes
+  // it; a press on a profile's card does not. Closing drops the inline
+  // create field (below).
+  usePopoverDismiss({
+    open,
+    within: [containerRef],
+    onDismiss: () => setOpen(false),
+    returnFocus: triggerRef,
+  });
+
+  // A dialog takes focus as it opens (on the profile in use) and hands it
+  // back to its control as it closes; it comes before the control in tab
+  // order, so Tab would not reach it. These are the app's own focus moves:
+  // they open no profile's preview.
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      const insideRoot =
-        target instanceof Node &&
-        Boolean(containerRef.current?.contains(target));
-      const insideInspector =
-        target instanceof Element &&
-        Boolean(target.closest("[data-resource-inspector]"));
-      if (!insideRoot && !insideInspector) {
-        setOpen(false);
-        setCreating(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
+    const frame = requestAnimationFrame(() => {
+      const popover = popoverRef.current;
+      // Already inside (a quick press on New profile focused its field):
+      // moving focus now would blur that field, which drops it.
+      if (popover?.contains(document.activeElement)) return;
+      const target =
+        popover?.querySelector<HTMLElement>("[data-profile-active]") ??
+        popover?.querySelector<HTMLElement>("button");
+      if (target) moveFocusAsApp(() => target.focus());
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+  // Before the closed dialog turns inert and drops the focus it holds.
+  useLayoutEffect(() => {
+    if (open) return;
+    const trigger = triggerRef.current;
+    if (trigger && popoverRef.current?.contains(document.activeElement))
+      moveFocusAsApp(() => trigger.focus());
   }, [open]);
 
   useEffect(() => {
@@ -95,11 +103,16 @@ export function ProfileBar({
   return (
     <div ref={containerRef} className="relative min-w-0 flex-1">
       <div
-        className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+        ref={popoverRef}
+        className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-standard ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
         }`}
+        // Profiles with their previews and a create field: a popover, not
+        // a menu of commands (menus are MenuPortal's).
+        role="dialog"
+        aria-label="Profiles"
         aria-hidden={!open}
         inert={!open ? true : undefined}
       >
@@ -113,33 +126,31 @@ export function ProfileBar({
             <ResourceInspector
               key={profile.id}
               label={`${profile.name} profile details`}
-              content={
+              content={(dismiss) => (
                 <ProfileInspector
                   profile={profile}
                   data={data}
-                  projects={projects}
-                  current={isActive}
                   onOpenSettings={() => {
+                    dismiss();
                     setOpen(false);
                     onOpenSettings(profile.id);
                   }}
                 />
-              }
+              )}
             >
               {(inspectorProps) => (
                 <button
                   {...inspectorProps}
                   type="button"
+                  aria-current={isActive || undefined}
+                  data-profile-active={isActive || undefined}
                   onClick={() => {
                     setOpen(false);
                     if (!isActive) onSwitch(profile);
                   }}
                   className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
                 >
-                  <span
-                    className="size-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: profile.color }}
-                  />
+                  <ProfileAvatar profile={profile} size="sm" />
                   <span className="min-w-0 flex-1 truncate">
                     {profile.name}
                   </span>
@@ -188,40 +199,41 @@ export function ProfileBar({
 
       <ResourceInspector
         label={`${active.name} profile details`}
-        content={
+        // The open menu already shows every profile; its preview would cover it.
+        disabled={open}
+        content={(dismiss) => (
           <ProfileInspector
             profile={active}
             data={data}
-            projects={projects}
-            current
-            onOpenSettings={() => onOpenSettings(active.id)}
+            onOpenSettings={() => {
+              dismiss();
+              onOpenSettings(active.id);
+            }}
           />
-        }
+        )}
       >
         {(inspectorProps) => (
           <button
             {...inspectorProps}
+            ref={(node) => {
+              inspectorProps.ref.current = node;
+              triggerRef.current = node;
+            }}
             type="button"
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => {
+              inspectorProps.onClick();
+              setOpen((value) => !value);
+            }}
             className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[13px] transition-colors duration-150 ${
               open
                 ? "bg-bg-overlay text-fg"
                 : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
             }`}
-            ref={triggerRef}
             aria-label={`Switch profile: ${active.name}`}
-            aria-haspopup="menu"
+            aria-haspopup="dialog"
             aria-expanded={open}
           >
-            <span
-              className="grid size-5 shrink-0 place-items-center rounded-full text-xs font-medium ring-1 ring-fg/10"
-              style={{
-                color: active.color,
-                backgroundColor: `color-mix(in srgb, ${active.color} 12%, var(--color-bg-raised))`,
-              }}
-            >
-              {active.name.slice(0, 1).toUpperCase()}
-            </span>
+            <ProfileAvatar profile={active} />
             <span className="min-w-0 flex-1 truncate text-left">
               {active.name}
             </span>

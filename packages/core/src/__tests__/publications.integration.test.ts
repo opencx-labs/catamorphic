@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
+import { projectAdmin } from "./project-admin.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -49,7 +50,7 @@ describeIf("PublicationsService (ADR 0055)", () => {
     admin = {
       ...root,
       externalUserId: "admin",
-      scope: [{ kind: "project", projectId }],
+      ...projectAdmin(projectId),
     };
     sales = {
       ...root,

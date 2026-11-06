@@ -1,6 +1,7 @@
-import type {
-  DesktopUpdateChannel,
-  DesktopUpdateState,
+import {
+  type DesktopUpdateChannel,
+  type DesktopUpdateState,
+  updateMessageKey,
 } from "../shared/update.js";
 
 export interface UpdateInfoLike {
@@ -35,6 +36,11 @@ export interface UpdaterAdapter {
   ): this;
   on(event: "error", listener: (error: Error) => void): this;
   checkForUpdates(): Promise<unknown>;
+  /**
+   * Forget a check that never settled, so the next one sends a new request
+   * (electron-updater otherwise hands back the stuck promise forever).
+   */
+  abandonCheck?(): void;
   downloadUpdate(): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
 }
@@ -47,11 +53,48 @@ export interface DesktopUpdaterControllerOptions {
   broadcast: (state: DesktopUpdateState) => void;
   logger?: Pick<Console, "error" | "info" | "warn">;
   prepareInstall?: () => Promise<void>;
-  canInstall?: () => Promise<boolean>;
+  /** Installation did not proceed; release any prepared workspace freeze. */
+  cancelInstall?: () => void;
+  /**
+   * The release downloaded and not installed yet, kept across launches: a
+   * check that finds it again has electron-updater verify its cached copy
+   * and offers Restart, never Download a second time.
+   */
+  downloaded?: {
+    load(): string | undefined;
+    save(version: string | undefined): void;
+  };
+  /**
+   * Whether the app runs from a place macOS can update in place. An app
+   * opened from its disk image or from Downloads runs from a read-only
+   * copy, and Squirrel refuses to replace it.
+   */
+  installedInPlace?: () => boolean;
+  /** Moves the app into Applications and relaunches; false when declined. */
+  moveToApplications?: () => Promise<boolean>;
+  /** How long a check may take before it counts as failed. */
+  checkTimeoutMs?: number;
+}
+
+/** Squirrel.Mac's refusal for a translocated or disk-image copy. */
+function needsMove(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /read-only volume|move the application/i.test(error.message)
+  );
 }
 
 function releaseUrl(version: string): string {
   return `https://github.com/opencx-labs/catamorphic/releases/tag/desktop-v${version}`;
+}
+
+/** What the state says about a release found. */
+function release(info: UpdateInfoLike) {
+  return {
+    version: info.version,
+    ...(info.releaseName ? { releaseName: info.releaseName } : {}),
+    releaseUrl: releaseUrl(info.version),
+  };
 }
 
 function messageFor(error: unknown): string {
@@ -63,7 +106,8 @@ export class DesktopUpdaterController {
   private state: DesktopUpdateState;
   private preparing = false;
   private manualCheckId = 0;
-  private checking: Promise<void> | null = null;
+  private dismissedMessage: string | null = null;
+  private checking: Promise<boolean> | null = null;
   private downloading: Promise<void> | null = null;
   private readonly logger: Pick<Console, "error" | "info" | "warn">;
 
@@ -75,6 +119,9 @@ export class DesktopUpdaterController {
       channel: options.channel,
       manual: false,
     };
+    // The release that waited is the one running now.
+    if (options.downloaded?.load() === options.currentVersion)
+      options.downloaded.save(undefined);
     const updater = options.updater;
     if (!options.supported || !updater) return;
 
@@ -91,6 +138,17 @@ export class DesktopUpdaterController {
       });
     });
     updater.on("update-available", (info) => {
+      // Downloaded before Work last quit: its cached copy is verified (or
+      // fetched again) without asking, and the release shows once ready.
+      // Failing that, it is offered for download as any release is.
+      if (info.version === options.downloaded?.load()) {
+        this.setState({ ...this.state, ...release(info) });
+        void this.fetchRelease((error) => {
+          this.logger.warn("[desktop] downloaded update unavailable:", error);
+          this.setReleaseState("available", info);
+        });
+        return;
+      }
       this.setReleaseState("available", info);
     });
     updater.on("update-not-available", () => {
@@ -110,21 +168,38 @@ export class DesktopUpdaterController {
       });
     });
     updater.on("update-downloaded", (info) => {
+      options.downloaded?.save(info.version);
       this.setReleaseState("downloaded", info);
     });
     updater.on("error", (error) => {
       if (this.preparing) return;
+      if (this.state.phase === "installing") this.options.cancelInstall?.();
+      if (needsMove(error)) {
+        this.moveRequired(true);
+        return;
+      }
       this.handleError(error);
     });
   }
 
   current(): DesktopUpdateState {
-    return this.state;
+    return updateMessageKey(this.state) === this.dismissedMessage
+      ? { ...this.state, dismissed: true }
+      : this.state;
+  }
+
+  /** A delayed click cannot dismiss a newer check or phase. */
+  dismiss(messageKey: string): void {
+    if (messageKey !== updateMessageKey(this.state)) return;
+    this.dismissedMessage = messageKey;
+    this.options.broadcast(this.current());
   }
 
   setChannel(channel: DesktopUpdateChannel): boolean {
     if (
       this.checking ||
+      // A remembered release being verified again, phase still "checking".
+      this.downloading ||
       this.state.phase === "downloading" ||
       this.state.phase === "downloaded" ||
       this.state.phase === "installing"
@@ -142,7 +217,8 @@ export class DesktopUpdaterController {
     return true;
   }
 
-  async check(manual: boolean): Promise<void> {
+  /** Look for an update; resolves whether the update feed answered. */
+  async check(manual: boolean): Promise<boolean> {
     if (manual) this.manualCheckId += 1;
     if (!this.options.supported || !this.options.updater) {
       this.setState({
@@ -152,16 +228,21 @@ export class DesktopUpdaterController {
         manual,
         message: "Updates are checked by installed macOS builds.",
       });
-      return;
+      return false;
+    }
+    if (this.options.installedInPlace && !this.options.installedInPlace()) {
+      this.moveRequired(manual);
+      return false;
     }
     if (
+      this.downloading ||
       this.state.phase === "downloading" ||
       this.state.phase === "downloaded" ||
       this.state.phase === "installing" ||
       (!manual && this.state.phase === "available")
     ) {
       if (manual) this.setState({ ...this.state, manual: true });
-      return;
+      return true;
     }
     if (this.checking) {
       if (manual) {
@@ -175,11 +256,27 @@ export class DesktopUpdaterController {
       channel: this.state.channel,
       manual,
     });
-    this.checking = this.options.updater
-      .checkForUpdates()
-      .then(() => undefined)
-      .catch((error) => this.handleError(error))
+    const updater = this.options.updater;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A request that never settles (a connection lost across sleep) must
+    // not hold every later check: it fails after a while and is forgotten.
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => {
+          updater.abandonCheck?.();
+          reject(new Error("The update service did not answer in time."));
+        },
+        this.options.checkTimeoutMs ?? 2 * 60_000,
+      );
+    });
+    this.checking = Promise.race([updater.checkForUpdates(), timedOut])
+      .then(() => true)
+      .catch((error) => {
+        this.handleError(error);
+        return false;
+      })
       .finally(() => {
+        clearTimeout(timer);
         this.checking = null;
       });
     return this.checking;
@@ -194,10 +291,19 @@ export class DesktopUpdaterController {
       manual: true,
       percent: 0,
     });
-    this.downloading = this.options.updater
+    return this.fetchRelease();
+  }
+
+  /** Start electron-updater's download of the release found, or join it. */
+  private fetchRelease(
+    failed: (error: unknown) => void = (error) => this.handleError(error),
+  ): Promise<void> {
+    const updater = this.options.updater;
+    if (!updater) return Promise.resolve();
+    this.downloading ??= updater
       .downloadUpdate()
       .then(() => undefined)
-      .catch((error) => this.handleError(error))
+      .catch(failed)
       .finally(() => {
         this.downloading = null;
       });
@@ -214,11 +320,9 @@ export class DesktopUpdaterController {
       message: undefined,
     });
     try {
-      if (this.options.canInstall && !(await this.options.canInstall()))
-        throw new Error(
-          "Finish active agents and terminals before restarting.",
-        );
-      // Never call MacUpdater.quitAndInstall until native preparation has
+      // Work never waits on agents or terminals to restart: working agents
+      // continue after it, and the rest ends with Work (ADR 0246). Never
+      // call MacUpdater.quitAndInstall until native preparation has
       // completed. Its preparation path registers an uncancellable late quit.
       this.preparing = true;
       try {
@@ -226,20 +330,60 @@ export class DesktopUpdaterController {
       } finally {
         this.preparing = false;
       }
-      if (this.current().phase !== "installing") return;
-      if (this.options.canInstall && !(await this.options.canInstall()))
-        throw new Error(
-          "Work started while the update was preparing. Finish it, then restart.",
-        );
+      if (this.current().phase !== "installing") {
+        this.options.cancelInstall?.();
+        return;
+      }
       this.options.updater.quitAndInstall(false, true);
     } catch (error) {
+      this.options.cancelInstall?.();
       this.logger.error("[desktop] update preparation failed:", error);
+      if (needsMove(error)) {
+        this.moveRequired(true);
+        return;
+      }
       this.setState({
         ...downloaded,
         manual: true,
         message: messageFor(error),
       });
     }
+  }
+
+  /** Moves Work into Applications; Electron relaunches it from there. */
+  async move(): Promise<void> {
+    if (
+      this.state.phase !== "move-required" ||
+      !this.options.moveToApplications
+    )
+      return;
+    try {
+      // Moving relaunches Work, as an update restart does (ADR 0246).
+      const moved = await this.options.moveToApplications();
+      if (!moved)
+        this.setState({
+          ...this.state,
+          manual: true,
+          message:
+            "Work stayed where it is. Move it to Applications to get updates.",
+        });
+    } catch (error) {
+      this.logger.error("[desktop] moving to Applications failed:", error);
+      this.setState({
+        ...this.state,
+        manual: true,
+        message: `Work could not move itself (${messageFor(error)}). Drag Work into Applications, then open it from there.`,
+      });
+    }
+  }
+
+  private moveRequired(manual: boolean): void {
+    this.setState({
+      phase: "move-required",
+      currentVersion: this.options.currentVersion,
+      channel: this.state.channel,
+      manual,
+    });
   }
 
   private setReleaseState(
@@ -251,9 +395,7 @@ export class DesktopUpdaterController {
       currentVersion: this.options.currentVersion,
       channel: this.state.channel,
       manual: true,
-      version: info.version,
-      ...(info.releaseName ? { releaseName: info.releaseName } : {}),
-      releaseUrl: releaseUrl(info.version),
+      ...release(info),
     });
   }
 
@@ -282,7 +424,7 @@ export class DesktopUpdaterController {
       ...state,
       ...(this.manualCheckId ? { manualCheckId: this.manualCheckId } : {}),
     };
-    this.options.broadcast(this.state);
+    this.options.broadcast(this.current());
   }
 
   private configureChannel(channel: DesktopUpdateChannel): void {

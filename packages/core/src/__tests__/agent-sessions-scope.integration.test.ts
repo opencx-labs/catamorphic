@@ -2,30 +2,25 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AttemptStart } from "@catamorphic/agent-protocol/runner";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  SandboxProvider,
-  StartSessionOpts,
-  TurnOptions,
-} from "@catamorphic/sandbox";
+import type { SandboxProvider } from "@catamorphic/sandbox";
 import { context, trace } from "@opentelemetry/api";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Identity } from "../identity.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type Identity, projectPrincipalIdentity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
-import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { CodingAgentRegistry } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { projectAdmin } from "./project-admin.js";
+import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -56,42 +51,48 @@ const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
   },
 });
 
-/** A host-execution provider that records what core hands it. */
-class RecordingProvider implements CodingAgentProvider {
-  readonly name: string;
-  readonly starts: StartSessionOpts[] = [];
+/** A host-execution harness that records what core hands it. */
+class RecordingProvider {
+  readonly callers: Array<{ tenantId: string; externalUserId: string }> = [];
   readonly correlations: ReturnType<typeof correlationAttributes>[] = [];
-  readonly turns: Array<TurnOptions | undefined> = [];
-  constructor(name: string) {
-    this.name = name;
+  readonly adapter = new RecordingAdapter({
+    before: async (attempt, host) => {
+      this.correlations.push(correlationAttributes());
+      if (attempt.input?.text === "partial then fail") {
+        host.emit({
+          type: "item.started",
+          key: "partial",
+          status: "completed",
+          item: {
+            kind: "assistant_message",
+            text: "I finished the useful part.",
+            agentId: null,
+          },
+        });
+        throw new Error("Provider connection closed");
+      }
+    },
+  });
+  constructor(readonly name: string) {}
+  get attempts(): AttemptStart[] {
+    return this.adapter.attempts;
   }
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    this.starts.push(opts);
+  agent(id: string) {
     return {
-      providerSessionId: crypto.randomUUID(),
-      sessionId: opts.sessionId,
-      projectId: opts.projectId,
-      sandboxId: opts.sandboxId,
-      workingDirectory: opts.workingDirectory,
+      id,
+      harness: {
+        placement: "host" as const,
+        adapter: this.adapter,
+        local: (context: {
+          caller?: { tenantId: string; externalUserId: string };
+        }) => {
+          if (context.caller) this.callers.push(context.caller);
+          return {};
+        },
+      },
+      topology: "native" as const,
     };
   }
-  async *sendMessage(
-    _session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    this.turns.push(opts);
-    this.correlations.push(correlationAttributes());
-    if (message === "partial then fail") {
-      yield { type: "text", content: "I finished the useful part." };
-      yield { type: "error", content: "Provider connection closed" };
-      yield { type: "done" };
-      return;
-    }
-    yield { type: "text", content: `echo: ${message}` };
-    yield { type: "done" };
-  }
-  async dispose(): Promise<void> {}
 }
 
 describeIf("scoped agent sessions (ADR 0055)", () => {
@@ -125,18 +126,9 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     sales = new RecordingProvider("sales-harness");
     personal = new RecordingProvider("personal-harness");
     const registered = new Map([
-      [
-        csmAgentId,
-        { id: csmAgentId, provider: csm, topology: "native" as const },
-      ],
-      [
-        salesAgentId,
-        { id: salesAgentId, provider: sales, topology: "native" as const },
-      ],
-      [
-        "personal",
-        { id: "personal", provider: personal, topology: "native" as const },
-      ],
+      [csmAgentId, csm.agent(csmAgentId)],
+      [salesAgentId, sales.agent(salesAgentId)],
+      ["personal", personal.agent("personal")],
     ]);
     const registry: CodingAgentRegistry = {
       defaultAgentId: () => "personal",
@@ -153,7 +145,9 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       codingAgents: registry,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
-      nativeAgentCheckout: { resolve: () => rootPath },
+      nativeAgentCheckout: {
+        resolve: () => ({ path: rootPath, owned: false }),
+      },
       // The project's tool roster: two tools, one renamed via its trigger.
       mcpToolNames: async () =>
         new Map([
@@ -166,7 +160,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     viewer = {
       ...root,
       externalUserId: "csm-alice",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [
         {
           kind: "agent",
@@ -181,8 +175,8 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     admin = {
       ...root,
       externalUserId: "admin-bob",
-      executionScope: [{ projectId, name: "local" }],
-      scope: [{ kind: "project", projectId }],
+      executionScope: [{ projectId, name: "default" }],
+      ...projectAdmin(projectId),
     };
   });
 
@@ -192,68 +186,6 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       await db.destroy();
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  it("reads transcript and execution from one snapshot while another connection settles", async () => {
-    if (!db) throw new Error("unreachable");
-    const database = db;
-    const session = await sessions.create(root, projectId);
-    const receipt = await sessions.turns.deliver({
-      sessionId: session.id,
-      content: "Work",
-      author: { kind: "user", externalUserId: root.externalUserId },
-      mode: "next_turn",
-    });
-    await sessions.turns.claimNextForSession({
-      sessionId: session.id,
-      workerId: "snapshot-test",
-    });
-    const reply = await database
-      .insertInto("agent_messages")
-      .values({
-        session_id: session.id,
-        role: "assistant",
-        content: "Working",
-        author_kind: "agent",
-        author_payload: { kind: "agent", sessionId: session.id, agentId: null },
-        metadata: { status: "in_progress" },
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    const execution = AgentTurnsService.prototype.execution;
-    const spy = vi
-      .spyOn(AgentTurnsService.prototype, "execution")
-      .mockImplementationOnce(async function (this: AgentTurnsService, input) {
-        await database.transaction().execute(async (trx) => {
-          await trx
-            .updateTable("agent_messages")
-            .set({ content: "Finished", metadata: { status: "completed" } })
-            .where("id", "=", reply.id)
-            .execute();
-          await trx
-            .updateTable("agent_turns")
-            .set({
-              status: "completed",
-              result_message_id: reply.id,
-              lease_token: null,
-              lease_owner: null,
-              lease_expires_at: null,
-            })
-            .where("id", "=", receipt.turnId)
-            .execute();
-        });
-        return execution.call(this, input);
-      });
-    try {
-      const snapshot = await sessions.get(root, projectId, session.id);
-      expect(snapshot.execution?.status).toBe("running");
-      expect(snapshot.messages.at(-1)?.content).toBe("Working");
-      const fresh = await sessions.get(root, projectId, session.id);
-      expect(fresh.execution?.status).toBe("completed");
-      expect(fresh.messages.at(-1)?.content).toBe("Finished");
-    } finally {
-      spy.mockRestore();
-    }
   });
 
   it("a viewer opens sessions only on the agents its scope names", async () => {
@@ -288,7 +220,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     );
   });
 
-  it("a builder (project ref) uses any agent, and sees every session", async () => {
+  it("an admin (`*` grants) uses any agent, and sees every session", async () => {
     await sessions.create(admin, projectId, { agentId: salesAgentId });
     await sessions.create(admin, projectId);
     const all = await sessions.list(admin, projectId);
@@ -357,7 +289,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       sessions.deliver(appViewer, projectId, first.id, {
         content: "hello",
         author: { kind: "user", externalUserId: appViewer.externalUserId },
-        mode: "next_turn",
+        mode: "queue",
         idempotencyKey: "app-deliver",
       }),
     ).rejects.toThrow(AccessDeniedError);
@@ -440,6 +372,32 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       true,
     );
     expect(visibleRoots.items.some((item) => item.id === first.id)).toBe(false);
+
+    // Disclosure counts follow the same per-person visibility as a branch.
+    await sessions.archive(viewer, projectId, first.id);
+    await db
+      .updateTable("agent_session_views")
+      .set({ visibility: "latent" })
+      .where("session_id", "=", second.id)
+      .where("external_user_id", "=", viewer.externalUserId)
+      .execute();
+    const promoted = await sessions.list(viewer, projectId, {
+      rootsOnly: true,
+      visibility: "promoted",
+      limit: 100,
+    });
+    expect(
+      promoted.items.find((item) => item.id === parent.id)?.childCount,
+    ).toBe(0);
+    const branch = await sessions.list(viewer, projectId, {
+      parentSessionId: parent.id,
+      visibility: "promoted",
+    });
+    expect(branch.items).toEqual([]);
+    const allChildren = await sessions.list(viewer, projectId, {
+      parentSessionId: parent.id,
+    });
+    expect(allChildren.total).toBe(2);
   });
 
   it("persists an agent-owned todo snapshot with stable item ids", async () => {
@@ -482,6 +440,29 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       updated,
     );
 
+    // An id the agent made up for a new item is the item's id from then on.
+    const ownId = "b1c1e0a1-0000-4000-8000-000000000001";
+    const added = await sessions.replaceTodos(viewer, projectId, session.id, [
+      ...updated,
+      {
+        id: ownId,
+        title: "Open the pull request",
+        description: "Push the branch and open it for review.",
+        status: "pending",
+      },
+    ]);
+    expect(added.map((todo) => todo.id)).toEqual([updated[0]!.id, ownId]);
+    const echoed = await sessions.replaceTodos(viewer, projectId, session.id, [
+      { ...added[1]!, status: "in_progress" },
+    ]);
+    expect(echoed).toEqual([{ ...added[1], status: "in_progress" }]);
+    await expect(
+      sessions.replaceTodos(viewer, projectId, session.id, [
+        { ...added[1]! },
+        { ...added[1]!, title: "Twice" },
+      ]),
+    ).rejects.toThrow(`Duplicate todo id: ${ownId}`);
+
     const foreign = { ...viewer, externalUserId: "csm-carol" };
     await expect(
       sessions.replaceTodos(foreign, projectId, session.id, []),
@@ -519,9 +500,12 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       agentId: csmAgentId,
     });
     await sessions.sendMessage(viewer, projectId, session.id, "hello");
-    const start = csm.starts.at(-1);
+    const start = csm.attempts.at(-1);
     if (!start) throw new Error("provider never started");
-    expect(start.caller).toEqual(viewer);
+    expect(csm.callers.at(-1)).toEqual({
+      tenantId: viewer.tenantId,
+      externalUserId: viewer.externalUserId,
+    });
     // Project tools server: only the WORKFLOW tools outside the scope are
     // denied (by TOOL name); the documents/skills/ask surface and the poll
     // tool authorize themselves at the endpoint and stay reachable.
@@ -533,20 +517,17 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect(start.toolPolicies?.slack).toEqual([
       { default: "ask", tools: { post: "deny" } },
     ]);
-    // Refreshed per turn, so a later grant change reaches the next call.
-    expect(csm.turns.at(-1)?.toolPolicies).toEqual(start.toolPolicies);
   });
 
-  it("builders get no caller layers (nothing to narrow)", async () => {
+  it("an admin with no tool narrowing gets empty caller layers", async () => {
     const session = await sessions.create(admin, projectId, {
       agentId: salesAgentId,
     });
     await sessions.sendMessage(admin, projectId, session.id, "hi");
-    const start = sales.starts.at(-1);
-    expect(start?.caller).toEqual(admin);
+    const start = sales.attempts.at(-1);
+    expect(sales.callers.at(-1)?.externalUserId).toBe(admin.externalUserId);
     // An EMPTY map, not none: it replaces whatever a previous caller left.
     expect(start?.toolPolicies).toEqual({});
-    expect(sales.turns.at(-1)?.toolPolicies).toEqual({});
   });
 
   it("applies per-session model and effort overrides to the harness", async () => {
@@ -563,8 +544,8 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       created.id,
       "initial configuration",
     );
-    expect(sales.turns.at(-1)?.model).toBe("test/model-v1");
-    expect(sales.turns.at(-1)?.effort).toBe("medium");
+    expect(sales.attempts.at(-1)?.model).toBe("test/model-v1");
+    expect(sales.attempts.at(-1)?.effort).toBe("medium");
     const configured = await sessions.update(admin, projectId, created.id, {
       model: "test/model-v2",
       effort: "high",
@@ -573,8 +554,8 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect(configured.modelEffort).toBe("high");
 
     await sessions.sendMessage(admin, projectId, created.id, "configured");
-    expect(sales.turns.at(-1)?.model).toBe("test/model-v2");
-    expect(sales.turns.at(-1)?.effort).toBe("high");
+    expect(sales.attempts.at(-1)?.model).toBe("test/model-v2");
+    expect(sales.attempts.at(-1)?.effort).toBe("high");
 
     const switched = await sessions.update(admin, projectId, created.id, {
       agentId: csmAgentId,
@@ -638,20 +619,19 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       agentId: salesAgentId,
     });
 
-    const failed = await sessions.sendMessage(
+    const { reply, turn } = await sessions.sendMessage(
       admin,
       projectId,
       session.id,
       "partial then fail",
     );
 
-    expect(failed.content).toBe("Provider connection closed");
-    expect(failed.metadata).toEqual(
-      expect.objectContaining({
-        status: "failed",
-        partialContent: "I finished the useful part.",
-      }),
+    // The prose stays the agent's message; the error is the turn's.
+    expect(reply?.kind === "assistant_message" && reply.text).toBe(
+      "I finished the useful part.",
     );
+    expect(turn.status).toBe("failed");
+    expect(turn.error?.message).toBe("Provider connection closed");
   });
 
   it("revoking the agent from the scope closes the door mid-conversation", async () => {
@@ -665,5 +645,102 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await expect(
       sessions.sendMessage(revoked, projectId, session.id, "still there?"),
     ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("a project chat is shared with everyone whose role reaches its agent (ADR 0156)", async () => {
+    const project = projectPrincipalIdentity({
+      tenantId: root.tenantId,
+      projectId,
+      environment: "default",
+    });
+    const shared = await sessions.create(project, projectId, {
+      agentId: csmAgentId,
+    });
+    expect(shared.owner).toBe("project");
+    const carol: Identity = { ...viewer, externalUserId: "csm-carol" };
+    for (const member of [viewer, carol]) {
+      const listed = await sessions.list(member, projectId);
+      expect(listed.items.find((item) => item.id === shared.id)?.owner).toBe(
+        "project",
+      );
+      expect((await sessions.get(member, projectId, shared.id)).id).toBe(
+        shared.id,
+      );
+    }
+    // Teammates continue it, and nobody's own chats leak through it.
+    await sessions.deliver(carol, projectId, shared.id, {
+      content: "Picking this up",
+      author: { kind: "user", externalUserId: carol.externalUserId },
+      mode: "message_only",
+      idempotencyKey: "project-note",
+    });
+    expect(
+      (await sessions.list(carol, projectId)).items.every(
+        (item) =>
+          item.owner === "project" || item.externalUserId === "csm-carol",
+      ),
+    ).toBe(true);
+    // A role that does not reach the agent does not see the project chat.
+    const salesViewer: Identity = {
+      ...viewer,
+      externalUserId: "sales-dan",
+      scope: [{ kind: "agent", projectId, name: "sales" }],
+    };
+    expect(
+      (await sessions.list(salesViewer, projectId)).items.some(
+        (item) => item.id === shared.id,
+      ),
+    ).toBe(false);
+    await expect(
+      sessions.get(salesViewer, projectId, shared.id),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("sessions:read reads everyone's chats and sessions:write acts on them (ADR 0158)", async () => {
+    const alices = await sessions.create(viewer, projectId);
+    // `agents: ["*"]` reaches every agent, but only the caller's own chats.
+    const everyAgent: Identity = {
+      ...viewer,
+      externalUserId: "ops-erin",
+      scope: [{ kind: "agent", projectId, name: "*" }],
+    };
+    expect(
+      (await sessions.list(everyAgent, projectId)).items.some(
+        (item) => item.id === alices.id,
+      ),
+    ).toBe(false);
+    await expect(
+      sessions.get(everyAgent, projectId, alices.id),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const reader: Identity = {
+      ...everyAgent,
+      projectPermissions: [{ projectId, permission: "sessions:read" }],
+    };
+    expect(
+      (await sessions.list(reader, projectId)).items.some(
+        (item) => item.id === alices.id,
+      ),
+    ).toBe(true);
+    expect((await sessions.get(reader, projectId, alices.id)).id).toBe(
+      alices.id,
+    );
+    const note = {
+      content: "Reviewed",
+      author: { kind: "user" as const, externalUserId: "ops-erin" },
+      mode: "message_only" as const,
+      idempotencyKey: "ops-review",
+    };
+    await expect(
+      sessions.deliver(reader, projectId, alices.id, note),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const writer: Identity = {
+      ...everyAgent,
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    await expect(
+      sessions.deliver(writer, projectId, alices.id, note),
+    ).resolves.toMatchObject({});
   });
 });

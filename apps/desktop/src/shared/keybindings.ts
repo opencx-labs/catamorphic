@@ -66,6 +66,8 @@ const CODE_KEYS: Record<string, string> = {
   Backquote: "`",
   Minus: "-",
   Equal: "=",
+  // Option+Space types a no-break space on a Mac.
+  Space: " ",
 };
 
 function physicalKey(code: string | undefined): string | undefined {

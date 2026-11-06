@@ -1,7 +1,7 @@
 /** Shared authoring guidance offered to every harness through host skill discovery. */
 export const SESSION_WORKFLOWS_SKILL = `---
 name: session-workflows
-description: Author Catamorphic workflows for timed wakeups, recurring checks, session lifecycle events, and attributed session actions. Use for ephemeral session monitors and durable agent automations.
+description: Author Catamorphic workflows for timed wakeups, recurring checks, session lifecycle events, directory events (people joining or leaving), and attributed session actions. Use for ephemeral session monitors, durable agent automations, and onboarding or offboarding automations.
 ---
 
 # Session workflows
@@ -16,9 +16,10 @@ Discover this host's actual capabilities and schemas before authoring.
 | Request | Delivery | Lifetime |
 | --- | --- | --- |
 | Remind the user | deliver with mode: "message_only", attention: "required" | One-shot schedule owned by the session, no default expiry |
-| Wake an agent to do work | deliver with mode: "next_turn" | One-shot or conditional monitor; stop when its purpose is complete |
+| Wake an agent to do work | deliver with mode: "queue" | One-shot or conditional monitor; stop when its purpose is complete |
 | Monitor events without noise | Inspect the event/state, then deliver only a meaningful change | Session watcher or explicitly enabled reusable workflow |
-| Have an agent prepare a recurring result in a stable chat | wake with a stable workflow-scoped key | Member-owned enablement; reuse the same session |
+| Have an agent prepare a recurring result in a stable chat | deliver with a stable key (e.g. "daily") | Member or project enablement; the key reuses the same chat |
+| Have an agent handle something for everyone in the project (a PR review, an inbound request) | deliver with the event's key; the project shares one chat per key | Project enablement |
 
 Neither saving source nor deploying alone turns a trigger on. A workflow return
 ends that run, not its recurring activation.
@@ -45,7 +46,18 @@ session.turn-changed, session.state-changed, session.work-changed, and
 session.authority-changed. Config may select sessionId, agentId, statuses, and
 workStatus. Omitting sessionId observes authorized matching sessions in the
 project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
-statuses: ["completed", "failed"] }). Never guess an id.
+statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
+key in payload.session.key (null otherwise), so where selects a family of chats
+without starting runs for the rest: where: { payload: { session: { key: {
+$prefix: "pr-" } } } }.
+
+A watcher may bind the project's own trigger kinds too, such as the GitHub
+library in writing-workflows. A host without a public webhook URL (the desktop)
+can observe for it instead: pass the host's event source to create_watcher
+(eventSource: "github"). The host polls the repository with your GitHub
+connection from the watcher's start and records events shaped like the webhook's
+deliveries, with payload.hostVerified true in place of a signature, so the same
+trigger kinds and where filters match on every host.
 
 Events are normalized Project Events. input.payload.session is the snapshot at
 the transition; input.payload.detail contains the message/turn/visibility change.
@@ -64,9 +76,11 @@ and session_reopen for new work. Observe session.work-changed with
 ## Host calls and authoring shape
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
-deliver, wake, create, fork, spawn, archive, unarchive, interrupt,
+deliver, create, fork, spawn, archive, unarchive, interrupt,
 complete, reopen, stopWatcher, and stop operations. Every host call is a
-boundary transition: RETURN it. Consume its result as the next boundary's input.
+boundary transition: RETURN it. Consume its result as the next boundary's input
+(pass { state } as a second argument to keep data across it; the next boundary
+then receives { result, state }, see durable-workflows).
 Do not await it, put it inside a use-step helper, or invoke a second host call
 in the same boundary. Put ordinary network/file IO in use-step helpers with
 one destructured object parameter and JSDoc display names.
@@ -88,7 +102,7 @@ export const followUp = defineWorkflow(({ defineBoundary }) => ({
         context.host["catamorphic.sessions"].deliver({
           sessionId: "REPLACE_WITH_CURRENT_SESSION_ID",
           content: "Continue the requested follow-up. Inspect current state first.",
-          mode: "next_turn",
+          mode: "queue",
           idempotencyKey: context.input.activationId + ":" + context.input.scheduledFor,
         }),
     }),
@@ -146,8 +160,9 @@ create a temporary watcher and filter its exact sessionId in trigger config. If
 predicates can reject an event, branch the stop boundary too: a quiet return from
 one boundary does not skip the next boundary. Stop only after a matching action. The stop operation belongs to temporary activations.
 Use inspect in a preceding boundary if current state must supersede the event
-snapshot. deliver with message_only and attention: "required" requests user attention without running a model;
-use deliver with next_turn when the parent agent should continue automatically.
+snapshot. deliver with message_only and attention: "required" requests user attention without running a model
+(the agent reads it with its next turn);
+use deliver with queue when the parent agent should continue automatically.
 
 ### User reminder
 
@@ -183,25 +198,256 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
+### A chat per pull request
+
+A project automation that reviews each pull request in its own chat, shared with
+everyone in the project. It binds \`github.pull_request\` from the GitHub trigger
+library in \`writing-workflows\` (\`.work/triggers/github.ts\`), and its \`where\`
+lets only opened and updated, non-draft pull requests start a run. Enable it for
+the project; the key reuses the chat when the same pull request changes again.
+\`workspace\` starts the chat's checkout at the pull request's head, fetched from
+the project's remote by the host; each later push moves the same chat to the new
+head (the agent is told the old and new heads and what changed), and the chat's
+\`workspace\` records the exact commit it reviewed.
+Keys belong to the project, so a second automation closes the same chat when
+the pull request merges or closes: its workspace, branches, and grants are
+released, the transcript stays readable, and a reopened pull request starts a
+fresh chat.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/** @displayname Review pull requests */
+export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("github.pull_request", {
+      where: { payload: { body: { action: ["opened", "synchronize", "reopened"], pull_request: { draft: false } } } },
+    }),
+  ],
+  steps: [
+    /** @displayname Ask for a review */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
+        const event = input.payload.body;
+        return host["catamorphic.sessions"].deliver({
+          key: "pr-" + event.repository.full_name + "-" + event.number,
+          workspace: { ref: "refs/pull/" + event.number + "/head", update: "reset" },
+          title: "Review: " + event.pull_request.title,
+          content: "Review the changes in " + event.pull_request.html_url + " and summarize risks.",
+          notification: { title: "Review ready", body: event.pull_request.title },
+        });
+      },
+    }),
+  ],
+}));
+
+/** @displayname Close pull request chats */
+export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("github.pull_request", { where: { payload: { body: { action: "closed" } } } })],
+  steps: [
+    /** @displayname Close the review chat */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"github.pull_request">>) => {
+        const event = input.payload.body;
+        const key = "pr-" + event.repository.full_name + "-" + event.number;
+        return host["catamorphic.sessions"].close({ key, idempotencyKey: "closed:" + key });
+      },
+    }),
+  ],
+}));
+\`\`\`
+
+### A chat per Slack thread
+
+Mentions of the Slack app become one project chat per thread, keyed
+\`slack:<channel>:<thread_ts>\`, and the agent's settled reply is posted back
+to the thread by a second automation reacting to \`session.turn-changed\`.
+Both recipes, with the trigger library they bind, are in the \`slack\` skill.
+
+## Directory events
+
+On a Work server, people joining and leaving start workflows:
+directory.member-joined (an account's first sign-in, or a sign-in after the
+directory restores it), directory.member-left (the account is disabled:
+suspended, deleted, or outside every required group), and
+directory.groups-changed. A workflow binding them must declare
+\`memberships:read\`. input.payload.member is { id, email, name, domain },
+input.payload.groups the member's groups (lowercased), and groups-changed adds
+added and removed. Config { groups: ["eng@example.com"] } selects members of
+any of those groups (on groups-changed, changes that add or remove one); where
+on payload.member.domain selects one domain. Only projects with the automation
+turned on receive them, each change once; nothing from before it was turned on
+is replayed.
+
+host["catamorphic.secrets"] sets and deletes a member's own value of a declared
+project secret (\`secrets:write\`), naming them by email or id; Environments
+that list the secret hand each member their value. Issue a credential and
+return the set call from the same boundary, so the value is never a boundary's
+output (the run keeps those). A key per engineer, revoked when they leave:
+
+\`\`\`typescript
+import { type BoundaryContext, defineSecrets, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+export const secrets = defineSecrets({
+  CLICKHOUSE_ORGANIZATION_ID: { description: "The ClickHouse Cloud organization that issues keys" },
+  CLICKHOUSE_ADMIN_KEY: { description: "A ClickHouse Cloud key that manages keys, as keyId:keySecret" },
+});
+
+/** Where the organization's keys live, and the admin key's credentials. */
+function keysApi() {
+  return {
+    url: \`https://api.clickhouse.cloud/v1/organizations/\${secrets.CLICKHOUSE_ORGANIZATION_ID}/keys\`,
+    headers: {
+      authorization: \`Basic \${Buffer.from(secrets.CLICKHOUSE_ADMIN_KEY).toString("base64")}\`,
+      "content-type": "application/json",
+    },
+  };
+}
+
+/**
+ * @displayname Revoke ClickHouse keys
+ * @icon key-round
+ * @param email - @displayname Email | @description Whose keys to revoke
+ */
+async function revokeClickHouseKeys({ email }: { email: string }) {
+  "use step";
+  const { url, headers } = keysApi();
+  const listed = await fetch(url, { headers });
+  if (!listed.ok) throw new Error(\`Listing ClickHouse keys failed: \${listed.status}\`);
+  const { result } = (await listed.json()) as { result: { id: string; name: string }[] };
+  const keys = result.filter((key) => key.name === \`work \${email}\`);
+  for (const key of keys) {
+    const revoked = await fetch(\`\${url}/\${key.id}\`, { method: "DELETE", headers });
+    if (!revoked.ok) throw new Error(\`Revoking ClickHouse key \${key.id} failed: \${revoked.status}\`);
+  }
+  return { revoked: keys.length };
+}
+
+/**
+ * @displayname Issue a ClickHouse key
+ * @icon key-round
+ * @param email - @displayname Email | @description Who the key is for
+ */
+async function issueClickHouseKey({ email }: { email: string }) {
+  "use step";
+  const { url, headers } = keysApi();
+  const created = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ name: \`work \${email}\`, roles: ["developer"], state: "enabled" }),
+  });
+  if (!created.ok) throw new Error(\`Issuing a ClickHouse key failed: \${created.status}\`);
+  const { result } = (await created.json()) as { result: { keyId: string; keySecret: string } };
+  return \`\${result.keyId}:\${result.keySecret}\`;
+}
+
+/** @displayname Issue engineers their ClickHouse key */
+export const issueEngineerKeys = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["memberships:read", "secrets:write"],
+  triggers: [trigger("directory.member-joined", { groups: ["engineering@example.com"] })],
+  steps: [
+    /** @displayname Issue and store the key */
+    defineBoundary({
+      run: async ({ input, host }: BoundaryContext<TriggerPayload<"directory.member-joined">>) => {
+        const { email } = input.payload.member;
+        // A retried run must not leave a second key behind.
+        await revokeClickHouseKeys({ email });
+        const value = await issueClickHouseKey({ email });
+        return host["catamorphic.secrets"].set({ name: "CLICKHOUSE_API_KEY", value, member: email });
+      },
+    }),
+  ],
+}));
+
+/** @displayname Revoke leavers' ClickHouse keys */
+export const revokeLeaverKeys = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["memberships:read", "secrets:write"],
+  triggers: [trigger("directory.member-left", { groups: ["engineering@example.com"] })],
+  steps: [
+    /** @displayname Revoke their keys */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<TriggerPayload<"directory.member-left">>) => {
+        const { email } = input.payload.member;
+        await revokeClickHouseKeys({ email });
+        return { email };
+      },
+    }),
+    /** @displayname Delete their stored key */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ email: string }>) =>
+        host["catamorphic.secrets"].delete({ name: "CLICKHOUSE_API_KEY", member: input.email }),
+    }),
+  ],
+}));
+\`\`\`
+
+Enable both as project automations. Declare CLICKHOUSE_API_KEY in
+\`.work/project.json\` \`secrets\` and list it in the Environments whose
+sandboxes need it.
+
 ## Session actions and delivery
 
 - inspect/list/history are authorized reads. history is bounded; increase its
-  limit only when needed. Read a child as an ordinary session.
-- deliver message_only records context without a model turn; next_turn starts
-  work when idle or queues behind the active turn; interrupt requests a course
-  change. The host preserves origin in model input and in visible history.
-  Authoring a workflow message does not grant system/developer instruction rank.
-- wake creates/reuses a stable member session and requests attention when its
-  agent turn settles. Its optional notification title/body customizes that alert.
-  It is member-only; service-owned enablements have no implicit personal recipient.
-  Grant the project agent and its required connections/Environment. Use deliver
-  when the session id is known. Choose a stable wake key to reuse the conversation.
-- spawn respects the source agent's configured delegation routes. Fresh context
+  limit only when needed. Read a child as an ordinary session. history also
+  returns the chat's key, and through: "<messageId>" ends it at that message,
+  so a workflow on session.turn-changed reads exactly the reply the event's
+  detail.resultMessageId names, even after later turns.
+- deliver message_only records it without a model turn: people see it at
+  once and the agent reads it with its next turn. queue starts work when idle
+  or queues behind the active turn; steer adds the message to the turn working
+  now (it queues when none is); interrupt stops the active turn and runs this
+  next. The chat shows it as the workflow's message, never the person's, and
+  the agent reads it in a <workflow-message> envelope (ADR 0217). Authoring a
+  workflow message does not grant system/developer instruction rank.
+- deliver names its chat one of two ways. sessionId reaches that exact chat.
+  key reaches the chat this workflow keeps for the key: the first delivery starts
+  it (with agentSlug, title and environment when given) and later ones reuse it,
+  so "pr-" + number gives one chat per pull request and "daily" one recurring
+  chat. A keyed chat alerts its people when the agent's turn settles; pass
+  notification { title, body } to word that alert, or to alert on a chat named by
+  sessionId. Who a keyed chat belongs to follows the enablement: a member's
+  automation reaches that member's own chat; a project automation reaches a
+  project chat that everyone whose role reaches the agent can read and continue,
+  or one member's chat with audience: { member: "<id>" } (a current member; use
+  an id from an event or a lookup, never a guess). A project chat runs as the
+  project, not as any person: it runs in its agent's Environment and uses that
+  Environment's committed service bindings (never a member's connection), so
+  the agent definition names the aliases it needs. Reaching a chat that
+  is not the run's own (another member's by sessionId or audience) needs
+  \`sessions:write\` in the workflow's \`permissions\`; the project chat from a
+  member's automation needs \`automations:write\`. Listing everyone's chats
+  needs \`sessions:read\`.
+- No one watches a project chat, so name who approves for it: approvers
+  { members: ["<id>"], roles: ["<role>"] } on deliver (a pull request's author
+  and reviewers, an on-call role). When its agent needs approval (a query a
+  server guard escalates, a tool set to ask) they are notified and answer from the chat, and
+  only they can; the agent waits for the Environment's approvals.waitMinutes
+  (30 by default), then continues without it. Without approvers such an
+  action is refused at once.
+- workspace on deliver (and create) starts a chat's checkout at a ref of the
+  project's linked remote: a branch, tag, commit, or full ref such as
+  refs/pull/42/head. The host fetches it with the remote's own credentials; the
+  sandbox never holds them. Delivered again to an open chat it moves the
+  checkout before the next turn: update "rebase" (default) keeps the agent's
+  work on top of the new base, "reset" discards it. The agent is told what
+  changed, and a conflicting rebase changes nothing and says so. A chat
+  working in a person's own project folder first gets its own worktree; that
+  folder is never reset.
+- Git inside a chat's sandbox reaches remotes through the gateway when the
+  chat's Environment binds a Git connection (a binding with git.repositories
+  and git.push rules): plain git fetch and git push origin work, with the
+  session's grant, never the remote's credential. Pushes go to work/* branches
+  (or the binding's push rules); the default branch, deletes, and anything
+  without git:write are refused with a readable Git error.
+- spawn starts a copy of the chat's agent unless agentId names another, and
+  takes model and effort as the agent's delegation grants allow (a copy keeps
+  the chat's model and effort otherwise); readOnly and delegate: false need no
+  grant. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
 - attention: "required" on deliver alerts the user to that exact message. It is
   independent of mode and defaults to none. Use message_only for a reminder to
-  the user; use next_turn for work the agent should perform. Do not run a model
+  the user; use queue for work the agent should perform. Do not run a model
   merely to display a reminder. Notification preferences affect alerts, not the
   retained message or its unread attention. Repeated delivery with the same key
   creates one message and one attention request.
@@ -209,8 +455,10 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
   preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
 
-Use stable idempotencyKey values for operations that take them; wake uses its
-stable key and the host's run receipts. Reuse the same action key for retries of the
+Use stable idempotencyKey values for operations that take them. deliver
+defaults to one delivery per run, chat and content, so a retried boundary never
+posts twice; pass a key when the same text must arrive twice in one run, or to
+tie delivery to an event. Reuse the same action key for retries of the
 same action; use a different key for a new action. Do not use a fresh random key
 on each boundary retry. Prefer event identity or activationId + scheduledFor.
 Causal chains prevent self-triggering and bounded multi-workflow loops; do not
@@ -231,5 +479,5 @@ Before reporting an automation active, inspect its enabled status, source revisi
 Environment, expiry, and next intended behavior. Check authored source with the
 project checker. Verify one real occurrence or controlled event, including the
 quiet path. Ensure a finite monitor stops itself, and show the user its workflow
-or artifact link. Never introduce permanent polling to satisfy a one-time wake.
+or artifact link. Never introduce permanent polling to satisfy a one-time wakeup.
 `;

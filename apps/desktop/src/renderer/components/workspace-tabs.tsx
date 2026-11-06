@@ -1,8 +1,5 @@
-import { Clock } from "lucide-react";
+import { Clock, Puzzle } from "lucide-react";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
-import { useSidebarContent } from "./sidebar-contribution.js";
-import { SidebarItemRow } from "./sidebar-item-row.js";
-import { SidebarTree } from "./sidebar-tree.js";
 
 export {
   type DiffSource,
@@ -21,6 +18,7 @@ import {
   Download,
   FileCode,
   FileDiff,
+  Ghost,
   GitFork,
   Globe,
   KeyRound,
@@ -35,31 +33,83 @@ import {
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  type ComponentType,
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { useEndOfDrag } from "../lib/drag-end.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
+import { useWindowImage } from "../lib/window-images";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
-import { SignalBadge, SignalGlyph } from "./chat-signals";
-import { OpenResourceButton } from "./open-resource-button.js";
+import { ACTIVITY_LABELS, SignalBadge, SignalGlyph } from "./chat-signals";
+import type { FileTarget } from "./file-menu.js";
+import {
+  OpenResourceButton,
+  type ResourceActions,
+} from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
-/** The card's status line — most urgent signal first. */
+/**
+ * The card's status line, as the icon's corners say it: what needs the
+ * person, then what the tab is doing.
+ */
 function tabStatusLine(tab: WorkspaceTab): string | null {
+  if (tab.kind === "browser" && tab.pageDialog)
+    return "The page is waiting for your answer";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
-  if (tab.working) return "Agent is working…";
-  if (tab.attention) return "Ready for you";
-  if (tab.unread) return "New reply";
-  if (tab.draft) {
-    return tab.kind === "editor" || tab.kind === "workflow"
-      ? "Unsaved changes"
-      : "Unsent draft";
-  }
+  const needs = tab.attention
+    ? "Ready for you"
+    : tab.unread
+      ? "New reply"
+      : tab.draft
+        ? tab.kind === "editor" || tab.kind === "workflow"
+          ? "Unsaved changes"
+          : "Unsent draft"
+        : null;
+  const activity = tab.activity;
+  const doing =
+    activity === "working"
+      ? "Agent is working…"
+      : activity
+        ? ACTIVITY_LABELS[activity]
+        : null;
+  if (needs || doing) return [needs, doing].filter(Boolean).join(" · ");
+  if (tab.kind === "browser" && tab.asleep)
+    return "Asleep to save memory. Opens where you left off";
+  if (tab.kind === "browser" && tab.incognito)
+    return "Incognito. Keeps no history and does not reopen after Work quits";
   return null;
 }
+
+/**
+ * A sleeping tab (ADR 0194) reads as Chrome's: its icon fades behind a
+ * dashed ring. The ring sits in the icon's own box, so nothing shifts.
+ */
+function SleepRing({ tab }: { tab: WorkspaceTab }) {
+  if (tab.kind !== "browser" || !tab.asleep) return null;
+  return (
+    <span
+      aria-hidden="true"
+      data-tab-asleep=""
+      className="pointer-events-none absolute -inset-[3px] animate-fade-in rounded-full border border-dashed border-fg-muted"
+    />
+  );
+}
+
+const sleepingGlyph = (tab: WorkspaceTab) =>
+  `transition-[opacity,filter,scale] duration-200 ease-standard ${
+    tab.kind === "browser" && tab.asleep ? "scale-80 opacity-50 grayscale" : ""
+  }`;
 
 const HOVER_CARD_DELAY_MS = 500;
 const TAB_EXIT_FALLBACK_MS = 280;
@@ -129,6 +179,7 @@ const TAB_ICONS = {
   sites: SlidersHorizontal,
   passwords: KeyRound,
   downloads: Download,
+  extensions: Puzzle,
   usage: ChartColumn,
   palette: Search,
   "agent-setup": Bot,
@@ -138,6 +189,27 @@ const TAB_ICONS = {
   diff: FileDiff,
   mcpapp: AppWindow,
 } as const;
+
+/**
+ * The icon the tab's page showed, from main (ADR 0277), or the tab's own
+ * glyph while there is none.
+ */
+function PageIcon({
+  icon,
+  className,
+  fallback: Fallback,
+}: {
+  icon: string | null;
+  className: string;
+  fallback: ComponentType<{ className?: string }>;
+}) {
+  const source = useWindowImage(icon ? { site: { icon } } : null);
+  return source ? (
+    <img src={source} alt="" className={`${className} rounded-[3px]`} />
+  ) : (
+    <Fallback className={className} />
+  );
+}
 
 interface RenderedTab {
   tab: WorkspaceTab;
@@ -167,15 +239,18 @@ function mergeRendered(
   return merged;
 }
 
+/**
+ * A tab's close button takes no room in the strip: it rides over the end of
+ * the tab's label (`.workspace-tab-close` in styles.css), showing while the
+ * tab is hovered or holds keyboard focus, as the title's end fades under it.
+ */
 function CloseButton({
   hint,
   label,
-  className,
   onClick,
 }: {
   hint: boolean;
   label: string;
-  className: string;
   onClick: () => void;
 }) {
   const keybindings = useKeybindings();
@@ -183,21 +258,25 @@ function CloseButton({
     <button
       type="button"
       onClick={onClick}
-      className={`grid size-5 cursor-pointer place-items-center rounded text-fg-faint transition-opacity duration-150 hover:text-fg ${className}`}
+      className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg"
       aria-label={label}
     >
       <X className="size-3" />
     </button>
   );
+  const className = "workspace-tab-close";
   return hint ? (
     <ShortcutHint
       label="Close tab"
       shortcut={formatBinding(keybindings["close-tab"])}
+      className={className}
     >
       {button}
     </ShortcutHint>
   ) : (
-    <ShortcutHint label={label}>{button}</ShortcutHint>
+    <ShortcutHint label={label} className={className}>
+      {button}
+    </ShortcutHint>
   );
 }
 
@@ -205,6 +284,9 @@ function CloseButton({
  * Tab strip only — the host owns the surrounding top bar (drag region,
  * sidebar toggle) so tabs and window chrome share one row.
  */
+/** Where a tab's stretch of its group's eyebrow ends. */
+type EyebrowEnd = "bridge" | "chevron" | "tab";
+
 export interface TabGroup {
   /** The owning chat's tab key. */
   parentKey: string;
@@ -213,192 +295,38 @@ export interface TabGroup {
   collapsed: boolean;
 }
 
-export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
-  return props.orientation === "vertical" ? (
-    <SidebarWorkspaceTabs {...props} />
-  ) : (
-    <TabStrip {...props} />
-  );
+/** How far across a tab, 0 to 1, the pointer is. */
+function dropRatio(element: HTMLElement, clientX: number) {
+  const rect = element.getBoundingClientRect();
+  return (clientX - rect.left) / Math.max(1, rect.width);
 }
 
-function SidebarWorkspaceTabs({
-  tabs,
-  activeKey,
-  secondaryKey,
-  highlightKey,
-  groups = [],
-  onSelect,
-  onClose,
-  onNew,
-  onToggleGroup,
-  onReorder,
-  onDragStateChange,
-}: Parameters<typeof TabStrip>[0]) {
-  const [dragged, setDragged] = useState<string>();
-  useSidebarContent(tabs.length ? "ready" : "empty");
-  const parents = new Map(
-    groups.flatMap((group) =>
-      group.memberKeys.map((key) => [key, group.parentKey] as const),
-    ),
+export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
+  // A tab whose page waits on its dialog says so (ADR 0227); one out of
+  // sight also wears the waiting question's badge. A tab on screen shows
+  // the dialog itself.
+  const waiting = usePageDialogsWaiting();
+  const { activeKey, secondaryKey } = props;
+  const tabs = useMemo(
+    () =>
+      waiting.size === 0
+        ? props.tabs
+        : props.tabs.map((tab) => {
+            const key = tabKey(tab);
+            if (tab.kind !== "browser" || !waiting.has(key)) return tab;
+            const onScreen = key === activeKey || key === secondaryKey;
+            return {
+              ...tab,
+              pageDialog: true,
+              ...(onScreen ? {} : { awaitingInput: true }),
+            };
+          }),
+    [props.tabs, waiting, activeKey, secondaryKey],
   );
-  const items = tabs.map((tab) => ({
-    ...tab,
-    id: tabKey(tab),
-    parentId: parents.get(tabKey(tab)),
-    hasChildren: groups.some((group) => group.parentKey === tabKey(tab)),
-    collapsed: groups.find((group) => group.parentKey === tabKey(tab))
-      ?.collapsed,
-  }));
-  return (
-    <div data-tab-orientation="vertical" className="app-no-drag min-w-0">
-      <SidebarTree
-        items={items}
-        selectedId={activeKey}
-        rowHeight={32}
-        label="Workspace tabs"
-        renderItem={(tab, tree) => {
-          const Icon = TAB_ICONS[tab.kind];
-          const group = groups.find((group) => group.parentKey === tab.id);
-          const toggle = () => {
-            if (group && onToggleGroup)
-              onToggleGroup(group.parentKey.slice("chat:".length));
-            tree.toggle();
-          };
-          return (
-            // biome-ignore lint/a11y/noStaticElementInteractions: drag target; row controls are keyboard reachable.
-            <div
-              data-point-key={tab.id}
-              data-palette-target={highlightKey === tab.id || undefined}
-              className="animate-sidebar-tab-in"
-              draggable={Boolean(onReorder)}
-              onDragStart={(event) => {
-                setDragged(tab.id);
-                onDragStateChange?.(tab.id);
-                event.dataTransfer.setData("text/plain", tab.id);
-                event.dataTransfer.setData(
-                  TAB_DRAG_TYPE,
-                  JSON.stringify({
-                    key: tab.id,
-                    kind: tab.kind,
-                    title: tab.label ?? tab.name,
-                    detail: tab.detail,
-                    bookmarkUrl: tab.bookmarkUrl,
-                  } satisfies TabDragPayload),
-                );
-                event.dataTransfer.effectAllowed = "copyMove";
-              }}
-              onDragOver={(event) => {
-                if (dragged && dragged !== tab.id) event.preventDefault();
-              }}
-              onDrop={(event) => {
-                if (dragged && dragged !== tab.id) {
-                  event.preventDefault();
-                  onReorder?.(dragged, tab.id);
-                }
-                setDragged(undefined);
-                onDragStateChange?.(null);
-              }}
-              onDragEnd={() => {
-                setDragged(undefined);
-                onDragStateChange?.(null);
-              }}
-            >
-              <SidebarItemRow
-                itemId={tab.id}
-                label={tab.label ?? tab.name}
-                style={{ marginLeft: tree.depth * 12 }}
-                active={activeKey === tab.id || secondaryKey === tab.id}
-                resource
-                disclosure={
-                  tree.hasChildren
-                    ? {
-                        open: group ? !group.collapsed : tree.expanded,
-                        onToggle: toggle,
-                      }
-                    : undefined
-                }
-                icon={
-                  <SignalGlyph
-                    working={tab.working ?? false}
-                    awaitingInput={tab.awaitingInput}
-                    className="size-3.5"
-                  >
-                    {tab.kind === "app" ? (
-                      <AppGlyph icon={tab.appIcon} className="size-3.5" />
-                    ) : tab.kind === "chat" ? (
-                      <ChatGlyph
-                        icon={tab.chatIcon}
-                        fork={tab.fork}
-                        className="size-3.5"
-                      />
-                    ) : tab.kind === "browser" && tab.faviconUrl ? (
-                      <img
-                        src={tab.faviconUrl}
-                        alt=""
-                        className="size-3.5 rounded"
-                      />
-                    ) : (
-                      <Icon className="size-3.5" />
-                    )}
-                  </SignalGlyph>
-                }
-                labelContent={<AnimatedTitle text={tab.label ?? tab.name} />}
-                end={
-                  <SignalBadge
-                    signals={{
-                      working: tab.working,
-                      attention: tab.attention,
-                      unread: tab.unread,
-                      draft: tab.draft,
-                      awaitingInput: tab.awaitingInput,
-                    }}
-                    size="sm"
-                  />
-                }
-                actions={[
-                  {
-                    action: "close",
-                    label: `Close ${tab.label ?? tab.name}`,
-                    icon: "X",
-                  },
-                ]}
-                defaultMenu={[
-                  {
-                    action: "close",
-                    label: `Close ${tab.label ?? tab.name}`,
-                    icon: "X",
-                  },
-                ]}
-                preview={{
-                  title: tab.label ?? tab.name,
-                  description: tab.detail,
-                  metadata: tabStatusLine(tab)
-                    ? [{ label: "Status", value: tabStatusLine(tab) ?? "" }]
-                    : undefined,
-                }}
-                onOpen={(mode) => onSelect(tab.id, mode)}
-                onAction={() => onClose(tab.id)}
-              />
-            </div>
-          );
-        }}
-      />
-      {onNew && (
-        <button
-          type="button"
-          aria-label="New tab"
-          className="sidebar-tab"
-          onClick={onNew}
-        >
-          <Plus className="size-3.5" />
-        </button>
-      )}
-    </div>
-  );
+  return <TabStrip {...props} tabs={tabs} />;
 }
 
 function TabStrip({
-  orientation = "horizontal",
   alignment = "start",
   tabs,
   activeKey,
@@ -410,9 +338,12 @@ function TabStrip({
   onNew,
   onToggleGroup,
   onReorder,
+  onAttach,
+  attachable,
   onDragStateChange,
+  tabFile,
+  tabActions,
 }: {
-  orientation?: "horizontal" | "vertical";
   alignment?: "start" | "center";
   tabs: WorkspaceTab[];
   activeKey?: string;
@@ -433,10 +364,25 @@ function TabStrip({
   onToggleGroup?: (chatLocalId: string) => void;
   /** Drag-reorder: move `key` before `beforeKey` (null = to the end). */
   onReorder?: (key: string, beforeKey: string | null) => void;
+  /**
+   * A tab dropped on a chat's tab, or among another group's tabs, joins
+   * that chat (`chatKey`); dropped among the top tabs, null, it leaves its
+   * chat. Lands before `beforeKey` (null: last).
+   */
+  onAttach?: (
+    key: string,
+    chatKey: string | null,
+    beforeKey: string | null,
+  ) => void;
+  /** Whether a tab may join that chat (or, with null, leave its own). */
+  attachable?: (key: string, chatKey: string | null) => boolean;
   /** A tab drag started (key) or ended (null) — hosts show drop zones. */
   onDragStateChange?: (key: string | null) => void;
+  /** The file a tab shows (an editor's): its menu adds the file's actions. */
+  tabFile?: (key: string) => FileTarget | undefined;
+  /** What a tab's resource does itself (a chat's verbs), after opening it. */
+  tabActions?: (key: string) => ResourceActions | undefined;
 }) {
-  const vertical = orientation === "vertical";
   const keybindings = useKeybindings();
   const [rendered, setRendered] = useState<RenderedTab[]>(() =>
     mergeRendered([], tabs),
@@ -447,7 +393,11 @@ function TabStrip({
     setRendered((previous) => mergeRendered(previous, tabs));
   }
   const [dragKey, setDragKey] = useState<string | null>(null);
-  const [dropBeforeKey, setDropBeforeKey] = useState<string | null>(null);
+  // Where a dragged tab would land: before a tab, or inside a chat's.
+  const [dropAt, setDropAt] = useState<{
+    key: string;
+    inside: boolean;
+  } | null>(null);
   // Hover card: armed by dwelling on a tab's body, disarmed by leaving,
   // clicking, or starting a drag.
   const [hoverCard, setHoverCard] = useState<{
@@ -467,10 +417,8 @@ function TabStrip({
       setHoverCard({
         key,
         exiting: false,
-        x: vertical ? rect.right + 12 : rect.left,
-        y: vertical
-          ? Math.min(rect.top, window.innerHeight - 140)
-          : rect.bottom + 8,
+        x: rect.left,
+        y: rect.bottom + 8,
       });
     }, HOVER_CARD_DELAY_MS);
   };
@@ -487,6 +435,9 @@ function TabStrip({
       .map((group) => [group.memberKeys.at(-1) as string, group]),
   );
 
+  // Tabs whose entrance has played. They drop its class, and the clip it
+  // needs while the width grows, so a group's eyebrow can sit above them.
+  const [entered, setEntered] = useState<ReadonlySet<string>>(() => new Set());
   const removeExited = (key: string) =>
     setRendered((previous) =>
       previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
@@ -502,6 +453,12 @@ function TabStrip({
     const keys: string[] = JSON.parse(exitingKeys);
     if (keys.length === 0) return;
     const exiting = new Set(keys);
+    // A tab that comes back plays its entrance again.
+    setEntered((previous) =>
+      keys.some((key) => previous.has(key))
+        ? new Set([...previous].filter((key) => !exiting.has(key)))
+        : previous,
+    );
     const timer = window.setTimeout(
       () =>
         setRendered((previous) =>
@@ -513,31 +470,96 @@ function TabStrip({
     );
     return () => window.clearTimeout(timer);
   }, [exitingKeys]);
+  const endDrag = () => {
+    setDragKey(null);
+    setDropAt(null);
+    onDragStateChange?.(null);
+  };
+  // A tab closed mid-drag never hears its dragend: the close buttons would
+  // stay hidden and the strip's ends would stop moving the window.
+  useEndOfDrag(Boolean(dragKey), endDrag);
 
   if (rendered.length === 0 && !onNew) return null;
+  // Groups holding the tab in front or its split companion.
+  const activeGroups = new Set(
+    rendered.flatMap(({ tab, exiting }) =>
+      !exiting &&
+      tab.groupId &&
+      (tabKey(tab) === activeKey || tabKey(tab) === secondaryKey)
+        ? [tab.groupId]
+        : [],
+    ),
+  );
+  const parentOf = new Map(
+    groups.flatMap((group) =>
+      group.memberKeys.map((key): [string, string] => [key, group.parentKey]),
+    ),
+  );
+  /** A chat's tab takes a tab dropped on all but its leading edge. */
+  const dropsInside = (dragged: string, tab: WorkspaceTab, x: number) =>
+    tab.kind === "chat" &&
+    !dragged.startsWith("chat:") &&
+    Boolean(onAttach && attachable?.(dragged, tabKey(tab))) &&
+    x > 0.3;
+  /**
+   * A dragged tab lands before another (null: last) among the tabs of the
+   * group it lands in, joining or leaving a chat on the way.
+   */
+  const land = (dragged: string, beforeKey: string | null) => {
+    const into = beforeKey ? (parentOf.get(beforeKey) ?? null) : null;
+    if (
+      onAttach &&
+      !dragged.startsWith("chat:") &&
+      (parentOf.get(dragged) ?? null) !== into &&
+      attachable?.(dragged, into)
+    )
+      onAttach(dragged, into, beforeKey);
+    else onReorder?.(dragged, beforeKey);
+  };
+  // The strip's spare room drags the window, as Chrome's does: the strip
+  // takes presses for its tabs and their drops, so its empty ends hand
+  // them back to the chrome. Centred tabs sit between two such ends, which
+  // share the room equally; with no room left they have no width. While a
+  // tab is dragged they are part of the drop target (the end of the strip),
+  // never a window handle.
+  const windowHandle = (end: "start" | "end") => (
+    <div
+      aria-hidden="true"
+      data-tab-strip-room={end}
+      className={`min-w-0 flex-1 self-stretch ${end === "start" ? "-me-1" : "-ms-1"} ${dragKey ? "" : "app-drag"}`}
+    />
+  );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : `flex-1 items-center ${alignment === "center" ? "[justify-content:safe_center]" : "justify-start"} self-stretch overflow-x-auto overflow-y-hidden`}`}
-      data-tab-orientation={orientation}
+      className="app-no-drag flex min-w-0 flex-1 items-center gap-1 self-stretch overflow-x-auto overflow-y-hidden"
+      data-tab-orientation="horizontal"
+      data-tab-alignment={alignment}
+      // A dragged tab hides every close button until it lands.
+      data-tab-dragging={dragKey ? "" : undefined}
       onDragOver={(event) => {
         if (dragKey) {
           event.preventDefault();
-          setDropBeforeKey(null);
+          setDropAt(null);
         }
       }}
       onDrop={(event) => {
         if (!dragKey) return;
         event.preventDefault();
-        onReorder?.(dragKey, null);
-        setDragKey(null);
-        setDropBeforeKey(null);
-        onDragStateChange?.(null);
+        land(dragKey, null);
+        endDrag();
       }}
     >
+      {alignment === "center" && windowHandle("start")}
       {rendered.map(({ tab, exiting }, index) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
+        // A group wears the accent while it holds the tab in front (or its
+        // split companion); left behind, its eyebrow and chevrons go quiet,
+        // so it never reads as the one in focus.
+        const groupActive = Boolean(
+          tab.groupId && activeGroups.has(tab.groupId),
+        );
         const secondary = !exiting && key === secondaryKey;
         const highlighted = !exiting && key === highlightKey;
         const Icon = TAB_ICONS[tab.kind];
@@ -557,15 +579,59 @@ function TabStrip({
               (tabKey(neighbor.tab) === activeKey ||
                 tabKey(neighbor.tab) === secondaryKey),
           );
-        const mergeRight =
-          !vertical && inPair && neighborInPair(rendered[index + 1]);
-        const mergeLeft =
-          !vertical && inPair && neighborInPair(rendered[index - 1]);
+        const mergeRight = inPair && neighborInPair(rendered[index + 1]);
+        const mergeLeft = inPair && neighborInPair(rendered[index - 1]);
+        // A group wears one eyebrow across all its tabs: each tab draws its
+        // stretch of the line, bridging the gap to the next member (and the
+        // fold chevron after the last), so the run reads as one.
+        const sameGroup = (neighbor?: RenderedTab) =>
+          Boolean(
+            neighbor &&
+              !neighbor.exiting &&
+              neighbor.tab.groupId === tab.groupId,
+          );
+        const eyebrowEnd: EyebrowEnd =
+          closesGroup && onToggleGroup
+            ? "chevron"
+            : sameGroup(rendered[index + 1])
+              ? "bridge"
+              : "tab";
+        const eyebrow =
+          !exiting && tab.groupId
+            ? { starts: !sameGroup(rendered[index - 1]), end: eyebrowEnd }
+            : undefined;
         return (
           <Fragment key={key}>
             <div
               data-palette-target={highlighted || undefined}
               data-point-key={key}
+              // Anywhere on the tab (its close button over the label's end,
+              // its padding) opens the menu its label opens.
+              onContextMenu={(event) => {
+                const tabLabel = event.currentTarget.querySelector(
+                  ".workspace-tab-label",
+                );
+                if (
+                  exiting ||
+                  event.defaultPrevented ||
+                  !tabLabel ||
+                  (event.target instanceof Node &&
+                    tabLabel.contains(event.target))
+                )
+                  return;
+                event.preventDefault();
+                tabLabel.dispatchEvent(
+                  new MouseEvent("contextmenu", {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                  }),
+                );
+              }}
+              data-page-dialog={
+                (tab.kind === "browser" && tab.pageDialog) || undefined
+              }
               draggable={Boolean(onReorder) && !exiting}
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", key);
@@ -586,146 +652,211 @@ function TabStrip({
                 setDragKey(key);
                 onDragStateChange?.(key);
               }}
-              onDragEnd={() => {
-                setDragKey(null);
-                setDropBeforeKey(null);
-                onDragStateChange?.(null);
-              }}
+              onDragEnd={endDrag}
               onDragOver={(event) => {
                 if (!dragKey || dragKey === key) return;
                 event.preventDefault();
                 event.stopPropagation();
-                setDropBeforeKey(key);
+                const inside = dropsInside(
+                  dragKey,
+                  tab,
+                  dropRatio(event.currentTarget, event.clientX),
+                );
+                setDropAt((current) =>
+                  current?.key === key && current.inside === inside
+                    ? current
+                    : { key, inside },
+                );
               }}
               onDragLeave={() =>
-                setDropBeforeKey((current) =>
-                  current === key ? null : current,
-                )
+                setDropAt((current) => (current?.key === key ? null : current))
               }
               onDrop={(event) => {
                 if (!dragKey || dragKey === key) return;
                 event.preventDefault();
                 event.stopPropagation();
-                onReorder?.(dragKey, key);
-                setDragKey(null);
-                setDropBeforeKey(null);
-                onDragStateChange?.(null);
+                if (
+                  dropsInside(
+                    dragKey,
+                    tab,
+                    dropRatio(event.currentTarget, event.clientX),
+                  )
+                )
+                  onAttach?.(dragKey, key, null);
+                else land(dragKey, key);
+                endDrag();
               }}
               onAnimationEnd={(event) => {
-                if (
-                  event.animationName === "tab-out" ||
-                  event.animationName === "sidebar-tab-out"
-                )
-                  removeExited(key);
+                if (event.target !== event.currentTarget) return;
+                if (event.animationName === "tab-out") removeExited(key);
+                if (event.animationName === "tab-in")
+                  setEntered((previous) =>
+                    previous.has(key) ? previous : new Set(previous).add(key),
+                  );
               }}
-              className={`group flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
+              data-tab-active={active || undefined}
+              data-tab-drop={
+                dropAt?.key === key && dropAt.inside ? "inside" : undefined
+              }
+              className={`workspace-tab group relative flex h-8 shrink-0 items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 rounded-lg ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
-                tab.groupId
-                  ? vertical
-                    ? "border-l-2 border-l-accent/40 "
-                    : "border-t-2 border-t-accent/40 "
-                  : ""
-              }${dragKey === key ? "opacity-50 " : ""}${
-                dropBeforeKey === key
-                  ? vertical
-                    ? "border-t-2 border-t-accent "
-                    : "border-l-2 border-l-accent "
+                dragKey === key ? "opacity-50 " : ""
+              }${
+                dropAt?.key === key && !dropAt.inside
+                  ? "border-l-2 border-l-accent "
                   : ""
               }${
                 exiting
-                  ? vertical
-                    ? "animate-sidebar-tab-out pointer-events-none"
-                    : "animate-tab-out pointer-events-none"
-                  : vertical
-                    ? "animate-sidebar-tab-in"
+                  ? "animate-tab-out pointer-events-none"
+                  : entered.has(key)
+                    ? ""
                     : "animate-tab-in"
               } ${
-                vertical
-                  ? `${highlighted ? "border-accent" : active || secondary ? "border-border" : "border-transparent"} ${active ? "bg-bg-raised text-fg" : secondary ? "bg-bg-raised text-fg-muted" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`
-                  : highlighted
-                    ? active
-                      ? "border-accent bg-bg text-fg"
-                      : "border-accent text-fg"
-                    : active
-                      ? "border-border bg-bg text-fg"
-                      : secondary
-                        ? "border-border bg-bg text-fg-muted"
-                        : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+                // The tab in front wears the theme's accent, as an open
+                // chat's bubble does: a neutral border on the strip's near
+                // black was hard to find. The palette's target keeps the
+                // full accent, so the two still read apart.
+                highlighted
+                  ? active
+                    ? "border-accent bg-bg text-fg"
+                    : "border-accent text-fg"
+                  : active
+                    ? "border-accent/60 bg-bg text-fg"
+                    : secondary
+                      ? "border-border bg-bg text-fg-muted"
+                      : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
               }`}
               aria-hidden={exiting || undefined}
             >
-              <OpenResourceButton
-                type="button"
-                onOpen={(mode) => {
-                  disarmHoverCard();
-                  onSelect(key, mode);
-                }}
-                onMouseEnter={(event) => {
-                  if (!exiting && !dragKey) {
-                    armHoverCard(key, event.currentTarget);
-                  }
-                }}
-                onMouseLeave={disarmHoverCard}
-                className={`flex min-w-0 cursor-pointer items-center gap-1.5 px-1.5 ${vertical ? "h-full flex-1 text-left" : ""}`}
-                aria-current={active || undefined}
-              >
-                {/* Same signal vocabulary as the chat bubbles: spinner
-                  while working; unread/draft/question land as badges. */}
-                <span className="relative grid size-3.5 shrink-0 place-items-center">
-                  <SignalGlyph
-                    working={tab.working ?? false}
-                    awaitingInput={tab.awaitingInput}
-                    className="size-3.5"
-                  >
-                    {tab.kind === "browser" && tab.faviconUrl ? (
-                      <img
-                        src={tab.faviconUrl}
-                        alt=""
-                        className="size-3.5 rounded-[3px]"
-                      />
-                    ) : tab.kind === "app" ? (
-                      <AppGlyph icon={tab.appIcon} className="size-3.5" />
-                    ) : tab.kind === "chat" ? (
-                      <ChatGlyph
-                        icon={tab.chatIcon}
-                        fork={tab.fork}
-                        className="size-3.5"
-                      />
-                    ) : (
-                      <Icon className="size-3.5" />
-                    )}
-                  </SignalGlyph>
-                  {/* A custom conversation icon still reads as a chat: a
-                      tiny chat marker rides the glyph's corner. */}
-                  {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (
-                    <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
-                      {tab.fork ? (
-                        <GitFork className="size-1.5 text-fg-muted" />
-                      ) : (
-                        <MessageSquare className="size-1.5 text-fg-muted" />
-                      )}
-                    </span>
-                  )}
-                  <span className="absolute -right-1 -top-1">
-                    <SignalBadge
-                      signals={{
-                        working: tab.working,
-                        unread: tab.unread,
-                        attention: tab.attention,
-                        draft: tab.draft,
-                        awaitingInput: tab.awaitingInput,
-                      }}
-                      size="sm"
-                    />
-                  </span>
-                </span>
-                <AnimatedTitle
-                  text={tab.label ?? tab.name}
-                  className={vertical ? "min-w-0 flex-1" : "max-w-40"}
+              {eyebrow && (
+                <span
+                  aria-hidden="true"
+                  data-tab-group-eyebrow={eyebrow.starts ? "start" : "rest"}
+                  // Three pixels tall, so its rounded ends read as a pill
+                  // rather than a cut line; a pixel above the tab's edge.
+                  className={`pointer-events-none absolute -top-[5px] h-[3px] transition-colors duration-150 ${groupActive ? "bg-accent/50" : "bg-border-strong"} ${
+                    eyebrow.starts
+                      ? "left-1.5 rounded-l-full"
+                      : mergeLeft
+                        ? "left-0"
+                        : "-left-px"
+                  } ${
+                    // Past this tab's border: gap-1 to the next member (none
+                    // across a merged split pair), or gap-1 and the size-6
+                    // fold chevron after the last.
+                    eyebrow.end === "bridge"
+                      ? mergeRight
+                        ? "right-0"
+                        : "-right-[5px]"
+                      : eyebrow.end === "chevron"
+                        ? "-right-[29px] rounded-r-full"
+                        : "right-1.5 rounded-r-full"
+                  }`}
                 />
-              </OpenResourceButton>
-              {/* Collapsed group parent: expand its folded surfaces. */}
+              )}
+              {/* The label and the close button riding over its end. The
+                label is the tab's press target, so it fills the tab inside
+                its border: the tab's padding is the label's own, and a press
+                anywhere on the tab opens it. */}
+              <span className="relative flex min-w-0 items-center self-stretch">
+                <OpenResourceButton
+                  type="button"
+                  url={tab.kind === "browser" ? tab.bookmarkUrl : undefined}
+                  file={tabFile?.(key)}
+                  actions={tabActions?.(key)}
+                  onOpen={(mode) => {
+                    disarmHoverCard();
+                    onSelect(key, mode);
+                  }}
+                  onMouseEnter={(event) => {
+                    if (!exiting && !dragKey) {
+                      armHoverCard(key, event.currentTarget);
+                    }
+                  }}
+                  onMouseLeave={disarmHoverCard}
+                  className="workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 self-stretch px-2.5"
+                  aria-current={active || undefined}
+                >
+                  {/* Same signal vocabulary as the chat bubbles: a spinner
+                  on the icon's lower corner while working, or what it waits
+                  on (the icon still names the tab); unread/draft/question
+                  land as badges on its upper corner. */}
+                  <span className="relative grid size-3.5 shrink-0 place-items-center">
+                    <SignalGlyph activity={tab.activity} className="size-3.5">
+                      {tab.kind === "browser" ? (
+                        <PageIcon
+                          icon={tab.faviconUrl ?? null}
+                          className={`size-3.5 ${sleepingGlyph(tab)}`}
+                          fallback={Icon}
+                        />
+                      ) : tab.kind === "app" ? (
+                        <AppGlyph icon={tab.appIcon} className="size-3.5" />
+                      ) : tab.kind === "chat" ? (
+                        <ChatGlyph
+                          icon={tab.chatIcon}
+                          fork={tab.fork}
+                          className="size-3.5"
+                        />
+                      ) : (
+                        <Icon className="size-3.5" />
+                      )}
+                    </SignalGlyph>
+                    <SleepRing tab={tab} />
+                    {/* An incognito page keeps its site's icon; a ghost on
+                      its lower corner says where it lives. */}
+                    {tab.kind === "browser" &&
+                      tab.incognito &&
+                      !tab.activity && (
+                        <span
+                          className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised"
+                          data-tab-incognito=""
+                        >
+                          <Ghost className="size-1.5 text-fg-muted" />
+                        </span>
+                      )}
+                    {/* A custom conversation icon still reads as a chat: a
+                      tiny chat marker rides the glyph's lower corner, which
+                      what the chat is doing takes while it says anything. */}
+                    {tab.kind === "chat" &&
+                      hasCustomChatIcon(tab.chatIcon) &&
+                      !tab.activity && (
+                        <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
+                          {tab.fork ? (
+                            <GitFork className="size-1.5 text-fg-muted" />
+                          ) : (
+                            <MessageSquare className="size-1.5 text-fg-muted" />
+                          )}
+                        </span>
+                      )}
+                    <span className="absolute -right-1 -top-1">
+                      <SignalBadge
+                        signals={{
+                          working: tab.working,
+                          unread: tab.unread,
+                          attention: tab.attention,
+                          draft: tab.draft,
+                          awaitingInput: tab.awaitingInput,
+                        }}
+                        size="sm"
+                      />
+                    </span>
+                  </span>
+                  <AnimatedTitle
+                    text={tab.label ?? tab.name}
+                    className="workspace-tab-title min-w-3 max-w-40"
+                  />
+                </OpenResourceButton>
+                {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
+                <CloseButton
+                  hint={active}
+                  label={`Close ${tab.label ?? tab.name}`}
+                  onClick={() => onClose(key)}
+                />
+              </span>
+              {/* Collapsed group parent: expand its folded surfaces. It
+                sits over the label's last 4px, where the tab's padding was,
+                and above the label, so all of it takes a press. */}
               {parentGroup?.collapsed && onToggleGroup && (
                 <ShortcutHint label="Expand grouped tabs">
                   <button
@@ -733,7 +864,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(parentGroup.parentKey.slice("chat:".length))
                     }
-                    className="flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] text-accent/80 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
+                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent relative -ms-1 me-1 ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
                     aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
                   >
                     <ChevronsRight className="size-3" />
@@ -741,13 +872,6 @@ function TabStrip({
                   </button>
                 </ShortcutHint>
               )}
-              {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
-              <CloseButton
-                hint={active}
-                label={`Close ${tab.label ?? tab.name}`}
-                className={active ? "" : "row-reveal"}
-                onClick={() => onClose(key)}
-              />
             </div>
             {/* Last member of an expanded group: fold the group away. */}
             {closesGroup && onToggleGroup && (
@@ -758,7 +882,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(closesGroup.parentKey.slice("chat:".length))
                     }
-                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-accent/70 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
+                    className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${groupActive ? "text-accent/70" : "text-fg-faint"}`}
                     aria-label="Collapse grouped tabs"
                   >
                     <ChevronsLeft className="size-3.5" />
@@ -798,21 +922,20 @@ function TabStrip({
         <div className="flex shrink-0 items-center self-stretch">
           <ShortcutHint
             label="New tab"
-            className={vertical ? "w-full" : undefined}
             shortcut={formatBinding(keybindings["new-tab"])}
           >
             <button
               type="button"
               onClick={onNew}
-              className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg ${vertical ? "h-8 w-full justify-start px-2 text-xs" : "h-7 w-7 justify-center"}`}
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
               aria-label="New tab"
             >
               <Plus className="size-4" />
-              {vertical && "New tab"}
             </button>
           </ShortcutHint>
         </div>
       )}
+      {windowHandle("end")}
     </div>
   );
 }

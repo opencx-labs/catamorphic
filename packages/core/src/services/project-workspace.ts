@@ -1,16 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PROJECT_GITIGNORE } from "@catamorphic/git";
+import {
+  isProjectPathWithin,
+  PROJECT_APP_DATA_DIR,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 
-export const PROJECT_DATA_ROOT = ".catamorphic/app-data";
 export const PROJECT_WORKSPACE_IGNORE = PROJECT_GITIGNORE;
 
 /** Create the local workspace on first use; never rewrite the owner's ignore choices. */
 export function ensureProjectWorkspace({ root }: { root: string }): void {
-  const directory = path.join(root, ".catamorphic");
+  const directory = path.join(root, PROJECT_WORKSPACE_ROOT);
   const existing = fs.lstatSync(directory, { throwIfNoEntry: false });
   if (existing?.isSymbolicLink())
-    throw new Error("The Catamorphic workspace cannot be a symbolic link");
+    throw new Error(
+      `The ${PROJECT_WORKSPACE_ROOT} folder cannot be a symbolic link`,
+    );
   fs.mkdirSync(directory, { recursive: true });
   try {
     fs.writeFileSync(
@@ -27,14 +33,14 @@ export function ensureProjectWorkspace({ root }: { root: string }): void {
 /** Document addresses remain portable while their local backing stays in app-data. */
 export function localDocumentRelativePath(relative: string): string {
   return relative.startsWith("store/")
-    ? `${PROJECT_DATA_ROOT}/${relative}`
+    ? `${PROJECT_APP_DATA_DIR}/${relative}`
     : relative;
 }
 
 /** Persistent storage for trusted local app/workflow execution, created on demand. */
 export function projectDataDirectory({ root }: { root: string }): string {
   ensureProjectWorkspace({ root });
-  const directory = path.join(root, PROJECT_DATA_ROOT);
+  const directory = path.join(root, PROJECT_APP_DATA_DIR);
   const existing = fs.lstatSync(directory, { throwIfNoEntry: false });
   if (existing?.isSymbolicLink())
     throw new Error("Project app data cannot be a symbolic link");
@@ -44,8 +50,5 @@ export function projectDataDirectory({ root }: { root: string }): string {
 
 /** Mutable project data is never served through the shared program surface. */
 export function isProjectDataPath(relative: string): boolean {
-  return (
-    relative === PROJECT_DATA_ROOT ||
-    relative.startsWith(`${PROJECT_DATA_ROOT}/`)
-  );
+  return isProjectPathWithin(relative, PROJECT_APP_DATA_DIR);
 }

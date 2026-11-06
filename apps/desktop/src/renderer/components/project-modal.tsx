@@ -1,7 +1,7 @@
 import {
-  type GithubRepoSummary,
-  useGithubRepos,
-  useGithubStatus,
+  type CodeHostRepositorySummary,
+  useCodeHostRepositories,
+  useCodeHosts,
 } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -62,9 +62,8 @@ export function ProjectModal({
   const [name, setName] = useState("");
   const [parentDir, setParentDir] = useState("");
   const [importDir, setImportDir] = useState<string | null>(null);
-  const [selectedRepo, setSelectedRepo] = useState<GithubRepoSummary | null>(
-    null,
-  );
+  const [selectedRepo, setSelectedRepo] =
+    useState<CodeHostRepositorySummary | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [githubGrant, setGithubGrant] =
@@ -76,7 +75,7 @@ export function ProjectModal({
       desktopApi.onGithubConnected((result) => {
         setGithubGrant(null);
         if (result && "error" in result) setError(result.error);
-        void queryClient.invalidateQueries({ queryKey: ["cat", "github"] });
+        void queryClient.invalidateQueries({ queryKey: ["cat", "code-hosts"] });
       }),
     [queryClient],
   );
@@ -364,7 +363,7 @@ export function ProjectModal({
             onDone={() => {
               setManagingGithubAccess(false);
               void queryClient.invalidateQueries({
-                queryKey: ["cat", "github"],
+                queryKey: ["cat", "code-hosts"],
               });
             }}
           />,
@@ -444,6 +443,31 @@ export function GithubAuthorizationTray({
   );
 }
 
+/**
+ * The person's GitHub connection (ADR 0177): their personal `github`
+ * connection as the code hosts report it.
+ */
+function useGithubConnection() {
+  const hosts = useCodeHosts();
+  const connection = hosts.data?.find(
+    (host) => host.provider === "github",
+  )?.connection;
+  const account = connection?.account;
+  const login =
+    account &&
+    typeof account === "object" &&
+    "login" in account &&
+    typeof account.login === "string"
+      ? account.login
+      : undefined;
+  return {
+    isLoading: hosts.isLoading,
+    data: hosts.data
+      ? { connected: connection?.status === "ready", login }
+      : undefined,
+  };
+}
+
 export function GithubRepositoryAccessTray({ onDone }: { onDone: () => void }) {
   return (
     <aside
@@ -483,14 +507,14 @@ function GithubPanel({
   onAuthorizationStarted,
   onManageAccess,
 }: {
-  selected: GithubRepoSummary | null;
-  onSelect: (repo: GithubRepoSummary | null) => void;
+  selected: CodeHostRepositorySummary | null;
+  onSelect: (repo: CodeHostRepositorySummary | null) => void;
   onAuthorizationStarted: (grant: GithubAuthorizationGrant) => void;
   onManageAccess: () => void;
 }) {
-  const statusQuery = useGithubStatus();
+  const statusQuery = useGithubConnection();
   const connected = statusQuery.data?.connected === true;
-  const reposQuery = useGithubRepos({ enabled: connected });
+  const reposQuery = useCodeHostRepositories("github", { enabled: connected });
   const [authError, setAuthError] = useState<string | null>(null);
   const [authPending, setAuthPending] = useState(false);
   const [filter, setFilter] = useState("");
@@ -610,12 +634,14 @@ function GithubPanel({
         ) : (
           visible.map((repo) => (
             <button
-              key={repo.id}
+              key={repo.fullName}
               type="button"
-              onClick={() => onSelect(selected?.id === repo.id ? null : repo)}
+              onClick={() =>
+                onSelect(selected?.fullName === repo.fullName ? null : repo)
+              }
               data-testid={`github-repo-${repo.fullName}`}
               className={`flex w-full cursor-pointer items-center gap-2 border-b border-border px-2.5 py-1.5 text-left text-[13px] transition-colors duration-100 last:border-b-0 ${
-                selected?.id === repo.id
+                selected?.fullName === repo.fullName
                   ? "bg-bg-overlay text-fg"
                   : "text-fg-muted hover:bg-bg-inset hover:text-fg"
               }`}
@@ -624,7 +650,7 @@ function GithubPanel({
               {repo.private && (
                 <Lock className="size-3 shrink-0 text-fg-faint" />
               )}
-              {selected?.id === repo.id && (
+              {selected?.fullName === repo.fullName && (
                 <Check className="size-3.5 shrink-0 text-accent" />
               )}
             </button>

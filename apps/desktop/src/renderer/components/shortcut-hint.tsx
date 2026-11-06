@@ -47,6 +47,9 @@ export function ShortcutHint({
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const [themeTokens, setThemeTokens] = useState<CSSProperties>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The frame that flips a mounted hint visible; hiding cancels it too, or a
+  // hint shown by focus reappears over the menu a right-click just opened.
+  const frameRef = useRef(0);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -54,7 +57,13 @@ export function ShortcutHint({
   // transition ends, not when the pointer leaves.
   const [visible, setVisible] = useState(false);
 
-  useEffect(() => () => clearTimeout(timerRef.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(timerRef.current);
+      cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
 
   useLayoutEffect(() => {
     const tooltip = tooltipRef.current;
@@ -99,7 +108,7 @@ export function ShortcutHint({
         y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
       });
       // Mount hidden, then flip visible next frame so the transition runs.
-      requestAnimationFrame(() => setVisible(true));
+      frameRef.current = requestAnimationFrame(() => setVisible(true));
     }, delay);
   };
 
@@ -112,11 +121,12 @@ export function ShortcutHint({
       x: rect.x + rect.width / 2,
       y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
     });
-    requestAnimationFrame(() => setVisible(true));
+    frameRef.current = requestAnimationFrame(() => setVisible(true));
   };
 
   const hide = () => {
     clearTimeout(timerRef.current);
+    cancelAnimationFrame(frameRef.current);
     setVisible(false);
   };
 
@@ -162,7 +172,15 @@ export function ShortcutHint({
       className={`inline-flex ${className}`}
       onMouseEnter={show}
       onMouseLeave={hide}
-      onFocusCapture={showFromFocus}
+      // Keyboard focus only: a click or right-click also focuses the
+      // control, and a hint shown then would cover the menu it opened.
+      onFocusCapture={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.matches(":focus-visible")
+        )
+          showFromFocus();
+      }}
       onBlurCapture={hide}
       onKeyDownCapture={(event) => {
         if (event.key === "Escape") hide();
@@ -190,7 +208,7 @@ export function ShortcutHint({
             onTransitionEnd={() => {
               if (!visible) setPosition(null);
             }}
-            className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-standard ${
               visible
                 ? "translate-y-0 opacity-100"
                 : side === "bottom"
@@ -222,9 +240,16 @@ export function DisabledControlHints() {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     let target: HTMLElement | null = null;
+    /** A hint is on screen (or leaving): only then is there one to hide. */
+    let shown = false;
     let showTimer: ReturnType<typeof setTimeout> | undefined;
     let exitTimer: ReturnType<typeof setTimeout> | undefined;
     const hide = () => {
+      // Scrolls and presses reach this all the time (a chat following its
+      // answer scrolls every frame): with no hint coming or shown, nothing
+      // to do.
+      if (!target && !shown) return;
+      shown = false;
       clearTimeout(showTimer);
       setVisible(false);
       clearTimeout(exitTimer);
@@ -262,16 +287,28 @@ export function DisabledControlHints() {
               ? Math.max(8, rect.top - 44)
               : rect.bottom + 7,
         });
+        shown = true;
         setVisible(true);
       }, SHOW_DELAY_MS);
     };
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") hide();
     };
+    const scroll = (event: Event) => {
+      // A following chat can scroll beside a fixed inspector. Only a
+      // scroll that moves this control invalidates its hover position.
+      if (
+        event.target === document ||
+        (target &&
+          event.target instanceof Element &&
+          event.target.contains(target))
+      )
+        hide();
+    };
     document.addEventListener("pointerover", move, true);
     document.addEventListener("focusin", move, true);
     document.addEventListener("pointerdown", hide, true);
-    document.addEventListener("scroll", hide, true);
+    document.addEventListener("scroll", scroll, true);
     window.addEventListener("blur", hide);
     document.addEventListener("keydown", key);
     return () => {
@@ -280,7 +317,7 @@ export function DisabledControlHints() {
       document.removeEventListener("pointerover", move, true);
       document.removeEventListener("focusin", move, true);
       document.removeEventListener("pointerdown", hide, true);
-      document.removeEventListener("scroll", hide, true);
+      document.removeEventListener("scroll", scroll, true);
       window.removeEventListener("blur", hide);
       document.removeEventListener("keydown", key);
     };

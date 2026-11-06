@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
@@ -12,7 +13,7 @@ let projectId: string;
 let personalFile: string;
 const helpers = `
 ${setReactValueJs}
-const input=()=>[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
+const input=()=>[...document.querySelectorAll('[aria-label="Search commands, pages, and more"]')].find(el=>!el.closest('[inert]') && el.getBoundingClientRect().width>0);
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 `;
@@ -38,6 +39,13 @@ const destination = async (id: string) => {
     `(()=>{const row=document.querySelector('[data-setting-id="${id}"]');const root=document.querySelector('[data-settings-scroll]');if(!row||!root)return false;const a=row.getBoundingClientRect(),b=root.getBoundingClientRect();return a.top>=b.top && a.top<b.bottom})()`,
     { label: `${id} row in view` },
   );
+  const ring = await app.eval<{ width: number; offset: number }>(`(() => {
+    const row = document.querySelector('[data-setting-id="${id}"]');
+    const style = getComputedStyle(row);
+    return {width:parseFloat(style.outlineWidth),offset:parseFloat(style.outlineOffset)};
+  })()`);
+  expect(ring.width).toBeGreaterThan(0);
+  expect(ring.offset).toBeLessThanOrEqual(-ring.width);
 };
 beforeAll(async () => {
   app = await launchApp();
@@ -104,7 +112,7 @@ it("settings Space scopes search and opens the shared theme picker for colors", 
     ),
   ).toBe(1);
   await wait(
-    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('textarea[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
+    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
   );
   expect(
     await app.eval(
@@ -134,6 +142,42 @@ it("supports repeated destinations and leaving the mode", async () => {
   await run(`key('Enter')`);
   await destination("contentFrame");
 });
+it("keeps the first shortcut highlight inside its clipped list and clears it without changing row corners", async () => {
+  await open();
+  await type("configure agent shortcut");
+  await wait(`return rows()[0]?.textContent.includes('Configure agent')`);
+  await run(`key('Enter')`);
+  await destination("shortcut.configure-agent");
+  const before = await app.eval<string>(`(() => {
+    const row = document.querySelector('[data-setting-id="shortcut.configure-agent"]');
+    row.tabIndex = -1;
+    row.focus({preventScroll:true});
+    document.documentElement.dataset.focusModality = 'keyboard';
+    return getComputedStyle(row).borderRadius;
+  })()`);
+  // The destination remains fully inset even if the row itself receives focus.
+  await destination("shortcut.configure-agent");
+  await wait(
+    `return !input() && [...document.querySelectorAll('[role="dialog"]')].filter(dialog=>dialog.querySelector('[aria-label="Search commands, pages, and more"]')).every(dialog=>getComputedStyle(dialog.parentElement).opacity==='0')`,
+  );
+  await app.screenshot(
+    path.join(
+      process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp",
+      "settings-shortcut-highlight.png",
+    ),
+  );
+  await open();
+  await type("framed content");
+  await wait(`return rows()[0]?.textContent.includes('Framed content')`);
+  await run(`key('Enter')`);
+  await destination("contentFrame");
+  expect(
+    await app.eval(`(() => {
+    const row = document.querySelector('[data-setting-id="shortcut.configure-agent"]');
+    return !row.hasAttribute('data-settings-target') && getComputedStyle(row).borderRadius === ${JSON.stringify(before)};
+  })()`),
+  ).toBe(true);
+});
 it("offers the actual desktop host skill and lets a project agent edit its scoped JSON file", async () => {
   await open();
   await type(">configuring-catamorphic-desktop");
@@ -149,7 +193,7 @@ it("offers the actual desktop host skill and lets a project agent edit its scope
   await open();
   await type("agent");
   await run(`key(' ')`);
-  await wait(`return input().placeholder==='Message the agent…'`);
+  await wait(`return input().dataset.placeholder==='Message the agent…'`);
   await type("E2E enable personal framed content");
   await wait(
     `return rows()[0]?.textContent.includes('Ask agent') && !rows()[0]?.textContent.includes('E2E enable personal framed content')`,

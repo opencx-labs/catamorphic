@@ -7,12 +7,12 @@ import { projectTelemetrySettings } from "./telemetry-settings.js";
 let directory: string;
 beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-otel-"));
-  fs.mkdirSync(path.join(directory, ".catamorphic"));
+  fs.mkdirSync(path.join(directory, ".work"));
 });
 afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
 function settings(project: unknown, machine: unknown = {}) {
   fs.writeFileSync(
-    path.join(directory, ".catamorphic/project.json"),
+    path.join(directory, ".work/project.json"),
     JSON.stringify({ telemetry: project }),
   );
   fs.writeFileSync(

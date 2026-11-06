@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
     types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
 
@@ -89,6 +88,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-validation
@@ -112,6 +113,7 @@ jobs:
         id: setup
         with:
           cache-suffix: workspace-${{ matrix.shard }}
+          electron: "true"
       - run: bun run check --lane=workspace --shard=${{ matrix.shard }}/${{ matrix.total }}
       - uses: ./.github/actions/test-cache-save
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -119,6 +121,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-workspace-${{ matrix.shard }}
@@ -147,12 +151,94 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-pwa
           path: .turbo/runs/*.json
           include-hidden-files: true
           if-no-files-found: ignore
+          retention-days: 7
+
+  module-confinement-macos:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: module-confinement-macos
+      - name: Probe native macOS confinement
+        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+      - name: Measure macOS sandbox overhead
+        run: |
+          mkdir -p test-results
+          bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
+          module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
+          "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > test-results/module-bench-macos.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: module-confinement-macos
+          path: test-results/
+          retention-days: 7
+
+  module-confinement-linux:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: module-confinement-linux
+          electron: "true"
+      - name: Install namespace tools
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --yes bubblewrap socat time xvfb xauth x11-utils xdotool openbox build-essential curl xz-utils meson ninja-build pkg-config libcap-dev
+          # Noble's older package does not include safe destination symlink
+          # setup. Build the pinned upstream release for this disposable runner.
+          curl --fail --location --retry 3 https://github.com/containers/bubblewrap/releases/download/v0.13.0/bubblewrap-0.13.0.tar.xz --output /tmp/work-bubblewrap.tar.xz
+          echo '4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765  /tmp/work-bubblewrap.tar.xz' | sha256sum --check
+          tar -xJf /tmp/work-bubblewrap.tar.xz --directory /tmp
+          meson setup /tmp/work-bubblewrap-build /tmp/bubblewrap-0.13.0 -Dtests=false -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled
+          ninja -C /tmp/work-bubblewrap-build
+          sudo install -m 0755 /tmp/work-bubblewrap-build/bwrap /usr/bin/bwrap
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /usr/local/etc/work-module-tests /etc/ssl/work-module-tests
+          # Scope the user-namespace allowance to the system sandbox binary.
+          # No global AppArmor or user-namespace security setting is disabled.
+          if command -v apparmor_parser >/dev/null && test -d /sys/kernel/security/apparmor; then
+            printf '%s\n' 'abi <abi/4.0>,' 'profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, }' | sudo tee /etc/apparmor.d/work-test-bwrap
+            sudo apparmor_parser -r /etc/apparmor.d/work-test-bwrap
+          fi
+      - name: Probe the real Linux boundary
+        env:
+          CATAMORPHIC_TEST_MODULE_CONFINEMENT: "1"
+        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+      - name: Build the desktop
+        run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+      - name: Verify confined modules in Electron
+        env:
+          CATAMORPHIC_TEST_MODULE_CONFINEMENT: "1"
+        run: bun run --cwd apps/desktop test:e2e:ci sidebar-live-sources.e2e --bail=1
+      - name: Measure Linux sandbox overhead
+        run: |
+          mkdir -p test-results
+          bun build apps/desktop/scripts/module-sandbox-bench.ts --target=node --external @anthropic-ai/sandbox-runtime --outfile apps/desktop/out/module-bench.mjs
+          module_bench_node=$(bun -e 'import {repositoryNodePath} from "./scripts/tool-runtime.ts"; console.log(repositoryNodePath({rootPath:process.cwd()}))')
+          "$module_bench_node" --expose-gc apps/desktop/out/module-bench.mjs > test-results/module-bench-linux.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: module-confinement-linux
+          path: test-results/
           retention-days: 7
 
   desktop-linux:
@@ -170,9 +256,13 @@ jobs:
         id: setup
         with:
           cache-suffix: desktop-linux-${{ matrix.shard }}
+          electron: "true"
       - name: Install private desktop
         run: |
-          sudo apt-get update
+          # A list the runner image adds for itself (Google Chrome's,
+          # Microsoft's) can be mid-sync; the install fails on its own if
+          # what it needs is missing.
+          sudo apt-get update -o Acquire::Retries=3 || echo "::warning::apt-get update could not read every package list"
           sudo apt-get install --yes xvfb xauth x11-utils xdotool openbox
           display_versions=$(dpkg-query -W --showformat='${Package}=${Version}\n' | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)
           echo "CATAMORPHIC_TEST_RUNTIME=$CATAMORPHIC_TEST_RUNTIME|display=$display_versions" >> "$GITHUB_ENV"
@@ -181,6 +271,8 @@ jobs:
           CATAMORPHIC_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.total }}
         run: bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
       - uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: always()
         with:
           name: desktop-linux-${{ matrix.shard }}
@@ -193,6 +285,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-desktop-linux-${{ matrix.shard }}
@@ -219,6 +313,7 @@ jobs:
         id: setup
         with:
           cache-suffix: desktop-macos-${{ matrix.shard }}
+          electron: "true"
       - name: Test native macOS desktop
         env:
           # The runner inherits Bash; desktop terminals on macOS use Zsh,
@@ -231,8 +326,25 @@ jobs:
         run: |
           defaults write com.apple.universalaccess reduceMotion -bool false
           defaults write com.apple.universalaccess reduceTransparency -bool false
+          # A hosted-compute LAN prompt can cover otherwise focusable test
+          # windows. Decline only that runner prompt on this disposable Mac.
+          mkdir -p test-results
+          permission_log="${PWD}/test-results/macos-native-permissions.log"
+          python3 scripts/macos-ci-permissions.py --self-test
+          python3 scripts/macos-ci-permissions.py --watch > "${permission_log}" 2>&1 &
+          permission_pid=$!
+          trap 'kill "${permission_pid}" 2>/dev/null || true; wait "${permission_pid}" || true; cat "${permission_log}"' EXIT
+          for attempt in $(seq 1 50); do
+            kill -0 "${permission_pid}" 2>/dev/null || { cat "${permission_log}"; exit 1; }
+            grep -q '^Watching only for' "${permission_log}" && break
+            sleep 0.1
+          done
+          grep -q '^Watching only for' "${permission_log}"
           bun scripts/tool-runtime.ts turbo run test:e2e:ci --filter=catamorphic-desktop --concurrency=2 --force=${{ github.event_name != 'pull_request' }} --output-logs=new-only --summarize
+          kill -0 "${permission_pid}"
       - uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: always()
         with:
           name: desktop-macos-${{ matrix.shard }}
@@ -245,6 +357,8 @@ jobs:
           key: ${{ steps.setup.outputs.task-cache-key }}
       - name: Upload task execution summary
         uses: actions/upload-artifact@v4
+        # Diagnostics only: an artifact service outage never fails verification.
+        continue-on-error: true
         if: ${{ !cancelled() }}
         with:
           name: turbo-desktop-macos-${{ matrix.shard }}
@@ -253,9 +367,56 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  container:
+    name: Container sandboxes
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    # A GitHub-hosted runner: its own Docker daemon under systemd, which
+    # the job reconfigures with a gVisor runtime (ADR 0204).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        id: setup
+        with:
+          cache-suffix: container
+      - name: Install gVisor
+        # A dated release, so a new gVisor never turns this job red on its
+        # own; move it forward deliberately (the same one as
+        # packages/container/scripts/test-machine.Dockerfile).
+        env:
+          GVISOR_RELEASE: "20260928"
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases $GVISOR_RELEASE main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update -o Acquire::Retries=3 || echo "::warning::apt-get update could not read every package list"
+          sudo apt-get install --yes "runsc=$GVISOR_RELEASE.0"
+          runsc --version
+      - name: Register runsc with Work's runtime arguments
+        run: |
+          sudo mkdir -p /etc/docker
+          current=$(sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+          # Docker Hub rate-limits shared runner addresses; Google's public
+          # mirror needs no token and falls back to Docker Hub itself.
+          echo "$current" | jq --arg path "$(command -v runsc)" '.runtimes.runsc = {path: $path, runtimeArgs: ["--host-uds=open", "--net-raw"]} | .["registry-mirrors"] = ["https://mirror.gcr.io"]' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
+          docker info --format '{{json .Runtimes.runsc}}'
+          docker run --rm --runtime=runsc --network none alpine:3.22.2 echo gVisor runs
+      - run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/container... --output-logs=errors-only
+      - name: Real container sandboxes under gVisor
+        env:
+          WORK_TEST_CONTAINER: "1"
+        run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts src/__tests__/sandbox-provider.container.test.ts
+      - uses: ./.github/actions/test-cache-save
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        with:
+          key: ${{ steps.setup.outputs.task-cache-key }}
+
   checks:
     name: checks
-    needs: [access, shards, validation, workspace, pwa, desktop-linux, desktop-macos]
+    needs: [access, shards, validation, workspace, pwa, module-confinement-macos, module-confinement-linux, desktop-linux, desktop-macos, container]
     if: always() && needs.access.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -284,10 +445,11 @@ jobs:
         if: env.MODEL_EVAL_AVAILABLE == '1'
         with:
           cache-suffix: eval
+          electron: "true"
       - name: Prepare eval desktop
         if: env.MODEL_EVAL_AVAILABLE == '1'
         run: |
-          sudo apt-get update
+          sudo apt-get update -o Acquire::Retries=3 || echo "::warning::apt-get update could not read every package list"
           sudo apt-get install --yes xvfb xauth x11-utils xdotool openbox
           mkdir -p "$CATAMORPHIC_E2E_ARTIFACTS_DIR"
           bun run build
@@ -300,7 +462,6 @@ jobs:
           CATAMORPHIC_EVAL: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}

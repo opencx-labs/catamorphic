@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -35,6 +36,7 @@ const MAX_MS = 300;
 const LOOP_ALLOWLIST = new Set(["animate-spin", "animate-pulse"]);
 const DURATION_EXCEPTIONS: Record<string, number> = {
   "animate-title-change": 1200,
+  "animate-veil-touch": 760,
 };
 
 let app: AppHandle;
@@ -72,6 +74,12 @@ const helpers = `
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  // A floating chat: the dock's + (Cmd+N would take a New Tab in front).
+  const newFloatingChat = () => {
+    const plus = $('[data-dock-rail] button[aria-label="New chat"]');
+    plus?.click();
+    return !!plus;
+  };
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
@@ -96,7 +104,12 @@ const helpers = `
     if (raw.endsWith('s')) return parseFloat(raw) * 1000;
     return Number.NaN;
   };
-  /** Sample element state every ~25ms until it unmounts or times out. */
+  /**
+   * Sample element state every ~25ms until it unmounts or times out. The
+   * bound is for a stuck exit, not a duration check: removal waits for the
+   * exit animation's end event, which a busy CI host delivers late.
+   */
+  const EXIT_BOUND_MS = 5000;
   const sampleUntilGone = (el, exitClass, timeoutMs) => new Promise((resolve) => {
     const samples = [];
     const started = performance.now();
@@ -120,6 +133,22 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+/** Give sampling time to see the middle without changing the animation's timeline. */
+async function inspectSlowMotion<T>(inspect: () => Promise<T>): Promise<T> {
+  await runWait(
+    "return document.getAnimations().every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity);",
+    { label: "the window at rest before time slows" },
+  );
+  await app.cdp("Animation.enable");
+  try {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    return await inspect();
+  } finally {
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    await app.cdp("Animation.disable");
+  }
+}
+
 interface AnimationRule {
   selector: string;
   name: string;
@@ -128,11 +157,11 @@ interface AnimationRule {
   iterationCount: string;
 }
 
-/** All `.animate-*` single-class rules in the loaded stylesheets. */
+/** All `.animate-*` and shared `.cat-*` single-class rules in the loaded stylesheets. */
 const collectAnimationRules = () =>
   run<AnimationRule[]>(`
     return allStyleRules()
-      .filter((rule) => rule.selectorText && /^\\.animate-[a-z0-9-]+$/.test(rule.selectorText))
+      .filter((rule) => rule.selectorText && /^\\.(?:animate|cat)-[a-z0-9-]+$/.test(rule.selectorText))
       .filter((rule) => rule.style && rule.style.animationName && rule.style.animationName !== 'none')
       .map((rule) => ({
         selector: rule.selectorText.slice(1),
@@ -276,6 +305,31 @@ describe("design-system bounds (static sweep)", () => {
       expect(entry.ms, entry.selector).toBeLessThanOrEqual(MAX_MS);
     }
   });
+
+  it("transition utilities without an ease-* class use the standard easing", async () => {
+    // Every generated transition-* utility, resolved on a probe element so
+    // the theme's default curve is what gets measured, not the rule text.
+    const easings = await run<{ utility: string; easing: string }[]>(`
+      const utilities = allStyleRules()
+        .filter((rule) => rule.selectorText && /^\\.transition(-|$)/.test(rule.selectorText))
+        .filter((rule) => rule.style && rule.style.transitionTimingFunction)
+        .map((rule) => rule.selectorText.slice(1).replace(/\\\\(.)/g, '$1'));
+      const probe = document.createElement('div');
+      document.body.append(probe);
+      const measured = [...new Set(utilities)].map((utility) => {
+        probe.className = utility;
+        return { utility, easing: getComputedStyle(probe).transitionTimingFunction };
+      });
+      probe.remove();
+      return measured;
+    `);
+    expect(easings.map((entry) => entry.utility)).toEqual(
+      expect.arrayContaining(["transition", "transition-colors"]),
+    );
+    for (const entry of easings) {
+      expect(entry.easing, entry.utility).toBe(STANDARD_EASING);
+    }
+  });
 });
 
 describe("paired motion (enter/exit mirrors)", () => {
@@ -301,6 +355,44 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
+  it("a sidebar tab and its strip arrive and leave on one reversible transition (ADR 0226)", async () => {
+    const transitions = await run<
+      Array<{ selector: string; durations: string; easing: string }>
+    >(`
+      return allStyleRules()
+        .filter((rule) => rule.selectorText === '.sidebar-tab-slot' || rule.selectorText === '.sidebar-strip')
+        .map((rule) => ({
+          selector: rule.selectorText,
+          durations: rule.style.transitionDuration,
+          easing: rule.style.transitionTimingFunction,
+        }));
+    `);
+    expect(transitions.map((rule) => rule.selector).sort()).toEqual([
+      ".sidebar-strip",
+      ".sidebar-tab-slot",
+    ]);
+    for (const rule of transitions) {
+      // One duration and the standard curve both ways: leaving reverses
+      // arriving from wherever it is.
+      // The production build writes 200ms as 0.2s.
+      expect(
+        new Set(
+          rule.durations.split(",").map((value) => {
+            const duration = value.trim();
+            return duration.endsWith("ms")
+              ? Number.parseFloat(duration)
+              : Number.parseFloat(duration) * 1000;
+          }),
+        ),
+        rule.selector,
+      ).toEqual(new Set([200]));
+      expect(
+        new Set(rule.easing.split(",").map((value) => value.trim())),
+        rule.selector,
+      ).toEqual(new Set(["var(--ease-standard)"]));
+    }
+  });
+
   it("dock-in and dock-out match in duration and easing", async () => {
     const rules = await collectAnimationRules();
     const enter = rules.find((rule) => rule.selector === "animate-dock-in");
@@ -314,10 +406,15 @@ describe("paired motion (enter/exit mirrors)", () => {
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
     await runWait(
       `if (visibleDock()) return true;
-       pressKey('n', { metaKey: true });
+       newFloatingChat();
        return false;`,
       { label: "floating dock ready for pose check" },
     );
+    expect(
+      await run<string[]>(
+        "return getComputedStyle(visibleDock()).animationName.split(',').map(name=>name.trim());",
+      ),
+    ).toContain("dock-in");
     const enterFrom = await run<{ translateY: number; scale: number }>(`
       const keyframes = allStyleRules().find(
         (rule) => rule instanceof CSSKeyframesRule && rule.name === 'dock-in');
@@ -429,7 +526,10 @@ describe("animate-before-unmount", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         input.dispatchEvent(new KeyboardEvent('keydown',
           { key: 'Enter', bubbles: true, cancelable: true }));
-        const deadline = performance.now() + 5000;
+        // Ready waits on the pairing listener starting in the main process,
+        // which a busy host takes longer than 5 s to do. The loop ends as
+        // soon as the modal is ready; the bound is for one that never is.
+        const deadline = performance.now() + 30000;
         while (performance.now() < deadline) {
           sampleEntrance();
           if ($('[data-testid="mobile-pairing-modal"]')?.dataset.state === 'ready') break;
@@ -440,7 +540,7 @@ describe("animate-before-unmount", () => {
       }
       const modal = $('[data-testid="mobile-pairing-modal"]');
       if (!loadingLayout || modal?.dataset.state !== 'ready') {
-        throw new Error('Pairing modal did not expose stable loading and ready states');
+        throw new Error('Pairing modal did not expose stable loading and ready states: loading ' + (loadingLayout ? 'seen' : 'missed') + ', state ' + modal?.dataset.state);
       }
       const heading = byText('h2', 'Continue on mobile');
       const overlay = heading.closest('[aria-hidden]');
@@ -482,8 +582,7 @@ describe("animate-before-unmount", () => {
   });
 
   it("dismissing an empty floating chat tweens out, then unmounts", async () => {
-    // Sidebar + is icon-only: select by aria-label, not text.
-    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     // Let the enter animation finish — dismissing a barely-mounted dock
     // (opacity still ~0) would leave the exit tween nothing to fade.
     await runWait(
@@ -491,13 +590,13 @@ describe("animate-before-unmount", () => {
        return !!dock && getComputedStyle(dock).opacity === '1';`,
       { label: "empty dock fully visible" },
     );
-    const samples = await run<
-      { t: number; opacity?: number; gone?: boolean }[]
-    >(`
-      const dock = visibleDock();
-      pressKey('Escape');
-      return sampleUntilGone(dock, null, 1500);
-    `);
+    const samples = await inspectSlowMotion(() =>
+      run<{ t: number; opacity?: number; gone?: boolean }[]>(`
+        const dock = visibleDock();
+        pressKey('Escape');
+        return sampleUntilGone(dock, null, 15000);
+      `),
+    );
     // Mid-tween: mounted with partial opacity. End: unmounted.
     expect(
       samples.some(
@@ -508,11 +607,13 @@ describe("animate-before-unmount", () => {
       ),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 
   it("minimizing a floating chat never replays dock-in between the two poses", async () => {
-    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     await runWait(
       `const dock = visibleDock();
        return !!dock && getComputedStyle(dock).opacity === '1';`,
@@ -555,31 +656,33 @@ describe("animate-before-unmount", () => {
 
   it("closing a workspace tab plays tab-out before removal", async () => {
     await run(`$('button[aria-label="New tab"]').click(); return true;`);
-    // Scope to tab-strip elements: tabs carry animate-tab-in from mount
-    // (bubble close buttons share the "Close …" aria-label prefix).
+    // Scope to tab-strip elements (bubble close buttons share the
+    // "Close …" aria-label prefix).
     await runWait(
-      `return $$('.animate-tab-in button[aria-label^="Close"]').length >= 2;`,
+      `return $$('[data-tab-orientation="horizontal"] [data-point-key] button[aria-label^="Close"]').length >= 2;`,
       { label: "second workspace tab open" },
     );
     const samples = await run<
       { t: number; exiting?: boolean; gone?: boolean }[]
     >(`
-      const buttons = $$('.animate-tab-in button[aria-label^="Close"]');
+      const buttons = $$('[data-tab-orientation="horizontal"] [data-point-key] button[aria-label^="Close"]');
       const button = buttons[buttons.length - 1];
-      const tab = button.closest('.animate-tab-in');
+      const tab = button.closest('[data-point-key]');
       button.click();
-      return sampleUntilGone(tab, 'animate-tab-out', 1500);
+      return sampleUntilGone(tab, 'animate-tab-out', EXIT_BOUND_MS);
     `);
     expect(
       samples.some((sample) => sample.exiting),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 
   it("tab hover cards fade out before unmounting", async () => {
     await run(`
-      const tab = $('.animate-tab-in[data-point-key]');
+      const tab = $('[data-tab-orientation="horizontal"] [data-point-key]');
       const body = [...tab.querySelectorAll('button')]
         .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
       body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
@@ -593,7 +696,7 @@ describe("animate-before-unmount", () => {
     const samples = await run<
       { t: number; exiting?: boolean; gone?: boolean }[]
     >(`
-      const tab = $('.animate-tab-in[data-point-key]');
+      const tab = $('[data-tab-orientation="horizontal"] [data-point-key]');
       const body = [...tab.querySelectorAll('button')]
         .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
       const card = $('[data-testid="tab-hover-card"]');
@@ -601,13 +704,15 @@ describe("animate-before-unmount", () => {
         bubbles: true,
         relatedTarget: document.body,
       }));
-      return sampleUntilGone(card, 'animate-fade-out', 1000);
+      return sampleUntilGone(card, 'animate-fade-out', EXIT_BOUND_MS);
     `);
     expect(
       samples.some((sample) => sample.exiting),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
   });
 
   it("chat messages tween in on every arrival path", async () => {
@@ -616,46 +721,113 @@ describe("animate-before-unmount", () => {
     // settled reply. Each must MOUNT in the hidden pose (opacity 0) and
     // tween to visible — a message that appears already-opaque skipped
     // its entrance (the pre-paint effect-flush regression).
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     // Every arrival has to stay on screen to be measured: by default the
     // preambles are replaced as they come and folded once answered.
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'all', chatWorkSettled: 'keep' }).then(() => true);`,
     );
-    await run(`
-      const log = visibleDock().querySelector('[role="log"]');
-      window.__mounts = [];
-      window.__mountEls = [];
-      window.__mountsObs = new MutationObserver((muts) => {
-        for (const m of muts) for (const n of m.addedNodes) {
-          if (!(n instanceof HTMLElement)) continue;
-          const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
-          for (const a of articles) {
-            window.__mounts.push({ atInsert: getComputedStyle(a).opacity });
-            window.__mountEls.push(a);
+    // Then again on a renderer slowed fourfold, as on a busy CI runner:
+    // events arrive between late frames, and the turn's first steps line
+    // comes with work and prose that joined it in the same frame, taking
+    // the place the turn line kept for it (it fades in there, unmoved).
+    // And on one that stalls for 600 ms in the frame that first shows the
+    // turn and again in the one that first shows the agent's words, as a
+    // macOS runner did: the rest of the turn lands in one late frame.
+    for (const { rate, stalls } of [
+      { rate: 1, stalls: false },
+      { rate: 4, stalls: false },
+      { rate: 1, stalls: true },
+    ]) {
+      const pass = stalls ? "stalled" : `${rate}x slower`;
+      await app.cdp("Emulation.setCPUThrottlingRate", { rate });
+      try {
+        await run(`
+          const log = visibleDock().querySelector('[role="log"]');
+          if (${stalls}) {
+            // A long task after the frame's styles, before its motion.
+            window.__stalls = 0;
+            const stalled = new ResizeObserver((entries) => {
+              for (const { target } of entries) {
+                stalled.unobserve(target);
+                const end = performance.now() + 600;
+                while (performance.now() < end);
+                window.__stalls++;
+              }
+            });
+            // The first of each to arrive in this turn.
+            const firsts = ['[data-testid="chat-activity"]', 'article:not([data-user-message])'];
+            window.__stallObs = new MutationObserver((muts) => {
+              for (const m of muts) for (const n of m.addedNodes) {
+                if (!(n instanceof HTMLElement)) continue;
+                for (const [i, selector] of firsts.entries()) {
+                  const el = selector && (n.matches(selector) ? n : n.querySelector(selector));
+                  if (!el) continue;
+                  firsts[i] = undefined;
+                  stalled.observe(el);
+                }
+              }
+            });
+            window.__stallObs.observe(log, { childList: true, subtree: true });
           }
-        }
-      });
-      window.__mountsObs.observe(log, { childList: true, subtree: true });
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'preamble entrance check');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    // 1 user echo + 2 flushed preambles + 1 final reply — each must have
-    // mounted hidden and (eventually) settled fully visible.
-    const mounts = await runWait<{ atInsert: string }[]>(
-      `if (window.__mounts.length < 4) return false;
-       const settled = window.__mountEls.every((el) =>
-         el.isConnected && getComputedStyle(el).opacity === '1');
-       if (!settled) return false;
-       window.__mountsObs.disconnect();
-       return window.__mounts;`,
-      { timeoutMs: 30_000, label: "all arrival paths mounted and settled" },
-    );
-    for (const mount of mounts) {
-      expect(Number(mount.atInsert)).toBeLessThan(1);
+          window.__mounts = [];
+          window.__mountEls = [];
+          window.__mountsObs = new MutationObserver((muts) => {
+            for (const m of muts) for (const n of m.addedNodes) {
+              if (!(n instanceof HTMLElement)) continue;
+              const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
+              for (const a of articles) {
+                window.__mounts.push({
+                  atInsert: getComputedStyle(a).opacity,
+                  // What arrived, for a failure to name.
+                  what: a.hasAttribute('data-user-message') ? 'user echo'
+                    : a.hasAttribute('data-live-work') ? 'live work' : 'reply',
+                  text: a.textContent.slice(0, 60),
+                });
+                window.__mountEls.push(a);
+              }
+            }
+          });
+          window.__mountsObs.observe(log, { childList: true, subtree: true });
+          const ta = visibleDock().querySelector('[data-composer-input]');
+          setReactValue(ta, 'preamble entrance check');
+          ta.closest('form').requestSubmit();
+          return true;
+        `);
+        // 1 user echo + 2 flushed preambles + 1 final reply — each must
+        // have mounted hidden and (eventually) settled fully visible.
+        const mounts = await runWait<{ atInsert: string }[]>(
+          `if (window.__mounts.length < 4) return false;
+           const settled = window.__mountEls.every((el) =>
+             el.isConnected && getComputedStyle(el).opacity === '1');
+           if (!settled) return false;
+           window.__mountsObs.disconnect();
+           window.__stallObs?.disconnect();
+           return window.__mounts;`,
+          {
+            timeoutMs: 30_000,
+            label: `all arrival paths mounted and settled (${pass})`,
+          },
+        );
+        for (const mount of mounts)
+          expect(
+            Number(mount.atInsert),
+            `${pass}: ${JSON.stringify(mount)}`,
+          ).toBeLessThan(1);
+        if (stalls)
+          expect(
+            await run<number>("return window.__stalls;"),
+            "the renderer stalled as the turn and the agent's words came",
+          ).toBe(2);
+        // The turn has ended before the next one starts.
+        await runWait(
+          `return !visibleDock().querySelector('[data-testid="chat-activity"]');`,
+          { timeoutMs: 30_000, label: "turn settled" },
+        );
+      } finally {
+        await app.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
+      }
     }
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'latest', chatWorkSettled: 'collapse' }).then(() => true);`,
@@ -674,12 +846,581 @@ describe("animate-before-unmount", () => {
       const button = $$('.animate-bubble-in button[aria-label^="Close"]').at(-1);
       const bubble = button.closest('.animate-bubble-in');
       button.click();
-      return sampleUntilGone(bubble, 'animate-bubble-out', 1500);
+      return sampleUntilGone(bubble, 'animate-bubble-out', EXIT_BOUND_MS);
     `);
     expect(
       samples.some((sample) => sample.exiting),
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
-    expect(samples.at(-1)?.gone).toBe(true);
+    expect(samples.at(-1)?.gone, `samples: ${JSON.stringify(samples)}`).toBe(
+      true,
+    );
+  });
+});
+
+const sidebarSettled = (open: boolean) =>
+  runWait(
+    `const side = $('[data-workspace-visible="true"] [data-sidebar="left"]');
+     return side?.getAttribute('aria-hidden') === '${!open}' && side.dataset.settled === 'true' &&
+       !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')) &&
+       !('contentSettling' in document.documentElement.dataset);`,
+    { label: `left sidebar ${open ? "open" : "closed"} and settled` },
+  );
+
+describe("chats over a settling sidebar", () => {
+  const settled = sidebarSettled;
+  // A web page lays out in its own process, so its content settles once
+  // the panel is still (ADR 0200); content Work draws moves with the
+  // panel instead (below).
+  const page = http.createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end("<title>Motion page</title><p>A page beside the sidebar</p>");
+  });
+  afterAll(() => {
+    page.close();
+  });
+
+  it("puts a web page in front", async () => {
+    await new Promise<void>((resolve) => page.listen(0, "127.0.0.1", resolve));
+    const address = page.address();
+    if (!address || typeof address === "string") throw new Error("No address");
+    await run(`
+      window.catamorphicDesktop.workspaceNavigate({
+        projectId: $('[data-workspace-visible="true"]').dataset.projectRuntime,
+        surface: { url: 'http://127.0.0.1:${address.port}/', title: 'Motion page', mode: 'tab', nonce: 'motion-page', open: 'browser' },
+      });
+      return true;
+    `);
+    await app.waitFor(
+      `[...document.querySelectorAll('[data-workspace-visible="true"] webview')].some((view) => { try { return view.checkVisibility() && view.getTitle() === 'Motion page' && !view.isLoading(); } catch { return false; } })`,
+      { label: "web page in front", timeoutMs: 30_000 },
+    );
+  });
+
+  it("a floating chat glides with the content instead of vanishing under it", async () => {
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
+    await runWait(
+      `const dock = visibleDock();
+       return !!dock && getComputedStyle(dock).opacity === '1' && dock.getAnimations().every((a) => a.playState !== 'running');`,
+      { label: "floating chat at rest" },
+    );
+    // Where everything rests: the dock on the visible chat region (anchored),
+    // the chat centred in it.
+    const geometry = () =>
+      run<{ host: number[]; region: number[]; offCentre: number }>(`
+        const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
+        const region = $('[data-workspace-visible="true"] [data-workspace-chat-region]').getBoundingClientRect();
+        const chat = visibleDock().getBoundingClientRect();
+        return {
+          host: box($('[data-dock-host]')),
+          region: box($('[data-workspace-visible="true"] [data-workspace-chat-region]')),
+          offCentre: Math.round(Math.abs(chat.left + chat.width / 2 - (region.left + region.width / 2))),
+        };
+      `);
+    const before = await geometry();
+    expect(before.host).toEqual(before.region);
+    expect(before.offCentre).toBeLessThanOrEqual(1);
+    // While the content settles, the chat is in a layer of its own above
+    // the content's snapshot (the content would otherwise cover it).
+    const seen = await run<{ layered: boolean; dockGroup: boolean }>(`
+      $('[aria-label="Collapse sidebar"]').click();
+      return new Promise((resolve) => {
+        const started = performance.now();
+        const seen = { layered: false, dockGroup: false };
+        const tick = () => {
+          const dock = visibleDock();
+          if (dock && 'contentSettling' in document.documentElement.dataset) {
+            const style = getComputedStyle(dock);
+            seen.layered ||= style.getPropertyValue('view-transition-name') === 'match-element' && style.getPropertyValue('view-transition-class') === 'dock-float';
+            // A group beyond the content's, the sidebars' and the root's:
+            // the chat's own layer, whatever name the browser generates.
+            seen.dockGroup ||= document.getAnimations().some((a) => {
+              const name = /^::view-transition-group((.+))$/.exec(a.effect?.pseudoElement ?? '')?.[1];
+              return !!name && !['root', 'workspace-content', 'workspace-tabs', 'sidebar-left', 'sidebar-right'].includes(name);
+            });
+          }
+          if ((seen.layered && seen.dockGroup) || performance.now() - started > 5000) resolve(seen);
+          else requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    `);
+    expect(seen).toEqual({ layered: true, dockGroup: true });
+    await settled(false);
+    const collapsed = await geometry();
+    expect(collapsed.host).toEqual(collapsed.region);
+    expect(collapsed.offCentre).toBeLessThanOrEqual(1);
+    const [, , widthBefore = 0] = before.region;
+    const [, , widthCollapsed = 0] = collapsed.region;
+    expect(widthCollapsed).toBeGreaterThan(widthBefore);
+    await run(`$('[aria-label="Expand sidebar"]').click(); return true;`);
+    await settled(true);
+    expect(await geometry()).toEqual(before);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("the tab strip's + slides with the sidebar and lands without a jump", async () => {
+    await settled(true);
+    // Toggles the left sidebar and follows the + and the panel's edge every
+    // frame until both are still and the content has settled.
+    type Frame = {
+      plus: number;
+      edge: number;
+      docked: string;
+      seen: boolean;
+      rightToggle: boolean;
+    };
+    const toggle = (label: string) =>
+      run<Frame[]>(`
+        const plus = () => $('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]');
+        const side = () => $('[data-workspace-visible="true"] [data-sidebar="left"]');
+        // What a press at an element's centre would reach: drawn, not clipped.
+        const reached = (element) => {
+          const box = element?.getBoundingClientRect();
+          return !!box && element.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+        };
+        const sample = () => ({
+          plus: Math.round(plus().getBoundingClientRect().left),
+          edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
+          docked: side().dataset.docked,
+          seen: reached(plus()),
+          rightToggle: reached($('[data-workspace-visible="true"] .workspace-chrome [aria-label$="right sidebar"]')),
+        });
+        const frames = [sample()];
+        [...document.querySelectorAll('[aria-label="${label}"]')]
+          .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
+          .click();
+        return new Promise((resolve) => {
+          const started = performance.now();
+          const tick = () => {
+            frames.push(sample());
+            if (side().dataset.settled === 'true' && performance.now() - started > 200) resolve(frames);
+            else if (performance.now() - started > 15000) resolve(frames);
+            else requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+      `);
+    const check = (frames: Frame[], from: number) => {
+      const to = frames.at(-1)?.plus ?? from;
+      const width = Math.max(...frames.map((frame) => frame.edge));
+      // While the panel is midway, so is the +.
+      const midway = frames.filter(
+        (frame) => frame.edge > width * 0.25 && frame.edge < width * 0.75,
+      );
+      expect(midway.length, JSON.stringify(frames)).toBeGreaterThan(0);
+      for (const frame of midway) {
+        expect(frame.plus).toBeGreaterThan(Math.min(from, to) + 2);
+        expect(frame.plus).toBeLessThan(Math.max(from, to) - 2);
+        // Drawn where it is, even past where the content's edge was, and
+        // never over the right sidebar's toggle.
+        expect(frame.seen, JSON.stringify(frame)).toBe(true);
+        expect(frame.rightToggle, JSON.stringify(frame)).toBe(true);
+      }
+      // Once the content has taken or given back the space, the + is where
+      // it rests: no jump when the layout changes.
+      const flipped = frames.findIndex(
+        (frame) => frame.docked !== frames[0]?.docked,
+      );
+      expect(flipped, JSON.stringify(frames)).toBeGreaterThan(0);
+      for (const frame of frames.slice(flipped)) expect(frame.plus).toBe(to);
+      return to;
+    };
+    // Preserve the shared timeline while giving rAF enough time to observe
+    // the middle of a 200 ms transition on a busy test host.
+    await inspectSlowMotion(async () => {
+      const open = await run<number>(
+        `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
+      );
+      const closed = check(await toggle("Collapse sidebar"), open);
+      expect(closed).toBeLessThan(open);
+      await settled(false);
+      expect(check(await toggle("Expand sidebar"), closed)).toBe(open);
+      await settled(true);
+    });
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});
+
+describe("content Work draws moves with the sidebar", () => {
+  it("rides the panel's edge every frame, the tabs with it, and lands without a jump", async () => {
+    await run(
+      `$('[data-workspace-visible="true"] [aria-label="Settings"]').click(); return true;`,
+    );
+    await runWait(
+      `return [...document.querySelectorAll('[data-workspace-visible="true"] webview')].every((view) => !view.checkVisibility()) &&
+        !!$('[data-workspace-visible="true"] [data-settings-scroll]');`,
+      { label: "Settings in front" },
+    );
+    await sidebarSettled(true);
+    // The Settings tab grows into the strip first (tab-in).
+    await runWait(
+      `return document.getAnimations().every((animation) => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity);`,
+      { label: "the window at rest" },
+    );
+    type Frame = {
+      edge: number;
+      content: number;
+      plus: number;
+      push: boolean;
+      settling: boolean;
+    };
+    const toggle = async (label: string) => {
+      // This verifies paired geometry, not the host's frame rate. Hold the
+      // animation clock and sample explicit transition times: a loaded CI
+      // runner can otherwise skip the entire middle of a 200 ms slide.
+      await app.cdp("Animation.enable");
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
+      try {
+        return await run<Frame[]>(`
+        const side = () => $('[data-workspace-visible="true"] [data-sidebar="left"]');
+        const frames = [];
+        [...document.querySelectorAll('[aria-label="${label}"]')]
+          .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
+          .click();
+        return (async () => {
+          const nextFrame = () => new Promise(requestAnimationFrame);
+          await nextFrame();
+          const moving = document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity);
+          if (!moving.some(a => a instanceof CSSTransition && a.transitionProperty === 'transform' && a.effect.target === side().querySelector('.sidebar-inner')))
+            throw new Error('The sidebar slide did not start');
+          const sample = () => {
+            frames.push({
+              edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
+              content: Math.round($('[data-workspace-visible="true"] .workspace-surface').getBoundingClientRect().left),
+              plus: Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left),
+              push: side().hasAttribute('data-push'),
+              settling: 'contentSettling' in document.documentElement.dataset,
+            });
+          };
+          for (const time of [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 240, 300]) {
+            for (const animation of moving) animation.currentTime = time;
+            await nextFrame();
+            sample();
+          }
+          for (const animation of moving) animation.finish();
+          await nextFrame(); await nextFrame(); sample();
+          return frames;
+        })();
+      `);
+      } finally {
+        await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+        await app.cdp("Animation.disable");
+      }
+    };
+    const check = (frames: Frame[]) => {
+      // No settle after the slide: the content was where it belongs all
+      // along, its edge on the panel's.
+      expect(frames.some((frame) => frame.push)).toBe(true);
+      expect(frames.some((frame) => frame.settling)).toBe(false);
+      for (const frame of frames)
+        expect(
+          Math.abs(Math.max(frame.edge, 0) - frame.content),
+          JSON.stringify(frame),
+        ).toBeLessThanOrEqual(1);
+      // The + travels one way only and is still once the panel is.
+      const plus = frames.map((frame) => frame.plus);
+      const rising = (plus.at(-1) ?? 0) >= (plus[0] ?? 0);
+      for (let index = 1; index < plus.length; index += 1)
+        expect(
+          rising
+            ? (plus[index] ?? 0) >= (plus[index - 1] ?? 0)
+            : (plus[index] ?? 0) <= (plus[index - 1] ?? 0),
+          JSON.stringify(plus),
+        ).toBe(true);
+      const width = Math.max(...frames.map((frame) => frame.edge));
+      const midway = frames.filter(
+        (frame) => frame.edge > width * 0.25 && frame.edge < width * 0.75,
+      );
+      expect(midway.length, JSON.stringify(frames)).toBeGreaterThan(0);
+      return plus.at(-1) ?? 0;
+    };
+    const open = await run<number>(
+      `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
+    );
+    const closed = check(await toggle("Collapse sidebar"));
+    expect(closed).toBeLessThan(open);
+    await sidebarSettled(false);
+    expect(check(await toggle("Expand sidebar"))).toBe(open);
+    await sidebarSettled(true);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});
+
+describe("a floating chat grows into its tab", () => {
+  it("over what was in front, which stays until covered, its card easing into the tab", async () => {
+    // Settings in front (the sidebar's test left it there), a new floating
+    // chat over it, which the person then makes a tab.
+    await run(
+      `$('[data-workspace-visible="true"] [aria-label="Settings"]').click(); return true;`,
+    );
+    const settings = `$('[data-workspace-visible="true"] [data-surface-key^="settings:"]')`;
+    await runWait(`return !!${settings}?.checkVisibility();`, {
+      label: "Settings in front",
+    });
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(
+      `const dock = visibleDock();
+       return !!dock && dock.dataset.floatingChat === 'true' &&
+         getComputedStyle(dock).opacity === '1';`,
+      { label: "a floating chat over Settings" },
+    );
+    await runWait(
+      `return visibleDock().parentElement.getAnimations({subtree:true}).every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity);`,
+      {
+        label: "the floating chat has finished arriving",
+      },
+    );
+    await app.cdp("Animation.enable");
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
+    let frames: Array<{
+      t: number;
+      tab: boolean;
+      behind: boolean;
+      width: number;
+      title: number;
+    }>;
+    try {
+      frames = await run<
+        Array<{
+          t: number;
+          tab: boolean;
+          behind: boolean;
+          width: number;
+          title: number;
+        }>
+      >(`
+      const dock = visibleDock();
+      const title = dock.querySelector('header');
+      const frames = [];
+      return (async () => {
+        const nextFrame = () => new Promise(requestAnimationFrame);
+        pressKey('M', { metaKey: true, shiftKey: true });
+        const deadline = performance.now() + 5000;
+        while (dock.dataset.chatTab !== 'true') {
+          if (performance.now() > deadline) throw new Error('The chat did not enter its tab pose');
+          await nextFrame();
+        }
+        await nextFrame();
+        const motions = dock.parentElement.getAnimations({subtree:true})
+          .filter(a => a instanceof CSSTransition);
+        if (!motions.length) throw new Error('The chat growth did not start');
+        // A busy renderer can delay animation progress after the state
+        // commit. The old 250 ms unmount timer must not discard the back.
+        await new Promise(resolve => setTimeout(resolve, 350));
+        const sample = (t) => {
+          frames.push({
+            t,
+            tab: dock.dataset.chatTab === 'true',
+            behind: !!${settings}?.checkVisibility(),
+            width: Math.round(dock.getBoundingClientRect().width),
+            title: Number(getComputedStyle(title).opacity),
+          });
+        };
+        for (const time of [0, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 300]) {
+          for (const animation of motions) animation.currentTime = time;
+          await nextFrame(); sample(time);
+        }
+        for (const animation of motions) animation.finish();
+        await nextFrame(); await nextFrame(); sample(320);
+        return frames;
+      })();`);
+    } finally {
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+      await app.cdp("Animation.disable");
+    }
+    const grown = frames.filter((frame) => frame.tab);
+    expect(grown.length, JSON.stringify(frames)).toBeGreaterThan(5);
+    const from = grown[0]?.t ?? 0;
+    // What was in front stays beneath the growing chat, then goes once it
+    // is covered: never the bare backdrop around the chat.
+    expect(
+      grown
+        .filter((frame) => frame.t < from + 150)
+        .every((frame) => frame.behind),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(grown.at(-1)?.behind, JSON.stringify(frames)).toBe(false);
+    // It grows through the sizes between (by however much the window
+    // leaves it: 48px on a narrow one), and its title fades rather than
+    // vanishing in the first frame.
+    const [first = 0, last = 0] = [grown[0]?.width, grown.at(-1)?.width];
+    expect(last - first, JSON.stringify(frames)).toBeGreaterThan(8);
+    expect(
+      grown.some((frame) => frame.width > first + 1 && frame.width < last - 1),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(
+      grown.some((frame) => frame.title > 0 && frame.title < 1),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});
+
+it("morphs a tab back to floating without replaying its entrance", async () => {
+  await run(
+    "visibleDock().querySelector('[data-composer-input]').focus();return true;",
+  );
+  await app.press("Escape");
+  await runWait("return visibleDock()?.dataset.floatingChat === 'true';", {
+    label: "tab becomes floating",
+  });
+  expect(
+    await run<string[]>(
+      "return getComputedStyle(visibleDock()).animationName.split(',').map(name=>name.trim());",
+    ),
+  ).not.toContain("dock-in");
+  expect(
+    await run<string>("return getComputedStyle(visibleDock()).opacity;"),
+  ).toBe("1");
+  const localId = await run<string>(
+    "return visibleDock().dataset.chatLocalId;",
+  );
+  await run(
+    "setReactValue(visibleDock().querySelector('[data-composer-input]'),'keep the mode probe');return true;",
+  );
+  await runWait(
+    "return !!visibleDock()?.querySelector('button[aria-label=\"Minimize chat to bubble\"]');",
+    { label: "draft makes the floating chat minimizable" },
+  );
+  await app.press("Escape");
+  await runWait(
+    `const dock=document.querySelector('[data-chat-local-id="${localId}"]');return dock?.inert && !dock.dataset.floatingChat;`,
+    { label: "floating chat minimized" },
+  );
+  await run(
+    `document.querySelector('[data-chat-bubble="${localId}"] button[aria-label^="Open"]').click();return true;`,
+  );
+  await runWait(
+    `return visibleDock()?.dataset.chatLocalId===${JSON.stringify(localId)};`,
+    { label: "floating chat restored from its bubble" },
+  );
+  expect(
+    await run<string[]>(
+      "return getComputedStyle(visibleDock()).animationName.split(',').map(name=>name.trim());",
+    ),
+  ).toContain("dock-in");
+  await run(
+    "setReactValue(visibleDock().querySelector('[data-composer-input]'),'');pressKey('M', {metaKey:true,shiftKey:true});return true;",
+  );
+  await runWait("return visibleDock()?.dataset.chatTab === 'true';", {
+    label: "chat restored to its tab",
+  });
+  await runWait(
+    "return visibleDock().parentElement.getAnimations({subtree:true}).every(a=>a.playState!=='running'||a.effect?.getTiming().iterations===Infinity);",
+    { label: "tab morph settled" },
+  );
+});
+
+describe("inputs grow by gliding", () => {
+  const SHIFT = 8;
+  const paletteInput = `$$('textarea[aria-label="Search commands, pages, and more"]').find((el) => !el.closest('[inert]'))`;
+  const composerInput = `visibleDock()?.querySelector('[data-composer-input]')`;
+  interface Glide {
+    before: number;
+    frames: { at: number; height: number; scrolled: number; inset: number }[];
+    /** The frame's height transitions: begun, finished and cut short. */
+    transitions: { ran: number; ended: number; cancelled: number };
+  }
+  /**
+   * The frame's height while a real Shift+Enter adds a line, with how far
+   * the input sits from the frame's top edge. A value set by script adds a
+   * line too, but only the browser's own newline scrolls to the caret.
+   */
+  const glide = async (input: string): Promise<Glide> => {
+    await run(`
+      const input = ${input};
+      const frame = input.parentElement.closest('.overflow-clip');
+      input.focus();
+      if (input instanceof HTMLTextAreaElement) {
+        input.setSelectionRange(input.value.length, input.value.length);
+      } else {
+        const range = document.createRange();
+        range.selectNodeContents(input);
+        range.collapse(false);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+      }
+      const before = frame.getBoundingClientRect().height;
+      const frames = [];
+      const transitions = { ran: 0, ended: 0, cancelled: 0 };
+      const counted = (field) => (event) => {
+        if (event.target === frame && event.propertyName === 'height') transitions[field] += 1;
+      };
+      const listeners = [['transitionrun', counted('ran')], ['transitionend', counted('ended')], ['transitioncancel', counted('cancelled')]];
+      for (const [type, listener] of listeners) frame.addEventListener(type, listener);
+      const started = performance.now();
+      window.__glide = new Promise((resolve) => {
+        const tick = () => {
+          const box = frame.getBoundingClientRect();
+          frames.push({
+            at: Math.round(performance.now() - started),
+            height: box.height,
+            scrolled: frame.scrollTop,
+            inset: input.getBoundingClientRect().top - box.top,
+          });
+          // Half a second of frames, and on until the glide has ended (a
+          // slow renderer can end it late), two seconds at most.
+          const elapsed = performance.now() - started;
+          if (elapsed < 500 || (transitions.ended === 0 && elapsed < 2000))
+            requestAnimationFrame(tick);
+          else {
+            for (const [type, listener] of listeners) frame.removeEventListener(type, listener);
+            resolve({ before, frames, transitions });
+          }
+        };
+        requestAnimationFrame(tick);
+      });
+      return true;
+    `);
+    await app.press("Enter", SHIFT);
+    return run<Glide>("return window.__glide;");
+  };
+  const expectGlide = ({ before, frames, transitions }: Glide) => {
+    const end = frames.at(-1)?.height ?? 0;
+    const trace = JSON.stringify({ before, frames, transitions });
+    expect(end, trace).toBeGreaterThan(before);
+    // The frame's height transitioned to its end: it glided rather than
+    // snapped. Told by the transition itself, not by frames caught midway,
+    // which a slow renderer (macOS CI draws without a GPU) can space past
+    // its 150 ms. One retargeted as the height settles is cut short for
+    // the next, which ends: only an ending counts.
+    expect(transitions.ran, trace).toBeGreaterThan(0);
+    expect(transitions.ended, trace).toBeGreaterThan(0);
+    // The new line is clipped until it has glided into view, never scrolled
+    // to: the first line stays on the frame's top edge throughout.
+    expect(
+      frames.every(
+        ({ scrolled, inset }) => scrolled === 0 && Math.abs(inset) < 0.5,
+      ),
+      trace,
+    ).toBe(true);
+  };
+
+  it("the palette's input glides taller for a new line, its first line in place", async () => {
+    await run(
+      `if (!(${paletteInput})) pressKey('p', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!(${paletteInput});`, { label: "palette open" });
+    await run(`setReactValue(${paletteInput}, 'first line'); return true;`);
+    expectGlide(await glide(paletteInput));
+    await run(`setReactValue(${paletteInput}, ''); return true;`);
+    // Cancelable, as a real key is: the palette takes it, and the chat
+    // behind keeps its place.
+    await run(`pressKey('Escape'); return true;`);
+    await runWait(`return !(${paletteInput});`, { label: "palette closed" });
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("the composer glides taller for a new line the same way", async () => {
+    await run(`if (!(${composerInput})) newFloatingChat(); return true;`);
+    await runWait(`return !!(${composerInput});`, {
+      label: "a chat to type in",
+    });
+    await run(`setReactValue(${composerInput}, 'first line'); return true;`);
+    expectGlide(await glide(composerInput));
+    await run(`setReactValue(${composerInput}, ''); return true;`);
+    expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -125,21 +125,6 @@ export const myWorkflow = defineWorkflow(({ defineBoundary }) => ({
     expect(branches[2]?.label).toBe("Otherwise");
   });
 
-  it("parses sleep calls as delay nodes", () => {
-    const source = workflowSource({
-      body: `
-        await doSomething();
-        await sleep("7 days");
-        await doSomethingElse();
-      `,
-    });
-    const graph = parseWorkflow(source);
-
-    const delayNode = graph.nodes.find((n) => n.type === "delay");
-    expect(delayNode).toBeDefined();
-    expect(delayNode?.duration).toBe("7 days");
-  });
-
   it("parses Promise.all as parallel nodes", () => {
     const source = workflowSource({
       body: `

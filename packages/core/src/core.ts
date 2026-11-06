@@ -1,25 +1,25 @@
-import type { DB, Json } from "@catamorphic/db";
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+import { type DB, type Json, withStorableParameters } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
-  CodingAgentProvider,
   EnvironmentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
 import { instrumentSandboxProvider } from "@catamorphic/sandbox";
+import { PROJECT_SKILLS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
-import type { Identity } from "./identity.js";
+import { type Identity, mayUseProject } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
 import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
-import { AgentRuntimeEventsService } from "./services/agent-runtime-events-service.js";
-import { AgentRuntimeRequestsService } from "./services/agent-runtime-requests-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
   type NativeAgentCheckout,
+  type ToolAlwaysAllowedEvent,
 } from "./services/agent-sessions-service.js";
 import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
@@ -32,19 +32,32 @@ import {
   type CapabilityProviderRuntime,
   CapabilityRegistry,
 } from "./services/capability-providers.js";
+import {
+  chatOwner,
+  defaultDeliveryKey,
+  parseChatDelivery,
+} from "./services/chat-delivery.js";
 import { ClientRunnersService } from "./services/client-runners-service.js";
+import type { CodeHost } from "./services/code-host.js";
+import { CodeHostsService } from "./services/code-hosts-service.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
+  type RegisteredCodingAgent,
   singleAgentRegistry,
 } from "./services/coding-agent-registry.js";
 import { ConnectionAdmissionService } from "./services/connection-admission.js";
 import { ConnectionBroker } from "./services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
+import type {
+  ConnectionActionGuard,
+  ModelRequestRewrite,
+} from "./services/connection-guards.js";
 import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
 } from "./services/connection-providers.js";
+import type { EnvironmentConnectionBinding } from "./services/connection-types.js";
 import { ConnectionsService } from "./services/connections-service.js";
 import type { CredentialVault } from "./services/credential-vault.js";
 import { DbSandboxStore } from "./services/db-sandbox-store.js";
@@ -61,15 +74,23 @@ import { ExecutionAllocationsService } from "./services/execution-allocations-se
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
-import { GithubProjectEventSource } from "./services/github-event-source.js";
-import {
-  GithubService,
-  type GithubServiceConfig,
-} from "./services/github-service.js";
+import { GitGatewayService } from "./services/git-gateway.js";
 import { executeHostCall } from "./services/host-calls.js";
+import {
+  dbHttpGatewayStore,
+  HttpGatewayService,
+} from "./services/http-gateway.js";
 import { MembershipsService } from "./services/memberships-service.js";
+import {
+  dbModelGatewayStore,
+  ModelGatewayService,
+} from "./services/model-gateway.js";
+import { NodeRecoveryService } from "./services/node-recovery-service.js";
+import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
+import { PlacementWaitsService } from "./services/placement-waits.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
+import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
 import type { ProjectEventSourceProvider } from "./services/project-event-monitors-service.js";
 import { ProjectEventMonitorsService } from "./services/project-event-monitors-service.js";
 import { ProjectEventsService } from "./services/project-events-service.js";
@@ -86,11 +107,13 @@ import {
   RetentionService,
 } from "./services/retention-service.js";
 import { RolesService } from "./services/roles-service.js";
+import { requireAttemptTime } from "./services/run-abortable.js";
 import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SchedulesService } from "./services/schedules-service.js";
+import { secretsCapability } from "./services/secrets-capability.js";
 import { SecretsService } from "./services/secrets-service.js";
 import {
   SESSION_ACTION_SCHEMAS,
@@ -98,10 +121,12 @@ import {
 } from "./services/session-actions-service.js";
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
+import { SessionPreviewsService } from "./services/session-previews-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
+import { SessionTerminalsService } from "./services/session-terminals-service.js";
+import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
-import type { ToolPermissionChannel } from "./services/tool-permission-broker.js";
 import type {
   McpToolKindSpec,
   TriggerKindRuntime,
@@ -112,6 +137,8 @@ import {
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
 import { WatchersService } from "./services/watchers-service.js";
+import { WebhooksService } from "./services/webhooks-service.js";
+import { WorkWakeups } from "./services/work-wakeups.js";
 import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -119,14 +146,22 @@ export interface CatamorphicCoreConfig {
   agentCapabilities?: AgentCapabilityOptions;
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
-  /** Distinct leased execution instance beneath the logical host authority. */
+  /**
+   * This process's own local node lease beneath the logical host authority.
+   * Work on it runs only here; work on remote nodes and on no node runs on
+   * any host of the authority (ADR 0192).
+   */
   workerNode?: { id: string; token: string };
   /**
-   * How long a project's parsed `.catamorphic/roles/*.json` set is trusted before it is
-   * re-read from the shared origin (ADR 0055). Role *definitions* may lag
-   * by this much; membership is read fresh on every resolve. Default 10s.
+   * How long this process's pollers (workflow and agent workers, event
+   * delivery, live session streams) wait after a poll while no work was
+   * found, hinted or due (ADR 0229). Writes made in this process hint them
+   * at once, so only work written elsewhere waits for an idle poll.
+   * Default: they always wait their short interval. A single-process host,
+   * where every write is its own, can raise it freely; a host with several
+   * replicas trades that much latency for work another replica writes.
    */
-  rolesCacheTtlMs?: number;
+  idlePollMs?: number;
   /**
    * Where project-store bytes live when a document is not text (ADR 0055):
    * inline in Postgres by default; a filesystem or S3-compatible store
@@ -134,13 +169,6 @@ export interface CatamorphicCoreConfig {
    * text and the search index always stay in the database.
    */
   documentBlobStore?: DocumentBlobStore;
-  /**
-   * The identity whose code-host connection opens pull requests for members'
-   * proposals (ADR 0055) — the organisation's bot account, connected to
-   * GitHub like any user. Absent = proposals land as branches on the
-   * project origin only.
-   */
-  proposalBot?: Identity;
   /**
    * Pull the caller's `store/` view into the agent's folder before each
    * turn and ship its writes after (ADR 0055). Default on. Hosts whose
@@ -159,35 +187,84 @@ export interface CatamorphicCoreConfig {
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
-  /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
-  resolveMemberIdentity?: (args: {
+  /**
+   * Connection aliases the host offers in an Environment beside the ones
+   * committed in `.work/project.json` (ADR 0172), such as a desktop's own
+   * profile MCP servers (ADR 0086). A committed alias of the same name wins.
+   */
+  connectionBindings?: (args: {
     tenantId: string;
     projectId: string;
+    environment: string;
+  }) => Promise<Readonly<Record<string, EnvironmentConnectionBinding>>>;
+  /**
+   * Checks every brokered connection action from agents and workflows (ADR
+   * 0162). Escalations ask the agent session's person with a session request.
+   * Guards are host code (ADR 0183).
+   */
+  connectionGuards?: readonly ConnectionActionGuard[];
+  /**
+   * How long one connection guard may take before its action escalates to a
+   * person (default 30 seconds). A throwing guard always denies.
+   */
+  connectionGuardTimeoutMs?: number;
+  /**
+   * Rewrite model request bodies through the gateway before its policy
+   * reads them (ADR 0256), in order: pin an aggregator's providers, drop
+   * fields. Host code, as guards are; each is bounded by the guard timeout.
+   */
+  modelRequestRewrites?: readonly ModelRequestRewrite[];
+  /** Re-resolve live authority for dispatch, gateways and OAuth callbacks. */
+  resolveMemberIdentity?: (args: {
+    tenantId: string;
+    /** Absent for a tenant-wide or personal connection authorization. */
+    projectId?: string;
     externalUserId: string;
   }) => Promise<Identity | null>;
+  /**
+   * The external user id of whoever signs in with `email`, or null. Lets
+   * workflows name members by email (`catamorphic.secrets`, ADR 0210);
+   * without it they name members by id only.
+   */
+  memberIdForEmail?: (args: {
+    tenantId: string;
+    email: string;
+  }) => Promise<string | null>;
+  /**
+   * Where sandboxes reach the control plane: its public URL's host and port
+   * (`work.acme.com:443`, see `gatewayHostOf`; a bare host allows every
+   * port). An Environment with restricted egress always reaches them, and
+   * `egress: "gateway"` reaches nothing else (ADR 0176).
+   */
+  gatewayHosts?: readonly string[];
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
     sessionId: string;
     alias: string;
   }) => string | undefined;
+  /**
+   * The gateway's base URL as a session's sandbox reaches it (ADRs 0175,
+   * 0180), e.g. `https://work.example.com/api/gateway`, where the host
+   * mounts the plugin's gateway routes. Sandboxes get Git configured for
+   * `<gatewayUrl>/git/<alias>/`, harnesses reach models at
+   * `<gatewayUrl>/model/<alias>/`, and code reaches HTTP APIs at
+   * `<gatewayUrl>/http/<alias>` (ADR 0212). Absent, Git, model and HTTP
+   * aliases are not offered to sandboxes.
+   */
+  gatewayUrl?: (args: {
+    projectId: string;
+    sessionId: string;
+  }) => string | undefined;
   pluginResolver?: PluginResolver;
   /**
-   * Pluggable coding agent(s). Pass a single provider (e.g. `AiSdkCodingAgent`
-   * from `@catamorphic/ai-sdk`) for the classic one-agent setup, or a
-   * {@link CodingAgentRegistry} when the host offers several agents (the
-   * desktop app registers one per configured profile agent). Requires
-   * `sandboxProvider` — sandbox-execution agents operate on a per-(project,
-   * user) dev sandbox.
+   * Pluggable coding agent(s): one {@link RegisteredCodingAgent}, or a
+   * {@link CodingAgentRegistry} when the host offers several (the desktop
+   * registers one per profile agent). Each names a harness that runs in
+   * this process or beside its workspace (ADR 0198). Questions and
+   * approvals are session requests every client answers (ADR 0197).
    */
-  codingAgent?: CodingAgentProvider | CodingAgentRegistry;
-  /**
-   * Where tool-permission asks (ADR 0054) park for hosts that answer them
-   * over HTTP: hand its `handlerFor(agent)` to your providers'
-   * `onToolPermission`, and the plugin serves the pending list + answer
-   * routes. Hosts with their own consent UI (the desktop bridge) omit it.
-   */
-  toolPermissions?: ToolPermissionChannel;
+  codingAgent?: RegisteredCodingAgent | CodingAgentRegistry;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `topology: "native"` (Claude Code, Codex).
@@ -227,11 +304,13 @@ export interface CatamorphicCoreConfig {
   /** Hard cap on a built app bundle (js + css). Defaults to 5 MiB. */
   maxAppBundleBytes?: number;
   /**
-   * GitHub App registration for repo import + push-back. Hosts bring their
-   * own app (client id, and the secret when using the server web flow).
-   * Without it, the GitHub surfaces are unavailable.
+   * Code hosts over connections (ADRs 0044, 0177): pull requests and
+   * repositories for remotes a connection provider serves with Git. Each
+   * names a registered `connectionProviders` kind. Sync, pull requests,
+   * proposals, import, and publishing act through the caller's own
+   * connection to that provider, else the service connection named like it.
    */
-  github?: GithubServiceConfig;
+  codeHosts?: readonly CodeHost[];
   /**
    * Host-defined trigger kinds. Workflows subscribe with
    * `triggers: [trigger("kind", config)]`; the host fires a kind with a
@@ -249,11 +328,19 @@ export interface CatamorphicCoreConfig {
    */
   mcpToolKinds?: readonly McpToolKindSpec[];
   /**
+   * Project webhook intake (ADRs 0156, 0171). `maxBodyBytes` is the largest
+   * body any endpoint may accept (default 1 MiB, at most 64 MiB); a
+   * workflow's `trigger("webhook", { maxBodyBytes })` may ask for up to it.
+   */
+  webhooks?: { maxBodyBytes?: number };
+  /**
    * Fires after a coding-agent chat turn settles (completed, failed, or
    * awaiting input). Host-owned; a natural place to fire a chat trigger
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** A person chose "Always allow" for an agent's tool; the host keeps it (ADR 0054). */
+  onToolAlwaysAllowed?: (event: ToolAlwaysAllowedEvent) => void | Promise<void>;
   /** Optional host-owned Web Push transport. Events remain durable without it. */
   pushNotifications?: PushNotificationTransport;
   /**
@@ -279,7 +366,7 @@ export interface CatamorphicCoreConfig {
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills (ADR 0049): playbooks the host
-   * ships, listed alongside a project's own `.catamorphic/skills/` without being
+   * ships, listed alongside a project's own `.work/skills/` without being
    * written into the project repo. Receives the framework defaults keyed by
    * `<name>/SKILL.md`; return the final map. Replacing or removing entries
    * is legitimate. A project skill with the same name shadows a host skill.
@@ -314,12 +401,18 @@ export interface CatamorphicCoreConfig {
  */
 export class CatamorphicCore {
   readonly db: Kysely<DB>;
+  /** This process's hints that durable work may be waiting (ADR 0229). */
+  readonly wakeups = new WorkWakeups();
+  /** See {@link CatamorphicCoreConfig.idlePollMs}. */
+  readonly idlePollMs?: number;
   readonly projectManager: ProjectManager;
   readonly sandboxProvider?: SandboxProvider;
   readonly pluginResolver?: PluginResolver;
 
   readonly projects: ProjectsService;
   readonly projectEvents: ProjectEventsService;
+  /** Project webhook URLs and their durable intake (ADR 0156). */
+  readonly webhooks: WebhooksService;
   readonly projectEventMonitors: ProjectEventMonitorsService;
   readonly projectEventSources: readonly ProjectEventSourceProvider[];
   readonly workflows: WorkflowsService;
@@ -337,11 +430,23 @@ export class CatamorphicCore {
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
+  /** Work waiting for a machine (ADR 0258), the demand machine rules read. */
+  readonly placementWaits: PlacementWaitsService;
+  /** Moves the work of lost disposable machines (ADR 0190). */
+  readonly nodeRecovery: NodeRecoveryService;
   readonly connections?: ConnectionsService;
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
-  /** Committed `.catamorphic/roles/*.json` and their expansion into identities (ADR 0055). */
+  /** Git smart HTTP for sandboxes, authorized by session grants (ADR 0175). */
+  readonly gitGateway?: GitGatewayService;
+  /** Models through the gateway for sandbox harnesses (ADR 0180). */
+  readonly modelGateway?: ModelGatewayService;
+  /** HTTP APIs through the gateway for code in sandboxes (ADR 0212). */
+  readonly httpGateway?: HttpGatewayService;
+  /** Workspaces at a ref of a project's linked remote (ADR 0178). */
+  readonly sessionWorkspaces: SessionWorkspaces;
+  /** Committed `.work/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
   readonly memberships: MembershipsService;
@@ -349,7 +454,7 @@ export class CatamorphicCore {
   readonly documents: DocumentsService;
   /** Propose-a-change: member edits as branches/PRs on their behalf (ADR 0055). */
   readonly proposals: ProposalsService;
-  /** Whether proposals open pull requests (a proposalBot is configured). */
+  /** Whether proposals can open pull requests (a code host is configured). */
   readonly proposalsOpenPullRequests: boolean;
   /** Publications: documents served to an audience at a stable URL (ADR 0055). */
   readonly publications: PublicationsService;
@@ -357,7 +462,16 @@ export class CatamorphicCore {
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
-  readonly runPluginsLoader?: RunPluginsLoader;
+  /** Members' own logins and files for their own chats (ADR 0184). */
+  readonly personalEnvironments: PersonalEnvironmentService;
+  readonly runPluginsLoader: RunPluginsLoader;
+  private connectionProviderRegistry?: ConnectionProviderRegistry;
+  /** A project member's current identity: the host's resolver, else stock memberships. */
+  private readonly resolveMember: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
@@ -366,15 +480,15 @@ export class CatamorphicCore {
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
   readonly sessionActions?: SessionActionsService;
-  /** Durable normalized provider events, independently replayable by cursor. */
-  readonly agentRuntimeEvents: AgentRuntimeEventsService;
-  /** Durable approval, question, and elicitation requests. */
-  readonly agentRuntimeRequests: AgentRuntimeRequestsService;
-  readonly toolPermissions?: ToolPermissionChannel;
+  /** Terminals people open in a chat's workspace (ADR 0209). */
+  readonly sessionTerminals?: SessionTerminalsService;
+  /** Previews of servers running in a chat's workspace (ADR 0209). */
+  readonly sessionPreviews?: SessionPreviewsService;
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
-  readonly github?: GithubService;
+  /** Pull requests and repositories through connections (ADR 0177). */
+  readonly codeHosts: CodeHostsService;
   readonly remoteSync: RemoteSyncService;
   readonly notifications: UserNotificationsService;
   readonly appStorage: AppStorageService;
@@ -388,8 +502,10 @@ export class CatamorphicCore {
   readonly hostSkillFiles: Record<string, string>;
 
   constructor(config: CatamorphicCoreConfig) {
-    this.toolPermissions = config.toolPermissions;
-    this.db = config.db;
+    // Every parameter reaches Postgres as a value it stores, on every
+    // host's database.
+    this.db = withStorableParameters(config.db);
+    this.idlePollMs = config.idlePollMs;
     this.notifications = new UserNotificationsService(
       this.db,
       config.pushNotifications,
@@ -400,7 +516,7 @@ export class CatamorphicCore {
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
     // Imported repositories stay untouched. Offer their missing framework
     // skills through the existing host tier; project/user skills still win.
-    const skillPrefix = ".catamorphic/skills/";
+    const skillPrefix = `${PROJECT_SKILLS_DIR}/`;
     const defaultHostSkills = {
       ...Object.fromEntries(
         Object.entries(this.seedFiles)
@@ -449,7 +565,7 @@ export class CatamorphicCore {
     const sessionDeliveryCapability: CapabilityProviderRuntime = {
       name: "catamorphic.sessions",
       description:
-        "Deliver to an existing agent session or wake a stable member session",
+        "Read and act on chats; deliver messages to a chat by id or by a workflow key",
       calls: {
         ...Object.fromEntries(
           Object.keys(SESSION_ACTION_SCHEMAS).map((operation) => [
@@ -463,10 +579,12 @@ export class CatamorphicCore {
               if (!(operation in SESSION_ACTION_SCHEMAS))
                 throw new Error("Unknown session action");
               const origin = await this.workflowSessionOrigin(context);
+              requireAttemptTime(context);
               return this.sessionActions.execute({
                 identity: context.caller,
                 projectId: context.projectId,
                 operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
+                signal: context.signal,
                 args,
                 ...origin,
               });
@@ -475,11 +593,12 @@ export class CatamorphicCore {
         ),
         stop: async (context, args) => {
           const origin = await this.workflowSessionOrigin(context);
-          if (
-            !origin.provenance.sessionId ||
-            !origin.provenance.watcherId ||
-            !this.sessionActions
-          )
+          requireAttemptTime(context);
+          const watcher =
+            origin.author.kind === "workflow"
+              ? origin.author.watcher
+              : undefined;
+          if (!watcher || !this.sessionActions)
             throw new Error(
               "Only a temporary workflow can stop its own activation",
             );
@@ -487,82 +606,145 @@ export class CatamorphicCore {
             identity: context.caller,
             projectId: context.projectId,
             operation: "stopWatcher",
+            signal: context.signal,
             ...origin,
             args: {
               ...(args && typeof args === "object" ? args : {}),
-              sessionId: origin.provenance.sessionId,
-              watcherId: origin.provenance.watcherId,
+              sessionId: watcher.sessionId,
+              watcherId: watcher.id,
             },
-          });
-        },
-        wake: async (context, args) => {
-          if (!this.agentSessions) {
-            throw new Error("Coding agents are not configured");
-          }
-          const input = sessionWakeArgs(args);
-          let enabledEnvironment: string | undefined;
-          const run = await this.db
-            .selectFrom("workflow_runs")
-            .select("workflow_enablement_id")
-            .where("id", "=", context.runId)
-            .executeTakeFirst();
-          if (run?.workflow_enablement_id) {
-            const enablement = await this.db
-              .selectFrom("workflow_enablements")
-              .select([
-                "owner_kind",
-                "owner_external_user_id",
-                "environment_name",
-              ])
-              .where("id", "=", run.workflow_enablement_id)
-              .executeTakeFirstOrThrow();
-            if (
-              enablement.owner_kind !== "member" ||
-              enablement.owner_external_user_id !==
-                context.caller.externalUserId
-            ) {
-              throw new Error(
-                "catamorphic.sessions.wake requires a member-owned workflow enablement",
-              );
-            }
-            enabledEnvironment = enablement.environment_name;
-          }
-          return this.agentSessions.wake(context.caller, context.projectId, {
-            ...input,
-            wakeKey: JSON.stringify([context.workflowName, input.key]),
-            origin: await this.workflowSessionOrigin(context),
-            environment: enabledEnvironment ?? input.environment,
-            workflowName: context.workflowName,
-            runId: context.runId,
           });
         },
         deliver: async (context, args) => {
           if (!this.agentSessions) {
             throw new Error("Coding agents are not configured");
           }
-          const input = sessionDeliveryArgs(args);
+          const input = parseChatDelivery(args);
           const origin = await this.workflowSessionOrigin(context);
-          return this.agentSessions.deliver(
-            context.caller,
-            context.projectId,
-            input.sessionId,
-            {
+          requireAttemptTime(context);
+          const idempotencyKey =
+            input.idempotencyKey ??
+            defaultDeliveryKey({
+              runId: context.runId,
+              chat: "sessionId" in input ? input.sessionId : input.key,
               content: input.content,
-              author: origin.author,
-              metadata: {
-                provenance: origin.provenance,
-                causation: origin.causation,
+            });
+          const message = {
+            content: input.content,
+            signal: context.signal,
+            author: origin.author,
+            mode: input.mode,
+            ...(input.attention ? { attention: input.attention } : {}),
+            idempotencyKey,
+            causation: origin.causation,
+            // A chat a workflow keeps alerts its people when the turn settles.
+            ...(input.notification || "key" in input
+              ? { alert: input.notification ?? {} }
+              : {}),
+          };
+          const nameApprovers = async (owner: Identity, sessionId: string) => {
+            const approvers = input.approvers;
+            if (!approvers || !this.agentSessions) return;
+            for (const member of approvers.members ?? [])
+              if (
+                !(await this.resolveMember({
+                  tenantId: owner.tenantId,
+                  projectId: context.projectId,
+                  externalUserId: member,
+                }))
+              )
+                throw new Error(
+                  `Approver ${member} is not a member of this project`,
+                );
+            requireAttemptTime(context);
+            await this.agentSessions.setApprovers({
+              identity: owner,
+              projectId: context.projectId,
+              sessionId,
+              approvers,
+              signal: context.signal,
+            });
+          };
+          if ("sessionId" in input) {
+            await nameApprovers(context.caller, input.sessionId);
+            requireAttemptTime(context);
+            const receipt = await this.agentSessions.deliver(
+              context.caller,
+              context.projectId,
+              input.sessionId,
+              {
+                ...message,
+                ...(input.workspace ? { workspace: input.workspace } : {}),
               },
-              mode: input.mode,
-              attention: input.attention,
-              idempotencyKey: input.idempotencyKey,
+            );
+            return {
+              ...receipt,
+              sessionId: input.sessionId,
+              sessionCreated: false,
+            };
+          }
+          // A chat named by key belongs to whoever the automation serves;
+          // the key belongs to the project, so every automation in it
+          // reaches the same chat (ADR 0173).
+          const run = await this.db
+            .selectFrom("workflow_runs")
+            .select("workflow_enablement_id")
+            .where("id", "=", context.runId)
+            .executeTakeFirst();
+          const enablement = run?.workflow_enablement_id
+            ? await this.db
+                .selectFrom("workflow_enablements")
+                .select(["owner_kind", "owner_external_user_id"])
+                .where("id", "=", run.workflow_enablement_id)
+                .executeTakeFirstOrThrow()
+            : undefined;
+          const owner = await chatOwner({
+            caller: context.caller,
+            projectId: context.projectId,
+            audience: input.audience,
+            enablement,
+            resolveMember: this.resolveMember,
+          });
+          // Placed by its own Environment, never the run's: the one this
+          // delivery names, else the agent's preferred, else the project
+          // default.
+          requireAttemptTime(context);
+          const chat = await this.agentSessions.chatForKey(
+            owner,
+            context.projectId,
+            {
+              key: input.key,
+              signal: context.signal,
+              workflowName: context.workflowName,
+              ...(input.agentSlug ? { agentSlug: input.agentSlug } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
+              ...(input.title ? { title: input.title } : {}),
+              ...(input.workspace ? { workspace: input.workspace } : {}),
+              origin,
             },
           );
+          requireAttemptTime(context);
+          await nameApprovers(owner, chat.sessionId);
+          requireAttemptTime(context);
+          const receipt = await this.agentSessions.deliver(
+            owner,
+            context.projectId,
+            chat.sessionId,
+            message,
+          );
+          return { ...receipt, ...chat };
         },
       },
     };
     this.capabilities = new CapabilityRegistry([
       sessionDeliveryCapability,
+      secretsCapability({
+        // Constructed further down; resolved per call.
+        secrets: () => this.secrets,
+        ...(config.memberIdForEmail
+          ? { memberIdForEmail: config.memberIdForEmail }
+          : {}),
+      }),
       ...(config.capabilityProviders ?? []),
     ]);
     this.projects = new ProjectsService(
@@ -571,51 +753,55 @@ export class CatamorphicCore {
       config.projectHooks,
       { seedFiles: this.seedFiles },
     );
-    this.projectEvents = new ProjectEventsService(this.db);
-    this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
-    this.appStorage = new AppStorageService(this.db);
-    this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
-    this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
-    this.github = config.github
-      ? new GithubService(
-          this.db,
-          this.projectManager,
-          this.projects,
-          config.github,
-          this.projectEvents,
-        )
-      : undefined;
-    this.projectEventSources = [
-      ...(this.github ? [new GithubProjectEventSource(this.github)] : []),
-      ...(config.projectEventSources ?? []),
-    ];
-    // Provider-agnostic remote sync (ADR 0044); code hosts contribute
-    // credentials/capabilities through the CodeHost seam.
-    this.remoteSync = new RemoteSyncService(
+    this.projectEvents = new ProjectEventsService(this.db, this.wakeups);
+    this.webhooks = new WebhooksService(this.db, {
+      events: this.projectEvents,
+      ...(config.webhooks?.maxBodyBytes !== undefined
+        ? { maxBodyBytes: config.webhooks.maxBodyBytes }
+        : {}),
+      secretValue: async ({ projectId, name }) => {
+        const project = await this.db
+          .selectFrom("projects")
+          .select("tenant_id")
+          .where("id", "=", projectId)
+          .executeTakeFirst();
+        return project && this.secrets
+          ? this.secrets.value({
+              tenantId: project.tenant_id,
+              projectId,
+              name,
+            })
+          : undefined;
+      },
+    });
+    this.projectEventMonitors = new ProjectEventMonitorsService(
       this.db,
-      this.projectManager,
-      this.github ? [this.github.codeHost] : [],
+      this.wakeups,
     );
+    this.appStorage = new AppStorageService(this.db);
+    this.projectEventSources = config.projectEventSources ?? [];
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
     this.projectEnvironments = new ProjectEnvironmentsService(
       this.db,
       this.projectManager,
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
+    this.placementWaits = new PlacementWaitsService(this.db);
     this.clientRunners = config.clientExecution
       ? new ClientRunnersService(this.db, this.projectEnvironments)
       : undefined;
+    const clientRunners = this.clientRunners;
     this.executionEnvironments = new ExecutionEnvironmentsService(
       this.projectEnvironments,
-      {
-        get: (args) =>
-          args.bindingId === "this-machine" && this.clientRunners
-            ? this.clientRunners.binding({
-                ...args,
-                workerNodeId: args.workerNodeId ?? config.workerNode?.id,
-              })
-            : config.environmentProvider.get(args),
-      },
+      config.environmentProvider,
+      clientRunners
+        ? {
+            // A member's own machine is no host's node: any host runs its
+            // chats while its runner's lease is live (ADR 0192).
+            get: (args) => clientRunners.binding(args),
+          }
+        : undefined,
+      { gatewayHosts: config.gatewayHosts ?? [] },
     );
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,
@@ -626,6 +812,8 @@ export class CatamorphicCore {
       resolveMemberIdentity: config.resolveMemberIdentity,
       // Constructed below; read at call time.
       memberRoles: (args) => this.memberships.describeMember(args),
+      sessionSandboxing: async (args) =>
+        this.agentSessions?.agentSandboxing(args),
     });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
@@ -634,20 +822,48 @@ export class CatamorphicCore {
         "credentialVault is required when connectionProviders are configured",
       );
     }
+    const providers = new ConnectionProviderRegistry(connectionProviders);
+    const executionJobs = new ExecutionJobsService(
+      this.db,
+      config.workerNode,
+      this.wakeups,
+    );
     if (connectionProviders.length > 0 && credentialVault) {
-      const providers = new ConnectionProviderRegistry(connectionProviders);
-      this.connections = new ConnectionsService(
-        this.db,
-        credentialVault,
+      const hostBindings = config.connectionBindings;
+      this.connections = new ConnectionsService({
+        db: this.db,
+        jobs: executionJobs,
+        vault: credentialVault,
         providers,
-        async (identity) => {
+        ...(config.resolveMemberIdentity
+          ? { resolveMemberIdentity: config.resolveMemberIdentity }
+          : {}),
+        // Committed bindings are read with the Environment they belong to
+        // (ADR 0172); a host may add its own aliases beside them, and a
+        // committed alias wins over a host one of the same name.
+        bindings: async ({ identity, projectId, environment }) => {
+          const [definition, host] = await Promise.all([
+            this.projectEnvironments.get({
+              identity,
+              projectId,
+              name: environment,
+            }),
+            hostBindings?.({
+              tenantId: identity.tenantId,
+              projectId,
+              environment,
+            }),
+          ]);
+          return { ...host, ...definition?.connections };
+        },
+        onMemberConnectionReady: async (identity) => {
           if (this.workflowEnablements) {
             await this.workflowEnablements.reenableEligibleForMember({
               identity,
             });
           }
         },
-        async ({ identity, connectionId }) => {
+        onConnectionUnavailable: async ({ identity, connectionId }) => {
           if (this.workflowEnablements) {
             await this.workflowEnablements.suspendForConnection({
               identity,
@@ -655,7 +871,7 @@ export class CatamorphicCore {
             });
           }
         },
-      );
+      });
       this.connectionAdmission = new ConnectionAdmissionService(
         this.connections,
       );
@@ -664,13 +880,119 @@ export class CatamorphicCore {
         providers,
         this.executionAllocations,
         () => this.workflowEnablements,
+        {
+          guards: config.connectionGuards ?? [],
+          ...(config.resolveMemberIdentity
+            ? { resolveMemberIdentity: config.resolveMemberIdentity }
+            : {}),
+          ...(config.connectionGuardTimeoutMs
+            ? { guardTimeoutMs: config.connectionGuardTimeoutMs }
+            : {}),
+          approve: async (request) =>
+            (await this.agentSessions?.askApproval({
+              sessionId: request.sessionId,
+              title: request.title,
+              description: request.description,
+              origin: {
+                kind: "host",
+                id: request.server,
+                displayName: "Connection gateway",
+              },
+              approval: {
+                action: `${request.server} · ${request.tool}`,
+                details: request.description,
+                tool: {
+                  server: request.server,
+                  name: request.tool,
+                  input: JSON.parse(JSON.stringify(request.input)),
+                },
+              },
+            })) ?? "deny",
+          sessionOwner: async (sessionId) =>
+            (
+              await this.db
+                .selectFrom("agent_sessions")
+                .select("external_user_id")
+                .where("id", "=", sessionId)
+                .where("status", "=", "active")
+                .executeTakeFirst()
+            )?.external_user_id,
+          sessionSandboxing: async (sessionId) => {
+            const session = await this.db
+              .selectFrom("agent_sessions")
+              .select("project_id")
+              .where("id", "=", sessionId)
+              .executeTakeFirst();
+            return session
+              ? this.agentSessions?.agentSandboxing({
+                  projectId: session.project_id,
+                  sessionId,
+                })
+              : undefined;
+          },
+          projectRemote: async ({ tenantId, projectId }) =>
+            (
+              await this.db
+                .selectFrom("projects")
+                .select("remote_url")
+                .where("id", "=", projectId)
+                .where("tenant_id", "=", tenantId)
+                .executeTakeFirst()
+            )?.remote_url,
+        },
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(
         this.db,
         this.executionAllocations,
       );
+      this.connectionProviderRegistry = providers;
+      this.gitGateway = new GitGatewayService({
+        db: this.db,
+        grants: this.connectionGrants,
+        allocations: this.executionAllocations,
+        broker: this.connectionBroker,
+        providers,
+        connections: this.connections,
+      });
+      this.modelGateway = new ModelGatewayService({
+        store: dbModelGatewayStore(this.db),
+        broker: this.connectionBroker,
+        rewrites: config.modelRequestRewrites ?? [],
+        ...(config.connectionGuardTimeoutMs
+          ? { rewriteTimeoutMs: config.connectionGuardTimeoutMs }
+          : {}),
+      });
+      this.httpGateway = new HttpGatewayService({
+        store: dbHttpGatewayStore(this.db),
+        broker: this.connectionBroker,
+      });
     }
-    this.deployment = new DeploymentService(this.projectManager);
+    this.codeHosts = new CodeHostsService({
+      db: this.db,
+      projectManager: this.projectManager,
+      projects: this.projects,
+      hosts: config.codeHosts ?? [],
+      providers,
+      ...(this.connections ? { connections: this.connections } : {}),
+    });
+    // Provider-agnostic remote sync (ADR 0044): credentials come from the
+    // connection that backs the origin (ADR 0177).
+    this.remoteSync = new RemoteSyncService(
+      this.db,
+      this.projectManager,
+      this.codeHosts,
+    );
+    this.sessionWorkspaces = new SessionWorkspaces({
+      projectManager: this.projectManager,
+      origin: (input) => this.remoteSync.origin(input),
+      // Constructed later, with the connection providers; read per call.
+      bindingCredentials: (input) =>
+        this.connectionBroker?.mirrorCredentials(input) ??
+        Promise.resolve(undefined),
+    });
+    this.deployment = new DeploymentService(this.projectManager, (input) =>
+      this.workflowEnablements.markUpdateAvailable(input),
+    );
     this.deploymentArtifacts = new DeploymentArtifactsService(this.db);
     this.deploymentRuntime = this.sandboxProvider
       ? new DeploymentRuntimeService(
@@ -683,12 +1005,16 @@ export class CatamorphicCore {
           },
         )
       : undefined;
-    const executionJobs = new ExecutionJobsService(this.db, config.workerNode);
+    // Read at call time: memberships are constructed further down.
+    this.resolveMember =
+      config.resolveMemberIdentity ??
+      ((args) => this.memberships.identityFor(args));
     this.retention = new RetentionService(this.db, config.retention);
     const executionWorker = new ExecutionWorkerService(
       executionJobs,
       this.retention,
       this.db,
+      { wakeups: this.wakeups, idlePollMs: config.idlePollMs },
     );
     const runtimeEvents = new RuntimeEventsService(this.db);
     const rateReservations = new RateReservationsService(this.db);
@@ -703,16 +1029,33 @@ export class CatamorphicCore {
     }
     // Secrets exist independently of plugins: a project declares its own with
     // `defineSecrets` in code, and plugins may declare additional ones.
-    this.secrets = new SecretsService(this.db, this.plugins, (args) =>
-      this.workflows.listDeclaredSecrets(args),
+    this.secrets = new SecretsService({
+      db: this.db,
+      ...(this.plugins ? { plugins: this.plugins } : {}),
+      projectDeclarations: (args) =>
+        args.purpose === "run"
+          ? this.workflows.declaredSecretsForRun(args)
+          : this.workflows.listDeclaredSecrets(args),
+      ...(config.credentialVault ? { vault: config.credentialVault } : {}),
+      environments: this.projectEnvironments,
+      isMember: async (args) => {
+        const member = await this.resolveMember(args);
+        return member !== null && mayUseProject(member, args.projectId);
+      },
+    });
+    this.personalEnvironments = new PersonalEnvironmentService({
+      db: this.db,
+      ...(config.credentialVault ? { vault: config.credentialVault } : {}),
+      environments: this.projectEnvironments,
+    });
+    this.runPluginsLoader = new RunPluginsLoader(
+      this.secrets,
+      this.plugins && this.pluginResolver
+        ? { plugins: this.plugins, resolver: this.pluginResolver }
+        : undefined,
+      this.capabilities,
     );
     if (this.plugins && this.pluginResolver) {
-      this.runPluginsLoader = new RunPluginsLoader(
-        this.plugins,
-        this.secrets,
-        this.pluginResolver,
-        this.capabilities,
-      );
       this.agentContext = new AgentContextService(
         this.plugins,
         this.pluginResolver,
@@ -720,6 +1063,19 @@ export class CatamorphicCore {
     }
 
     const coordinator = new RunCoordinator(this.db, executionJobs);
+    this.nodeRecovery = new NodeRecoveryService({
+      db: this.db,
+      environments: this.executionEnvironments,
+      allocations: this.executionAllocations,
+      coordinator,
+      connections: this.connectionAdmission,
+      waits: this.placementWaits,
+      // Read at call time: memberships are constructed further down.
+      resolveOwner: (args) => this.resolveMember(args),
+    });
+    executionWorker.registerAllocationMaintenance({
+      handler: (args) => this.nodeRecovery.reconcileWorkflowWaits(args),
+    });
     executionWorker.registerExhaustedHandler((args) =>
       coordinator.handleExhaustedJob(args),
     );
@@ -761,6 +1117,8 @@ export class CatamorphicCore {
       ...(this.connectionBroker
         ? {
             callConnection: (args: {
+              signal: AbortSignal;
+              deadlineAt: string;
               caller: Identity;
               allocationId: string;
               alias: string;
@@ -773,6 +1131,9 @@ export class CatamorphicCore {
                 alias: args.alias,
                 action: args.action,
                 input: args.input,
+                caller: "workflow",
+                signal: args.signal,
+                deadlineAt: args.deadlineAt,
               }),
             parkConnectionCall: (args: {
               caller: Identity;
@@ -846,9 +1207,7 @@ export class CatamorphicCore {
           policies: this.appPolicies,
           ...args,
         }),
-      resolveMemberIdentity:
-        config.resolveMemberIdentity ??
-        ((args) => this.memberships.identityFor(args)),
+      resolveMemberIdentity: this.resolveMember,
     });
     this.schedules = new SchedulesService(this.db, this.triggers);
 
@@ -864,11 +1223,7 @@ export class CatamorphicCore {
       this.projectManager,
       { allowE2eFake: process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" },
     );
-    this.roles = new RolesService(this.db, this.projectManager, {
-      ...(config.rolesCacheTtlMs !== undefined
-        ? { ttlMs: config.rolesCacheTtlMs }
-        : {}),
-    });
+    this.roles = new RolesService(this.db, this.projectManager);
     this.memberships = new MembershipsService(this.db, this.roles);
     this.documents = new DocumentsService(this.db, {
       projectManager: this.projectManager,
@@ -877,12 +1232,11 @@ export class CatamorphicCore {
         : {}),
     });
     this.publications = new PublicationsService(this.db);
-    this.proposalsOpenPullRequests = Boolean(config.proposalBot);
+    this.proposalsOpenPullRequests = this.codeHosts.available;
     this.proposals = new ProposalsService(
       this.db,
       this.projectManager,
-      this.github ? [this.github.codeHost] : [],
-      config.proposalBot,
+      this.codeHosts,
     );
 
     if (config.codingAgent) {
@@ -896,6 +1250,8 @@ export class CatamorphicCore {
         agentCapabilities: this.agentCapabilities,
         hostId: config.hostId,
         workerNode: config.workerNode,
+        wakeups: this.wakeups,
+        idlePollMs: config.idlePollMs,
         projectManager: this.projectManager,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,
@@ -904,8 +1260,35 @@ export class CatamorphicCore {
         connectionAdmission: this.connectionAdmission,
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
+        workspaces: this.sessionWorkspaces,
+        personalEnvironments: this.personalEnvironments,
+        secrets: this.secrets,
+        ...(config.gatewayUrl
+          ? {
+              sandboxGateway: {
+                url: (args: { projectId: string; sessionId: string }) =>
+                  config.gatewayUrl?.(args),
+                remoteBaseUrls: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.git
+                    ?.remoteBaseUrls,
+                modelApi: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.model
+                    ?.api,
+                servesHttp: (providerKind: string) =>
+                  this.connectionProviderRegistry?.get(providerKind)?.http !==
+                  undefined,
+                turnUsage: async (args: {
+                  sessionId: string;
+                  turnId: string;
+                }) => this.modelGateway?.sessionUsage(args),
+              },
+            }
+          : {}),
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
+        ...(config.onToolAlwaysAllowed
+          ? { onToolAlwaysAllowed: config.onToolAlwaysAllowed }
+          : {}),
         onTurnSettled: async (event) => {
           if (
             event.status === "completed" ||
@@ -969,13 +1352,22 @@ export class CatamorphicCore {
         events: this.projectEvents,
         monitors: this.projectEventMonitors,
         sessions: this.agentSessions,
-        github: this.github,
+        eventSources: this.projectEventSources,
+        wakeups: this.wakeups,
       });
       this.sessionActions = new SessionActionsService(
         this.db,
         this.agentSessions,
         () => this.watchers,
       );
+      this.sessionTerminals = new SessionTerminalsService({
+        db: this.db,
+        sessions: this.agentSessions,
+      });
+      this.sessionPreviews = new SessionPreviewsService({
+        db: this.db,
+        sessions: this.agentSessions,
+      });
       this.agentSessions.setSessionActionHandler(async (input) => {
         const action = SESSION_ACTION_SCHEMAS[input.operation];
         if (!action || !this.sessionActions)
@@ -989,12 +1381,27 @@ export class CatamorphicCore {
       });
     }
   }
+  /**
+   * One pass of durable event delivery (ADR 0138, 0156): retire expired
+   * watchers, then run every active workflow bound to new Project Events
+   * (webhooks, chat events, polled sources). Hosts call it on a timer with
+   * `startEventDispatcher`, whether or not coding agents are configured.
+   */
+  async dispatchEvents(input: { limit?: number } = {}): Promise<number> {
+    await this.watchers?.expireDue(input);
+    return new ProjectEventDispatcher(
+      this.db,
+      this.triggers,
+      this.workflowEnablements,
+    ).dispatch(input);
+  }
+
   private async workflowSessionOrigin(
     context: import("./services/capability-providers.js").HostCallContext,
   ) {
     const run = await this.db
       .selectFrom("workflow_runs")
-      .select(["workflow_enablement_id", "input"])
+      .select(["workflow_enablement_id", "input", "provenance"])
       .where("id", "=", context.runId)
       .where("project_id", "=", context.projectId)
       .executeTakeFirstOrThrow();
@@ -1020,39 +1427,34 @@ export class CatamorphicCore {
       ...previous,
       ...(run.workflow_enablement_id ? [run.workflow_enablement_id] : []),
     ];
-    const author: import("./services/agent-turns-service.js").SessionMessageAuthor =
-      {
-        kind: "workflow",
-        runId: context.runId,
-        workflowName: context.workflowName,
-      };
-    return {
-      author,
-      causation,
-      provenance: {
-        projectId: context.projectId,
-        hostId: this.agentSessions?.hostId ?? "",
-        runId: context.runId,
-        workflowName: context.workflowName,
-        scheduledFor:
-          run.input &&
-          typeof run.input === "object" &&
-          !Array.isArray(run.input) &&
-          typeof run.input.scheduledFor === "string"
-            ? run.input.scheduledFor
-            : null,
-        firedAt:
-          run.input &&
-          typeof run.input === "object" &&
-          !Array.isArray(run.input) &&
-          typeof run.input.firedAt === "string"
-            ? run.input.firedAt
-            : null,
-        enablementId: run.workflow_enablement_id,
-        watcherId: watcher?.id ?? null,
-        sessionId: watcher?.session_id ?? null,
-      },
+    const runInput =
+      run.input && typeof run.input === "object" && !Array.isArray(run.input)
+        ? run.input
+        : {};
+    const author: SessionMessageAuthor = {
+      kind: "workflow",
+      runId: context.runId,
+      workflowName: context.workflowName,
+      ...(run.provenance &&
+      typeof run.provenance === "object" &&
+      !Array.isArray(run.provenance) &&
+      typeof run.provenance.displayName === "string"
+        ? { displayName: run.provenance.displayName }
+        : {}),
+      ...(run.workflow_enablement_id
+        ? { enablementId: run.workflow_enablement_id }
+        : {}),
+      ...(watcher?.session_id
+        ? { watcher: { id: watcher.id, sessionId: watcher.session_id } }
+        : {}),
+      ...(typeof runInput.scheduledFor === "string"
+        ? { scheduledFor: runInput.scheduledFor }
+        : {}),
+      ...(typeof runInput.firedAt === "string"
+        ? { firedAt: runInput.firedAt }
+        : {}),
     };
+    return { author, causation };
   }
 }
 
@@ -1067,132 +1469,4 @@ function requireAllocationId(allocationId: string | null): string {
     throw new Error("Workflow execution requires an Environment Allocation");
   }
   return allocationId;
-}
-
-function sessionDeliveryArgs(value: unknown): {
-  sessionId: string;
-  content: string;
-  mode: "message_only" | "next_turn" | "interrupt";
-  attention?: "required" | "none";
-  idempotencyKey?: string;
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("catamorphic.sessions.deliver expects an object");
-  }
-  const input = value as Record<string, unknown>;
-  if (typeof input.sessionId !== "string" || !input.sessionId) {
-    throw new Error("sessionId must be a non-empty string");
-  }
-  if (typeof input.content !== "string" || !input.content.trim()) {
-    throw new Error("content must be a non-empty string");
-  }
-  if (
-    input.mode !== "message_only" &&
-    input.mode !== "next_turn" &&
-    input.mode !== "interrupt"
-  ) {
-    throw new Error("mode must be message_only, next_turn, or interrupt");
-  }
-  if (
-    input.idempotencyKey !== undefined &&
-    typeof input.idempotencyKey !== "string"
-  ) {
-    throw new Error("idempotencyKey must be a string");
-  }
-  if (
-    input.attention !== undefined &&
-    input.attention !== "none" &&
-    input.attention !== "required"
-  )
-    throw new Error("attention must be none or required");
-  return {
-    attention: input.attention,
-    sessionId: input.sessionId,
-    content: input.content,
-    mode: input.mode,
-    ...(typeof input.idempotencyKey === "string"
-      ? { idempotencyKey: input.idempotencyKey }
-      : {}),
-  };
-}
-
-function sessionWakeArgs(value: unknown): {
-  key: string;
-  content: string;
-  agentSlug?: string;
-  environment?: string;
-  title?: string;
-  mode?: "next_turn" | "interrupt";
-  notification?: { title?: string; body?: string };
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("catamorphic.sessions.wake expects an object");
-  }
-  const input = value as Record<string, unknown>;
-  const requiredString = (name: "key" | "content") => {
-    const item = input[name];
-    if (typeof item !== "string" || !item.trim()) {
-      throw new Error(`${name} must be a non-empty string`);
-    }
-    return item.trim();
-  };
-  const optionalString = (name: string, max: number) => {
-    const item = input[name];
-    if (item === undefined) return undefined;
-    if (typeof item !== "string" || !item.trim() || item.length > max) {
-      throw new Error(
-        `${name} must be a non-empty string up to ${max} characters`,
-      );
-    }
-    return item.trim();
-  };
-  const key = requiredString("key");
-  if (key.length > 200) throw new Error("key must be 200 characters or fewer");
-  const mode = input.mode;
-  if (mode !== undefined && mode !== "next_turn" && mode !== "interrupt") {
-    throw new Error("mode must be next_turn or interrupt");
-  }
-  const notification = input.notification;
-  if (
-    notification !== undefined &&
-    (!notification ||
-      typeof notification !== "object" ||
-      Array.isArray(notification))
-  ) {
-    throw new Error("notification must be an object");
-  }
-  const notificationRecord = notification as
-    | Record<string, unknown>
-    | undefined;
-  const notificationString = (name: "title" | "body", max: number) => {
-    const item = notificationRecord?.[name];
-    if (item === undefined) return undefined;
-    if (typeof item !== "string" || !item.trim() || item.length > max) {
-      throw new Error(
-        `notification.${name} must be a non-empty string up to ${max} characters`,
-      );
-    }
-    return item.trim();
-  };
-  const notificationTitle = notificationString("title", 200);
-  const notificationBody = notificationString("body", 500);
-  const agentSlug = optionalString("agentSlug", 255);
-  const environment = optionalString("environment", 255);
-  const title = optionalString("title", 500);
-  return {
-    key,
-    content: requiredString("content"),
-    ...(agentSlug ? { agentSlug } : {}),
-    ...(environment ? { environment } : {}),
-    ...(title ? { title } : {}),
-    ...(mode ? { mode } : {}),
-    ...(notificationTitle || notificationBody
-      ? {
-          notification: {
-            ...(notificationTitle ? { title: notificationTitle } : {}),
-            ...(notificationBody ? { body: notificationBody } : {}),
-          },
-        }
-      : {}),
-  };
 }

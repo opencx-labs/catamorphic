@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-23
-- **Updated by:** 0026 (pauses are capabilities on canonical Runs)
+- **Updated by:** 0026 (pauses are capabilities on canonical Runs), [0260](0260-every-returned-call-carries-state.md) (every returned call carries state, as pause does)
 
 ## Context
 

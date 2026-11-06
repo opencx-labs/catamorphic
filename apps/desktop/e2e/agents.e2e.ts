@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
+  focusWindow,
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
   workspaceDomHelpersJs,
 } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
  * Agent commands and profile switching, on their own app instance: these
@@ -42,9 +44,9 @@ const helpers = `
     window.dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const paletteInput = () => (
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => document.activeElement === el) ??
-    $$('textarea[aria-label="Search commands, pages, and more"]')
+    $$('[aria-label="Search commands, pages, and more"]')
       .find((el) => !el.closest('[inert]'))
   );
   const wizardVisible = () => {
@@ -80,6 +82,19 @@ const openFreshChat = async (label: string) => {
     { timeoutMs: 30_000, label },
   );
 };
+
+/**
+ * The visible chat's turn has ended: a message sent now starts a turn of
+ * its own instead of reaching the one still finishing (ADR 0240).
+ */
+const settled = (label = "the turn before settled") =>
+  runWait(
+    `return !visibleDock()?.querySelector('[data-testid="chat-stop"]');`,
+    {
+      timeoutMs: 30_000,
+      label,
+    },
+  );
 
 const ensurePalette = async () => {
   await run(
@@ -149,6 +164,8 @@ describe("agents and profiles", () => {
               !byText('[role="tab"], button', 'Set up agent');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+    // Chats as a sidebar list, for the session inspector below.
+    await addSidebarSections(app, [CHATS_SECTION]);
   });
 
   it("hides palette actions that cannot affect the empty workspace", async () => {
@@ -241,8 +258,12 @@ describe("agents and profiles", () => {
     );
     await run(paletteEscape);
 
-    // Focus a chat; the command appears.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // Focus a chat; the command appears. The dock's + floats it (Cmd+N
+    // would open it in the New Tab in front, which Escape does not close).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!visibleDock();`, { label: "chat focused" });
     await ensurePalette();
     await resetPalette();
@@ -281,38 +302,97 @@ describe("agents and profiles", () => {
 
   it("changes the default agent's effort through the effort picker", async () => {
     await openPicker("Change model effort", "Effort");
-    // The current level carries the check chip; the five rows (ADR 0056:
-    // low → max) keep their order (marked, never reordered).
+    // Each level by the harness's own name and nothing else; the current
+    // one carries the check chip, and the five rows (ADR 0056: low → max)
+    // keep their order (marked, never reordered).
+    const levels = `paletteRows().filter((el) => el.dataset.itemId?.startsWith('pick:effort:'))`;
+    const named = (name: string) =>
+      `(${levels}).find((el) => el.dataset.itemId === 'pick:effort:${name}')`;
     await runWait(
-      `const rows = paletteRows();
-       return rows.some((el) => el.textContent.includes('Medium effort') &&
-                                el.querySelector('[data-testid="palette-current"]')) &&
-              rows.some((el) => el.textContent.includes('High effort'));`,
+      `return !!${named("medium")}?.querySelector('[data-testid="palette-current"]') &&
+              !${named("high")}?.querySelector('[data-testid="palette-current"]');`,
       { label: "effort rows with current marker" },
     );
     await runWait(
-      `const rows = paletteRows().filter((el) => el.textContent.includes('effort'));
-       return rows.length === 5 &&
-              rows[0].textContent.includes('Low effort') &&
-              rows[3].textContent.includes('Extra-high effort') &&
-              rows[4].textContent.includes('Max effort');`,
-      { label: "effort rows keep low→max order" },
+      `const rows = ${levels};
+       const names = rows.map((el) => el.querySelector('span.truncate')?.textContent);
+       return JSON.stringify(names) === JSON.stringify(['low', 'medium', 'high', 'xhigh', 'max']) &&
+              rows.every((el) => el.querySelectorAll('span.truncate').length === 1);`,
+      { label: "effort rows keep low→max order, names only" },
     );
-    await run(pickOption("High effort"));
+    await run(
+      `const opt = ${named("high")}; opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); return true;`,
+    );
     await openPicker("Change model effort", "Effort");
     await runWait(
-      `return paletteRows()
-        .some((el) => el.textContent.includes('High effort') &&
-                      el.querySelector('[data-testid="palette-current"]'));`,
+      `return !!${named("high")}?.querySelector('[data-testid="palette-current"]');`,
       { label: "current effort moved to high" },
     );
     await run(paletteEscape);
   });
 
+  it("changes a Claude Code agent's own permission mode through the palette (ADR 0182)", async () => {
+    const before = await app.eval<{ defaultAgentId: string | null }>(
+      `window.catamorphicDesktop.agentsList()`,
+    );
+    const created = await app.eval<{
+      id: string;
+      sandboxing: string;
+      harnessPermissions: { permissionMode?: string };
+    }>(
+      `window.catamorphicDesktop.agentsCreate({harness:'claude-code',auth:'local',name:'Claude modes'})`,
+    );
+    // Tests never run the host's own Claude Code (ADR 0196): Work's copy.
+    expect(
+      await app.eval(`window.catamorphicDesktop.claudeCodeStatus()`),
+    ).toMatchObject({ using: "work", installed: null });
+    // Local agents default to full freedom in both settings (ADR 0140).
+    expect(created.sandboxing).toBe("publish");
+    expect(created.harnessPermissions).toEqual({
+      permissionMode: "bypassPermissions",
+    });
+    const id = JSON.stringify(created.id);
+    await app.eval(`window.catamorphicDesktop.agentsSetDefault(${id})`);
+    // No chat focused: the picker targets the default agent.
+    await openPicker("Change permission mode", "Permission mode");
+    await runWait(
+      `const rows = paletteRows();
+       return rows.length === 6 &&
+              rows[0].textContent.includes('Default') &&
+              rows[5].textContent.includes('Bypass permissions') &&
+              !!rows[5].querySelector('[data-testid="palette-current"]');`,
+      { label: "Claude Code's own modes, bypass current" },
+    );
+    await run(pickOption("Plan"));
+    await runWait(
+      `return window.catamorphicDesktop.agentsList().then((data) =>
+         data.agents.find((agent) => agent.id === ${id})
+           ?.harnessPermissions?.permissionMode === 'plan');`,
+      { label: "permission mode saved on the agent" },
+    );
+    await openPicker("Change permission mode", "Permission mode");
+    await runWait(
+      `return paletteRows().some((el) => el.textContent.includes('Plan') &&
+         el.querySelector('[data-testid="palette-current"]'));`,
+      { label: "current permission mode moved to plan" },
+    );
+    // Agent picker rows name each agent's permission mode.
+    await openPicker("Change default agent", "Default agent");
+    await runWait(
+      `return paletteRows().some((el) =>
+         el.textContent.includes('Claude modes') && el.textContent.includes('Plan'));`,
+      { label: "agent row detail shows the permission mode" },
+    );
+    await run(paletteEscape);
+    await app.eval(
+      `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(before.defaultAgentId)})`,
+    );
+  });
+
   it("clicking beside the picker panel closes the OVERLAY palette (click-away)", async () => {
     // The overlay specifically (Cmd+P) — the New Tab palette is a page and
     // exempt from click-away. Its input takes focus on open.
-    const overlayInput = `$$('textarea[aria-label="Search commands, pages, and more"]')
+    const overlayInput = `$$('[aria-label="Search commands, pages, and more"]')
       .find((el) => el.closest('.fixed') && !el.closest('[inert]'))`;
     await run(
       `if (!(${overlayInput})) pressKey('p', { metaKey: true }); return true;`,
@@ -360,11 +440,31 @@ describe("agents and profiles", () => {
               paletteRows().some((el) => el.textContent.includes('Fake Model B'));`,
       { label: "harness-supplied model rows" },
     );
-    // Aliased ids surface their resolved, versioned id in the faded detail.
+    // Each row is titled by the harness's display name, with the id it
+    // sends beside it: an alias shows its resolved, versioned id.
     await runWait(
-      `return paletteRows().some((el) => el.textContent.includes('fake-model-a-2.1'));`,
-      { label: "resolved id in the model row detail" },
+      `const parts = (id) => {
+         const row = paletteRows().find((el) => el.dataset.itemId === 'pick:model:' + id);
+         return row ? [...row.querySelectorAll('span.truncate')].map((el) => el.textContent) : null;
+       };
+       return JSON.stringify(parts('fake-model-a')) === JSON.stringify(['Fake Model A', 'fake-model-a-2.1']) &&
+              JSON.stringify(parts('fake-model-b')) === JSON.stringify(['Fake Model B', 'fake-model-b']);`,
+      { label: "display name titles, ids beside them" },
     );
+    // Typing finds a model by its name or by an id it shows.
+    for (const query of ["model b", "fake-model-a-2.1"]) {
+      await run(
+        `setReactValue(paletteInput(), ${JSON.stringify(query)}); return true;`,
+      );
+      await runWait(
+        `return paletteRows()[0]?.dataset.itemId === ${JSON.stringify(
+          query === "model b"
+            ? "pick:model:fake-model-b"
+            : "pick:model:fake-model-a",
+        )};`,
+        { label: `search "${query}" finds its model first` },
+      );
+    }
     await run(`setReactValue(paletteInput(), 'my-custom-model'); return true;`);
     await runWait(pickOption('Use "my-custom-model"'), {
       label: "typed model row",
@@ -404,7 +504,7 @@ describe("agents and profiles", () => {
     await runWait(
       `const chip = $('[data-testid="palette-mode-chip"]');
        return !!chip && chip.textContent.includes('Ask agent') &&
-              paletteInput().value === '';`,
+              (paletteInput().value ?? paletteInput().textContent) === '';`,
       { label: "agent chip committed from 'chat'" },
     );
     await resetPalette();
@@ -452,7 +552,7 @@ describe("agents and profiles", () => {
     `);
 
     await run(
-      `byText('button[aria-haspopup="menu"]', 'Default Profile').click(); return true;`,
+      `byText('button[aria-haspopup="dialog"]', 'Default Profile').click(); return true;`,
     );
     await runWait(`return !!byText('button', 'New profile');`, {
       label: "profile menu open",
@@ -471,14 +571,14 @@ describe("agents and profiles", () => {
     await runWait(
       `return window.__veilSeen === true &&
               !$('[class*="animate-profile-veil"]') &&
-              !!byText('button[aria-haspopup="menu"]', 'Work');`,
+              !!byText('button[aria-haspopup="dialog"]', 'Work');`,
       { timeoutMs: 15_000, label: "veil played and settled on Work" },
     );
 
     // The fresh profile's Default Project only has onboarding, which also
     // counts as empty. Switching back restores the previously selected project.
     await run(
-      `byText('button[aria-haspopup="menu"]', 'Work').click(); return true;`,
+      `byText('button[aria-haspopup="dialog"]', 'Work').click(); return true;`,
     );
     await runWait(`return !!byText('button', 'Default Profile');`, {
       label: "profile menu lists Default Profile",
@@ -486,7 +586,7 @@ describe("agents and profiles", () => {
     await run(`byText('button', 'Default Profile').click(); return true;`);
     await runWait(
       `return !$('[class*="animate-profile-veil"]') &&
-              !!byText('button[aria-haspopup="menu"]', 'Default Profile') &&
+              !!byText('button[aria-haspopup="dialog"]', 'Default Profile') &&
               !!byText('[role="tab"], button', 'New Tab');`,
       { timeoutMs: 15_000, label: "back on the default profile workspace" },
     );
@@ -497,7 +597,7 @@ describe("agents and profiles", () => {
     // thus its highlight) after Escape, so the clear-on-close behavior
     // belongs to the overlay only.
     const overlayInput = `(
-      $$('textarea[aria-label="Search commands, pages, and more"]')
+      $$('[aria-label="Search commands, pages, and more"]')
         .find((el) => el.closest('.fixed') && !el.closest('[inert]'))
     )`;
     const ensureOverlay = async () => {
@@ -539,8 +639,12 @@ describe("agents and profiles", () => {
     });
 
     // With a floating chat focused, session-scoped commands target it:
-    // the dock's border goes accent while the row is highlighted.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // the dock's border goes accent while the row is highlighted. The
+    // dock's + floats it over the New Tab (Cmd+N would open it there).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!visibleDock();`, { label: "chat focused" });
     await ensureOverlay();
     await run(`setReactValue(${overlayInput}, '>switch agent'); return true;`);
@@ -727,6 +831,11 @@ describe("agents and profiles", () => {
 
   it("a successful reconnect retries the failed turn on its own", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    await settled();
+    // An earlier turn recovered the same way: this one's recovery is the next.
+    const recovered = `return $$('[role="log"] article')
+      .filter((el) => el.textContent.includes('Recovered after reconnecting.')).length;`;
+    const before = await run<number>(recovered);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'one more auth error please');
@@ -736,21 +845,24 @@ describe("agents and profiles", () => {
     // Account-auth OpenRouter agent → the card offers a one-click
     // reconnect beside Retry.
     await runWait(
-      `return !!$('[data-testid="chat-error-card"]') &&
-              !!$('[data-testid="chat-reauth"]');`,
+      `return !!visibleDock()?.querySelector('[data-testid="chat-error-card"]:not([inert], [inert] *)') &&
+              !!visibleDock()?.querySelector('[data-testid="chat-reauth"]:not([inert], [inert] *)');`,
       { timeoutMs: 30_000, label: "reconnect button on the auth card" },
     );
-    await run(`$('[data-testid="chat-reauth"]').click(); return true;`);
+    await runWait(
+      `const button = visibleDock()?.querySelector('[data-testid="chat-reauth"]:not([inert], [inert] *)');
+      if (!button) return false; button.click(); return true;`,
+      { label: "active reconnect control" },
+    );
     // The e2e login stub completes ~immediately and stamps a NEW key —
     // which rebuilds the provider (production PKCE parity), so this
     // retry runs against a freshly re-anchored harness session. The
     // successful reconnect must retry the failed turn WITHOUT another
     // click or message.
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('Recovered after reconnecting.'));`,
-      { timeoutMs: 30_000, label: "reconnect auto-retried the turn" },
-    );
+    await runWait(`return (() => { ${recovered} })() > ${before};`, {
+      timeoutMs: 30_000,
+      label: "reconnect auto-retried the turn",
+    });
     // The dead-retry regression: a re-anchored session routed through the
     // harness's native re-run answered "nothing to retry" forever. That
     // wording (old or new) must never land in the transcript here.
@@ -766,18 +878,56 @@ describe("agents and profiles", () => {
 
   it("auto-retries rate-limited turns with a visible countdown", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    // The recovered turn may still be finishing: a message now would reach
+    // it rather than start a turn of its own (ADR 0240).
+    await settled();
+    // The ticker lives only for the 5 s backoff, and a loaded host can
+    // spend that between two polls: record it as it renders instead.
     await run(`
+      window.__retryTickerSeen = false;
+      window.__retryTickerObserver?.disconnect();
+      window.__retryTickerObserver = new MutationObserver(() => {
+        if ($('[data-testid="chat-error-card"]') && $('[data-testid="chat-auto-retry"]')) {
+          window.__retryTickerSeen = true;
+          window.__retryTickerObserver.disconnect();
+        }
+      });
+      window.__retryTickerObserver.observe(document.body, { childList: true, subtree: true });
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'please hit a rate limit');
       ta.closest('form').requestSubmit();
       return true;
     `);
     // The failure surfaces as a friendly card WITH the auto-retry ticker…
-    await runWait(
-      `return !!$('[data-testid="chat-error-card"]') &&
-              !!$('[data-testid="chat-auto-retry"]');`,
-      { timeoutMs: 30_000, label: "rate-limit card with auto-retry ticker" },
-    );
+    try {
+      await runWait(`return window.__retryTickerSeen === true;`, {
+        timeoutMs: 30_000,
+        label: "rate-limit card with auto-retry ticker",
+      });
+    } catch (error) {
+      console.log(
+        "rate-limit-debug:",
+        JSON.stringify(
+          await app.eval<unknown>(`(async () => { ${helpers}
+            const { url } = await window.catamorphicDesktop.getServerState();
+            const { items: projects } = await fetch(url + '/api/projects').then((r) => r.json());
+            const turns = [];
+            for (const project of projects) {
+              const { items } = await fetch(url + '/api/projects/' + project.id + '/agent/sessions').then((r) => r.json());
+              for (const session of items) {
+                const detail = await fetch(url + '/api/projects/' + project.id + '/agent/sessions/' + session.id).then((r) => r.json());
+                for (const turn of detail.snapshot.turns) {
+                  const input = detail.snapshot.items.find((item) => item.id === turn.inputItemId);
+                  turns.push([session.title, turn.ordinal, turn.status, turn.attemptCount, turn.retryAt, input?.text?.slice(0, 40), turn.error?.message?.slice(0, 60), turn.updatedAt]);
+                }
+              }
+            }
+            return { turns, dock: visibleDock()?.querySelector('[role="log"]')?.textContent.slice(-1500), now: new Date().toISOString() };
+          })()`),
+        ),
+      );
+      throw error;
+    }
     // …and the scheduled retry (5s backoff) recovers without user action.
     await runWait(
       `return $$('[role="log"] article')
@@ -786,15 +936,88 @@ describe("agents and profiles", () => {
     );
   });
 
-  it("queues messages during a turn; edits hold their place until done", async () => {
+  it("reaches the working agent with a message sent meanwhile, and interrupts for it on request", async () => {
+    const interrupted = `return $$('[role="log"] div')
+      .filter((el) => el.textContent.trim() === 'Interrupted').length;`;
+    const before = await run<number>(interrupted);
     await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly and wait for interruption');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+      { timeoutMs: 30_000, label: "slow turn running" },
+    );
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'use the blue one');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    const sent = `$$('[role="log"] article[data-user-message]')
+      .find((el) => el.textContent.includes('use the blue one'))`;
+    // In the conversation at once, never queued: unread until the agent's
+    // next step (ADR 0240).
+    await runWait(
+      `const message = ${sent};
+      return !!message &&
+        message.querySelector('[data-testid="chat-unread-line"]')?.dataset.unread === 'true' &&
+        message.querySelector('[data-testid="chat-unread-state"]')?.textContent === 'Not read yet' &&
+        // Offered once the session holds the message, not while it sends.
+        !!message.querySelector('[data-testid="chat-steer-now"]') &&
+        $$('[data-testid="chat-queued-message"]').length === 0;`,
+      { timeoutMs: 20_000, label: "unread message in the conversation" },
+    );
+    await run(`
+      ${sent}.querySelector('[data-testid="chat-steer-now"]').click();
+      return true;
+    `);
+    // The agent stops its step and reads it, in the same turn.
+    await runWait(
+      `return !${sent}.querySelector('[data-unread]') &&
+        $$('[role="log"] article').some((el) =>
+          el.textContent.includes('take in these messages') && el.textContent.includes('use the blue one'));`,
+      { timeoutMs: 30_000, label: "read now, in the same turn" },
+    );
+    expect(await run<number>(interrupted)).toBe(before);
+  });
+
+  describe("with queueing on", () => {
+    // Saved preferences reach the window through a file watch, after the
+    // save returns: wait until the window has heard.
+    const setQueueing = async (on: boolean) => {
+      const already = await app.eval<boolean>(
+        `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.chatQueueMessages === ${on})`,
+      );
+      if (already) return;
+      await app.eval(`(() => {
+        window.__queueHeard = undefined;
+        window.__queueUnsubscribe?.();
+        window.__queueUnsubscribe = window.catamorphicDesktop.onPrefsChanged(
+          (prefs) => { window.__queueHeard = prefs.chatQueueMessages; });
+        return window.catamorphicDesktop
+          .setPrefs({ chatQueueMessages: ${on} })
+          .then(() => true);
+      })()`);
+      await app.waitFor(`window.__queueHeard === ${on}`, {
+        label: "the window heard the queue preference",
+      });
+    };
+    beforeAll(() => setQueueing(true));
+    afterAll(() => setQueueing(false));
+
+    it("queues messages during a turn; edits hold their place until done", async () => {
+      await settled();
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly please');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    // Queue two while the slow turn runs: one to edit, one to delete.
-    await run(`
+      // Queue two while the slow turn runs: one to edit, one to delete.
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'wrong words');
       ta.closest('form').requestSubmit();
@@ -802,159 +1025,230 @@ describe("agents and profiles", () => {
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(
-      `return $$('[data-testid="chat-queued-message"]').length === 2;`,
-      { label: "two queued ghost bubbles" },
-    );
-    // Delete the second straight away.
-    await run(`
+      await runWait(
+        `return $$('[data-testid="chat-queued-message"]').length === 2;`,
+        { label: "two queued ghost bubbles" },
+      );
+      // Delete the second straight away.
+      await run(`
       const items = $$('[data-testid="chat-queued-message"]');
       items[1].querySelector('[data-testid="chat-queued-delete"]').click();
       return true;
     `);
-    await runWait(
-      `return $$('[data-testid="chat-queued-message"]').length === 1;`,
-      { label: "queued message deleted (animated out)" },
-    );
-    // Start editing the head; its dispatch must WAIT for the edit even
-    // after the slow turn finishes.
-    await run(`
+      await runWait(
+        `return $$('[data-testid="chat-queued-message"]').length === 1;`,
+        { label: "queued message deleted (animated out)" },
+      );
+      // Start editing the head; its dispatch must WAIT for the edit even
+      // after the slow turn finishes.
+      await run(`
       $('[data-testid="chat-queued-message"]')
         .querySelector('[aria-label="Edit queued message"]').click();
       return true;
     `);
-    await runWait(`return !!$('[data-testid="chat-queued-edit"]');`, {
-      label: "inline queue editor",
-    });
-    await run(`
+      await runWait(`return !!$('[data-testid="chat-queued-edit"]');`, {
+        label: "inline queue editor",
+      });
+      await run(`
       setReactValue($('[data-testid="chat-queued-edit"]'), 'actually right words');
       return true;
     `);
-    // Slow turn (4s) settles while the edit is open — nothing dispatches.
-    await runWait(
-      `return $$('[role="log"] article')
+      // Slow turn (4s) settles while the edit is open — nothing dispatches.
+      await runWait(
+        `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('Done after a long think.'));`,
-      { timeoutMs: 30_000, label: "slow turn finished during the edit" },
-    );
-    const dispatchedEarly = await run<boolean>(`
+        { timeoutMs: 30_000, label: "slow turn finished during the edit" },
+      );
+      const dispatchedEarly = await run<boolean>(`
       return $$('[role="log"] article')
         .some((el) => el.textContent.includes('You said: wrong words') ||
                       el.textContent.includes('You said: actually right words'));
     `);
-    if (dispatchedEarly) {
-      throw new Error("queued message dispatched while it was being edited");
-    }
-    // Rejected edits keep both the local draft and the server hold.
-    await app.blockRequests(["*/agent/sessions/*/turns/*"]);
-    await run(`
+      if (dispatchedEarly) {
+        throw new Error("queued message dispatched while it was being edited");
+      }
+      // Rejected edits keep both the local draft and the server hold.
+      await app.blockRequests(["*/agent/sessions/*/commands"]);
+      await run(`
       $('[data-testid="chat-queued-edit"]').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}));
       return true;
     `);
-    await runWait(
-      `return !!$('[data-testid="chat-queued-message"] [role="alert"]') && $('[data-testid="chat-queued-edit"]')?.value === 'actually right words';`,
-      { label: "failed queue edit preserves the draft" },
-    );
-    await app.blockRequests([]);
-    // Committing again releases the successfully updated queue entry.
-    await run(`
+      await runWait(
+        `return !!$('[data-testid="chat-queued-message"] [role="alert"]') && $('[data-testid="chat-queued-edit"]')?.value === 'actually right words';`,
+        { label: "failed queue edit preserves the draft" },
+      );
+      await app.blockRequests([]);
+      // Committing again releases the successfully updated queue entry.
+      await run(`
       const editor = $('[data-testid="chat-queued-edit"]');
       editor.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Enter', bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(
-      `return $$('[role="log"] article')
+      await runWait(
+        `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('You said: actually right words'));`,
-      { timeoutMs: 30_000, label: "edited queued message sent after commit" },
-    );
-  });
+        { timeoutMs: 30_000, label: "edited queued message sent after commit" },
+      );
+    });
 
-  it("send-now and Cmd+Enter interrupt the running turn", async () => {
-    // Wait until the provider is anchored and handling the slow turn before
-    // queueing. A completed turn earlier in this shared transcript also says
-    // "Working on it", so the live activity is the synchronization point.
-    await run(`
+    it("send-now and Cmd+Enter interrupt the running turn", async () => {
+      // Wait until the provider is anchored and handling the slow turn before
+      // queueing. A completed turn earlier in this shared transcript also says
+      // "Working on it", so the live activity is the synchronization point.
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly and wait for interruption');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(
-      `return $('[role="log"] span.animate-pulse')?.textContent.trim() === 'Waiting...';`,
-      { timeoutMs: 30_000, label: "first slow turn running" },
-    );
-    // Queue behind the running turn, then promote via the bubble's send-now.
-    await run(`
+      await runWait(
+        `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+        { timeoutMs: 30_000, label: "first slow turn running" },
+      );
+      // Queue behind the running turn, then promote via the bubble's send-now.
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'urgent now');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(
-      `return $$('[data-testid="chat-queued-message"]').length === 1;`,
-      { label: "queued behind the slow turn" },
-    );
-    await run(`
-      $('[data-testid="chat-queued-send-now"]').click();
-      return true;
-    `);
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('You said: urgent now'));`,
-      { timeoutMs: 30_000, label: "promoted message answered" },
-    );
-    try {
       await runWait(
-        `return $$('[role="log"] div')
-          .some((el) => el.textContent.trim() === 'Interrupted');`,
-        { label: "interrupted note for the aborted turn" },
+        `return $$('[data-testid="chat-queued-message"]').length === 1;`,
+        { label: "queued behind the slow turn" },
       );
-    } catch (error) {
-      console.log(
-        "interrupt-debug:",
-        JSON.stringify(
-          await run<unknown>(`
+      // Every frame from the press until the message has arrived: the bubble
+      // looks sent at once, and the message takes over where it was, already
+      // shown, rather than rising in anew somewhere else.
+      type Box = { top: number; right: number };
+      const handover = await run<{
+        sending: boolean;
+        bubble: Box | null;
+        arrived: (Box & { opacity: number }) | null;
+      }>(`
+      const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, right: r.right }; };
+      let bubble = null;
+      let sending = false;
+      $('[data-testid="chat-queued-send-now"]').click();
+      return new Promise((resolve) => {
+        const started = performance.now();
+        const sample = () => {
+          const queued = $('[data-testid="chat-queued-message"]');
+          if (queued) {
+            bubble = box(queued.firstElementChild);
+            sending ||= queued.dataset.sending === 'true' &&
+              queued.querySelector('[data-testid="chat-queued-state"]')?.textContent === 'Sending';
+          }
+          const message = $$('[role="log"] article[data-user-message]')
+            .find((el) => el.textContent.includes('urgent now'));
+          if (message) {
+            resolve({ sending, bubble, arrived: { ...box(message), opacity: Number(getComputedStyle(message).opacity) } });
+            return;
+          }
+          if (performance.now() - started > 20000) resolve({ sending, bubble, arrived: null });
+          else requestAnimationFrame(sample);
+        };
+        sample();
+      });
+    `);
+      expect(handover.sending, JSON.stringify(handover)).toBe(true);
+      expect(
+        handover.arrived?.opacity,
+        JSON.stringify(handover),
+      ).toBeGreaterThan(0.9);
+      expect(
+        Math.abs((handover.arrived?.top ?? 0) - (handover.bubble?.top ?? 1e6)),
+        JSON.stringify(handover),
+      ).toBeLessThan(8);
+      expect(
+        Math.abs(
+          (handover.arrived?.right ?? 0) - (handover.bubble?.right ?? 1e6),
+        ),
+        JSON.stringify(handover),
+      ).toBeLessThan(8);
+      await runWait(
+        `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: urgent now'));`,
+        { timeoutMs: 30_000, label: "promoted message answered" },
+      );
+      try {
+        await runWait(
+          `return $$('[role="log"] div')
+          .some((el) => el.textContent.trim() === 'Interrupted');`,
+          { label: "interrupted note for the aborted turn" },
+        );
+      } catch (error) {
+        console.log(
+          "interrupt-debug:",
+          JSON.stringify(
+            await run<unknown>(`
             return $$('[role="log"] article, [role="log"] .italic')
               .map((el) => el.textContent.trim().slice(0, 60)).slice(-8);
           `),
-        ),
-      );
-      console.log(
-        "app-tail:",
-        app
-          .getOutput()
-          .split("\n")
-          .filter(
-            (line) => line.includes("[fake]") || line.includes("interrupt"),
-          )
-          .slice(-10)
-          .join("\n"),
-      );
-      throw error;
-    }
+          ),
+        );
+        console.log(
+          "app-tail:",
+          app
+            .getOutput()
+            .split("\n")
+            .filter(
+              (line) => line.includes("[fake]") || line.includes("interrupt"),
+            )
+            .slice(-10)
+            .join("\n"),
+        );
+        throw error;
+      }
 
-    // Cmd+Enter from the composer takes the same fast path.
-    await run(`
+      // Cmd+Enter from the composer takes the same fast path.
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly and wait for interruption');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(
-      `return $('[role="log"] span.animate-pulse')?.textContent.trim() === 'Waiting...';`,
-      { timeoutMs: 30_000, label: "second slow turn running" },
-    );
-    await run(`
+      await runWait(
+        `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+        { timeoutMs: 30_000, label: "second slow turn running" },
+      );
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'jump the line');
       ta.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Enter', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(
-      `return $$('[role="log"] article')
+      await runWait(
+        `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('You said: jump the line'));`,
-      { timeoutMs: 30_000, label: "Cmd+Enter message answered immediately" },
+        { timeoutMs: 30_000, label: "Cmd+Enter message answered immediately" },
+      );
+    });
+  });
+
+  it("the send button stops a running turn when there is nothing to send", async () => {
+    await settled();
+    const interrupted = `return $$('[role="log"] div')
+      .filter((el) => el.textContent.trim() === 'Interrupted').length;`;
+    const before = await run<number>(interrupted);
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly and wait for interruption');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+      { timeoutMs: 30_000, label: "slow turn running" },
+    );
+    await runWait(`return !!$('[data-testid="chat-stop"]');`, {
+      label: "stop button while the agent works",
+    });
+    await run(`$('[data-testid="chat-stop"]').click(); return true;`);
+    await runWait(
+      `return (() => { ${interrupted} })() > ${before} && !$('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "turn stopped, send button back" },
     );
   });
 
@@ -990,18 +1284,32 @@ describe("agents and profiles", () => {
     );
   });
 
-  it("terminal chips appear, spin only while the command runs, and survive tab open/close", async () => {
+  it("a terminal chip spins while its command runs and leaves with it; an open tab keeps the output until closed", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
-    // A slow-ish command: the chip must spin DURING it and stop AFTER.
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal: sleep 3 && echo chip-done');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
+    // An agent terminal lives as long as its command (ADR 0223), so a
+    // terminal chip in this app is one whose command still runs.
+    const chip = `$('[data-testid="chip"][data-kind="terminal"]')`;
+    const tabs = `$$('[data-point-key]').filter((el) =>
+      (el.getAttribute('data-point-key') ?? '').startsWith('terminal:'))`;
+    const send = (text: string) =>
+      run(`
+        const ta = visibleDock().querySelector('[data-composer-input]');
+        setReactValue(ta, ${JSON.stringify(text)});
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+    const reply = (marker: string) =>
+      runWait<string>(
+        `return $$('[role="log"] article').find((el) =>
+           el.textContent.includes(${JSON.stringify(marker)}) &&
+           el.textContent.includes('terminal result'))?.textContent ?? false;`,
+        { timeoutMs: 30_000, label: `${marker} returned to the agent` },
+      );
+    // A slow-ish command: the chip must spin DURING it and leave AFTER.
+    await send("terminal: sleep 3 && echo chip-done");
     try {
       await runWait(
-        `return !!$('[data-testid="surface-chip"][data-active]');`,
+        `return ${chip}?.getAttribute('data-signal') === 'working';`,
         {
           timeoutMs: 30_000,
           label: "chip spinning while the command runs",
@@ -1013,8 +1321,8 @@ describe("agents and profiles", () => {
         JSON.stringify(
           await run<unknown>(`
             return {
-              chips: $$('[data-testid="surface-chip"]').map((el) => ({
-                active: el.hasAttribute('data-active'),
+              chips: $$('[data-testid="chip"]').map((el) => ({
+                active: el.getAttribute('data-signal') === 'working',
                 text: el.textContent.trim().slice(0, 30),
               })),
               lastArticles: $$('[role="log"] article')
@@ -1025,108 +1333,102 @@ describe("agents and profiles", () => {
       );
       throw error;
     }
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('chip-done'));`,
-      { timeoutMs: 30_000, label: "command output returned to the agent" },
-    );
-    // Command over, shell still alive: the spinner must be OFF.
-    await runWait(
-      `return !!$('[data-testid="surface-chip"]') &&
-              !$('[data-testid="surface-chip"][data-active]');`,
-      { timeoutMs: 15_000, label: "chip idle once the command finished" },
-    );
-
     // The agent's terminal is BACKGROUND: a chip on the rail, but no
     // workspace tab (strip tabs carry their key as data-point-key) —
-    // run_terminal must not move the user's view.
+    // a background command must not move the user's view.
     await run(`
-      const keys = $$('[data-point-key]')
-        .map((el) => el.getAttribute('data-point-key') ?? '')
-        .filter((key) => key.startsWith('terminal:'));
+      const keys = ${tabs}.map((el) => el.getAttribute('data-point-key'));
       if (keys.length > 0) {
-        throw new Error('run_terminal opened a workspace tab: ' + keys.join(' | '));
+        throw new Error('a background command opened a workspace tab: ' + keys.join(' | '));
       }
       return true;
     `);
+    await reply("chip-done");
+    // Command over: its shell ended, and its chip left the chat.
+    await runWait(`return !${chip};`, {
+      timeoutMs: 15_000,
+      label: "chip gone once the command finished",
+    });
 
-    // Open the chip as a tab, close the tab — later chats must still get
-    // their chips (regression: this used to strand future attachments).
+    // Opened as a tab while it runs, a terminal keeps showing what it
+    // printed once its command ends, until the person closes it.
+    await send("terminal: sleep 5 && echo tab-done");
+    await runWait(
+      `return ${chip}?.getAttribute('data-signal') === 'working';`,
+      {
+        timeoutMs: 30_000,
+        label: "second command running",
+      },
+    );
+    await run(
+      `${chip}.querySelector('[data-chip-main]').click(); return true;`,
+    );
+    await runWait(`return ${tabs}.length === 1;`, {
+      label: "terminal open as a tab",
+    });
+    const terminalId = /terminalId\W+([0-9a-f-]{36})/.exec(
+      await reply("tab-done"),
+    )?.[1];
+    if (!terminalId) throw new Error("the reply names no terminal");
+    await runWait(
+      `return ${tabs}.length === 1 && ${chip}?.getAttribute('data-signal') !== 'working';`,
+      {
+        timeoutMs: 15_000,
+        label: "ended terminal's tab stays, idle",
+      },
+    );
+    expect(
+      await app.eval<{ buffer: string; running: boolean } | null>(
+        `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(terminalId)})`,
+      ),
+    ).toMatchObject({
+      running: false,
+      buffer: expect.stringContaining("tab-done"),
+    });
+    // Closing it is final: no chip comes back for a shell that is gone.
     await run(`
-      $('[data-testid="surface-chip"] button').click();
+      ${tabs}[0].querySelector('button[aria-label^="Close "]').click();
       return true;
     `);
-    await runWait(
-      `return !!$('[data-point-key^="terminal:"] button[aria-label^="Close "]');`,
-      { label: "terminal open as a tab" },
-    );
-    await run(`
-      $('[data-point-key^="terminal:"] button[aria-label^="Close "]').click();
-      return true;
-    `);
-    // Closing an agent-controlled terminal's tab backgrounds it: the tab
-    // is gone, but the chip (and the shell behind it) survives.
-    await runWait(
-      `return !$$('[data-point-key]').some((el) =>
-        (el.getAttribute('data-point-key') ?? '').startsWith('terminal:')) &&
-        !!$('[data-testid="surface-chip"]');`,
-      { label: "closed agent terminal returns to a chip" },
-    );
+    await runWait(`return ${tabs}.length === 0 && !${chip};`, {
+      label: "closed ended terminal leaves no chip",
+    });
+
+    // Later chats still get their chips (regression: closing a terminal
+    // tab used to strand future attachments).
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "fresh chat open" });
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal: echo chip-two');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    await runWait(
-      // The user prompt also contains chip-two. Wait for the completed tool
-      // result before the next scenario extracts its terminalId.
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('chip-two') &&
-                      el.textContent.includes('terminal result'));`,
-      { timeoutMs: 30_000, label: "second run returned output" },
-    );
-    await runWait(
-      `return !!visibleDock().querySelector('[data-testid="surface-chip"]');`,
-      { timeoutMs: 15_000, label: "new chat still gets its terminal chip" },
-    );
-  });
+    await send("terminal: sleep 3 && echo chip-two");
+    await runWait(`return !!${chip};`, {
+      timeoutMs: 15_000,
+      label: "new chat still gets its terminal chip",
+    });
+    await reply("chip-two");
+    await runWait(`return !${chip};`, {
+      timeoutMs: 15_000,
+      label: "new chat's chip gone once its command finished",
+    });
 
-  it("agents can target an existing terminal by id", async () => {
-    // Reuse the terminal from the previous message instead of opening
-    // another tab: extract its id from the tool result in the timeline.
-    const terminalId = await run<string | null>(`
-      const texts = $$('[role="log"] article').map((el) => el.textContent);
-      for (const text of texts.reverse()) {
-        const match = /"terminalId":"([0-9a-f-]+)"/.exec(text);
-        if (match) return match[1];
-      }
-      return null;
-    `);
-    if (!terminalId) throw new Error("no terminalId in prior tool results");
-    const tabsBefore = await run<number>(
-      `return $$('[data-testid="surface-chip"]').length;`,
-    );
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal @${terminalId}: echo targeted-run');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
+    // Stopped by its agent, a command leaves no spinning chip behind.
+    await send("stop: sleep 60");
     await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('targeted-run') &&
-                      el.textContent.includes('terminal result'));`,
-      { timeoutMs: 30_000, label: "targeted run returned output" },
+      `return ${chip}?.getAttribute('data-signal') === 'working';`,
+      {
+        timeoutMs: 30_000,
+        label: "chip spinning before the stop",
+      },
     );
-    const tabsAfter = await run<number>(
-      `return $$('[data-testid="surface-chip"]').length;`,
+    await runWait(
+      `return $$('[role="log"] article').some((el) =>
+        el.textContent.includes('Stopped it') && el.textContent.includes('stopped'));`,
+      { timeoutMs: 30_000, label: "agent stopped its command" },
     );
-    if (tabsAfter > tabsBefore) {
-      throw new Error("targeting an existing terminal opened a new one");
-    }
+    await runWait(
+      `return !${chip} &&
+         [...visibleDock().querySelectorAll('[data-testid="chat-background-status"]')]
+           .some((el) => el.textContent === 'Stopped command in background');`,
+      { timeoutMs: 15_000, label: "stopped command's chip gone" },
+    );
   });
 
   it("marks agent switches in the transcript", async () => {
@@ -1142,10 +1444,13 @@ describe("agents and profiles", () => {
       label: "switch-agent picker",
     });
     await runWait(pickOption("Second Fake"), { label: "pick Second Fake" });
+    // The switch round-trips through the server, lands as a streamed marker
+    // and then names the agent from a refetched roster: bounded like the
+    // other server round trips in this file, not like a local render.
     await runWait(
       `return $$('[role="log"] div')
         .some((el) => el.textContent.trim() === 'Switched to Second Fake');`,
-      { timeoutMs: 15_000, label: "agent-change marker in the timeline" },
+      { timeoutMs: 30_000, label: "agent-change marker in the timeline" },
     );
   });
 
@@ -1203,6 +1508,7 @@ describe("agents and profiles", () => {
       throw new Error(`Unexpected coordination result: ${coordinationResult}`);
     }
 
+    await settled("coordination turn settled");
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'terminal: git show --format= --name-only HEAD && pwd');
@@ -1226,10 +1532,110 @@ describe("agents and profiles", () => {
     );
     await app.press("Enter");
     await runWait(
-      `const inspector = $('[data-testid="session-inspector-content"]');
-       return inspector?.textContent.includes('Checkout') &&
-         inspector.textContent.includes('catamorphic/');`,
+      `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+       return folder?.dataset.folderKind === 'managed' &&
+         folder.textContent.includes('work/');`,
       { label: "active chat isolated checkout in session status" },
+    );
+  });
+
+  it("gives a chat its own worktree from the palette and brings its changes back from the popup", async () => {
+    // The previous test leaves its chat's status popup open.
+    if (
+      await run<boolean>(
+        `return !!$('[data-testid="session-inspector-content"]');`,
+      )
+    )
+      await app.press("Escape");
+    await runWait(`return !$('[data-testid="session-inspector-content"]');`, {
+      label: "earlier status popup closed",
+    });
+    await ensurePalette();
+    await resetPalette();
+    await run(
+      `setReactValue(paletteInput(), 'New chat in a worktree'); return true;`,
+    );
+    await runWait(pickOption("New chat in a worktree"), {
+      label: "new worktree chat action",
+    });
+    await runWait(
+      `return !!visibleDock()?.querySelector('[data-testid="session-inspector-worktree"]');`,
+      { label: "worktree chat shows its branch mark" },
+    );
+    const openFolder = async (label: string, expression: string) => {
+      await run(
+        `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').focus(); return true;`,
+      );
+      await app.press("Enter");
+      await runWait(
+        `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+         return !!folder && (${expression});`,
+        { timeoutMs: 30_000, label },
+      );
+    };
+    const closeFolder = async () => {
+      await app.press("Escape");
+      await runWait(`return !$('[data-testid="session-inspector-content"]');`, {
+        label: "status popup closed",
+      });
+    };
+    await openFolder(
+      "a new chat's worktree comes with its first message",
+      `folder.dataset.folderKind === 'managed' &&
+       folder.textContent.includes('with the first message')`,
+    );
+    await closeFolder();
+
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'terminal: printf "from the chat\\\\n" > chat-made.txt && pwd');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return [...visibleDock().querySelectorAll('[role="log"] article')].some((el) =>
+         el.textContent.includes('terminal result:') &&
+         el.textContent.includes('/worktrees/'));`,
+      { timeoutMs: 30_000, label: "first turn ran in the chat's own worktree" },
+    );
+
+    await openFolder(
+      "the popup names the worktree and its change",
+      `folder.textContent.includes('work/') &&
+       folder.textContent.includes('1 changed file') &&
+       !!folder.querySelector('[data-folder-action="bring"]:not([disabled])')`,
+    );
+    await run(
+      `$('[data-testid="chat-folder"] [data-folder-action="bring"]').click(); return true;`,
+    );
+    await runWait(
+      `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+       return !!folder && folder.dataset.folderKind === 'primary' &&
+         folder.textContent.includes('Brought 1 changed file to the project folder.');`,
+      { timeoutMs: 30_000, label: "changes brought to the project folder" },
+    );
+    await closeFolder();
+    await runWait(
+      `return !visibleDock()?.querySelector('[data-testid="session-inspector-worktree"]');`,
+      { label: "branch mark gone once back in the project folder" },
+    );
+
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'terminal: cat chat-made.txt && rm chat-made.txt && pwd');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const results = [...visibleDock().querySelectorAll('[role="log"] article')]
+         .filter((el) => el.textContent.includes('terminal result:'));
+       const last = results.at(-1)?.textContent ?? '';
+       return results.length >= 2 && last.includes('from the chat') &&
+         !last.includes('/worktrees/');`,
+      {
+        timeoutMs: 30_000,
+        label: "the next turn works in the project folder with the change",
+      },
     );
   });
 
@@ -1290,6 +1696,7 @@ describe("agents and profiles", () => {
         label: "agent-created PDF",
       },
     );
+    await settled("PDF turn settled");
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'show: file:artifact.pdf');
@@ -1298,7 +1705,7 @@ describe("agents and profiles", () => {
     `);
     await runWait(
       `const chip = visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');
+         '[data-testid="chip"][data-kind="browser"]');
        const view = $$('webview').find((candidate) =>
          decodeURIComponent(candidate.src ?? '').endsWith('/artifact.pdf'));
        return !!chip && chip.textContent.includes('artifact.pdf') &&
@@ -1308,8 +1715,9 @@ describe("agents and profiles", () => {
   });
 
   it("rejects opening a directory without adding a broken surface", async () => {
+    await settled();
     const before = await run<number>(
-      `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
+      `return visibleDock().querySelectorAll('[data-testid="chip"]').length;`,
     );
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
@@ -1323,7 +1731,7 @@ describe("agents and profiles", () => {
     );
     expect(
       await run<number>(
-        `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
+        `return visibleDock().querySelectorAll('[data-testid="chip"]').length;`,
       ),
     ).toBe(before);
   });
@@ -1331,8 +1739,8 @@ describe("agents and profiles", () => {
   it("centers the surface chip actions vertically", async () => {
     await runWait(
       `const chip = visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');
-       const action = chip?.querySelector('button[aria-label$="to the right"]');
+         '[data-testid="chip"][data-kind="browser"]');
+       const action = chip?.querySelector('[data-chip-button="open-side"]');
        if (!chip || !action) return false;
        const chipRect = chip.getBoundingClientRect();
        const actionRect = action.getBoundingClientRect();
@@ -1347,7 +1755,7 @@ describe("agents and profiles", () => {
   it("keeps a surface chip when its tab closes and removes it only from the chip", async () => {
     const key = await run<string | null>(`
       return visibleDock()?.querySelector(
-        '[data-testid="surface-chip"][data-kind="browser"]')
+        '[data-testid="chip"][data-kind="browser"]')
         ?.getAttribute('data-point-key')?.slice('chip:'.length) ?? null;
     `);
     if (!key) throw new Error("PDF surface chip has no key");
@@ -1373,16 +1781,16 @@ describe("agents and profiles", () => {
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(
       `const chip = visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');
+         '[data-testid="chip"][data-kind="browser"]');
        return !!chip &&
          chip.getAttribute('data-point-key') === ${JSON.stringify(`chip:${key}`)} &&
-         !!chip.querySelector('button[aria-label^="Remove "]');`,
+         !!chip.querySelector('[data-chip-button="remove"]');`,
       { label: "closed PDF tab remains as a removable chip" },
     );
 
     await runWait(
       `const remove = visibleDock()?.querySelector(
-        '[data-testid="surface-chip"][data-kind="browser"] button[aria-label^="Remove "]'
+        '[data-testid="chip"][data-kind="browser"] [data-chip-button="remove"]'
       );
       if (!remove) return false;
       remove.click();
@@ -1391,7 +1799,7 @@ describe("agents and profiles", () => {
     );
     await runWait(
       `return !visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');`,
+         '[data-testid="chip"][data-kind="browser"]');`,
       { label: "PDF chip explicitly removed" },
     );
   });
@@ -1415,12 +1823,17 @@ describe("agents and profiles", () => {
       `return !!$('.monaco-editor') && !!$('[data-point-key^="editor:"]') && !!$('[data-split-divider]');`,
       { label: "linked source editor" },
     );
+    // A workflow chip names the workflow, whatever the link text said.
+    await runWait(
+      `return $('a[href="workflow:linkedWorkflow"]')?.textContent.includes('Linked workflow');`,
+      { label: "workflow chip names the workflow" },
+    );
     await run(
-      `byText('a', 'Open linked graph').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
+      `$('a[href="workflow:linkedWorkflow"]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
     );
     await runWait(
-      `return !!$('[data-point-key="workflow:linkedWorkflow"]') && !!$('.react-flow__node');`,
-      { label: "linked workflow graph" },
+      `return !!$('[data-point-key="workflow:linkedWorkflow"]')?.textContent.includes('Linked workflow') && !!$('.react-flow__node');`,
+      { label: "linked workflow graph in a tab named for it" },
     );
 
     await run(
@@ -1438,19 +1851,38 @@ describe("agents and profiles", () => {
     );
   });
   it("shows the shared session inspector and explains unavailable server moves", async () => {
-    await run(
-      `const row = byText('[data-session-id] button', 'artifact links'); if (!row) throw new Error('Session row missing'); row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); return true;`,
+    await settled("the artifact-link turn finished before inspecting its move");
+    await focusWindow(app);
+    const row = await runWait<{ x: number; y: number }>(
+      `const row = byText('[data-session-id] button', 'artifact links');
+       if (!row) return false;
+       const box = row.getBoundingClientRect();
+       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };`,
+      { label: "session row to inspect" },
     );
+    await app.movePointer(row);
     await runWait(
       `return !!$('[data-resource-inspector]') && !!byText('[data-resource-inspector] button', 'Move to server');`,
       { label: "sidebar session inspector" },
     );
-    await runWait(
-      `return byText('[data-resource-inspector] button', 'Move to server')?.getAttribute('aria-disabled') === 'true';`,
-      { label: "move eligibility" },
+    const move = await runWait<{ x: number; y: number }>(
+      `const inspector = $('[data-resource-inspector]');
+       const button = byText('[data-resource-inspector] button', 'Move to server');
+       if (!inspector || button?.getAttribute('aria-disabled') !== 'true' ||
+           button.dataset.disabledReason !== 'Link this project to a server first' ||
+           inspector.getAnimations({subtree:true}).some(animation =>
+             animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)) return false;
+       const box = button.getBoundingClientRect();
+       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };`,
+      { label: "disabled move control after the inspector settles" },
     );
-    await run(
-      `byText('[data-resource-inspector] button', 'Move to server').dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); return true;`,
+    // Readiness includes eligibility: hovering during the preceding turn
+    // would explain its busy state instead of the missing server link.
+    // A synthetic pointerover also does not establish native hover on macOS.
+    await app.movePointer(move);
+    await runWait(
+      `return byText('[data-resource-inspector] button', 'Move to server')?.matches(':hover');`,
+      { label: "native pointer over the disabled move control" },
     );
     await runWait(
       `return $$('[role="tooltip"]').some(node => node.textContent === 'Link this project to a server first');`,
@@ -1458,5 +1890,6 @@ describe("agents and profiles", () => {
     );
 
     await run(`pressKey('Escape'); return true;`);
+    await app.movePointer({ x: 1, y: 1 });
   });
 });

@@ -1,7 +1,4 @@
-import type {
-  AgentChatTextAttachment,
-  AgentChatTextSource,
-} from "@catamorphic/react";
+import type { AgentTextAttachment, AgentTextSource } from "@catamorphic/react";
 
 /**
  * Classifying pasted/dropped text into composer pills. Ordinary short text
@@ -22,7 +19,7 @@ const PATH_PATTERN =
 
 export type PillClassification =
   | { kind: "native" }
-  | { kind: "pill"; source: AgentChatTextSource; name: string };
+  | { kind: "pill"; source: AgentTextSource; name: string };
 
 /** Decide what a pasted string becomes. */
 export function classifyPastedText(raw: string): PillClassification {
@@ -77,9 +74,9 @@ export function selectionName(opts: {
 
 export function textPill(
   text: string,
-  source: AgentChatTextSource,
+  source: AgentTextSource,
   name: string,
-): AgentChatTextAttachment {
+): AgentTextAttachment {
   return { kind: "text", name, text, source };
 }
 

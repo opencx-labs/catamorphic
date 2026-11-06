@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
@@ -89,7 +90,7 @@ function startFakeServer(): Promise<void> {
       return send(200, {
         issuer: origin,
         authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
-        token_endpoint: `${origin}/api/auth/mcp/token`,
+        token_endpoint: `${origin}/api/auth/oauth2/token`,
         registration_endpoint: `${origin}/api/auth/mcp/register`,
         code_challenge_methods_supported: ["S256"],
       });
@@ -109,7 +110,7 @@ function startFakeServer(): Promise<void> {
       }, 500);
       return;
     }
-    if (req.method === "POST" && url.pathname === "/api/auth/mcp/token") {
+    if (req.method === "POST" && url.pathname === "/api/auth/oauth2/token") {
       return send(200, {
         access_token: TOKEN,
         refresh_token: "desktop-refresh-token",
@@ -138,11 +139,15 @@ function startFakeServer(): Promise<void> {
         "/api/projects/remote-1/workflows",
         "/api/projects/remote-1/apps",
         "/api/projects/remote-1/skills",
-        "/api/projects/remote-1/workflow-enablements",
         "/api/projects/remote-1/proposals",
       ].includes(url.pathname)
     )
       return send(200, []);
+    if (
+      req.method === "GET" &&
+      url.pathname === "/api/projects/remote-1/workflow-enablements"
+    )
+      return send(200, { items: [], canManageProjectAutomations: false });
     if (
       req.method === "GET" &&
       url.pathname === "/api/projects/remote-1/agent/sessions"
@@ -158,7 +163,6 @@ function startFakeServer(): Promise<void> {
         projects: [
           {
             projectId: "remote-1",
-            builder: false,
             source: null,
             permissions: [],
             agents: ["csm"],
@@ -178,6 +182,7 @@ function startFakeServer(): Promise<void> {
           agentSessions: true,
           storeUploadMaxBytes: 1024 * 1024,
         },
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION, runner: 3 },
       });
     }
     if (
@@ -209,7 +214,7 @@ function startFakeServer(): Promise<void> {
       void readJson().then((body) => {
         proposals.push(body);
         send(201, {
-          branch: "proposals/member/x-1",
+          branch: "work/proposals/member/x-1",
           pullRequest: {
             url: "https://github.com/acme/brain/pull/7",
             number: 7,
@@ -372,86 +377,73 @@ describe("remote projects (ADR 0055)", () => {
     // Files is a collapsible section, without builder-only Git controls.
     await runWait(
       `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click();
-       return $('[data-testid="files-nav"]')?.textContent.includes('.catamorphic');`,
+       return $('[data-sidebar-section="files"]')?.textContent.includes('.work');`,
       {
         timeoutMs: 60_000,
         label: "member files",
       },
     );
-    await runWait(`return !!$('[data-testid="remote-sync"]');`, {
-      label: "member download control",
-    });
+    // The Server list (work:remote, ADR 0234): Download updates is its
+    // header action.
+    await runWait(
+      `return !!$('[data-sidebar-section="remote"] button[data-header-action="sync"]');`,
+      { label: "member download control" },
+    );
     projectDir = path.join(app.userDataDir, "Work", "acme-brain");
     expect(
       fs.readFileSync(path.join(projectDir, "docs/handbook.md"), "utf8"),
     ).toContain("Refunds take 5 days");
     expect(
       fs.readFileSync(
-        path.join(
-          projectDir,
-          ".catamorphic/app-data/store/customers/acme/notes.md",
-        ),
+        path.join(projectDir, ".work/app-data/store/customers/acme/notes.md"),
         "utf8",
       ),
     ).toBe("Acme notes v2\n");
     // The store never enters the local git history.
     expect(
-      fs.readFileSync(path.join(projectDir, ".catamorphic/.gitignore"), "utf8"),
+      fs.readFileSync(path.join(projectDir, ".work/.gitignore"), "utf8"),
     ).toContain("/app-data/");
   });
 
   it("ships a local store edit with the synced version", async () => {
     fs.writeFileSync(
-      path.join(
-        projectDir,
-        ".catamorphic/app-data/store/customers/acme/notes.md",
-      ),
+      path.join(projectDir, ".work/app-data/store/customers/acme/notes.md"),
       "Acme notes v2 + brief\n",
     );
-    fs.mkdirSync(
-      path.join(projectDir, ".catamorphic/app-data/store/customers/acme"),
-      {
-        recursive: true,
-      },
-    );
+    fs.mkdirSync(path.join(projectDir, ".work/app-data/store/customers/acme"), {
+      recursive: true,
+    });
     fs.writeFileSync(
-      path.join(
-        projectDir,
-        ".catamorphic/app-data/store/customers/acme/brief.md",
-      ),
+      path.join(projectDir, ".work/app-data/store/customers/acme/brief.md"),
       "# Brief\n",
     );
     fs.writeFileSync(
-      path.join(projectDir, ".catamorphic/app-data/store/private.txt"),
+      path.join(projectDir, ".work/app-data/store/private.txt"),
       "Private local draft",
     );
     await run(`window.dispatchEvent(new Event('focus')); return true;`);
-    await runWait(
-      `return !!$('input[aria-label="Upload notes.md"]') && !!$('input[aria-label="Upload brief.md"]');`,
-      { timeoutMs: 30_000, label: "local files available for selection" },
-    );
+    // Each file changed on this device is a row; Upload is on its own menu.
+    const row = (name: string) =>
+      `$('[data-sidebar-section="remote"] [data-sidebar-item-id$="/${name}"]')`;
+    await runWait(`return !!${row("notes.md")} && !!${row("brief.md")};`, {
+      timeoutMs: 30_000,
+      label: "local files listed",
+    });
     expect(writes).toHaveLength(0);
-    expect(await run(`return $('[data-testid="remote-ship"]').disabled;`)).toBe(
-      true,
-    );
-    await run(
-      `$('input[aria-label="Upload notes.md"]').click(); $('input[aria-label="Upload brief.md"]').click(); return true;`,
-    );
-    await runWait(
-      `const btn = $('[data-testid="remote-ship"]'); return !!btn && !btn.disabled;`,
-      {
-        timeoutMs: 30_000,
-        label: "ship enabled",
-      },
-    );
-    await run(`$('[data-testid="remote-ship"]').click(); return true;`);
-    await runWait(
-      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('uploaded');`,
-      {
-        timeoutMs: 30_000,
-        label: "ship message",
-      },
-    );
+    for (const name of ["notes.md", "brief.md"]) {
+      await run(
+        `${row(name)}.querySelector('[aria-haspopup="menu"]').click(); return true;`,
+      );
+      await runWait(
+        `const item = [...document.querySelectorAll('[data-sidebar-menu] [role="menuitem"]')].find(node => node.textContent.trim() === 'Upload'); if (!item || item.disabled) return false; item.click(); return true;`,
+        { label: `upload ${name}` },
+      );
+      // The source says what happened, and the file is no longer only here.
+      await runWait(
+        `return !!$('[data-sidebar-section="remote"]')?.textContent.includes('uploaded') && !${row(name)};`,
+        { timeoutMs: 30_000, label: `${name} uploaded` },
+      );
+    }
     expect(writes.map((w) => `${w.path}@${w.ifVersion}`).sort()).toEqual([
       "store/customers/acme/brief.md@0",
       "store/customers/acme/notes.md@2",
@@ -467,15 +459,15 @@ describe("remote projects (ADR 0055)", () => {
       `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
     await runWait(
-      `for (const name of ['.catamorphic', 'app-data', 'store', 'customers']) { const folder = byText('[data-testid="files-nav"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-testid="files-nav"] button', 'acme');`,
+      `for (const name of ['.work', 'app-data', 'store', 'customers']) { const folder = byText('[data-sidebar-section="files"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-sidebar-section="files"] button', 'acme');`,
     );
     await runWait(
-      `const folder = byText('[data-testid="files-nav"] button', 'acme');
+      `const folder = byText('[data-sidebar-section="files"] button', 'acme');
        if (!folder) return false; if (folder.getAttribute('aria-expanded') === 'false') folder.click(); return true;`,
       { label: "open customer folder" },
     );
     await runWait(
-      `const row = $('[data-testid="files-nav"] [data-sidebar-item-id=".catamorphic/app-data/store/customers/acme/brief.md"] [data-tree-primary]');
+      `const row = $('[data-sidebar-section="files"] [data-sidebar-item-id=".work/app-data/store/customers/acme/brief.md"] [data-tree-primary]');
        if (!row) return false; row.click(); return true;`,
       {
         timeoutMs: 30_000,
@@ -532,9 +524,9 @@ describe("remote projects (ADR 0055)", () => {
     expect(
       await run(
         `return {
-          handbook: !!$('[data-testid="files-nav"] [data-sidebar-item-id="docs/handbook.md"] [data-tree-primary]'),
-          sync: !!$('[data-testid="remote-sync"]'),
-          propose: !!$('[data-testid="remote-propose"]'),
+          handbook: !!$('[data-sidebar-section="files"] [data-sidebar-item-id="docs/handbook.md"] [data-tree-primary]'),
+          sync: !!$('[data-sidebar-section="remote"] button[data-header-action="sync"]'),
+          propose: !!$('[data-sidebar-section="remote"] [data-sidebar-item-id="program-edits"]'),
         };`,
       ),
     ).toEqual({ handbook: false, sync: true, propose: false });

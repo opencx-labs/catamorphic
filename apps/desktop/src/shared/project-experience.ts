@@ -4,17 +4,25 @@
  * are the facts every host can return for the current caller.
  */
 export interface ProjectExperienceWhen {
-  /** Present only when the caller's builder state equals this value. */
-  builder?: boolean;
-  /** Every listed namespaced project permission must be present. */
+  /** Every listed project permission must be held (ADR 0158). */
   permissions?: string[];
 }
 
 export interface ProjectExperienceContext {
   /** Root is host authority and therefore satisfies every project predicate. */
   root: boolean;
-  builder: boolean;
+  /** Held permissions as `GET /me` reports them: implications expanded. */
   permissions: readonly string[];
+}
+
+/**
+ * Whether a remote member works on the program itself, in a Git checkout of
+ * it (`program:write`). Everyone else syncs the project's files read-only.
+ */
+export function writesProgram(
+  capabilities: { permissions: readonly string[] } | null | undefined,
+): boolean {
+  return capabilities?.permissions.includes("program:write") ?? false;
 }
 
 const PERMISSION_NAME = /^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$/;
@@ -29,12 +37,7 @@ export function sanitizeProjectExperienceWhen(
 ): ProjectExperienceWhen | null | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) return null;
-  if (
-    Object.keys(value).some((key) => !["builder", "permissions"].includes(key))
-  ) {
-    return null;
-  }
-  if (value.builder !== undefined && typeof value.builder !== "boolean") {
+  if (Object.keys(value).some((key) => key !== "permissions")) {
     return null;
   }
   if (
@@ -48,7 +51,6 @@ export function sanitizeProjectExperienceWhen(
     return null;
   }
   return {
-    ...(typeof value.builder === "boolean" ? { builder: value.builder } : {}),
     ...(Array.isArray(value.permissions)
       ? { permissions: [...new Set(value.permissions)] }
       : {}),
@@ -60,9 +62,6 @@ export function matchesProjectExperience(
   context: ProjectExperienceContext,
 ): boolean {
   if (!when || context.root) return true;
-  if (when.builder !== undefined && when.builder !== context.builder) {
-    return false;
-  }
   const available = new Set(context.permissions);
   return (when.permissions ?? []).every((permission) =>
     available.has(permission),

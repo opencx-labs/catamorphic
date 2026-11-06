@@ -48,18 +48,18 @@ it("edits and resets profile and personal choices through the real Settings UI",
   ).toBe(false);
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
   await chooseScope("personal");
   await app.waitFor(
-    `document.querySelector('[data-setting="contentFrame"]').textContent.includes('From profile')`,
+    `document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('From profile')`,
   );
   expect(
     await app.eval(`document.querySelector('[name="contentFrame"]').checked`),
   ).toBe(true);
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
   await app.waitFor(
     `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.sources.contentFrame==='personal' && s.values.contentFrame===false)`,
@@ -71,33 +71,33 @@ it("edits and resets profile and personal choices through the real Settings UI",
   ).toBe("personal");
   await app.screenshot("/tmp/settings-personal-overrides.png");
   await app.eval(
-    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
   );
   await app.waitFor(
-    `document.querySelector('[name="contentFrame"]').checked && !document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `document.querySelector('[name="contentFrame"]').checked && !document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
 });
 it("shared file edits apply live, reset inherits them, and reload preserves sources", async () => {
-  fs.mkdirSync(`${root}/.catamorphic`, { recursive: true });
+  fs.mkdirSync(`${root}/.work`, { recursive: true });
   fs.writeFileSync(
-    `${root}/.catamorphic/settings.json`,
+    `${root}/.work/settings.json`,
     JSON.stringify({ contentFrame: false }),
   );
   await app.waitFor(
-    `!document.querySelector('[name="contentFrame"]').checked && document.querySelector('[data-setting="contentFrame"]').textContent.includes('From project')`,
+    `!document.querySelector('[name="contentFrame"]').checked && document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('From project')`,
   );
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])')`,
   );
   await app.eval(
-    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
   );
   await app.waitFor(`!document.querySelector('[name="contentFrame"]').checked`);
   await chooseScope("project");
   await app.screenshot("/tmp/settings-project-defaults.png");
   await app.eval(
-    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
   );
   await app.waitFor(`document.querySelector('[name="contentFrame"]').checked`);
   await app.reload();
@@ -131,7 +131,7 @@ it("keeps inherited controls usable in the compact light settings view", async (
   await app.waitFor(`!!document.querySelector('[name="contentFrame"]')`);
   await chooseScope("personal");
   await app.waitFor(
-    `document.querySelector('[data-setting="contentFrame"]').textContent.includes('From profile')`,
+    `document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('From profile')`,
   );
   expect(
     await app.eval(
@@ -147,12 +147,16 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
   await app.eval(
     `[...document.querySelectorAll('[aria-label="Collapse right sidebar"]')].find(button => !button.closest('[inert]'))?.click()`,
   );
+  await app.waitFor(
+    "[...document.querySelectorAll('[data-sidebar]')].every(side => side.dataset.settled === 'true') && !document.getAnimations().some(animation => animation.effect?.pseudoElement?.startsWith('::view-transition'))",
+    { label: "sidebars settled" },
+  );
   for (const width of [720, 900]) {
     await app.eval(
       `window.catamorphicDesktop.setSettings({projectId:${JSON.stringify(projectId)},scope:'profile',patch:{contentFrame:true}})`,
     );
     await app.waitFor(
-      `document.querySelector('[data-setting="contentFrame"]').textContent.includes('Custom for profile') && !document.querySelector('[name="contentFrame"]').disabled`,
+      `document.querySelector('[data-setting="contentFrame"] [data-source-current]').textContent.includes('Custom for profile') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.eval(
       `window.catamorphicDesktop.devWindow('setSize',${width},760)`,
@@ -185,10 +189,10 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
     const rowsBefore = await rows();
     await app.screenshot(`/tmp/settings-checkbox-before-${width}.png`);
     await app.eval(
-      `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
+      `document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])').click()`,
     );
     await app.waitFor(
-      `!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
+      `!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.screenshot(`/tmp/settings-checkbox-reset-${width}.png`);
     expect(
@@ -197,7 +201,7 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
     ).toEqual(before);
     await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
     await app.waitFor(
-      `!!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
+      `!!document.querySelector('[aria-label="Reset Framed content to inherited"]:not([inert])') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     expect(
       await geometry(),
@@ -270,7 +274,7 @@ it("edits workspace padding, rounding and dividers independently and persists th
   );
   expect(
     await run(
-      "return getComputedStyle($('[data-sidebar=right]')).borderLeftWidth",
+      "return getComputedStyle($('[data-sidebar=right] > .sidebar-inner')).borderLeftWidth",
     ),
   ).toBe("0px");
   expect(
@@ -295,13 +299,19 @@ it("edits workspace padding, rounding and dividers independently and persists th
   );
   await run("$('input[name=sidebarDividers]').click()");
   await app.waitFor(
-    "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
+    "getComputedStyle(document.querySelector('[data-sidebar=right] > .sidebar-inner')).borderLeftWidth === '1px'",
   );
   await app.reload();
+  // Until preferences load, the workspace draws an unframed main: a 0px
+  // radius and a 0px margin. The saved 0px radius alone cannot tell the
+  // saved state from that first frame, so wait for the saved padding too.
   await app.waitFor(
-    "document.querySelector('main') && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
-  );
-  expect(await run("return getComputedStyle($('main')).marginTop")).toBe(
-    "12px",
+    `(() => {
+      const main = document.querySelector('main');
+      if (!main) return false;
+      const style = getComputedStyle(main);
+      return style.marginTop === '12px' && style.borderRadius === '0px';
+    })()`,
+    { label: "saved padding and rounding after reload" },
   );
 });

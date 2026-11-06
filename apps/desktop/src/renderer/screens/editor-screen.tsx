@@ -1,7 +1,9 @@
+import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { ActionInputDialog } from "../components/action-input-dialog.js";
 import { FileInspector } from "../components/file-inspector.js";
 import { PendingButton } from "../components/pending-button.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -13,6 +15,33 @@ import {
 import { localEditorPath } from "../lib/local-project-files.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
+
+/** Personal files show relative to the profile's own personal folder. */
+const PERSONAL_PREFIX_PATTERN = new RegExp(
+  `^(?:.*/)?${PROJECT_PERSONAL_DIR.replaceAll(".", "\\.")}/[^/]+/`,
+);
+
+/** The names Work gives the files it creates (Untitled.md, Untitled 2.md). */
+const UNTITLED_NAME = /^Untitled(?: \d+)?\.[^./]+$/;
+
+const baseName = (path: string) => path.split("/").at(-1) ?? path;
+const withoutExtension = (name: string) => name.replace(/\.[^.]+$/, "");
+
+/** A name for a new file from its first line ("# Plan" names it Plan). */
+function suggestedName(content: string | undefined): string {
+  const firstLine =
+    content
+      ?.split("\n")
+      .map((line) =>
+        line
+          .replace(/^[#>\-*\s]+/, "")
+          .replace(/[/\\:*?"<>|]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .find(Boolean) ?? "";
+  return firstLine.slice(0, 60).trim() || "Untitled";
+}
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
@@ -37,6 +66,8 @@ const isPdfPath = (path: string) => /\.pdf$/i.test(path);
 
 export interface EditorScreenProps {
   projectId: string;
+  /** Its pane occupies a slot in the visible workspace. */
+  active: boolean;
   line?: number;
   column?: number;
   navigation?: string;
@@ -48,10 +79,13 @@ export interface EditorScreenProps {
   onShare?: (filePath: string) => void;
   onPropose?: (filePath: string) => void;
   onSharePersonal?: (filePath: string, intent: "publish" | "propose") => void;
+  /** The file was renamed: the tab follows it to its new path. */
+  onRename?: (filePath: string) => void;
 }
 
 export function EditorScreen({
   projectId,
+  active,
   line,
   column,
   navigation,
@@ -61,7 +95,10 @@ export function EditorScreen({
   onShare,
   onPropose,
   onSharePersonal,
+  onRename,
 }: EditorScreenProps) {
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const theme = useTheme();
   const editorTheme = useMonacoTheme();
   const officeFile = filePath ? isOfficePath(filePath) : false;
@@ -74,6 +111,10 @@ export function EditorScreen({
         filePath: await localEditorPath(projectId, filePath ?? ""),
       }),
     retry: false,
+    // A file changed outside Work shows once its window is back, as an
+    // agent's change does (below); a draft keeps what it started from.
+    refetchOnWindowFocus: () =>
+      filePath ? draftsRef.current[filePath] === undefined : false,
   });
   const writeFile = useMutation({
     mutationFn: async ({ path, content }: { path: string; content: string }) =>
@@ -94,20 +135,33 @@ export function EditorScreen({
     editorRef.current.revealLineInCenter(line);
   }, [line, column, navigation]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   useEffect(() => {
     if (!pdfFile || !filePath) {
       setPdfUrl(null);
       return;
     }
     let cancelled = false;
-    void desktopApi.projectRoot(projectId).then((root) => {
-      if (cancelled || !root) return;
-      const url = new URL("file:///");
-      url.pathname = `${root.replace(/\/$/, "")}/${filePath}`;
-      setPdfUrl(url.href);
-    });
+    setPdfError(null);
+    let documentUrl: string | undefined;
+    void desktopApi
+      .pdfGuestDocument({ projectId, filePath })
+      .then((url) => {
+        documentUrl = url;
+        if (cancelled) void desktopApi.appGuestClose({ url });
+        else setPdfUrl(url);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled)
+          setPdfError(
+            error instanceof Error
+              ? error.message
+              : "This PDF could not be opened. Try again.",
+          );
+      });
     return () => {
       cancelled = true;
+      if (documentUrl) void desktopApi.appGuestClose({ url: documentUrl });
     };
   }, [filePath, pdfFile, projectId]);
 
@@ -116,6 +170,19 @@ export function EditorScreen({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
+
+  // An agent's turn that changed the open file shows here once it settles.
+  // A draft keeps the content it started from, so saving it still reports
+  // the conflict.
+  useEffect(
+    () =>
+      desktopApi.onGitChanged((event) => {
+        if (event.projectId !== projectId || !filePath) return;
+        if (draftsRef.current[filePath] !== undefined) return;
+        void fileQuery.refetch();
+      }),
+    [projectId, filePath, fileQuery.refetch],
+  );
 
   // Report only real transitions through a ref: the parent recreates the
   // callback each render, and a naive effect on it would loop forever.
@@ -143,11 +210,26 @@ export function EditorScreen({
     });
   };
 
+  // A file Work named Untitled asks for its name when it is first saved;
+  // keeping that name saves it as it is from then on.
+  const [naming, setNaming] = useState<"save" | "rename" | null>(null);
+  const keptNamesRef = useRef(new Set<string>());
+  const personal = filePath ? PERSONAL_PREFIX_PATTERN.test(filePath) : false;
+
   const saveRef = useRef(() => {});
   saveRef.current = () => {
     if (!filePath) return;
     const content = draftsRef.current[filePath];
     if (content === undefined || writeFile.isPending) return;
+    if (
+      onRename &&
+      personal &&
+      UNTITLED_NAME.test(baseName(filePath)) &&
+      !keptNamesRef.current.has(filePath)
+    ) {
+      setNaming("save");
+      return;
+    }
     writeFile.mutate(
       { path: filePath, content },
       {
@@ -178,10 +260,27 @@ export function EditorScreen({
     action(filePath);
   };
 
+  const renameTo = async (name: string) => {
+    if (!filePath || !onRename) return;
+    const renamed = await desktopApi.editorFileRename({
+      filePath: await localEditorPath(projectId, filePath),
+      name,
+    });
+    const nextPath = filePath.replace(/[^/]*$/, baseName(renamed));
+    if (nextPath === filePath) return;
+    // An unsaved draft is the file's, whatever it is called.
+    setDrafts((current) => {
+      const { [filePath]: moved, ...rest } = current;
+      return moved === undefined ? current : { ...rest, [nextPath]: moved };
+    });
+    onRename(nextPath);
+  };
+
   // Selection channel: while this pane's editor has focus, chats can pull
   // "what's selected" to build a selection pill (see lib/editor-selection).
   const filePathRef = useRef(filePath);
   filePathRef.current = filePath;
+  const screenRef = useRef<HTMLDivElement>(null);
   const unregisterRef = useRef<(() => void) | null>(null);
   const publishReader = (
     read: () => { text: string; startLine?: number; endLine?: number } | null,
@@ -189,9 +288,21 @@ export function EditorScreen({
     unregisterRef.current?.();
     unregisterRef.current = registerSelectionReader(() => {
       const path = filePathRef.current;
-      if (!path) return null;
+      // Tabs and inactive projects keep their editors mounted. Their old
+      // selections are not context for a chat opened over another surface.
+      // Read the workspace's known pane state before asking the browser:
+      // checkVisibility can flush styles across every retained transcript.
+      if (!path || !activeRef.current) return null;
       const selection = read();
-      return selection ? { filePath: path, ...selection } : null;
+      if (
+        !selection ||
+        !screenRef.current?.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true,
+        })
+      )
+        return null;
+      return { filePath: path, ...selection };
     });
   };
   useEffect(() => () => unregisterRef.current?.(), []);
@@ -245,6 +356,7 @@ export function EditorScreen({
     // into a chat makes a selection pill (see lib/editor-selection). React's
     // handler runs after Monaco's/ProseMirror's own copy populated the event.
     <div
+      ref={screenRef}
       className="flex min-h-0 flex-1 flex-col"
       onCopy={stampSelectionOnClipboard}
     >
@@ -253,7 +365,7 @@ export function EditorScreen({
         className="flex h-12 shrink-0 items-center gap-2 px-3"
       >
         <span className="min-w-0 truncate font-mono text-xs text-fg-muted">
-          {filePath.replace(/^(?:.*\/)?\.catamorphic\/personal\/[^/]+\//, "")}
+          {filePath.replace(PERSONAL_PREFIX_PATTERN, "")}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
           <FileInspector
@@ -262,6 +374,7 @@ export function EditorScreen({
             dirty={draft !== undefined}
             saving={writeFile.isPending}
             onSave={() => saveRef.current()}
+            onRename={onRename ? () => setNaming("rename") : undefined}
             onPublish={onShare ? () => saveBeforeAction(onShare) : undefined}
             onPropose={
               onPropose ? () => saveBeforeAction(onPropose) : undefined
@@ -289,9 +402,42 @@ export function EditorScreen({
           )}
         </span>
       </div>
-      {(fileQuery.error || writeFile.error) && (
+      <ActionInputDialog
+        selectInitialValue
+        request={
+          naming && {
+            label: naming === "save" ? "Save file" : "Rename file",
+            input: {
+              title: naming === "save" ? "Save file" : "Rename file",
+              submit: naming === "save" ? "Save" : "Rename",
+              fields: [
+                {
+                  name: "name",
+                  label: "Name",
+                  value:
+                    naming === "save"
+                      ? suggestedName(draft)
+                      : withoutExtension(baseName(filePath)),
+                  placeholder: "File name",
+                },
+              ],
+            },
+            run: async (values) => {
+              const name = values.name?.trim() ?? "";
+              if (!name) throw new Error("Name the file.");
+              if (naming === "save") {
+                await saveBeforeAction(() => undefined);
+                keptNamesRef.current.add(filePath);
+              }
+              await renameTo(name);
+            },
+          }
+        }
+        onClose={() => setNaming(null)}
+      />
+      {(fileQuery.error || writeFile.error || pdfError) && (
         <p role="alert" className="p-3 text-xs text-danger">
-          {fileQuery.error?.message ?? writeFile.error?.message}
+          {fileQuery.error?.message ?? writeFile.error?.message ?? pdfError}
         </p>
       )}
       <div className="flex min-h-0 flex-1 flex-col">
@@ -341,6 +487,10 @@ export function EditorScreen({
               value={draft ?? savedContent}
               onChange={handleChange}
               onSave={() => saveRef.current()}
+              documentPath={filePath}
+              readImage={(path) =>
+                desktopApi.projectImage({ projectId, filePath: path })
+              }
               onSelectionReader={(reader) => {
                 if (reader) publishReader(reader);
                 else {

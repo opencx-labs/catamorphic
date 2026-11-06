@@ -3,12 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const encryption = vi.hoisted(() => ({ available: true }));
+const encryption = vi.hoisted(() => ({ available: true, failDecrypt: false }));
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => encryption.available,
     encryptString: (value: string) => Buffer.from(value),
-    decryptString: (value: Buffer) => value.toString("utf8"),
+    decryptString: (value: Buffer) => {
+      if (encryption.failDecrypt)
+        throw new Error("Keychain item could not be decrypted");
+      return value.toString("utf8");
+    },
   },
 }));
 
@@ -23,6 +28,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   encryption.available = true;
+  encryption.failDecrypt = false;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true });
 });
 
@@ -43,7 +49,7 @@ describe("RemoteProjectsStore", () => {
         accessToken: "access-1",
         refreshToken: "refresh-1",
         accessTokenExpiresAt: "2026-08-27T00:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid",
       },
     });
@@ -52,29 +58,94 @@ describe("RemoteProjectsStore", () => {
       Buffer.from("not-json").toString("base64");
     fs.writeFileSync(file, JSON.stringify(raw));
 
-    const inspected = new RemoteProjectsStore(file).inspect("local1");
-
-    expect(inspected?.link).toMatchObject({
+    const corrupted = fs.readFileSync(file, "utf8");
+    const reread = new RemoteProjectsStore(file);
+    expect(() => reread.inspect("local1")).toThrow(
+      "Work could not unlock the saved credential",
+    );
+    expect(reread.list().local1).toMatchObject({
       connectionId: "connection-1",
       serverUrl: "https://brain.acme.dev/api",
       remoteProjectId: "remote1",
       remoteProjectName: "Acme Brain",
     });
-    expect(inspected?.credentials).toBeNull();
+    expect(fs.readFileSync(file, "utf8")).toBe(corrupted);
   });
 
-  it("keeps credentials session-only when OS encryption is unavailable", () => {
+  it("reports keychain decrypt failures without erasing the saved token or project locator", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-store-"));
+    dirs.push(dir);
+    const file = path.join(dir, "remotes.json");
+    new RemoteProjectsStore(file).set("local1", remoteLink());
+    const before = fs.readFileSync(file, "utf8");
+    const reread = new RemoteProjectsStore(file);
+    encryption.failDecrypt = true;
+    expect(() => reread.get("local1")).toThrow(
+      "Unlock your operating system's keychain",
+    );
+    expect(reread.list().local1).toMatchObject({
+      connectionId: "connection-1",
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    encryption.failDecrypt = false;
+    expect(reread.get("local1")?.credentials.accessToken).toBe("access-1");
+  });
+
+  it("can discover saved sign-ins without unlocking any credential", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-store-"));
+    dirs.push(dir);
+    const file = path.join(dir, "remotes.json");
+    const store = new RemoteProjectsStore(file);
+    store.set("saved", remoteLink());
+    const { credentials: _credentials, ...locator } = remoteLink();
+    store.setLocator("signed-out", { ...locator, connectionId: "signed-out" });
+    encryption.available = false;
+    encryption.failDecrypt = true;
+    const reread = new RemoteProjectsStore(file);
+    expect(reread.hasCredentials("saved")).toBe(true);
+    expect(reread.hasCredentials("signed-out")).toBe(false);
+    expect(reread.hasCredentials("missing")).toBe(false);
+    expect(() => reread.get("saved")).toThrow("keychain");
+  });
+
+  it("refuses a session-only sign-in when OS encryption is unavailable", () => {
     encryption.available = false;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-session-"));
     dirs.push(dir);
     const file = path.join(dir, "remotes.json");
     const store = new RemoteProjectsStore(file);
-    store.set("local1", remoteLink());
+    expect(() => store.set("local1", remoteLink())).toThrow(
+      "Unlock your operating system's keychain",
+    );
 
+    expect(store.get("local1")).toBeNull();
+    expect(store.list()).toEqual({});
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("preserves saved credentials and the current session when an encrypted update cannot be stored", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-session-"));
+    dirs.push(dir);
+    const file = path.join(dir, "remotes.json");
+    const store = new RemoteProjectsStore(file);
+    store.set("local1", remoteLink());
+    const before = fs.readFileSync(file, "utf8");
+    encryption.available = false;
+    expect(() =>
+      store.updateCredentials("local1", {
+        ...remoteLink().credentials,
+        accessToken: "access-new",
+      }),
+    ).toThrow("OS credential encryption is unavailable");
+    expect(() => new RemoteProjectsStore(file).get("local1")).toThrow(
+      "Unlock your operating system's keychain",
+    );
     expect(store.get("local1")?.credentials.accessToken).toBe("access-1");
-    expect(fs.readFileSync(file, "utf8")).not.toContain("access-1");
-    expect(new RemoteProjectsStore(file).get("local1")).toBeNull();
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    encryption.available = true;
+    expect(
+      new RemoteProjectsStore(file).get("local1")?.credentials.accessToken,
+    ).toBe("access-1");
   });
 
   it("single-flights refreshes for every consumer of one connection", async () => {
@@ -137,7 +208,7 @@ function remoteLink() {
       accessToken: "access-1",
       refreshToken: "refresh-1",
       accessTokenExpiresAt: "2026-08-27T00:00:00.000Z",
-      tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+      tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
       scope: "openid",
     },
   };

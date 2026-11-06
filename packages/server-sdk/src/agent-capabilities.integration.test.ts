@@ -202,14 +202,13 @@ beforeAll(async () => {
       id: sessionId,
       project_id: projectId,
       external_user_id: alice.externalUserId,
-      provider: "fixture",
       agent_id: "assistant",
     })
     .execute();
   const allocation = await cat.core.executionAllocations.create({
     identity: alice,
     projectId,
-    environmentName: "local",
+    environmentName: "default",
     workloadKind: "agent",
     rootWorkloadId: sessionId,
     policy: {
@@ -361,7 +360,7 @@ it("keeps context small and excludes other users, credentials, and permission li
   expect(value).toMatchObject({
     currentUser: { id: "alice", displayName: "Alice" },
     agentLoopHost: null,
-    environment: "local",
+    environment: "default",
     execution: {
       declaredCapabilities: ["docker"],
       harnessSandbox: "provider_configured",
@@ -401,6 +400,15 @@ it("discovers only matching authorized schemas and rechecks visibility after rev
   ).rejects.toThrow();
   expect(executions).toBe(1);
 });
+it("ranks by the words a capability matches, so descriptive queries still find it", async () => {
+  const names = async (query: string) =>
+    (await gateway.discover({ query })).items.map((item) => item.name);
+  expect(await names("people search")).toEqual(["people.search"]);
+  // No capability matches all three words; the one that matches most leads.
+  expect(await names("find people photographs")).toContain("people.search");
+  expect(await names("photographs")).toEqual([]);
+});
+
 it("rejects malformed and identity-spoofing input before executing", async () => {
   await expect(
     gateway.invoke({
@@ -515,8 +523,12 @@ it("refreshes member authority without treating host root identities as members"
   expect(identityResolutions).toBe(0);
   const scoped: Identity = {
     ...alice,
-    scope: [{ kind: "project", projectId }],
-    executionScope: [{ projectId, name: "local" }],
+    scope: [
+      { kind: "agent", projectId, name: "*" },
+      { kind: "workflow", projectId, name: "*" },
+    ],
+    projectPermissions: [{ projectId, permission: "*" }],
+    executionScope: [{ projectId, name: "default" }],
   };
   memberIdentity = scoped;
   const memberGateway = cat.core.agentCapabilities.forSession({
@@ -529,7 +541,12 @@ it("refreshes member authority without treating host root identities as members"
     (await memberGateway.discover({ query: "context" })).items,
   ).toHaveLength(1);
   expect(identityResolutions).toBe(1);
-  memberIdentity = { ...scoped, scope: [], executionScope: [] };
+  memberIdentity = {
+    ...scoped,
+    scope: [],
+    executionScope: [],
+    projectPermissions: [],
+  };
   await expect(
     memberGateway.invoke({
       name: "context.read",
@@ -542,7 +559,11 @@ it("refreshes member authority without treating host root identities as members"
 it("never widens a narrowed caller when membership refresh returns broader grants", async () => {
   const scoped: Identity = {
     ...alice,
-    scope: [{ kind: "project", projectId }],
+    scope: [
+      { kind: "agent", projectId, name: "*" },
+      { kind: "workflow", projectId, name: "*" },
+    ],
+    projectPermissions: [{ projectId, permission: "*" }],
     executionScope: [],
   };
   memberIdentity = alice;

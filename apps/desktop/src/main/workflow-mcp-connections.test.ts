@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(value),
     decryptString: (value: Buffer) => value.toString(),
   },
 }));
 
-const { workflowMcpConnectionEntries } = await import(
-  "./workflow-mcp-connections.js"
-);
+const { desktopProfileMcpProvider, workflowMcpConnectionEntries } =
+  await import("./workflow-mcp-connections.js");
 
 describe("workflowMcpConnectionEntries", () => {
   it("uses the same deterministic aliases as agent MCP configuration", () => {
@@ -63,5 +63,53 @@ describe("workflowMcpConnectionEntries", () => {
         },
       ]),
     ).toEqual([]);
+  });
+
+  it("omits blocked credentials without changing another connection's alias", () => {
+    const entries = workflowMcpConnectionEntries([
+      {
+        id: "blocked",
+        name: "Mail",
+        transport: "http",
+        url: "https://blocked.test/mcp",
+        enabled: true,
+        source: { kind: "manual" },
+        credentialError: "Unlock your keychain",
+      },
+      {
+        id: "healthy",
+        name: "Mail",
+        transport: "http",
+        url: "https://healthy.test/mcp",
+        enabled: true,
+        source: { kind: "manual" },
+      },
+    ]);
+    expect(
+      entries.map(({ alias, connection }) => [alias, connection.id]),
+    ).toEqual([["mail-2", "healthy"]]);
+  });
+});
+
+describe("profile MCP connections in the broker (ADR 0225)", () => {
+  it("passes each tool's results through as its server sent them", () => {
+    expect(desktopProfileMcpProvider.mcp).toBe(true);
+  });
+
+  it("never names a connector after a host tool server it would shadow", () => {
+    const entries = workflowMcpConnectionEntries(
+      ["Workspace", "Catamorphic"].map((name) => ({
+        id: name,
+        name,
+        transport: "http" as const,
+        url: `https://${name.toLowerCase()}.example.test/mcp`,
+        enabled: true,
+        source: { kind: "manual" as const },
+      })),
+    );
+    expect(entries.map((entry) => entry.alias)).toEqual([
+      "workspace-2",
+      "catamorphic-2",
+    ]);
   });
 });

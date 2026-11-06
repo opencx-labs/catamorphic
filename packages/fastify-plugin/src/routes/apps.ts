@@ -42,8 +42,8 @@ const AppChannelSchema = z.enum(["published", "dev"]);
 
 /**
  * Every viewer-facing app route narrows whoever arrives to this one app
- * (ADR 0053): a builder's full identity is confined to the app while inside
- * it — the untrusted bundle never inherits project access — and a viewer's
+ * (ADR 0053, 0158): an admin's identity is confined to the app while inside
+ * it (the untrusted bundle never inherits project access or permissions) and a viewer's
  * scoped identity must cover the app or ends up with an empty scope. The
  * narrowing is structural (it is the route, not a header the client sends),
  * so there is no claim to validate and nothing to forge.

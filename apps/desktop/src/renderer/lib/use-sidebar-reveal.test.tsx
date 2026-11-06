@@ -123,7 +123,7 @@ describe("collapsed sidebar native hover", () => {
     expect(revealed()).toBe(false);
   });
 
-  it("preserves keyboard reveal after native pointer tracking starts", () => {
+  it("preserves keyboard reveal after native pointer tracking starts", async () => {
     mount();
     point("outside");
     act(() =>
@@ -132,6 +132,11 @@ describe("collapsed sidebar native hover", () => {
         ?.focus(),
     );
     expect(revealed()).toBe(true);
+    // Focus moves in on the next frame, once the sidebar can take it.
+    await act(
+      () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
       "Expand sidebar",
     );

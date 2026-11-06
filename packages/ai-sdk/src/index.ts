@@ -1,10 +1,23 @@
 export {
-  AiSdkCodingAgent,
-  type AiSdkCodingAgentOpts,
-} from "./ai-sdk-agent.js";
+  AI_SDK_HARNESS,
+  type AiSdkAdapterOptions,
+  type AiSdkLocal,
+  createAiSdkAdapter,
+  type McpConnector,
+} from "./adapter.js";
+export { classifyModelError } from "./errors.js";
 export {
-  AiSdkAgentRuntime,
-  type AiSdkAgentRuntimeOpts,
-  type AiSdkToolPolicyDecision,
-  type AiSdkToolPolicyRequest,
-} from "./ai-sdk-runtime.js";
+  type ShellState,
+  stopBackgroundCommands,
+} from "./shell.js";
+export {
+  entriesThroughTurn,
+  foldThread,
+  parseThreadEntries,
+  type ThreadEntry,
+} from "./thread.js";
+export {
+  type AiSdkSandboxProvider,
+  mcpModelToolName,
+  pruneEmptyOptionalArgs,
+} from "./tools.js";

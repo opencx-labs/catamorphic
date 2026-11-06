@@ -1,6 +1,7 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { writesProgram } from "../../shared/project-experience.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -36,8 +37,7 @@ export function DeleteProjectModal({
         .remoteStatus(projectId)
         .then((status) => {
           if (cancelled) return;
-          const member =
-            status !== null && status.capabilities?.builder !== true;
+          const member = status !== null && !writesProgram(status.capabilities);
           setRemoteMember(member);
           if (member) setAlsoTrash(true);
         })
@@ -88,7 +88,7 @@ export function DeleteProjectModal({
               checked={alsoTrash}
               onChange={(event) => setAlsoTrash(event.target.checked)}
               data-testid="delete-trash-checkbox"
-              className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-danger)]"
+              className="mt-0.5"
             />
             <span className="min-w-0 text-xs leading-relaxed text-fg-muted">
               Also move the project folder to the Trash
@@ -96,7 +96,8 @@ export function DeleteProjectModal({
                 className="mt-0.5 block truncate font-mono text-fg-faint"
                 dir="rtl"
               >
-                {rootPath}
+                {/* Isolated, or the path's leading slash moves to its end. */}
+                <bdi>{rootPath}</bdi>
               </span>
             </span>
           </label>

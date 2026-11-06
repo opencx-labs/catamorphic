@@ -55,25 +55,40 @@ Concrete implications for any change you make:
 
 ### Contained project capabilities (ADR 0142)
 
-User-project capabilities live in `.catamorphic/`: its independent Bun workspace,
-workflows, apps, contracts, scripts, agents, roles, skills, and shared config.
-Run capability checks with `bun run --cwd .catamorphic check`. Opening an existing
+User-project capabilities live in `.work/`: its independent Bun workspace,
+workflows, trigger kinds, apps, contracts, scripts, agents, roles, skills, and shared config.
+Run capability checks with `bun run --cwd .work check`. Opening an existing
 folder is inert, including plain folders without Git; initialize Git only for an
 operation that needs it (ADR 0141). Preserve root manifests and owner instructions.
 
-Project-owned mutable data lives in `.catamorphic/app-data/`, ignored by the scoped
-`.catamorphic/.gitignore` by default. Preserve ignore edits. Logical `store/...`
+Project-owned mutable data lives in `.work/app-data/`, ignored by the scoped
+`.work/.gitignore` by default. Preserve ignore edits. Logical `store/...`
 document addresses map there locally; a root `store/` remains ordinary user content.
 Profiles, credentials, caches, staging, and managed worktrees stay in host storage.
+Code builds these paths and the Git-visible names (published ref, managed
+branch prefix, checkpoint author, app-data env and mount) from
+`@catamorphic/workflow/project-layout`; do not repeat the literals.
 
 This framework repository's `.agents/skills/`, `apps/`, and `packages/` are its own
 engineering layout. They are not generated user-project paths and stay in place.
 
+### Compose before declaring a blocker
+
+A use case does not need a native integration for every service it touches.
+Workflows run ordinary TypeScript and npm dependencies with full IO. Glue code
+in workflows and Work server hooks is expected product use: workflows own
+orchestration and recovery; hooks own privileged operations, credentials,
+authorization, and routes. External Postgres may store application-owned state
+without becoming a framework table. An external runner does not have to enroll
+as a Work worker; enrollment is for Work-managed sandbox and agent execution.
+Assess a missing guarantee with a concrete failing case before proposing a new
+primitive. Follow `skills/setup-work-server/references/workflow-composition.md`.
+
 ### Infrastructure priorities
 
-- **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare` default cloud provider, `@catamorphic/daytona` alternate), local sandboxes (`@catamorphic/microsandbox`), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
-- **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
-- **Managed machines share one brain.** ADR 0099 accepts multiple Catamorphic server instances sharing network Postgres, accessible authoritative storage, and one logical authority. Each instance has its own identity and fenced execution ownership. PGlite remains standalone; the member's **This machine** execution does not receive database credentials (ADR 0098). Network Postgres deployments use shared object storage and leased machine dispatch. Keep [setup guidance](skills/setup-catamorphic-server/references/cluster-deployment.md) aligned with implemented enrollment and recovery capabilities.
+- **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare`), local sandboxes (`@catamorphic/microsandbox`, or `@catamorphic/container` under gVisor on any Linux machine with Docker and gVisor, ADR 0204), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
+- **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure. A control-plane replica's memory holds only working state of work it claimed through a Postgres lease, caches keyed by content or database revision, and registries built identically at boot; anything other replicas observe or must exclude lives in Postgres (ADR 0193, enforced by `scripts/replica-memory.test.ts`).
+- **A control plane and credential-less workers.** Work server replicas share network Postgres, object storage, and one authority for availability (ADR 0099), and are disposable: a replica's node lives one process, and any replica moves a lost replica's runs and chats to a live one (ADR 0190). Execution capacity comes from enrolled workers that hold only a machine credential (ADR 0164); each worker owns its node lease, renewed by its own calls to any replica, so any replica runs its agents' controller loops and forwards sandbox operations through a queue fenced by the worker's process epoch (ADR 0192). Workflow runs and every organization credential stay on the control plane; credentials reach systems only through the gateway (ADR 0162), except a member's own harness logins and files, which may reach sandboxes that run only that member's work (ADR 0184), and the secrets a project lists on an Environment, with a value per member, which reach that Environment's sandboxes where the placement isolates their owner (ADR 0206). Organization administrators connect named service connections once; each project's Environments bind them by name in `.work/project.json`, so access changes are reviewed like code (ADR 0172). Environments say what work needs and an optional `pool` of machine labels; the host places each piece of work by its owner, preferring the owner's own machine, then a group's, then a shared one, and machine rules keep per-person or per-team machines in step with the directory (ADR 0167): Hetzner Cloud servers or pools of enrolled machines, all installed by the same script and kept for a while after release (ADR 0205). The member's **This machine** execution does not receive database credentials (ADR 0098). Keep [setup guidance](skills/setup-work-server/references/cluster-deployment.md) aligned with implemented enrollment and recovery capabilities.
 - **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); hosts register the host-side SDK themselves (see `INTEGRATION.md`).
 - **Bun** for running, bundling, and inside sandboxes.
 
@@ -90,31 +105,37 @@ Big desktop design/philosophy choices are additionally logged in
 
 Public developer surface:
 
-- `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
-- `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — workflow tools + documents + skills + `ask_agent`, narrowed by identity (ADR 0055); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
+- `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, connectionProviders?, codeHosts?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
+- `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — the member's working loop: overview, draft/check/deploy, workflow runs, documents, skills, `ask_agent`, `ai.tool-call` workflow tools, and host tools via `projectMcp`, narrowed by identity (ADRs 0055, 0166); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
-- `packages/ui` — React Flow editor components (canvas, panels, AI bar) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
+- `packages/ui`: React Flow editor components (canvas, panels, member review) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
 - `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
-- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
+- `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface. Its dependency-free `project-layout` subpath names the user-project layout (`.work/` paths, `refs/work/published`, the `work/` branch prefix).
+- `packages/work-server` — **`@catamorphic/work-server`**: the Work server as a library (ADR 0160): `createWorkServer({ config, hooks })` with typed data as `config` and code as `hooks` (ADR 0183), `workServerConfigFromEnv` (the only reader of `WORK_*` variables and files), typed hooks (agent capabilities, connection providers and guards, directories, a machine provisioner, project seeds, routes). `apps/server` supplies reference process source; deployments own their image (ADR 0294). Framework packages never import it.
 - `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
 Internal packages:
 
-- `packages/core`: framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, committed roles and memberships, workflow enablements, session attention/mailboxes/subsessions/archive, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
+- `packages/core`: framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, committed roles and memberships, workflow enablements, session attention/mailboxes/subsessions/archive, **remote sync**, the **CodeHost seam** over connections (`CodeHostsService`, ADR 0177), skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
-- `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
-- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.catamorphic/scripts/check.ts`.
-- `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
+- `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, GitHub App auth and manifest registration, REST API client. The server SDK builds the `github` connection provider and `githubCodeHost` on it (ADR 0177).
+- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.work/scripts/check.ts`.
+- `packages/sandbox` — vendor-neutral sandbox contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging, tool-policy helpers for harnesses, and `WarmSessions`, the pool that keeps a thread's harness up between attempts (ADR 0222). No vendor SDKs here.
+- `packages/agent-protocol` — **`@catamorphic/agent-protocol`**: the session log model (turns, attempts, items, requests, provider threads), events, commands and the pure reducer clients and server share (ADR 0197); `/runner` is the runner protocol: `HarnessAdapter`, `HarnessCapabilities`, `AttemptStart`, frames and commands (ADR 0198).
+- `packages/agent-runner` — **`@catamorphic/agent-runner`**: the harness-agnostic runner that drives one attempt on an adapter (`AttemptRunner`, `InProcessRunner` for host harnesses, `runStdioRunner` for sandboxes).
+- `packages/runner-bundle` — **`@catamorphic/runner-bundle`**: the runner and its sandbox adapters (`claude-code`, `codex`) as one hash-addressed file a sandbox runs with Bun or Node (`loadRunnerBundle`).
 - `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
+- `packages/container` — **`@catamorphic/container`**: sandboxes as OCI containers through the Docker Engine API under gVisor (`runsc`) or runc, with an egress proxy on a mounted socket, nested Docker, and volumes (ADR 0204); the Work server's backend on Linux machines without KVM.
 - `packages/local-process` — **`@catamorphic/local-process`**: sandboxless subprocess execution with an explicit env; trusted single-tenant hosts only (ADR 0047).
 - `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend`.
 - `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3ObjectStore` with the generic `ObjectRemoteBackend` from `@catamorphic/git` store project origins in any S3-compatible bucket (ADR 0012).
-- `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
-- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent harness: `AiSdkCodingAgent` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's built-in harness.
-- `packages/claude-code` — **`@catamorphic/claude-code`** coding-agent harness backed by the Claude Agent SDK / Claude Code CLI: preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, background-task events, per-session MCP servers (`mcpServersForSession`).
-- `packages/codex` — **`@catamorphic/codex`** coding-agent harness using the pinned OpenAI Codex app-server protocol.
+- `packages/hetzner` — **`@catamorphic/hetzner`**: Hetzner Cloud client and `HetznerCloudMachines`, the Work server's `hetzner-cloud` machine class (ADR 0205): one labeled server per machine, created idempotently by name, destroyed by id or label after an optional snapshot. `@catamorphic/hetzner/testing` fakes its API in process.
+- `packages/ai-sdk` — **`@catamorphic/ai-sdk`** harness adapter: `createAiSdkAdapter` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's and Work server's built-in agent.
+- `packages/claude-code` — **`@catamorphic/claude-code`** harness adapter backed by the Claude Agent SDK / Claude Code CLI (`createClaudeCodeAdapter`): preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, subagents and background-task events, native state through the SDK's `SessionStore`, model and slash-command catalogs. Hosts add MCP servers per turn through the harness's `mcpServers(context)`. With `warm`, a thread's CLI serves its next attempt when nothing it started with changed (ADR 0222; the desktop's setting).
+- `packages/acp` — **`@catamorphic/acp`** harness adapter for Agent Client Protocol agents (`createAcpAdapter`): runs an agent's command (such as `hermes acp`) per attempt over stdio, serves Work's host tools to it as a loopback MCP server, and reopens its session with `session/load` (or `session/resume`), reporting `thread.lost` for one the agent no longer has (ADR 0241, 0245). The desktop runs it for ACP agents added in Settings (Hermes is a preset) and for approved project agents (`acp.command`).
+- `packages/codex` — **`@catamorphic/codex`** harness adapter using the pinned OpenAI Codex app-server protocol (`createCodexAdapter`), with its rollout file as portable native state; `warm` keeps a thread's app-server between attempts (ADR 0222).
 - `packages/mcp` — **`@catamorphic/mcp`**: MCP client infrastructure — both protocol generations with auto-negotiation, elicitation (form + URL), official MCP registry search, plugin-marketplace fetch/install.
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
 - `packages/runtime` — workflow execution harness (runs inside the sandbox).
@@ -123,24 +144,24 @@ Internal packages:
 
 Apps:
 
-- `apps/desktop` — the Work desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
+- `apps/desktop` — the Work desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, changes and pull requests as sidebar sources, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
 - `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), OAuth server connections, and local profiles. Reaches a server through a credential-free invite, direct host sign-in, or desktop QR pairing (ADR 0060). See `apps/pwa/AGENTS.md`.
-- `apps/server` — the stock self-hostable server (ADR 0059): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution), Better Auth with built-in local auth and optional OAuth/OIDC providers, agent-driven machine-local provisioning, credential-free project invitations, unique-per-install mDNS hostname for LAN reach, and `DATABASE_URL` opt-in for real Postgres. Microsandbox is selectable for isolated remote development with per-agent limits and managed workspace budgets (ADR 0100). **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
+- `apps/server` is the Work server reference process and development host. Deployments pin `@catamorphic/work-server`, own their entry point and image, and compose hooks (ADR 0294). The library supplies Better Auth, OAuth/OIDC, setup operations, project invitations, PGlite or network Postgres, and execution providers. **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md` and `packages/work-server/README.md`.
 
 How the three connect (setting up / troubleshooting, read in this order):
 
 1. **Auth is always a bearer token resolved per request** (ADR 0055): desktop = fixed local identity on loopback; stock server = OAuth authorization code with S256 PKCE, refresh tokens, and membership-derived scope; desktop-LAN = device tokens from QR pairing (hashes in `<userData>/mobile-pairing.json`).
 2. **Invites are credential-free locators**: `work://connect?server=<api base incl. /api>&project=…&invitation=…`. The desktop or PWA discovers the server's OAuth endpoints, signs in, and redeems admission. The desktop then creates a synced local project (ADR 0044/0055).
 3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
-4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create is builder/root-only; the PWA derives the id from `GET /me`.
-5. **Sessions mirror to the linked remote** (ADR 0061): after every settled turn on a remote-linked project the desktop pushes the transcript to `PUT …/agent/sessions/:id/mirror`; the server's copy is continuable there (history-seeded re-anchor), and a `409 diverged` means the server owns the fork — the desktop stops pushing and stamps its copy with a `mirror_fork` marker clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
-6. **Session privacy** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.catamorphic/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance. Connected projects always hide incognito, and restored incognito tabs never mount remote chats (ADR 0098).
+4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create starts on the member's permitted project default; the PWA derives the id from `GET /me`.
+5. **Sessions mirror to the linked remote** (ADR 0197): on a remote-linked project the desktop pushes the session's event log after the remote's acknowledged sequence to `PUT …/agent/sessions/:id/mirror` (a full base when the remote has no copy; a `409 behind` names the sequence to resend from), and the remote applies it through the same projector. The server's copy is continuable there on a fresh provider thread handed the history (ADR 0198). A `409 diverged` means the server owns the fork: the desktop stops pushing and records a `mirror_fork` notice clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
+6. **Session privacy** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.work/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance. Connected projects always hide incognito, and restored incognito tabs never mount remote chats (ADR 0098).
 
 ## Skills
 
 - `.agents/skills/announcement-video/SKILL.md`: Work/Catamorphic product films: purposeful browse, chat, and app demos; real sent messages, readable animations, capture, and website integration
 
-- `skills/setup-catamorphic-server/SKILL.md` — the public adaptive entry for stock-server setup and embedding Catamorphic in an existing host
+- `skills/setup-work-server/SKILL.md` — the public adaptive entry for Work server setup and embedding Catamorphic in an existing host
 - `.agents/skills/` — canonical repository-internal skills, following the
   [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a
   compatibility symlink to this directory.
@@ -150,15 +171,19 @@ How the three connect (setting up / troubleshooting, read in this order):
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
-`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `catamorphic-projects`,
+`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `work-projects`,
 `writing-workflows`, `batch-workflows`, `durable-workflows`, `building-apps`
 (mechanics), and `designing-apps` (replaceable doctrine). Workflow guidance lives
 in the corresponding `packages/core/src/*-skill.ts` modules so each skill can be
 maintained and its examples exercised independently.
 
 `HOST_SKILLS` includes `workflow-lifecycle` (source placement and enablement),
-`session-workflows` (timers, events, attention, and actions), and `session-artifacts`.
-These reach existing projects without rewriting their seeded files. Read the
+`session-workflows` (timers, events, attention, and actions), `session-artifacts`,
+`searching-documents`, and `publishing-to-github`. These reach existing projects
+without rewriting their seeded files. Ready-made automations are not skills: they
+are registry packs (`packages/registry`, ADR 0262), such as `pull-request-reviews`
+and `slack-threads`, which an agent fetches with `registry.read`, installs into a
+project, and adapts; each installs a project skill of its own. Read the
 relevant skill when changing its contract; keep sibling guidance consistent.
 Project and user skill overrides retain their existing precedence.
 
@@ -235,7 +260,10 @@ bun run build # all packages from root via Turbo
 ```
 
 Packages resolve each other via `dist/`: rebuild changed packages before a
-desktop build or e2e run, or your changes silently don't ship.
+desktop build or e2e run, or your changes silently don't ship. Bun builds each
+package's JavaScript from the `bundle` field of its package.json
+(`scripts/build-package.ts`) and `tsc` writes its declarations; a new entry
+point goes in `bundle.entry` (ADR 0232).
 
 ### 4. Tests
 
@@ -275,13 +303,48 @@ CI runs the repository checks on every push to `main`. When you push to
 work. A successful run is valid evidence for the checks it completed; keep
 `main` green before reporting the work complete.
 
+### 10. Pull requests that change UI
+
+A pull request that changes what a person sees shows it in its description: a
+screenshot of each visual change (before and after when it replaces
+something) and a GIF of anything that moves (motion, focus travelling, drag,
+opening and closing). Capture from the running app with the CDP driver (see
+`apps/desktop/AGENTS.md`, "Visual verification"):
+
+```bash
+node apps/desktop/scripts/drive.mjs clip /tmp/pr/after.png <x> <y> <w> <h> 2
+node apps/desktop/scripts/drive.mjs record /tmp/pr/motion.gif <x> <y> <w> <h> @steps.json
+```
+
+`clip` and `record` take CSS pixels; `record` plays its steps (keys, clicks,
+pointer moves, wheel, script, waits) and keeps the motion's real pace. Crop
+to the change, keep a GIF to a few seconds, and show only fixture or dev
+profile content: the repository is public.
+
+Keep media out of the change's history. Commit the files with no parent on a
+`pr-media/<topic>` branch and embed them by commit:
+
+```bash
+export GIT_INDEX_FILE="$(mktemp -u)"
+for f in /tmp/pr/*; do
+  git update-index --add --cacheinfo "100644,$(git hash-object -w "$f"),$(basename "$f")"
+done
+media="$(git commit-tree "$(git write-tree)" -m "PR media: <topic>")"
+rm -f "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE
+git push origin "${media}:refs/heads/pr-media/<topic>"  # braces: zsh reads "$media:r" as a modifier
+# In the description: ![After](https://github.com/opencx-labs/catamorphic/raw/<media>/after.png)
+```
+
+Pushing media follows the same rule as any push: only for a pull request
+the user asked for.
+
 ## Design Principles
 
 Settled decisions — do not deviate without explicit user approval. ADRs in `docs/decisions/`; operational detail in `.cursor/rules/`:
 
 - **Project model, git versioning, DB types** → `project-model.mdc`
 - **Sandbox execution, providers, run lifecycle, instrumentation** → `sandbox-execution.mdc`
-- **Editor UI: Runs panel and state management** → `playground-ui.mdc`
+- **Workflow editor packages: data access, runs, Runs panel, shared state** → `workflow-editor.mdc`
 - **Canvas layout, nodes, edges, read-only behavior** → `graph-design.mdc`
 - **Parser node types, containers, source ranges, provenance** → `parser-conventions.mdc`
 - **Detail panel, code editor, bidirectional linking** → `panel-editor.mdc`
@@ -370,10 +433,19 @@ Use `@catamorphic/otel` (`getTracer("@catamorphic/<package>")` + `withSpan`). At
 ```
 db → core → fastify-plugin → api-client
 otel → sandbox → core
+agent-protocol → agent-runner → core
+sandbox → agent-runner → runner-bundle
+agent-protocol → claude-code → runner-bundle → core
+agent-protocol → codex → runner-bundle
+agent-protocol → acp
+agent-protocol → ai-sdk
+agent-protocol → react
 otel → core
+workflow → git
+workflow → parser
 git → core
 git → s3
-github → core
+github → server-sdk
 parser → core
 parser → ui
 app → sandbox
@@ -383,8 +455,10 @@ app → ui
 workflow → runtime → sandbox → core
 runtime → microsandbox
 runtime → local-process
+runtime → container
 mcp → ai-sdk
-core → claude-code
 core → server-sdk
+server-sdk → work-server → apps/server
+otel → hetzner → work-server
 api-client → react → ui → registry
 ```

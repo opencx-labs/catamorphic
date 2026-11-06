@@ -26,6 +26,7 @@ const HOST_SKILLS = {
     "---",
     "name: publishing-to-github",
     "description: Push the project to GitHub.",
+    'argument-hint: "[repository name]"',
     "---",
     "",
     "# Host github skill body",
@@ -75,24 +76,20 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     });
     projectId = project.id;
 
-    const repo = await projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       await repo.writeFile(
-        ".catamorphic/skills/local-notes/SKILL.md",
-        "---\nname: local-notes\ndescription: A project skill.\n---\n\nproject body",
+        ".work/skills/local-notes/SKILL.md",
+        "---\nname: local-notes\ndescription: A project skill.\nargument-hint: [meeting]\n---\n\nproject body",
       );
       await repo.writeFile(
-        ".catamorphic/skills/shadowed/SKILL.md",
+        ".work/skills/shadowed/SKILL.md",
         "---\nname: shadowed\ndescription: The PROJECT version.\n---\n\nproject shadow body",
       );
-      await repo.commit("Add project skills", {
-        name: "alice",
-        email: "alice@example.com",
-      });
     } finally {
       await repo.dispose();
     }
@@ -113,6 +110,16 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     ]);
     const shadowed = skills.find((skill) => skill.name === "shadowed");
     expect(shadowed?.description).toBe("The PROJECT version.");
+    // Claude Code's `argument-hint`, from either tier; absent when undeclared.
+    expect(
+      Object.fromEntries(
+        skills.map((skill) => [skill.name, skill.argumentHint]),
+      ),
+    ).toEqual({
+      "local-notes": "[meeting]",
+      "publishing-to-github": "[repository name]",
+      shadowed: undefined,
+    });
   });
 
   it("reads content by name from either tier, project winning", async () => {

@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
+import {
+  EncryptedCredentialVault,
+  vaultKeyId,
+} from "../services/encrypted-credential-vault.js";
 
 describe("CredentialVault", () => {
+  it("cannot alias a different tenant by adding separators to a ref", async () => {
+    const vault = new MemoryCredentialVault();
+    const ref = await vault.put({
+      tenantId: "company:team",
+      material: new TextEncoder().encode("company-secret"),
+    });
+    await expect(
+      vault.withMaterial({
+        tenantId: "company",
+        ref: { id: `team:${ref.id}` },
+        use: () => "leaked",
+      }),
+    ).rejects.toThrow("not found");
+  });
   it("tenant-qualifies refs and zeroes callback copies", async () => {
     const vault = new MemoryCredentialVault();
     const ref = await vault.put({
@@ -25,5 +43,106 @@ describe("CredentialVault", () => {
     await expect(
       vault.withMaterial({ tenantId: "tenant-a", ref, use: () => undefined }),
     ).rejects.toThrow("not found");
+  });
+});
+
+describe("EncryptedCredentialVault keyring (ADR 0162)", () => {
+  function memoryStore() {
+    const records = new Map<string, Uint8Array>();
+    return {
+      records,
+      get: async (key: string) => {
+        const data = records.get(key);
+        return data ? { data, etag: "e" } : null;
+      },
+      put: async (key: string, data: Uint8Array) => {
+        records.set(key, data);
+      },
+      deletePrefix: async (key: string) => {
+        records.delete(key);
+      },
+    };
+  }
+  const oldKey = new Uint8Array(32).fill(1);
+  const newKey = new Uint8Array(32).fill(2);
+  const read = (vault: EncryptedCredentialVault, ref: { id: string }) =>
+    vault.withMaterial({
+      tenantId: "tenant",
+      ref,
+      use: (material) => new TextDecoder().decode(material),
+    });
+
+  it("seals with the current key and still opens records of previous keys", async () => {
+    const store = memoryStore();
+    const before = new EncryptedCredentialVault({ store, keys: [oldKey] });
+    const legacy = await before.put({
+      tenantId: "tenant",
+      material: new TextEncoder().encode("old secret"),
+    });
+    const rotated = new EncryptedCredentialVault({
+      store,
+      keys: [newKey, oldKey],
+    });
+    const fresh = await rotated.put({
+      tenantId: "tenant",
+      material: new TextEncoder().encode("new secret"),
+    });
+    expect(await read(rotated, legacy)).toBe("old secret");
+    expect(await read(rotated, fresh)).toBe("new secret");
+    expect(rotated.currentKeyId).toBe(vaultKeyId(newKey));
+    const sealed = JSON.parse(
+      new TextDecoder().decode(
+        [...store.records.entries()].find(([key]) =>
+          key.includes(fresh.id),
+        )?.[1],
+      ),
+    );
+    expect(sealed.kid).toBe(vaultKeyId(newKey));
+    expect(JSON.stringify(sealed)).not.toContain("new secret");
+
+    // Dropping the previous key before every record was rewritten is loud.
+    const dropped = new EncryptedCredentialVault({ store, keys: [newKey] });
+    await expect(read(dropped, legacy)).rejects.toThrow("key this vault lacks");
+  });
+
+  it("rejects keys that are not 32 bytes and an empty keyring", () => {
+    expect(
+      () =>
+        new EncryptedCredentialVault({
+          store: memoryStore(),
+          keys: [new Uint8Array(16)],
+        }),
+    ).toThrow("32 bytes");
+    expect(
+      () => new EncryptedCredentialVault({ store: memoryStore(), keys: [] }),
+    ).toThrow("at least one key");
+  });
+
+  it("rejects unsupported envelopes, forged tenants and modified authentication tags", async () => {
+    const store = memoryStore();
+    const vault = new EncryptedCredentialVault({ store, keys: [newKey] });
+    const ref = await vault.put({
+      tenantId: "tenant",
+      material: new TextEncoder().encode("company-secret"),
+    });
+    const [recordKey, bytes] = [...store.records.entries()][0]!;
+    await expect(
+      vault.withMaterial({ tenantId: "other", ref, use: () => "leaked" }),
+    ).rejects.toThrow();
+    const envelope = JSON.parse(new TextDecoder().decode(bytes));
+    const write = (record: unknown) =>
+      store.records.set(
+        recordKey,
+        new TextEncoder().encode(JSON.stringify(record)),
+      );
+    const { kid: _kid, ...unkeyed } = envelope;
+    write(unkeyed);
+    await expect(read(vault, ref)).rejects.toThrow();
+    write({ ...envelope, tag: Buffer.alloc(12).toString("base64") });
+    await expect(read(vault, ref)).rejects.toThrow();
+    write({ ...envelope, nonce: Buffer.alloc(16).toString("base64") });
+    await expect(read(vault, ref)).rejects.toThrow();
+    write(envelope);
+    expect(await read(vault, ref)).toBe("company-secret");
   });
 });

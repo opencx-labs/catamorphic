@@ -263,7 +263,6 @@ describeIf("scoped identity run reads", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: builder.externalUserId,
-        provider: "test",
       })
       .execute();
     await db
@@ -276,8 +275,8 @@ describeIf("scoped identity run reads", () => {
         kind: "app",
         name: "review",
         title: "Review",
-        source_path: ".catamorphic/apps/review/src/App.tsx",
-        remote_branch: `catamorphic/artifacts/${sourceId}`,
+        source_path: ".work/apps/review/src/App.tsx",
+        remote_branch: `work/artifacts/${sourceId}`,
         commit_sha: commitSha,
       })
       .execute();

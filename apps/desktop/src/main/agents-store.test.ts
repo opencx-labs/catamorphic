@@ -1,13 +1,27 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  SANDBOXING_LEVELS,
+} from "@catamorphic/sandbox";
+import { safeStorage } from "electron";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CLAUDE_PERMISSION_MODE_OPTIONS,
+  CODEX_APPROVAL_OPTIONS,
+  CODEX_SANDBOX_OPTIONS,
+  SANDBOXING_OPTIONS,
+} from "../shared/agent-permissions.js";
 
 // The store encrypts via Electron's safeStorage; unit tests run outside
 // Electron, so exercise a reversible stand-in cipher.
 vi.mock("electron", () => ({
   safeStorage: {
-    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => "gnome_libsecret",
+    isEncryptionAvailable: vi.fn(() => true),
     encryptString: (value: string) => Buffer.from(`enc:${value}`, "utf-8"),
     decryptString: (buffer: Buffer) => {
       const raw = buffer.toString("utf-8");
@@ -27,6 +41,7 @@ function storeFile(): string {
 }
 
 afterEach(() => {
+  vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
   for (const dir of tmpdirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -34,31 +49,258 @@ afterEach(() => {
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 
+describe("agent API key storage", () => {
+  it("allows only public metadata across the renderer boundary", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({ harness: "ai-sdk" });
+    const publicAgent = toPublicAgent({
+      ...agent,
+      ...{ unexpectedSecret: "hidden-secret" },
+    });
+    expect(publicAgent).not.toHaveProperty("unexpectedSecret");
+    expect(JSON.stringify(publicAgent)).not.toContain("hidden-secret");
+  });
+
+  it("refuses unsupported or corrupt settings without replacing the file", () => {
+    const file = storeFile();
+    for (const data of [
+      "{broken",
+      JSON.stringify({
+        agents: [{ id: "a", unexpectedSecret: "hidden-secret" }],
+      }),
+    ]) {
+      fs.writeFileSync(file, data);
+      expect(() => new AgentsStore(file)).toThrow(
+        "Agent settings could not be opened",
+      );
+      expect(fs.readFileSync(file, "utf8")).toBe(data);
+    }
+  });
+  it("never exposes key fragments through the public masked label", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({ harness: "ai-sdk" });
+    for (const apiKey of [
+      "shortkey",
+      "abcdefghijkl",
+      "sk-long-secret-1234567890",
+    ]) {
+      const publicAgent = toPublicAgent({ ...agent, apiKey });
+      expect(publicAgent.apiKeyMasked).toBe("••••••••");
+      expect(JSON.stringify(publicAgent)).not.toContain(apiKey);
+    }
+  });
+  it("refuses to save keys without OS encryption, without changing existing agents", () => {
+    const file = storeFile();
+    const store = new AgentsStore(file);
+    const agent = store.create({
+      harness: "ai-sdk",
+      apiKey: "existing-secret",
+    });
+    const before = fs.readFileSync(file, "utf8");
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    expect(() =>
+      store.create({ harness: "ai-sdk", apiKey: "new-secret" }),
+    ).toThrow("OS credential encryption is unavailable");
+    expect(() =>
+      store.update(agent.id, { name: "Changed", apiKey: "replacement-secret" }),
+    ).toThrow("OS credential encryption is unavailable");
+    expect(() => store.get(agent.id)).toThrow(
+      "Unlock your operating system's keychain",
+    );
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+    expect(store.list()).toHaveLength(1);
+    expect(store.get(agent.id)?.name).toBe(agent.name);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+  it("preserves an unreadable saved key and refuses to fall back to another account", () => {
+    const file = storeFile();
+    const store = new AgentsStore(file);
+    const agent = store.create({
+      harness: "claude-code",
+      auth: "api-key",
+      apiKey: "saved-key",
+    });
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    raw.agents[0].apiKeyEncrypted =
+      Buffer.from("not encrypted").toString("base64");
+    const before = JSON.stringify(raw);
+    fs.writeFileSync(file, before);
+    const reread = new AgentsStore(file);
+    expect(() => reread.get(agent.id)).toThrow(
+      "Work could not unlock the saved credential",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it.each(["locked", "corrupt"])(
+    "keeps metadata and key replacement available for a %s credential",
+    (condition) => {
+      const file = storeFile();
+      const original = new AgentsStore(file);
+      const blocked = original.create({
+        harness: "claude-code",
+        auth: "api-key",
+        apiKey: "saved-secret",
+      });
+      const local = original.create({ harness: "codex", auth: "local" });
+      if (condition === "corrupt") {
+        const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+        raw.agents[0].apiKeyEncrypted =
+          Buffer.from("invalid ciphertext").toString("base64");
+        fs.writeFileSync(file, JSON.stringify(raw));
+      } else
+        vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+      const store = new AgentsStore(file);
+      const decrypt = vi.spyOn(safeStorage, "decryptString");
+      expect(store.listMetadata().map((agent) => agent.id)).toEqual([
+        blocked.id,
+        local.id,
+      ]);
+      expect(store.getMetadata(blocked.id)).toMatchObject({
+        id: blocked.id,
+        hasApiKey: true,
+      });
+      expect(store.getMetadata(blocked.id)).not.toHaveProperty("apiKey");
+      expect(store.getMetadata(blocked.id)).not.toHaveProperty(
+        "apiKeyEncrypted",
+      );
+      expect(decrypt).not.toHaveBeenCalled();
+      expect(() => store.get(blocked.id)).toThrow();
+      expect(store.get(local.id)?.auth).toBe("local");
+      const snapshot = store.listPublic();
+      expect(snapshot.map((agent) => agent.id)).toEqual([blocked.id, local.id]);
+      expect(snapshot[0]).toMatchObject({
+        name: blocked.name,
+        hasApiKey: true,
+        credentialError: expect.stringContaining("keychain"),
+      });
+      expect(snapshot[1]).not.toHaveProperty("credentialError");
+      expect(JSON.stringify(snapshot)).not.toContain("saved-secret");
+      expect(store.update(blocked.id, { name: "Recoverable" })?.name).toBe(
+        "Recoverable",
+      );
+      expect(() => store.get(blocked.id)).toThrow();
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+      expect(
+        store.update(blocked.id, { apiKey: "replacement-secret" })?.hasApiKey,
+      ).toBe(true);
+      expect(store.get(blocked.id)?.apiKey).toBe("replacement-secret");
+      expect(store.listPublic()[0]).not.toHaveProperty("credentialError");
+      decrypt.mockRestore();
+    },
+  );
+
+  it("can remove a locked key without unlocking it", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({
+      harness: "claude-code",
+      auth: "api-key",
+      apiKey: "saved-secret",
+    });
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    expect(
+      store.update(agent.id, { auth: "local", apiKey: null }),
+    ).toMatchObject({ auth: "local", hasApiKey: false });
+    expect(store.get(agent.id)).toMatchObject({ auth: "local", apiKey: null });
+  });
+
+  it.each(["local", "account"] as const)(
+    "does not unlock an unused saved key for native %s authentication",
+    (auth) => {
+      const file = storeFile();
+      const agent = new AgentsStore(file).create({
+        harness: "claude-code",
+        auth: "api-key",
+        apiKey: "saved-secret",
+      });
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      raw.agents[0].auth = auth;
+      raw.agents[0].apiKeyEncrypted = "invalid ciphertext";
+      fs.writeFileSync(file, JSON.stringify(raw));
+      const store = new AgentsStore(file);
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+      expect(store.get(agent.id)).toMatchObject({ auth, apiKey: null });
+      expect(store.listPublic()[0]).toMatchObject({ auth, hasApiKey: true });
+      expect(store.listPublic()[0]).not.toHaveProperty("credentialError");
+      store.update(agent.id, { auth: "api-key" });
+      expect(() => store.get(agent.id)).toThrow(
+        "OS credential encryption is unavailable",
+      );
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+      expect(() => store.get(agent.id)).toThrow(
+        "Work could not unlock the saved credential",
+      );
+    },
+  );
+
+  it("still requires the saved key for the built-in harness's account mode", () => {
+    const store = new AgentsStore(storeFile());
+    const agent = store.create({
+      harness: "ai-sdk",
+      provider: "openrouter",
+      auth: "account",
+      apiKey: "saved-secret",
+    });
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    expect(() => store.get(agent.id)).toThrow(
+      "OS credential encryption is unavailable",
+    );
+    expect(store.listPublic()[0]).toMatchObject({
+      id: agent.id,
+      hasApiKey: true,
+      credentialError: expect.stringContaining("keychain"),
+    });
+  });
+
+  it.each(["", Buffer.from("enc:").toString("base64")])(
+    "refuses an empty saved credential instead of returning a missing key (%s)",
+    (ciphertext) => {
+      const file = storeFile();
+      const agent = new AgentsStore(file).create({
+        harness: "claude-code",
+        auth: "api-key",
+        apiKey: "saved-secret",
+      });
+      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+      raw.agents[0].apiKeyEncrypted = ciphertext;
+      fs.writeFileSync(file, JSON.stringify(raw));
+      const store = new AgentsStore(file);
+      expect(store.getMetadata(agent.id)?.hasApiKey).toBe(true);
+      expect(() => store.get(agent.id)).toThrow(
+        "Work could not unlock the saved credential",
+      );
+    },
+  );
+});
+
 describe("AgentsStore — ADR 0056 fields", () => {
-  it("persists instructions, mode, memory, skills, and coordination; defaults stay implicit", () => {
+  it("persists instructions, sandboxing, permission mode, memory, skills, and coordination; defaults stay implicit", () => {
     const file = storeFile();
     const store = new AgentsStore(file);
     const agent = store.create({
       harness: "claude-code",
       instructions: "  You are the reviewer.  ",
-      mode: "read-only",
+      sandboxing: "contained",
+      harnessPermissions: { permissionMode: "plan" },
       memory: true,
       skills: { mode: "picked", names: ["publishing-to-github"] },
       coordination: "isolate-on-contention",
       delegation: {
         enabled: true,
         maxConcurrentChildren: 4,
-        routes: [
+        agents: [
           {
-            id: "reviewer",
-            target: "project:reviewer",
-            allowFurtherDelegation: false,
+            agent: "project:reviewer",
+            model: ["claude-sonnet-5-5"],
+            effort: "at-most-parent",
+            delegate: false,
           },
         ],
       },
     });
     expect(agent.instructions).toBe("You are the reviewer.");
-    expect(agent.mode).toBe("read-only");
+    expect(agent.sandboxing).toBe("contained");
+    expect(agent.harnessPermissions).toEqual({ permissionMode: "plan" });
     expect(agent.memory).toBe(true);
     expect(agent.skills).toEqual({
       mode: "picked",
@@ -68,11 +310,12 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(agent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 4,
-      routes: [
+      agents: [
         {
-          id: "reviewer",
-          target: "project:reviewer",
-          allowFurtherDelegation: false,
+          agent: "project:reviewer",
+          model: ["claude-sonnet-5-5"],
+          effort: "at-most-parent",
+          delegate: false,
         },
       ],
     });
@@ -84,7 +327,8 @@ describe("AgentsStore — ADR 0056 fields", () => {
     const stored = raw.agents.find(
       (candidate: { id: string }) => candidate.id === plain.id,
     );
-    expect(stored.mode).toBeUndefined();
+    expect(stored.sandboxing).toBeUndefined();
+    expect(stored.harnessPermissions).toBeUndefined();
     expect(stored.memory).toBeUndefined();
     expect(stored.skills).toBeUndefined();
     expect(stored.instructions).toBeUndefined();
@@ -93,16 +337,45 @@ describe("AgentsStore — ADR 0056 fields", () => {
     // The public shape materializes them for the renderer. Memory is
     // OPT-IN (ADR 0056): a fresh agent remembers nothing.
     const publicAgent = toPublicAgent(plain);
-    expect(publicAgent.mode).toBe("full-access");
+    // Local agents default to full freedom (ADR 0140), in each setting.
+    expect(publicAgent.sandboxing).toBe("publish");
+    expect(publicAgent.harnessPermissions).toEqual({
+      sandbox: "danger-full-access",
+      approvals: "on-request",
+    });
+    expect(
+      toPublicAgent(store.create({ harness: "claude-code" }))
+        .harnessPermissions,
+    ).toEqual({ permissionMode: "bypassPermissions" });
+    expect(
+      toPublicAgent(store.create({ harness: "ai-sdk" })).harnessPermissions,
+    ).toEqual({});
     expect(publicAgent.memory).toBe(false);
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
     expect(publicAgent.coordination).toBe("shared-first");
-    expect(publicAgent.delegation).toMatchObject({
+    // By default, copies of itself on any model and effort (ADR 0271).
+    expect(publicAgent.delegation).toEqual({
       enabled: true,
       maxConcurrentChildren: 10,
-      routes: [{ id: "same-agent", target: "self" }],
+      agents: [{ agent: "self", model: "any", effort: "any", delegate: true }],
     });
+  });
+
+  it("refuses an unsupported saved delegation instead of resetting authority", () => {
+    const file = storeFile();
+    new AgentsStore(file).create({ harness: "claude-code" });
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+    saved.agents[0].delegation = {
+      enabled: false,
+      routes: [{ target: "self" }],
+    };
+    const contents = JSON.stringify(saved);
+    fs.writeFileSync(file, contents);
+    expect(() => new AgentsStore(file)).toThrow(
+      "Agent settings could not be opened",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(contents);
   });
 
   it("update clears back to defaults including shared-first coordination", () => {
@@ -110,36 +383,35 @@ describe("AgentsStore — ADR 0056 fields", () => {
     const agent = store.create({
       harness: "claude-code",
       instructions: "persona",
-      mode: "full-access",
+      sandboxing: "publish",
+      harnessPermissions: { permissionMode: "auto" },
       memory: true,
       skills: { mode: "picked", names: ["a"] },
       coordination: "isolation-required",
       delegation: {
         enabled: false,
         maxConcurrentChildren: 2,
-        routes: [],
+        agents: [],
       },
     });
     const updated = store.update(agent.id, {
       instructions: "",
-      mode: "edit",
+      sandboxing: "propose",
+      harnessPermissions: {},
       memory: false,
       skills: { mode: "all" },
       coordination: "shared-first",
       delegation: {
         enabled: true,
         maxConcurrentChildren: 10,
-        routes: [
-          {
-            id: "same-agent",
-            target: "self",
-            allowFurtherDelegation: true,
-          },
+        agents: [
+          { agent: "self", model: "any", effort: "any", delegate: true },
         ],
       },
     });
     expect(updated?.instructions).toBeUndefined();
-    expect(updated?.mode).toBe("edit");
+    expect(updated?.sandboxing).toBe("propose");
+    expect(updated?.harnessPermissions).toBeUndefined();
     expect(updated?.memory).toBeUndefined();
     expect(updated?.skills).toBeUndefined();
     expect(updated?.coordination).toBeUndefined();
@@ -147,6 +419,62 @@ describe("AgentsStore — ADR 0056 fields", () => {
       enabled: true,
       maxConcurrentChildren: 10,
     });
+  });
+});
+
+describe("AgentsStore: permission mode and sandboxing (ADR 0182)", () => {
+  it("takes each harness's own settings and refuses another harness's", () => {
+    const store = new AgentsStore(storeFile());
+    const codex = store.create({
+      harness: "codex",
+      harnessPermissions: { sandbox: "workspace-write" },
+    });
+    expect(toPublicAgent(codex).harnessPermissions).toEqual({
+      sandbox: "workspace-write",
+      approvals: "on-request",
+    });
+    expect(
+      store.update(codex.id, {
+        harnessPermissions: { sandbox: "workspace-write", approvals: "never" },
+      })?.harnessPermissions,
+    ).toEqual({ sandbox: "workspace-write", approvals: "never" });
+    expect(() =>
+      store.update(codex.id, {
+        harnessPermissions: { permissionMode: "auto" },
+      }),
+    ).toThrow("A codex agent takes 'sandbox' and 'approvals'");
+    expect(() =>
+      store.create({
+        harness: "ai-sdk",
+        harnessPermissions: { permissionMode: "plan" },
+      }),
+    ).toThrow("has no harness permission settings");
+    // Sandboxing and permission mode are independent: bypassing the
+    // harness's checks inside a contained sandbox is valid.
+    const fast = store.create({
+      harness: "claude-code",
+      sandboxing: "contained",
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+    expect(toPublicAgent(fast)).toMatchObject({
+      sandboxing: "contained",
+      harnessPermissions: { permissionMode: "bypassPermissions" },
+    });
+  });
+
+  it("mirrors the harness values the sandbox package defines", () => {
+    expect(SANDBOXING_OPTIONS.map((option) => option.value)).toEqual([
+      ...SANDBOXING_LEVELS,
+    ]);
+    expect(
+      CLAUDE_PERMISSION_MODE_OPTIONS.map((option) => option.value).sort(),
+    ).toEqual([...CLAUDE_CODE_PERMISSION_MODES].sort());
+    expect(CODEX_SANDBOX_OPTIONS.map((option) => option.value).sort()).toEqual(
+      [...CODEX_SANDBOX_MODES].sort(),
+    );
+    expect(CODEX_APPROVAL_OPTIONS.map((option) => option.value).sort()).toEqual(
+      [...CODEX_APPROVAL_POLICIES].sort(),
+    );
   });
 });
 
@@ -183,4 +511,67 @@ it("advertises the native Codex attachment path to the composer", () => {
     "image",
     "document",
   ]);
+});
+
+it("imports chats only for Claude Code and Codex agents that turn it on (ADR 0233)", () => {
+  const store = new AgentsStore(storeFile());
+  const claude = store.create({ harness: "claude-code" });
+  expect(toPublicAgent(claude).syncSessions).toBe(false);
+  expect(store.update(claude.id, { syncSessions: true })?.syncSessions).toBe(
+    true,
+  );
+  expect(
+    store.update(claude.id, { syncSessions: false })?.syncSessions,
+  ).toBeUndefined();
+  const builtIn = store.create({ harness: "ai-sdk", syncSessions: true });
+  expect(builtIn.syncSessions).toBeUndefined();
+  expect(
+    store.update(builtIn.id, { syncSessions: true })?.syncSessions,
+  ).toBeUndefined();
+  expect(
+    store.create({ harness: "codex", syncSessions: true }).syncSessions,
+  ).toBe(true);
+});
+
+it("syncs a tool's chats on one agent of that tool at a time (ADR 0233)", () => {
+  const store = new AgentsStore(storeFile());
+  const first = store.create({ harness: "claude-code", syncSessions: true });
+  const codex = store.create({ harness: "codex", syncSessions: true });
+  const second = store.create({ harness: "claude-code" });
+  store.update(second.id, { syncSessions: true });
+  const synced = store
+    .list()
+    .filter((agent) => agent.syncSessions)
+    .map((agent) => agent.id);
+  expect(synced.sort()).toEqual([codex.id, second.id].sort());
+  expect(synced).not.toContain(first.id);
+});
+
+it("keeps an ACP agent's command, refuses one without, and gives it nothing of the CLIs' (ADR 0241)", () => {
+  const file = storeFile();
+  const store = new AgentsStore(file);
+  const hermes = store.create({
+    name: "Hermes",
+    harness: "acp",
+    acp: { command: ["hermes", "acp"] },
+    syncSessions: true,
+  });
+  expect(hermes.acp).toEqual({ command: ["hermes", "acp"] });
+  expect(hermes.auth).toBe("local");
+  expect(hermes.syncSessions).toBeUndefined();
+  expect(
+    store.update(hermes.id, { syncSessions: true })?.syncSessions,
+  ).toBeUndefined();
+  expect(toPublicAgent(hermes).accepts).toEqual(["image"]);
+  expect(new AgentsStore(file).get(hermes.id)?.acp).toEqual({
+    command: ["hermes", "acp"],
+  });
+  for (const acp of [undefined, { command: [] }, { command: [""] }, {}])
+    expect(() =>
+      // A malformed input, as the renderer could send one.
+      store.create(JSON.parse(JSON.stringify({ harness: "acp", acp }))),
+    ).toThrow("An ACP agent needs the command that starts it.");
+  expect(
+    store.create({ harness: "codex", acp: { command: ["hermes", "acp"] } }).acp,
+  ).toBeUndefined();
 });

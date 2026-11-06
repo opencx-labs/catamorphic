@@ -1,9 +1,4 @@
-import {
-  evaluate,
-  pause,
-  send,
-  ws,
-} from "/Users/tabaza/Desktop/work-product-film/activity-demo/cdp.mjs";
+import { evaluate, pause, send, ws } from "./cdp.mjs";
 
 const box = (expr) =>
   evaluate(

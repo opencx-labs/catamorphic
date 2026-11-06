@@ -1,18 +1,31 @@
 import type {
   CloneSource,
+  ProjectDraft,
   ProjectManager,
-  ProjectRepo,
 } from "@catamorphic/git";
-import { WORKFLOW_SOURCE_ROOT } from "@catamorphic/parser";
-import type { SandboxProvider, SandboxResources } from "@catamorphic/sandbox";
+import type {
+  SandboxProvider,
+  SandboxResources,
+  SignInHarness,
+} from "@catamorphic/sandbox";
 import {
   resolveWorkflowPackageFallback,
   SandboxManagerImpl,
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
+import {
+  PROJECT_LOCKFILE_PATHS,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  PROJECT_WORKSPACE_ROOT,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import type { Identity } from "../identity.js";
 import type { DbSandboxStore } from "./db-sandbox-store.js";
-import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  SandboxSyncError,
+  type SyncedFileChange,
+  syncSandboxChanges,
+} from "./sandbox-sync.js";
 
 export interface PreparedDevSandbox {
   id: string;
@@ -31,6 +44,8 @@ export class DevSandboxService {
       store: DbSandboxStore;
       sessionId?: string;
       resources?: SandboxResources;
+      /** The owner's sign-ins a new sandbox mounts (ADR 0199). */
+      signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
     },
   ) {
     this.manager = new SandboxManagerImpl({
@@ -42,6 +57,7 @@ export class DevSandboxService {
         storageMb: deps.resources?.storageMb,
         gpu: deps.resources?.gpu,
       },
+      ...(deps.signIns ? { signIns: deps.signIns } : {}),
     });
   }
 
@@ -49,7 +65,13 @@ export class DevSandboxService {
     identity: Identity;
     projectId: string;
     refresh: boolean;
+    /**
+     * Put the draft's files in a new sandbox; default true. False leaves a
+     * new sandbox empty for a setup that may see its base alone (ADR 0257).
+     */
+    populate?: boolean;
   }): Promise<PreparedDevSandbox> {
+    const populate = opts.populate ?? true;
     const repo = this.deps.sessionId
       ? await this.deps.projectManager.openSession({
           tenantId: opts.identity.tenantId,
@@ -57,11 +79,11 @@ export class DevSandboxService {
           sessionId: this.deps.sessionId,
           refresh: opts.refresh,
         })
-      : await this.deps.projectManager.openDev(
-          opts.identity.tenantId,
-          opts.projectId,
-          opts.identity.externalUserId,
-        );
+      : await this.deps.projectManager.openDraft({
+          tenantId: opts.identity.tenantId,
+          projectId: opts.projectId,
+          externalUserId: opts.identity.externalUserId,
+        });
     try {
       const baseCommitSha = await repo.resolveRef("HEAD").catch(() => null);
       const existing = await this.deps.store.findSandbox({
@@ -69,18 +91,26 @@ export class DevSandboxService {
         sandboxType: "dev",
         userId: opts.identity.externalUserId,
       });
-      const cloneSource = existing
-        ? undefined
-        : await this.cloneSourceIfInSync({
-            identity: opts.identity,
-            projectId: opts.projectId,
-            repo,
-          });
+      const cloneSource =
+        existing || !populate
+          ? undefined
+          : await this.cloneSourceIfInSync({
+              identity: opts.identity,
+              projectId: opts.projectId,
+              repo,
+            });
       const handle = await this.manager.ensureDevSandbox({
         projectId: opts.projectId,
         userId: opts.identity.externalUserId,
         cloneSource,
       });
+      if (!populate)
+        return {
+          id: handle.id,
+          providerId: handle.providerId,
+          projectDirectory: this.projectDirectory,
+          baseCommitSha,
+        };
       if (!cloneSource && (!existing || opts.refresh)) {
         await this.deps.provider.uploadFiles(
           handle.providerId,
@@ -90,7 +120,7 @@ export class DevSandboxService {
       }
       const workflowPackage = await resolveWorkflowPackageFallback({
         hasLockfile: await Promise.all(
-          [".catamorphic/bun.lock", ".catamorphic/bun.lockb"].map((file) =>
+          PROJECT_LOCKFILE_PATHS.map((file) =>
             repo.readFile(file).then(
               () => true,
               () => false,
@@ -98,13 +128,13 @@ export class DevSandboxService {
           ),
         ).then((present) => present.some(Boolean)),
         packageJson: await repo
-          .readFile(`${WORKFLOW_SOURCE_ROOT}/package.json`)
+          .readFile(PROJECT_WORKFLOWS_PACKAGE_PATH)
           .catch(() => undefined),
       });
       await uploadPluginPayloads({
         provider: this.deps.provider,
         sandboxId: handle.providerId,
-        projectDir: `${this.projectDirectory}/.catamorphic`,
+        projectDir: `${this.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
         plugins: workflowPackage ? [workflowPackage] : undefined,
       });
       return {
@@ -123,7 +153,7 @@ export class DevSandboxService {
   }
 
   /**
-   * Mirror the caller's dev-sandbox changes into the dev working copy right
+   * Mirror the caller's dev-sandbox changes into the caller's draft right
    * now, without waiting for the current agent turn to finish. No-op when
    * the caller has no dev sandbox (host-execution agents edit the dev tree
    * directly). Used by builds that must see the agent's in-flight work.
@@ -144,6 +174,8 @@ export class DevSandboxService {
     if (status === "stopped" || status === "archived") {
       await this.deps.provider.startSandbox(existing.providerId);
     }
+    // A build goes on with the dev tree as it is; the turn's own sync
+    // reports the failure on its reply.
     return syncSandboxChanges({
       provider: this.deps.provider,
       projectManager: this.deps.projectManager,
@@ -151,13 +183,17 @@ export class DevSandboxService {
       projectId: opts.projectId,
       sandboxProviderId: existing.providerId,
       projectDir: this.projectDirectory,
+    }).catch((error: unknown) => {
+      if (!(error instanceof SandboxSyncError)) throw error;
+      console.warn(`[catamorphic] ${error.message}`);
+      return [];
     });
   }
 
   private async cloneSourceIfInSync(opts: {
     identity: Identity;
     projectId: string;
-    repo: ProjectRepo;
+    repo: ProjectDraft;
   }): Promise<CloneSource | undefined> {
     const remoteBackend = this.deps.projectManager.remoteBackend;
     if (!remoteBackend?.getCloneSource) return undefined;
@@ -165,7 +201,7 @@ export class DevSandboxService {
     if (!status || status.dirty) return undefined;
     const head = await opts.repo.resolveRef("HEAD").catch(() => null);
     const remoteSha = await opts.repo
-      .resolveRef("refs/catamorphic/published/main")
+      .resolveRef(publishedRef())
       .catch(() => null);
     if (!head || head !== remoteSha) return undefined;
     return remoteBackend.getCloneSource(

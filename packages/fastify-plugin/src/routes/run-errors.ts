@@ -78,10 +78,9 @@ export function replyForTriggerError(
     return reply.status(400).send({ error: err.message });
   }
   if (err instanceof SandboxProviderNotConfiguredError) {
-    return reply.status(503).send({
-      error:
-        "Sandbox provider not configured. Set CLOUDFLARE_SANDBOX_API_URL and CLOUDFLARE_SANDBOX_API_KEY (recommended) or DAYTONA_API_KEY to enable workflow execution.",
-    });
+    // The host chooses and constructs the execution backend; the library
+    // names none of them.
+    return reply.status(503).send({ error: err.message });
   }
   return null;
 }

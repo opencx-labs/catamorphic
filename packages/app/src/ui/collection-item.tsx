@@ -118,7 +118,7 @@ export function CollectionItemView({
       key={action.id}
       type="button"
       role={inMenu ? "menuitem" : undefined}
-      className="cat-btn cat-btn-ghost"
+      className="cat-btn cat-btn--subtle"
       data-danger={action.danger || undefined}
       aria-label={action.label}
       aria-disabled={
@@ -169,17 +169,6 @@ export function CollectionItemView({
         }
       }}
     >
-      {onToggle && (
-        <button
-          type="button"
-          className="cat-btn cat-btn-ghost"
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
-          aria-expanded={expanded}
-          onClick={onToggle}
-        >
-          {expanded ? "▾" : "▸"}
-        </button>
-      )}
       <button
         type="button"
         className="cat-collection-label"
@@ -204,11 +193,12 @@ export function CollectionItemView({
         <progress aria-label={`${label} progress`} max={1} value={progress} />
       )}
       {children}
+      {actionState.error && <span role="alert">{actionState.error}</span>}
       {actions.map((action) => actionButton(action))}
       {preview && (
         <button
           type="button"
-          className="cat-btn cat-btn-ghost"
+          className="cat-btn cat-btn--subtle"
           aria-label={`Inspect ${label}`}
           aria-expanded={inspecting}
           onClick={() => {
@@ -222,7 +212,7 @@ export function CollectionItemView({
       {menu.length > 0 && (
         <button
           type="button"
-          className="cat-btn cat-btn-ghost"
+          className="cat-btn cat-btn--subtle"
           aria-label={`More actions for ${label}`}
           aria-haspopup="menu"
           onClick={() => {
@@ -239,7 +229,19 @@ export function CollectionItemView({
           ⋯
         </button>
       )}
-      {actionState.error && <span role="alert">{actionState.error}</span>}
+      {/* The disclosure ends the row, so every row's label starts at the
+          same place and only a child's indent reads as belonging. */}
+      {onToggle && (
+        <button
+          type="button"
+          className="cat-btn cat-btn--subtle"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          {expanded ? "▾" : "▸"}
+        </button>
+      )}
       {inspecting &&
         createPortal(
           <div
@@ -275,7 +277,7 @@ export function CollectionItemView({
           >
             <button
               type="button"
-              className="cat-btn cat-btn-ghost"
+              className="cat-btn cat-btn--subtle"
               aria-label={`Close ${label} details`}
               onClick={() => {
                 setInspecting(false);

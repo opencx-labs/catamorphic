@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ProjectNotFoundError } from "@catamorphic/core";
 import { emitLog } from "@catamorphic/otel";
 import {
   loadTelemetryEnvironmentFile,
@@ -9,13 +11,23 @@ import {
   app,
   BrowserWindow,
   dialog,
-  ipcMain,
   Menu,
+  MenuItem,
+  type MenuItemConstructorOptions,
+  nativeImage,
   nativeTheme,
   powerMonitor,
   safeStorage,
+  screen,
+  session,
+  shell,
   type WebContents,
+  webContents,
 } from "electron";
+import { chatBookmarkUrl } from "../shared/bookmark-target.js";
+import { SHELL_WINDOW_ARGUMENT } from "../shared/desktop-workspace.js";
+import { opensInWork } from "../shared/downloads.js";
+import { localFileUrl } from "../shared/surface-link.js";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { macApplicationMenu } from "./app-menu.js";
@@ -31,22 +43,46 @@ import {
   desktopApplicationName,
   desktopDataDirFromEnvironment,
 } from "./development-paths.js";
+import { dockClicks } from "./dock-clicks.js";
+import { registerDockIcon } from "./dock-icon.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
+import { GuestDocuments } from "./guest-documents.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
+import { adoptLoginShellPath } from "./login-shell-path.js";
 import { McpAppsService } from "./mcp-apps.js";
 import { MobilePairingService } from "./mobile-pairing.js";
 import { prepareVersionBackup } from "./pre-migration-backup.js";
+import { assertProductionLaunchArguments } from "./production-launch.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
-import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
+import { registerResourceSupport } from "./resource-monitor.js";
+import {
+  DESKTOP_TENANT_ID,
+  DESKTOP_USER_ID,
+  type EmbeddedServer,
+  startEmbeddedServer,
+} from "./server/boot.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
+import {
+  isSameShellDocument,
+  registerShellScheme,
+  serveShellDocuments,
+  shellDocumentUrl,
+} from "./shell-document.js";
+import {
+  isRegisteredShellContents,
+  registerShellContents,
+  shellIpcMain,
+  shellSurfaceFor,
+} from "./shell-ipc.js";
 import {
   registerDesktopShutdown,
   shutdownDesktopServices,
 } from "./shutdown.js";
-import { projectTelemetrySettings } from "./telemetry-settings.js";
+import { cachedProjectTelemetrySettings } from "./telemetry-settings.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 import { consumeUpdateRestart } from "./update-restart.js";
@@ -54,7 +90,15 @@ import {
   type DesktopUpdaterService,
   registerDesktopUpdater,
 } from "./updater.js";
-import { WindowStateStore } from "./window-state.js";
+import { registerVoiceSupport } from "./voice/index.js";
+import { WindowButtons } from "./window-buttons.js";
+import {
+  cascadeWindowState,
+  fitToDisplays,
+  freshWindowState,
+  WindowStateStore,
+  type WorkspaceWindowState,
+} from "./window-state.js";
 import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
 // Electron derives the macOS safeStorage Keychain service from the app name.
@@ -62,6 +106,21 @@ import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 // production identity so local testing cannot poison the production item's
 // access control list and cause prompts after an update.
 const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
+try {
+  assertProductionLaunchArguments({
+    isPackaged: app.isPackaged,
+    hasSwitch: (name) => app.commandLine.hasSwitch(name),
+  });
+} catch (error) {
+  dialog.showErrorBox(
+    "Work could not start securely",
+    error instanceof Error
+      ? error.message
+      : "Remove debugging options and open Work again.",
+  );
+  app.exit(1);
+}
+registerShellScheme();
 app.setName(
   desktopApplicationName({
     isPackaged: app.isPackaged,
@@ -81,17 +140,6 @@ if (
   app.commandLine.appendSwitch("use-mock-keychain");
 }
 
-// macOS 26.x + Apple Silicon: V8's background compiler threads race the
-// OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
-// RegisterInstructionStreamAllocation (electron/electron#51351 family).
-// Keep JIT compilation on the main thread until Electron ships a fix.
-if (process.platform === "darwin") {
-  app.commandLine.appendSwitch(
-    "js-flags",
-    "--no-concurrent-sparkplug --no-concurrent-recompilation",
-  );
-}
-
 // A window driven over the debugging port (dev runs, films, e2e) keeps
 // rendering while another window covers it. Chromium otherwise pauses an
 // occluded window's compositor: screencast frames stop, the browser
@@ -108,20 +156,43 @@ if (app.commandLine.hasSwitch("remote-debugging-port")) {
 // the Electron and app tokens here, before ready, makes every layer
 // (request headers, navigator.userAgent, navigator.userAgentData)
 // consistently Chrome. There is no "register as a browser with Google"
-// path; identical-engine browsers get blocked by name (Vivaldi proved
-// it by misspelling theirs), so shipping Chrome's identity IS the fix.
+// path, so Chrome's identity is the fix, but only whole: Google's sign-in
+// refuses a browser that says it is Chrome without `window.chrome.app`,
+// which the browsing session's preload supplies (preload/chrome-object.ts,
+// ADR 0235).
 // Whole tokens: a prerelease version ("0.1.0-alpha.8") left "-alpha.8"
 // dangling in the UA, which is not a Chrome UA any more. Chromium also
 // drops the spaces from the app name ("Work Development/1.2.3" is
-// "WorkDevelopment/1.2.3" in the token).
+// "WorkDevelopment/1.2.3" in the token). Chrome's UA carries only its
+// major version ("Chrome/156.0.0.0", the reduced UA); Electron's carries
+// the full one, which no Chrome sends. The full version still reaches
+// sites through the client hints that ask for it (main/browser.ts).
 app.userAgentFallback = app.userAgentFallback
   .replace(/ Electron\/\S+/, "")
   .replace(new RegExp(` ${app.name.replaceAll(" ", "")}/\\S+`), "")
-  .replace(/ catamorphic-desktop\/\S+/, "");
+  .replace(/ catamorphic-desktop\/\S+/, "")
+  .replace(/ Chrome\/(\d+)\.[\d.]+/, " Chrome/$1.0.0.0");
 
 // E2E runs point userData at a throwaway dir so tests never touch real
 // settings/projects/DB, and may run beside a normally-running app.
 const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
+// Under test, an error the main process does not catch is printed for the
+// harness, which fails the run naming it. Electron's own answer is a modal
+// alert, which holds the main thread: the app could not quit, and the run
+// ended killed with the error unknown (workspaces on macOS CI).
+if (e2eDataDir) {
+  const report = (kind: string, error: unknown) =>
+    console.error(
+      `[desktop] Main process ${kind}:`,
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+  process.on("uncaughtException", (error) =>
+    report("uncaught exception", error),
+  );
+  process.on("unhandledRejection", (reason) =>
+    report("unhandled rejection", reason),
+  );
+}
 if (isolatedDataDir) {
   app.setPath("userData", isolatedDataDir);
 }
@@ -157,8 +228,8 @@ const pendingBrowserUrls = process.argv.flatMap((arg) => {
 });
 let pendingBrowserWindow: BrowserWindow | null = null;
 function browserLinkWindow(): BrowserWindow | undefined {
-  const windows = BrowserWindow.getAllWindows().filter(
-    (window) => !desktopWorkspaces?.isDock(window),
+  const windows = BrowserWindow.getAllWindows().filter((window) =>
+    desktopWorkspaces?.isWorkspace(window),
   );
   return windows.find((window) => window.isFocused()) ?? windows[0];
 }
@@ -182,7 +253,19 @@ function notifyBrowserLinks(): void {
   window.focus();
   window.webContents.send("catamorphic:pending-browser-urls");
 }
-ipcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
+// Finder's Open With, or a file dropped on the Dock icon: a file Work can
+// show opens in a tab, as an opened download does (ADR 0153); anything
+// else is shown in Finder.
+app.on("open-file", (event, filePath) => {
+  event.preventDefault();
+  if (!opensInWork(filePath)) {
+    shell.showItemInFolder(filePath);
+    return;
+  }
+  pendingBrowserUrls.push(localFileUrl(filePath));
+  notifyBrowserLinks();
+});
+shellIpcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (!window || event.senderFrame !== event.sender.mainFrame) return [];
   if (!pendingBrowserWindow || pendingBrowserWindow.isDestroyed())
@@ -209,7 +292,7 @@ function deliverConnectLink(url: string): void {
 }
 
 /** The renderer's side of the hand-off (registered here: no ipc.ts cycle). */
-ipcMain.handle("catamorphic:remote-take-pending-link", () => {
+shellIpcMain.handle("catamorphic:remote-take-pending-link", () => {
   const link = pendingConnectLink;
   pendingConnectLink = null;
   return link;
@@ -228,9 +311,14 @@ const telemetry = startTelemetry({
 });
 emitLog({ scope: "catamorphic-desktop", body: "Desktop starting" });
 
+// Agents, MCP servers and tools reach what the person's terminal reaches
+// (Homebrew, nvm, gcloud): the login shell's PATH, read while the app
+// starts and in place before the server can start anything.
+const loginPathAdopted = adoptLoginShellPath({ packaged: app.isPackaged });
+
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
-// Per-profile config (theme, keybindings, sidebar, agents) — one manager
+// Per-profile config (theme, keybindings, workspace, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
 const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
   nativeTheme.shouldUseDarkColors ? "dark" : "light",
@@ -252,23 +340,32 @@ const state: ServerState = {
 /**
  * Which profile each window shows. Windows are born with a profile (theme
  * pre-painted from it) and can switch in place when their workspace is
- * empty; broadcasts of per-profile state (theme, keybindings, sidebar,
+ * empty; broadcasts of per-profile state (theme, keybindings, workspace,
  * agents) go only to that profile's windows.
  */
 const windowProfiles = new Map<number, string>();
+const windowState = new WindowStateStore(
+  path.join(app.getPath("userData"), "window-state.json"),
+);
 
 export interface WindowProfileRegistry {
   profileFor(sender: WebContents): string;
   windowsFor(profileId: string): BrowserWindow[];
   assign(sender: WebContents, profileId: string): void;
+  /**
+   * A surface of Work's own outside a workspace window (the passkey sheet
+   * over a sign-in popup) reads that profile's settings for its life.
+   */
+  attach(contents: WebContents, profileId: string): void;
   openWindow(profileId: string): void;
 }
 
 const windows: WindowProfileRegistry = {
   profileFor(sender) {
-    return (
-      windowProfiles.get(sender.id) ?? profilesStore.lastActiveProfile().id
-    );
+    const profileId = windowProfiles.get(sender.id);
+    if (!profileId || !profilesStore.get(profileId))
+      throw new Error("This action requires a registered Work profile.");
+    return profileId;
   },
   windowsFor(profileId) {
     return BrowserWindow.getAllWindows().filter(
@@ -279,7 +376,20 @@ const windows: WindowProfileRegistry = {
   },
   assign(sender, profileId) {
     const previousProfileId = windows.profileFor(sender);
+    // A closed workspace still owns its projects. Bring it back before an
+    // empty window can adopt its profile and fail to claim those projects.
+    if (
+      previousProfileId !== profileId &&
+      desktopWorkspaces?.activateProfile(profileId)
+    ) {
+      profilesStore.setLastActiveProfile(profileId);
+      return;
+    }
     windowProfiles.set(sender.id, profileId);
+    if (previousProfileId !== profileId) {
+      guestDocuments?.closeOwner(sender.id);
+      state.current?.mcpAppViews?.closeOwner(sender.id);
+    }
     if (previousProfileId !== profileId)
       desktopWorkspaces?.reassign(sender, previousProfileId);
     profilesStore.setLastActiveProfile(profileId);
@@ -289,7 +399,16 @@ const windows: WindowProfileRegistry = {
         profileConfig.forProfile(profileId).theme.resolved(),
       ),
     );
+    if (window) windowButtons.apply(window);
     applyMenuForFocusedWindow();
+  },
+  attach(contents, profileId) {
+    const id = contents.id;
+    // Attached again (voice's bubble moving between profiles): one
+    // listener is enough.
+    if (!windowProfiles.has(id))
+      contents.once("destroyed", () => windowProfiles.delete(id));
+    windowProfiles.set(id, profileId);
   },
   openWindow(profileId) {
     if (desktopWorkspaces?.activateProfile(profileId)) return;
@@ -297,6 +416,23 @@ const windows: WindowProfileRegistry = {
     window.focus();
   },
 };
+
+const windowButtons = new WindowButtons({
+  allowed: (window: BrowserWindow) =>
+    profileConfig
+      .forProfile(windows.profileFor(window.webContents))
+      .prefs.load().windowButtons,
+});
+
+/** A collapsed sidebar holding the header hides them until it is revealed. */
+shellIpcMain.handle(
+  "catamorphic:window-controls-visible",
+  (event, visible: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window && typeof visible === "boolean")
+      windowButtons.request(window, visible);
+  },
+);
 
 function sendToProfile(
   profileId: string,
@@ -312,16 +448,29 @@ function createWindow(
   profileId?: string,
   dock = false,
   initialProjectId?: string,
+  placement: {
+    cascadeFrom?: BrowserWindow;
+    restored?: WorkspaceWindowState;
+    focus?: boolean;
+  } = {},
 ): BrowserWindow {
   const profile = profileId
     ? (profilesStore.get(profileId) ?? profilesStore.lastActiveProfile())
     : profilesStore.lastActiveProfile();
   const stores = profileConfig.forProfile(profile.id);
-  // Placement survives a relaunch (size, position, maximized/fullscreen).
-  const windowState = new WindowStateStore(
-    path.join(app.getPath("userData"), "window-state.json"),
+  // Restored windows keep their own placement; a new project window
+  // cascades from its source, and a fresh window uses the last placement.
+  const from = placement.cascadeFrom;
+  const saved = fitToDisplays(
+    placement.restored?.state ??
+      (from
+        ? cascadeWindowState(
+            from.getNormalBounds(),
+            screen.getDisplayMatching(from.getNormalBounds()).workArea,
+          )
+        : windowState.placement()),
+    screen.getAllDisplays(),
   );
-  const saved = windowState.load();
   if (
     !dock &&
     !fs.existsSync(windowState.file) &&
@@ -360,11 +509,16 @@ function createWindow(
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      additionalArguments: [SHELL_WINDOW_ARGUMENT],
       // Browser tabs render as <webview> guests (see main/browser.ts).
       webviewTag: true,
     },
   });
+  // The detached dock is not a window to switch to: the Window menu's list
+  // (and Cmd+`, which walks it) name only workspace windows.
+  if (dock && process.platform === "darwin")
+    window.excludedFromShownWindowsMenu = true;
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url))
       window.webContents.send("catamorphic:browser-open-url", { url });
@@ -376,52 +530,70 @@ function createWindow(
     if (pendingConnectLink) deliverConnectLink(pendingConnectLink);
     notifyBrowserLinks();
   });
+  // Hidden restored windows defer their native modes until shown: entering
+  // fullscreen before show can leave macOS with a blank Space.
+  if (!dock)
+    window.once("show", () => {
+      if (saved.maximized) window.maximize();
+      if (saved.fullscreen) window.setFullScreen(true);
+    });
   window.once("ready-to-show", () => {
     if (dock) window.showInactive();
-    else window.show();
-    // The relaunch after an update starts behind the user's other windows.
-    if (!dock && consumeUpdateRestart(app.getPath("userData"))) {
-      app.focus({ steal: true });
-      window.focus();
+    else if (placement.restored?.visible !== false) {
+      if (placement.focus === false || placement.restored?.minimized)
+        window.showInactive();
+      else window.show();
+      if (placement.restored?.minimized) window.minimize();
     }
-    // Native window managers can ignore zoom requests before the first show.
-    if (!dock && saved.maximized) window.maximize();
-    // Fullscreen after show: entering it on a hidden window leaves macOS
-    // with a blank space until the next repaint.
-    if (!dock && saved.fullscreen) window.setFullScreen(true);
   });
-  if (!dock) windowState.track(window, saved);
   // Captured now: `closed` fires after destruction, when touching
   // window.webContents throws "Object has been destroyed".
   const webContentsId = window.webContents.id;
   windowProfiles.set(webContentsId, profile.id);
+  if (!dock) windowButtons.manage(window);
   profilesStore.setLastActiveProfile(profile.id);
   window.on("closed", () => {
     windowProfiles.delete(webContentsId);
   });
+  window.webContents.on(
+    "did-start-navigation",
+    (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame && !inPlace) {
+        guestDocuments?.closeOwner(webContentsId);
+        state.current?.mcpAppViews?.closeOwner(webContentsId);
+      }
+    },
+  );
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    const query = new URLSearchParams(
-      dock
-        ? { surface: "dock" }
-        : initialProjectId
-          ? { project: initialProjectId }
-          : {},
-    );
-    void window.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
-  } else {
-    void window.loadFile(
-      path.join(import.meta.dirname, "../renderer/index.html"),
-      {
-        query: dock
-          ? { surface: "dock" }
-          : initialProjectId
-            ? { project: initialProjectId }
-            : {},
-      },
-    );
-  }
-  desktopWorkspaces?.track(window, dock);
+  // Claims are in place before renderer loading, including every retained
+  // project of a restored window. Detached docks never enter this store.
+  const workspaceState = placement.restored
+    ? { ...placement.restored, state: saved }
+    : freshWindowState({
+        profileId: profile.id,
+        projectId: initialProjectId,
+        state: saved,
+      });
+  desktopWorkspaces?.track(window, dock, workspaceState);
+  const query: Record<string, string> = dock
+    ? { surface: "dock", clicks: dockClicks() }
+    : {
+        window: workspaceState.id,
+        ...(initialProjectId ? { project: initialProjectId } : {}),
+      };
+  const documentUrl = shellDocumentUrl({ query });
+  registerShellContents({
+    contents: window.webContents,
+    documentUrl,
+    surface: "workspace",
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isSameShellDocument(documentUrl, url)) return;
+    event.preventDefault();
+    if (/^https?:/i.test(url))
+      window.webContents.send("catamorphic:browser-open-url", { url });
+  });
+  void window.loadURL(documentUrl);
   return window;
 }
 
@@ -434,6 +606,22 @@ let desktopWorkspaces: DesktopWorkspaces | null = null;
 // the command palette, and toggle-sidebar are window-level shortcuts handled
 // in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
+  // Keep Electron's platform-specific edit commands. Build the plain-paste
+  // item with our shortcut rather than mutating a native menu item's fields.
+  const edit = Menu.buildFromTemplate([{ role: "editMenu" }]).items[0]?.submenu;
+  const plainPaste = new MenuItem({
+    role: "pasteAndMatchStyle",
+    accelerator: "CmdOrCtrl+Shift+V",
+  });
+  const editItems = (edit?.items ?? []).map((item) =>
+    item.role?.toLowerCase() === "pasteandmatchstyle" ? plainPaste : item,
+  );
+  if (!editItems.includes(plainPaste))
+    editItems.splice(
+      editItems.findIndex((item) => item.role === "paste") + 1,
+      0,
+      plainPaste,
+    );
   const checkForUpdates = () => {
     // A macOS app can have no windows while its menu is still reachable.
     // The new renderer reads the latest updater state after loading.
@@ -462,9 +650,19 @@ function buildMenu(bindings: Keybindings): Menu {
             }
           },
         },
+        // The close button's action, for windows that hide their buttons.
+        // Elsewhere the Window menu's close role has it.
+        ...(process.platform === "darwin"
+          ? [
+              {
+                label: "Close Window",
+                click: (_item, window) => window?.close(),
+              } satisfies MenuItemConstructorOptions,
+            ]
+          : []),
       ],
     },
-    { role: "editMenu" },
+    { role: "editMenu", submenu: Menu.buildFromTemplate(editItems) },
     {
       // Custom View menu: the stock viewMenu role binds Cmd+R /
       // Cmd+Shift+R to reloading the whole app window, which must belong
@@ -488,6 +686,9 @@ function buildMenu(bindings: Keybindings): Menu {
     },
     {
       label: "Window",
+      // macOS's Window menu: it lists the open windows, and Cmd+` moves
+      // between them.
+      role: "window",
       submenu: [
         // Not the stock minimize role: its default Cmd+M accelerator would
         // swallow the workspace's minimize/restore-chat shortcut.
@@ -546,13 +747,93 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  if (!app.isPackaged && process.platform === "darwin") {
-    app.dock?.setIcon(path.join(import.meta.dirname, "../../build/icon.png"));
-  }
+  const rendererRoot = path.join(import.meta.dirname, "../renderer");
+  serveShellDocuments({ root: rendererRoot });
+  guestDocuments = new GuestDocuments({
+    api: () => state.current ?? undefined,
+    views: () => state.current?.mcpAppViews,
+    projectRoot: (projectId) =>
+      state.current?.projectRoots.getSync(projectId) ?? undefined,
+    permits: (ownerId, projectId) => {
+      const contents = webContents.fromId(ownerId);
+      if (!contents || !isRegisteredShellContents(contents)) return false;
+      return (
+        profilesStore.profileForProject(projectId).id ===
+        windows.profileFor(contents)
+      );
+    },
+  });
+  guestDocuments.serve();
+  shellIpcMain.handle(
+    "catamorphic:app-guest-document",
+    (event, input: unknown) => {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("url" in input) ||
+        typeof input.url !== "string" ||
+        !("mountId" in input) ||
+        typeof input.mountId !== "string"
+      )
+        throw new Error("Invalid app document");
+      return guestDocuments?.projectUrl({
+        ownerId: event.sender.id,
+        url: input.url,
+        mountId: input.mountId,
+      });
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:app-guest-close",
+    (event, input: unknown) => {
+      if (
+        input &&
+        typeof input === "object" &&
+        "url" in input &&
+        typeof input.url === "string"
+      )
+        guestDocuments?.close({ ownerId: event.sender.id, url: input.url });
+    },
+  );
+  shellIpcMain.handle(
+    "catamorphic:pdf-guest-document",
+    (event, input: unknown) => {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("projectId" in input) ||
+        typeof input.projectId !== "string" ||
+        !("filePath" in input) ||
+        typeof input.filePath !== "string"
+      )
+        throw new Error("Invalid PDF document");
+      return guestDocuments?.pdfUrl({
+        ownerId: event.sender.id,
+        projectId: input.projectId,
+        filePath: input.filePath,
+      });
+    },
+  );
+  app.on("web-contents-created", (_event, contents) => {
+    contents.once("destroyed", () => {
+      guestDocuments?.closeOwner(contents.id);
+      state.current?.mcpAppViews?.closeOwner(contents.id);
+    });
+  });
+  // An empty native image restores the signed bundle icon on macOS. Keep
+  // Icon Composer rendering under OS control when no custom icon is selected.
+  registerDockIcon({
+    defaultIcon: app.isPackaged
+      ? nativeImage.createEmpty()
+      : nativeImage.createFromPath(
+          path.join(import.meta.dirname, "../../build/icon.png"),
+        ),
+  });
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.
   if (
+    !app.isPackaged &&
     shouldUseE2ePlainTextEncryption({
       e2eDataDir,
       platform: process.platform,
@@ -562,16 +843,8 @@ app.whenReady().then(async () => {
   }
   desktopUpdater = registerDesktopUpdater({
     broadcast: state.broadcast,
-    canInstall: async () => {
-      if (!server || terminalSupport?.hasActiveWork()) return false;
-      const activeTurn = await server.catamorphic.core.db
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("status", "=", "running")
-        .limit(1)
-        .executeTakeFirst();
-      return !activeTurn;
-    },
+    prepareRestart: () => desktopWorkspaces?.prepareQuit() ?? Promise.resolve(),
+    cancelRestart: () => desktopWorkspaces?.resume(),
   });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
@@ -588,12 +861,14 @@ app.whenReady().then(async () => {
     }
   });
   nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
-  profileConfig.onSidebarChanged((profileId) => {
+  profileConfig.onWorkspaceChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.
-    sendToProfile(profileId, "catamorphic:sidebar-config-changed", null);
+    sendToProfile(profileId, "catamorphic:workspace-config-changed", null);
   });
   profileConfig.onPrefsChanged((profileId, prefs) => {
+    for (const window of windows.windowsFor(profileId))
+      windowButtons.apply(window);
     sendToProfile(profileId, "catamorphic:prefs-changed", prefs);
   });
   profileConfig.onConnectionsChanged((profileId) => {
@@ -615,6 +890,15 @@ app.whenReady().then(async () => {
       path.join(paths.profilesDir, profileId, "connectors"),
     connectionsFor: (profileId) =>
       profileConfig.forProfile(profileId).connections,
+    // Scripted runs (E2E, demo recordings) never reach the public catalogs:
+    // none reads them, and a request still out at quit can hold the exit.
+    ...(e2eDataDir
+      ? { catalogFetch: async () => new Response(null, { status: 404 }) }
+      : {}),
+    images: {
+      list: (url) => browserSupport?.images.list(url),
+      inline: async (url) => (await browserSupport?.images.inline(url)) ?? null,
+    },
   });
   // MCP Apps host: which connection tools carry a ui:// view, their
   // templates, and the view-initiated tool calls. Elicitation from those
@@ -631,10 +915,10 @@ app.whenReady().then(async () => {
 
   const unsubscribeProfileRemoved = profilesStore.onRemoved((id) => {
     void mcpApps.releaseProfile(id);
-    state.current?.agentRegistry.releaseProfile(id);
   });
   disposeProfileResources = async () => {
     unsubscribeProfileRemoved();
+    connectors.dispose();
     await mcpApps.dispose();
   };
 
@@ -653,9 +937,12 @@ app.whenReady().then(async () => {
     file: path.join(paths.root, "..", "mobile-pairing.json"),
     profileConfig,
     serverUrl: () => state.current?.url ?? null,
+    apiToken: () => state.current?.apiToken ?? null,
     ...(e2eMobilePairingAddress && e2eDataDir
       ? {
           lanAddresses: () => [e2eMobilePairingAddress],
+          // The explicit pairing fixture exercises loopback HTTP and motion.
+          requestLocalNetworkAccess: async () => {},
         }
       : {}),
   });
@@ -675,6 +962,10 @@ app.whenReady().then(async () => {
     mcpApps,
     mobilePairing,
     incognitoSessions,
+    {
+      prepareQuit: () => desktopWorkspaces?.prepareQuit() ?? Promise.resolve(),
+      forgetProject: (projectId) => desktopWorkspaces?.forget(projectId),
+    },
   );
   browserSupport = registerBrowserSupport(
     profilesStore,
@@ -682,32 +973,150 @@ app.whenReady().then(async () => {
     windows,
     async (projectId) =>
       (await state.current?.projectRoots.get(projectId)) ?? null,
-    async () => {
-      const env =
-        await state.current?.agentRegistry.nativeToolchainEnvironment();
-      return env?.CATAMORPHIC_BUN ?? "bun";
+    async () =>
+      (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
+    (window) => desktopWorkspaces?.isDock(window) ?? false,
+    {
+      // Ordinary Docker UI suites cannot create nested /proc mounts. A
+      // dedicated native Linux lane verifies the real boundary (ADR 0283).
+      unconfined:
+        e2eDataDir !== undefined &&
+        process.platform !== "darwin" &&
+        process.env.CATAMORPHIC_TEST_MODULE_CONFINEMENT !== "1",
+      workPorts: () => {
+        const url = state.current?.url;
+        if (!url) return [];
+        try {
+          return [Number(new URL(url).port)];
+        } catch {
+          return [];
+        }
+      },
     },
   );
-  terminalSupport = registerTerminalSupport(state, async (projectId) => ({
-    ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
-      {}),
-    ...(agentBridge?.openHookEnv(projectId) ?? {}),
-  }));
+  voiceSupport = registerVoiceSupport({
+    state,
+    profileConfig,
+    profiles: profilesStore,
+    windows,
+    incognito: incognitoSessions,
+    dockDetached: (profileId) =>
+      desktopWorkspaces?.dockDetached(profileId) ??
+      profileConfig.forProfile(profileId).prefs.load().dockDetached,
+    isWorkspace: (window) => desktopWorkspaces?.isWorkspace(window) ?? false,
+    activeProject: (window) => desktopWorkspaces?.activeProject(window) ?? null,
+    browserProfileFor: (contents) => browserSupport?.profileOf(contents),
+    openChat: ({ sender, session }) =>
+      desktopWorkspaces?.navigate({
+        sender,
+        projectId: session.projectId,
+        surface: {
+          url: chatBookmarkUrl(session),
+          title: "Assistant",
+          mode: "floating",
+          nonce: randomUUID(),
+        },
+      }),
+  });
+  terminalSupport = registerTerminalSupport(
+    state,
+    async (projectId) => ({
+      ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
+        {}),
+      ...(agentBridge?.openHookEnv(projectId) ?? {}),
+    }),
+    (projectId, sender) => desktopWorkspaces?.owner(projectId) === sender,
+    {
+      canAccessProject: (projectId, sender) =>
+        profilesStore.profileForProject(projectId).id ===
+        windows.profileFor(sender),
+      profileFor: (sender) => windows.profileFor(sender),
+    },
+  );
+  registerResourceSupport();
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
+    windowState,
+    onQuitCancelled: () => desktopUpdater?.cancelRestart(),
     profileForProject: (projectId) =>
       profilesStore.profileForProject(projectId).id,
+    projectExists: async (projectId) => {
+      if (!server) throw new Error("The project server is still starting.");
+      try {
+        await server.catamorphic.core.projects.get(
+          {
+            tenantId: DESKTOP_TENANT_ID,
+            externalUserId: DESKTOP_USER_ID,
+          },
+          projectId,
+        );
+        return true;
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) return false;
+        throw error;
+      }
+    },
     createWindow,
+    onReleased: (projectId, from) => terminalSupport?.handOff(projectId, from),
   });
   agentBridge = registerAgentBridge(
     terminalSupport.agentTerminals,
     (projectId) => desktopWorkspaces?.target(projectId),
+    (projectId) => desktopWorkspaces?.arrival(projectId) ?? Promise.resolve(),
+    {
+      file: path.join(paths.root, "..", "command-watches.json"),
+      env: async () =>
+        (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
+    },
   );
-  ipcMain.handle("catamorphic:webview-preload", () =>
+  shellIpcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
-  const window = createWindow();
+  const session = windowState.load();
+  const savedWindows = session.windows.filter(({ profileId }) =>
+    profilesStore.get(profileId),
+  );
+  const restored = savedWindows.map((saved) => ({
+    saved,
+    window: createWindow(saved.profileId, false, saved.activeProjectId, {
+      restored: saved,
+      focus: false,
+    }),
+  }));
+  const startupWindows =
+    restored.length > 0
+      ? restored.map(({ window }) => window)
+      : [createWindow()];
+  // All windows reserve their owners synchronously above. Show them without
+  // taking focus one by one, then restore the last visible workspace once.
+  void Promise.all(
+    startupWindows.map(
+      (window) =>
+        new Promise<void>((resolve) => {
+          window.once("ready-to-show", () => resolve());
+          window.once("closed", () => resolve());
+        }),
+    ),
+  ).then(() => {
+    const target =
+      restored.find(
+        ({ saved }) =>
+          saved.id === session.lastFocusedWindowId &&
+          saved.visible &&
+          !saved.minimized,
+      ) ?? restored.find(({ saved }) => saved.visible && !saved.minimized);
+    const window =
+      target?.window ?? (restored.length === 0 ? startupWindows[0] : undefined);
+    const updateRestart = consumeUpdateRestart(app.getPath("userData"));
+    if (!window || window.isDestroyed()) return;
+    // Restored windows are shown inactive. On macOS, choosing a key window
+    // alone may leave the application inactive on an ordinary relaunch too.
+    // Activate once, then focus only the saved visible workspace selected above.
+    if (updateRestart || (process.platform === "darwin" && restored.length > 0))
+      app.focus({ steal: true });
+    window.focus();
+  });
 
   try {
     const versionBackup = prepareVersionBackup({
@@ -721,6 +1130,7 @@ app.whenReady().then(async () => {
         `[desktop] Backed up the pre-migration database to ${versionBackup.backupPath}`,
       );
     }
+    await loginPathAdopted;
     server = await startEmbeddedServer(
       paths,
       profilesStore,
@@ -730,11 +1140,26 @@ app.whenReady().then(async () => {
       mcpApps,
       incognitoSessions,
       [desktopProfileMcpProvider],
+      (ownerId) => {
+        const contents = webContents.fromId(ownerId);
+        return contents && isRegisteredShellContents(contents)
+          ? windows.profileFor(contents)
+          : undefined;
+      },
     );
     versionBackup.markBootSuccessful();
+    // The app's own windows (the default session; browser tabs have their
+    // profiles' sessions) carry this run's token to the embedded API, which
+    // refuses web pages without it.
+    allowDesktopWindowsApi({ url: server.url, token: server.apiToken });
+    // The assistant sees the window the person is in (ADR 0265).
+    server.agentRegistry.setPersonPlace(
+      (profileId) => desktopWorkspaces?.personProject(profileId) ?? null,
+    );
+    const telemetrySettings = cachedProjectTelemetrySettings();
     telemetry.configureProjects({
       resolve: (projectId) =>
-        projectTelemetrySettings({
+        telemetrySettings({
           projectId,
           rootPath: server?.projectRoots.getSync(projectId),
           userDataPath: app.getPath("userData"),
@@ -748,16 +1173,38 @@ app.whenReady().then(async () => {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
     });
+    server.personalEnvironment.subscribe((change) =>
+      state.broadcast("catamorphic:personal-environment-changed", change),
+    );
+    server.onSessionsChanged(() =>
+      state.broadcast("catamorphic:sessions-changed", {}),
+    );
     // Don't hold job leases through OS sleep. A lease held by a frozen
     // process expires on the wall clock, so the step's work is discarded on
     // wake; releasing before the freeze parks the job cleanly and resume
     // picks it back up within a poll interval.
-    powerMonitor.on("suspend", () => void server?.suspendExecution());
+    powerMonitor.on("suspend", () => {
+      void server?.suspendExecution();
+      server?.signInRecovery.left();
+    });
+    // Away and back again: a chat whose turn failed on its sign-in while
+    // the person was away is not given up on (ADR 0228).
+    powerMonitor.on("lock-screen", () => server?.signInRecovery.left());
+    powerMonitor.on(
+      "unlock-screen",
+      () => void server?.signInRecovery.returned(),
+    );
     powerMonitor.on("resume", () => {
       server?.resumeExecution();
       server?.syncSessionMailboxes();
+      server?.personalEnvironment.nudge();
     });
-    app.on("browser-window-focus", () => server?.syncSessionMailboxes());
+    app.on("browser-window-focus", () => {
+      server?.syncSessionMailboxes();
+      server?.personalEnvironment.nudge();
+      // A sign-in renewed outside Work runs its failed chats again.
+      void server?.signInRecovery.probe();
+    });
     // OAuth-backed connections hand their token to harnesses as a plain
     // header, so the app keeps it fresh: at boot, after sleep, and on a
     // slow tick (refresh only fires when a token is near expiry).
@@ -770,9 +1217,10 @@ app.whenReady().then(async () => {
     powerMonitor.on("resume", refreshConnectionTokens);
     // A wake is when sessions turn out to have expired — nudge every
     // window to re-probe its agents' auth health.
-    powerMonitor.on("resume", () =>
-      state.broadcast("catamorphic:agent-auth-maybe-changed", {}),
-    );
+    powerMonitor.on("resume", () => {
+      state.broadcast("catamorphic:agent-auth-maybe-changed", {});
+      void server?.signInRecovery.returned();
+    });
     setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -781,7 +1229,6 @@ app.whenReady().then(async () => {
       "Work failed to start",
       `The embedded server could not boot.\n\n${message}`,
     );
-    window.close();
     app.quit();
     return;
   }
@@ -794,18 +1241,31 @@ app.whenReady().then(async () => {
 let disposeProfileResources: (() => Promise<void>) | undefined;
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
+let voiceSupport: ReturnType<typeof registerVoiceSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
 let desktopUpdater: DesktopUpdaterService | null = null;
+let guestDocuments: GuestDocuments | null = null;
 
 registerDesktopShutdown({
   app,
   shutdown: async () => {
     await shutdownDesktopServices({
       steps: [
+        // A relaunch hands working agents back before anything they use
+        // stops, and the next launch continues them; terminals and the
+        // rest simply end (ADR 0246).
+        {
+          name: "agent turns",
+          dispose: () =>
+            desktopUpdater?.restarting()
+              ? server?.catamorphic.handBackTurns()
+              : undefined,
+        },
         { name: "profile clients", dispose: () => disposeProfileResources?.() },
         { name: "profile settings", dispose: () => profileConfig.dispose() },
         { name: "browser", dispose: () => browserSupport?.dispose() },
         { name: "terminals", dispose: () => terminalSupport?.dispose() },
+        { name: "voice", dispose: () => voiceSupport?.dispose() },
         { name: "agent bridge", dispose: () => agentBridge?.dispose() },
         { name: "updater", dispose: () => desktopUpdater?.dispose() },
         {
@@ -827,8 +1287,65 @@ registerDesktopShutdown({
     server = null;
   },
   onError: (error) => console.error("[desktop] shutdown failed:", error),
+  openWindows: () =>
+    BrowserWindow.getAllWindows().map((window) => {
+      const contents = window.webContents;
+      const pages = webContents
+        .getAllWebContents()
+        .filter((page) => page.hostWebContents === contents);
+      return [
+        `window ${window.id} (${new URL(contents.getURL() || "about:blank").search || "main"})`,
+        window.isVisible() ? "shown" : "hidden",
+        contents.isCrashed() ? "crashed" : "",
+        contents.isLoading() ? "loading" : "",
+        pages.length ? `${pages.length} pages` : "",
+        ...pages
+          .filter((page) => page.isCrashed() || page.isLoading())
+          .map((page) => `a page ${page.isCrashed() ? "crashed" : "loading"}`),
+      ]
+        .filter(Boolean)
+        .join(", ");
+    }),
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+/**
+ * Add the embedded API's token to the app windows' requests to it, and to
+ * no other port: a preview origin forwards headers to a remote server.
+ */
+function allowDesktopWindowsApi(input: { url: string; token: string }): void {
+  const api = new URL(input.url);
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["<all_urls>"] },
+    (details, callback) => {
+      const target = new URL(details.url);
+      const requestHeaders = Object.fromEntries(
+        Object.entries(details.requestHeaders).filter(
+          ([name]) => name.toLowerCase() !== DESKTOP_API_TOKEN_HEADER,
+        ),
+      );
+      const contents =
+        details.webContentsId === undefined
+          ? undefined
+          : webContents.fromId(details.webContentsId);
+      const trusted =
+        contents &&
+        shellSurfaceFor(contents) === "workspace" &&
+        details.frame &&
+        !details.frame.detached &&
+        details.frame === contents.mainFrame;
+      callback({
+        requestHeaders:
+          target.origin === api.origin && trusted
+            ? {
+                ...requestHeaders,
+                [DESKTOP_API_TOKEN_HEADER]: input.token,
+              }
+            : requestHeaders,
+      });
+    },
+  );
+}

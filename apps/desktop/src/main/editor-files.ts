@@ -40,3 +40,43 @@ export async function writeEditorFile({
     throw new Error("This file is too large for the text editor");
   await fs.writeFile(filePath, content, "utf8");
 }
+
+/**
+ * Renames a file in place, keeping its extension when the new name has
+ * none, and never replacing another file. Returns the new absolute path.
+ */
+export async function renameEditorFile({
+  filePath,
+  name,
+}: {
+  filePath: string;
+  name: string;
+}) {
+  if (!path.isAbsolute(filePath))
+    throw new Error("Expected an absolute file path");
+  const trimmed = name.trim();
+  if (
+    !trimmed ||
+    trimmed === "." ||
+    trimmed === ".." ||
+    /[/\\\0]/.test(trimmed)
+  )
+    throw new Error("Choose a name without slashes.");
+  const extension = path.extname(filePath);
+  const fileName =
+    path.extname(trimmed) || !extension ? trimmed : `${trimmed}${extension}`;
+  const target = path.join(path.dirname(filePath), fileName);
+  if (target === filePath) return filePath;
+  const source = await fs.lstat(filePath);
+  if (!source.isFile()) throw new Error("This path is not a file");
+  const existing = await fs.lstat(target).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return null;
+    throw error;
+  });
+  // The same file under another case on a case-insensitive disk is a rename.
+  if (existing && existing.ino !== source.ino)
+    throw new Error(`A file named ${fileName} is already here.`);
+  await fs.rename(filePath, target);
+  return target;
+}

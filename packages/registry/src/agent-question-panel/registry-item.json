@@ -2,9 +2,9 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "agent-question-panel",
   "type": "registry:component",
-  "description": "Tabbed blocking or non-blocking agent questions, with deferred answers and optional host hints.",
-  "dependencies": ["lucide-react"],
-  "registryDependencies": ["@catamorphic/chat-timeline"],
+  "description": "Tabbed blocking or non-blocking agent questions (ADR 0195). Submits one answer per question for respond(id, { kind: \"question\", answers }); free-text replies go through the chat composer.",
+  "dependencies": ["@catamorphic/react", "lucide-react"],
+  "registryDependencies": [],
   "files": [
     {
       "path": "components/catamorphic/agent-question-panel.tsx",

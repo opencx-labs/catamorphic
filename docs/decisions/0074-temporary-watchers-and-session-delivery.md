@@ -1,11 +1,15 @@
 # 0074: Temporary Watchers and durable session delivery
 
-- **Status:** Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139)
+- **Status:** Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139; GitHub monitor superseded by 0177; delivery modes amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md); inputs typed by author, and `message_only` read with the next turn, by [0217](0217-only-people-write-user-messages.md))
 - **Date:** 2026-08-28
 - **Refines:** 0039, 0061, 0067
 - **Supersedes in part:** 0068, 0069
 
 ## Current scope
+
+[ADR 0177](0177-github-is-a-connection.md) removes the GitHub monitor and the
+`github.*` host kinds: a watcher names a host-registered polled event source,
+and the desktop's GitHub source records webhook-shaped deliveries.
 
 [ADR 0139](0139-session-reminder-lifetime-and-attention.md) supersedes the expiry
 and placement rules below. Session-owned watchers have no implicit expiry, stay

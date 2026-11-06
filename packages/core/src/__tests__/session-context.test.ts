@@ -19,7 +19,7 @@ const snapshot = {
   project: { id: "p", name: "Acme brain" },
   sessionId: "s",
   allocationId: "a",
-  environment: "local",
+  environment: "default",
   agentLoopHost: null,
   execution: {
     bindingId: "local",

@@ -2,17 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(value),
     decryptString: (value: Buffer) => value.toString(),
   },
 }));
 
-import { forwardRemoteApi } from "./remote-api.js";
+import {
+  forwardRemoteApi,
+  proxiedGuestUrl,
+  remoteMachinesRequest,
+} from "./remote-api.js";
 import { RemoteProjectsStore } from "./remote-projects-store.js";
 
 it("routes a linked project under the member token and never falls through to local root", async () => {
@@ -81,4 +86,100 @@ it("routes a linked project under the member token and never falls through to lo
     await remote.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+it("asks the project's server for the member's own machines with the member token", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cat-remote-api-"));
+  const remote = Fastify();
+  remote.get("/api/work/me/machines", async (request) => {
+    expect(request.headers.authorization).toBe("Bearer member-token");
+    return { machines: [] };
+  });
+  remote.post(
+    "/api/work/me/machines/:id/codex/sign-in",
+    async (request, reply) => {
+      expect(request.params).toEqual({ id: "m-1" });
+      return reply.status(409).send({
+        error: "ada-devbox is not connected.",
+        code: "machine_offline",
+      });
+    },
+  );
+  const base = await remote.listen({ port: 0, host: "127.0.0.1" });
+  const store = new RemoteProjectsStore(path.join(directory, "remote.json"));
+  store.set("local", {
+    connectionId: "runner-id",
+    serverUrl: `${base}/api`,
+    remoteProjectId: "remote",
+    remoteProjectName: "Company",
+    lastSyncAt: null,
+    credentials: {
+      clientId: "client",
+      accessToken: "member-token",
+      refreshToken: "refresh-token",
+      accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+      tokenEndpoint: `${base}/token`,
+      scope: "openid",
+    },
+  });
+  const profiles = { forProject: () => ({ remoteProjects: store }) };
+  try {
+    const request = remoteMachinesRequest({ profiles, projectId: "local" });
+    expect(await request({ method: "GET", path: "" })).toEqual({
+      status: 200,
+      body: { machines: [] },
+    });
+    expect(
+      await request({ method: "POST", path: "/m-1/codex/sign-in" }),
+    ).toEqual({
+      status: 409,
+      body: {
+        error: "ada-devbox is not connected.",
+        code: "machine_offline",
+      },
+    });
+    // A project that lost its link answers as a server without the route.
+    expect(
+      await remoteMachinesRequest({ profiles, projectId: "other" })({
+        method: "GET",
+        path: "",
+      }),
+    ).toEqual({
+      status: 404,
+      body: { error: "This project is no longer linked to its server." },
+    });
+  } finally {
+    await remote.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+describe("proxiedGuestUrl", () => {
+  it("routes a server app's document through the desktop proxy", () => {
+    expect(
+      proxiedGuestUrl({
+        state: {
+          state: "ready",
+          guestUrl:
+            "https://brain.example.com/api/projects/remote-1/apps/pilot/guest?channel=dev&versionId=v1",
+        },
+        localBase:
+          "http://127.0.0.1:4000/desktop/projects/local-1/remote-api/api",
+        remoteProjectId: "remote-1",
+        localProjectId: "local-1",
+      }),
+    ).toEqual({
+      state: "ready",
+      guestUrl:
+        "http://127.0.0.1:4000/desktop/projects/local-1/remote-api/api/projects/local-1/apps/pilot/guest?channel=dev&versionId=v1",
+    });
+    expect(
+      proxiedGuestUrl({
+        state: { state: "not_published" },
+        localBase: "x",
+        remoteProjectId: "r",
+        localProjectId: "l",
+      }),
+    ).toEqual({ state: "not_published" });
+  });
 });

@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -7,7 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
 import { electronLaunchArgs } from "./harness-args.js";
-import { clickNativePointer, moveNativePointer } from "./native-pointer.js";
+import {
+  clickNativePointer,
+  moveNativePointer,
+  moveNativePointerThrough,
+} from "./native-pointer.js";
 
 /**
  * E2E harness: builds the app (electron-vite), launches the real Electron
@@ -42,6 +46,22 @@ async function freeCdpPort(): Promise<number> {
   return cdpPort();
 }
 
+/** The evaluated expression threw inside the page. */
+class PageException extends Error {}
+
+/**
+ * DevTools' answer to a check sent as its page navigates or reloads: the
+ * document it ran in went, and the next one is not there yet.
+ */
+function navigating(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /Execution context was destroyed|Cannot find context with specified id|Inspected target navigated or closed/.test(
+      error.message,
+    )
+  );
+}
+
 export interface FrameHandle {
   getRendererErrors: () => string[];
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
@@ -58,6 +78,11 @@ export interface AppHandle {
   processId?: number;
   /** Low-level DevTools instrumentation for performance and lifecycle checks. */
   cdp: (method: string, params?: unknown) => Promise<unknown>;
+  /** Subscribe to trace and other instrumentation events from this target. */
+  onCdpEvent: (
+    method: string,
+    listener: (params: unknown) => void,
+  ) => () => void;
   /** Reload the main document and wait for its new load event. */
   reload: () => Promise<void>;
   /** Evaluate JS in the app window; resolves the JSON-serialized result. */
@@ -78,6 +103,10 @@ export interface AppHandle {
   press: (key: KeyName, modifiers?: number) => Promise<void>;
   /** Move the OS pointer to renderer coordinates on the isolated desktop. */
   movePointer: (point: { x: number; y: number }) => Promise<void>;
+  /** Move the OS pointer through renderer points in one gesture. */
+  movePointerThrough: (
+    points: readonly { x: number; y: number }[],
+  ) => Promise<void>;
   /**
    * Click with the OS pointer at renderer coordinates: the click lands on
    * whichever window the OS finds there, so a window above the workspace
@@ -100,7 +129,11 @@ export interface AppHandle {
   /** Uncaught renderer exceptions, including failures from lazy screens. */
   getRendererErrors: () => string[];
   userDataDir: string;
-  stop: (opts?: { preserveUserData?: boolean }) => Promise<void>;
+  stop: (opts?: {
+    preserveUserData?: boolean;
+    /** Skip compositor work when testing an immediate Quit boundary. */
+    captureFinalFrame?: boolean;
+  }) => Promise<void>;
   /**
    * SIGKILL without cleanup — simulates a crash/quit mid-operation. The
    * userData dir survives so a follow-up launchApp({ userDataDir }) can
@@ -116,10 +149,19 @@ export interface LaunchOpts {
   executablePath?: string;
   /** Exercise the shipped first-launch layout instead of the standard workspace fixture. */
   firstLaunch?: boolean;
+  /** Leave native startup visibility/focus untouched for restoration checks. */
+  activateWindow?: boolean;
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
   env?: Record<string, string>;
+  /** A WAV file the synthetic microphone plays (voice tests). */
+  fakeAudioCapture?: string;
+  /**
+   * Keep Electron's sandboxed renderers on Linux CI, where the OS sandbox
+   * is off (extension service workers need them, ADR 0203).
+   */
+  sandboxedRenderers?: boolean;
 }
 
 export function removeE2eDirectory(directory: string): void {
@@ -160,6 +202,8 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         platform: process.platform,
         // Only fake-credential tests use Chromium's test key. Real-provider evals retain OS encryption.
         useMockKeychain: (opts.env?.CATAMORPHIC_E2E_FAKE_AGENT ?? "1") === "1",
+        sandboxedRenderers: opts.sandboxedRenderers,
+        fakeAudioCapture: opts.fakeAudioCapture,
       }),
       ...(opts.urls ?? []),
     ],
@@ -203,21 +247,27 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     // Launching a child process is not a user activation on every window
     // manager. Activate the real page once on this private desktop before
     // interacting; subsequent focus changes remain entirely native.
-    await client.cdp("Page.bringToFront");
-    await client.waitFor("document.hasFocus()", {
-      label: "launched desktop activated",
-    });
+    if (opts.activateWindow !== false) {
+      await client.cdp("Page.bringToFront");
+      await client.waitFor("document.hasFocus()", {
+        label: "launched desktop activated",
+      });
+    }
     // IPC and DOM fixtures must start at the same composed first paint a
     // person sees, after Default Project initialization has settled.
     await client.waitFor(
-      `!!document.querySelector('[data-workspace-visible=true] button[aria-label="Expand right sidebar"]') && (!document.querySelector('[data-boot-veil]') || document.querySelector('[data-boot-veil]').classList.contains('pointer-events-none'))`,
+      `!!document.querySelector('[data-workspace-visible=true] [data-workspace-ready], [data-testid="project-load-error"]')`,
       { timeoutMs: 60_000, label: "initial workspace revealed" },
     );
     // Most interaction suites use an explicit, stable workspace layout. The
     // tutorial/window suites opt into the real first-launch presentation.
-    if (!opts.userDataDir && !opts.firstLaunch) {
+    if (
+      !opts.userDataDir &&
+      !opts.firstLaunch &&
+      opts.activateWindow !== false
+    ) {
       await client.eval(
-        "window.catamorphicDesktop.setPrefs({sidebarOpen:true})",
+        "window.catamorphicDesktop.setPrefs({sidebarOpen:true,dockCollapsed:false})",
       );
       await client.eval(
         "window.catamorphicDesktop.devWindow('setSize',1200,800)",
@@ -233,9 +283,10 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       urlSubstring: string,
       frameOpts: { timeoutMs?: number } = {},
     ): Promise<FrameHandle> => {
-      const deadline = Date.now() + (frameOpts.timeoutMs ?? 30_000);
+      const deadline = performance.now() + (frameOpts.timeoutMs ?? 30_000);
       let seen = "";
-      while (Date.now() < deadline) {
+      let attachError = "";
+      while (performance.now() < deadline) {
         try {
           const targets = (await fetch(`http://127.0.0.1:${port}/json`).then(
             (response) => response.json(),
@@ -248,31 +299,45 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           );
           if (frame) {
             const frameWs = new WebSocket(frame.webSocketDebuggerUrl);
-            await new Promise<void>((resolve, reject) => {
-              frameWs.addEventListener("open", () => resolve(), {
-                once: true,
+            try {
+              await new Promise<void>((resolve, reject) => {
+                frameWs.addEventListener("open", () => resolve(), {
+                  once: true,
+                });
+                frameWs.addEventListener(
+                  "error",
+                  () => reject(new Error("WebSocket to the target failed")),
+                  { once: true },
+                );
               });
-              frameWs.addEventListener("error", (event) => reject(event), {
-                once: true,
+              // A target in transition (a worker starting or stopping) can
+              // take the socket and never answer: try a fresh one rather
+              // than spend the whole deadline on it.
+              const frameClient = await createClient(frameWs, {
+                page: false,
+                attachTimeoutMs: 5_000,
               });
-            });
-            const frameClient = await createClient(frameWs, { page: false });
-            return {
-              eval: frameClient.eval,
-              waitFor: frameClient.waitFor,
-              getRendererErrors: frameClient.getRendererErrors,
-              close: () => frameWs.close(),
-            };
+              return {
+                eval: frameClient.eval,
+                waitFor: frameClient.waitFor,
+                getRendererErrors: frameClient.getRendererErrors,
+                close: () => frameWs.close(),
+              };
+            } catch (error) {
+              frameWs.close();
+              throw error;
+            }
           }
-        } catch {
+        } catch (error) {
           // /json can 404 transiently while targets churn; keep polling.
+          attachError = error instanceof Error ? error.message : String(error);
         }
         await sleep(500);
       }
       throw new Error(
         `No CDP target matching "${urlSubstring}" within ${
           frameOpts.timeoutMs ?? 30_000
-        }ms.\n--- targets ---\n${seen}`,
+        }ms.${attachError ? `\nLast attempt: ${attachError}` : ""}\n--- targets ---\n${seen}`,
       );
     };
 
@@ -284,6 +349,14 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
         );
         await moveNativePointer({ x: bounds.x + x, y: bounds.y + y });
+      },
+      movePointerThrough: async (points) => {
+        const bounds = await client.eval<{ x: number; y: number }>(
+          "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
+        );
+        await moveNativePointerThrough(
+          points.map(({ x, y }) => ({ x: bounds.x + x, y: bounds.y + y })),
+        );
       },
       clickPointer: async ({ x, y }) => {
         const bounds = await client.eval<{ x: number; y: number }>(
@@ -300,7 +373,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
             path.join(artifactDirectory, "electron.log"),
             output,
           );
-          if (!killedForRecovery) {
+          if (!killedForRecovery && opts?.captureFinalFrame !== false) {
             await client
               .screenshot(path.join(artifactDirectory, "last-frame.png"))
               .catch(() => {});
@@ -308,13 +381,23 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         }
         ws.close();
         try {
-          if (!killedForRecovery) await terminate(child);
+          if (!killedForRecovery)
+            await terminate(child, { sampleTo: artifactDirectory });
         } catch (error) {
           throw new Error(
-            `${String(error)}\n--- app output ---\n${output.slice(-4000)}`,
+            `${String(error)}${mainProcessErrors(output)
+              .map((failure) => `\n${failure}`)
+              .join("")}\n--- app output ---\n${output.slice(-4000)}`,
           );
         }
         if (!opts?.preserveUserData) removeE2eDirectory(userDataDir);
+        // A main-process error the app printed (main/index.ts) fails the
+        // run that saw it, by name, though the app quit.
+        const failures = mainProcessErrors(output);
+        if (failures.length > 0)
+          throw new Error(
+            `The main process failed during this run:\n${failures.join("\n")}`,
+          );
       },
       kill: async () => {
         ws.close();
@@ -344,9 +427,10 @@ async function connectCdp(
   child: ChildProcess,
   port: number,
 ): Promise<WebSocket> {
-  const deadline = Date.now() + 60_000;
+  // Wall-clock corrections must not shorten or extend polling deadlines.
+  const deadline = performance.now() + 60_000;
   let lastError: unknown;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         `Electron exited early: ${child.signalCode ?? child.exitCode}`,
@@ -357,7 +441,13 @@ async function connectCdp(
         (response) => response.json(),
       )) as { type: string; url: string; webSocketDebuggerUrl: string }[];
       // The app window is the only "page" target that isn't a webview guest.
-      const page = targets.find((target) => target.type === "page");
+      const page = targets.find(
+        (target) =>
+          target.type === "page" &&
+          (target.url.startsWith("work-internal://shell/index.html") ||
+            (target.url.startsWith("file:") &&
+              target.url.includes("/index.html"))),
+      );
       if (page) {
         const ws = new WebSocket(page.webSocketDebuggerUrl);
         await new Promise<void>((resolve, reject) => {
@@ -376,9 +466,17 @@ async function connectCdp(
   throw new Error(`CDP never became reachable: ${String(lastError)}`);
 }
 
-async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
+async function createClient(
+  ws: WebSocket,
+  opts: {
+    page?: boolean;
+    /** How long attaching may take before the caller tries again. */
+    attachTimeoutMs?: number;
+  } = {},
+) {
   let nextId = 1;
   const rendererErrors: string[] = [];
+  const listeners = new Map<string, Set<(params: unknown) => void>>();
   const pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -397,18 +495,15 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
       error?: { message: string };
     };
     if (message.method === "Runtime.exceptionThrown") {
-      const description =
+      rendererErrors.push(
         message.params?.exceptionDetails?.exception?.description ??
-        message.params?.exceptionDetails?.text ??
-        "Uncaught renderer exception";
-      // Electron 43.6–44.4.3 throws from a <webview>'s own
-      // disconnectedCallback whenever a loaded guest is removed
-      // (electron/electron#53989, fixed by #54089; not yet released).
-      // Harmless to the app and outside its control; drop this filter
-      // with the Electron bump that carries the fix.
-      if (!/Invalid guestInstanceId/.test(description))
-        rendererErrors.push(description);
+          message.params?.exceptionDetails?.text ??
+          "Uncaught renderer exception",
+      );
     }
+    if (message.method)
+      for (const listener of listeners.get(message.method) ?? [])
+        listener(message.params);
     if (message.id === undefined) return;
     const waiter = pending.get(message.id);
     if (!waiter) return;
@@ -457,10 +552,10 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     pending.clear();
   });
 
-  await send("Runtime.enable");
+  await send("Runtime.enable", undefined, opts.attachTimeoutMs);
   // Frame targets only need Runtime; Page powers the window screenshot.
   if (opts.page !== false) {
-    await send("Page.enable");
+    await send("Page.enable", undefined, opts.attachTimeoutMs);
   }
 
   const evaluate = async <T>(expression: string): Promise<T> => {
@@ -473,7 +568,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
       exceptionDetails?: { exception?: { description?: string } };
     };
     if (result.exceptionDetails) {
-      throw new Error(
+      throw new PageException(
         result.exceptionDetails.exception?.description ??
           "Evaluation threw in the page",
       );
@@ -486,15 +581,28 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     opts?: { timeoutMs?: number; label?: string },
   ): Promise<T> => {
     const timeoutMs = opts?.timeoutMs ?? 15_000;
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     let last: unknown;
-    while (Date.now() < deadline) {
-      last = await evaluate(expression);
+    let thrown: string | undefined;
+    while (performance.now() < deadline) {
+      try {
+        last = await evaluate(expression);
+        thrown = undefined;
+      } catch (error) {
+        // A condition that throws is not met yet: an element not rendered,
+        // a document still loading (a frame just connected to), or one
+        // going as the page navigates or reloads. A lost connection still
+        // fails at once.
+        if (!(error instanceof PageException) && !navigating(error))
+          throw error;
+        last = undefined;
+        thrown = error instanceof Error ? error.message : String(error);
+      }
       if (last) return last as T;
       await sleep(200);
     }
     throw new Error(
-      `Timed out (${timeoutMs}ms) waiting for ${opts?.label ?? expression}; last value: ${JSON.stringify(last)}`,
+      `Timed out (${timeoutMs}ms) waiting for ${opts?.label ?? expression}; last value: ${JSON.stringify(last)}${thrown ? `; last error: ${thrown}` : ""}`,
     );
   };
 
@@ -556,6 +664,15 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     });
   return {
     cdp: send,
+    onCdpEvent: (method: string, listener: (params: unknown) => void) => {
+      const subscribers = listeners.get(method) ?? new Set();
+      subscribers.add(listener);
+      listeners.set(method, subscribers);
+      return () => {
+        subscribers.delete(listener);
+        if (!subscribers.size) listeners.delete(method);
+      };
+    },
     eval: evaluate,
     waitFor,
     screenshot,
@@ -570,10 +687,17 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
 export type KeyName = keyof typeof KEY_CODES;
 
 const KEY_CODES = {
-  m: { windowsVirtualKeyCode: 77, code: "KeyM" },
+  l: { windowsVirtualKeyCode: 76, code: "KeyL" },
   p: { windowsVirtualKeyCode: 80, code: "KeyP" },
   Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
+  Slash: { key: "/", windowsVirtualKeyCode: 191, code: "Slash", text: "/" },
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
+  n: { windowsVirtualKeyCode: 78, code: "KeyN" },
+  b: { windowsVirtualKeyCode: 66, code: "KeyB" },
+  f: { windowsVirtualKeyCode: 70, code: "KeyF" },
+  j: { windowsVirtualKeyCode: 74, code: "KeyJ" },
+  m: { windowsVirtualKeyCode: 77, code: "KeyM" },
+  w: { windowsVirtualKeyCode: 87, code: "KeyW" },
   Enter: { windowsVirtualKeyCode: 13, code: "Enter", text: "\r" },
   Backspace: { windowsVirtualKeyCode: 8, code: "Backspace" },
   Delete: { windowsVirtualKeyCode: 46, code: "Delete" },
@@ -581,10 +705,27 @@ const KEY_CODES = {
   Tab: { windowsVirtualKeyCode: 9, code: "Tab" },
   ArrowUp: { windowsVirtualKeyCode: 38, code: "ArrowUp" },
   ArrowDown: { windowsVirtualKeyCode: 40, code: "ArrowDown" },
+  PageUp: { windowsVirtualKeyCode: 33, code: "PageUp" },
   PageDown: { windowsVirtualKeyCode: 34, code: "PageDown" },
+  Home: { windowsVirtualKeyCode: 36, code: "Home" },
+  End: { windowsVirtualKeyCode: 35, code: "End" },
+  t: { windowsVirtualKeyCode: 84, code: "KeyT" },
   ArrowLeft: { windowsVirtualKeyCode: 37, code: "ArrowLeft" },
   ArrowRight: { windowsVirtualKeyCode: 39, code: "ArrowRight" },
 } as const;
+
+/**
+ * The New Tab page's palette input. The overlay palette (Cmd+P) is always
+ * mounted, closed and inert, with the same "Search or ask" placeholder, so
+ * a test that types into the New Tab page waits for this one: typing into
+ * the overlay's before the New Tab page mounts goes nowhere.
+ */
+export const NEW_TAB_INPUT =
+  '[data-workspace-visible="true"] [data-palette="tab"] textarea';
+
+/** The overlay palette's input while it is open (Cmd+P). */
+export const OVERLAY_INPUT =
+  '[aria-hidden="false"] [data-palette="overlay"] textarea';
 
 /**
  * Page-side helper source for suite `helpers` strings: set a field's value
@@ -610,7 +751,71 @@ export const setReactValueJs = `const setReactValue = (el, value) => {
     ));
   };`;
 
-export async function terminate(child: ChildProcess): Promise<void> {
+/**
+ * Makes the app's window the key window, as a person working in it has.
+ * Electron's `sendInputEvent` reaches a page only while its window is
+ * focused, and on macOS a test app can start out inactive.
+ */
+export async function focusWindow(app: AppHandle): Promise<void> {
+  await app.waitFor(
+    "window.catamorphicDesktop.devWindow('focus').then((state) => state?.focused === true)",
+    { label: "the window is key" },
+  );
+}
+
+/**
+ * Moves the CDP pointer onto `selector` in a web page (`view` is an
+ * expression for its <webview>) until the page's own pointer events put it
+ * there. The window routes input to a page a frame or more after it shows
+ * one, and a press sent before then lands nowhere.
+ */
+export async function pointerOnPage(
+  app: AppHandle,
+  input: { view: string; selector: string; point: { x: number; y: number } },
+): Promise<void> {
+  const inPage = <T>(code: string) =>
+    app.eval<T>(
+      `${input.view}.executeJavaScript(${JSON.stringify(code)}, true)`,
+    );
+  await inPage(
+    "(() => { window.__e2ePointerOn = null; if (!window.__e2ePointerWatched) { window.__e2ePointerWatched = true; addEventListener('pointermove', (event) => { window.__e2ePointerOn = event.target; }, true); } return true; })()",
+  );
+  for (let attempt = 0; ; attempt += 1) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: input.point.x + (attempt % 2),
+      y: input.point.y,
+    });
+    const on = await inPage<boolean>(
+      `document.querySelector(${JSON.stringify(input.selector)}).contains(window.__e2ePointerOn)`,
+    );
+    if (on) return;
+    if (attempt === 50)
+      throw new Error(`${input.selector} never took the pointer`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * Errors the main process did not catch, as it printed them under test
+ * (main/index.ts), each with its stack up to the next log line.
+ */
+export function mainProcessErrors(output: string): string[] {
+  const marker = "[desktop] Main process ";
+  const failures: string[] = [];
+  for (
+    let at = output.indexOf(marker);
+    at !== -1;
+    at = output.indexOf(marker, at + marker.length)
+  )
+    failures.push(output.slice(at, at + 3000).split("\n[")[0] ?? "");
+  return failures;
+}
+
+export async function terminate(
+  child: ChildProcess,
+  options: { sampleTo?: string } = {},
+): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
       child.once("exit", () => resolve());
@@ -618,8 +823,9 @@ export async function terminate(child: ChildProcess): Promise<void> {
     // Main handles SIGTERM through the ordinary asynchronous Quit lifecycle.
     // SIGKILL is a bounded last resort and must fail a normal teardown.
     const timeout = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null)
-        child.kill("SIGKILL");
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      sampleHung(child, options.sampleTo);
+      child.kill("SIGKILL");
     }, 15_000);
     try {
       child.kill("SIGTERM");
@@ -632,6 +838,29 @@ export async function terminate(child: ChildProcess): Promise<void> {
     throw new Error(
       `Electron did not exit cleanly: ${child.signalCode ?? `code ${child.exitCode}`}`,
     );
+}
+
+/**
+ * What holds an app that will not quit, from its own stacks, before it is
+ * killed: macOS's `sample`, kept with the diagnostics, its main thread
+ * printed. A blocked main thread logs nothing of its own.
+ */
+function sampleHung(child: ChildProcess, directory?: string): void {
+  if (process.platform !== "darwin" || !child.pid || !directory) return;
+  const file = path.join(directory, "hung-sample.txt");
+  try {
+    execFileSync("sample", [String(child.pid), "2", "-mayDie", "-file", file], {
+      stdio: "ignore",
+      timeout: 20_000,
+    });
+    const report = fs.readFileSync(file, "utf8");
+    const start = report.indexOf("Call graph:");
+    process.stderr.write(
+      `--- ${file}: main thread ---\n${report.slice(start, start + 6000)}\n`,
+    );
+  } catch (error) {
+    process.stderr.write(`Could not sample the app: ${String(error)}\n`);
+  }
 }
 
 const sleep = (ms: number) =>
@@ -651,13 +880,13 @@ export async function openOnboardingStep(app: AppHandle, label: string) {
 /** Project creation and server connections live in the normal project switcher. */
 export async function openProjectSwitcher(app: AppHandle) {
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Switch project"]')`,
+    `!!document.querySelector('[data-workspace-visible=true] [aria-label="Switch project"]')`,
   );
   await app.eval(
-    `document.querySelector('button[aria-label="Expand sidebar"]')?.click()`,
+    `document.querySelector('[data-workspace-visible=true] button[aria-label="Expand sidebar"]')?.click()`,
   );
   await app.eval(
-    `document.querySelector('button[aria-label="Switch project"]').click()`,
+    `document.querySelector('[data-workspace-visible=true] button[aria-label="Switch project"]').click()`,
   );
   await app.waitFor(
     `!!document.querySelector('[data-testid="switcher-connect-remote"]:not([inert] *)')`,
@@ -679,19 +908,21 @@ export async function createProjectWorkspace({
   app,
   name,
   rootPath,
+  importExisting,
 }: {
   app: AppHandle;
   name: string;
   rootPath: string;
+  importExisting?: boolean;
 }) {
   const project = await app.eval<{ id: string; name: string }>(
-    `window.catamorphicDesktop.createProject(${JSON.stringify({ name, rootPath })})`,
+    `window.catamorphicDesktop.createProject(${JSON.stringify({ name, rootPath, importExisting })})`,
   );
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
   );
   await app.waitFor(
-    `document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime === ${JSON.stringify(project.id)}`,
+    `document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime === ${JSON.stringify(project.id)} && !!document.querySelector('[data-workspace-visible=true] [data-workspace-ready]')`,
   );
   return project;
 }

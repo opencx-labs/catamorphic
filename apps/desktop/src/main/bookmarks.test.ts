@@ -22,6 +22,45 @@ afterEach(() => {
 });
 
 describe("BookmarksStore", () => {
+  it("loads outside edits live, including atomic renames, and ignores its own writes", async () => {
+    const { value, file } = store();
+    value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
+    const changes: unknown[] = [];
+    const unwatch = value.watch((change) => changes.push(change), {
+      intervalMs: 20,
+    });
+    try {
+      // The app's own write is not an outside change.
+      value.addBookmark("p", { label: "Blog", url: "https://blog.test/" });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(changes).toEqual([]);
+      // An agent appends a bookmark and renames the file into place.
+      const edited = JSON.parse(fs.readFileSync(file, "utf-8"));
+      edited.byProject.p.bookmarks.push({
+        id: "agent-1",
+        label: "Agent added",
+        url: "https://agent.test/",
+      });
+      edited.pinnedByProfile = {
+        profile: { folders: [], bookmarks: [] },
+      };
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(edited));
+      fs.renameSync(`${file}.tmp`, file);
+      await expect
+        .poll(() => changes, { timeout: 3000 })
+        .toEqual([{ projectIds: ["p"], profileIds: ["profile"] }]);
+      expect(
+        value.forProject("p").bookmarks.map((entry) => entry.label),
+      ).toEqual(["Docs", "Blog", "Agent added"]);
+      // A broken edit keeps what is loaded.
+      fs.writeFileSync(file, "{ not json");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(value.forProject("p").bookmarks).toHaveLength(3);
+    } finally {
+      unwatch();
+    }
+  });
+
   it("backfills icons from a visited page without overwriting other pages' icons", () => {
     const { value, file } = store();
     const imported = value.addBookmark("p", {
@@ -255,40 +294,113 @@ describe("BookmarksStore", () => {
       bookmark,
     ]);
     expect(value.library("other-profile").bookmarks).toHaveLength(0);
-    value.removeLibrary("profile", bookmark.folderId ?? "missing");
+    value.remove({
+      projectId: "project",
+      profileId: "profile",
+      scope: "library",
+      id: bookmark.folderId ?? "missing",
+    });
     expect(value.library("profile").bookmarks[0]?.folderId).toBe(
       value.library("profile").folders[0]?.id,
     );
   });
 
-  it("migrates the former flat pinned array on read", () => {
-    const { file } = store();
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        byProject: {},
-        pinnedByProfile: {
-          profile: [
-            { id: "one", label: "Example", url: "https://example.com" },
-          ],
-        },
-      }),
-    );
-
-    expect(new BookmarksStore(file).pinned("profile")).toEqual({
-      folders: [],
-      bookmarks: [{ id: "one", label: "Example", url: "https://example.com" }],
+  it("builds every change on the file as it is, so an outside edit is never written over", () => {
+    const { value, file } = store();
+    value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
+    // An agent appends a bookmark; the app changes something before any
+    // poll could have noticed.
+    const edited = JSON.parse(fs.readFileSync(file, "utf-8"));
+    edited.byProject.p.bookmarks.push({
+      id: "agent-1",
+      label: "Agent added",
+      url: "https://agent.test/",
+      note: "kept as written",
     });
+    fs.writeFileSync(file, JSON.stringify(edited));
+    value.observeFavicon({
+      profileId: "profile",
+      projectIds: ["p"],
+      url: "https://docs.test/",
+      faviconUrl: "https://docs.test/icon.png",
+    });
+    const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+    expect(saved.byProject.p.bookmarks).toEqual([
+      expect.objectContaining({
+        label: "Docs",
+        faviconUrl: "https://docs.test/icon.png",
+      }),
+      {
+        id: "agent-1",
+        label: "Agent added",
+        url: "https://agent.test/",
+        note: "kept as written",
+      },
+    ]);
   });
 
-  it("repairs folders for bookmarks flattened by an earlier import", () => {
+  it("still announces an outside edit that an in-app change built on", async () => {
+    const { value, file } = store();
+    value.addBookmark("x", { label: "Docs", url: "https://docs.test/" });
+    const changes: unknown[] = [];
+    const unwatch = value.watch((change) => changes.push(change), {
+      intervalMs: 20,
+    });
+    try {
+      // The poller's first stat is its baseline: edits before it are not
+      // changes to it.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      // An agent adds to project y; before the poll, the app changes x.
+      const edited = JSON.parse(fs.readFileSync(file, "utf-8"));
+      edited.byProject.y = {
+        folders: [],
+        bookmarks: [{ id: "agent", label: "Agent", url: "https://a.test/" }],
+      };
+      fs.writeFileSync(file, JSON.stringify(edited));
+      value.addBookmark("x", { label: "Blog", url: "https://blog.test/" });
+      // x's caller tells windows about x; the watcher still tells them y.
+      await expect
+        .poll(() => changes, { timeout: 3000 })
+        .toEqual([{ projectIds: ["y"], profileIds: [] }]);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(changes).toHaveLength(1);
+    } finally {
+      unwatch();
+    }
+  });
+
+  it("reports a broken file and refuses to write over it", () => {
+    const { value, file } = store();
+    value.addBookmark("p", { label: "Docs", url: "https://docs.test/" });
+    fs.writeFileSync(file, '{ "byProject": { "p": { "bookmarks": [{}] } } }');
+    // What was valid stays shown, with the reason the edit is not.
+    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
+      ["Docs"],
+    );
+    expect(value.error).toContain(file);
+    expect(() =>
+      value.addBookmark("p", { label: "Blog", url: "https://blog.test/" }),
+    ).toThrow();
+    expect(fs.readFileSync(file, "utf-8")).toBe(
+      '{ "byProject": { "p": { "bookmarks": [{}] } } }',
+    );
+    // Fixed, it applies again.
+    fs.writeFileSync(file, JSON.stringify({ byProject: {} }));
+    expect(value.forProject("p").bookmarks).toEqual([]);
+    expect(value.error).toBeUndefined();
+  });
+
+  it("files a root bookmark into the folder a later import gives it", () => {
     const { file } = store();
     fs.writeFileSync(
       file,
       JSON.stringify({
         byProject: {},
         pinnedByProfile: {
-          profile: [{ id: "bun", label: "Bun", url: "https://bun.sh" }],
+          profile: {
+            folders: [],
+            bookmarks: [{ id: "bun", label: "Bun", url: "https://bun.sh" }],
+          },
         },
       }),
     );
@@ -329,12 +441,151 @@ describe("BookmarksStore", () => {
     value.unpin("profile", "project", imported?.id ?? "missing");
 
     expect(value.pinned("profile").bookmarks).toHaveLength(0);
-    expect(value.forProject("project").bookmarks).toEqual([
-      expect.objectContaining({
-        label: "Example",
-        url: "https://example.com",
-        folderId: undefined,
+    const [unpinned, ...rest] = value.forProject("project").bookmarks;
+    expect(rest).toEqual([]);
+    expect(unpinned).toMatchObject({
+      label: "Example",
+      url: "https://example.com",
+    });
+    expect(unpinned?.folderId).toBeUndefined();
+  });
+
+  it("edits a bookmark's name, address and folder wherever it lives", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    value.importPinned("profile", {
+      folders: [{ path: ["Work"] }],
+      bookmarks: [{ label: "Docs", url: "https://docs.test/start" }],
+    });
+    value.observeFavicon({
+      ...where,
+      projectIds: [],
+      url: "https://docs.test/start",
+      faviconUrl: "https://docs.test/icon.png",
+    });
+    const pinned = value.pinned("profile");
+    const folder = pinned.folders[0];
+    const docs = pinned.bookmarks[0];
+    if (!folder || !docs) throw new Error("import missing");
+
+    // Another page of the same site keeps the icon.
+    value.update({
+      ...where,
+      scope: "pinned",
+      id: docs.id,
+      label: "  Reference  ",
+      url: "https://docs.test/reference",
+      folderId: folder.id,
+    });
+    expect(value.pinned("profile").bookmarks[0]).toMatchObject({
+      id: docs.id,
+      label: "Reference",
+      url: "https://docs.test/reference",
+      folderId: folder.id,
+      faviconUrl: "https://docs.test/icon.png",
+    });
+
+    // Another site drops it until the new page reports its own; an emptied
+    // name keeps the old one; null takes it back to the root.
+    value.update({
+      ...where,
+      scope: "pinned",
+      id: docs.id,
+      label: " ",
+      url: "https://www.other.test/",
+      folderId: null,
+    });
+    const moved = value.pinned("profile").bookmarks[0];
+    expect(moved).toMatchObject({
+      label: "Reference",
+      url: "https://www.other.test/",
+    });
+    expect(moved?.folderId).toBeUndefined();
+    expect(moved?.faviconUrl).toBeUndefined();
+    // The project's tree never saw it.
+    expect(value.forProject("project").bookmarks).toEqual([]);
+  });
+
+  it("keeps an edit to a pinned library bookmark when it is unpinned", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    value.importBookmarks("profile", {
+      folders: [],
+      bookmarks: [{ label: "Docs", url: "https://docs.test/" }],
+    });
+    const saved = value.library("profile").bookmarks[0];
+    if (!saved) throw new Error("import missing");
+    value.pin("project", "profile", saved.id);
+    value.update({
+      ...where,
+      scope: "pinned",
+      id: saved.id,
+      label: "Reference",
+      url: "https://docs.test/reference",
+    });
+    value.unpin("profile", "project", saved.id);
+    expect(value.pinned("profile").bookmarks).toEqual([]);
+    expect(value.library("profile").bookmarks[0]).toMatchObject({
+      id: saved.id,
+      label: "Reference",
+      url: "https://docs.test/reference",
+    });
+  });
+
+  it("refuses an address that is not a web page's, and a bookmark that is gone", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    const bookmark = value.addBookmark("project", {
+      label: "Docs",
+      url: "https://docs.test/",
+    });
+    expect(() =>
+      value.update({
+        ...where,
+        scope: "project",
+        id: bookmark.id,
+        url: "javascript:alert(1)",
       }),
-    ]);
+    ).toThrow("Enter an http or https address.");
+    expect(() =>
+      value.update({ ...where, scope: "pinned", id: bookmark.id, label: "X" }),
+    ).toThrow("This bookmark no longer exists.");
+    expect(value.forProject("project").bookmarks[0]).toEqual(bookmark);
+  });
+
+  it("renames and removes folders in the scope that holds them", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    value.importPinned("profile", {
+      folders: [{ path: ["Work"] }],
+      bookmarks: [
+        { label: "Docs", url: "https://docs.test/", folderPath: ["Work"] },
+      ],
+    });
+    const folder = value.pinned("profile").folders[0];
+    if (!folder) throw new Error("import missing");
+    value.renameFolder({
+      ...where,
+      scope: "pinned",
+      id: folder.id,
+      label: "Reading",
+    });
+    expect(value.pinned("profile").folders[0]?.label).toBe("Reading");
+    expect(() =>
+      value.renameFolder({
+        ...where,
+        scope: "pinned",
+        id: folder.id,
+        label: "",
+      }),
+    ).toThrow("Name the folder.");
+
+    // Removing a pinned folder keeps its bookmarks, one level up.
+    value.remove({ ...where, scope: "pinned", id: folder.id });
+    expect(value.pinned("profile").folders).toEqual([]);
+    expect(value.pinned("profile").bookmarks[0]).toMatchObject({
+      label: "Docs",
+    });
+    expect(value.pinned("profile").bookmarks[0]?.folderId).toBeUndefined();
   });
 });

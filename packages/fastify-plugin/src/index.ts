@@ -6,8 +6,20 @@ export {
   identityFromBearer,
   identityFromHeaders,
 } from "./http-identity.js";
-export type { CatamorphicPluginOptions, RouteContext } from "./plugin.js";
+export type {
+  CatamorphicPluginOptions,
+  ProjectMcpHost,
+  ProjectMcpHostTool,
+  RouteContext,
+} from "./plugin.js";
 export { catamorphicPlugin } from "./plugin.js";
 export { projectToolCapabilities } from "./project-capabilities.js";
+export {
+  apiErrorResponse,
+  apiNotFoundResponse,
+  errorLogFields,
+  requestLogFields,
+} from "./request-logging.js";
+export { PREVIEW_REFUSAL_HEADER } from "./routes/session-previews.js";
 export { pwaManifestWithLaunch, serveSpaDist } from "./spa.js";
 export { instrumentHttpServer } from "./telemetry.js";

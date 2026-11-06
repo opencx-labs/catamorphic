@@ -1,3 +1,5 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
+import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import type { Identity } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
@@ -26,10 +28,12 @@ describe("GET /me (ADR 0055 introspection)", () => {
           path: "store/customers/acme/**",
           access: "write",
         },
-        { kind: "project", projectId: "other" },
+        { kind: "agent", projectId: "other", name: "*" },
       ],
       projectPermissions: [
         { projectId: PROJECT_ID, permission: "brain:maintain" },
+        { projectId: PROJECT_ID, permission: "sessions:write" },
+        { projectId: "other", permission: "runs:*" },
       ],
     };
     const app = createApp({
@@ -57,13 +61,18 @@ describe("GET /me (ADR 0055 introspection)", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       version: 1,
-      identity: { externalUserId: "alice", root: false },
+      identity: {
+        externalUserId: "alice",
+        root: false,
+        controlPlanePermissions: [],
+      },
       projects: [
         {
           projectId: PROJECT_ID,
-          builder: false,
+          name: PROJECT_ID,
           source: null,
-          permissions: ["brain:maintain"],
+          // Implications expanded, so a client simply tests membership.
+          permissions: ["sessions:read", "sessions:write", "brain:maintain"],
           agents: ["csm"],
           workflows: ["crm.lookup"],
           apps: [],
@@ -77,10 +86,10 @@ describe("GET /me (ADR 0055 introspection)", () => {
         },
         {
           projectId: "other",
-          builder: true,
+          name: "other",
           source: null,
-          permissions: [],
-          agents: [],
+          permissions: ["runs:read", "runs:write"],
+          agents: ["*"],
           workflows: [],
           apps: [],
           documents: [],
@@ -95,14 +104,21 @@ describe("GET /me (ADR 0055 introspection)", () => {
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
       },
+      agentProtocol: {
+        session: SESSION_PROTOCOL_VERSION,
+        runner: RUNNER_PROTOCOL_VERSION,
+      },
     });
   });
 
-  it("discloses repository source only to builders", async () => {
+  it("discloses repository source only to program readers", async () => {
     const builder: Identity = {
       tenantId: "t",
       externalUserId: "builder",
-      scope: [{ kind: "project", projectId: PROJECT_ID }],
+      scope: [],
+      projectPermissions: [
+        { projectId: PROJECT_ID, permission: "program:read" },
+      ],
     };
     const app = createApp({
       identity: () => builder,
@@ -139,11 +155,15 @@ describe("GET /me (ADR 0055 introspection)", () => {
   it("enforces namespaced project permissions in the public contract", () => {
     const response = {
       version: 1,
-      identity: { externalUserId: "alice", root: false },
+      identity: {
+        externalUserId: "alice",
+        root: false,
+        controlPlanePermissions: ["connections:read"],
+      },
       projects: [
         {
           projectId: PROJECT_ID,
-          builder: false,
+          name: PROJECT_ID,
           source: null,
           permissions: ["not-namespaced"],
           agents: [],
@@ -160,6 +180,10 @@ describe("GET /me (ADR 0055 introspection)", () => {
         mcp: true,
         agentSessions: true,
         storeUploadMaxBytes: 64 * 1024 * 1024,
+      },
+      agentProtocol: {
+        session: SESSION_PROTOCOL_VERSION,
+        runner: RUNNER_PROTOCOL_VERSION,
       },
     };
     expect(MeSchema.safeParse(response).success).toBe(false);

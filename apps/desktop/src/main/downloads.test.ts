@@ -36,6 +36,9 @@ class FakeItem extends EventEmitter implements DownloadItemLike {
   getURL() {
     return `https://files.test/${this.filename}`;
   }
+  getURLChain() {
+    return [this.getURL()];
+  }
   getMimeType() {
     return "text/plain";
   }
@@ -163,6 +166,48 @@ describe("DownloadsManager", () => {
     expect(running.state).toBe("cancelled");
     expect(manager.list("p1")).toEqual([]);
     manager.dispose();
+  });
+
+  it("lists an incognito download only until its session ends, never on disk", () => {
+    vi.useFakeTimers();
+    const store = new DownloadsStore(dir);
+    const manager = new DownloadsManager(store, {
+      downloadsDir: () => path.join(dir, "Downloads"),
+      broadcast: () => {},
+    });
+    const kept = new FakeItem("kept.txt", 2);
+    manager.attach("p1", kept, null);
+    kept.finish();
+    const secret = new FakeItem("secret.txt", 2);
+    manager.attach("p1", secret, null, { incognito: true });
+    secret.finish();
+    const arriving = new FakeItem("arriving.txt", 2);
+    manager.attach("p1", arriving, null, { incognito: true });
+    expect(manager.list("p1").map((record) => record.filename)).toEqual(
+      expect.arrayContaining(["kept.txt", "secret.txt", "arriving.txt"]),
+    );
+    vi.advanceTimersByTime(1_000);
+    const written = JSON.parse(
+      fs.readFileSync(path.join(dir, "p1", "downloads.json"), "utf-8"),
+    ) as { filename: string }[];
+    expect(written.map((record) => record.filename)).toEqual(["kept.txt"]);
+    // The file itself stays where it was saved.
+    manager.forgetIncognito("p1");
+    expect(fs.existsSync(secret.savePath)).toBe(true);
+    expect(
+      manager
+        .list("p1")
+        .map((record) => record.filename)
+        .sort(),
+    ).toEqual(["arriving.txt", "kept.txt"]);
+    // One still arriving goes with the next session's end.
+    arriving.finish();
+    manager.forgetIncognito("p1");
+    expect(manager.list("p1").map((record) => record.filename)).toEqual([
+      "kept.txt",
+    ]);
+    manager.dispose();
+    vi.useRealTimers();
   });
 
   it("marks downloads left in flight at the last quit as interrupted", () => {

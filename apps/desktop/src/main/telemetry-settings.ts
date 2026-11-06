@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ProjectTelemetryConfiguration } from "@catamorphic/otel/node";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { z } from "zod";
 
 const Environment = z.record(z.string().regex(/^OTEL_[A-Z0-9_]+$/), z.string());
@@ -38,7 +39,7 @@ export function projectTelemetrySettings(args: {
   if ((args.env ?? process.env).OTEL_SDK_DISABLED?.toLowerCase() === "true")
     return {};
   const manifest = args.rootPath
-    ? readJson(path.join(args.rootPath, ".catamorphic/project.json"))
+    ? readJson(path.join(args.rootPath, PROJECT_MANIFEST_PATH))
     : undefined;
   const rawProject =
     manifest && typeof manifest === "object" && "telemetry" in manifest
@@ -84,4 +85,46 @@ export function projectTelemetrySettings(args: {
     }
   }
   return config;
+}
+
+/** How long a project's telemetry answer stands before its files are read again. */
+const TELEMETRY_SETTINGS_TTL_MS = 5_000;
+
+/**
+ * {@link projectTelemetrySettings} for span routing, which asks for a
+ * project without telemetry on every span it starts: each project's answer
+ * (or failure) is kept for a few seconds, and read again at once when its
+ * folder becomes known.
+ */
+export function cachedProjectTelemetrySettings(
+  options: { ttlMs?: number; now?: () => number } = {},
+): typeof projectTelemetrySettings {
+  const ttlMs = options.ttlMs ?? TELEMETRY_SETTINGS_TTL_MS;
+  const now = options.now ?? Date.now;
+  const answers = new Map<
+    string,
+    {
+      at: number;
+      rootPath: string | undefined;
+      answer:
+        | { value: ProjectTelemetryConfiguration | undefined }
+        | { error: unknown };
+    }
+  >();
+  return (args) => {
+    const at = now();
+    let entry = answers.get(args.projectId);
+    if (!entry || entry.rootPath !== args.rootPath || at - entry.at >= ttlMs) {
+      let answer: NonNullable<typeof entry>["answer"];
+      try {
+        answer = { value: projectTelemetrySettings(args) };
+      } catch (error) {
+        answer = { error };
+      }
+      entry = { at, rootPath: args.rootPath, answer };
+      answers.set(args.projectId, entry);
+    }
+    if ("error" in entry.answer) throw entry.answer.error;
+    return entry.answer.value;
+  };
 }

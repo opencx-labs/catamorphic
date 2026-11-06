@@ -140,12 +140,15 @@ describeIf("ObjectRemoteBackend (integration)", () => {
     expect(originMain).toBe(head);
   }, 120_000);
 
-  it("round-trips a push and seeds a second user's working copy", async () => {
+  it("round-trips a push and reads it from a second member's draft", async () => {
     const managerA = new ProjectManager(
       new FsBackend(await tmp("s3-devA-")),
       backend,
     );
-    const repoA = await managerA.openDev(TENANT, PROJECT, "user-a");
+    const repoA = await managerA.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
     await repoA.writeFile("src/feature.ts", "export const feature = 42;\n");
     await repoA.commit("add feature", AUTHOR);
     await push({
@@ -160,7 +163,11 @@ describeIf("ObjectRemoteBackend (integration)", () => {
       new FsBackend(await tmp("s3-devB-")),
       backend,
     );
-    const repoB = await managerB.openDev(TENANT, PROJECT, "user-b");
+    const repoB = await managerB.openDraft({
+      tenantId: TENANT,
+      projectId: PROJECT,
+      externalUserId: "user-b",
+    });
     const files = await repoB.readAllFiles();
     await repoB.dispose();
 

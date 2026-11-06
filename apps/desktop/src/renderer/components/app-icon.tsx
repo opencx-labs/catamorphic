@@ -41,3 +41,18 @@ export function AppGlyph({
     />
   );
 }
+
+const APP_ICON_NAMES: Record<AppIconName, string> = {
+  default: "LayoutGrid",
+  review: "GitPullRequest",
+  dashboard: "LayoutDashboard",
+  report: "FileChartColumn",
+  tracker: "ListChecks",
+  form: "ClipboardList",
+  calculator: "Calculator",
+};
+
+/** The app's glyph as a Lucide name, for rows that name their icon. */
+export function appIconName(icon: unknown): string {
+  return APP_ICON_NAMES[resolveAppIcon(icon)];
+}

@@ -126,9 +126,17 @@ export const APP_BASE_CSS = [
   "--ease-standard:cubic-bezier(0.2,0,0,1);",
   "--cat-font-size:13px;--cat-font-size-sm:11px;",
   "--cat-row-h:28px;",
-  "--cat-motion-fast:150ms;--cat-motion-base:220ms;--cat-motion-slow:250ms",
+  "--cat-motion-fast:150ms;--cat-motion-base:220ms;--cat-motion-slow:250ms;",
+  // One focus ring (ADR 0168): width, style (none while the pointer leads,
+  // set by the guest runtime), and its two placements.
+  "--focus-ring-width:2px;--focus-ring-style:solid;",
+  "--focus-ring-offset:1px;--focus-ring-inset:-1px",
   "}",
+  ':root[data-focus-modality="pointer"]{--focus-ring-style:none}',
   "*{box-sizing:border-box}",
+  // A ring never fades in from the text color: every element rests with the
+  // accent as its outline color, so no transition has anything to animate.
+  "*,::before,::after{outline-color:var(--color-accent,#f95225)}",
   // Fallbacks are neutral dark surfaces, for hosts that mount without a
   // theme; themed hosts always override via appThemeCss.
   "body{margin:0;background:var(--color-bg,#0a0a0b);color:var(--color-fg,#e6e6e9);",

@@ -1,5 +1,6 @@
 import { Project, type SourceFile, SyntaxKind } from "ts-morph";
 import { parseProject } from "./parser.js";
+import { transitionCallName } from "./transition-calls.js";
 import type {
   DiscoveredWorkflow,
   SourceRange,
@@ -168,7 +169,7 @@ function collectWorkflowCallEdit(opts: {
     .find(
       (candidate) =>
         candidate.getStart() === opts.node.sourceRange.start &&
-        candidate.getExpression().getText() === "callWorkflow",
+        transitionCallName(candidate) === "callWorkflow",
     );
   if (!call) return;
   const args = call.getArguments().map((argument) => argument.getText());

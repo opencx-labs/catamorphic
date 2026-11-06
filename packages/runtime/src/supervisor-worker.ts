@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import {
+  carriedState,
   connectionNamespace,
   documentsCalls,
   hostCallTransition,
@@ -209,11 +210,21 @@ async function executeInvocationTarget(args: {
       _workflow: unknown,
       options: Record<string, unknown>,
       metadata?: Record<string, unknown>,
-    ): Record<string, unknown> => ({
-      __catamorphicDurableTransition: "child_workflow",
-      input: options.input,
-      ...(metadata ? { workflow: metadata } : {}),
-    });
+    ): Record<string, unknown> => {
+      const { input, ...rest } = options;
+      const unknown = Object.keys(rest).find((key) => key !== "state");
+      if (unknown !== undefined)
+        throw new Error(
+          `callWorkflow takes { input, state? }; '${unknown}' is not one of them`,
+        );
+      return {
+        __catamorphicDurableTransition: "child_workflow",
+        input,
+        // `{ input, state }`: the state rides to the step after the child.
+        ...(Object.hasOwn(options, "state") ? carriedState(rest) : {}),
+        ...(metadata ? { workflow: metadata } : {}),
+      };
+    };
     // Host calls (ADR 0055): a boundary returns the call; the host executes
     // it with the run's caller attached and the result feeds the next step.
     const documents = documentsCalls(hostCallTransition);

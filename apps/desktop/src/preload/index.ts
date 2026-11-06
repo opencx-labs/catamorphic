@@ -1,5 +1,19 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { BackgroundCommandView } from "../shared/background-commands.js";
+import { SHELL_WINDOW_CLOSE_CHANNEL } from "../shared/desktop-workspace.js";
+import type { ResourceSnapshot } from "../shared/resources.js";
+import type { TerminalCreateInput } from "../shared/terminal.js";
+import type { TrustedHosts } from "../shared/trusted-hosts.js";
+import type { WindowImageRequest } from "../shared/window-images.js";
+import { installShellWindowClose } from "./shell-window-close.js";
+
+installShellWindowClose({
+  bridge: contextBridge,
+  requestClose: () => ipcRenderer.send(SHELL_WINDOW_CLOSE_CHANNEL),
+  isMainFrame: process.isMainFrame,
+  argv: process.argv,
+});
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -18,20 +32,32 @@ const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   }) as Promise<T>;
 
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
 import type {
+  BookmarkFolderRename,
   BookmarkMove,
   BookmarkPlacement,
+  BookmarkRemoval,
+  BookmarkUpdate,
 } from "../shared/bookmark-target.js";
+import type {
+  BrowserHistory,
+  BrowserSleepBlocker,
+} from "../shared/browser-history.js";
+import type { ClaudeCodeInstallStatus } from "../shared/claude-code-install.js";
 import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
   ChatDraftUpdate,
+  DockAction,
   DockCommand,
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceInitial,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
+import type { DockIconState } from "../shared/dock-icon.js";
 import type {
   DockDrag,
   DockRegion,
@@ -45,11 +71,38 @@ import type {
   GitOverviewSubscription,
   GitRecordInput,
 } from "../shared/git.js";
+import type { MenuItem, PageContextMenu } from "../shared/menu.js";
 import type { OpenMode } from "../shared/open-mode.js";
-import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
+import type {
+  PrCommentInput,
+  PrDecisionInput,
+  PullRequestStatusRead,
+} from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
-import type { SidebarSourceRequest } from "../shared/sidebar-source.js";
+import type {
+  SidebarSourceRequest,
+  SidebarSourceWorkCall,
+} from "../shared/sidebar-source.js";
 import type { DesktopUpdateState } from "../shared/update.js";
+import {
+  VOICE_CAPTURE_MESSAGE,
+  VOICE_PORT_MESSAGE,
+  VOICE_REST_MESSAGE,
+  type VoiceBubbleState,
+  type VoiceDictation,
+  type VoiceKeysState,
+  type VoiceLevels,
+  type VoicePortMessage,
+  type VoicePress,
+  type VoiceReadAloud,
+  type VoiceRestMessage,
+  type VoiceStatus,
+  type VoiceWindowChoice,
+} from "../shared/voice.js";
+import type {
+  VoiceBubbleDrag,
+  VoiceSpotsState,
+} from "../shared/voice-bubble.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -57,6 +110,21 @@ export interface ServerInfo {
 }
 
 const api = {
+  dockIconState: (): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-state"),
+  dockIconSet: (bytes: Uint8Array): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-set", bytes),
+  dockIconReset: (): Promise<DockIconState> =>
+    invoke("catamorphic:dock-icon-reset"),
+  onDockIconChanged: (
+    listener: (state: DockIconState) => void,
+  ): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: DockIconState) =>
+      listener(state);
+    ipcRenderer.on("catamorphic:dock-icon-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:dock-icon-changed", handler);
+  },
   defaultBrowserState: (): Promise<DefaultBrowserState> =>
     invoke("catamorphic:default-browser-state"),
   defaultBrowserRequest: (): Promise<DefaultBrowserState> =>
@@ -68,7 +136,7 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:pending-browser-urls", listener);
   },
-  workspaceInitial: (): Promise<string | undefined> =>
+  workspaceInitial: (): Promise<WorkspaceInitial> =>
     invoke("catamorphic:workspace-initial"),
   dockDraftGet: (localId: string): Promise<ChatDraft | null> =>
     invoke("catamorphic:dock-draft-get", localId),
@@ -82,10 +150,20 @@ const api = {
     ipcRenderer.on("catamorphic:dock-draft", handler);
     return () => ipcRenderer.removeListener("catamorphic:dock-draft", handler);
   },
+  workspaceFlushed: (requestId: string, error?: string): Promise<void> =>
+    invoke("catamorphic:workspace-flushed", requestId, error),
   workspaceClaim: (projectId: string): Promise<boolean> =>
     invoke("catamorphic:workspace-claim", projectId),
   workspaceNavigate: (input: WorkspaceNavigation): Promise<void> =>
     invoke("catamorphic:workspace-navigate", input),
+  workspaceRelease: (projectId: string, released: boolean): Promise<void> =>
+    invoke("catamorphic:workspace-release", projectId, released),
+  workspaceHandoffPut: (projectId: string, snapshot: unknown): Promise<void> =>
+    invoke("catamorphic:workspace-handoff-put", projectId, snapshot),
+  workspaceHandoffTake: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:workspace-handoff-take", projectId),
+  workspaceReady: (projectId: string): Promise<void> =>
+    invoke("catamorphic:workspace-ready", projectId),
   workspaceActive: (projectId: string): Promise<void> =>
     invoke("catamorphic:workspace-active", projectId),
   dockPublish: (data: DockData): Promise<void> =>
@@ -98,10 +176,11 @@ const api = {
     invoke("catamorphic:dock-command", command),
   dockActivate: (localId?: string): Promise<void> =>
     invoke("catamorphic:dock-activate", localId),
-  dockNewChat: (): Promise<void> => invoke("catamorphic:dock-new-chat"),
+  dockNewChat: (input?: { shortcut?: boolean }): Promise<void> =>
+    invoke("catamorphic:dock-new-chat", input),
   dockAction: (
     localId: string,
-    action: "close" | "minimize" | "send",
+    action: DockAction,
     message?: string,
   ): Promise<void> =>
     invoke("catamorphic:dock-action", localId, action, message),
@@ -109,13 +188,50 @@ const api = {
     invoke("catamorphic:dock-drag", input),
   dockResize: (size: DockSize): Promise<void> =>
     invoke("catamorphic:dock-resize", size),
-  dockIgnoreMouse: (ignore: boolean): Promise<void> =>
+  dockIgnoreMouse: (ignore: boolean): Promise<boolean> =>
     invoke("catamorphic:dock-ignore-mouse", ignore),
+  dockShape: (
+    rects: Array<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }> | null,
+  ): Promise<boolean> => invoke("catamorphic:dock-shape", rects),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),
-  dockMenu: (
-    entries: Array<{ label: string; action: string; danger?: boolean }>,
-  ): Promise<string | null> => invoke("catamorphic:dock-menu", entries),
+  dockMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
+    invoke("catamorphic:dock-menu", entries),
+  voiceBubbleMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
+    invoke("catamorphic:voice-bubble-menu", entries),
+  voiceBubbleState: (): Promise<VoiceBubbleState | null> =>
+    invoke("catamorphic:voice-bubble-state"),
+  voiceBubbleWindows: (): Promise<VoiceWindowChoice[]> =>
+    invoke("catamorphic:voice-bubble-windows"),
+  voiceBubbleWindow: (windowId: number): Promise<void> =>
+    invoke("catamorphic:voice-bubble-window", windowId),
+  voiceBubbleDrag: (input: VoiceBubbleDrag): Promise<void> =>
+    invoke("catamorphic:voice-bubble-drag", input),
+  voiceSpotsState: (): Promise<VoiceSpotsState | null> =>
+    invoke("catamorphic:voice-bubble-spots-state"),
+  onVoiceSpots: (listener: (state: VoiceSpotsState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceSpotsState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-bubble-spots", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-bubble-spots", handler);
+  },
+  onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceBubbleState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-bubble", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-bubble", handler);
+  },
   dockRegion: (region: DockRegion | null): Promise<void> =>
     invoke("catamorphic:dock-region", region),
   onDockSnapshot: (
@@ -144,8 +260,11 @@ const api = {
   updateState: (): Promise<DesktopUpdateState> =>
     invoke("catamorphic:update-state"),
   updateCheck: (): Promise<void> => invoke("catamorphic:update-check"),
+  updateDismiss: (messageKey: string): Promise<void> =>
+    invoke("catamorphic:update-dismiss", messageKey),
   updateDownload: (): Promise<void> => invoke("catamorphic:update-download"),
   updateInstall: (): Promise<void> => invoke("catamorphic:update-install"),
+  updateMove: (): Promise<void> => invoke("catamorphic:update-move"),
   onUpdateStateChanged: (
     listener: (state: DesktopUpdateState) => void,
   ): (() => void) => {
@@ -171,6 +290,10 @@ const api = {
 
   filePreview: (input: FilePreviewInput): Promise<ResourcePreview> =>
     invoke("catamorphic:file-preview", input),
+  projectImage: (input: {
+    projectId: string;
+    filePath: string;
+  }): Promise<string | null> => invoke("catamorphic:project-image", input),
 
   composerFileSave: (input: {
     projectId: string;
@@ -185,6 +308,8 @@ const api = {
     invoke("catamorphic:window-set-profile", profileId),
   openProfileWindow: (profileId: string): Promise<void> =>
     invoke("catamorphic:open-profile-window", profileId),
+  profileConnections: (profileId: string): Promise<unknown> =>
+    invoke("catamorphic:profile-connections", profileId),
 
   // --- per-profile agents ---
   agentsList: (): Promise<unknown> => invoke("catamorphic:agents-list"),
@@ -213,10 +338,21 @@ const api = {
   projectAgentApprove: (
     projectId: string,
     slug: string,
+    reviewedHash: string,
   ): Promise<{ ok: boolean; error?: string }> =>
-    invoke("catamorphic:project-agent-approve", projectId, slug),
-  agentSetupStatus: (): Promise<{ claudeCode: boolean; codex: boolean }> =>
-    invoke("catamorphic:agent-setup-status"),
+    invoke("catamorphic:project-agent-approve", projectId, slug, reviewedHash),
+  agentSetupStatus: (): Promise<{
+    claudeCode: boolean;
+    codex: boolean;
+    /** Where the person's Hermes is installed, if it is. */
+    hermes: string | null;
+  }> => invoke("catamorphic:agent-setup-status"),
+  claudeCodeStatus: (): Promise<ClaudeCodeInstallStatus | null> =>
+    invoke("catamorphic:claude-code-status"),
+  claudeCodeUpdate: (): Promise<{
+    output: string;
+    status: ClaudeCodeInstallStatus;
+  }> => invoke("catamorphic:claude-code-update"),
   agentLogin: (
     id: string,
   ): Promise<{ started: boolean; command?: string; error?: string }> =>
@@ -230,6 +366,13 @@ const api = {
     sessionId?: string;
   }): Promise<AgentCommandsResult> =>
     invoke("catamorphic:agent-commands", input),
+  /** The model the harness runs here when nothing pins one. */
+  agentDefaultModel: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }): Promise<AgentDefaultModelResult> =>
+    invoke("catamorphic:agent-default-model", input),
   /**
    * Proactive auth probe: what is knowably wrong before a send, plus
    * main's verdict on whether a one-click re-login flow exists.
@@ -238,6 +381,13 @@ const api = {
     id: string,
   ): Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }> =>
     invoke("catamorphic:agent-auth-health", id),
+  /** A shown sign-in failure, which main runs again once it is fixed. */
+  agentAuthFailureShown: (failure: {
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+    agentId: string;
+  }): Promise<void> => invoke("catamorphic:agent-auth-failure-shown", failure),
   /** Whole-machine transcript scan for the usage page (ADR 0057). */
   usageSummary: (days: number): Promise<unknown> =>
     invoke("catamorphic:usage-summary", days),
@@ -333,6 +483,13 @@ const api = {
     invoke("catamorphic:workspace-state-get", projectId),
   workspaceStateSet: (projectId: string, snapshot: unknown): Promise<void> =>
     invoke("catamorphic:workspace-state-set", projectId, snapshot),
+  /** This computer's chats may have changed (ADR 0229). */
+  onSessionsChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:sessions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sessions-changed", handler);
+  },
   onGitChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:git-changed", handler);
@@ -340,16 +497,32 @@ const api = {
   },
 
   // --- MCP Apps (embedded views for connection tools) ---
+  appGuestDocument: (input: {
+    url: string;
+    mountId: string;
+  }): Promise<string> => invoke("catamorphic:app-guest-document", input),
+  appGuestClose: (input: { url: string }): Promise<void> =>
+    invoke("catamorphic:app-guest-close", input),
+  pdfGuestDocument: (input: {
+    projectId: string;
+    filePath: string;
+  }): Promise<string> => invoke("catamorphic:pdf-guest-document", input),
   mcpAppsUiTools: (): Promise<unknown> =>
     invoke("catamorphic:mcp-apps-ui-tools"),
-  mcpAppsView: (toolKey: string): Promise<unknown> =>
-    invoke("catamorphic:mcp-apps-view", toolKey),
+  mcpAppsView: (input: {
+    projectId: string;
+    sessionId: string;
+    toolKey: string;
+    toolUseId: string;
+  }): Promise<unknown> => invoke("catamorphic:mcp-apps-view", input),
+  mcpAppsClose: (mountId: string): Promise<void> =>
+    invoke("catamorphic:mcp-apps-close", mountId),
   mcpAppsCall: (
-    viewToolKey: string,
+    mountId: string,
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<unknown> =>
-    invoke("catamorphic:mcp-apps-call", viewToolKey, toolName, args),
+    invoke("catamorphic:mcp-apps-call", mountId, toolName, args),
 
   // --- OpenRouter catalog (searchable model selector, best-free default) ---
   openrouterModels: (): Promise<unknown> =>
@@ -361,6 +534,9 @@ const api = {
     invoke("catamorphic:history-record", input),
   historyRemove: (id: string) => invoke("catamorphic:history-remove", id),
   historyClear: () => invoke("catamorphic:history-clear"),
+  paletteRecord: (input: unknown) =>
+    invoke("catamorphic:palette-record", input),
+  paletteSignals: () => invoke("catamorphic:palette-signals"),
   onHistoryChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:history-changed", handler);
@@ -371,11 +547,22 @@ const api = {
     invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:browser-import-run", input),
-  browserImportPasswords: (input: { profileId: string }): Promise<unknown> =>
-    invoke("catamorphic:browser-import-passwords", input),
+  passwordFileImport: (input: { profileId: string }): Promise<unknown> =>
+    invoke("catamorphic:password-file-import", input),
+  passwordFileUnlock: (input: {
+    profileId: string;
+    token: string;
+    password: string;
+  }): Promise<unknown> => invoke("catamorphic:password-file-unlock", input),
+  passwordFileKeyFile: (input: {
+    token: string;
+    clear?: boolean;
+  }): Promise<unknown> => invoke("catamorphic:password-file-key-file", input),
+  passwordFileForget: (input: { token: string }): Promise<void> =>
+    invoke("catamorphic:password-file-forget", input),
 
-  devUpdateRestart: (): Promise<boolean> =>
-    invoke("catamorphic:dev-update-restart"),
+  devUpdateRestart: (options?: { abort?: boolean }): Promise<boolean> =>
+    invoke("catamorphic:dev-update-restart", options),
   devWindow: (action: string, width?: number, height?: number) =>
     invoke("catamorphic:dev-window", action, width, height),
   defaultProjectsDir: (): Promise<string> =>
@@ -400,6 +587,12 @@ const api = {
     invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
     invoke("catamorphic:reveal-folder", folderPath),
+  copyFileToClipboard: (filePath: string): Promise<void> =>
+    invoke("catamorphic:copy-file-to-clipboard", filePath),
+  sayFileActionFailed: (input: {
+    message: string;
+    detail: string;
+  }): Promise<void> => invoke("catamorphic:file-action-failed", input),
   editorFileRead: (input: { filePath: string }): Promise<{ content: string }> =>
     invoke("catamorphic:editor-file-read", input),
   projectLocalFiles: (projectId: string): Promise<Array<{ path: string }>> =>
@@ -409,6 +602,14 @@ const api = {
     content: string;
     expectedContent: string;
   }): Promise<void> => invoke("catamorphic:editor-file-write", input),
+  editorFileRename: (input: {
+    filePath: string;
+    name: string;
+  }): Promise<string> => invoke("catamorphic:editor-file-rename", input),
+  personalFileCreate: (input: {
+    projectId: string;
+    extension: string;
+  }): Promise<string> => invoke("catamorphic:personal-file-create", input),
   projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
     invoke("catamorphic:project-open-file", projectId, filePath),
   authorizationStatus: (): Promise<{
@@ -486,6 +687,12 @@ const api = {
   }) => invoke("catamorphic:remote-enable-local-execution", input),
   remoteAuthority: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-authority", projectId),
+  remotePreviewOpen: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }): Promise<{ url: string }> =>
+    invoke("catamorphic:remote-preview-open", input),
   remoteStatus: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>
@@ -503,6 +710,8 @@ const api = {
     invoke("catamorphic:remote-publish", input),
   remotePropose: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:remote-propose", input),
+  remotePublishProgram: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-publish-program", input),
   remoteReconnect: (projectId: string): Promise<{ ok: true }> =>
     invoke("catamorphic:remote-reconnect", projectId),
   remoteMembers: (projectId: string): Promise<unknown> =>
@@ -513,6 +722,58 @@ const api = {
     invoke("catamorphic:remote-member-set-roles", input),
   remoteMemberInvite: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:remote-member-invite", input),
+  remoteSecrets: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-secrets", input),
+  remoteSecretSet: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-secret-set", input),
+  remoteSecretDelete: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-secret-delete", input),
+  remoteMachines: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:remote-machines", projectId),
+  remoteCodexSignIn: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-in", input),
+  remoteCodexSignInStatus: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-in-status", input),
+  remoteCodexSignInCancel: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-codex-sign-in-cancel", input),
+  remoteCodexSignOut: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-out", input),
+  openSignInLink: (url: string): Promise<void> =>
+    invoke("catamorphic:open-sign-in-link", url),
+  remoteServiceConnections: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connections", projectId),
+  remoteServiceConnectionCreate: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connection-create", input),
+  remoteServiceConnectionAuthorize: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connection-authorize", input),
+  remoteServiceConnectionComplete: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-service-connection-complete", input),
+  remoteServiceConnectionRevoke: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-service-connection-revoke", input),
+  personalEnvironment: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:personal-environment", projectId),
+  personalEnvironmentSync: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-sync", projectId),
+  personalEnvironmentAddFiles: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-add-files", projectId),
+  personalEnvironmentRemoveFile: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:personal-environment-remove-file", input),
+  personalEnvironmentConfigFile: (projectId: string): Promise<string> =>
+    invoke("catamorphic:personal-environment-config-file", projectId),
+  onPersonalEnvironmentChanged: (
+    listener: (change: { profileId: string; projectId: string }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      change: { profileId: string; projectId: string },
+    ) => listener(change);
+    ipcRenderer.on("catamorphic:personal-environment-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:personal-environment-changed",
+        handler,
+      );
+  },
   remoteDisconnect: (projectId: string): Promise<void> =>
     invoke("catamorphic:remote-disconnect", projectId),
   remoteTakePendingLink: (): Promise<string | null> =>
@@ -607,8 +868,11 @@ const api = {
   // --- browser tabs ---
   webviewPreloadPath: (): Promise<string> =>
     invoke("catamorphic:webview-preload"),
-  browserPrepareProfile: (profileId: string): Promise<string> =>
-    invoke("catamorphic:browser-prepare-profile", profileId),
+  browserPrepareProfile: (
+    profileId: string,
+    incognito = false,
+  ): Promise<string> =>
+    invoke("catamorphic:browser-prepare-profile", { profileId, incognito }),
 
   // --- site settings (ADR 0150) ---
   siteSettingsGet: (input: { origin: string }): Promise<unknown> =>
@@ -649,6 +913,183 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:downloads-changed", handler);
   },
+  // --- Chrome extensions (ADR 0203) ---
+  extensionsState: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-state"),
+  extensionsSetEnabled: (input: {
+    id: string;
+    enabled: boolean;
+  }): Promise<void> => invoke("catamorphic:extensions-set-enabled", input),
+  extensionsSetPinned: (input: {
+    id: string;
+    pinned: boolean;
+  }): Promise<void> => invoke("catamorphic:extensions-set-pinned", input),
+  extensionsRemove: (input: { id: string }): Promise<boolean> =>
+    invoke("catamorphic:extensions-remove", input),
+  extensionsDeveloperMode: (input: { enabled: boolean }): Promise<void> =>
+    invoke("catamorphic:extensions-developer-mode", input),
+  extensionsLoadUnpacked: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-load-unpacked"),
+  extensionsReload: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:extensions-reload", input),
+  extensionsUpdateNow: (): Promise<void> =>
+    invoke("catamorphic:extensions-update-now"),
+  extensionsReviewUpdate: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:extensions-review-update", input),
+  extensionsOpenOptions: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:extensions-open-options", input),
+  extensionsActions: (input: { guestId: number | null }): Promise<unknown> =>
+    invoke("catamorphic:extensions-actions", input),
+  extensionsActionClick: (input: {
+    id: string;
+    guestId: number | null;
+  }): Promise<unknown> => invoke("catamorphic:extensions-action-click", input),
+  extensionsActionMenu: (input: {
+    id: string;
+    guestId: number | null;
+  }): Promise<void> => invoke("catamorphic:extensions-action-menu", input),
+  extensionsTabsReport: (input: {
+    reporter: string;
+    visible: boolean;
+    guestIds: number[];
+    activeGuestId: number | null;
+  }): Promise<void> => invoke("catamorphic:extensions-tabs-report", input),
+  extensionsWindowRespond: (payload: {
+    id: number;
+    result: { guestId?: number } | null;
+  }): void =>
+    ipcRenderer.send("catamorphic:extensions-window-response", payload),
+  extensionsViewAttached: (input: {
+    guestId: number;
+    extensionId: string;
+    kind: "popup" | "side-panel";
+    tabGuestId: number | null;
+  }): Promise<void> => invoke("catamorphic:extensions-view-attached", input),
+  extensionsFocusPopup: (input: { guestId: number }): Promise<void> =>
+    invoke("catamorphic:extensions-focus-popup", input),
+  extensionsSidePanels: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-side-panels"),
+  extensionsSidePanelClose: (input: { guestId: number }): Promise<void> =>
+    invoke("catamorphic:extensions-side-panel-close", input),
+  extensionsDebugging: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-debugging"),
+  extensionsDebuggerStop: (input: { guestId: number }): Promise<void> =>
+    invoke("catamorphic:extensions-debugger-stop", input),
+  extensionsPromptAnswer: (input: {
+    id: string;
+    accept: boolean;
+  }): Promise<void> => invoke("catamorphic:extensions-prompt-answer", input),
+  extensionsPrompts: (): Promise<unknown> =>
+    invoke("catamorphic:extensions-prompts"),
+  onExtensionsChanged: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-changed", handler);
+  },
+  onExtensionActionsChanged: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-actions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-actions-changed",
+        handler,
+      );
+  },
+  onExtensionWindowRequest: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-window-request", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-window-request",
+        handler,
+      );
+  },
+  onExtensionPopupSize: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-popup-size", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-popup-size", handler);
+  },
+  onExtensionsClosePopups: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:extensions-close-popups", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-close-popups",
+        handler,
+      );
+  },
+  onExtensionSidePanel: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-side-panel", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-side-panel", handler);
+  },
+  onExtensionDebuggingChanged: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-debugging-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-debugging-changed",
+        handler,
+      );
+  },
+  onExtensionPrompt: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-prompt", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-prompt", handler);
+  },
+  onExtensionPromptWithdrawn: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-prompt-withdrawn", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:extensions-prompt-withdrawn",
+        handler,
+      );
+  },
+  onExtensionInstalled: (listener: (payload: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on("catamorphic:extensions-installed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:extensions-installed", handler);
+  },
+  // Page dialogs in browser tabs (ADR 0227).
+  pageDialogs: (input: { guestId: number }): Promise<unknown[]> =>
+    invoke("catamorphic:page-dialogs", input),
+  pageDialogAnswer: (input: unknown): Promise<boolean> =>
+    invoke("catamorphic:page-dialog-answer", input),
+  onPageDialogs: (listener: (change: unknown) => void) => {
+    const handler = (_event: unknown, change: unknown) => listener(change);
+    ipcRenderer.on("catamorphic:page-dialogs-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:page-dialogs-changed", handler);
+  },
+  // Sent, not invoked: it must reach main before the navigation it names.
+  browserUnloadIntent: (input: { guestId: number; intent: unknown }): void =>
+    ipcRenderer.send("catamorphic:browser-unload-intent", input),
+  browserCloseAsk: (input: {
+    guestId: number;
+    requestId: string;
+    preserve: boolean;
+  }): Promise<string> => invoke("catamorphic:browser-close-ask", input),
+  browserCloseCancel: (input: {
+    guestId: number;
+    requestId: string;
+  }): Promise<void> => invoke("catamorphic:browser-close-cancel", input),
+  browserCloseApproved: (input: {
+    guestId: number;
+    requestId: string;
+  }): Promise<boolean> => invoke("catamorphic:browser-close-approved", input),
+  onBrowserCloseAnswer: (listener: (answer: unknown) => void) => {
+    const handler = (_event: unknown, answer: unknown) => listener(answer);
+    ipcRenderer.on("catamorphic:browser-close-answer", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-close-answer", handler);
+  },
+
   sitePermissionAnswer: (input: {
     id: string;
     decision: string;
@@ -696,6 +1137,43 @@ const api = {
         handler,
       );
   },
+  onPasskeyRequest: (listener: (request: unknown) => void) => {
+    const handler = (_event: unknown, request: unknown) => listener(request);
+    ipcRenderer.on("catamorphic:passkey-request", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:passkey-request", handler);
+  },
+  onPasskeySettled: (listener: (payload: { ids: string[] }) => void) => {
+    const handler = (_event: unknown, payload: { ids: string[] }) =>
+      listener(payload);
+    ipcRenderer.on("catamorphic:passkey-settled", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:passkey-settled", handler);
+  },
+  passkeyRequests: (): Promise<unknown[]> =>
+    invoke("catamorphic:passkey-requests"),
+  passkeyCancel: (input: { id: string }): Promise<boolean> =>
+    invoke("catamorphic:passkey-cancel", input),
+  passkeyUse: (input: { id: string; passkeyId: string }): Promise<unknown> =>
+    invoke("catamorphic:passkey-use", input),
+  passkeySave: (input: { id: string }): Promise<unknown> =>
+    invoke("catamorphic:passkey-save", input),
+  passkeyAutofill: (input: { guestId: number }): Promise<unknown> =>
+    invoke("catamorphic:passkey-autofill", input),
+  passkeyAutofillUse: (input: {
+    guestId: number;
+    requestId: string;
+    passkeyId: string;
+  }): Promise<unknown> => invoke("catamorphic:passkey-autofill-use", input),
+  onSiteSystemRefusal: (listener: (notice: unknown) => void) => {
+    const handler = (_event: unknown, notice: unknown) => listener(notice);
+    ipcRenderer.on("catamorphic:site-permission-system-refused", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:site-permission-system-refused",
+        handler,
+      );
+  },
   onSiteSettingsChanged: (
     listener: (change: { profileId: string; origin: string | null }) => void,
   ) => {
@@ -707,6 +1185,20 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:site-settings-changed", handler);
   },
+  browserNavigationHistory: (input: {
+    guestId: number;
+  }): Promise<BrowserHistory | null> =>
+    invoke("catamorphic:browser-navigation-history", input),
+  browserSleepBlocker: (input: {
+    guestId: number;
+  }): Promise<BrowserSleepBlocker | null> =>
+    invoke("catamorphic:browser-sleep-blocker", input),
+  browserSleep: (input: { guestId: number }): Promise<string | null> =>
+    invoke("catamorphic:browser-sleep", input),
+  browserSleepMinute: (): Promise<number> =>
+    invoke("catamorphic:browser-sleep-minute"),
+  browserSleepRelease: (input: { snapshotId: string }): Promise<void> =>
+    invoke("catamorphic:browser-sleep-release", input),
   browserRecordHistory: (input: unknown): Promise<void> =>
     invoke("catamorphic:browser-history-record", input),
   browserRetitleHistory: (input: {
@@ -717,6 +1209,8 @@ const api = {
     url: string;
     faviconUrl: string;
   }): Promise<void> => invoke("catamorphic:browser-history-favicon", input),
+  windowImage: (input: WindowImageRequest): Promise<string | null> =>
+    invoke("catamorphic:window-image", input),
   browserSuggest: (input: {
     profileId: string;
     query: string;
@@ -724,13 +1218,25 @@ const api = {
     matches: { url: string; title: string }[];
     inline: string | null;
   }> => invoke("catamorphic:browser-suggest", input),
+  onBrowserContextMenu: (
+    listener: (menu: PageContextMenu) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, menu: PageContextMenu) => listener(menu);
+    ipcRenderer.on("catamorphic:browser-context-menu", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-context-menu", handler);
+  },
+  browserContextMenuPick: (input: {
+    menuId: string;
+    action: string | null;
+  }): Promise<void> => invoke("catamorphic:browser-context-menu-pick", input),
   onBrowserOpenUrl: (
-    listener: (url: string, mode?: OpenMode) => void,
+    listener: (url: string, mode?: OpenMode, incognito?: boolean) => void,
   ): (() => void) => {
     const handler = (
       _event: unknown,
-      payload: { url: string; mode?: OpenMode },
-    ) => listener(payload.url, payload.mode);
+      payload: { url: string; mode?: OpenMode; incognito?: boolean },
+    ) => listener(payload.url, payload.mode, payload.incognito === true);
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);
@@ -783,6 +1289,8 @@ const api = {
     listener: (command: {
       webContentsId: number | null;
       direction: "back" | "forward";
+      /** A mouse side button (or app command), or a three-finger swipe. */
+      gesture: "button" | "swipe";
     }) => void,
   ): (() => void) => {
     const handler = (
@@ -827,11 +1335,9 @@ const api = {
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
   terminalGhosttyAppearance: () =>
     invoke("catamorphic:terminal-ghostty-appearance"),
-  terminalCreate: (input: {
-    projectId?: string;
-    cols?: number;
-    rows?: number;
-  }): Promise<{ sessionId: string; cwd: string }> =>
+  terminalCreate: (
+    input: TerminalCreateInput,
+  ): Promise<{ sessionId: string; cwd: string }> =>
     invoke("catamorphic:terminal-create", input),
   terminalWrite: (sessionId: string, data: string): Promise<void> =>
     invoke("catamorphic:terminal-write", sessionId, data),
@@ -843,6 +1349,12 @@ const api = {
     invoke("catamorphic:terminal-resize", sessionId, cols, rows),
   terminalKill: (sessionId: string): Promise<void> =>
     invoke("catamorphic:terminal-kill", sessionId),
+  /** What Work runs, by who it runs for (ADR 0266). */
+  resourcesRead: (): Promise<ResourceSnapshot> =>
+    invoke("catamorphic:resources-read"),
+  /** End a process Work started, and what it started. */
+  resourcesEnd: (pid: number): Promise<void> =>
+    invoke("catamorphic:resources-end", pid),
   onTerminalData: (
     listener: (payload: { sessionId: string; data: string }) => void,
   ): (() => void) => {
@@ -862,6 +1374,22 @@ const api = {
     sessionId: string,
   ): Promise<{ buffer: string } | null> =>
     invoke("catamorphic:terminal-restore-buffer", sessionId),
+  terminalAdopt: (
+    sessionId: string,
+    projectId: string,
+  ): Promise<{ buffer: string } | null> =>
+    invoke("catamorphic:terminal-adopt", sessionId, projectId),
+  backgroundCommands: (): Promise<BackgroundCommandView[]> =>
+    invoke("catamorphic:background-commands"),
+  onBackgroundCommands: (
+    listener: (commands: BackgroundCommandView[]) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, commands: BackgroundCommandView[]) =>
+      listener(commands);
+    ipcRenderer.on("catamorphic:background-commands", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:background-commands", handler);
+  },
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ): (() => void) => {
@@ -874,11 +1402,15 @@ const api = {
       ipcRenderer.removeListener("catamorphic:terminal-busy", handler);
   },
   onTerminalExit: (
-    listener: (payload: { sessionId: string; exitCode: number }) => void,
+    listener: (payload: {
+      sessionId: string;
+      exitCode: number;
+      message?: string;
+    }) => void,
   ): (() => void) => {
     const handler = (
       _event: unknown,
-      payload: { sessionId: string; exitCode: number },
+      payload: { sessionId: string; exitCode: number; message?: string },
     ) => listener(payload);
     ipcRenderer.on("catamorphic:terminal-exit", handler);
     return () =>
@@ -916,6 +1448,16 @@ const api = {
   ): Promise<unknown> => invoke("catamorphic:profiles-update", id, patch),
   profilesSetDefault: (id: string): Promise<void> =>
     invoke("catamorphic:profiles-set-default", id),
+  profilesSyncSettings: (input: {
+    profileId: string;
+    from: string;
+    parts: string[];
+    keepInSync: boolean;
+  }): Promise<void> => invoke("catamorphic:profiles-sync-settings", input),
+  profilesStopSyncing: (input: {
+    profileId: string;
+    parts: string[];
+  }): Promise<void> => invoke("catamorphic:profiles-stop-syncing", input),
   profilesRemove: (id: string): Promise<boolean> =>
     invoke("catamorphic:profiles-remove", id),
   profilesClaimProject: (profileId: string, projectId: string): Promise<void> =>
@@ -963,6 +1505,8 @@ const api = {
   }): Promise<void> => invoke("catamorphic:vault-allow-saving", input),
   vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
     invoke("catamorphic:vault-remove", input),
+  vaultPasskeys: (input: { profileId: string }): Promise<unknown[]> =>
+    invoke("catamorphic:vault-passkeys", input),
   vaultCopyPassword: (input: {
     profileId: string;
     id: string;
@@ -1002,19 +1546,10 @@ const api = {
     label: string;
     parentId?: string;
   }): Promise<unknown> => invoke("catamorphic:bookmarks-add-folder", input),
-  bookmarksUpdate: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label?: string;
-    url?: string;
-    folderId?: string | null;
-  }): Promise<void> => invoke("catamorphic:bookmarks-update", input),
-  bookmarksRemove: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-remove", input),
+  bookmarksUpdate: (input: BookmarkUpdate): Promise<void> =>
+    invoke("catamorphic:bookmarks-update", input),
+  bookmarksRemove: (input: BookmarkRemoval): Promise<void> =>
+    invoke("catamorphic:bookmarks-remove", input),
   bookmarksPin: (input: {
     projectId: string;
     profileId: string;
@@ -1025,22 +1560,8 @@ const api = {
     profileId: string;
     id: string;
   }): Promise<void> => invoke("catamorphic:bookmarks-unpin", input),
-  bookmarksRemoveLibrary: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-remove-library", input),
-  bookmarksRemovePinned: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-remove-pinned", input),
-  bookmarksRename: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-rename", input),
+  bookmarksRenameFolder: (input: BookmarkFolderRename): Promise<void> =>
+    invoke("catamorphic:bookmarks-rename-folder", input),
   onBookmarksChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:bookmarks-changed", handler);
@@ -1075,10 +1596,25 @@ const api = {
       ipcRenderer.send("catamorphic:git-overview-unsubscribe", id);
     };
   },
-  sessionCheckouts: (projectId: string): Promise<unknown> =>
-    invoke("catamorphic:session-checkouts", projectId),
+  sessionCheckouts: (
+    projectId: string,
+    options?: { titles?: boolean },
+  ): Promise<unknown> =>
+    invoke("catamorphic:session-checkouts", projectId, options),
   sessionUseProjectFolder: (input: { projectId: string; sessionId: string }) =>
     invoke("catamorphic:session-use-project-folder", input),
+  sessionCheckout: (input: { projectId: string; sessionId: string }) =>
+    invoke("catamorphic:session-checkout", input),
+  projectWorktreesAvailable: (projectId: string) =>
+    invoke("catamorphic:project-worktrees-available", projectId),
+  sessionUseOwnWorktree: (input: { projectId: string; sessionId: string }) =>
+    invoke("catamorphic:session-use-own-worktree", input),
+  sessionBringToProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => invoke("catamorphic:session-bring-to-project-folder", input),
+  sessionDiscardWorktree: (input: { projectId: string; sessionId: string }) =>
+    invoke("catamorphic:session-discard-worktree", input),
   gitUntrackedDirectory: (input: {
     projectId: string;
     worktreePath: string;
@@ -1089,6 +1625,8 @@ const api = {
   cancelFileSearch: () => invoke("catamorphic:file-search-cancel"),
   fileSearch: (input: FileSearchInput) =>
     invoke("catamorphic:file-search", input),
+  workspaceTabs: (projectId: string) =>
+    invoke("catamorphic:workspace-tabs", projectId),
   prComment: (input: PrCommentInput): Promise<unknown> =>
     invoke("catamorphic:pr-comment", input),
   prDecision: (input: PrDecisionInput): Promise<unknown> =>
@@ -1099,11 +1637,24 @@ const api = {
     invoke("catamorphic:pr-review", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:pr-list", projectId),
+  prStatus: (url: string): Promise<PullRequestStatusRead> =>
+    invoke("catamorphic:pr-status", url),
   prFiles: (projectId: string, number: number): Promise<unknown> =>
     invoke("catamorphic:pr-files", projectId, number),
 
   sidebarSourceRequest: (input: SidebarSourceRequest): Promise<unknown> =>
     invoke("catamorphic:sidebar-source-request", input),
+  sidebarSourceAllow: (input: {
+    projectId: string;
+    sectionId: string;
+    fingerprint: string;
+  }): Promise<void> => invoke("catamorphic:sidebar-source-allow", input),
+  appAccessApproved: (input: {
+    projectId: string;
+    app: string;
+  }): Promise<boolean> => invoke("catamorphic:app-access-approved", input),
+  appAccessAllow: (input: { projectId: string; app: string }): Promise<void> =>
+    invoke("catamorphic:app-access-allow", input),
   sidebarSourceCancel: (id: string): Promise<void> =>
     invoke("catamorphic:sidebar-source-cancel", id),
   sidebarSourceSubscribe: (input: {
@@ -1113,6 +1664,18 @@ const api = {
   }): Promise<void> => invoke("catamorphic:sidebar-source-subscribe", input),
   sidebarSourceUnsubscribe: (id: string): Promise<void> =>
     invoke("catamorphic:sidebar-source-unsubscribe", id),
+  trustedHosts: (projectId?: string): Promise<TrustedHosts> =>
+    invoke("catamorphic:trusted-hosts", projectId),
+  trustHost: (host: string): Promise<void> =>
+    invoke("catamorphic:trusted-hosts-add", host),
+  untrustHost: (host: string): Promise<void> =>
+    invoke("catamorphic:trusted-hosts-remove", host),
+  onTrustedHostsChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:trusted-hosts-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:trusted-hosts-changed", handler);
+  },
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => {
@@ -1124,25 +1687,153 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:sidebar-source-changed", handler);
   },
-  // --- sidebar config ---
-  sidebarConfigGet: (projectId?: string): Promise<unknown> =>
-    invoke("catamorphic:sidebar-config-get", projectId),
-  sidebarConfigFile: (): Promise<string> =>
-    invoke("catamorphic:sidebar-config-file"),
-  sidebarConfigSource: (): Promise<string> =>
-    invoke("catamorphic:sidebar-config-source"),
-  sidebarConfigReset: (): Promise<void> =>
-    invoke("catamorphic:sidebar-config-reset"),
+  /** A module asking Work for something while it serves this window (ADR 0234). */
+  onSidebarSourceWork: (
+    listener: (event: {
+      callId: string;
+      projectId: string;
+      sectionId: string;
+      /** The chat the asking request serves, for Work's chat-scoped lists. */
+      sessionId?: string;
+      call: SidebarSourceWorkCall;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: {
+        callId: string;
+        projectId: string;
+        sectionId: string;
+        sessionId?: string;
+        call: SidebarSourceWorkCall;
+      },
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:sidebar-source-work", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sidebar-source-work", handler);
+  },
+  sidebarSourceWorkResult: (input: {
+    callId: string;
+    ok: boolean;
+    value?: unknown;
+    error?: string;
+  }): Promise<void> => invoke("catamorphic:sidebar-source-work-result", input),
+  // --- voice (ADR 0216); its settings are prefs ---
+  voiceStatus: (): Promise<VoiceStatus> =>
+    invoke("catamorphic:voice-get-status"),
+  voiceReadAloud: (input: VoiceReadAloud): Promise<void> =>
+    invoke("catamorphic:voice-read-aloud", input),
+  voicePress: (press: VoicePress): Promise<void> =>
+    invoke("catamorphic:voice-press", press),
+  voiceRelease: (input?: { heldMs?: number }): Promise<void> =>
+    invoke("catamorphic:voice-release", input),
+  voiceFrontChat: (chat: { projectId: string; sessionId: string } | null) =>
+    ipcRenderer.send("catamorphic:voice-front-chat", chat),
+  voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
+  voiceOpenChat: (): Promise<void> => invoke("catamorphic:voice-open-chat"),
+  voiceLearn: (input: {
+    projectId?: string;
+    sessionId?: string;
+  }): Promise<void> => invoke("catamorphic:voice-learn", input),
+  onVoiceStatus: (listener: (status: VoiceStatus) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: VoiceStatus) =>
+      listener(value);
+    ipcRenderer.on("catamorphic:voice-status", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-status", handler);
+  },
+  onVoiceLevels: (listener: (levels: VoiceLevels) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: VoiceLevels) =>
+      listener(value);
+    ipcRenderer.on("catamorphic:voice-levels", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-levels", handler);
+  },
+  /** A text field here has focus: dictation writes into this window. */
+  voiceFieldFocus: (): void =>
+    ipcRenderer.send("catamorphic:voice-field-focus"),
+  /** What was dictated here was sent. */
+  voiceDictationSent: (): void =>
+    ipcRenderer.send("catamorphic:voice-dictation-sent"),
+  voiceKeysStatus: (): Promise<VoiceKeysState> =>
+    invoke("catamorphic:voice-keys-status"),
+  /** Asks macOS to let voice's shortcuts work in every app. */
+  voiceKeysAllow: (): Promise<void> => invoke("catamorphic:voice-keys-allow"),
+  onVoiceKeys: (listener: (state: VoiceKeysState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceKeysState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-keys", handler);
+    return () => ipcRenderer.removeListener("catamorphic:voice-keys", handler);
+  },
+  onVoiceDictation: (listener: (dictation: VoiceDictation) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceDictation,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-dictation", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-dictation", handler);
+  },
+  // --- workspace config (sidebars, palette modes) ---
+  workspaceConfigGet: (projectId?: string): Promise<unknown> =>
+    invoke("catamorphic:workspace-config-get", projectId),
+  workspaceConfigFile: (): Promise<string> =>
+    invoke("catamorphic:workspace-config-file"),
+  workspaceConfigSource: (): Promise<string> =>
+    invoke("catamorphic:workspace-config-source"),
+  workspaceConfigReset: (): Promise<void> =>
+    invoke("catamorphic:workspace-config-reset"),
   // The changed event carries no config: the resolved layers depend on the
   // renderer's active project, so the renderer refetches on the signal.
-  onSidebarConfigChanged: (listener: () => void): (() => void) => {
+  onWorkspaceConfigChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();
-    ipcRenderer.on("catamorphic:sidebar-config-changed", handler);
+    ipcRenderer.on("catamorphic:workspace-config-changed", handler);
     return () =>
-      ipcRenderer.removeListener("catamorphic:sidebar-config-changed", handler);
+      ipcRenderer.removeListener(
+        "catamorphic:workspace-config-changed",
+        handler,
+      );
   },
 };
 
 export type CatamorphicDesktopApi = typeof api;
 
 contextBridge.exposeInMainWorld("catamorphicDesktop", api);
+
+// The audio page's port to the speech worker (ADR 0216). A MessagePort
+// cannot cross the context bridge as a value, but it can be transferred
+// into the page with a window message to itself ("*": a file:// page's
+// origin is opaque and cannot be named as a target).
+ipcRenderer.on(VOICE_PORT_MESSAGE, (event, input: unknown) => {
+  const microphone =
+    typeof input === "object" && input !== null && "microphone" in input
+      ? input.microphone
+      : null;
+  const listen =
+    typeof input === "object" && input !== null && "listen" in input
+      ? input.listen !== false
+      : true;
+  window.postMessage(
+    {
+      type: VOICE_PORT_MESSAGE,
+      microphone: typeof microphone === "string" ? microphone : null,
+      listen,
+    } satisfies VoicePortMessage,
+    "*",
+    event.ports,
+  );
+});
+ipcRenderer.on(VOICE_REST_MESSAGE, () => {
+  window.postMessage(
+    { type: VOICE_REST_MESSAGE } satisfies VoiceRestMessage,
+    "*",
+  );
+});
+
+// Main owns capture intent independently of recognition and playback.
+ipcRenderer.on(VOICE_CAPTURE_MESSAGE, (_event, listening: unknown) => {
+  if (typeof listening === "boolean")
+    window.postMessage({ type: VOICE_CAPTURE_MESSAGE, listening }, "*");
+});

@@ -32,7 +32,7 @@ export function extractJsDocMetadata(source: JsDocSource): JsDocMetadata {
   const jsDocs = source.getJsDocs();
 
   for (const doc of jsDocs) {
-    const desc = doc.getDescription().trim();
+    const desc = reflow(doc.getDescription());
     if (desc) {
       result.description = desc;
     }
@@ -58,7 +58,7 @@ export function extractJsDocMetadata(source: JsDocSource): JsDocMetadata {
           meta.displayName = tagText.replace(/\s*\|?\s*$/, "").trim();
           result.paramMetadata.set(lastParamName, meta);
         } else {
-          result.displayName = tagText;
+          result.displayName = withoutSeparator(tagText);
         }
         result.tags.displayname = tagText;
       } else if (tagName === "description") {
@@ -67,7 +67,7 @@ export function extractJsDocMetadata(source: JsDocSource): JsDocMetadata {
           meta.description = tagText.replace(/\s*\|?\s*$/, "").trim();
           result.paramMetadata.set(lastParamName, meta);
         } else if (!result.description) {
-          result.description = tagText;
+          result.description = withoutSeparator(tagText);
           result.tags.description = tagText;
         }
       } else if (tagName === "icon") {
@@ -82,6 +82,14 @@ export function extractJsDocMetadata(source: JsDocSource): JsDocMetadata {
   }
 
   return result;
+}
+
+/**
+ * The parameter style `@displayname Name | @description Text` also appears on
+ * one line above a workflow; the tag then ends with the pipe before the next.
+ */
+function withoutSeparator(text: string): string {
+  return text.replace(/\s*\|?\s*$/, "").trim();
 }
 
 function parseParamTag(
@@ -180,4 +188,29 @@ export function extractParameterInfo(
   }
 
   return result;
+}
+
+/**
+ * Source comments wrap at the code's line width; a person reads prose. Join
+ * wrapped lines, keep paragraph breaks and list items on their own lines.
+ */
+function reflow(text: string): string {
+  return text
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) =>
+      paragraph
+        .split("\n")
+        .map((line) => line.trim())
+        .reduce(
+          (joined, line) =>
+            !joined
+              ? line
+              : /^([-*•]|\d+[.)])\s/.test(line)
+                ? `${joined}\n${line}`
+                : `${joined} ${line}`,
+          "",
+        ),
+    )
+    .join("\n\n");
 }

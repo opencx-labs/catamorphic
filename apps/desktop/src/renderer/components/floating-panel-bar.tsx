@@ -25,7 +25,7 @@ export function FloatingPanelBar({
   }, []);
   const bindings = useKeybindings();
   const button =
-    "grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-default disabled:opacity-40";
+    "grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-40";
   return (
     <fieldset
       ref={controlsRef}

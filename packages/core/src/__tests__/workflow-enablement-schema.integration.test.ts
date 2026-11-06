@@ -15,7 +15,6 @@ const tenantId = crypto.randomUUID();
 const projectId = crypto.randomUUID();
 const artifactId = crypto.randomUUID();
 const connectionId = crypto.randomUUID();
-const bindingId = crypto.randomUUID();
 
 beforeAll(async () => {
   await migrateToLatest({ db, schema });
@@ -48,18 +47,6 @@ beforeAll(async () => {
       label: "Mail",
     })
     .execute();
-  await db
-    .insertInto("environment_connection_bindings")
-    .values({
-      id: bindingId,
-      tenant_id: tenantId,
-      project_id: projectId,
-      environment_name: "local",
-      alias: "mail",
-      provider_kind: "mcp",
-      principal_kinds: ["member"],
-    })
-    .execute();
 });
 
 afterAll(async () => {
@@ -74,7 +61,7 @@ function memberValues(externalUserId: string) {
     workflow_name: "watchInbox",
     deployment_artifact_id: artifactId,
     commit_sha: "a".repeat(40),
-    environment_name: "local",
+    environment_name: "default",
     owner_kind: "member" as const,
     owner_external_user_id: externalUserId,
     owner_identity: { tenantId, externalUserId },
@@ -122,7 +109,6 @@ describe("workflow enablement schema", () => {
     const selection = {
       enablement_id: enablement.id,
       alias: "mail",
-      binding_id: bindingId,
       connection_id: connectionId,
       provider_kind: "mcp",
       principal_kind: "member" as const,

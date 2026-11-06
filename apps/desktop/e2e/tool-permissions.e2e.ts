@@ -7,7 +7,10 @@ import {
   workspaceDomHelpersJs,
 } from "./harness.js";
 
-/** Session consent is a durable question. Navigation and reload must preserve it. */
+/**
+ * Approvals and connector requests are durable session requests (ADR 0197),
+ * answered in the chat or from any client. Navigation and reload keep them.
+ */
 
 let app: AppHandle;
 let projectId: string;
@@ -35,8 +38,15 @@ const helpers = `
   const send = (text) => { const ta = composer(); setReactValue(ta, text); ta.closest('form').requestSubmit(); };
   const timeline = () => $$('[role="log"]').map((el) => el.textContent).join('\\n');
   const modal = () => $('section[aria-label="The agent has a question"]');
+  const approval = () => $('[data-testid="approval-card"][data-request-kind="approval"]');
+  const requestCard = (text) => $$('[data-testid="approval-card"]').find((el) => el.textContent.includes(text));
   const answer = label => { byText('section[aria-label="The agent has a question"] button', label).click(); };
   const submitAnswer = () => byText('section[aria-label="The agent has a question"] button', 'Submit').click();
+  // The expanded floating chat; minimized ones stay mounted but inert.
+  const hereChat = () => $$('[data-floating-chat]').find((el) => !el.closest('[inert]'));
+  const here = () => hereChat()?.querySelector('[data-composer-input]');
+  const hereLog = () => hereChat()?.querySelector('[role="log"]')?.textContent ?? '';
+  const sendHere = (text) => { const ta = here(); setReactValue(ta, text); ta.closest('form').requestSubmit(); };
 `;
 const run = <T>(body: string) =>
   app.eval<T>(`(() => { ${helpers}\n${body} })()`);
@@ -44,6 +54,17 @@ const runWait = <T>(
   body: string,
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+
+/**
+ * The chat's turn has ended: a message sent now starts a turn of its own
+ * instead of reaching the one still finishing (ADR 0240).
+ */
+const settled = () =>
+  runWait(
+    `const section = $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+     return !!section && !section.querySelector('[data-testid="chat-stop"]');`,
+    { timeoutMs: 30_000, label: "the turn before settled" },
+  );
 
 describe("tool permissions", () => {
   it("boots, creates a project, a 'fake' connection, and a chat", async () => {
@@ -73,15 +94,19 @@ describe("tool permissions", () => {
     await app.eval(
       `window.catamorphicDesktop.connectionsCreate({ name: 'fake', transport: 'http', url: 'http://127.0.0.1:1/mcp' })`,
     );
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // The dock's + floats it over the New Tab (Cmd+N would open it there).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!composer();`, { label: "floating chat" });
   }, 180_000);
 
   it("an approval survives tab switches and renderer reload; Always allow writes the rule", async () => {
     await run(`send('permission: fake/post_message'); return true;`);
     await runWait(
-      `const m = modal(); return !!m && m.textContent.includes('post message') && m.textContent.includes('fake');`,
-      { timeoutMs: 30_000, label: "consent modal" },
+      `const card = approval(); return !!card && card.textContent.includes('post_message') && card.textContent.includes('fake');`,
+      { timeoutMs: 30_000, label: "approval card" },
     );
     expect(
       await run(`return !!$('[data-testid="tool-permission-modal"]');`),
@@ -91,21 +116,26 @@ describe("tool permissions", () => {
     const chatKey = await run<string>(
       `return $('[data-point-key^="chat:"]').dataset.pointKey;`,
     );
-    await run(
-      `byText('[data-point-key] button', 'New Tab').click(); return true;`,
+    // Opening the chat reused the empty New Tab. Create another tab to
+    // exercise leaving the pending request before returning to it.
+    await runWait(
+      `const button = $('[data-workspace-visible="true"] button[aria-label="New tab"]');
+       if (!button) return false; button.click(); return true;`,
+      { label: "open another tab beside the pending approval" },
     );
+    await runWait(`return !!byText('[data-point-key] button', 'New Tab');`);
     await run(
       `$('[data-point-key="'+${JSON.stringify(chatKey)}+'"]').querySelector('button').click(); return true;`,
     );
-    await runWait(`return !!modal();`);
+    await runWait(`return !!approval();`);
     await app.waitFor(
       `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)}).then(state => state?.chats?.some(chat => 'chat:'+chat.localId===${JSON.stringify(chatKey)} && chat.mode==='tab'))`,
       { label: "chat tab persisted before reload" },
     );
     await app.reload();
     await runWait(
-      `return !!modal() && modal().textContent.includes('post message');`,
-      { timeoutMs: 60000, label: "pending consent restored" },
+      `return !!approval() && approval().textContent.includes('post_message');`,
+      { timeoutMs: 60000, label: "pending approval restored" },
     );
     await runWait(
       `return !!$('[data-point-key="'+${JSON.stringify(chatKey)}+'"]');`,
@@ -131,13 +161,9 @@ describe("tool permissions", () => {
       ),
     ).toBe(false);
     await app.screenshot("/tmp/catamorphic-durable-consent.png");
-    await run(`answer('Always allow'); return true;`);
+    await run(`$('[data-testid="approval-always"]').click(); return true;`);
     await runWait(
-      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); return !!button && !button.disabled;`,
-    );
-    await run(`submitAnswer(); return true;`);
-    await runWait(
-      `return timeline().includes('permission decision: allow (always)');`,
+      `return !approval() && timeline().includes('permission decision: allow (always)');`,
       {
         timeoutMs: 30_000,
         label: "agent got allow (always)",
@@ -152,14 +178,15 @@ describe("tool permissions", () => {
   }, 60_000);
 
   it("another client answers the durable question; the originating chat resumes", async () => {
+    await settled();
     await run(`send('permission: fake/upload_file'); return true;`);
     await runWait(
-      `return !!modal() && modal().textContent.includes('upload file');`,
-      { timeoutMs: 30_000, label: "third consent modal" },
+      `return !!approval() && approval().textContent.includes('upload_file');`,
+      { timeoutMs: 30_000, label: "third approval card" },
     );
-    // Act as the companion app: find the pending ask through the embedded
-    // server's permissions route and allow it. The broker races the modal,
-    // so the answer must both unblock the tool call AND withdraw the card.
+    // Act as the companion app: find the pending request in the session's
+    // snapshot and answer it with a command. The answer must both unblock
+    // the tool call AND withdraw the card in this window.
     const answered = await app.eval<{ ok: boolean; detail: string }>(`
       (async () => {
         const state = await window.catamorphicDesktop.getServerState();
@@ -172,15 +199,23 @@ describe("tool permissions", () => {
           for (const session of sessions.items) {
             const url = base + "/projects/" + project.id +
               "/agent/sessions/" + session.id;
-            const pending = await fetch(url).then(r => r.ok ? r.json() : { questions: [] });
-            const ask = pending.questions?.find(p => p.questions?.[0]?.question.includes("upload file"));
+            const detail = await fetch(url).then(r => r.ok ? r.json() : null);
+            const ask = detail?.snapshot.requests.find(
+              (request) => request.status === "pending" && request.approval?.tool?.name === "upload_file",
+            );
             if (!ask) continue;
-            const posted = await fetch(url + "/questions/" + encodeURIComponent(ask.requestId) + "/answer", {
+            const posted = await fetch(url + "/commands", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ answer: "Allow once" }),
+              body: JSON.stringify({
+                type: "respond",
+                commandId: crypto.randomUUID(),
+                requestId: ask.id,
+                response: { kind: "approval", decision: "approved" },
+              }),
             });
-            return { ok: posted.ok, detail: "answered " + ask.requestId };
+            const receipt = await posted.json();
+            return { ok: posted.ok && receipt.status === "accepted", detail: "answered " + ask.id };
           }
         }
         return { ok: false, detail: "no pending ask found over HTTP" };
@@ -188,27 +223,24 @@ describe("tool permissions", () => {
     `);
     expect(answered).toMatchObject({ ok: true });
     await runWait(
-      `return !modal() && timeline().includes('permission decision: allow');`,
-      { timeoutMs: 30_000, label: "modal withdrawn, agent got allow" },
+      `return !approval() && timeline().includes('permission decision: allow');`,
+      { timeoutMs: 30_000, label: "card withdrawn, agent got allow" },
     );
   }, 60_000);
 
-  it("Deny answers deny; the modal closes", async () => {
+  it("Deny answers deny; the card closes", async () => {
+    await settled();
     await run(`send('permission: fake/delete_channel'); return true;`);
     await runWait(
-      `return !!modal() && modal().textContent.includes('delete channel');`,
+      `return !!approval() && approval().textContent.includes('delete_channel');`,
       {
         timeoutMs: 30_000,
-        label: "second consent modal",
+        label: "second approval card",
       },
     );
-    await run(`answer('Deny'); return true;`);
+    await run(`$('[data-testid="approval-deny"]').click(); return true;`);
     await runWait(
-      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); return !!button && !button.disabled;`,
-    );
-    await run(`submitAnswer(); return true;`);
-    await runWait(
-      `return !modal() && timeline().includes('permission decision: deny');`,
+      `return !approval() && timeline().includes('permission decision: deny');`,
       {
         timeoutMs: 30_000,
         label: "agent got deny",
@@ -217,47 +249,54 @@ describe("tool permissions", () => {
   }, 60_000);
 });
 
-it("queues concurrent native elicitation requests and settles each independently", async () => {
+it("shows concurrent connector requests together and settles each independently", async () => {
+  await settled();
   await run(`send('elicitation: queue');`);
   await runWait(
-    `return $('[data-testid="elicitation-modal"]')?.textContent.includes('First app');`,
+    `return !!requestCard('First app') && !!requestCard('Second app');`,
   );
   await app.screenshot("/tmp/codex-elicitation.png");
-  await run(`$('[data-testid="elicitation-modal"] form').requestSubmit();`);
-  await runWait(
-    `return $('[data-testid="elicitation-modal"]')?.textContent.includes('Second app');`,
-  );
   await run(
-    `byText('[data-testid="elicitation-modal"] button','Cancel').click();`,
+    `requestCard('First app').querySelector('[data-testid="elicitation-accept"]').click();`,
+  );
+  await runWait(
+    `return !requestCard('First app') && !!requestCard('Second app');`,
+  );
+  // Ready at once: answering one request never holds the other.
+  expect(
+    await run(
+      `return requestCard('Second app').querySelector('[data-testid="elicitation-decline"]').disabled;`,
+    ),
+  ).toBe(false);
+  await run(
+    `requestCard('Second app').querySelector('[data-testid="elicitation-decline"]').click();`,
   );
   await runWait(
     `return timeline().includes('elicitation decisions: accept,decline');`,
   );
-  expect(await run(`return !!$('[data-testid="elicitation-modal"]');`)).toBe(
-    false,
-  );
+  expect(await run(`return !!$('[data-testid="approval-card"]');`)).toBe(false);
 });
-it("withdraws native elicitation on cancellation", async () => {
+it("withdraws a connector request on cancellation", async () => {
+  await settled();
   await run(`send('elicitation: cancel');`);
-  await runWait(`return !!$('[data-testid="elicitation-modal"]');`);
+  await runWait(`return !!requestCard('Cancelled app');`);
   await runWait(
-    `return !$('[data-testid="elicitation-modal"]') && timeline().includes('elicitation decisions: decline');`,
+    `return !requestCard('Cancelled app') && timeline().includes('elicitation decisions: decline');`,
   );
 });
 
-it("remembers native app consent only after an explicit chat-scoped answer", async () => {
+it("remembers native app consent only after an explicit answer in the chat", async () => {
+  await settled();
   await run(`send('elicitation: app'); return true;`);
-  await runWait(`return modal()?.textContent.includes('Allow for this chat');`);
+  await runWait(`return !!requestCard('Calculator');`);
   expect(await run(`return !!$('[data-testid="elicitation-modal"]');`)).toBe(
     false,
   );
-  await run(`answer('Allow for this chat'); return true;`);
-  await runWait(
-    `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); return !!button && !button.disabled;`,
+  await run(
+    `requestCard('Calculator').querySelector('[data-testid="elicitation-accept"]').click(); return true;`,
   );
-  await run(`submitAnswer(); return true;`);
   await runWait(
-    `return timeline().includes('app consent: accept,accept') && !modal();`,
+    `return timeline().includes('app consent: accept,accept') && !requestCard('Calculator');`,
   );
 });
 
@@ -273,8 +312,12 @@ it("keeps working while questions are collapsed and consumes the answer in the s
   await runWait(
     `return !!modal() && timeline().includes('continuing independent work');`,
   );
-  await app.waitFor(
-    `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+  // The agent keeps working (a step every 200 ms), so the chat behind the
+  // question never stops animating; only the panel being photographed has
+  // to be still.
+  await runWait(
+    `return !!modal() && modal().getAnimations({ subtree: true }).every((a) => a.playState !== 'running');`,
+    { label: "question panel still" },
   );
   await app.screenshot("/tmp/catamorphic-nonblocking-question.png");
   await run(`$('button[aria-label="Answer later"]').click(); return true;`);
@@ -289,4 +332,285 @@ it("keeps working while questions are collapsed and consumes the answer in the s
     `return [...document.querySelectorAll('[role="log"] article')].some(m => m.textContent.includes('Answer received during the same turn') && m.textContent.includes('Orange')) && !modal();`,
     { timeoutMs: 30_000 },
   );
+});
+
+// ADR 0195: the chat keeps going around a question.
+describe("talking around questions", () => {
+  const settle = () =>
+    app.waitFor(
+      `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+    );
+
+  it("opens a fresh floating chat", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!here() && !hereLog().includes('permission');`, {
+      label: "fresh floating chat",
+    });
+  });
+
+  it("a message during a blocking question gets a reply; the question stays open and still answers", async () => {
+    await run(`sendHere('blocking question about the layout'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('Which layout should I use?');`,
+      { timeoutMs: 30_000, label: "blocking question" },
+    );
+    await settle();
+    // The waiting status sits in the header beside the title, no row above
+    // it; the question has an Other answer, and the composer takes free
+    // text too.
+    expect(
+      await run(`
+        const m = modal();
+        return {
+          headerFirst: m.firstElementChild === m.querySelector('header'),
+          status: m.querySelector('header [role="status"]')?.textContent,
+          other: !!byText('section[aria-label="The agent has a question"] button', 'Other'),
+          placeholder: here().dataset.placeholder,
+        };
+      `),
+    ).toEqual({
+      headerFirst: true,
+      status: "Waiting for your answer",
+      other: true,
+      placeholder: "Answer in your own words…",
+    });
+    await app.screenshot("/tmp/catamorphic-blocking-question.png");
+    // A slow attachment shows its progress without moving the question.
+    const top = await run<number>(
+      `return modal().getBoundingClientRect().top;`,
+    );
+    await run(`
+      here().focus();
+      window.__originalFileRead = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function () {
+        return new Promise((resolve, reject) => {
+          window.__releasePaste = () => window.__originalFileRead.call(this).then(resolve, reject);
+        });
+      };
+      const data = new DataTransfer();
+      data.items.add(new File([new Uint8Array([7, 8])], 'notes.bin'));
+      here().dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return here().closest('form').textContent.includes('Preparing attachments');`,
+      { label: "attachment preparing" },
+    );
+    expect(
+      await run<number>(`return modal().getBoundingClientRect().top;`),
+    ).toBe(top);
+    await run(
+      `File.prototype.arrayBuffer = window.__originalFileRead; window.__releasePaste(); return true;`,
+    );
+    await runWait(
+      `return !!here().querySelector('[data-testid="composer-pill"]');`,
+      { label: "attachment pill" },
+    );
+    await run(`
+      const el = here(); el.focus();
+      const range = document.createRange(); range.selectNodeContents(el); range.collapse(false);
+      getSelection().removeAllRanges(); getSelection().addRange(range);
+      document.execCommand('insertText', false, ' what is the difference?');
+      el.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return hereLog().includes('Replying before you answer') && hereLog().includes('notes.bin') && modal()?.textContent.includes('Answer when ready');`,
+      { timeoutMs: 30_000, label: "reply while the question stays open" },
+    );
+    // The reply reads after the message it answers.
+    expect(
+      await run(`
+        const articles = [...hereChat().querySelectorAll('[role="log"] article')];
+        const sent = articles.findIndex((el) => el.textContent.includes('what is the difference?') && el.dataset.userMessage);
+        const reply = articles.findIndex((el) => el.textContent.includes('Replying before you answer'));
+        return sent >= 0 && sent < reply;
+      `),
+    ).toBe(true);
+    await run(`answer('Grid'); return true;`);
+    // Sent, the answer takes the question's place while the panel closes
+    // as it was, taking no second press; it never vanishes first.
+    await runWait(
+      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit');
+       if (!button || button.disabled) return false;
+       const cards = () => hereChat().querySelectorAll('[data-testid="question-answer"]').length;
+       const before = cards();
+       window.__answerSent = { both: false, live: false };
+       const look = () => {
+         const panel = modal();
+         if (!panel || cards() === before) return;
+         window.__answerSent.both = true;
+         if (!panel.closest('[inert]')) window.__answerSent.live = true;
+       };
+       window.__answerWatch = new MutationObserver(look);
+       window.__answerWatch.observe(hereChat(), { subtree: true, childList: true, attributes: true, attributeFilter: ['inert'] });
+       button.click();
+       return true;`,
+    );
+    await runWait(
+      `const card = hereChat().querySelector('[data-testid="question-answer"]'); return !modal() && !!card && card.textContent.includes('Which layout should I use?') && card.textContent.includes('Grid') && !card.textContent.includes('User answer');`,
+      { timeoutMs: 30_000, label: "answer card in history" },
+    );
+    expect(
+      await run(
+        `window.__answerWatch.disconnect(); return window.__answerSent;`,
+      ),
+    ).toEqual({ both: true, live: false });
+  }, 90_000);
+
+  it("answers a question in its own words through Other", async () => {
+    const SHIFT = 8;
+    const submit = `byText('section[aria-label="The agent has a question"] button', 'Submit')`;
+    await settled();
+    await run(`sendHere('blocking question about the layout'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('Which layout should I use?');`,
+      { timeoutMs: 30_000, label: "blocking question" },
+    );
+    await settle();
+    await run(`answer('Other'); return true;`);
+    // Its own input takes the caret, the composer's kind, not the chat's.
+    await runWait(
+      `return document.activeElement?.dataset.testid === 'question-answer-input';`,
+      { label: "the answer takes the caret" },
+    );
+    expect(await run(`return ${submit}.disabled;`)).toBe(true);
+    // Typed at once, while the answer is still opening: text inserted then
+    // landed behind the caret, so the next line came first.
+    await app.insertText("Cards in columns");
+    await app.press("Enter", SHIFT);
+    await app.insertText("sorted by date");
+    expect(
+      await run(
+        `return { chat: here().textContent, ready: !${submit}.disabled };`,
+      ),
+    ).toEqual({ chat: "", ready: true });
+    // A long paste becomes a pill, and an image dropped on the box attaches
+    // there, as they do in a message (ADR 0244); the image's reading is
+    // held, so Enter comes while it still attaches.
+    await run(`
+      const input = $('[data-testid="question-answer-input"]');
+      const text = new DataTransfer();
+      text.setData('text/plain', Array.from({ length: 14 }, (_, i) => 'card ' + i).join('\\n'));
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: text, bubbles: true, cancelable: true }));
+      window.__originalFileRead = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function () {
+        return new Promise((resolve, reject) => {
+          window.__releaseFile = () => window.__originalFileRead.call(this).then(resolve, reject);
+        });
+      };
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      const image = new DataTransfer();
+      image.items.add(new File([png], 'dot.png', { type: 'image/png' }));
+      const box = input.getBoundingClientRect();
+      input.dispatchEvent(new DragEvent('drop', { dataTransfer: image, bubbles: true, cancelable: true, clientX: box.right - 4, clientY: box.top + 8 }));
+      return true;
+    `);
+    await runWait(`return typeof window.__releaseFile === 'function';`, {
+      label: "the dropped image attaching",
+    });
+    // Sending waits for it rather than going without it.
+    await app.press("Enter");
+    expect(await run(`return !!modal() && here().textContent === '';`)).toBe(
+      true,
+    );
+    await run(
+      `File.prototype.arrayBuffer = window.__originalFileRead; window.__releaseFile(); return true;`,
+    );
+    await runWait(
+      `return $('[data-testid="question-answer-input"]').querySelectorAll('[data-pill-id]').length === 2 && !here().querySelector('[data-pill-id]');`,
+      { label: "a text pill and the image in the answer, none in the chat" },
+    );
+    const cards = `[...hereChat().querySelectorAll('[data-testid="question-answer"]')]`;
+    const before = await run<number>(`return ${cards}.length;`);
+    // Enter on the last unanswered question sends the answers.
+    await run(
+      `$('[data-testid="question-answer-input"]').focus(); return true;`,
+    );
+    await app.press("Enter");
+    // The agent read the pasted text in the answer, and where the image is.
+    await runWait(
+      `return !modal() && hereLog().includes('Using the Cards in columns') && hereLog().includes('card 13') && hereLog().includes('dot.png, attachment 1 of the message after these answers');`,
+      { timeoutMs: 30_000, label: "the agent read the words and the paste" },
+    );
+    // One card holds the answer, its pills in place; the image's message
+    // shows as that card.
+    await runWait(
+      `const all = ${cards}; const card = all.at(-1); return all.length === ${before} + 1 && card.textContent.includes('Which layout should I use?') && card.textContent.includes('sorted by date') && card.querySelectorAll('[data-testid="sent-pill"]').length === 2 && ![...hereChat().querySelectorAll('[data-user-message]')].some((el) => el.textContent.includes('With my answer to'));`,
+      { timeoutMs: 30_000, label: "the answer and its pills in history" },
+    );
+  }, 60_000);
+
+  it("moves through several questions with Enter, focus going along", async () => {
+    await settled();
+    await run(`sendHere('ask me two questions'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('What is your favorite color?');`,
+      { timeoutMs: 30_000, label: "two questions" },
+    );
+    await settle();
+    await run(`answer('Other'); return true;`);
+    await runWait(
+      `return document.activeElement?.dataset.testid === 'question-answer-input';`,
+      { label: "the first answer takes the caret" },
+    );
+    await app.insertText("Teal");
+    await app.press("Enter");
+    // The question left turns inert; focus goes on to the next one's first
+    // option, so Escape there is still the panel's.
+    await runWait(
+      `const active = document.activeElement; return !!active?.closest('section[aria-label="The agent has a question"]') && !active.closest('[inert]') && active.textContent.includes('Cats');`,
+      { label: "focus on the next question" },
+    );
+    await app.press("Enter");
+    await runWait(
+      `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+      { label: "both answered" },
+    );
+    await runWait(
+      `return !modal() && hereLog().includes('Got it, noted') && hereLog().includes('Teal');`,
+      { timeoutMs: 30_000, label: "the answers reached the agent" },
+    );
+  }, 60_000);
+
+  it("the agent closes a question the conversation settled", async () => {
+    await run(`sendHere('blocking question again'); return true;`);
+    await runWait(`return !!modal();`, { timeoutMs: 30_000 });
+    await run(`sendHere('never mind'); return true;`);
+    await runWait(
+      `return hereLog().includes('Replying before you answer: never mind') && modal()?.textContent.includes('Answer when ready');`,
+      { timeoutMs: 30_000, label: "deferred question" },
+    );
+    await run(`sendHere('close my questions'); return true;`);
+    await runWait(
+      `return !modal() && hereLog().includes('Questions: Closed');`,
+      { timeoutMs: 30_000, label: "question closed" },
+    );
+  }, 60_000);
+
+  it("a message during a permission request withdraws it and reaches the agent", async () => {
+    await run(`sendHere('permission: fake/archive_thread'); return true;`);
+    await runWait(
+      `return !!approval() && approval().textContent.includes('archive_thread');`,
+      { timeoutMs: 30_000, label: "approval request" },
+    );
+    // Typing declines a permission request; the composer does not offer it
+    // as an answer.
+    expect(await run(`return here().dataset.placeholder;`)).not.toBe(
+      "Answer in your own words…",
+    );
+    await run(`sendHere('do something else instead'); return true;`);
+    await runWait(
+      `return !approval() && hereLog().includes('permission decision: deny') && hereLog().includes('Steered: do something else instead');`,
+      { timeoutMs: 30_000, label: "consent withdrawn, message answered" },
+    );
+  }, 60_000);
+
+  it("the agent can see Work's window instead of asking", async () => {
+    await run(`sendHere('look at my screen'); return true;`);
+    await runWait(`return hereLog().includes('Saw 1 window image');`, {
+      timeoutMs: 30_000,
+      label: "window screenshot",
+    });
+  }, 60_000);
 });

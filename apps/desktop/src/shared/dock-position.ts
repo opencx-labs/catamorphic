@@ -20,6 +20,23 @@ export interface DockDrag {
   phase: "start" | "move" | "end" | "cancel";
   screenX: number;
   reducedMotion: boolean;
+  /**
+   * The window's size once the drag lands. The window keeps its size while
+   * dragging (the open chat collapses as the drag starts), so the landing
+   * moves and resizes it in one step.
+   */
+  size?: DockSize;
+}
+
+/** A requested dock size, kept to the display's work area. */
+export function fitDockSize(
+  size: Pick<DockSize, "width" | "height">,
+  area: { width: number; height: number },
+) {
+  return {
+    width: Math.max(100, Math.min(Math.round(size.width), area.width)),
+    height: Math.max(64, Math.min(Math.round(size.height), area.height)),
+  };
 }
 
 /** Resting positions are relative to the display, never saved coordinates. */
@@ -47,4 +64,32 @@ export function dockPosition({
     ),
     y: Math.max(area.y, area.y + area.height - height - 12),
   };
+}
+
+export type DockSpot = "left" | "center" | "right";
+
+/**
+ * Where a dragged strip lands: the resting spot nearest its centre. It
+ * leaves the spot it started from once it has gone 40% of the way to the
+ * next one, so a short deliberate drag is enough, and let go short of that
+ * it slides back.
+ */
+export function dockLanding<Spot extends DockSpot>(input: {
+  from: DockSpot;
+  /** The strip's centre now, on the same axis as `spots`. */
+  centre: number;
+  /** Each spot it may land on, by the centre it rests at. */
+  spots: readonly { spot: Spot; at: number }[];
+}): Spot | undefined {
+  let landing: Spot | undefined;
+  let nearest = Number.POSITIVE_INFINITY;
+  for (const { spot, at } of input.spots) {
+    const distance =
+      Math.abs(input.centre - at) * (spot === input.from ? 1.5 : 1);
+    if (distance < nearest) {
+      landing = spot;
+      nearest = distance;
+    }
+  }
+  return landing;
 }

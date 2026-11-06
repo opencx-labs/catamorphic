@@ -10,13 +10,15 @@ import {
 } from "./harness.js";
 
 /**
- * Skills as commands (ADR 0052): the two-tier skill list (project files +
- * host skills) surfaces as palette rows and composer /commands, both of
- * which just send the invocation message to an agent. The e2e fake answers
- * `Use the "<name>" skill` with the REAL read_skill workspace tool, so
- * these tests cover renderer → message → toolkit → core's merged tiers end
- * to end. The connect test drives request_connection the same way: real
- * tool, real connectors modal, user (the test) declining.
+ * Skills as commands (ADR 0052, 0270, 0274): the skill tiers (project
+ * files, host skills) and the chat agent's own commands are listed by the
+ * composer's "/" menu, which puts a skill in the message as a pill, and by
+ * the palette's Skills mode, which sends its invocation. The e2e fake
+ * answers both (a skill pill, or `Use the "<name>" skill`) with the REAL
+ * read_skill workspace tool, so these tests cover renderer → message →
+ * toolkit → core's merged tiers end to end. The connect test drives
+ * request_connection the same way: real tool, real connectors modal, user
+ * (the test) declining.
  */
 
 let app: AppHandle;
@@ -53,9 +55,30 @@ const helpers = `
     return [...input.closest('[role="dialog"]').querySelectorAll('[role="option"]')];
   };
   const composer = () => visibleDock()?.querySelector('[data-composer-input]');
+  const chip = () =>
+    paletteInput()?.closest('[role="dialog"]')
+      .querySelector('[data-testid="palette-mode-chip"]')?.textContent.trim();
+  const rowIds = () => paletteRows().map((row) => row.dataset.itemId);
+  // A New Tab shows the palette too; the overlay is put away when inert.
+  const overlayClosed = () =>
+    !!$('[data-palette="overlay"]')?.closest('[inert]');
+  const lastSent = () => {
+    const messages = visibleDock()?.querySelectorAll('[data-user-message]') ?? [];
+    return messages[messages.length - 1];
+  };
   const composerKey = (key, mods = {}) =>
     composer().dispatchEvent(new KeyboardEvent('keydown',
       { key, bubbles: true, cancelable: true, ...mods }));
+  // The composer's "/" and "@" menu (ADR 0274), while it is open.
+  const composerMenu = () =>
+    $$('[data-testid="composer-menu"]').find((el) => !el.inert);
+  const menuIds = () =>
+    [...(composerMenu()?.querySelectorAll('[role="option"]') ?? [])].map((el) => el.dataset.itemId);
+  const menuLoading = () => !!composerMenu()?.querySelector('[role="status"]');
+  const composerPills = () =>
+    [...(composer()?.querySelectorAll('[data-testid="composer-pill"]') ?? [])];
+  const sentPills = () =>
+    [...(lastSent()?.querySelectorAll('[data-testid="sent-pill"]') ?? [])].map((el) => el.dataset.pillKind);
 `;
 
 const run = <T>(body: string) =>
@@ -78,6 +101,45 @@ const ensurePalette = async () => {
 
 const paletteType = (text: string) =>
   run(`setReactValue(paletteInput(), ${JSON.stringify(text)}); return true;`);
+
+/** ⌘ on macOS, Ctrl elsewhere: the palette's new-chat commit. */
+const PRIMARY = process.platform === "darwin" ? 4 : 2;
+
+/**
+ * "/" typed at the end of the front chat's composer: its menu opens above
+ * it with the slash typed, rows loaded.
+ */
+const slashInComposer = async () => {
+  await run(
+    `const c = composer(); c.focus();
+     const range = document.createRange(); range.selectNodeContents(c); range.collapse(false);
+     getSelection().removeAllRanges(); getSelection().addRange(range);
+     return true;`,
+  );
+  await runWait(`return document.activeElement === composer();`, {
+    label: "composer focused",
+  });
+  await app.press("Slash");
+  await runWait(`return menuIds().length > 0 && !menuLoading();`, {
+    timeoutMs: 15_000,
+    label: "the composer's / menu",
+  });
+};
+
+/** The palette's Skills mode: Cmd+P, then "/", rows loaded. */
+const slashInPalette = async () => {
+  await ensurePalette();
+  // The overlay focuses its input a frame after it opens; a key before
+  // that would land in the composer and open the composer's own menu.
+  await runWait(`return document.activeElement === paletteInput();`, {
+    label: "palette input focused",
+  });
+  await app.press("Slash");
+  await runWait(
+    `return chip() === 'Skills' && rowIds().length > 0 && !rowIds().includes('skills:loading');`,
+    { timeoutMs: 15_000, label: "the palette's Skills mode" },
+  );
+};
 
 describe("skills as commands", () => {
   it("boots into a project workspace", async () => {
@@ -123,16 +185,11 @@ describe("skills as commands", () => {
       ["team-notes", "How this team writes notes."],
       ["checklist", "The release checklist."],
     ]) {
-      const dir = path.join(
-        projectRoot,
-        ".catamorphic",
-        "skills",
-        String(name),
-      );
+      const dir = path.join(projectRoot, ".work", "skills", String(name));
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(
         path.join(dir, "SKILL.md"),
-        `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\nBody of ${name}.\n`,
+        `---\nname: ${name}\ndescription: ${description}\n${name === "team-notes" ? "argument-hint: [meeting]\n" : ""}---\n\n# ${name}\nBody of ${name}.\n`,
       );
     }
     await runWaitAsync(
@@ -163,6 +220,43 @@ describe("skills as commands", () => {
     await run(`pressKey('Escape'); return true;`);
   });
 
+  it("lists one Skills row in the empty palette, enters the mode on /, and Tab takes a skill's instructions", async () => {
+    await ensurePalette();
+    await paletteType("");
+    await runWait(`return rowIds().includes('skills-mode');`, {
+      label: "one Skills row in the empty palette",
+    });
+    expect(
+      await run<string[]>(
+        `return rowIds().filter((id) => id.startsWith('skill:'));`,
+      ),
+    ).toEqual([]);
+    await app.press("Slash");
+    await runWait(
+      `return chip() === 'Skills' && paletteInput().value === '';`,
+      {
+        label: "/ enters the Skills mode",
+      },
+    );
+    // Not opened by a composer: Backspace leaves the mode, as any mode.
+    await app.press("Backspace");
+    await runWait(`return !chip();`, { label: "left the mode" });
+    await paletteType(">team");
+    await runWait(`return rowIds()[0] === 'skill:team-notes';`);
+    await app.press("Tab");
+    await runWait(
+      `return chip() === 'Team notes' && paletteInput().placeholder === '[meeting]';`,
+      { label: "Tab takes its instructions, with its hint" },
+    );
+    // Leave the palette as found (it may be the New Tab's, which Escape
+    // does not close): back to the list, out of the mode, empty.
+    await app.press("Backspace");
+    await runWait(`return chip() === 'Skills';`, { label: "back to the list" });
+    await app.press("Backspace");
+    await runWait(`return !chip();`, { label: "out of the mode" });
+    await run(`pressKey('Escape'); return true;`);
+  });
+
   it("runs a host skill from the palette into a new chat", async () => {
     await ensurePalette();
     await paletteType(">publishing-to-github");
@@ -182,154 +276,261 @@ describe("skills as commands", () => {
     );
   });
 
-  it("runs a project skill via the composer slash menu", async () => {
+  it("opens the / menu from the composer, and a picked skill goes in the message", async () => {
     await runWait(`return !!composer();`, { label: "composer available" });
-    await run(`setReactValue(composer(), '/team'); return true;`);
+    await slashInComposer();
+    // The slash is typed; the chat's commands and the skills are listed.
+    expect(await run(`return composer().textContent;`)).toBe("/");
+    expect(await run<string[]>(`return menuIds();`)).toEqual(
+      expect.arrayContaining(["action:session-status", "skill:team-notes"]),
+    );
+    await app.insertText("team");
+    await runWait(`return menuIds()[0] === 'skill:team-notes';`, {
+      label: "team-notes ranked first",
+    });
+    // Enter puts the skill in the message, where the word was.
+    await app.press("Enter");
     await runWait(
-      `const menu = $('[data-testid="slash-menu"]');
-       return !!menu && !!menu.querySelector('[data-skill-name="team-notes"]');`,
-      { timeoutMs: 15_000, label: "slash menu lists team-notes" },
+      `return !composerMenu() && composerPills().map((el) => el.dataset.pillKind).join() === 'skill' &&
+         !composer().textContent.includes('/team');`,
+      { label: "the skill as a pill" },
     );
-    await run(
-      `const row = $('[data-testid="slash-menu"] [data-skill-name="team-notes"]');
-       row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-       return true;`,
-    );
-    expect(await run(`return composer().textContent;`)).toBe("/team");
-    await run(
-      `$('[data-testid="slash-menu"] [data-skill-name="team-notes"]').click(); return true;`,
-    );
+    await app.press("Enter");
     await runWait(
       `return !!byText('section[aria-label] *', 'skill loaded: team-notes') &&
               !!byText('section[aria-label] *', 'source:project');`,
       { timeoutMs: 30_000, label: "project skill loaded reply" },
     );
+    // The message reads as the skill, and the keyboard stays in the chat.
+    expect(await run(`return sentPills();`)).toEqual(["skill"]);
+    await runWait(`return document.activeElement === composer();`, {
+      label: "composer focused again",
+    });
   });
 
-  it("uses live input when Enter arrives before the menu rerenders", async () => {
-    await run(`setReactValue(composer(), '/team'); return true;`);
+  it("puts a skill anywhere in a message: Space after its whole name, Tab on a row", async () => {
+    // Mid-message: "summarize the call and /team-notes include the decisions ↵",
+    // typed without looking.
+    await run(`setReactValue(composer(), ''); return true;`);
+    await slashInComposer();
+    await app.press("Backspace");
+    await app.insertText("summarize the call and ");
+    await app.press("Slash");
+    await app.insertText("team-notes");
+    await runWait(`return menuIds()[0] === 'skill:team-notes';`);
+    await app.press("Space");
     await runWait(
-      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]');`,
+      `return !composerMenu() && composerPills().length === 1 &&
+         composerPills()[0].dataset.pillKind === 'skill';`,
+      { label: "Space after a full name puts the skill in" },
     );
-    await run(
-      `setReactValue(composer(), 'Keep this freshly typed message'); composerKey('Enter'); return true;`,
-    );
+    await app.insertText("include the decisions");
+    await app.press("Enter");
     await runWait(
-      `return !!byText('[role="log"] *', 'You said: Keep this freshly typed message');`,
+      `return /skill loaded: team-notes \\(source:project, \\d+ chars\\) \\| summarize the call and include the decisions/
+         .test(visibleDock().querySelector('[role="log"]').textContent);`,
+      { timeoutMs: 30_000, label: "the message's words reached the agent" },
     );
-
-    await run(`setReactValue(composer(), '/team'); return true;`);
+    // Tab on the highlighted row does the same; Backspace takes the pill out.
+    await slashInComposer();
+    await app.insertText("check");
+    await runWait(`return menuIds()[0] === 'skill:checklist';`);
+    await app.press("Tab");
     await runWait(
-      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]');`,
+      `return !composerMenu() && composerPills()[0]?.textContent.includes('Checklist');`,
+      { label: "Tab puts it in" },
     );
-    await run(
-      `setReactValue(composer(), '/team-notes keep the freshly typed arguments'); composerKey('Tab'); composer().closest('form').requestSubmit(); return true;`,
-    );
+    await app.press("Backspace");
+    await app.press("Backspace");
     await runWait(
-      `return !!byText('[role="log"] *', 'Use the "team-notes" skill: keep the freshly typed arguments');`,
-    );
-  });
-
-  it("completes a command with Tab, leaves space for arguments, and keeps IME and Escape safe", async () => {
-    await run(`setReactValue(composer(), '/team'); return true;`);
-    await runWait(
-      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
-    );
-    await run(`composerKey('Enter', { isComposing: true }); return true;`);
-    expect(await run(`return composer().textContent;`)).toBe("/team");
-    await run(`composerKey('Escape'); return true;`);
-    await runWait(`return !$('[data-testid="slash-menu"]');`);
-    expect(await run(`return !!composer();`)).toBe(true);
-    await run(`setReactValue(composer(), '/team-'); return true;`);
-    await runWait(`return !!$('[data-testid="slash-menu"]');`);
-    await run(`composerKey('Tab'); return true;`);
-    await runWait(`return !$('[data-testid="slash-menu"]');`);
-    expect(
-      await run(`return composer().textContent.replaceAll('\u00a0', ' ');`),
-    ).toBe("/team-notes ");
-    await run(
-      `setReactValue(composer(), '/team-notes include the decisions'); return true;`,
-    );
-    await run(`composer().closest('form').requestSubmit(); return true;`);
-    await runWait(
-      `return !!byText('[role="log"] *', 'Use the "team-notes" skill: include the decisions');`,
+      `return composerPills().length === 0 && composer().textContent.trim() === '';`,
+      { label: "Backspace removes it" },
     );
   });
 
-  it("shows an empty state and links keyboard navigation to the active option", async () => {
-    await run(`setReactValue(composer(), '/zzzznonexistent'); return true;`);
+  it("closes on Escape keeping what was typed, and slash text goes as written", async () => {
+    await run(`setReactValue(composer(), ''); return true;`);
+    await slashInComposer();
+    await app.insertText("check");
+    await runWait(`return menuIds()[0] === 'skill:checklist';`);
+    await app.press("Escape");
     await runWait(
-      `return !!byText('[data-testid="slash-menu"]', 'No matching commands');`,
+      `return !composerMenu() && document.activeElement === composer() &&
+         composer().textContent === '/check' && !!visibleDock();`,
+      { label: "menu closed, typing kept, chat in place" },
     );
-    await run(`setReactValue(composer(), '/'); return true;`);
+    // The same word stays closed; the next one opens it again.
+    await app.insertText("list");
+    expect(await run(`return !!composerMenu();`)).toBe(false);
+    await app.insertText(" and ");
+    await app.press("Slash");
+    await runWait(`return menuIds().length > 0;`, {
+      label: "the next word opens it",
+    });
+    // A path is not a command: its second slash closes the menu.
+    await run(`setReactValue(composer(), ''); return true;`);
+    await slashInComposer();
+    await app.insertText("usr");
+    await app.press("Slash");
+    await app.insertText("bin is missing");
     await runWait(
-      `return $('[data-testid="slash-menu"] [role="option"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+      `return !composerMenu() && composer().textContent === '/usr/bin is missing';`,
+      { label: "a path typed" },
     );
-    await run(`composerKey('ArrowDown'); return true;`);
+    await app.press("Enter");
     await runWait(
-      `const active = document.getElementById(composer().getAttribute('aria-activedescendant')); return active && active.getAnimations().length === 0;`,
+      `return !!byText('[role="log"] *', 'You said: /usr/bin is missing');`,
+      { timeoutMs: 30_000, label: "slash message sent as written" },
     );
-    await app.screenshot("/tmp/catamorphic-slash-menu.png");
-    expect(
-      await run(
-        `const active = document.getElementById(composer().getAttribute('aria-activedescendant')); return active?.getAttribute('aria-selected');`,
-      ),
-    ).toBe("true");
-    expect(
-      await run(
-        `return !!document.getElementById(composer().getAttribute('aria-controls'));`,
-      ),
-    ).toBe(true);
+    // A pasted slash command is a message too: nothing resolves it.
     await run(
-      `composerKey('Escape'); setReactValue(composer(), ''); return true;`,
+      `setReactValue(composer(), '/team-notes keep it literal'); composerKey('Enter'); return true;`,
+    );
+    await runWait(
+      `return !!byText('[role="log"] *', 'You said: /team-notes keep it literal');`,
+      { timeoutMs: 30_000, label: "pasted slash text sent as written" },
     );
   });
 
-  it("keeps the selected row visible in the compact light composer", async () => {
-    await app.eval(
-      `window.catamorphicDesktop.setTheme({selection:'light',overrides:{}})`,
-    );
-    await app.waitFor(`document.documentElement.dataset.theme === 'light'`);
-    await app.eval(`window.catamorphicDesktop.devWindow('setSize',840,650)`);
-    await run(`setReactValue(composer(), '/'); return true;`);
+  it("takes instructions in the palette's Skills mode after Space or Tab", async () => {
+    // Typed without looking: Cmd+P, "/team-notes include the decisions ↵".
+    await slashInPalette();
+    await app.insertText("team-notes");
+    await app.press("Space");
     await runWait(
-      `return $('[data-testid="slash-menu"] [role="option"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+      `return chip() === 'Team notes' && paletteInput().value === '';`,
+      { label: "Space after a full name chips the skill" },
     );
-    for (let index = 0; index < 20; index++)
-      await run(`composerKey('ArrowDown'); return true;`);
+    expect(await run(`return paletteInput().placeholder;`)).toBe("[meeting]");
+    await app.insertText("include the decisions");
+    await app.press("Enter");
     await runWait(
-      `const list = document.getElementById(composer().getAttribute('aria-controls')); const active = document.getElementById(composer().getAttribute('aria-activedescendant')); if (!list || !active) return false; const a = active.getBoundingClientRect(), b = list.getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1 && active.getAnimations().length === 0;`,
+      `return /skill loaded: team-notes \\(source:project, \\d+ chars\\) \\| include the decisions/
+         .test(visibleDock().querySelector('[role="log"]').textContent);`,
+      { timeoutMs: 30_000, label: "instructions reached the agent" },
     );
-    await app.screenshot("/tmp/catamorphic-slash-menu-light.png");
-    expect(app.getRendererErrors()).toEqual([]);
-    await run(
-      `composerKey('Escape'); setReactValue(composer(), ''); return true;`,
+    // Tab on the highlighted row does the same; Backspace walks back.
+    await slashInPalette();
+    await app.insertText("check");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Tab");
+    await runWait(`return chip() === 'Checklist';`, { label: "Tab chips it" });
+    await app.press("Backspace");
+    await runWait(`return chip() === 'Skills';`, {
+      label: "Backspace back to the list",
+    });
+    // Put away with its exit played, so the next palette opens fresh.
+    await app.press("Escape");
+    await runWait(
+      `return overlayClosed() && !document.getAnimations().some((animation) =>
+         animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      { label: "palette put away, its exit played" },
     );
-    await app.eval(
-      `window.catamorphicDesktop.setTheme({selection:'dark',overrides:{}})`,
-    );
-    await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,800)`);
   });
 
-  it("surfaces discovery errors, preserves the draft, and recovers with Retry", async () => {
+  it("starts a new chat with the skill on ⌘↵", async () => {
+    const before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+    );
+    await slashInPalette();
+    await app.insertText("checklist");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Enter", PRIMARY);
+    await runWait(
+      `const ids = $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);
+       return ids.some((id) => !${JSON.stringify(before)}.includes(id));`,
+      { timeoutMs: 15_000, label: "a new chat" },
+    );
+    await runWait(
+      `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(before)}.includes(el.dataset.chatLocalId));
+       return !!fresh && fresh.hasAttribute('data-chat-tab') &&
+         fresh.textContent.includes('skill loaded: checklist');`,
+      { timeoutMs: 30_000, label: "the new chat, a tab, ran the skill" },
+    );
+  });
+
+  it("starts a floating chat on ⌥↵, and a New Tab's palette starts the chat in the tab", async () => {
+    let before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+    );
+    await slashInPalette();
+    await app.insertText("checklist");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Enter", 1);
+    await runWait(
+      `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(before)}.includes(el.dataset.chatLocalId));
+       return !!fresh && fresh.hasAttribute('data-floating-chat') &&
+         fresh.textContent.includes('skill loaded: checklist');`,
+      { timeoutMs: 30_000, label: "a floating chat ran the skill" },
+    );
+    before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+    );
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(
+      `const input = document.activeElement;
+       return input?.getAttribute('aria-label') === 'Search commands, pages, and more' &&
+         input.closest('[data-palette="tab"]') !== null;`,
+      { label: "a New Tab's palette" },
+    );
+    await app.press("Slash");
+    await runWait(
+      `return chip() === 'Skills' && !rowIds().includes('skills:loading');`,
+      {
+        label: "the New Tab's Skills mode",
+      },
+    );
+    // No chat is the target here: no Status row.
+    expect(await run<string[]>(`return rowIds();`)).not.toContain(
+      "skills:status",
+    );
+    await app.insertText("checklist");
+    await runWait(`return rowIds()[0] === 'skills:checklist';`);
+    await app.press("Enter");
+    await runWait(
+      `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(before)}.includes(el.dataset.chatLocalId));
+       return !!fresh && fresh.hasAttribute('data-chat-tab') &&
+         fresh.textContent.includes('skill loaded: checklist');`,
+      { timeoutMs: 30_000, label: "the chat took the tab" },
+    );
+  });
+
+  it("surfaces discovery errors and recovers with Retry", async () => {
+    // The composer's menu leads with the failure, where Enter retries it.
     await app.blockRequests(["*/api/projects/*/skills"]);
     try {
-      await run(`setReactValue(composer(), '/team'); return true;`);
-      await runWait(
-        `return !!byText('[data-testid="slash-menu"]', 'Could not load skills');`,
-      );
-      await run(`composer().closest('form').requestSubmit(); return true;`);
-      expect(await run(`return composer().textContent;`)).toBe("/team");
+      await slashInComposer();
+      await runWait(`return menuIds()[0] === 'skills:error';`, {
+        label: "the failure leads the composer's menu",
+      });
     } finally {
       await app.blockRequests([]);
     }
-    await run(
-      `byText('[data-testid="slash-menu"] button', 'Retry').click(); return true;`,
-    );
-    await runWait(
-      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]');`,
-    );
+    await app.press("Enter");
+    await runWait(`return menuIds().includes('skill:team-notes');`, {
+      label: "skills after Enter retried",
+    });
+    await app.press("Escape");
     await run(`setReactValue(composer(), ''); return true;`);
+    // The palette's Skills mode does the same.
+    await app.blockRequests(["*/api/projects/*/skills"]);
+    try {
+      await slashInPalette();
+      await runWait(
+        `return paletteRows().some((row) => row.textContent.includes('Could not load skills'));`,
+      );
+    } finally {
+      await app.blockRequests([]);
+    }
+    // The error row retries in place.
+    await run(
+      `paletteRows().find((row) => row.textContent.includes('Could not load skills')).dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true })); return true;`,
+    );
+    await runWait(`return rowIds().includes('skills:team-notes');`, {
+      label: "skills after Retry",
+    });
+    await app.press("Escape");
+    await runWait(`return overlayClosed();`);
   });
 
   it("returns only the selected harness's native commands through the real desktop bridge", async () => {
@@ -357,7 +558,7 @@ describe("skills as commands", () => {
   });
 
   it("requires project-agent consent and refreshes a changed definition before discovery", async () => {
-    const dir = path.join(projectRoot, ".catamorphic", "agents");
+    const dir = path.join(projectRoot, ".work", "agents");
     fs.mkdirSync(dir, { recursive: true });
     const definition = {
       version: 1,
@@ -379,8 +580,13 @@ describe("skills as commands", () => {
     );
     expect(before.error).toBeTruthy();
     expect(before.commands).toEqual([]);
+    // Approves the definition as listed, as the consent dialog does.
     await app.eval(
-      `${invoke}.then(({api,projectId}) => api.projectAgentApprove(projectId, 'release-claude'))`,
+      `${invoke}.then(async ({api,projectId}) => {
+        const { agents } = await api.projectAgentsList(projectId);
+        const agent = agents.find((each) => each.slug === 'release-claude');
+        return api.projectAgentApprove(projectId, 'release-claude', agent.definitionHash);
+      })`,
     );
     const approved = await app.eval<{
       error?: string;
@@ -403,15 +609,28 @@ describe("skills as commands", () => {
     expect(stale.commands).toEqual([]);
   });
 
-  it("clears stale native rows when switching harnesses in the same chat", async () => {
+  it("lists each harness's own native rows after switching the same chat", async () => {
     const nativeDir = path.join(projectRoot, ".codex/skills/native-notes");
     fs.mkdirSync(nativeDir, { recursive: true });
     fs.writeFileSync(path.join(nativeDir, "SKILL.md"), "Native notes fixture.");
-    for (const [name, command, absent] of [
-      ["Catalog claude", "compact", "native-notes"],
-      ["Catalog codex", "native-notes", "compact"],
-      ["Fake Agent", "team-notes", "native-notes"],
-    ]) {
+    // Each harness's row in the composer's menu, and the row it must not
+    // list: a harness's own command, or a skill (its own file or shared).
+    const harnesses: Array<
+      [name: string, command: string, present: string, absent: string]
+    > = [
+      ["Catalog claude", "compact", "command:compact", "skill:native-notes"],
+      [
+        "Catalog codex",
+        "native-notes",
+        "skill:native-notes",
+        "command:compact",
+      ],
+      ["Fake Agent", "team-notes", "skill:team-notes", "skill:native-notes"],
+    ];
+    for (const [name, command, present, absent] of harnesses) {
+      const chat = await run<string>(
+        `return visibleDock()?.dataset.chatLocalId ?? '';`,
+      );
       await ensurePalette();
       await paletteType(">switch agent");
       await runWait(
@@ -420,45 +639,99 @@ describe("skills as commands", () => {
       await runWait(
         `const row = paletteRows().find(el => el.textContent.includes(${JSON.stringify(name)})); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true})); return true;`,
       );
+      // Every harness takes the same chat and updates its native commands.
       await runWait(
-        `return !!byText('[role="log"] div', ${JSON.stringify(`Switched to ${name}`)});`,
+        `const dock = visibleDock();
+         return !!dock && dock.dataset.chatLocalId === ${JSON.stringify(chat)} &&
+           !!byText('[role="log"] div', ${JSON.stringify(`Switched to ${name}`)});`,
+        { label: `${name} picked` },
       );
-      await run(`setReactValue(composer(), '/'); return true;`);
+      await runWait(`return overlayClosed();`, { label: "palette put away" });
+      await slashInComposer();
       await runWait(
-        `return !!$('[data-testid="slash-menu"] [data-skill-name="${command}"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+        `return menuIds().includes('${present}') && !menuIds().includes('${absent}');`,
+        { label: `${name} lists ${present}, not ${absent}` },
       );
+      // Chromium's keyboard path for each harness: the name, Space, the
+      // instructions, Enter. A skill goes in as a pill; a harness's own
+      // command stays typed and is sent as written.
+      await app.insertText(command);
+      await app.press("Space");
       await runWait(
-        `return !$('[data-testid="slash-menu"] [data-skill-name="${absent}"]');`,
-        { label: `remove ${absent} after switching to ${name}` },
+        present.startsWith("skill:")
+          ? `return !composerMenu() && composerPills().length === 1;`
+          : `return !composerMenu() && composer().textContent === '/${command} ';`,
+        { label: `${command} taken` },
       );
-      // Use Chromium's editing/keyboard path for each harness, including
-      // Tab completion, trailing whitespace, arguments, and dispatch.
-      await run(
-        `setReactValue(composer(), ''); composer().focus(); return true;`,
-      );
-      await app.insertText(`/${command}`);
-      await runWait(
-        `return !!$('[data-testid="slash-menu"] [data-skill-name="${command}"]');`,
-      );
-      await app.press("Tab");
-      expect(await run(`return composer().textContent;`)).toBe(`/${command} `);
       await app.insertText("release 42");
       await app.press("Enter");
       const reply =
         name === "Catalog claude"
           ? "You said: /compact release 42"
           : name === "Catalog codex"
-            ? "native skill loaded: Native notes fixture. | release 42"
-            : "skill loaded: team-notes";
+            ? "native skill loaded: Native notes fixture\\. \\| release 42"
+            : "skill loaded: team-notes \\(source:project, \\d+ chars\\) \\| release 42";
       await runWait(
-        `return visibleDock().querySelector('[role="log"]').textContent.includes(${JSON.stringify(reply)});`,
+        `return new RegExp(${JSON.stringify(reply)}).test(visibleDock().querySelector('[role="log"]').textContent);`,
         { label: `${name} command reply`, timeoutMs: 30_000 },
       );
       expect(await run(`return composer().textContent;`)).toBe("");
+      if (name !== "Catalog claude") continue;
+      // In a new chat, an agent's own command runs on that agent.
+      const chats = await run<string[]>(
+        `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId);`,
+      );
+      await slashInPalette();
+      await app.insertText("compact");
+      await runWait(`return rowIds()[0] === 'skills:compact';`);
+      await app.press("Enter", PRIMARY);
+      await runWait(
+        `const fresh = $$('[data-chat-local-id]').find(el => !${JSON.stringify(chats)}.includes(el.dataset.chatLocalId));
+         return !!fresh && fresh.textContent.includes('You said: /compact') &&
+           !!fresh.querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes('Catalog claude');`,
+        { label: "the new chat runs on Catalog claude", timeoutMs: 30_000 },
+      );
     }
   });
 
-  it("opens local status without sending or discarding attached context", async () => {
+  it("opens with the most used skills under Recent", async () => {
+    // The composer's menu leads with them too, from the same use signals.
+    await slashInComposer();
+    const composerList = await runWait<string>(
+      `const text = composerMenu()?.querySelector('[role="listbox"]')?.textContent ?? '';
+       return text.startsWith('Recent') ? text : false;`,
+      { label: "a Recent group first in the composer's menu" },
+    );
+    expect(composerList).toContain("All");
+    await app.press("Escape");
+    await run(`setReactValue(composer(), ''); return true;`);
+    await slashInPalette();
+    const listed = await runWait<string>(
+      `const list = paletteInput().closest('[role="dialog"]').querySelector('[role="listbox"]');
+       return list.textContent.startsWith('Recent') ? list.textContent : false;`,
+      { label: "a Recent group first" },
+    );
+    expect(listed).toContain("All");
+    // team-notes and checklist were run above; Status, never.
+    const recent = await run<string[]>(
+      `const rows = []; let group = '';
+       const list = paletteInput().closest('[role="dialog"]').querySelector('[role="listbox"] > div');
+       for (const el of list.children) {
+         if (!el.dataset.itemId) group = el.textContent.trim();
+         else if (group === 'Recent') rows.push(el.dataset.itemId);
+       }
+       return rows;`,
+    );
+    expect(recent).toEqual(
+      expect.arrayContaining(["skills:team-notes", "skills:checklist"]),
+    );
+    expect(recent).not.toContain("skills:status");
+    await app.press("Escape");
+    await runWait(`return overlayClosed();`);
+    await run(`setReactValue(composer(), ''); return true;`);
+  });
+
+  it("opens Status without sending, and a skill takes the composer's pills along", async () => {
     await run(
       `const data = new DataTransfer(); data.setData('text/plain', 'Meeting context. '.repeat(100)); composer().dispatchEvent(new ClipboardEvent('paste', {bubbles:true,cancelable:true,clipboardData:data})); return true;`,
     );
@@ -468,17 +741,55 @@ describe("skills as commands", () => {
     const count = await run<number>(
       `return composer().querySelectorAll('[data-pill-id]').length;`,
     );
-    await run(`setReactValue(composer(), '/status'); return true;`);
-    await run(`composer().closest('form').requestSubmit(); return true;`);
+    const sent = await run<number>(
+      `return visibleDock().querySelectorAll('[data-user-message]').length;`,
+    );
+    // Status is the chat's own command: it opens the chat's details, sends
+    // nothing, takes its word away and leaves the pills where they are.
+    await slashInComposer();
+    await app.insertText("status");
+    await runWait(`return menuIds()[0] === 'action:session-status';`);
+    await app.press("Enter");
+    await runWait(`return !!$('[data-testid="session-inspector-content"]');`, {
+      label: "status opened",
+    });
     expect(
       await run(`return composer().querySelectorAll('[data-pill-id]').length;`),
     ).toBe(count);
     expect(
       await run(`return composer().textContent.includes('/status');`),
     ).toBe(false);
-    await run(
-      `pressKey('Escape'); composer().replaceChildren(); composer().dispatchEvent(new InputEvent('input', {bubbles:true})); return true;`,
+    expect(
+      await run(
+        `return visibleDock().querySelectorAll('[data-user-message]').length;`,
+      ),
+    ).toBe(sent);
+    await app.press("Escape");
+    await runWait(`return !$('[data-testid="session-inspector-content"]');`);
+    // A skill the palette applies to a composer holding only pills is what
+    // they are for (ADR 0270).
+    await slashInPalette();
+    await app.insertText("team-notes");
+    await runWait(`return rowIds()[0] === 'skills:team-notes';`);
+    await app.press("Enter");
+    await runWait(
+      `const message = lastSent();
+       return !!message?.querySelector('[data-testid="sent-skill"]') &&
+         !!message.querySelector('[data-testid="sent-pill"]');`,
+      { timeoutMs: 30_000, label: "skill sent with the pills" },
     );
+    // The agent got the invocation with the pill attached (the fake's
+    // attachment echo), and its turn ends before the next test sends here.
+    await runWait(
+      `const log = visibleDock().querySelector('[role="log"]').textContent;
+       return log.includes('[prose] Use the "team-notes" skill.') &&
+         log.includes('[attachment 1:') && log.includes('Received 1 attachment');`,
+      { timeoutMs: 30_000, label: "the skill's reply, with its attachment" },
+    );
+    expect(
+      await run(`return composer().querySelectorAll('[data-pill-id]').length;`),
+    ).toBe(0);
+    expect(app.getRendererErrors()).toEqual([]);
   });
 
   it("targets the focused chat from the palette, highlighting it", async () => {
@@ -512,8 +823,9 @@ describe("skills as commands", () => {
       button: "left",
       clickCount: 1,
     });
+    // Another chat ran the checklist earlier: read this one's reply.
     await runWait(
-      `return !!byText('section[aria-label] *', 'skill loaded: checklist');`,
+      `return visibleDock().querySelector('[role="log"]').textContent.includes('skill loaded: checklist');`,
       { timeoutMs: 30_000, label: "checklist reply in the focused chat" },
     );
     const after = await run<string[]>(

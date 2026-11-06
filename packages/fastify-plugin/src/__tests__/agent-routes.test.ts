@@ -1,4 +1,9 @@
-import { AgentNotConfiguredError } from "@catamorphic/core";
+import {
+  AccessDeniedError,
+  AgentNotConfiguredError,
+  AgentSessionAuthorityRequiredError,
+  EnvironmentPolicyInvalidError,
+} from "@catamorphic/core";
 import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
@@ -24,6 +29,33 @@ describe("agent routes", () => {
       });
       expect(res.statusCode).toBe(503);
       expect(res.json()).toEqual({ error: "Coding agent not configured" });
+      await app.close();
+    });
+
+    it("answers 422 when the project's Environment policy is invalid", async () => {
+      const app = createTestApp({
+        core: {
+          agentSessions: {
+            create: vi.fn(async () => {
+              throw new EnvironmentPolicyInvalidError(
+                "defaultEnvironment must name a valid declared Environment",
+              );
+            }),
+          },
+        } as never,
+      });
+      await app.ready();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toEqual({
+        error:
+          "Invalid .work/project.json: defaultEnvironment must name a valid declared Environment",
+        code: "environment_policy_invalid",
+      });
       await app.close();
     });
 
@@ -63,12 +95,13 @@ describe("agent routes", () => {
     });
   });
 
-  it("rejects ambiguous or invalid hierarchy list queries", async () => {
+  it("rejects ambiguous hierarchy filters and invalid session list queries", async () => {
     const app = await buildApp();
     for (const query of [
       `rootsOnly=true&parentSessionId=${SESSION_ID}`,
       "rootsOnly=yes",
       "parentSessionId=unknown",
+      `query=${"a".repeat(501)}`,
     ]) {
       const response = await app.inject({
         method: "GET",
@@ -132,6 +165,122 @@ describe("agent routes", () => {
       await app.close();
     });
 
+    it("renames a chat through core, trimmed and bounded, only where it is held", async () => {
+      const rename = vi.fn(async (_identity, _projectId, _sessionId, title) => {
+        if (title === "Elsewhere")
+          throw new AgentSessionAuthorityRequiredError(SESSION_ID, "laptop", 2);
+      });
+      const app = createTestApp({
+        core: { agentSessions: { rename } } as never,
+      });
+      await app.ready();
+      const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/title`;
+      const renamed = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { title: "  Release notes " },
+      });
+      expect(renamed.statusCode).toBe(200);
+      expect(rename).toHaveBeenCalledWith(
+        expect.anything(),
+        PROJECT_ID,
+        SESSION_ID,
+        "Release notes",
+      );
+      for (const title of ["   ", "x".repeat(501)]) {
+        const refused = await app.inject({
+          method: "PATCH",
+          url,
+          payload: { title },
+        });
+        expect(refused.statusCode).toBe(400);
+      }
+      const elsewhere = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { title: "Elsewhere" },
+      });
+      expect(elsewhere.statusCode).toBe(409);
+      expect(elsewhere.json()).toMatchObject({ code: "authority_required" });
+      expect(rename).toHaveBeenCalledTimes(2);
+      await app.close();
+    });
+
+    it("sets session metadata by key through core, with core's refusals", async () => {
+      const setMetadata = vi.fn(async ({ values }) => {
+        if ("forbidden" in values) throw new AccessDeniedError();
+        if ("elsewhere" in values)
+          throw new AgentSessionAuthorityRequiredError(SESSION_ID, "laptop", 4);
+        return { pull_requests: values.pull_requests };
+      });
+      const setActivity = vi.fn(async () => {
+        throw new AgentSessionAuthorityRequiredError(SESSION_ID, "laptop", 4);
+      });
+      const app = createTestApp({
+        core: { agentSessions: { setMetadata, setActivity } } as never,
+      });
+      await app.ready();
+      const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/metadata`;
+      const set = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { pull_requests: [{ url: "https://x/pull/1" }] } },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toEqual({
+        metadata: { pull_requests: [{ url: "https://x/pull/1" }] },
+      });
+      expect(setMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: PROJECT_ID,
+          sessionId: SESSION_ID,
+          values: { pull_requests: [{ url: "https://x/pull/1" }] },
+        }),
+      );
+      const denied = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { forbidden: true } },
+      });
+      expect(denied.statusCode).toBe(403);
+      // A copy of a session another host holds is not written here (it
+      // would fork the person's chat), and neither is its activity.
+      const elsewhere = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { elsewhere: true } },
+      });
+      expect(elsewhere.statusCode).toBe(409);
+      expect(elsewhere.json()).toMatchObject({
+        code: "authority_required",
+        authorityRevision: 4,
+      });
+      const activity = await app.inject({
+        method: "PATCH",
+        url: url.replace(/metadata$/, "activity"),
+        payload: { activity: "Reviewing" },
+      });
+      expect(activity.statusCode).toBe(409);
+      expect(activity.json()).toMatchObject({ code: "authority_required" });
+      // Keys are checked before core is asked.
+      const malformed = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { "Pull Requests": [] } },
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(setMetadata).toHaveBeenCalledTimes(3);
+      await app.close();
+      const unconfigured = await buildApp();
+      const response = await unconfigured.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { note: "x" } },
+      });
+      expect(response.statusCode).toBe(503);
+      await unconfigured.close();
+    });
+
     it("reports an unavailable subsession agent as a client error", async () => {
       const app = createTestApp({
         core: {
@@ -156,14 +305,18 @@ describe("agent routes", () => {
     });
   });
 
-  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/messages", () => {
+  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/commands", () => {
+    const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/commands`;
+
     it("responds 503 when no coding agent is configured", async () => {
       const app = await buildApp();
       const res = await app.inject({
         method: "POST",
-        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        url,
         payload: {
-          message: "Hello, agent!",
+          type: "send",
+          commandId: "command-0001",
+          text: "Hello, agent!",
         },
       });
       expect(res.statusCode).toBe(503);
@@ -171,18 +324,44 @@ describe("agent routes", () => {
       await app.close();
     });
 
-    it("rejects empty message", async () => {
+    it("validates the command before anything runs", async () => {
       const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
-        payload: {
-          message: "",
+      for (const payload of [
+        { type: "send", commandId: "command-0001", text: "" },
+        { type: "send", text: "no command id" },
+        {
+          type: "send",
+          commandId: "command-0001",
+          text: "x",
+          dispatch: "next_turn",
         },
-      });
-      expect(res.statusCode).toBe(400);
+        { type: "answer", commandId: "command-0001" },
+      ]) {
+        const res = await app.inject({ method: "POST", url, payload });
+        expect(res.statusCode).toBe(400);
+      }
       await app.close();
     });
+  });
+
+  it("no longer serves the routes commands replaced", async () => {
+    const app = await buildApp();
+    const base = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`;
+    for (const [method, url] of [
+      ["POST", `${base}/messages`],
+      ["POST", `${base}/questions/q1/answer`],
+      ["GET", `${base}/permissions`],
+      ["POST", `${base}/permissions/${SESSION_ID}`],
+      ["POST", `${base}/retry`],
+      ["PATCH", `${base}/turns/${SESSION_ID}`],
+      ["DELETE", `${base}/turns/${SESSION_ID}`],
+      ["POST", `${base}/turns/${SESSION_ID}/send-now`],
+      ["POST", `${base}/interrupt`],
+    ] as const) {
+      const res = await app.inject({ method, url, payload: {} });
+      expect([method, url, res.statusCode]).toEqual([method, url, 404]);
+    }
+    await app.close();
   });
 
   describe("watcher lifecycle routes", () => {
@@ -245,19 +424,21 @@ describe("agent routes", () => {
   });
 });
 
-// The raised body cap is scoped to the messages route (base64 media rides
-// in the message body); every other route keeps Fastify's default 1MB cap.
+// The raised body cap is scoped to the commands and mirror routes (base64
+// media rides in a send); every other route keeps Fastify's default 1MB cap.
 describe("body limits", () => {
   // Past Fastify's 1MB default, within the text-attachment schema cap.
   const bigBody = "x".repeat(1_500_000);
 
-  it("lets a >1MB body through to the messages handler", async () => {
+  it("lets a >1MB body through to the commands handler", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/commands`,
       payload: {
-        message: "look at this",
+        type: "send",
+        commandId: "command-0001",
+        text: "look at this",
         attachments: [
           {
             kind: "text",
@@ -285,26 +466,97 @@ describe("body limits", () => {
   });
 });
 
-describe("tool permission routes (no core → 503, validation first)", () => {
-  it("lists 503 without a broker and validates ids", async () => {
-    const app = await buildApp();
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions`,
+describe("keyed chats a caller may not see (ADR 0173)", () => {
+  it("answer exactly like no chat at all", async () => {
+    const denied = async () => {
+      throw new AccessDeniedError();
+    };
+    const server = createTestApp({
+      core: {
+        agentSessions: {
+          keyedChatId: async ({ key }: { key: string }) =>
+            key === "pr-1" ? SESSION_ID : undefined,
+          get: denied,
+          close: denied,
+        },
+      } as never,
     });
-    expect(res.statusCode).toBe(503);
-    const bad = await app.inject({
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/not-a-uuid`,
-      payload: { decision: "allow" },
+    for (const key of ["pr-1", "pr-2"]) {
+      const url = `/api/projects/${PROJECT_ID}/agent/chats/${key}?member=alice`;
+      const found = await server.inject({ method: "GET", url });
+      expect([found.statusCode, found.json()]).toEqual([
+        404,
+        { error: "No open chat" },
+      ]);
+      const closed = await server.inject({ method: "DELETE", url });
+      expect([closed.statusCode, closed.json()]).toEqual([
+        200,
+        { sessionId: null, closed: false },
+      ]);
+    }
+    await server.close();
+  });
+});
+
+describe("personal environments (ADR 0199)", () => {
+  it("refuses sign-ins: they stay on the machine they were made on", async () => {
+    const replace = vi.fn(async () => ({
+      allowed: true,
+      files: [],
+      setup: null,
+    }));
+    const server = createTestApp({
+      core: { personalEnvironments: { replace } } as never,
     });
-    expect(bad.statusCode).toBe(400);
-    const badBody = await app.inject({
-      method: "POST",
-      url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/permissions/${SESSION_ID}`,
-      payload: { decision: "maybe" },
+    const url = `/api/projects/${PROJECT_ID}/personal-environment`;
+    const refused = await server.inject({
+      method: "PUT",
+      url,
+      payload: { logins: { codex: { auth: "{}" } }, files: [] },
     });
-    expect(badBody.statusCode).toBe(400);
-    await app.close();
+    // Only files and setup: anything else is refused, as any unknown key is.
+    expect(refused.statusCode).toBe(400);
+    expect(replace).not.toHaveBeenCalled();
+    const kept = await server.inject({
+      method: "PUT",
+      url,
+      payload: { files: [{ path: ".env", content: "QQ==" }] },
+    });
+    expect([kept.statusCode, kept.json()]).toEqual([
+      200,
+      { allowed: true, files: [], setup: null },
+    ]);
+    await server.close();
+  });
+
+  it("takes the member's own setup command with their files (ADR 0208)", async () => {
+    const replace = vi.fn(async () => ({
+      allowed: true,
+      files: [],
+      setup: { command: "mise install", updatedAt: "2026-10-06T00:00:00.000Z" },
+    }));
+    const server = createTestApp({
+      core: { personalEnvironments: { replace } } as never,
+    });
+    const url = `/api/projects/${PROJECT_ID}/personal-environment`;
+    const sent = await server.inject({
+      method: "PUT",
+      url,
+      payload: { files: [], setup: "mise install" },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().setup).toMatchObject({ command: "mise install" });
+    expect(replace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { files: [], setup: "mise install" },
+      }),
+    );
+    const tooLong = await server.inject({
+      method: "PUT",
+      url,
+      payload: { files: [], setup: "x".repeat(16_385) },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    await server.close();
   });
 });

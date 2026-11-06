@@ -7,6 +7,7 @@ import {
   launchApp,
   setReactValueJs,
 } from "./harness.js";
+import { pressNativeMacKey } from "./native-pointer.js";
 
 let app: AppHandle;
 let dock: FrameHandle | undefined;
@@ -207,7 +208,8 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     `document.querySelector('[aria-label="Collapse chat bubbles"]').click()`,
   );
   await dock.waitFor(
-    `innerWidth <= 112 && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+    // The collapsed bubble with the microphone and downloads beside it.
+    `innerWidth <= 154 && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
   );
   // Native movement uses the same two resting corners, even with centered expansion.
   await dock.eval(`(async () => {
@@ -281,7 +283,11 @@ it("restores each project's floating chat in single-project mode", async () => {
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)}`,
   );
-  await key("n");
+  // The dock's + floats it (Cmd+N would open it in the New Tab in front).
+  await app.waitFor(
+    `(() => { const plus = document.querySelector('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus; })()`,
+    { label: "the dock's +" },
+  );
   await app.waitFor(
     `!!document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')`,
   );
@@ -347,3 +353,112 @@ it("opens a different project in its own window without moving the original work
     other.close();
   }
 });
+
+it("moves a project this window keeps behind the one in front to a window of its own", async () => {
+  const mounted = (projectId: string) =>
+    `!!document.querySelector('[data-project-runtime=${JSON.stringify(projectId)}]')`;
+  // A shell running in the second project, holding something of its own.
+  await app.eval(
+    "window.__shells=[];window.catamorphicDesktop.onTerminalData(({sessionId})=>{if(!window.__shells.includes(sessionId))window.__shells.push(sessionId)})",
+  );
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}})`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)}`,
+  );
+  // Shells already printing here (the first project's) are not this one.
+  await app.eval("window.__shellsBefore=[...window.__shells]");
+  await key("`", "ctrlKey: true");
+  const shell = await app.waitFor<string>(
+    "window.__shells.find((id) => !window.__shellsBefore.includes(id)) ?? false",
+    { label: "second project's shell" },
+  );
+  await app.eval(
+    `window.catamorphicDesktop.terminalWrite(${JSON.stringify(shell)}, ${JSON.stringify("MOVED_MARK=kept; echo moved-$((40+2))\r")})`,
+  );
+  const printed = (frame: AppHandle | FrameHandle, text: string) =>
+    frame.waitFor(
+      `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(shell)}).then(b => !!b?.running && b.buffer.includes(${JSON.stringify(text)}))`,
+      { label: `the shell printed ${text}` },
+    );
+  await printed(app, "moved-42");
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(first)}})`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(first)}`,
+  );
+  expect(await app.eval<boolean>(mounted(second))).toBe(true);
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}, newWindow: true})`,
+  );
+  const other = await app.connectToFrame(`project=${second}`);
+  try {
+    // Its own window shows it, named for it, with its chat as it was left.
+    await other.waitFor(
+      `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)} && document.title === 'Second project'`,
+      { label: "second project in its own window" },
+    );
+    await other.waitFor(
+      `document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]') !== null`,
+      { label: "second project's workspace restored" },
+    );
+    // The same shell, still running, now answering here.
+    await other.waitFor(
+      "!!document.querySelector('[data-workspace-visible=\"true\"] canvas')",
+      { label: "the shell's tab in the new window" },
+    );
+    await other.eval(
+      `window.catamorphicDesktop.terminalWrite(${JSON.stringify(shell)}, ${JSON.stringify('echo "$MOVED_MARK-after"\r')})`,
+    );
+    await printed(other, "kept-after");
+    // This window let it go and kept everything else.
+    await app.waitFor(`!${mounted(second)}`, {
+      label: "second project let go here",
+    });
+    expect(await activeProject()).toBe(first);
+    expect(await app.eval<string>("document.title")).toBe("First project");
+    expect(
+      await app.eval(
+        `window.__retainedBrowser.isConnected && window.__retainedTerminal.isConnected`,
+      ),
+    ).toBe(true);
+    // Asked again, the window showing it comes forward; nothing moves.
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}, newWindow: true})`,
+    );
+    await other.waitFor("document.hasFocus()", {
+      label: "second project's window in front",
+    });
+    expect(await app.eval<boolean>(mounted(second))).toBe(false);
+    expect(await activeProject()).toBe(first);
+  } finally {
+    other.close();
+  }
+});
+
+it.runIf(process.platform === "darwin")(
+  "goes between project windows with Cmd+`, as any Mac app does",
+  async () => {
+    // The Window menu is the system's: Cmd+` walks the open windows.
+    await app.eval("window.catamorphicDesktop.devWindow('focus')");
+    await app.waitFor("document.hasFocus()", {
+      label: "first project's window is key",
+    });
+    await pressNativeMacKey("grave", ["command"]);
+    await app.waitFor("!document.hasFocus()", {
+      label: "Cmd+` moved to another window",
+    });
+    // Each press takes the next; the walk comes back around.
+    let back = false;
+    for (let press = 0; press < 3 && !back; press += 1) {
+      await pressNativeMacKey("grave", ["command"]);
+      back = await app
+        .waitFor("document.hasFocus()", { timeoutMs: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    expect(back).toBe(true);
+  },
+);

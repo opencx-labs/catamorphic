@@ -68,4 +68,20 @@ it("retains inline document names on errors and makes retry actionable", async (
   await act(async () => container.querySelector("button")?.click());
   expect(read).toHaveBeenCalledTimes(2);
   expect(container.textContent).toContain("Unsupported document");
+  expect(container.querySelector("button")).toBeNull();
+});
+
+it("shows a folder without offering to retry a successful preview", async () => {
+  read.mockResolvedValue({
+    name: "checkout",
+    location: "/project/checkout",
+    typeLabel: "File",
+    content: { kind: "unavailable", message: "Folder" },
+  });
+  await act(async () =>
+    root.render(<FilePreview filePath="/project/checkout" />),
+  );
+  expect(container.textContent).toContain("Folder");
+  expect(container.textContent).toContain("/project/checkout");
+  expect(container.querySelector("button")).toBeNull();
 });

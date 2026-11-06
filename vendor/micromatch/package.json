@@ -1,0 +1,9 @@
+{
+  "name": "micromatch",
+  "version": "0.0.0-catamorphic",
+  "private": true,
+  "description": "The part of micromatch this repository's tools call, without braces.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "index.cjs"
+}

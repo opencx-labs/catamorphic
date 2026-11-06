@@ -1,0 +1,893 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  cleanupWorkerAllocations,
+  type Identity,
+  WorkerNodesService,
+} from "@catamorphic/core";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
+import { sql } from "kysely";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { executionSettingsFromEnv } from "../execution-config.js";
+import {
+  createWorkServer,
+  SERVER_TENANT_ID,
+  type WorkServer,
+} from "../server.js";
+import { replyOf, testServerOptions } from "../test-support.js";
+import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
+
+/** What every worker call states (ADR 0198). */
+const PROTOCOL = { [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server) };
+
+import { startWorkWorker } from "./worker-runtime.js";
+
+/**
+ * A control plane that runs no agents itself, and a worker that holds no
+ * database, secret, or vault key (ADR 0164), talking over real HTTP.
+ */
+let root: string;
+let server: WorkServer;
+let base: string;
+let operatorSecret: string;
+let projectId: string;
+let worker: Awaited<ReturnType<typeof startWorkWorker>> | undefined;
+const identity: Identity = {
+  tenantId: SERVER_TENANT_ID,
+  externalUserId: "remote-worker-test",
+};
+
+function operator(
+  method: "GET" | "POST" | "DELETE" | "PATCH",
+  url: string,
+  body?: unknown,
+) {
+  return server.operatorApp.inject({
+    method,
+    url,
+    headers: {
+      authorization: `Bearer ${operatorSecret}`,
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    ...(body ? { payload: JSON.stringify(body) } : {}),
+  });
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(
+  check: () => Promise<boolean>,
+  what: string,
+  timeoutMs = 20_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for ${what}`);
+}
+
+async function workerAvailable(): Promise<boolean> {
+  const machines = (await operator("GET", "/_work/operator/machines")).json();
+  return machines.machines.some(
+    (machine: { id: string; available: boolean }) =>
+      machine.id === "worker.builder" && machine.available,
+  );
+}
+
+/** Enroll a worker with its placement and wait until it serves work. */
+async function enrollWorker(args: {
+  name: string;
+  placement: Record<string, unknown>;
+  workspaces: string;
+  env?: Record<string, string>;
+  workers: Array<Awaited<ReturnType<typeof startWorkWorker>>>;
+}): Promise<string> {
+  const enrollment = await operator("POST", "/_work/operator/workers", {
+    name: args.name,
+    ...args.placement,
+  });
+  expect(enrollment.statusCode).toBe(201);
+  const dataDir = path.join(root, args.name);
+  args.workers.push(
+    await startWorkWorker({
+      controlPlaneUrl: base,
+      dataDir,
+      enrollmentCode: enrollment.json().code,
+      execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
+        PATH: process.env.PATH,
+        WORK_MAX_WORKSPACES: args.workspaces,
+        ...args.env,
+      }),
+    }),
+  );
+  await waitFor(async () => {
+    const machines = (await operator("GET", "/_work/operator/machines")).json();
+    return machines.machines.some(
+      (machine: { id: string; available: boolean }) =>
+        machine.id === `worker.${args.name}` && machine.available,
+    );
+  }, `${args.name} to connect`);
+  return path.join(dataDir, "sandboxes");
+}
+
+beforeAll(async () => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "work-remote-worker-"));
+  server = await createWorkServer(
+    testServerOptions({
+      dataDir: path.join(root, "control-plane"),
+      env: {
+        WORK_FAKE_AGENT: "1",
+        WORK_CONTROL_PLANE_WORKLOADS: "workflow",
+        PATH: process.env.PATH,
+      },
+    }),
+  );
+  await server.app.listen({ port: 0, host: "127.0.0.1" });
+  const address = server.app.server.address();
+  if (!address || typeof address === "string") throw new Error("No address");
+  base = `http://127.0.0.1:${address.port}`;
+  operatorSecret = fs
+    .readFileSync(path.join(root, "control-plane", "operator-secret"), "utf8")
+    .trim();
+  const project = await server.catamorphic.core.projects.create(identity, {
+    name: "Remote execution",
+  });
+  projectId = project.id;
+  await server.catamorphic.core.deployment.deploy(
+    SERVER_TENANT_ID,
+    projectId,
+    identity.externalUserId,
+    {
+      message: "Configure execution",
+      files: {
+        ".work/project.json": JSON.stringify({
+          environments: {
+            build: { pool: { plane: "worker" }, workloads: ["agent"] },
+            server: { pool: { plane: "control" }, workloads: ["agent"] },
+            desk: {
+              pool: { plane: "worker" },
+              strict: true,
+              workloads: ["agent"],
+            },
+            compose: {
+              pool: { plane: "worker" },
+              workloads: ["agent"],
+              requirements: { containers: true },
+            },
+          },
+          defaultEnvironment: "build",
+        }),
+      },
+    },
+  );
+}, 120_000);
+
+afterAll(async () => {
+  await worker?.stop();
+  await server?.shutdown();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("remote workers (ADR 0164)", () => {
+  it("enrolls once and runs agent sandboxes on the worker, not the control plane", async () => {
+    // A process-isolated worker for everyone must be marked trusted.
+    const enrollment = await operator("POST", "/_work/operator/workers", {
+      name: "builder",
+      trusted: true,
+    });
+    expect(enrollment.statusCode).toBe(201);
+    const { code, nodeId } = enrollment.json();
+    expect(nodeId).toBe("worker.builder");
+
+    const workerDir = path.join(root, "worker");
+    worker = await startWorkWorker({
+      controlPlaneUrl: base,
+      dataDir: workerDir,
+      enrollmentCode: code,
+      execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
+        PATH: process.env.PATH,
+        WORK_MAX_WORKSPACES: "2",
+      }),
+    });
+    await waitFor(workerAvailable, "the worker to connect");
+    // Operators see what runs each machine's sandboxes and why (ADR 0204).
+    const listed = (await operator("GET", "/_work/operator/machines")).json();
+    const backendOf = (id: string) =>
+      listed.machines.find(
+        (machine: { id: string; descriptor: { backend?: unknown } }) =>
+          machine.id === id,
+      )?.descriptor.backend;
+    expect(backendOf("worker.builder")).toEqual({
+      kind: "local-process",
+      reason: "WORK_SANDBOX=local-process",
+    });
+    expect(
+      listed.machines.some(
+        (machine: {
+          descriptor: {
+            backend?: { kind?: string };
+            labels?: Record<string, string>;
+          };
+        }) =>
+          machine.descriptor.backend?.kind === "local-process" &&
+          machine.descriptor.labels?.plane === "control",
+      ),
+    ).toBe(true);
+
+    // The code was single use.
+    const replay = await server.app.inject({
+      method: "POST",
+      url: "/api/workers/enroll",
+      headers: PROTOCOL,
+      payload: { code, publicKey: generateExecutorKeyPair().publicKey },
+    });
+    expect(replay.statusCode).toBe(400);
+    expect(replay.json().error).toContain("invalid, used, or expired");
+
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "build",
+    });
+    const result = replyOf(
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
+    );
+    expect(result.turn.status).not.toBe("failed");
+    expect(result.content).toContain(path.join(workerDir, "sandboxes"));
+    // A later turn reuses the same workspace on the worker.
+    const again = replyOf(
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
+    );
+    expect(again.content).toContain(path.join(workerDir, "sandboxes"));
+    // A restarted worker (an upgrade) keeps the session's workspace.
+    await worker.stop();
+    worker = await startWorkWorker({
+      controlPlaneUrl: base,
+      dataDir: workerDir,
+      execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
+        PATH: process.env.PATH,
+        WORK_MAX_WORKSPACES: "2",
+      }),
+    });
+    await waitFor(workerAvailable, "the worker to reconnect");
+    const afterRestart = replyOf(
+      await sessions.sendMessage(
+        identity,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
+    );
+    expect(afterRestart.content).toContain(path.join(workerDir, "sandboxes"));
+    // The worker holds its credential, its key and sandboxes, nothing else.
+    expect(fs.readdirSync(workerDir).sort()).toEqual([
+      "sandboxes",
+      "sandboxes.json",
+      "worker-credential",
+      "worker-key",
+    ]);
+    for (const file of ["worker-credential", "worker-key"])
+      expect(fs.statSync(path.join(workerDir, file)).mode & 0o777).toBe(0o600);
+  }, 60_000);
+
+  it("runs background processes on the worker and ends them with the chat (ADR 0174)", async () => {
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "build",
+    });
+    const say = async (message: string) =>
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      ).content;
+    const [server1, pid1] = (await say("background-start")).split(" ");
+    const [server2, pid2] = (await say("background-start")).split(" ");
+    expect(server1).toMatch(/^proc-/);
+    expect(alive(Number(pid1))).toBe(true);
+    expect(alive(Number(pid2))).toBe(true);
+    expect(JSON.parse(await say("background-list"))).toEqual(
+      expect.arrayContaining([
+        { processId: server1, status: "running" },
+        { processId: server2, status: "running" },
+      ]),
+    );
+    expect(await say(`background-stop ${server2}`)).toBe("exited SIGTERM");
+    await waitFor(async () => !alive(Number(pid2)), "the stopped process");
+    // Closing the chat releases its workspace; the worker destroys the
+    // sandbox and everything still running in it.
+    await sessions.close(identity, projectId, session.id);
+    await waitFor(
+      async () => !alive(Number(pid1)),
+      "the chat's background process to end",
+      60_000,
+    );
+  }, 90_000);
+
+  it("keeps agent code off a control plane that runs only workflows", async () => {
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    await expect(
+      sessions.create(identity, projectId, { environment: "server" }),
+    ).rejects.toThrow();
+  });
+
+  it("refuses requests without the worker credential", async () => {
+    const response = await server.app.inject({
+      method: "POST",
+      url: "/api/workers/poll",
+      headers: { ...PROTOCOL, authorization: "Worker worker.builder:guess" },
+      payload: { session: crypto.randomUUID() },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("revoking a worker ends its authority at once", async () => {
+    const revoked = await operator("DELETE", "/_work/operator/workers/builder");
+    expect(revoked.statusCode).toBe(200);
+    await waitFor(async () => !(await workerAvailable()), "revocation");
+    const listed = (await operator("GET", "/_work/operator/workers")).json();
+    expect(listed.workers).toMatchObject([{ name: "builder", revoked: true }]);
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    await expect(
+      sessions.create(identity, projectId, { environment: "build" }),
+    ).rejects.toThrow();
+  }, 30_000);
+});
+
+describe("placement by owner (ADR 0167)", () => {
+  const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
+  afterAll(async () => {
+    await Promise.all(workers.map((running) => running.stop()));
+  });
+
+  async function person(username: string): Promise<Identity> {
+    const created = await operator("POST", "/_work/operator/users", {
+      username,
+      name: username,
+      password: "correct horse battery staple",
+      email: `${username}@example.com`,
+      memberships: [],
+    });
+    expect(created.statusCode).toBe(201);
+    return {
+      tenantId: SERVER_TENANT_ID,
+      externalUserId: created.json().user.id,
+    };
+  }
+
+  const startWorker = (
+    args: Omit<Parameters<typeof enrollWorker>[0], "workers">,
+  ) => enrollWorker({ ...args, workers });
+
+  it("puts each person's agents on their own machine, then the shared pool", async () => {
+    const alice = await person("alice");
+    const bob = await person("bob");
+    const aliceDesk = await startWorker({
+      name: "alice-desk",
+      placement: { access: { people: ["alice@example.com"] } },
+      workspaces: "1",
+    });
+    const shared = await startWorker({
+      name: "shared",
+      placement: { access: { everyone: true }, trusted: true },
+      workspaces: "4",
+    });
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const where = async (who: Identity, environment: string) => {
+      const session = await sessions.create(who, projectId, { environment });
+      const result = replyOf(
+        await sessions.sendMessage(
+          who,
+          projectId,
+          session.id,
+          "execution-location",
+        ),
+      );
+      return result.content;
+    };
+
+    expect(await where(alice, "build")).toContain(aliceDesk);
+    // Bob never lands on Alice's machine.
+    expect(await where(bob, "build")).toContain(shared);
+    // Alice's machine is full: the pool takes her next agent, unless strict.
+    expect(await where(alice, "build")).toContain(shared);
+    await expect(
+      sessions.create(alice, projectId, { environment: "desk" }),
+    ).rejects.toThrow();
+  }, 90_000);
+
+  it("keeps a released machine's chats until their workspaces are given back (ADR 0205)", async () => {
+    const dana = await person("dana");
+    // Room for two: a new chat that lands elsewhere was refused, not full.
+    const danaDesk = await startWorker({
+      name: "dana-desk",
+      placement: { access: { people: ["dana@example.com"] } },
+      workspaces: "2",
+    });
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const location = async (sessionId: string) =>
+      replyOf(
+        await sessions.sendMessage(
+          dana,
+          projectId,
+          sessionId,
+          "execution-location",
+        ),
+      ).content;
+    const chat = await sessions.create(dana, projectId, {
+      environment: "build",
+    });
+    expect(await location(chat.id)).toContain(danaDesk);
+    const { allocationId } = await sessions.get(dana, projectId, chat.id);
+
+    // Her machine is released: it takes no new work at once, while the
+    // chat already there keeps reaching its workspace.
+    await core.db
+      .updateTable("work_workers")
+      .set({ released_at: sql`now()` })
+      .where("node_id", "=", "worker.dana-desk")
+      .execute();
+    const next = await sessions.create(dana, projectId, {
+      environment: "build",
+    });
+    const elsewhere = await location(next.id);
+    expect(elsewhere).toContain(path.join(root, "shared", "sandboxes"));
+    expect(await location(chat.id)).toContain(danaDesk);
+
+    // Once idle (the default 30 minutes), the workspace is saved and given
+    // back, and the machine frees its slot.
+    await sessions.releaseIdleWorkspaces({
+      now: new Date(Date.now() + 60 * 60_000),
+    });
+    expect(
+      await core.db
+        .selectFrom("execution_allocations")
+        .select(["status", "release_reason"])
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "released", release_reason: "idle" });
+    await waitFor(async () => {
+      const row = await core.db
+        .selectFrom("execution_allocations")
+        .select("capacity_released_at")
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow();
+      return row.capacity_released_at !== null;
+    }, "the released machine to free the idle workspace");
+    // Its next turn runs on another machine.
+    const after = await location(chat.id);
+    expect(after).not.toContain(danaDesk);
+    expect(after).toContain(path.join(root, "shared", "sandboxes"));
+  }, 90_000);
+
+  it("places container Environments only on workers that offer containers (ADR 0176)", async () => {
+    const carol = await person("carol");
+    const dockerBox = await startWorker({
+      name: "docker-box",
+      placement: { access: { everyone: true }, trusted: true },
+      workspaces: "2",
+      // The endpoint starts with the sandbox; no daemon is needed to place.
+      env: { WORK_DOCKER_SOCKET: path.join(root, "docker.sock") },
+    });
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(carol, projectId, {
+      environment: "compose",
+    });
+    const location = replyOf(
+      await sessions.sendMessage(
+        carol,
+        projectId,
+        session.id,
+        "execution-location",
+      ),
+    );
+    expect(location.content).toContain(dockerBox);
+    const dockerHost = replyOf(
+      await sessions.sendMessage(carol, projectId, session.id, "docker-host"),
+    );
+    expect(dockerHost.content).toMatch(/^unix:\/\/.*\.sock$/);
+  }, 90_000);
+
+  it("refuses a process-isolated worker shared by several people", async () => {
+    const enrollment = await operator("POST", "/_work/operator/workers", {
+      name: "team-box",
+      access: { groups: ["eng@example.com"] },
+    });
+    const keys = generateExecutorKeyPair();
+    const enrolled = await server.app.inject({
+      method: "POST",
+      url: "/api/workers/enroll",
+      headers: PROTOCOL,
+      payload: { code: enrollment.json().code, publicKey: keys.publicKey },
+    });
+    const connect = await server.app.inject({
+      method: "POST",
+      url: "/api/workers/connect",
+      headers: {
+        ...PROTOCOL,
+        authorization: `Worker ${enrolled.json().credential}`,
+      },
+      payload: {
+        // An epoch is a UUIDv7 (ADR 0192).
+        session: "01920000-0000-7000-8000-000000000001",
+        offer: {
+          isolation: "process",
+          workspaceRoot: "/workspace",
+          capacity: { workspaces: 1 },
+        },
+        publicKey: keys.publicKey,
+      },
+    });
+    expect(connect.statusCode).toBe(403);
+    expect(connect.json().error).toContain("microsandbox");
+    // The operator can vouch for the team.
+    const trusted = await operator(
+      "PATCH",
+      "/_work/operator/workers/team-box",
+      {
+        trusted: true,
+      },
+    );
+    expect(trusted.statusCode).toBe(200);
+  });
+});
+
+describe("keyed chats on workers (ADR 0173)", () => {
+  const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
+  let reviewPool: string;
+  let chatBox: string;
+  afterAll(async () => {
+    await Promise.all(workers.map((running) => running.stop()));
+  });
+
+  beforeAll(async () => {
+    await server.catamorphic.core.deployment.deploy(
+      SERVER_TENANT_ID,
+      projectId,
+      identity.externalUserId,
+      {
+        message: "Pools for reviews and chats",
+        files: {
+          ".work/project.json": JSON.stringify({
+            environments: {
+              build: { pool: { plane: "worker" }, workloads: ["agent"] },
+              server: { pool: { plane: "control" }, workloads: ["agent"] },
+              desk: {
+                pool: { plane: "worker" },
+                strict: true,
+                workloads: ["agent"],
+              },
+              automation: {
+                pool: { plane: "control" },
+                workloads: ["workflow"],
+              },
+              review: { pool: { pool: "review" }, workloads: ["agent"] },
+              chats: {
+                pool: { pool: "chats" },
+                workloads: ["agent"],
+                idleReleaseMinutes: 5,
+              },
+            },
+            defaultEnvironment: "build",
+          }),
+          ".work/agents/reviewer.json": JSON.stringify({
+            version: 1,
+            name: "Reviewer",
+            kind: "builtin",
+            environment: { allowed: ["review"], preferred: ["review"] },
+          }),
+          ".work/agents/reader.json": JSON.stringify({
+            version: 1,
+            name: "Reader",
+            kind: "builtin",
+            sandboxing: "contained",
+            environment: { allowed: ["chats"], preferred: ["chats"] },
+          }),
+        },
+      },
+    );
+    // A trusted pool open only to this project's own work: no person's
+    // chat lands there, and the control plane carries no review label.
+    reviewPool = await enrollWorker({
+      name: "reviewer",
+      placement: {
+        labels: { pool: "review" },
+        access: { projects: [projectId] },
+        trusted: true,
+      },
+      workspaces: "2",
+      workers,
+    });
+    chatBox = await enrollWorker({
+      name: "chat-box",
+      placement: {
+        labels: { pool: "chats" },
+        access: { everyone: true },
+        trusted: true,
+      },
+      workspaces: "1",
+      workers,
+    });
+  }, 60_000);
+
+  it("a control-plane workflow's chat runs where its agent prefers, on a pool open only to the project", async () => {
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const runId = crypto.randomUUID();
+    // A run in the automation Environment, on the control plane.
+    await core.db
+      .insertInto("workflow_runs")
+      .values({
+        id: runId,
+        project_id: projectId,
+        workflow_name: "reviewPullRequests",
+        provenance: {},
+        status: "running",
+        environment_name: "automation",
+      })
+      .execute();
+    const delivered = await core.capabilities.call(
+      "catamorphic.sessions",
+      "deliver",
+      {
+        caller: identity,
+        projectId,
+        runId,
+        workflowName: "reviewPullRequests",
+        signal: new AbortController().signal,
+        deadlineAt: new Date(Date.now() + 300_000).toISOString(),
+      },
+      {
+        key: "pr-11",
+        audience: "project",
+        agentSlug: "reviewer",
+        title: "Review: pull request 11",
+        content: "execution-location",
+      },
+    );
+    expect(delivered).toMatchObject({ sessionCreated: true });
+    const sessionId =
+      delivered && typeof delivered === "object" && "sessionId" in delivered
+        ? String(delivered.sessionId)
+        : "";
+    await waitFor(async () => {
+      const transcript = await sessions.transcript(
+        identity,
+        projectId,
+        sessionId,
+      );
+      return transcript.some(
+        (message) =>
+          message.role === "assistant" && message.content.includes(reviewPool),
+      );
+    }, "the review to run on the review pool");
+    const chat = await sessions.get(identity, projectId, sessionId);
+    expect(chat).toMatchObject({
+      owner: "project",
+      key: "pr-11",
+      keyWorkflows: ["reviewPullRequests"],
+      environment: "review",
+      placement: {
+        environment: "review",
+        reason: "agent_preferred",
+        machine: { id: "worker.reviewer", label: "reviewer" },
+      },
+    });
+    // A person's own chat never lands on a machine opened to the project.
+    await expect(
+      sessions.create(identity, projectId, { environment: "review" }),
+    ).rejects.toThrow();
+  }, 60_000);
+
+  it("gives an idle chat's workspace back, rehydrates it on the next turn, and forgets it on close", async () => {
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "chats",
+    });
+    const say = async (message: string) =>
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      ).content;
+    expect(await say("execution-location")).toContain(chatBox);
+    await say("write-file notes.md kept across release");
+    expect(await say("read-file notes.md")).toBe("kept across release");
+    const before = await sessions.get(identity, projectId, session.id);
+
+    // Not idle long enough: nothing moves.
+    expect(await sessions.releaseIdleWorkspaces()).toBe(0);
+    // Past the Environment's idleReleaseMinutes, the slot is given back.
+    expect(
+      await sessions.releaseIdleWorkspaces({
+        now: new Date(Date.now() + 10 * 60_000),
+      }),
+    ).toBe(1);
+    const released = await core.db
+      .selectFrom("execution_allocations")
+      .select(["status", "release_reason"])
+      .where("id", "=", before.allocationId ?? "")
+      .executeTakeFirstOrThrow();
+    expect(released).toEqual({ status: "released", release_reason: "idle" });
+    await freed(before.allocationId);
+    const branch = () =>
+      core.projectManager.remoteBackend?.withOrigin(
+        SERVER_TENANT_ID,
+        projectId,
+        (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
+      );
+    expect(await branch()).toMatch(/^[0-9a-f]{40}$/);
+
+    // The next turn admits a fresh workspace and rehydrates it.
+    expect(await say("read-file notes.md")).toBe("kept across release");
+    const after = await sessions.get(identity, projectId, session.id);
+    expect(after.allocationId).not.toBe(before.allocationId);
+    expect(after.placement).toMatchObject({
+      environment: "chats",
+      machine: { id: "worker.chat-box" },
+    });
+
+    // Closing forgets the workspace: branch, copy, Allocation, sandbox.
+    await sessions.close(identity, projectId, session.id);
+    expect(await branch()).toBeNull();
+    await freed(after.allocationId);
+    expect(
+      await core.projectManager.exists(
+        SERVER_TENANT_ID,
+        projectId,
+        `session-${session.id}`,
+      ),
+    ).toBe(false);
+    const closed = await sessions.get(identity, projectId, session.id);
+    expect(closed.status).toBe("closed");
+    expect(
+      (await sessions.transcript(identity, projectId, session.id)).some(
+        (message) => message.content === "kept across release",
+      ),
+    ).toBe(true);
+  }, 90_000);
+
+  /** Wait until the machine has freed a released workspace's slot. */
+  async function freed(allocationId: string | null) {
+    const core = server.catamorphic.core;
+    await waitFor(async () => {
+      const row = await core.db
+        .selectFrom("execution_allocations")
+        .select(["worker_node_id", "capacity_released_at"])
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow();
+      if (row.capacity_released_at !== null) return true;
+      // Exercise real cleanup and the remote queue directly. Waiting for
+      // two independent ten-second maintenance ticks makes this a race
+      // with the twenty-second assertion deadline on a loaded runner.
+      const machine = await core.db
+        .selectFrom("worker_nodes")
+        .select("authority_id")
+        .where("id", "=", row.worker_node_id)
+        .executeTakeFirstOrThrow();
+      const nodes = new WorkerNodesService(core.db);
+      const node = (
+        await nodes.list({
+          tenantId: SERVER_TENANT_ID,
+          authorityId: machine.authority_id,
+        })
+      ).find((node) => node.id === row.worker_node_id);
+      if (!node?.remote) throw new Error("The chat worker is unavailable");
+      await cleanupWorkerAllocations({
+        db: core.db,
+        workerNode: { id: node.id, remote: true },
+        provider: nodes.remoteProvider({
+          nodeId: node.id,
+          offer: node.remote,
+          label: "Chat worker",
+        }),
+      });
+      return false;
+    }, "the workspace slot to be freed");
+  }
+
+  async function closeAndFree(sessionId: string) {
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const chat = await sessions.get(identity, projectId, sessionId);
+    await sessions.close(identity, projectId, sessionId);
+    await freed(chat.allocationId);
+  }
+
+  it("keeps an idle workspace whose changes could not be saved, and says so on the reply", async () => {
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "chats",
+    });
+    const send = async (message: string) =>
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      );
+    // The work of this turn cannot be read back: the checkout lost its Git.
+    const broken = await send(
+      "run printf unsaved > keep.md ;; run mv .git .git-hidden",
+    );
+    expect(broken.turn.outcome?.workspaceSync).toMatchObject({
+      error: expect.stringContaining("could not be saved"),
+    });
+    const later = { now: new Date(Date.now() + 10 * 60_000) };
+    expect(await sessions.releaseIdleWorkspaces(later)).toBe(0);
+    const kept = await sessions.get(identity, projectId, session.id);
+    const allocation = await core.db
+      .selectFrom("execution_allocations")
+      .select("status")
+      .where("id", "=", kept.allocationId ?? "")
+      .executeTakeFirstOrThrow();
+    expect(allocation.status).toBe("active");
+
+    // Once the changes can be read, they are saved and the slot given back.
+    await send("run mv .git-hidden .git");
+    expect(await sessions.releaseIdleWorkspaces(later)).toBe(1);
+    await freed(kept.allocationId);
+    expect((await send("read-file keep.md")).content).toBe("unsaved");
+    await closeAndFree(session.id);
+  }, 90_000);
+
+  it("gives a read-only agent's idle workspace back without saving what it changed", async () => {
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "chats",
+      agentId: `project:${projectId}:reader`,
+    });
+    const say = async (message: string) =>
+      replyOf(
+        await sessions.sendMessage(identity, projectId, session.id, message),
+      ).content;
+    await say("write-file scratch.md only-in-the-sandbox");
+    expect(await say("read-file scratch.md")).toBe("only-in-the-sandbox");
+    const idle = await sessions.get(identity, projectId, session.id);
+    expect(
+      await sessions.releaseIdleWorkspaces({
+        now: new Date(Date.now() + 10 * 60_000),
+      }),
+    ).toBe(1);
+    await freed(idle.allocationId);
+    const branch = await core.projectManager.remoteBackend?.withOrigin(
+      SERVER_TENANT_ID,
+      projectId,
+      (origin) => origin.resolveRef(`refs/heads/sessions/${session.id}`),
+    );
+    expect(branch ?? null).toBeNull();
+    // The fresh workspace starts from what the chat had saved: nothing.
+    expect(await say("read-file scratch.md")).toBe("missing");
+    await closeAndFree(session.id);
+  }, 90_000);
+});

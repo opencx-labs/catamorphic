@@ -11,12 +11,13 @@ import {
   LoaderCircle,
   Server,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
-import type { SessionCheckoutInfo } from "../lib/desktop-api.js";
+import type { ReactNode } from "react";
 import { ChatGlyph } from "./chat-icon.js";
 import { HarnessIcon } from "./harness-icon.js";
+import { InspectorFact } from "./inspector-fact.js";
 import { ResourceInspector } from "./resource-inspector.js";
 import { SessionArtifacts } from "./session-artifacts.js";
+import { ShortcutHint } from "./shortcut-hint.js";
 
 const SOURCE_LABELS: Record<AgentSession["source"], string> = {
   desktop: "Desktop",
@@ -37,20 +38,28 @@ export function SessionInspector({
   harness,
   provider,
   environmentControl,
+  environmentLabel,
   onManageConnections,
-  checkout,
-  onUseProjectFolder,
+  folder,
+  worktree = false,
   incognito,
   openRequest,
   onInspect,
   moving,
-  model = "Automatic",
+  model = "Agent default",
+  modelIsDefault = false,
   reportedModel,
   effort = "Default",
+  permissionMode,
+  sandboxing,
+  onEditAgent,
   onEditModel,
   onEditEffort,
+  onEditPermissionMode,
+  agentDisabledReason,
   modelDisabledReason,
   effortDisabledReason,
+  permissionModeDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -68,20 +77,38 @@ export function SessionInspector({
   harness?: string;
   provider?: string;
   environmentControl?: ReactNode;
+  /** The environment's name as its control shows it, for its row's copy. */
+  environmentLabel?: string;
   onManageConnections?: () => void;
-  checkout: SessionCheckoutInfo | null;
-  onUseProjectFolder?: () => Promise<void>;
+  /** The Folder row (ChatFolder), where the chat works (ADR 0215). */
+  folder?: ReactNode;
+  /** The chat works, or will, in its own worktree: the trigger says so. */
+  worktree?: boolean;
   incognito: boolean;
   openRequest?: number;
   onInspect?: () => void;
   moving: boolean;
   model?: string;
+  /** Nothing pins the model: it is the harness's own default. */
+  modelIsDefault?: boolean;
   reportedModel?: string | null;
   effort?: string;
+  /**
+   * The harness's own permission mode in its own words (ADR 0182); null
+   * when the harness has none.
+   */
+  permissionMode?: string | null;
+  /** What may leave the agent's sandbox (ADR 0182), as a label. */
+  sandboxing?: string | null;
+  /** Open the chat's agent picker. */
+  onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  onEditPermissionMode?: () => void;
+  agentDisabledReason?: string;
   modelDisabledReason?: string;
   effortDisabledReason?: string;
+  permissionModeDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -124,6 +151,7 @@ export function SessionInspector({
             fallbackTitle={fallbackTitle}
             agentName={agentName}
             environmentControl={environmentControl}
+            environmentLabel={environmentLabel}
             onManageConnections={
               onManageConnections
                 ? () => {
@@ -132,13 +160,22 @@ export function SessionInspector({
                   }
                 : undefined
             }
-            checkout={checkout}
-            onUseProjectFolder={onUseProjectFolder}
+            folder={folder}
             incognito={incognito}
             moving={moving}
             model={model}
+            modelIsDefault={modelIsDefault}
             reportedModel={reportedModel}
             effort={effort}
+            onEditAgent={
+              onEditAgent
+                ? () => {
+                    dismiss();
+                    onEditAgent();
+                  }
+                : undefined
+            }
+            agentDisabledReason={agentDisabledReason}
             onEditModel={
               onEditModel
                 ? () => {
@@ -155,8 +192,19 @@ export function SessionInspector({
                   }
                 : undefined
             }
+            permissionMode={permissionMode}
+            sandboxing={sandboxing}
+            onEditPermissionMode={
+              onEditPermissionMode
+                ? () => {
+                    dismiss();
+                    onEditPermissionMode();
+                  }
+                : undefined
+            }
             modelDisabledReason={modelDisabledReason}
             effortDisabledReason={effortDisabledReason}
+            permissionModeDisabledReason={permissionModeDisabledReason}
             moveDisabledReason={moveDisabledReason}
             moveError={moveError}
             onMove={onMove}
@@ -182,7 +230,7 @@ export function SessionInspector({
         <button
           {...triggerProps}
           type="button"
-          aria-label={`Session status: ${agentName}, ${state}, from ${source}`}
+          aria-label={`Session status: ${agentName}, ${state}, from ${source}${worktree ? ", in its own worktree" : ""}`}
           className="flex h-7 max-w-56 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
           data-testid="session-inspector-trigger"
         >
@@ -206,11 +254,18 @@ export function SessionInspector({
             </span>
           </span>
           <HarnessIcon
-            harness={harness ?? session?.provider}
+            harness={harness}
             provider={provider}
             className="size-3.5"
           />
           <span className="truncate">{agentName}</span>
+          {worktree ? (
+            <GitBranch
+              className="size-3 shrink-0 text-fg-faint"
+              aria-hidden="true"
+              data-testid="session-inspector-worktree"
+            />
+          ) : null}
           <span className="shrink-0 rounded bg-bg-inset px-1.5 py-0.5 text-[9px] font-medium text-fg-faint">
             {source}
           </span>
@@ -225,18 +280,25 @@ export function SessionInspectorContent({
   fallbackTitle,
   agentName,
   environmentControl,
+  environmentLabel,
   onManageConnections,
-  checkout,
-  onUseProjectFolder,
+  folder,
   incognito,
   moving = false,
-  model = "Automatic",
+  model = "Agent default",
+  modelIsDefault = false,
   reportedModel,
   effort = "Default",
+  permissionMode,
+  sandboxing,
+  onEditAgent,
   onEditModel,
   onEditEffort,
+  onEditPermissionMode,
+  agentDisabledReason,
   modelDisabledReason,
   effortDisabledReason,
+  permissionModeDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -249,18 +311,34 @@ export function SessionInspectorContent({
   fallbackTitle: string;
   agentName: string;
   environmentControl?: ReactNode;
+  /** The environment's name as its control shows it, for its row's copy. */
+  environmentLabel?: string;
   onManageConnections?: () => void;
-  checkout: SessionCheckoutInfo | null;
-  onUseProjectFolder?: () => Promise<void>;
+  /** The Folder row (ChatFolder), where the chat works (ADR 0215). */
+  folder?: ReactNode;
   incognito: boolean;
   moving?: boolean;
   model?: string;
+  /** Nothing pins the model: it is the harness's own default. */
+  modelIsDefault?: boolean;
   reportedModel?: string | null;
   effort?: string;
+  /**
+   * The harness's own permission mode in its own words (ADR 0182); null
+   * when the harness has none.
+   */
+  permissionMode?: string | null;
+  /** What may leave the agent's sandbox (ADR 0182), as a label. */
+  sandboxing?: string | null;
+  /** Open the chat's agent picker. */
+  onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  onEditPermissionMode?: () => void;
+  agentDisabledReason?: string;
   modelDisabledReason?: string;
   effortDisabledReason?: string;
+  permissionModeDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -269,8 +347,6 @@ export function SessionInspectorContent({
   archived?: boolean;
   onOpenParent?: () => void;
 }) {
-  const [changingFolder, setChangingFolder] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
   const state = archived
     ? "Archived"
     : !session
@@ -290,11 +366,6 @@ export function SessionInspectorContent({
       ? SOURCE_LABELS[session.source]
       : "Desktop";
   const title = session?.title ?? fallbackTitle;
-  const checkoutLabel = checkout
-    ? checkout.kind === "external"
-      ? "External checkout"
-      : (checkout.branch ?? "Worktree")
-    : null;
   return (
     <div data-testid="session-inspector-content">
       <header className="flex items-start gap-2.5 border-b border-border pb-3">
@@ -315,93 +386,73 @@ export function SessionInspectorContent({
         </div>
       </header>
 
-      <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
-        <InspectorRow label="Agent" value={agentName} />
+      <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
+        <InspectorRow
+          label="Agent"
+          value={agentName}
+          onEdit={onEditAgent}
+          disabledReason={agentDisabledReason}
+        />
         <InspectorRow
           label="Model"
           value={model}
+          tag={modelIsDefault ? "default" : undefined}
           onEdit={onEditModel}
           disabledReason={modelDisabledReason}
         />
         {reportedModel && reportedModel !== model ? (
-          <InspectorRow label="Last reply" value={reportedModel} />
+          <InspectorRow
+            label="Last reply"
+            value={reportedModel}
+            copyLabel="Copy last reply's model"
+          />
         ) : null}
         <InspectorRow
           label="Reasoning"
-          value={
-            effort === "Unavailable"
-              ? effort
-              : effort.charAt(0).toUpperCase() + effort.slice(1)
-          }
+          // The harness's own name for the level ("high", "xhigh"), as the
+          // effort picker lists it.
+          value={effort}
           onEdit={onEditEffort}
           disabledReason={effortDisabledReason}
         />
+        {permissionMode ? (
+          <InspectorRow
+            label="Permission mode"
+            value={permissionMode}
+            onEdit={onEditPermissionMode}
+            disabledReason={permissionModeDisabledReason}
+          />
+        ) : null}
+        {sandboxing ? (
+          <InspectorRow label="Sandboxing" value={sandboxing} />
+        ) : null}
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
-        <dt className="text-fg-faint">Environment</dt>
-        <dd className="min-w-0 text-fg">
+        <InspectorFact
+          term="Environment"
+          copy={environmentLabel ?? session?.environment ?? "Default"}
+          oneLine
+        >
           {environmentControl ?? session?.environment ?? "Default"}
-        </dd>
+        </InspectorFact>
         {onManageConnections && (
-          <>
-            <dt className="text-fg-faint">Connections</dt>
-            <dd className="min-w-0">
-              <button
-                type="button"
-                onClick={onManageConnections}
-                aria-label="Manage environment connections"
-                className="-mx-1.5 flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-fg transition-colors hover:bg-bg-raised"
-              >
-                <KeyRound aria-hidden="true" className="size-3" />
-                Manage connections
-              </button>
-            </dd>
-          </>
+          <InspectorFact term="Connections">
+            <button
+              type="button"
+              onClick={onManageConnections}
+              aria-label="Manage environment connections"
+              className="-mx-1.5 flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-fg transition-colors hover:bg-bg-raised"
+            >
+              <KeyRound aria-hidden="true" className="size-3" />
+              Manage connections
+            </button>
+          </InspectorFact>
         )}
-        {checkoutLabel && checkout ? (
-          <>
-            <InspectorRow label="Checkout" value={checkoutLabel} />
-            <dt className="text-fg-faint">Folder</dt>
-            <dd className="min-w-0 break-all text-fg-muted">
-              {checkout.path}
-              {onUseProjectFolder && (
-                <div className="mt-2 space-y-1">
-                  <button
-                    type="button"
-                    disabled={changingFolder || session?.running}
-                    className="cursor-pointer text-accent hover:underline disabled:cursor-default disabled:opacity-50"
-                    onClick={async () => {
-                      setChangingFolder(true);
-                      setFolderError(null);
-                      try {
-                        await onUseProjectFolder();
-                      } catch (error) {
-                        setFolderError(
-                          error instanceof Error
-                            ? error.message
-                            : "Could not change the working folder",
-                        );
-                      } finally {
-                        setChangingFolder(false);
-                      }
-                    }}
-                  >
-                    {changingFolder ? "Changing folder…" : "Use project folder"}
-                  </button>
-                  <p className="break-normal text-fg-faint">
-                    Future work uses the project folder. Existing files stay
-                    here.
-                  </p>
-                  {folderError && <p role="alert">{folderError}</p>}
-                </div>
-              )}
-            </dd>
-          </>
-        ) : null}
+        {folder}
         {incognito ? <InspectorRow label="Privacy" value="Incognito" /> : null}
         {session?.handoffStatus === "pending" ? (
           <InspectorRow label="Sync" value="Moving between hosts" />
-        ) : session && session.mirrorMessageCount > 0 ? (
+        ) : session && session.mirrorSequence > 0 ? (
           <InspectorRow label="Sync" value="Mirrored conversation" />
         ) : null}
         {session?.parentSessionId ? (
@@ -410,6 +461,7 @@ export function SessionInspectorContent({
         {session ? (
           <InspectorRow
             label="Updated"
+            copyLabel="Copy update time"
             value={new Date(session.updatedAt).toLocaleString([], {
               dateStyle: "medium",
               timeStyle: "short",
@@ -466,37 +518,61 @@ export function SessionInspectorContent({
 function InspectorRow({
   label,
   value,
+  copyLabel,
+  tag,
   onEdit,
   disabledReason,
 }: {
   label: string;
+  /** Shown, and what the row copies (never its tag). */
   value: string;
+  copyLabel?: string;
+  /** Faint qualifier after the value (e.g. "default"); never truncated. */
+  tag?: string;
   onEdit?: () => void;
   disabledReason?: string;
 }) {
+  const tagged = tag ? (
+    <span className="shrink-0 text-fg-faint">{tag}</span>
+  ) : null;
+  // The copy button keeps its place: a long value truncates, and its hint
+  // shows it whole, as the project popup's paths do.
+  // Disabled controls use the shared delegated hint, so hovering the value
+  // explains why it cannot change instead of repeating the model name.
+  const shown = disabledReason ? (
+    <span className="min-w-0 truncate">{value}</span>
+  ) : (
+    <ShortcutHint label={value} className="min-w-0">
+      <span className="min-w-0 truncate">{value}</span>
+    </ShortcutHint>
+  );
   return (
-    <>
-      <dt className="text-fg-faint">{label}</dt>
-      <dd className="min-w-0 text-fg" data-disabled-reason={disabledReason}>
-        {onEdit || disabledReason ? (
-          <button
-            type="button"
-            aria-label={`Change ${label.toLowerCase()}`}
-            onClick={onEdit}
-            disabled={Boolean(disabledReason)}
-            className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-visible:outline-2 focus-visible:outline-accent"
-          >
-            <span className="min-w-0 flex-1 truncate">{value}</span>
-            <ChevronDown
-              aria-hidden="true"
-              className="size-3 shrink-0 text-fg-faint group-hover:text-fg-muted"
-            />
-          </button>
-        ) : (
-          <span className="block truncate">{value}</span>
-        )}
-      </dd>
-    </>
+    <InspectorFact term={label} copy={value} copyLabel={copyLabel} oneLine>
+      {onEdit || disabledReason ? (
+        <button
+          type="button"
+          aria-label={`Change ${label.toLowerCase()}`}
+          onClick={onEdit}
+          disabled={Boolean(disabledReason)}
+          data-disabled-reason={disabledReason}
+          className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-standard hover:bg-bg-raised focus-ring-inset"
+        >
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            {shown}
+            {tagged}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className="size-3 shrink-0 text-fg-faint group-hover:text-fg-muted"
+          />
+        </button>
+      ) : (
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          {shown}
+          {tagged}
+        </span>
+      )}
+    </InspectorFact>
   );
 }
 

@@ -1,8 +1,5 @@
 import { getTracer, withSpan } from "@catamorphic/otel";
-import {
-  EXECUTION_TRANSFORM_VERSION,
-  WORKFLOW_SOURCE_ROOT,
-} from "@catamorphic/parser";
+import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
 import type { SandboxResources } from "@catamorphic/sandbox";
 import {
   DEPLOYMENT_RUNTIME_VERSION,
@@ -14,6 +11,11 @@ import {
   uploadPluginPayloads,
   WORKFLOW_PACKAGE_NAME,
 } from "@catamorphic/sandbox";
+import {
+  hasProjectLockfile,
+  PROJECT_WORKFLOWS_PACKAGE_PATH,
+  PROJECT_WORKSPACE_ROOT,
+} from "@catamorphic/workflow/project-layout";
 import type {
   DeploymentArtifact,
   DeploymentArtifactsService,
@@ -23,9 +25,21 @@ import type {
   DeploymentRuntimeRecordStatus,
   DeploymentRuntimeStore,
 } from "./deployment-runtime-store.js";
-import { uploadWorkspace } from "./playground/workspace-upload.js";
+import { uploadWorkspace } from "./workspace-upload.js";
 
 const tracer = getTracer("@catamorphic/core");
+
+/**
+ * The deployment could not be prepared: its dependencies did not install,
+ * or its files could not be protected. Retrying the job cannot fix that,
+ * so the step fails with this message (its retry policy still applies).
+ */
+export class DeploymentPreparationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeploymentPreparationError";
+  }
+}
 
 export class DeploymentRuntimeNotSupportedError extends Error {
   constructor() {
@@ -92,7 +106,7 @@ export class DeploymentRuntimeService {
       args.artifact.transformVersion !== EXECUTION_TRANSFORM_VERSION ||
       args.artifact.runtimeVersion !== DEPLOYMENT_RUNTIME_VERSION
     ) {
-      throw new Error(
+      throw new DeploymentPreparationError(
         `Deployment artifact '${args.artifact.id}' uses incompatible transform or runtime versions`,
       );
     }
@@ -109,7 +123,7 @@ export class DeploymentRuntimeService {
       async (span) => {
         return this.store.withArtifactLock({
           artifactId: args.artifact.id,
-          operation: async () => {
+          operation: async ({ signal }) => {
             const existing = await this.store.findReusable({
               artifactId: args.artifact.id,
             });
@@ -167,6 +181,9 @@ export class DeploymentRuntimeService {
                   usedAt: now,
                 });
               } else {
+                // Another replica took over the creation: this sandbox is
+                // destroyed below instead of recorded beside its runtime.
+                signal.throwIfAborted();
                 const replicaIndex = 0;
                 await this.store.insert({
                   artifactId: args.artifact.id,
@@ -189,6 +206,15 @@ export class DeploymentRuntimeService {
               span.setAttribute("catamorphic.runtime.id", runtime.runtimeId);
               return runtime;
             } catch (error) {
+              // Another replica took over this creation: its outcome is
+              // theirs to record. Only this replica's sandbox goes.
+              if (signal.aborted) {
+                if (!existing)
+                  await this.deps.provider
+                    .destroySandbox(sandboxId)
+                    .catch(() => {});
+                throw error;
+              }
               await this.deps.artifacts.markStatus({
                 artifactId: args.artifact.id,
                 status: "failed",
@@ -529,13 +555,9 @@ export class DeploymentRuntimeService {
     const workflowFallback = args.plugins?.find(
       (plugin) => plugin.packageName === WORKFLOW_PACKAGE_NAME,
     );
-    const packageJsonPath = `${WORKFLOW_SOURCE_ROOT}/package.json`;
+    const packageJsonPath = PROJECT_WORKFLOWS_PACKAGE_PATH;
     const packageJson = args.files[packageJsonPath];
-    if (
-      workflowFallback &&
-      (".catamorphic/bun.lock" in args.files ||
-        ".catamorphic/bun.lockb" in args.files)
-    ) {
+    if (workflowFallback && hasProjectLockfile(args.files)) {
       throw new Error(
         "The local @catamorphic/workflow fallback cannot be used with a lockfile",
       );
@@ -560,7 +582,7 @@ export class DeploymentRuntimeService {
         ? "bun install --no-save"
         : "if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --production --filter '!./apps/*'; else bun install --no-save; fi",
       {
-        cwd: `${args.projectDirectory}/.catamorphic`,
+        cwd: `${args.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
         timeout: 300,
       },
     );
@@ -572,14 +594,20 @@ export class DeploymentRuntimeService {
       );
     }
     if (install.exitCode !== 0) {
-      throw new Error(
-        `Deployment dependency install failed: ${install.result}`,
+      // bun's own banner line says nothing about what went wrong.
+      const output = install.result
+        .split("\n")
+        .filter((line) => !/^bun install v\S+/.test(line.trim()))
+        .join("\n")
+        .trim();
+      throw new DeploymentPreparationError(
+        `Installing the workflow's dependencies failed: ${output}`,
       );
     }
     await uploadPluginPayloads({
       provider: this.deps.provider,
       sandboxId: args.sandboxId,
-      projectDir: `${args.projectDirectory}/.catamorphic`,
+      projectDir: `${args.projectDirectory}/${PROJECT_WORKSPACE_ROOT}`,
       plugins: args.plugins ? [...args.plugins] : undefined,
     });
     const protect = await this.deps.provider.executeCommand(
@@ -588,7 +616,9 @@ export class DeploymentRuntimeService {
       { cwd: args.projectDirectory, timeout: 30 },
     );
     if (protect.exitCode !== 0) {
-      throw new Error(`Failed to protect deployment files: ${protect.result}`);
+      throw new DeploymentPreparationError(
+        `Failed to protect deployment files: ${protect.result.trim()}`,
+      );
     }
   }
 }

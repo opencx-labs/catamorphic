@@ -433,3 +433,201 @@ it("projects step descriptions and identifies the first boundary input correctly
     stepLabel: "Starting information",
   });
 });
+
+describe("host call labels", () => {
+  it("names chat and connection calls in words, never code", () => {
+    const graph = parseWorkflow(`
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, connections }: BoundaryContext<{ q: string }>) =>
+        connections.gmail.searchThreads({ query: input.q }),
+    }),
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ id: string }>) =>
+        host["catamorphic.sessions"].deliver({ key: input.id, content: "Triage" }),
+    }),
+  ],
+}));
+`);
+    const labels = graph.nodes
+      .filter((node) => node.type === "step")
+      .map((node) => node.label);
+    expect(labels).toEqual(["Gmail: search threads", "Message a chat"]);
+  });
+
+  it("names calls that carry state the same way (ADR 0260)", () => {
+    const graph = parseWorkflow(`
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, connections }: BoundaryContext<{ q: string }>) =>
+        connections.gmail.searchThreads({ query: input.q }, { state: input }),
+    }),
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Carried<unknown, { q: string }>>) =>
+        host["catamorphic.sessions"].deliver({ key: input.state.q, content: "Triage" }, { state: input.state }),
+    }),
+  ],
+}));
+`);
+    const labels = graph.nodes
+      .filter((node) => node.type === "step")
+      .map((node) => node.label);
+    expect(labels).toEqual(["Gmail: search threads", "Message a chat"]);
+  });
+});
+
+describe("descriptions", () => {
+  it("reads wrapped JSDoc as prose and keeps paragraphs", () => {
+    const graph = parseWorkflow(`
+/**
+ * Triage an inbound request in a chat the whole
+ * project can see.
+ *
+ * The form posts to the support webhook.
+ * @displayname Triage
+ */
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }: BoundaryContext<{ a: string }>) => input })],
+}));
+`);
+    expect(graph.description).toBe(
+      "Triage an inbound request in a chat the whole project can see.\n\nThe form posts to the support webhook.",
+    );
+  });
+});
+
+describe("declared permissions (ADR 0158)", () => {
+  const withPermissions = (value: string) => `
+export const review = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ${value},
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`;
+
+  it("reads a constant list, sorted and unique", () => {
+    expect(
+      parseWorkflow(
+        withPermissions('["sessions:write", "runs:read", "sessions:write"]'),
+      ).permissions,
+    ).toEqual(["runs:read", "sessions:write"]);
+    expect(parseWorkflow(withPermissions("[]")).permissions).toEqual([]);
+  });
+
+  it("declares nothing when the property is absent", () => {
+    expect(
+      parseWorkflow(`
+export const plain = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`).permissions,
+    ).toEqual([]);
+  });
+
+  it("rejects wildcards, bad names and computed lists", () => {
+    expect(() => parseWorkflow(withPermissions('["sessions:*"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions('["*"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions('["sessions"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions("PERMS"))).toThrow();
+  });
+});
+
+describe("conditional boundary bodies", () => {
+  const nodesOf = (source: string) => {
+    const graph = parseWorkflow(source);
+    const block = graph.nodes.find((node) => node.type === "if-block");
+    const branches = graph.nodes.filter((node) => node.parentId === block?.id);
+    return {
+      branches,
+      inside: (branchId: string | undefined) =>
+        graph.nodes.filter((node) => node.parentId === branchId),
+    };
+  };
+
+  it("draws a host call in its arm and no box for a value-only else", () => {
+    const { branches, inside } = nodesOf(`
+export const nudge = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ sessionId?: string }>) =>
+        input.sessionId
+          ? host["catamorphic.sessions"].deliver({ sessionId: input.sessionId, content: "Hi" })
+          : { skipped: true },
+    }),
+  ],
+}));
+`);
+    expect(branches.map((branch) => branch.label)).toEqual(["input.sessionId"]);
+    expect(inside(branches[0]?.id).map((node) => node.label)).toEqual([
+      "Message a chat",
+    ]);
+  });
+
+  it("draws step calls in both arms", () => {
+    const { branches, inside } = nodesOf(`
+/** @displayname Notify */
+async function notify({ to }: { to: string }) { "use step"; return to; }
+/** @displayname Archive */
+async function archive({ id }: { id: string }) { "use step"; return id; }
+
+export const route = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input }: BoundaryContext<{ urgent: boolean; id: string }>) =>
+        input.urgent ? notify({ to: input.id }) : archive({ id: input.id }),
+    }),
+  ],
+}));
+`);
+    expect(branches.map((branch) => branch.label)).toEqual([
+      "input.urgent",
+      "Otherwise",
+    ]);
+    expect(inside(branches[0]?.id).map((node) => node.label)).toEqual([
+      "Notify",
+    ]);
+    expect(inside(branches[1]?.id).map((node) => node.label)).toEqual([
+      "Archive",
+    ]);
+  });
+});
+
+describe("transitions read from the boundary context", () => {
+  it("draws context.pause and context.callWorkflow like their destructured forms", () => {
+    const graph = parseWorkflow(`
+export const approve = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: (context: BoundaryContext<{ id: string }>) =>
+        context.pause({ signal: "approval", timeout: "1 day" }),
+    }),
+    defineBoundary({
+      run: (context: BoundaryContext<{ approved: boolean }>) =>
+        context.callWorkflow(finish, { input: context.input }),
+    }),
+  ],
+}));
+
+export const finish = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({ done: true }) })],
+}));
+`);
+    expect(graph.nodes.find((node) => node.type === "pause")?.label).toBe(
+      "Wait for 'approval'",
+    );
+    expect(graph.nodes.some((node) => node.type === "call-workflow")).toBe(
+      true,
+    );
+    // A pause on some other object is an ordinary call, never a transition.
+    expect(graph.nodes.some((node) => node.label === "context.pause")).toBe(
+      false,
+    );
+  });
+});

@@ -20,11 +20,17 @@ beforeAll(async () => {
     rootPath: `${app.userDataDir}/local-agent`,
   });
   projectId = project.id;
-  const agent = await app.eval<{ id: string; mode: string; accepts: string[] }>(
+  const agent = await app.eval<{
+    id: string;
+    sandboxing: string;
+    harnessPermissions: { sandbox?: string };
+    accepts: string[];
+  }>(
     `window.catamorphicDesktop.agentsCreate({harness:'codex',auth:'local',name:'Codex audit'})`,
   );
   agentId = agent.id;
-  expect(agent.mode).toBe("full-access");
+  expect(agent.sandboxing).toBe("publish");
+  expect(agent.harnessPermissions.sandbox).toBe("danger-full-access");
   expect(agent.accepts).toEqual(["image", "document"]);
   await app.eval(
     `window.catamorphicDesktop.agentsSetProjectDefault(${JSON.stringify(projectId)},${JSON.stringify(agentId)})`,
@@ -39,13 +45,10 @@ it("accepts a screenshot into the Codex composer as native image media", async (
   await app.waitFor(
     `!!document.querySelector('textarea[placeholder*="Search or ask"]')`,
   );
-  // A reloaded page can render before global shortcut bindings settle.
-  // Open through the rendered control; this test covers media, not shortcuts.
-  await app.waitFor(
-    `!!document.querySelector('button[aria-label="New chat"]')`,
-  );
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor(`!!document.querySelector('[data-workspace-ready]')`);
   await app.eval(
-    `document.querySelector('button[aria-label="New chat"]').click()`,
+    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
   );
   await app.waitFor(`!!document.querySelector('[data-composer-input]')`);
   expect(
@@ -83,16 +86,27 @@ it("accepts a screenshot into the Codex composer as native image media", async (
   );
   expect(app.getRendererErrors()).toEqual([]);
 });
-it("keeps an explicitly selected restricted mode", async () => {
-  const updated = await app.eval<{ mode: string }>(
-    `window.catamorphicDesktop.agentsUpdate(${JSON.stringify(agentId)},{mode:'edit'})`,
+it("keeps an explicitly selected restricted sandboxing and permission mode", async () => {
+  const updated = await app.eval<{
+    sandboxing: string;
+    harnessPermissions: { sandbox?: string; approvals?: string };
+  }>(
+    `window.catamorphicDesktop.agentsUpdate(${JSON.stringify(agentId)},{sandboxing:'propose',harnessPermissions:{sandbox:'workspace-write'}})`,
   );
-  expect(updated.mode).toBe("edit");
+  expect(updated.sandboxing).toBe("propose");
+  expect(updated.harnessPermissions).toEqual({
+    sandbox: "workspace-write",
+    approvals: "on-request",
+  });
   await app.reload();
   const agents = await app.eval<{
-    agents: Array<{ id: string; mode: string }>;
+    agents: Array<{
+      id: string;
+      sandboxing: string;
+      harnessPermissions: { sandbox?: string };
+    }>;
   }>(`window.catamorphicDesktop.agentsList()`);
-  expect(agents.agents.find((agent) => agent.id === agentId)?.mode).toBe(
-    "edit",
-  );
+  const agent = agents.agents.find((candidate) => candidate.id === agentId);
+  expect(agent?.sandboxing).toBe("propose");
+  expect(agent?.harnessPermissions.sandbox).toBe("workspace-write");
 });

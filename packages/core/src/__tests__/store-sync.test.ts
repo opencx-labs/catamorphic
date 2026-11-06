@@ -20,6 +20,8 @@ class FakeServer implements RemoteDocumentsClient {
     { version: number; text: string; deleted: boolean }
   >();
   readonly writes: string[] = [];
+  /** The published commit program listings name, when the server has one. */
+  programCommit: string | undefined;
 
   async list(): Promise<RemoteDocumentEntry[]> {
     const entries: RemoteDocumentEntry[] = [];
@@ -30,6 +32,7 @@ class FakeServer implements RemoteDocumentsClient {
         contentType: "text/markdown",
         size: -1,
         digest: `git:${text.length}:${text}`,
+        ...(this.programCommit ? { commit: this.programCommit } : {}),
       });
     }
     for (const [p, doc] of this.store) {
@@ -114,21 +117,18 @@ class FakeServer implements RemoteDocumentsClient {
 
 const read = (root: string, p: string) =>
   fs.readFileSync(
-    path.join(root, p.startsWith("store/") ? `.catamorphic/app-data/${p}` : p),
+    path.join(root, p.startsWith("store/") ? `.work/app-data/${p}` : p),
     "utf8",
   );
 const write = (root: string, p: string, text: string) => {
   fs.mkdirSync(
     path.dirname(
-      path.join(
-        root,
-        p.startsWith("store/") ? `.catamorphic/app-data/${p}` : p,
-      ),
+      path.join(root, p.startsWith("store/") ? `.work/app-data/${p}` : p),
     ),
     { recursive: true },
   );
   fs.writeFileSync(
-    path.join(root, p.startsWith("store/") ? `.catamorphic/app-data/${p}` : p),
+    path.join(root, p.startsWith("store/") ? `.work/app-data/${p}` : p),
     text,
   );
 };
@@ -170,6 +170,16 @@ describe("remote project sync (ADR 0055)", () => {
     expect(again.unchanged).toBe(2);
   });
 
+  it("reports the published commit it read, the base for publishing (ADR 0191)", async () => {
+    expect(
+      (await syncRemoteProject(root, server)).programCommit,
+    ).toBeUndefined();
+    server.programCommit = "c".repeat(40);
+    expect((await syncRemoteProject(root, server)).programCommit).toBe(
+      "c".repeat(40),
+    );
+  });
+
   it("ship pushes local store edits and new files with the synced version; program edits are not shippable", async () => {
     await syncRemoteProject(root, server);
     write(root, "store/customers/acme/notes.md", "Acme notes v2 + my edit\n");
@@ -196,6 +206,36 @@ describe("remote project sync (ADR 0055)", () => {
     ]);
     // Clean after shipping: nothing left to ship.
     expect(localStatus(root).modified).toEqual([]);
+  });
+
+  it("lists new files under .work as program edits, never app data, personal files, or dependencies", async () => {
+    await syncRemoteProject(root, server);
+    write(root, ".work/images/harness.Dockerfile", "FROM node:22\n");
+    write(root, ".work/app-data/cache.json", "{}\n");
+    write(root, ".work/personal/environment.json", "{}\n");
+    write(root, ".work/node_modules/pkg/index.js", "\n");
+    write(root, "notes/scratch.md", "mine\n");
+    write(root, ".work/.DS_Store", "\n");
+    write(root, ".work/workflows/.DS_Store", "\n");
+    expect(localStatus(root).programEdits).toEqual([
+      ".work/images/harness.Dockerfile",
+    ]);
+    // The folder's own ignore rules count too.
+    write(
+      root,
+      ".work/.gitignore",
+      "/app-data/\nnode_modules/\ndist/\n.turbo/\n.DS_Store\n*.local\n",
+    );
+    write(root, ".work/config.local", "secret\n");
+    expect(localStatus(root).programEdits).toEqual([
+      ".work/.gitignore",
+      ".work/images/harness.Dockerfile",
+    ]);
+  });
+
+  it("a folder that gets no program files through sync lists no new ones", () => {
+    write(root, ".work/images/harness.Dockerfile", "FROM node:22\n");
+    expect(localStatus(root).programEdits).toEqual([]);
   });
 
   it("ship conflict: someone wrote first → their copy lands beside ours, ours stays, explicit resolution is required", async () => {
@@ -294,9 +334,7 @@ describe("remote project sync (ADR 0055)", () => {
   it("deletions travel both ways, but never over someone's newer edit", async () => {
     await syncRemoteProject(root, server);
     // Local delete → remote tombstone.
-    fs.rmSync(
-      path.join(root, ".catamorphic/app-data/store/customers/acme/notes.md"),
-    );
+    fs.rmSync(path.join(root, ".work/app-data/store/customers/acme/notes.md"));
     expect(localStatus(root).deleted).toEqual([
       "store/customers/acme/notes.md",
     ]);
@@ -314,7 +352,7 @@ describe("remote project sync (ADR 0055)", () => {
     await syncRemoteProject(root, server);
     expect(
       fs.existsSync(
-        path.join(root, ".catamorphic/app-data/store/customers/acme/plan.md"),
+        path.join(root, ".work/app-data/store/customers/acme/plan.md"),
       ),
     ).toBe(true);
     server.store.get("store/customers/acme/plan.md")!.deleted = true;
@@ -322,7 +360,7 @@ describe("remote project sync (ADR 0055)", () => {
     expect(report.removed).toEqual(["store/customers/acme/plan.md"]);
     expect(
       fs.existsSync(
-        path.join(root, ".catamorphic/app-data/store/customers/acme/plan.md"),
+        path.join(root, ".work/app-data/store/customers/acme/plan.md"),
       ),
     ).toBe(false);
   });

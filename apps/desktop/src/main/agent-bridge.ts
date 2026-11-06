@@ -1,11 +1,9 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import http from "node:http";
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
-import type {
-  ToolPermissionDecision,
-  ToolPermissionRequest,
-} from "@catamorphic/sandbox";
-import { BrowserWindow, ipcMain, webContents } from "electron";
+import { agentToolResult } from "@catamorphic/sandbox";
+import { BrowserWindow, webContents } from "electron";
 import {
   capOutput,
   encodeCommand,
@@ -13,10 +11,25 @@ import {
   waitForShellReady,
 } from "../shared/terminal-text.js";
 import {
+  type WorkspaceTabRef,
+  workspaceTabRef,
+} from "../shared/workspace-tab-ref.js";
+import {
+  BackgroundCommands,
+  type BackgroundCommandView,
+  type BackgroundNotifier,
+} from "./background-commands.js";
+import {
   type BrowserAction,
   BrowserDriver,
   browserUrl,
 } from "./browser-driver.js";
+import {
+  CommandWatches,
+  isCommandWatch,
+  runShellCheck,
+} from "./command-watches.js";
+import { shellIpcMain as ipcMain } from "./shell-ipc.js";
 import type { AgentTerminals } from "./terminal.js";
 
 /**
@@ -32,9 +45,25 @@ import type { AgentTerminals } from "./terminal.js";
  * Control handoff: surfaces an agent spawns are marked agent-controlled;
  * the renderer reports a user "take over", after which agent actions on
  * that surface fail with an explanatory error until the agent reclaims.
+ * A tab an agent opened is held by the session that drives it, from its
+ * first action in a turn until that turn settles: then it goes back to
+ * the person without a take-over, and a later turn may drive it again.
+ * The person's own tabs are never held: an agent drives one only when
+ * asked, without veiling it.
  */
 
+/**
+ * The turn a browser tab is held for: its chat, and the turn itself when
+ * the host knows it (a hold without one goes at the chat's next settle).
+ */
+export interface TurnHolder {
+  sessionId: string;
+  turnId?: string;
+}
+
 export interface WorkspaceBridge {
+  /** Ask the calling chat's chip owners to refresh their state. */
+  refreshChips(input: { projectId: string; sessionId: string }): Promise<void>;
   /** Tabs, chats, and sidebar items of the project's open workspace. */
   overview(projectId: string): Promise<unknown>;
   /**
@@ -48,62 +77,112 @@ export interface WorkspaceBridge {
   ): Promise<unknown>;
   /** Expand a tab from the overview: page text, terminal buffer, file. */
   readTab(projectId: string, key: string): Promise<unknown>;
+  /** A picture of the project's window as the person sees it. */
+  screenshotWindow(projectId: string): Promise<unknown>;
   openBrowser(
     projectId: string,
-    sessionId: string,
+    holder: TurnHolder,
     url: string,
   ): Promise<{ key: string }>;
   browserSnapshot(
     projectId: string,
+    holder: TurnHolder,
     key: string,
     format?: "dom" | "image",
   ): Promise<unknown>;
   browserAct(
     projectId: string,
+    holder: TurnHolder,
     key: string,
     action: BrowserAction,
+    /** Ends a wait the action makes early (ADR 0264). */
+    stopWaiting: AbortSignal,
   ): Promise<unknown>;
   /**
-   * Run a command in a terminal: a fresh agent terminal by default, or —
-   * with `targetTerminalId` — an existing one (agent-owned or the user's;
-   * the latter flips to agent-controlled first). Waits up to `timeoutMs`
-   * (default 2 minutes, like a stock coding-agent shell) and returns the
-   * output the command produced, sanitized for model reading. `exitCode`
-   * is present when shell integration saw the command complete; `offset`
-   * is the buffer position to pass to readTerminal for output-since-here.
+   * Start a long-running command in its own background agent terminal
+   * (ADR 0155): it outlives the turn, shows as a chip the person can open,
+   * and wakes the chat when it finishes or prints a watched line.
    */
-  runTerminal(
-    projectId: string,
-    sessionId: string,
-    command: string,
-    targetTerminalId?: string,
-    timeoutMs?: number,
-    workingDirectory?: string,
-  ): Promise<{
+  startBackgroundCommand(input: {
+    projectId: string;
+    sessionId: string;
+    command: string;
+    description: string;
+    workingDirectory?: string;
+    wakeOnExit?: boolean;
+    wakeOnOutput?: string;
+  }): Promise<{
+    id: string;
     key: string;
-    terminalId: string;
+    status: BackgroundCommandView["status"];
+    exitCode: number | null;
     output: string;
-    commandRunning: boolean;
-    exitCode?: number;
-    offset: number;
   }>;
   /**
-   * Read a terminal's output — the recent tail, or everything since
-   * `sinceOffset` (from an earlier read/run). `waitForIdleMs` blocks
-   * until the foreground command finishes (or the deadline), so callers
-   * following a long command wait server-side instead of polling.
+   * New output since the last read; `waitMs` blocks for news, the end, or
+   * something reaching the agent (`stopWaiting`, ADR 0264).
    */
-  readTerminal(
-    projectId: string,
-    terminalId: string,
-    opts?: { sinceOffset?: number; waitForIdleMs?: number },
-  ): Promise<{
+  readBackgroundCommand(input: {
+    sessionId: string;
+    id: string;
+    waitMs?: number;
+    waitFor?: string;
+    stopWaiting: AbortSignal;
+  }): Promise<{
+    status: BackgroundCommandView["status"];
+    exitCode: number | null;
     output: string;
-    running: boolean;
-    busy: boolean;
-    offset: number;
-    lastExitCode?: number;
-  } | null>;
+    matched?: string;
+  }>;
+  stopBackgroundCommand(input: { sessionId: string; id: string }): Promise<{
+    status: BackgroundCommandView["status"];
+    output: string;
+  }>;
+  /**
+   * Repeat a check until it succeeds or report when its output changes
+   * (ADR 0156). Durable across restarts; wakes the chat like a background
+   * command does.
+   */
+  startCommandWatch(input: {
+    projectId: string;
+    sessionId: string;
+    command: string;
+    description: string;
+    workingDirectory?: string;
+    everySeconds?: number;
+    until: "success" | "change";
+    expiresInSeconds?: number;
+  }): Promise<{
+    id: string;
+    status: BackgroundCommandView["status"];
+    exitCode: number | null;
+    output: string;
+    nextCheckInSeconds: number | null;
+  }>;
+  /** A watch's status and latest check; waits like a background read. */
+  readCommandWatch(input: {
+    sessionId: string;
+    id: string;
+    waitMs?: number;
+    waitFor?: string;
+    stopWaiting: AbortSignal;
+  }): Promise<{
+    status: BackgroundCommandView["status"];
+    exitCode: number | null;
+    output: string;
+    checks: number;
+    matched?: string;
+  }>;
+  stopCommandWatch(input: {
+    sessionId: string;
+    id: string;
+  }): Promise<{ status: BackgroundCommandView["status"] }>;
+  backgroundCommands(filter?: {
+    projectId?: string;
+    sessionId?: string;
+  }): BackgroundCommandView[];
+  /** Late-bound: how a finished command wakes its chat. */
+  setBackgroundNotifier(notify: BackgroundNotifier): void;
   /**
    * Send raw input. Works on agent terminals and on user terminals the
    * agent has taken over (an untouched user terminal is taken over
@@ -117,8 +196,19 @@ export interface WorkspaceBridge {
   /** Hand a surface back to the user (agent done) or reclaim it. */
   setControl(
     projectId: string,
+    holder: TurnHolder,
     key: string,
     controlled: boolean,
+  ): Promise<void>;
+  /**
+   * A turn settled: the browser tabs it held go back to the person. Not a
+   * take-over: a later turn may drive them again, visibly. A hold the
+   * chat's next turn already made stays. `retrying` marks a transient
+   * failure: the same turn runs again, and may hold its pages again.
+   */
+  releaseTurn(
+    projectId: string,
+    settled: TurnHolder & { retrying?: boolean },
   ): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
   sessionProcessCount(
@@ -137,12 +227,15 @@ export interface WorkspaceBridge {
    * is on another surface, the tab is prepared in the background and the
    * surface's chip on the agent's chat carries an attention indicator
    * instead (`opened: "background"`, plus a `note` telling the agent to
-   * narrate rather than assume the user saw it).
+   * narrate rather than assume the user saw it). A person talking with the
+   * chat by voice (`voice`) counts as watching it. Either way, a project
+   * or window Work isn't showing gets the background open.
    */
   openTarget(
     projectId: string,
     sessionId: string,
     target: string,
+    options?: { voice?: boolean },
   ): Promise<{
     key: string;
     opened: "focused" | "background";
@@ -173,18 +266,6 @@ export interface WorkspaceBridge {
     signal?: AbortSignal,
   ): Promise<ElicitResult>;
   /**
-   * An agent wants to use an MCP tool whose policy says "ask": the front
-   * window shows the consent card (tool, server, arguments); resolves
-   * with allow (once / always) or deny. Null when no window can show it,
-   * or when `signal` aborts (another surface answered first — the modal
-   * is withdrawn); callers without another surface treat null as deny.
-   */
-  toolPermission(
-    label: string | undefined,
-    request: ToolPermissionRequest,
-    signal?: AbortSignal,
-  ): Promise<ToolPermissionDecision | null>;
-  /**
    * An agent asks for a connector: the front window opens the connectors
    * modal pre-filled with the agent's search query; the user decides what
    * (if anything) to install. Resolves with the names of connections
@@ -203,20 +284,10 @@ const RPC_TIMEOUT_MS = 12_000;
 /** Elicitation waits on a human (form entry, OAuth) — give it real time. */
 const ELICIT_TIMEOUT_MS = 300_000;
 
-/**
- * Terminal waits mirror a stock coding-agent shell: 2 minutes by default,
- * 10 at most — a build that takes 90s should come back in one tool call,
- * not a poll loop that burns a model turn every 15 seconds.
- */
-const RUN_DEFAULT_WAIT_MS = 120_000;
-const RUN_MAX_WAIT_MS = 600_000;
 /** Model-facing output cap (matches stock Bash's ~30k inline window). */
 const OUTPUT_CAP = 30_000;
 /** Raw chars sliced before sanitizing (redraw noise shrinks a lot). */
 const RAW_READ_CAP = 150_000;
-
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Raw PTY buffer → what the model reads: sanitized, tail-capped. */
 const modelOutput = (raw: string): string =>
@@ -224,7 +295,18 @@ const modelOutput = (raw: string): string =>
 
 export function registerAgentBridge(
   agentTerminals: AgentTerminals,
-  targetFor?: (projectId?: string) => Electron.WebContents | undefined,
+  targetFor: (projectId?: string) => Electron.WebContents | undefined,
+  /**
+   * Settles once the project shows in a window: right away, or after a
+   * move to a window of its own (desktop-workspaces.ts arrival).
+   */
+  arrival: (projectId?: string) => Promise<void>,
+  watchOptions: {
+    /** Where command watches are saved between runs of the app. */
+    file: string;
+    /** The agent's toolchain env, so a check finds the same tools. */
+    env: () => Promise<Record<string, string>>;
+  },
 ): {
   bridge: WorkspaceBridge;
   /** Env for an agent terminal so its `open` shim reaches this app. */
@@ -264,7 +346,7 @@ export function registerAgentBridge(
   );
 
   /** Ask every window; the first renderer with an answer wins. */
-  const rpc = <T>(
+  const rpc = async <T>(
     method: string,
     params: unknown,
     timeoutMs = RPC_TIMEOUT_MS,
@@ -276,12 +358,10 @@ export function registerAgentBridge(
       typeof params.projectId === "string"
         ? params.projectId
         : undefined;
-    const target = targetFor?.(projectId);
-    const windows = targetFor
-      ? target
-        ? [{ webContents: target }]
-        : []
-      : BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+    // A project moving to a window of its own is asked there.
+    await arrival(projectId);
+    const target = targetFor(projectId);
+    const windows = target ? [{ webContents: target }] : [];
     if (windows.length === 0) return Promise.resolve(null);
     const id = ++nextId;
     return new Promise<T | null>((resolve) => {
@@ -309,18 +389,19 @@ export function registerAgentBridge(
    * that open interactive UI (a broadcast would pop the same modal in
    * every window showing the project).
    */
-  const rpcToFront = <T>(
+  const rpcToFront = async <T>(
     method: string,
     params: Record<string, unknown>,
     timeoutMs = RPC_TIMEOUT_MS,
     signal?: AbortSignal,
   ): Promise<T | null> => {
+    const projectId =
+      typeof params.projectId === "string" ? params.projectId : undefined;
+    await arrival(projectId);
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
-    const recipient = targetFor?.(
-      typeof params.projectId === "string" ? params.projectId : undefined,
-    );
+    const recipient = targetFor(projectId);
     const target = recipient
       ? { webContents: recipient, isDestroyed: () => recipient.isDestroyed() }
       : (BrowserWindow.getFocusedWindow() ?? windows[0]);
@@ -367,8 +448,15 @@ export function registerAgentBridge(
     "catamorphic:bridge-takeover",
     (_event, payload: { key: string }) => {
       takenOver.add(payload.key);
+      held.delete(payload.key);
     },
   );
+  /** An agent terminal ended: its tab key and handoff go with it. */
+  const forgetTerminal = (terminalId: string) => {
+    const key = terminalKeys.get(terminalId);
+    terminalKeys.delete(terminalId);
+    if (key) takenOver.delete(key);
+  };
   const guardControl = (key: string) => {
     if (takenOver.has(key)) {
       throw new Error(
@@ -377,6 +465,43 @@ export function registerAgentBridge(
           "task requires it.",
       );
     }
+  };
+  /** Browser tabs an agent opened: an agent's own, which it holds. */
+  const agentTabs = new Set<string>();
+  /** Browser tab key → the turn that holds it. */
+  const held = new Map<string, TurnHolder & { projectId: string }>();
+  /**
+   * Turns that settled for good (not to run again after a transient
+   * failure), latest last, and per session how many settled (for a holder
+   * without a turn id): openBrowser's page may mount after its turn ended.
+   */
+  const settledTurnIds = new Set<string>();
+  const settledTurns = new Map<string, number>();
+  /**
+   * The turn drives its agent's own tab until it settles, in sight. A tab
+   * the person took over stays theirs: input actions refuse there, and a
+   * look leaves it alone.
+   */
+  const holdBrowser = async (input: {
+    projectId: string;
+    holder: TurnHolder;
+    key: string;
+  }) => {
+    const current = held.get(input.key);
+    if (
+      !input.holder.sessionId ||
+      !agentTabs.has(input.key) ||
+      takenOver.has(input.key) ||
+      (current?.sessionId === input.holder.sessionId &&
+        current.turnId === input.holder.turnId)
+    )
+      return;
+    held.set(input.key, { projectId: input.projectId, ...input.holder });
+    await rpc("surfaceControl", {
+      projectId: input.projectId,
+      key: input.key,
+      controlled: true,
+    });
   };
 
   // --- browser guests ---
@@ -424,9 +549,11 @@ export function registerAgentBridge(
     );
     drivers.set(guest.id, { projectId, driver });
     const guestId = guest.id;
+    // A takeover outlives the page: a sleeping tab (ADR 0194) wakes into
+    // a new guest that is still the person's. Closing the tab or handing
+    // control back ends it.
     guest.once("destroyed", () => {
       drivers.delete(guestId);
-      takenOver.delete(key);
     });
     return driver;
   };
@@ -438,7 +565,98 @@ export function registerAgentBridge(
     );
   };
 
+  const background = new BackgroundCommands({
+    terminals: {
+      ...agentTerminals,
+      // A command's terminal ends with it, however it ended (ADR 0223).
+      kill: (terminalId) => {
+        forgetTerminal(terminalId);
+        return agentTerminals.kill(terminalId);
+      },
+    },
+    attach: async ({ projectId, sessionId, terminalId, title }) => {
+      const attached = await rpc<{ key: string } | null>(
+        "attachAgentTerminal",
+        { projectId, sessionId, terminalId, title: title.slice(0, 100) },
+      );
+      const key = attached?.key ?? `terminal:${terminalId}`;
+      terminalKeys.set(terminalId, key);
+      return key;
+    },
+    // Never write into a shell that hasn't shown its first prompt: bytes
+    // queued during startup are echoed twice (see waitForShellReady).
+    waitReady: (terminalId) =>
+      waitForShellReady({
+        running: () => agentTerminals.isRunning(terminalId),
+        prompts: () => agentTerminals.commandTracking(terminalId)?.prompts ?? 0,
+        bufferLength: () => agentTerminals.bufferLength(terminalId) ?? 0,
+      }),
+    modelOutput,
+    encode: encodeCommand,
+    changed: () => publishBackground(),
+  });
+  const watches = new CommandWatches({
+    run: async ({ command, workingDirectory, timeoutMs }) => {
+      const result = await runShellCheck({
+        command,
+        ...(workingDirectory ? { workingDirectory } : {}),
+        timeoutMs,
+        env: { ...process.env, ...(await watchOptions.env()) },
+      });
+      return { exitCode: result.exitCode, output: modelOutput(result.raw) };
+    },
+    load: async () => {
+      try {
+        const saved: unknown = JSON.parse(
+          await fs.readFile(watchOptions.file, "utf8"),
+        );
+        return Array.isArray(saved) ? saved.filter(isCommandWatch) : [];
+      } catch {
+        return [];
+      }
+    },
+    save: async (list) => {
+      const temporary = `${watchOptions.file}.${process.pid}.tmp`;
+      await fs.writeFile(temporary, JSON.stringify(list, null, 2));
+      await fs.rename(temporary, watchOptions.file);
+    },
+    changed: () => publishBackground(),
+  });
+  const backgroundWork = () => [...background.list(), ...watches.list()];
+  function publishBackground() {
+    const work = backgroundWork();
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed())
+        window.webContents.send("catamorphic:background-commands", work);
+    }
+  }
+  ipcMain.handle("catamorphic:background-commands", () => backgroundWork());
+  // A composer's @ lists the project's open tabs (ADR 0274), from the same
+  // overview the agent reads, in whichever window the chat is.
+  ipcMain.handle(
+    "catamorphic:workspace-tabs",
+    async (_event, projectId: unknown): Promise<WorkspaceTabRef[]> => {
+      if (typeof projectId !== "string") return [];
+      const overview = await rpc<{ tabs?: unknown }>("overview", { projectId });
+      return Array.isArray(overview?.tabs)
+        ? overview.tabs.flatMap((tab) => workspaceTabRef(tab) ?? [])
+        : [];
+    },
+  );
+
   const bridge: WorkspaceBridge = {
+    async refreshChips(input) {
+      const result = await rpc<{ requested: true } | { error: string }>(
+        "refreshChips",
+        input,
+      );
+      if (!result || "error" in result)
+        throw new Error(
+          result && "error" in result
+            ? result.error
+            : "This chat's chips are not available in an open workspace.",
+        );
+    },
     async overview(projectId) {
       const result = await rpc("overview", { projectId });
       if (!result) {
@@ -478,7 +696,47 @@ export function registerAgentBridge(
       return result;
     },
 
-    async openBrowser(projectId, sessionId, url) {
+    async screenshotWindow(projectId) {
+      await arrival(projectId);
+      const target = targetFor(projectId);
+      if (!target || target.isDestroyed())
+        throw new Error(
+          "No window has this project open, so the workspace is not visible.",
+        );
+      const image = await target.capturePage(undefined, {
+        stayHidden: true,
+        stayAwake: true,
+      });
+      if (image.isEmpty())
+        throw new Error("The window has not rendered yet. Try again shortly.");
+      const scaled =
+        image.getSize().width > 1600 ? image.resize({ width: 1600 }) : image;
+      return agentToolResult({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              kind: "window",
+              image: scaled.getSize(),
+              note: "Work's window as the person sees it: sidebars, tabs, and open chats.",
+            }),
+          },
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: scaled.toPNG().toString("base64"),
+          },
+        ],
+      });
+    },
+
+    async openBrowser(projectId, holder, url) {
+      const { sessionId, turnId } = holder;
+      const turns = settledTurns.get(sessionId) ?? 0;
+      const settled = () =>
+        turnId
+          ? settledTurnIds.has(turnId)
+          : (settledTurns.get(sessionId) ?? 0) !== turns;
       const result = await rpc<{ key: string } | { error: string }>(
         "openAgentBrowser",
         { projectId, sessionId, url: browserUrl(url) },
@@ -489,178 +747,43 @@ export function registerAgentBridge(
             "Could not open a browser tab (is the workspace open?)",
         );
       }
+      // Opened under the agent's control: its own, held by this turn,
+      // unless the turn settled while the page mounted (or there is none).
+      agentTabs.add(result.key);
+      if (sessionId && !settled())
+        held.set(result.key, { projectId, ...holder });
+      else
+        await rpc("surfaceControl", {
+          projectId,
+          key: result.key,
+          controlled: false,
+        });
       return result;
     },
 
-    async browserSnapshot(projectId, key, format) {
+    async browserSnapshot(projectId, holder, key, format) {
+      await holdBrowser({ projectId, holder, key });
       return (await driverFor(projectId, key)).snapshot(format);
     },
 
-    async browserAct(projectId, key, action) {
-      return (await driverFor(projectId, key)).act(action);
+    async browserAct(projectId, holder, key, action, stopWaiting) {
+      await holdBrowser({ projectId, holder, key });
+      return (await driverFor(projectId, key)).act(action, stopWaiting);
     },
 
-    async runTerminal(
-      projectId,
-      sessionId,
-      command,
-      targetTerminalId,
-      timeoutMs,
-      workingDirectory,
-    ) {
-      if (!command.trim()) {
-        throw new Error("Empty command.");
-      }
-      let terminalId: string;
-      let key: string;
-      if (targetTerminalId) {
-        if (!agentTerminals.isRunning(targetTerminalId)) {
-          throw new Error(
-            "That terminal's shell is not running. Pick another from workspace_overview or omit terminalId for a fresh one.",
-          );
-        }
-        const found =
-          terminalKeys.get(targetTerminalId) ??
-          (
-            await rpc<{ key: string } | null>("terminalKey", {
-              projectId,
-              terminalId: targetTerminalId,
-            })
-          )?.key;
-        if (!found) {
-          throw new Error(
-            "No workspace tab for that terminal id. Check workspace_overview.",
-          );
-        }
-        key = found;
-        guardControl(key);
-        if (agentTerminals.isBusy(targetTerminalId)) {
-          throw new Error(
-            "That terminal is mid-command. Wait (read_terminal), interrupt it (write_terminal with \\u0003), or run elsewhere.",
-          );
-        }
-        terminalId = targetTerminalId;
-        terminalKeys.set(terminalId, key);
-        // Running in the user's own terminal is a take-over: mark it so
-        // they see the handoff (and get the Take over button back).
-        if (!agentTerminals.isAgentOwned(terminalId)) {
-          await rpc("surfaceControl", { projectId, key, controlled: true });
-        }
-      } else {
-        const created = await agentTerminals.create(
-          projectId,
-          sessionId,
-          workingDirectory,
-        );
-        terminalId = created.sessionId;
-        const attached = await rpc<{ key: string } | null>(
-          "attachAgentTerminal",
-          {
-            projectId,
-            sessionId,
-            terminalId,
-            title: command.replace(/\s+/g, " ").trim().slice(0, 100),
-          },
-        );
-        key = attached?.key ?? `terminal:${terminalId}`;
-        terminalKeys.set(terminalId, key);
-        // Never write into a shell that hasn't shown its first prompt:
-        // bytes queued during startup are echoed by the tty AND again by
-        // the line editor, so the transcript showed the command twice
-        // (see waitForShellReady). Waiting also pins the prompt baseline,
-        // so the completion wait below can't mistake the STARTUP prompt
-        // for "the shell consumed my command".
-        await waitForShellReady({
-          running: () => agentTerminals.isRunning(terminalId),
-          prompts: () =>
-            agentTerminals.commandTracking(terminalId)?.prompts ?? 0,
-          bufferLength: () => agentTerminals.bufferLength(terminalId) ?? 0,
-        });
-      }
-
-      const baseline = agentTerminals.bufferLength(terminalId) ?? 0;
-      const trackingBefore = agentTerminals.commandTracking(terminalId);
-      const completionsBefore = trackingBefore?.completions ?? 0;
-      const promptsBefore = trackingBefore?.prompts ?? 0;
-      agentTerminals.writeAny(terminalId, encodeCommand(command));
-
-      // Wait for the command to finish — most are quick, and complete
-      // output beats a partial snapshot. Runs that outlast the wait
-      // return with commandRunning: true; the caller follows up with
-      // read_terminal (which can block on idle server-side).
-      const waitMs = Math.min(
-        Math.max(timeoutMs ?? RUN_DEFAULT_WAIT_MS, 1_000),
-        RUN_MAX_WAIT_MS,
-      );
-      const finishDeadline = Date.now() + waitMs;
-      // With shell integration, the completion counter is authoritative —
-      // it can't miss a fast command or mistake a slow shell startup for
-      // "already finished". Without markers, fall back to the busy flag
-      // after a short grace for the command to register as busy at all.
-      const graceDeadline = Date.now() + 1_200;
-      const commandFinished = () => {
-        if (!agentTerminals.isRunning(terminalId)) return true;
-        const tracking = agentTerminals.commandTracking(terminalId);
-        // A new prompt means the shell consumed the submitted line and
-        // came back — even for lines that run nothing (comment-only),
-        // which produce a prompt but no completion.
-        if (tracking?.seen) return tracking.prompts > promptsBefore;
-        return Date.now() > graceDeadline && !agentTerminals.isBusy(terminalId);
-      };
-      while (Date.now() < finishDeadline && !commandFinished()) {
-        await sleep(150);
-      }
-      // One beat for the tail of the output to flush through the pty.
-      await sleep(150);
-
-      const commandRunning = agentTerminals.isBusy(terminalId);
-      // Exit code only when shell integration watched THIS command end —
-      // a completion count that didn't move means the marker (and code)
-      // belongs to some earlier command.
-      const tracking = agentTerminals.commandTracking(terminalId);
-      const exitCode =
-        !commandRunning &&
-        tracking?.seen &&
-        tracking.completions > completionsBefore
-          ? tracking.lastExitCode
-          : null;
-      return {
-        key,
-        terminalId,
-        output: modelOutput(
-          agentTerminals.readFrom(terminalId, baseline, RAW_READ_CAP),
-        ),
-        commandRunning,
-        ...(exitCode !== null ? { exitCode } : {}),
-        offset: agentTerminals.bufferLength(terminalId) ?? 0,
-      };
-    },
-
-    async readTerminal(_projectId, terminalId, opts) {
-      if (agentTerminals.read(terminalId, 1) === null) return null;
-      const idleDeadline =
-        Date.now() +
-        Math.min(Math.max(opts?.waitForIdleMs ?? 0, 0), RUN_MAX_WAIT_MS);
-      while (Date.now() < idleDeadline && agentTerminals.isBusy(terminalId)) {
-        await sleep(200);
-      }
-      const raw =
-        opts?.sinceOffset !== undefined
-          ? agentTerminals.readFrom(terminalId, opts.sinceOffset, RAW_READ_CAP)
-          : (agentTerminals.read(terminalId, RAW_READ_CAP) ?? "");
-      const busy = agentTerminals.isBusy(terminalId);
-      const tracking = agentTerminals.commandTracking(terminalId);
-      return {
-        output: modelOutput(raw),
-        running: agentTerminals.isRunning(terminalId),
-        busy,
-        offset: agentTerminals.bufferLength(terminalId) ?? 0,
-        // The latest completed command's exit code — meaningful to a
-        // caller who just watched their command finish.
-        ...(!busy && tracking?.seen && tracking.lastExitCode !== null
-          ? { lastExitCode: tracking.lastExitCode }
-          : {}),
-      };
+    startBackgroundCommand: (input) => background.start(input),
+    readBackgroundCommand: (input) => background.read(input),
+    stopBackgroundCommand: (input) => background.stop(input),
+    startCommandWatch: (input) => watches.start(input),
+    readCommandWatch: (input) => watches.read(input),
+    stopCommandWatch: (input) => watches.stop(input),
+    backgroundCommands: (filter) => [
+      ...background.list(filter),
+      ...watches.list(filter),
+    ],
+    setBackgroundNotifier: (notify) => {
+      background.setNotifier(notify);
+      void watches.setNotifier(notify);
     },
 
     async writeTerminal(projectId, terminalId, data) {
@@ -692,11 +815,16 @@ export function registerAgentBridge(
       return agentTerminals.writeAny(terminalId, data);
     },
 
-    async openTarget(projectId, sessionId, target) {
+    async openTarget(projectId, sessionId, target, options) {
       const result = await rpc<
         | { key: string; opened: "focused" | "background"; note?: string }
         | { error: string }
-      >("openTarget", { projectId, sessionId, target });
+      >("openTarget", {
+        projectId,
+        sessionId,
+        target,
+        voice: options?.voice === true,
+      });
       if (!result || "error" in result) {
         throw new Error(
           (result as { error?: string } | null)?.error ??
@@ -743,25 +871,6 @@ export function registerAgentBridge(
       return result ?? { action: "decline" };
     },
 
-    async toolPermission(label, request, signal) {
-      const result = await rpcToFront<unknown>(
-        "toolPermission",
-        { label, request },
-        ELICIT_TIMEOUT_MS,
-        signal,
-      );
-      if (result === null || result === undefined) return null;
-      // Anything but a well-formed "allow" is a deny — a renderer error
-      // reply ({ error }) must never read as consent.
-      const decision = result as { decision?: unknown; remember?: unknown };
-      if (decision.decision === "allow") {
-        return decision.remember === "always"
-          ? { decision: "allow", remember: "always" }
-          : { decision: "allow" };
-      }
-      return { decision: "deny" };
-    },
-
     async requestConnection(projectId, sessionId, query, reason) {
       const result = await rpc<{ installed: string[] }>(
         "requestConnection",
@@ -773,14 +882,52 @@ export function registerAgentBridge(
       return result ?? { installed: [] };
     },
 
-    async setControl(projectId, key, controlled) {
-      if (controlled) takenOver.delete(key);
-      else takenOver.add(key);
+    async setControl(projectId, holder, key, controlled) {
+      const browser = key.startsWith("browser:");
+      if (controlled) {
+        takenOver.delete(key);
+        if (browser && holder.sessionId)
+          held.set(key, { projectId, ...holder });
+      } else {
+        held.delete(key);
+        // A released tab goes back as at the end of a turn: the agent may
+        // drive it again. A terminal stays the person's until reclaimed.
+        if (!browser) takenOver.add(key);
+      }
       await rpc("surfaceControl", { projectId, key, controlled });
+    },
+
+    async releaseTurn(projectId, { sessionId, turnId, retrying }) {
+      settledTurns.set(sessionId, (settledTurns.get(sessionId) ?? 0) + 1);
+      // A retry runs under the same turn id: a page it opens is its own.
+      if (turnId && !retrying) {
+        settledTurnIds.add(turnId);
+        // Only a page still mounting asks, so the recent turns are enough.
+        if (settledTurnIds.size > 256)
+          settledTurnIds.delete(settledTurnIds.values().next().value ?? "");
+      }
+      // Only this turn's holds: the chat's next turn may already hold a tab
+      // again by the time this settle arrives.
+      const keys = [...held]
+        .filter(
+          ([, holder]) =>
+            holder.projectId === projectId &&
+            holder.sessionId === sessionId &&
+            (!turnId || !holder.turnId || holder.turnId === turnId),
+        )
+        .map(([key]) => key);
+      for (const key of keys) held.delete(key);
+      await Promise.all(
+        keys.map((key) =>
+          rpc("surfaceControl", { projectId, key, controlled: false }),
+        ),
+      );
     },
 
     async closeSurface(projectId, key) {
       takenOver.delete(key);
+      held.delete(key);
+      agentTabs.delete(key);
       // An agent closing its terminal tab also ends the process behind
       // it — a headless PTY nobody can see must not keep running.
       if (key.startsWith("terminal:")) {
@@ -790,16 +937,22 @@ export function registerAgentBridge(
         });
         if (info?.terminalId) {
           agentTerminals.kill(info.terminalId);
-          terminalKeys.delete(info.terminalId);
+          forgetTerminal(info.terminalId);
         }
       }
       await rpc("closeSurface", { projectId, key });
     },
     async sessionProcessCount(projectId, sessionIds) {
-      return agentTerminals.countForOwners(projectId, sessionIds);
+      return (
+        agentTerminals.countForOwners(projectId, sessionIds) +
+        watches.count(projectId, sessionIds)
+      );
     },
     async stopSessionProcesses(projectId, sessionIds) {
-      return agentTerminals.killForOwners(projectId, sessionIds);
+      return (
+        agentTerminals.killForOwners(projectId, sessionIds) +
+        (await watches.stopForSessions(projectId, sessionIds))
+      );
     },
   };
 
@@ -853,6 +1006,9 @@ export function registerAgentBridge(
       };
     },
     dispose() {
+      background.dispose();
+      watches.dispose();
+      ipcMain.removeHandler("catamorphic:background-commands");
       hookServer.close();
       for (const entry of pending.values()) {
         clearTimeout(entry.timer);
@@ -860,6 +1016,10 @@ export function registerAgentBridge(
       }
       pending.clear();
       takenOver.clear();
+      held.clear();
+      agentTabs.clear();
+      settledTurns.clear();
+      settledTurnIds.clear();
       terminalKeys.clear();
     },
   };

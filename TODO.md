@@ -1,22 +1,68 @@
 # TODO
 
-- **Electron 44.4.4 (or later): drop the `Invalid guestInstanceId` guards.**
-  Electron 43.6–44.4.3 throw from a `<webview>`'s `disconnectedCallback`
-  when a loaded guest is removed (electron/electron#53989, fix #54089
-  merged to 44-x-y on 2026-09-18). Until a release carries it, the
-  renderer swallows that one uncaught error (`main.tsx`) and the e2e
-  harness ignores it (`e2e/harness.ts`). Remove both with the bump.
+- **Chrome extensions, follow-ups (ADR 0203).** `chrome://favicon` and
+  `_favicon/` URLs for extension pages; `userScripts` (Tampermonkey,
+  Violentmonkey); `privacy` and `contentSettings`; `identity.getAuthToken`
+  needs a Google sign-in Work does not have. `activeTab` reaches only the
+  APIs Work answers; Electron's `scripting` still wants host access, so a
+  picker such as uBlock Origin Lite's "Remove an element" needs Electron to
+  grant tab permissions. Native messaging with the Claude and ChatGPT
+  desktop apps is checked by hand on macOS only. MV2 extensions load
+  unpacked only while Electron runs MV2.
+- **Electron 45: stable pin and async `safeStorage`.** Work pins
+  45.0.0-beta.1 (Chromium 156), taken for Google's sign-in gate, which
+  turned out to be `chrome.app` and not the engine (ADR 0235); it stays for
+  the changes that landed with it. Move to 45.0.0 stable when it ships.
+  Electron 45 deprecates the synchronous
+  `safeStorage.isEncryptionAvailable`, `encryptString` and `decryptString`
+  (each logs a deprecation warning once), and Electron 46 removes them, so
+  the move to `isAsyncEncryptionAvailable`, `encryptStringAsync` and
+  `decryptStringAsync` comes before the next major. The callers read
+  synchronously today, so it is an async migration, not a rename:
+  `agent-bindings-store.ts`, `agents-store.ts`, `connections-store.ts`,
+  `credential-vault.ts`, `remote-projects-store.ts` and
+  `runner-key-store.ts` in `apps/desktop/src/main`, plus
+  `browser-vault.ts`, which only calls `isEncryptionAvailable`. Data
+  written by `encryptString` decrypts with `decryptStringAsync`.
+- **`window.chrome` fidelity (ADR 0235).** Work gives web pages Chrome's
+  `loadTimes`, `csi` and `app` from page script: the app methods are bound
+  functions that read as `function () { [native code] }`, without the names
+  Chrome's carry; `loadTimes` and `csi` sit behind a Proxy, which a
+  prototype cycle or the `caller` getter called on them directly can find;
+  and a frame a script creates (`about:blank`) keeps Electron's empty
+  `window.chrome`. Google's sign-in checks none of these today; the daily
+  live check (`.github/workflows/google-sign-in.yml`) says when that
+  changes.
+- **Client hints on page loads (ADR 0150).** Electron sends no client-hint
+  headers with a page load, and the webRequest rewrite in `main/browser.ts`
+  only replaces headers already there, so documents carry no Sec-CH-UA
+  (Chrome always sends it over https) and scripts and images keep
+  Chromium's own brands. Add the low-entropy hints to https documents and
+  frames.
+- **Legacy `chromeMediaSource` screen capture (ADR 0150).** `getUserMedia`
+  with `chromeMediaSource: 'desktop'` arrives as `display-capture` and opens
+  the share picker, but the stream follows the page's constraints, not the
+  pick, and the pick lingers in `pendingShares` (`main/browser.ts`). Refuse
+  those constraints from web content as Chrome does, and drop a guest's
+  pending share when it navigates or closes.
 - **Full-stack Claude Code e2e via a fake CLI.** The ask_user flow now has
   three pins: harness unit tests (mocked query), the harness↔core seam
   integration test (`packages/claude-code/src/__tests__/
   ask-user-core.integration.test.ts` — real AgentSessionsService + real
   Postgres, DATABASE_URL-gated), and the renderer panel via the fake-agent
-  e2e. The one uncovered layer is the SDK↔CLI boundary itself: a fixture
-  "fake claude" executable speaking the SDK's stdio protocol (pointed at
-  via `pathToClaudeCodeExecutable` under an e2e env flag) would let the
-  desktop e2e drive a REAL Claude Code harness end to end — questions,
-  permission round-trips, background tasks — without model calls. Worth
-  building once; every harness regression class lands in it.
+  e2e. The SDK↔CLI boundary now has a fixture CLI
+  (`packages/work-server/src/workers/fake-claude-cli.ts`, ADR 0180) that the
+  Work server e2e drives through a real harness, gateway and worker; it
+  speaks initialize, user turns, Bash tool use and results. Remaining: point
+  the desktop e2e at it (`pathToClaudeCodeExecutable` under an e2e env flag)
+  and grow it for questions, permission round-trips (`can_use_tool`), hook
+  callbacks and background tasks.
+- **Harnesses on the server, follow-ups (ADR 0180).** Codex in a sandbox has
+  no Work capability tools: carry them over the app-server protocol's
+  dynamic tools instead of the loopback listener. Renew connection MCP
+  (`mcp` channel) grants during long sessions. Serve project harness agents
+  when the server has no control-plane model (today `/me` reports chat off).
+  A usage view for gateway usage (`model_usage`) per project and member.
 - **Dev-shell follow-ups (ADR 0045).** PR review depth on the CodeHost
   seam: inline comments, approvals, merge-from-app; a human-facing worktree
   cleanup surface (agents can create and adopt worktrees, but Catamorphic
@@ -28,13 +74,15 @@
   ("project config (broken)" case is already reported by the resolver).
 - **Collaboration on the git backend (next slice after ADR 0044).**
   Invite flow (= repo access on the code host), PR review rendered
-  natively in the app, and PR-first "review mode" sync: when a project
-  declares review mode (likely in `.catamorphic/project.json`), auto-sync
-  stops pushing `main` and work flows through branches + PRs instead —
-  resolves the direct-push vs open-PR race deliberately deferred in
-  ADR 0044. Also: a calm sync-status pill in the UI (up to date /
-  syncing / diverged→rescue branch), and surfacing checkpoint history
-  per chat reply via `agent_messages.commit_sha`.
+  natively in the app. (PR-first sync is settled by ADR 0170: attached
+  repositories are never pushed to outside `work/` branches, with no
+  per-project mode.) Also: a calm sync-status pill in the UI (up to date /
+  syncing / ahead: open a pull request / diverged), and surfacing
+  checkpoint history per chat reply via `agent_messages.commit_sha`.
+  The publishing-to-github skill still publishes through `gh repo create`,
+  which leaves the project unlinked in core; route it through
+  `core.codeHosts.publishProject` (an owned link, ADR 0177) when the desktop
+  gains a publish surface.
 - **Registry git-panel: drafts are now commits-ahead.** ADR 0044 made
   "draft" mean local-commits-not-yet-pushed instead of a dirty tree;
   `git-panel`/`useCommitChanges` in packages/registry still assume the
@@ -47,23 +95,20 @@
   directory, add/modify/delete badges, click-through to the editor diff.
   The data is already persisted per assistant message
   (`metadata.changedFiles`, with `path` + `kind`).
-- **Port chat-timeline enhancements to the registry copy.** The desktop's
-  `chat-timeline.tsx` gained the collapsed per-turn step log (tool calls /
-  commands / file edits with expandable payloads and MCP connector icons),
-  dropped the touched-files chips, and gates the jump-to-previous arrow on
-  scrollability. `packages/registry/src/chat-timeline` is the installable
-  source of truth and still has the old behavior.
-- **ACP harness.** Project agent definitions (ADR 0050) accept
-  `kind: "acp"` today but resolve it to a fail-fast "not built yet"
-  entry. Build the real ACP client harness: a `CodingAgentProvider`
-  speaking the Agent Client Protocol over both transports — a local
-  command (`acp.command`, stdio) and a remote endpoint (`acp.endpoint`).
+- **ACP harness, the rest.** The desktop runs local ACP command agents
+  (`acp.command`, ADR 0241), and a Work server runs them in the chat's
+  sandbox on a model connection (ADR 0255), choosing the definition's model
+  through the agent's model option. Still to build: the remote endpoint
+  transport (`acp.endpoint`), effort through ACP, plans and usage over
+  ACP. A stdio MCP
+  bridge for agents that take no HTTP MCP (Work's tools ride
+  HTTP today, which Hermes accepts without advertising). A warm process
+  per thread instead of one per turn.
   The remote-Catamorphic-server agent story rides the endpoint transport:
   a stock server exposes its agents over ACP and a project definition
   points at it, with `credentials.source: "secret"` carrying the token so
-  no personal consent is involved. Map ACP's session/turn/interrupt
-  semantics onto the provider contract; per-agent home-dir isolation for
-  the command transport.
+  no personal consent is involved. Per-agent home-dir isolation for the
+  command transport (today an agent uses its own home, as Hermes does).
 - **Agent configuration follow-ups (ADR 0056).** v1 cuts to close when
   they start mattering: `read_skill` is not gated by an agent's picked
   skills (the prompt's skills section is the offer; the tool reads any
@@ -88,7 +133,7 @@
   and optional profile sync before implementation. This is intentionally
   deferred from temporary project Watchers.
 - **Agent channel integrations: Slack, code review.** The per-agent
-  schema (capabilities + tool policies + mode) is the substrate; what's
+  schema (capabilities + tool policies + sandboxing) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a
   Claude-Tag-class experience — a project agent wired to a Slack
   connector answers mentions/threads, with the agent's toolPolicies
@@ -97,7 +142,7 @@
   (`slack.mention`) + a workflow that opens an `ask_agent` turn, so it
   rides ADR 0039/0042 rather than new machinery. Code review: an agent
   assigned ONLY to reviews — a `github.pr-opened` trigger (CodeHost
-  seam, ADR 0045) invoking a read-only-mode agent whose persona is the
+  seam, ADR 0045) invoking a contained agent whose persona is the
   review doctrine, posting via the PR-review surface. Both are
   consumers of ADR 0056; neither needs new agent-side schema.
 - **Claude plugin for Catamorphic project connections.** Ship a general
@@ -112,7 +157,7 @@
   agent conversations begun through Claude appear in the project's ordinary
   session history with their source attributed.
 - **TS `defineAgent` layer over project agent JSON.** The committed
-  `.catamorphic/agents/<slug>.json` files are the substrate (ADR 0050); add the
+  `.work/agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by
   `@catamorphic/parser` like `defineSecrets`, compiled/projected into the
   JSON files (generated-projections style, ADR 0041) so the registry,
@@ -157,20 +202,25 @@
   memory reference_t3_code.md; probe pattern in t3's
   apps/server/src/provider/Layers/ClaudeProvider.ts.
 - **Usage page follow-ups (ADR 0057, t3-code-inspired).** Shipped
-  2026-08-21: transcript-scanned usage tab + composer context ring.
+  2026-08-21: transcript-scanned usage tab (the composer context ring
+  shipped beside it was removed 2026-10-21).
   Remaining: (a) an e2e with seeded fixture transcripts (the IPC has no
   seam yet); (b) a Codex rate-limit/quota gauge — the rollouts'
   `token_count` lines already carry `rate_limits.primary.used_percent`
-  and `resets_at`, which the SDK stream never exposes; (c) a Codex
-  context ring — `model_context_window` is also transcript-only, so the
-  meter needs a transcript-side assist; (d) an app-only scope filter by
-  joining transcript session ids to `agent_sessions.provider_session_id`;
-  (e) per-subagent token attribution (Claude `isSidechain` records);
-  (f) surface per-reply cost in the step log from `metadata.usage`.
+  and `resets_at`, which the SDK stream never exposes; (c) an app-only
+  scope filter by joining transcript session ids to
+  `agent_sessions.provider_session_id`; (d) per-subagent token
+  attribution (Claude `isSidechain` records); (e) surface per-reply cost
+  in the step log from `metadata.usage`.
+- **Chat icon waits (ADR 0273).** A chat's icon shows a watch, subagents
+  at work or a background command on its lower corner. Remaining: followed
+  sessions and session timers as waits; `activity` on the Chats list's
+  and subsessions' rows (`sources/chats.ts`), which need a chat's live
+  signals beyond its session fields.
 - **Review-deferred architecture cleanups (2026-08-21 code review).** Three
   confirmed-but-invasive findings deferred from the fix pass: (a) slash
   command listing as an optional provider capability (today: a Claude Code
-  special case across the ipc gate, the SlashEntry shape, and a hardcoded
+  special case across the ipc gate, the SkillEntry shape, and a hardcoded
   badge; Codex has ~/.codex/prompts waiting); (b) per-harness transcript
   usage-sources so the desktop scanner stops owning each CLI's on-disk
   format (usage-transcripts.ts provider switches + hardcoded home
@@ -189,9 +239,7 @@
   vocabulary (parser in pwa+desktop, builders in server+pairing), and
   the CDP e2e client (desktop and pwa harnesses); (d) drive the pwa e2e
   against `buildStockServer` with the fake agent instead of the
-  hand-written `scripts/dev-server.mjs` wire fake; (e) memoize the pwa
-  chat timeline (React.memo rows, useMemo turn steps) - it re-parses
-  every message's tool payloads on each 500ms poll; (f) desktop-side
+  hand-written `scripts/dev-server.mjs` wire fake; (f) desktop-side
   composer lock on a forked session (the PWA locks; the desktop only
   shows the marker row).
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on

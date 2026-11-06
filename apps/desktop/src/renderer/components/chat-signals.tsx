@@ -1,12 +1,33 @@
-import { LoaderCircle, Pencil } from "lucide-react";
+import {
+  Bot,
+  Hourglass,
+  LoaderCircle,
+  type LucideIcon,
+  Pencil,
+  SquareTerminal,
+} from "lucide-react";
 import type { ReactNode } from "react";
+import type { ChatWaiting } from "../../shared/chat.js";
+import type { SidebarActivity } from "../../shared/sidebar.js";
+
+export type { ChatWaiting };
 
 /**
  * The shared indicator vocabulary for chat surfaces. Every place that
- * represents a chat as an icon — bottom-strip bubbles, workspace tabs, the
- * collapsed aggregate bubble — renders the same signals the same way:
+ * represents a chat as an icon — bottom-strip bubbles, workspace tabs,
+ * sidebar rows, chips, the collapsed aggregate bubble — renders the same
+ * signals the same way, on two corners of the icon, so a chat can say what
+ * it is doing and what needs the person at once.
  *
- * - working:       the icon cross-fades to a spinner (the agent is busy)
+ * The lower corner says what it is doing (`activity`, decided by the chat):
+ * - working:       a small spinner (the agent is busy); the icon stays,
+ *                  so the surface keeps its identity
+ * - waiting:       what it waits on, whether its turn does nothing but wait
+ *                  or it rests with something left running: an hourglass for a
+ *                  watch, a bot for subagents, a terminal for a background
+ *                  command
+ *
+ * The upper corner says what needs the person:
  * - awaitingInput: pulsing accent "?" badge (the agent asked and is waiting)
  * - attention:     pulsing accent dot (a workflow asked the user to open it)
  * - unread:        filled accent dot (a reply landed while the surface was
@@ -14,56 +35,133 @@ import type { ReactNode } from "react";
  * - draft:         pencil badge (unsent composer text — also used for
  *                  editor tabs with unsaved changes)
  *
- * One badge shows at a time, most-urgent first: awaitingInput > attention >
- * unread > draft; a blocking question takes precedence over the spinner. `SignalGlyph` renders the
- * icon/spinner stack; `SignalBadge` renders the badge cluster — hosts
- * position it (bubbles pin it to the button corner, tabs to the icon).
+ * One mark shows per corner, most-urgent first: awaitingInput > attention >
+ * unread > draft above; below, a blocking question stops the spinner.
+ * `SignalGlyph` renders the icon with its lower corner;
+ * `SignalBadge` renders the upper corner's badge — hosts position it
+ * (bubbles pin it to the button corner, tabs to the icon).
  */
 export interface ChatSignals {
+  /** A turn runs: its end is the agent finishing. */
   working?: boolean;
   unread?: boolean;
   draft?: boolean;
   awaitingInput?: boolean;
   attention?: boolean;
+  /** The lower corner's mark. */
+  activity?: SidebarActivity | null;
 }
 
+/** What a chat waits on, most telling first. */
+const WAITING_ORDER: readonly ChatWaiting[] = ["watch", "subagent", "command"];
+
+const WAITING_ICONS: Record<ChatWaiting, LucideIcon> = {
+  watch: Hourglass,
+  subagent: Bot,
+  command: SquareTerminal,
+};
+
+/** The most telling of what several chats, or one chat's tasks, wait on. */
+export const firstWaiting = (
+  list: readonly (ChatWaiting | null | undefined)[],
+): ChatWaiting | null =>
+  WAITING_ORDER.find((kind) => list.includes(kind)) ?? null;
+
+/**
+ * The mark on a chat's lower corner: while a turn runs, working, unless a
+ * question holds it or all it does is wait (`waitingNow`); while it rests,
+ * what it left running.
+ */
+export const chatActivity = ({
+  working,
+  awaitingInput,
+  waitingNow,
+  leftRunning,
+}: {
+  working: boolean;
+  awaitingInput: boolean;
+  waitingNow: ChatWaiting | null;
+  leftRunning: ChatWaiting | null;
+}): SidebarActivity | null =>
+  working ? (awaitingInput ? null : (waitingNow ?? "working")) : leftRunning;
+
+/** What the lower corner says, in words (screen readers, hover cards). */
+export const ACTIVITY_LABELS: Record<SidebarActivity, string> = {
+  working: "Working",
+  watch: "Watching",
+  subagent: "Waiting on subagents",
+  command: "Running a command",
+};
+
+/** Several chats as one icon: any at work spins, else the most telling wait. */
 export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
   working: list.some((signals) => signals.working),
   unread: list.some((signals) => signals.unread),
   draft: list.some((signals) => signals.draft),
   awaitingInput: list.some((signals) => signals.awaitingInput),
   attention: list.some((signals) => signals.attention),
+  activity: list.some((signals) => signals.activity === "working")
+    ? "working"
+    : firstWaiting(
+        list.map((signals) =>
+          signals.activity === "working" ? null : signals.activity,
+        ),
+      ),
 });
 
-/** Base icon that cross-fades to a spinner while the agent works. */
+/**
+ * Base icon with what the chat is doing on its lower-right corner: the
+ * working spinner, or the glyph of what it waits on. The icon stays, so a
+ * busy chat, tab or chip still shows which one it is; the mark cuts its
+ * own gap out of the icon so it reads on any background. The upper corner
+ * is `SignalBadge`'s.
+ */
 export function SignalGlyph({
-  working = false,
-  awaitingInput = false,
+  activity = null,
   className = "size-4",
   children,
 }: {
-  working?: boolean;
-  awaitingInput?: boolean;
-  /** Size of the icon box (the icon and spinner share it). */
+  /** The lower corner's mark, if any. */
+  activity?: SidebarActivity | null;
+  /** Size of the icon box. */
   className?: string;
   /** The base icon (lucide icon, favicon img, …), sized to fill the box. */
   children: ReactNode;
 }) {
-  const busy = working && !awaitingInput;
+  const mark = activity;
+  const busy = mark === "working";
+  const visibility = (kind: SidebarActivity) =>
+    mark === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";
+  const transition =
+    "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-standard";
   return (
     <span className={`relative grid shrink-0 place-items-center ${className}`}>
       <span
-        className={`col-start-1 row-start-1 grid size-full place-items-center transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          busy ? "scale-50 opacity-0" : "scale-100 opacity-100"
-        }`}
+        className="signal-cutout grid size-full place-items-center"
+        data-cut={mark ? true : undefined}
       >
         {children}
       </span>
-      <LoaderCircle
-        className={`col-start-1 row-start-1 size-full text-accent transition-[opacity] duration-200 ${
-          busy ? "animate-spin opacity-100" : "opacity-0"
-        }`}
-      />
+      <span
+        className="absolute -bottom-1 -right-1 grid size-3 place-items-center"
+        data-activity={mark ?? undefined}
+        aria-hidden="true"
+      >
+        <LoaderCircle
+          strokeWidth={3}
+          className={`${transition} ${visibility("working")} size-2 text-accent ${busy ? "animate-spin" : ""}`}
+        />
+        {WAITING_ORDER.map((kind) => {
+          const Icon = WAITING_ICONS[kind];
+          return (
+            <Icon
+              key={kind}
+              strokeWidth={2.5}
+              className={`${transition} ${visibility(kind)} size-2.5 text-fg-muted`}
+            />
+          );
+        })}
+      </span>
     </span>
   );
 }
@@ -77,8 +175,8 @@ const BADGE_SIZES = {
 
 /**
  * The badge cluster: at most one badge visible, scale/opacity-transitioned
- * so arrivals and departures animate. Host wraps it in an absolutely
- * positioned span at the corner it wants.
+ * so arrivals and departures animate, shown whether or not the agent works.
+ * Host wraps it in an absolutely positioned span at the corner it wants.
  */
 export function SignalBadge({
   signals,
@@ -90,19 +188,17 @@ export function SignalBadge({
   const spec = BADGE_SIZES[size];
   const active = signals.awaitingInput
     ? "question"
-    : signals.working
-      ? null
-      : signals.attention
-        ? "attention"
-        : signals.unread
-          ? "unread"
-          : signals.draft
-            ? "draft"
-            : null;
+    : signals.attention
+      ? "attention"
+      : signals.unread
+        ? "unread"
+        : signals.draft
+          ? "draft"
+          : null;
   const visibility = (kind: string) =>
     active === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";
   const transition =
-    "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)]";
+    "col-start-1 row-start-1 transition-[opacity,scale] duration-200 ease-standard";
   return (
     <span className="grid place-items-center">
       {/* Agent question waiting: the most urgent signal — it pulses

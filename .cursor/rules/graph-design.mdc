@@ -1,82 +1,52 @@
 ---
-description: Visual design decisions for the workflow graph canvas
-globs: ["packages/ui/**/*.ts", "packages/ui/**/*.tsx", "packages/ui/**/*.css", "packages/parser/src/layout.ts"]
+description: Visual design of the workflow graph canvas - nodes, layout, edges, viewport, and transitions
+globs: packages/ui/src/canvas.tsx,packages/ui/src/nodes/**,packages/ui/src/use-graph-transition.ts,packages/ui/src/styles.css,packages/parser/src/layout.ts,packages/react/src/hooks/use-workflow-graph.ts
 alwaysApply: false
 ---
 
-# Workflow Graph — Visual Design
+# Workflow Graph: Visual Design
 
-## Target Audience
+The canvas (`WorkflowCanvas` in `packages/ui/src/canvas.tsx`) is read by **non-technical users**. It shows what a workflow does; the host's inspector shows how (ADR 0097).
 
-The canvas is viewed by **non-technical users**. No code artifacts (function names, return expressions, raw types) should appear on rendered nodes. All technical detail lives in the detail panel.
+## Nodes
 
-## Node Rendering
-
-- **All non-container nodes** have a fixed width of 240px (`width: 240px; box-sizing: border-box` in CSS). This ensures straight edges and consistent handle alignment.
-- **Canvas nodes show only**: icon + label. Nothing else.
-  - Step nodes: no function name subtitle.
-  - Trigger nodes: no description, no parameter badges.
-  - Return nodes: no return expression payload.
-- Descriptions, parameters, arguments, and provenance are shown **only in the detail panel**.
+- A node shows its icon and a human label. Never render code on a node: no function names, return expressions, raw types, or arguments.
+- Allowed extras, all plain language: the Start (`input`) node's trigger badges, the batch source and sink descriptions, a batch step's "Batch · N items" line, and a branch's condition through `prettyCondition` (`===` reads "is", `&&` reads "and").
+- Style with host theme tokens (`var(--color-*)` with a fallback), never a hard-coded palette in a component. Surfaces are neutral; the accent is reserved for selection (ADR 0157). The minimap themes nodes through CSS classes, not fill colors.
+- Handles stay in the DOM for edge routing but are invisible.
 
 ## Layout
 
-- **Vertical (top-to-bottom)** layout — allows natural scrolling. Not horizontal.
-- **Dagre** positions root-level nodes; custom recursive logic positions children inside containers.
-- **Spine alignment**: After Dagre layout, a post-processing pass center-aligns nodes in linear sequences (1-to-1 chains) so edges between them are perfectly straight.
-- **`estimateNodeHeight`** should match actual rendered height. Since nodes only show icon + label, height is `BASE_HEIGHT` for all non-container nodes.
+`layoutGraph` in `packages/parser/src/layout.ts` positions everything, top to bottom. Dagre places root nodes; recursive logic sizes and places container children; a spine pass straightens 1-to-1 chains.
 
-## Layout Constants (packages/parser/src/layout.ts)
-
-When adjusting spacing, change these constants — don't hardcode numbers elsewhere:
-
-- `NODE_WIDTH = 240` — fixed non-container node width
-- `BASE_HEIGHT = 44` — non-container node height
-- `RANK_SEP = 48` — vertical gap between root-level nodes
-- `NODE_SEP = 36` — horizontal gap between sibling root nodes
-- `BRANCH_GAP = 28` — gap between branches in if-block / parallel-block
-- `GROUP_PAD_X = 24` — horizontal padding inside containers
-- `GROUP_PAD_TOP = 40` — top padding inside containers (below header)
-- `GROUP_PAD_BOTTOM = 24` — bottom padding inside containers
-- `CHILD_GAP = 36` — vertical gap between children inside containers
+- Change spacing only through the constants at the top of `layout.ts` (`NODE_WIDTH`, `BASE_HEIGHT`, `RANK_SEP`, `BRANCH_GAP`, `GROUP_PAD_*`, `BOUNDARY_PAD_TOP`, `CHILD_GAP`, `COLLAPSED_CONTAINER_*`, and the trigger-row sizes).
+- `estimateNodeHeight` must match the rendered height, including the Start node's wrapped trigger rows and 56px described nodes. Update both together.
+- Leaf nodes are a fixed 240px wide (`.catamorphic-node`), so edges between chained nodes stay straight.
 
 ## Edges
 
-- All edges are **animated and dashed** (`strokeDasharray: "6 3"`, `animated: true`).
-- Edges should **curve smoothly** — no sharp right-angle bends. Use React Flow's default edge type.
-- Edges between consecutive nodes in a linear sequence must be **perfectly straight** (achieved by spine alignment + fixed node width).
-- **Edge colors**: branch-true `#22c55e`, branch-false `#ef4444`, parallel `#3b82f6`, default `#737373`.
+- Edges are solid, still, React Flow `default` curves in the border token. Only decision outcomes are tinted: `branch-true` with the success token, `branch-false` with the danger token (`use-workflow-graph.ts`).
+- `.react-flow__edge-interaction` has `pointer-events: none`, so dragging over an edge pans.
 
-## Handles
+## Read-only canvas
 
-- React Flow handle dots are **hidden** via CSS (opacity: 0 or display: none). The handles must still exist in the DOM for edge routing, but should be invisible.
+- Users never drag, connect, or delete: keep `nodesDraggable={false}`, `nodesConnectable={false}`, `deleteKeyCode={null}`, per-node `draggable/connectable/deletable: false`, and filter `position` changes in `onNodesChange`.
+- Clicking a node sets `selectedNodeIdAtom`; clicking the pane clears it. The canvas only selects. Hosts derive their inspector from the selection.
 
-## Canvas Behavior
+## Viewport
 
-- The graph is **read-only**: `nodesDraggable={false}`, `nodesConnectable={false}`, `deleteKeyCode={null}`. Also set `draggable: false`, `connectable: false`, `deletable: false` on each node object, and filter `position` changes from `onNodesChange`.
-- **Translate extent**: An invisible boundary keeps at least one node always in view — prevents panning into empty space. Computed dynamically from node bounding box with generous padding.
-- **Fit view** is enabled on load only. Never remount the canvas or reset its viewport when an inspector opens or source changes.
-- **Graph changes** reconcile positions, dimensions, and visibility for 220ms with `cubic-bezier(0.2, 0, 0, 1)`. Edges follow interpolated nodes. Removed nodes exit before removal; reduced motion settles immediately. Presentation matching never changes parser ids.
-- **Parse status** is exposed through `graphParseStateAtom`. Retain the last valid graph on failure and tell the user that it is stale. Superseded parse responses are ignored.
+- Fit once, after the canvas first has a visible size. Never refit, remount, or reset the viewport on edits, re-parses, or an inspector opening.
+- After that, `KeepInView` pans (never zooms) to keep the selection and newly added nodes on screen, and refits only when a resize leaves nothing visible. A viewport the user deliberately emptied is left alone.
+- `translateExtent` keeps the graph reachable with generous padding around the root bounding box.
 
-## Container Nodes (Group Nodes)
+## Graph changes
 
-Containers have explicit `width`/`height` via `style` prop. Non-container nodes do NOT get explicit width/height (React Flow measures them from DOM).
+- Parse status lives in `graphParseStateAtom`. On failure, keep the last valid graph and say it is stale. Ignore superseded parse responses.
+- Node identity across edits comes from each node's own data (`matchWorkflowNodes`), which also carries selection and collapsed state forward. Parser ids are never rewritten.
+- `useGraphTransition` animates position, size, and opacity for 220ms with `cubic-bezier(0.2, 0, 0, 1)`. Departures exit first, arrivals fade in after, edges follow their nodes, and reduced motion settles immediately.
 
-- **Nesting depth** affects border opacity: `0.3 + depth * 0.12` (capped at depth 3).
-- Boundaries are dedicated nameless gray dashed containers, not lexical
-  `scope-block` nodes. They use reduced top padding because they have no header.
-- Batch scopes are dedicated containers whose source, per-item processing, and
-  optional sink remain visually grouped. They are not a separate Workflow
-  category.
-- Pause nodes use amber and child-workflow calls use indigo. Their canvas labels
-  remain human-readable; timeout, state, target, and input live in Details.
-- Boundaries, batch scopes, and child-Workflow scopes are expanded by default and have
-  an in-canvas disclosure control. Collapsing is animated view state and never
-  rewrites workflow source.
+## Containers
 
-## Minimap
-
-Color-coded by node type:
-- trigger: `#ca8a04`, step: `#2563eb`, branch: `#a855f7`, loop-block: `#f97316`, parallel-block: `#06b6d4`, scope-block: `#94a3b8`, delay: `#737373`, return: `#22c55e`, if-block: `transparent`.
-- durable-boundary: `#94a3b8`, pause: `#d97706`, call-workflow: `#6366f1`.
+- Every node, container or leaf, gets its width and height from layout through `style`. Nesting depth (`data-depth`, capped at 3) strengthens the dashed outline.
+- A boundary is a nameless dashed container with reduced top padding, unless JSDoc gives it a name. A batch groups its source, per-item processing, and optional sink.
+- Boundaries, batches, and child-workflow calls start expanded and carry a `ContainerToggle`. Collapsing is view state in `collapsedNodeIdsAtom`; it never rewrites source.

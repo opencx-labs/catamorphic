@@ -13,6 +13,18 @@ const HEADERS = {
 
 const apps: ReturnType<typeof createTestApp>[] = [];
 
+/** The member's working loop (ADR 0166), served to every project member. */
+const PROGRAM_TOOLS = [
+  "project_overview",
+  "program_files",
+  "program_write",
+  "program_check",
+  "program_deploy",
+  "workflow_run",
+  "workflow_runs",
+  "run_details",
+];
+
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
@@ -97,10 +109,11 @@ async function rpc(
   app: ReturnType<typeof createTestApp>,
   method: string,
   params?: Record<string, unknown>,
+  url = MCP_URL,
 ) {
   const response = await app.inject({
     method: "POST",
-    url: MCP_URL,
+    url,
     headers: HEADERS,
     payload: { jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) },
   });
@@ -169,12 +182,13 @@ describe("project workflow-tools MCP endpoint", () => {
 
   it("serves without tool kinds: no workflow tools, no poll tool, the surface only", async () => {
     // A host with no tool kinds still has a project surface (ADR 0055);
-    // this stub has none of documents/skills/agents either, so: nothing.
+    // this stub has none of documents/skills/agents, so: the working loop.
     const core = { ...fakeCore(), mcpToolKinds: [] };
     const app = createTestApp({ core: core as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/list");
-    expect(result?.tools).toEqual([]);
+    const tools = (result?.tools ?? []) as Array<{ name: string }>;
+    expect(tools.map((tool) => tool.name)).toEqual(PROGRAM_TOOLS);
   });
 
   it("serves one tool per binding plus the poll tool", async () => {
@@ -187,6 +201,7 @@ describe("project workflow-tools MCP endpoint", () => {
       "lookupWeather",
       "daily_digest",
       "catamorphic_poll_run",
+      ...PROGRAM_TOOLS,
     ]);
 
     const weather = tools.find(
@@ -408,7 +423,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
             name: "writing-briefs",
             title: "Writing briefs",
             description: "How we brief",
-            path: ".catamorphic/skills/writing-briefs/SKILL.md",
+            path: ".work/skills/writing-briefs/SKILL.md",
             source: "project",
           },
         ]),
@@ -426,7 +441,10 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       agentSessions: {
         create: record("sessions.create", { id: "session-1" }),
         sendMessage: record("sessions.sendMessage", {
-          content: "Here is your brief.",
+          reply: { kind: "assistant_message", text: "Here is your brief." },
+        }),
+        setMetadata: record("sessions.setMetadata", {
+          pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
         }),
       },
       ...overrides,
@@ -459,6 +477,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "list_publications",
       "ask_agent",
       "send_agent_message",
+      ...PROGRAM_TOOLS,
     ]);
     expect(tools.find((t) => t.name === "documents_read")?.annotations).toEqual(
       { readOnlyHint: true },
@@ -559,17 +578,129 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     });
   });
 
-  it("offers GitHub watcher lifecycle tools when the host configured them", async () => {
+  it("reads and sets a key of the calling session's metadata, and of no other (ADR 0226)", async () => {
+    const { core, calls } = surfaceCore();
+    Object.assign(core.agentSessions, {
+      metadata: async (args: unknown) => {
+        calls.push({ op: "sessions.metadata", args });
+        return { note: "kept" };
+      },
+    });
+    // A session's connection also serves its discovery pair.
+    Object.assign(core, {
+      agentCapabilities: {
+        forSession: () => ({
+          discover: async () => ({ items: [] }),
+          invoke: async () => null,
+        }),
+      },
+    });
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    // A connection with no session has nothing to set.
+    const listed = await rpc(app, "tools/list");
+    const names = (listed.result?.tools ?? []) as Array<{ name: string }>;
+    expect(names.map((tool) => tool.name)).toContain("send_agent_message");
+    expect(names.map((tool) => tool.name)).not.toContain(
+      "set_session_metadata",
+    );
+    const sessionUrl = `${MCP_URL}?sessionId=session-1`;
+    const tools = await rpc(app, "tools/list", undefined, sessionUrl);
+    const tool = (
+      (tools.result?.tools ?? []) as Array<{
+        name: string;
+        inputSchema: { properties: Record<string, unknown> };
+      }>
+    ).find((entry) => entry.name === "set_session_metadata");
+    expect(tool).toBeDefined();
+    // Bound to the calling session: no session to name.
+    expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual([
+      "key",
+      "remove",
+      "value",
+    ]);
+    const set = await rpc(
+      app,
+      "tools/call",
+      {
+        name: "set_session_metadata",
+        arguments: {
+          sessionId: "someone-elses",
+          key: "pull_requests",
+          value: [{ url: "https://github.com/acme/web/pull/3" }],
+        },
+      },
+      sessionUrl,
+    );
+    expect(set.result?.structuredContent).toEqual({
+      metadata: {
+        pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
+      },
+    });
+    expect(calls.at(-1)).toMatchObject({
+      op: "sessions.setMetadata",
+      args: {
+        sessionId: "session-1",
+        projectId: PROJECT_ID,
+        values: {
+          pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
+        },
+        identity: { externalUserId: "user-1" },
+      },
+    });
+    // Without a value it reads, changing nothing.
+    const read = await rpc(
+      app,
+      "tools/call",
+      { name: "set_session_metadata", arguments: { key: "pull_requests" } },
+      sessionUrl,
+    );
+    expect(read.result?.structuredContent).toEqual({
+      metadata: { note: "kept" },
+    });
+    expect(calls.at(-1)).toMatchObject({
+      op: "sessions.metadata",
+      args: { sessionId: "session-1", projectId: PROJECT_ID },
+    });
+    // Removing is said with remove: true; a null value is refused, never
+    // taken as a removal (a model filling unused parameters meant to read).
+    await rpc(
+      app,
+      "tools/call",
+      {
+        name: "set_session_metadata",
+        arguments: { key: "pull_requests", remove: true },
+      },
+      sessionUrl,
+    );
+    expect(calls.at(-1)).toMatchObject({
+      op: "sessions.setMetadata",
+      args: { sessionId: "session-1", values: { pull_requests: null } },
+    });
+    for (const refused of [
+      { key: "Pull Requests", value: 1 },
+      { key: "pull_requests", value: null },
+    ]) {
+      const result = await rpc(
+        app,
+        "tools/call",
+        { name: "set_session_metadata", arguments: refused },
+        sessionUrl,
+      );
+      expect(result.result?.isError).toBe(true);
+    }
+    expect(
+      calls.filter((call) => call.op === "sessions.setMetadata"),
+    ).toHaveLength(2);
+  });
+
+  it("offers watcher tools that start a host's polled event sources (ADR 0177)", async () => {
     const { core, calls } = surfaceCore();
     Object.assign(core, {
-      github: {},
+      projectEventSources: [{ kind: "github", poll: async () => ({}) }],
       watchers: {
         create: async (args: unknown) => {
           calls.push({ op: "watchers.create", args });
-          return { id: "watcher-1", status: "active" };
-        },
-        createGithub: async (args: unknown) => {
-          calls.push({ op: "watchers.createGithub", args });
           return { id: "watcher-1", status: "active" };
         },
         list: async () => [],
@@ -579,46 +710,44 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     const app = createTestApp({ core: core as never });
     apps.push(app);
     const listed = await rpc(app, "tools/list");
-    const listedTools = listed.result?.tools ?? [];
-    const names = (listedTools as Array<{ name: string }>).map(
-      (tool) => tool.name,
-    );
+    const listedTools = (listed.result?.tools ?? []) as Array<{
+      name: string;
+      inputSchema?: { properties?: Record<string, { enum?: string[] }> };
+    }>;
+    const names = listedTools.map((tool) => tool.name);
     expect(names).toEqual(
       expect.arrayContaining([
         "create_watcher",
-        "create_github_watcher",
         "list_watchers",
         "stop_watcher",
       ]),
     );
-    const createGithubTool = (
-      listedTools as Array<{
-        name: string;
-        inputSchema?: { properties?: Record<string, unknown> };
-      }>
-    ).find((tool) => tool.name === "create_github_watcher");
-    expect(createGithubTool?.inputSchema?.properties).not.toHaveProperty(
-      "eventKinds",
-    );
+    expect(names).not.toContain("create_github_watcher");
+    const create = listedTools.find((tool) => tool.name === "create_watcher");
+    expect(create?.inputSchema?.properties?.eventSource?.enum).toEqual([
+      "github",
+    ]);
 
     await rpc(app, "tools/call", {
-      name: "create_github_watcher",
+      name: "create_watcher",
       arguments: {
         sessionId: "session-1",
         workflowName: "watchPullRequest",
         source:
           'export const watchPullRequest = defineWorkflow(() => ({ triggers: [trigger("github.pull_request")], steps: [] }))',
+        eventSource: "github",
+        pollIntervalSeconds: 30,
       },
     });
     expect(calls.at(-1)).toMatchObject({
-      op: "watchers.createGithub",
+      op: "watchers.create",
       args: expect.objectContaining({
         projectId: PROJECT_ID,
         sessionId: "session-1",
         workflowName: "watchPullRequest",
+        eventSource: { kind: "github", pollIntervalSeconds: 30 },
       }),
     });
-    expect(calls.at(-1)?.args).not.toHaveProperty("eventKinds");
   });
 
   it("scoped callers see only their workflows on the roster", async () => {

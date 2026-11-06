@@ -155,7 +155,8 @@ export interface ToolPermissionRequest {
 
 export type ToolPermissionDecision =
   | { decision: "allow"; remember?: "always" }
-  | { decision: "deny" };
+  /** `reason` tells the agent why, when a person did not simply decline. */
+  | { decision: "deny"; reason?: string };
 
 export type ToolPermissionHandler = (
   request: ToolPermissionRequest,
@@ -260,7 +261,9 @@ export class ToolGate {
     if (answer.decision !== "allow") {
       return {
         allowed: false,
-        message: `The user declined to let you use "${call.tool}" on ${call.server} for this call.`,
+        message:
+          answer.reason ??
+          `The user declined to let you use "${call.tool}" on ${call.server} for this call.`,
       };
     }
     if (answer.remember === "always") this.remembered.add(key);

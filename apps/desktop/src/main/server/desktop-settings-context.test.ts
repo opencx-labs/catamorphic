@@ -20,12 +20,13 @@ function fixture() {
     projects: `${root}/projects`,
     remotes: `${root}/remotes`,
     appBundles: `${root}/apps`,
-    githubFile: `${root}/github.json`,
     profilesFile: `${root}/profiles.json`,
     profilesDir: `${root}/profiles`,
     agentHomesDir: `${root}/agents`,
     harnessComponentsDir: `${root}/harness`,
     hostSkillsDir: `${root}/skills`,
+    attachmentsDir: `${root}/attachments`,
+    bookmarksFile: `${root}/bookmarks.json`,
   };
   const profiles = new ProfilesStore(paths.profilesFile);
   const one = profiles.create("One"),
@@ -50,7 +51,7 @@ it("identifies the owning profile and primary project paths, with live file erro
   const context = desktopSettingsContext(input);
   expect(context.files?.preferences).toEqual({
     profile: `${root}/profiles/${one.id}/prefs.json`,
-    project: `${project.rootPath}/.catamorphic/settings.json`,
+    project: `${project.rootPath}/.work/settings.json`,
     personal: `${root}/profiles/${one.id}/settings-projects/${project.id}.json`,
   });
   expect(context.files?.theme).toEqual({
@@ -58,10 +59,25 @@ it("identifies the owning profile and primary project paths, with live file erro
     project: context.files?.preferences.project,
     personal: context.files?.preferences.personal,
   });
+  expect(context.files?.workspace).toEqual({
+    profile: `${root}/profiles/${one.id}/workspace.js`,
+    personal: `${root}/profiles/${one.id}/workspace-projects/${project.id}.js`,
+    project: `${project.rootPath}/.work/workspace.js`,
+  });
   fs.writeFileSync(config.forProfile(one.id).theme.file, "broken");
   expect(desktopSettingsContext(input).errors?.[0]).toContain("theme.json");
   expect(JSON.stringify(context)).not.toContain(two.id);
   expect(DESKTOP_SETTINGS_SKILL).not.toContain("update_desktop_setting");
+  // Agents read what a setting does and what each value is called, not
+  // just its key and values.
+  expect(DESKTOP_SETTINGS_SKILL).toContain(
+    "| chatWorkLive | While the agent works: Notes are what the agent writes",
+  );
+  expect(DESKTOP_SETTINGS_SKILL).toContain('"notes" (Notes only)');
+  // A person's agent can hide the window buttons, and knows where it can.
+  expect(DESKTOP_SETTINGS_SKILL).toMatch(
+    /\| windowButtons \| Window buttons: .* Only on macOS; elsewhere it changes nothing\. \| boolean \| profile \| true \|/,
+  );
 });
 it("distinguishes restricted native access from an unavailable host filesystem", () => {
   const { config, one } = fixture();
@@ -79,4 +95,44 @@ it("distinguishes restricted native access from an unavailable host filesystem",
   });
   expect(unavailable).not.toHaveProperty("files");
   expect(unavailable.note).toContain("sandbox");
+});
+
+it("points shared parts at the other profile's files and names it", () => {
+  const { root, config, one, two } = fixture();
+  const project = { id: "project-two", rootPath: `${root}/primary-project` };
+  config.syncSettings({
+    profileId: two.id,
+    from: one.id,
+    parts: ["appearance", "workspace"],
+    keepInSync: true,
+  });
+  const context = desktopSettingsContext({
+    config,
+    profileId: two.id,
+    project,
+    access: "native",
+  });
+  expect(context.sharedSettings).toEqual({
+    appearance: ["One"],
+    workspace: ["One"],
+  });
+  expect(context.files?.theme.profile).toBe(
+    `${root}/profiles/${one.id}/theme.json`,
+  );
+  // The shared profile layer, but this profile's own per-project override.
+  expect(context.files?.workspace).toEqual({
+    profile: `${root}/profiles/${one.id}/workspace.js`,
+    personal: `${root}/profiles/${two.id}/workspace-projects/${project.id}.js`,
+    project: `${project.rootPath}/.work/workspace.js`,
+  });
+  expect(context.files?.preferences.profile).toBe(
+    `${root}/profiles/${two.id}/prefs.json`,
+  );
+  expect(context.files?.preferences.synced).toEqual([
+    {
+      file: `${root}/profiles/${one.id}/prefs.json`,
+      keys: expect.arrayContaining(["codeTheme", "tabPlacement"]),
+    },
+  ]);
+  expect(DESKTOP_SETTINGS_SKILL).toContain("sharedSettings");
 });

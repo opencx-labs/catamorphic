@@ -173,7 +173,8 @@ export function siteHost(origin: string): string {
 /**
  * Which site permission an Electron permission request is about. `media`
  * covers camera and microphone at once, so one request can map to two
- * kinds; unknown permissions map to none (and are denied).
+ * kinds; a screen, window or tab share is `display-capture`. Unknown
+ * permissions map to none (and are denied).
  */
 export function permissionKindsFor(
   permission: string,
@@ -187,9 +188,7 @@ export function permissionKindsFor(
       const types = details?.mediaTypes ?? [];
       if (types.includes("audio")) kinds.push("microphone");
       if (types.includes("video")) kinds.push("camera");
-      // getDisplayMedia arrives as a media request with no declared
-      // types; the picker is its prompt, so it is the screen-share kind.
-      return kinds.length > 0 ? kinds : ["screenShare"];
+      return kinds;
     }
     case "mediaKeySystem":
       // DRM playback (Widevine). No user-facing switch, always fine.
@@ -253,8 +252,17 @@ export function decideSitePermission(
 }
 
 /** "use your microphone and camera" */
-export function describeRequest(kinds: readonly SitePermissionKind[]): string {
-  const parts = kinds.map((kind) => SITE_PERMISSIONS[kind].ask);
+export function describeRequest(
+  kinds: readonly SitePermissionKind[],
+  context: { externalApp?: SitePermissionRequest["externalApp"] } = {},
+): string {
+  // Opening another app names it: "open Slack", or its scheme's links.
+  const app = context.externalApp;
+  const parts = kinds.map((kind) =>
+    kind === "externalApps" && app
+      ? `open ${app.name ?? `${app.scheme}: links`}`
+      : SITE_PERMISSIONS[kind].ask,
+  );
   if (parts.length <= 1) return parts[0] ?? "";
   // Camera + microphone share a verb: "use your microphone and camera".
   if (
@@ -281,6 +289,24 @@ export interface SiteSummary {
 /** OS-level access the app itself has, where the OS gates it (macOS). */
 export type SystemMediaAccess = "granted" | "denied" | "not-determined" | null;
 
+/** The kinds the OS gates per app on top of the site's choice. */
+export type MediaDeviceKind = Extract<
+  SitePermissionKind,
+  "camera" | "microphone"
+>;
+
+/**
+ * A site was allowed a device, but the OS refused it to the app, so the
+ * page's request failed anyway. The window explains instead of leaving
+ * the person to guess why the site ignored their Allow.
+ */
+export interface SiteSystemRefusal {
+  origin: string;
+  /** The requesting guest's webContents id (the tab it belongs to). */
+  guestId: number;
+  kinds: MediaDeviceKind[];
+}
+
 export interface SiteDetails extends SiteSummary {
   system: { camera: SystemMediaAccess; microphone: SystemMediaAccess };
 }
@@ -291,6 +317,8 @@ export interface SitePermissionRequest {
   guestId: number;
   origin: string;
   kinds: SitePermissionKind[];
+  /** For a request to open another app: which one, named for the prompt. */
+  externalApp?: { scheme: string; name?: string };
 }
 
 export const sitePermissionAnswerSchema = z.object({

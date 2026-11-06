@@ -6,9 +6,9 @@ import {
   CheckoutRemoteBackend,
   FsBackend,
   FsRemoteBackend,
-  PROJECT_MANIFEST_PATH,
   ProjectManager,
 } from "@catamorphic/git";
+import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { projectAdmin } from "./project-admin.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -62,12 +63,9 @@ describe("project Environment policy persistence", () => {
     ).list({ identity, projectId: project.id });
 
     expect(policy).toMatchObject({
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       environments: {
-        local: {
-          binding: "local",
-          workloads: ["agent", "workflow"],
-        },
+        default: { workloads: ["agent", "workflow"] },
       },
     });
     expect(policy.invalid).toBeUndefined();
@@ -99,11 +97,11 @@ describe("project Environment policy persistence", () => {
     const service = new ProjectEnvironmentsService(db, manager);
     const scoped: Identity = {
       ...identity,
-      scope: [{ kind: "project", projectId: project.id }],
+      ...projectAdmin(project.id),
     };
     const manifest = (name: string) =>
       JSON.stringify({
-        environments: { [name]: { binding: "local", workloads: ["agent"] } },
+        environments: { [name]: { workloads: ["agent"] } },
         defaultEnvironment: name,
       });
     try {
@@ -115,8 +113,8 @@ describe("project Environment policy persistence", () => {
       expect(
         (await service.list({ identity: scoped, projectId: project.id }))
           .defaultEnvironment,
-      ).toBe("local");
-      expect(await fs.readdir(root)).toEqual([".catamorphic"]);
+      ).toBe("default");
+      expect(await fs.readdir(root)).toEqual([".work"]);
       const sha = await repo.commit("Publish policy", {
         name: "Test",
         email: "test@example.com",

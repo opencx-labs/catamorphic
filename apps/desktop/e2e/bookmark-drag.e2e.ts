@@ -2,10 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
   launchApp,
+  NEW_TAB_INPUT,
   openProjectSwitcher,
   setReactValueJs,
   workspaceDomHelpersJs,
 } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 let app: AppHandle;
 let folderId: string;
@@ -50,7 +52,7 @@ beforeAll(async () => {
   );
   await wait("!$('[data-testid=project-submit]').disabled");
   await run("$('[data-testid=project-submit]').click()");
-  await wait("!!$('textarea[placeholder*=\"Search or ask\"]')");
+  await wait(`!!$(${JSON.stringify(NEW_TAB_INPUT)})`);
   await wait(
     "$('[aria-label=\"Switch project\"]')?.textContent.includes('Pinning workspace')",
   );
@@ -61,6 +63,8 @@ beforeAll(async () => {
   folderId = await app.eval(
     "(async()=>{const api=window.catamorphicDesktop;await api.setPrefs({tabPlacement:'sidebar',headerPlacement:'sidebar'});window.__bookmarkScope={profileId:await api.windowProfile(),projectId:(await api.getPrefs()).lastProjectId};return (await api.bookmarksAddFolder({...window.__bookmarkScope,label:'Research'})).id})()",
   );
+  // Chats as a list, so a chat row can be dragged as well as a tab row.
+  await addSidebarSections(app, [CHATS_SECTION]);
 });
 afterAll(async () => {
   await app?.stop();
@@ -69,7 +73,7 @@ afterAll(async () => {
 describe("drag tabs and chats into bookmarks", () => {
   it("pins the dragged browser page into a folder", async () => {
     await run(
-      "const input=$('textarea[placeholder*=\"Search or ask\"]');input.focus();setReactValue(input,'https://example.test/reference')",
+      `const input=$(${JSON.stringify(NEW_TAB_INPUT)});input.focus();setReactValue(input,'https://example.test/reference')`,
     );
     await wait(
       "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && document.activeElement.closest('[role=dialog]').querySelector('[data-item-id=web]')?.getAttribute('aria-selected')==='true'",
@@ -92,7 +96,9 @@ describe("drag tabs and chats into bookmarks", () => {
     ).toBe(true);
   });
   it("pins a saved chat and reopens the same conversation after its tab closes", async () => {
-    await run("$('button[aria-label=\"New chat\"]').click()");
+    await run(
+      "$('[data-sidebar-section=chats] button[aria-label=\"New chat\"]').click()",
+    );
     await wait("!!$('[data-composer-input]')");
     await run(
       "setReactValue($('[data-composer-input]'),'remember this pinned conversation');$('[data-composer-input]').focus()",
@@ -102,15 +108,24 @@ describe("drag tabs and chats into bookmarks", () => {
     const sessionId = await run<string>(
       "return $('aside [data-session-id]').dataset.sessionId",
     );
-    await drop("aside [data-session-id]", '[data-drop-zone="pinned"]');
-    await wait(
+    // An empty Pinned section stays hidden through a drag (a drag never adds
+    // space to the sidebar): the first pin is a bookmark's "Pin across
+    // projects".
+    await drop("aside [data-session-id]", `[data-tree-id="${folderId}"]`);
+    await app.waitFor(
+      "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.some(b=>b.url.startsWith('catamorphic://chat')))",
+    );
+    await app.eval(
+      "(async()=>{const d=await window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope);const b=d.project.bookmarks.find(b=>b.url.startsWith('catamorphic://chat'));await window.catamorphicDesktop.bookmarksPin({...window.__bookmarkScope,id:b.id})})()",
+    );
+    await app.waitFor(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===1)",
     );
     const pinned = (await bookmarks()).pinned.bookmarks[0];
     if (!pinned) throw new Error("The chat was not pinned");
     expect(new URL(pinned.url).searchParams.get("session")).toBe(sessionId);
     await app.eval(
-      `window.catamorphicDesktop.bookmarksRename({...window.__bookmarkScope,id:${JSON.stringify(pinned.id)},label:'Saved conversation'})`,
+      `window.catamorphicDesktop.bookmarksUpdate({...window.__bookmarkScope,scope:'pinned',id:${JSON.stringify(pinned.id)},label:'Saved conversation'})`,
     );
     await wait(
       "!!$('[data-drop-zone=pinned] button[aria-label=\"Saved conversation\"]') || [...$$('[data-drop-zone=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",
@@ -158,6 +173,60 @@ describe("drag tabs and chats into bookmarks", () => {
     await drop(`[data-tree-id="${ids[1]}"]`, `[data-tree-id="${folderId}"]`);
     await wait(
       `window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.find(b=>b.label==='Two')?.folderId===${JSON.stringify(folderId)})`,
+    );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+  it("nests a tab dropped on a chat under it, and takes it out again", async () => {
+    const page = '[data-tree-id^="browser:"]';
+    const chat = '[data-tree-id^="chat:"]';
+    await app.waitFor(
+      `!!document.querySelector('${page}[aria-level="1"]') && !!document.querySelector('${chat}')`,
+    );
+    // The middle of a chat with nothing under it yet is "inside".
+    await drop(page, chat);
+    await app.waitFor(
+      `!!document.querySelector('${page}[aria-level="2"]') && document.querySelector('${chat}').getAttribute('aria-expanded')==='true'`,
+    );
+    // The top edge of the chat's row puts it back among the top tabs.
+    await drop(page, chat, "top");
+    await app.waitFor(`!!document.querySelector('${page}[aria-level="1"]')`);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+  it("nests a tab dropped on a chat's tab in the top strip, and takes it out at the strip's end", async () => {
+    await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
+    const strip = '[data-tab-orientation="horizontal"]';
+    const page = `${strip} [data-point-key^="browser:"]`;
+    const chat = `${strip} [data-point-key^="chat:"]`;
+    await app.waitFor(
+      `!!document.querySelector('${page}') && !!document.querySelector('${chat}')`,
+    );
+    /**
+     * Drag the page tab and drop it on `target`, `x` of the way across, once
+     * the strip knows a tab is being dragged.
+     */
+    const dragPage = async (target: string, x: number) => {
+      await app.eval(
+        `(()=>{window.__stripDrag=new DataTransfer();document.querySelector('${page}').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__stripDrag}))})()`,
+      );
+      await app.waitFor(
+        `document.querySelector('${strip}').hasAttribute('data-tab-dragging')`,
+      );
+      await app.eval(
+        `(()=>{const target=document.querySelector('${target}');const r=target.getBoundingClientRect();const init={bubbles:true,cancelable:true,dataTransfer:window.__stripDrag,clientX:r.left+r.width*${x},clientY:r.top+r.height/2};for(const type of ['dragover','drop'])target.dispatchEvent(new DragEvent(type,init));document.querySelector('${page}').dispatchEvent(new DragEvent('dragend',{bubbles:true}));delete window.__stripDrag})()`,
+      );
+    };
+    // Past a chat tab's leading edge is inside it: the page joins its group.
+    await app.waitFor(
+      `!document.querySelector('${page} [data-tab-group-eyebrow]')`,
+    );
+    await dragPage(chat, 0.7);
+    await app.waitFor(
+      `!!document.querySelector('${page} [data-tab-group-eyebrow]') && !!document.querySelector('${chat} [data-tab-group-eyebrow]')`,
+    );
+    // The strip's end is among the top tabs: it leaves the chat.
+    await dragPage(strip, 0.99);
+    await app.waitFor(
+      `!document.querySelector('${page} [data-tab-group-eyebrow]')`,
     );
     expect(app.getRendererErrors()).toEqual([]);
   });

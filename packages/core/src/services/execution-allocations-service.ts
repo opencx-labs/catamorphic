@@ -2,12 +2,18 @@ import type { DB } from "@catamorphic/db";
 import type {
   EnvironmentBinding,
   EnvironmentRequirements,
+  SandboxEgress,
+  SandboxImage,
   WorkloadKind,
 } from "@catamorphic/sandbox";
+import { VOLUME_KEY_PATTERN, VOLUME_NAME_PATTERN } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import type { ResolvedConnectionBinding } from "./connection-types.js";
+import {
+  CONNECTION_ALIAS_PATTERN,
+  type ResolvedConnectionBinding,
+} from "./connection-types.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
@@ -17,6 +23,14 @@ import {
   WorkerResourceDefaultsSchema,
   workerUsage,
 } from "./worker-capacity.js";
+
+const EgressSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("open") }),
+  z.object({
+    mode: z.literal("allowlist"),
+    allow: z.array(z.string()),
+  }),
+]);
 
 const AllocationPolicySchema = z.object({
   binding: z.object({
@@ -34,6 +48,7 @@ const AllocationPolicySchema = z.object({
       .array(z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]))
       .optional(),
     resources: z.record(z.string(), z.union([z.number(), z.boolean()])),
+    labels: z.record(z.string(), z.string()).optional(),
   }),
   requirements: z.object({
     workload: z.enum(["agent", "workflow"]),
@@ -50,23 +65,94 @@ const AllocationPolicySchema = z.object({
   connections: z
     .array(
       z.object({
-        bindingId: z.string().uuid(),
         connectionId: z.string().uuid(),
-        alias: z.string(),
+        // Names files, Git config sections and helper arguments in sandboxes.
+        alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
         providerKind: z.string(),
         principalKind: z.enum(["member", "project_service", "tenant_service"]),
         capabilities: z.array(z.string()),
+        git: z
+          .object({
+            repositories: z.array(z.string()).optional(),
+            push: z.array(z.string()).optional(),
+          })
+          .optional(),
+        model: z
+          .object({
+            allow: z.array(z.string()).optional(),
+          })
+          .optional(),
       }),
     )
     .optional(),
   workflowEnablementId: z.string().uuid().optional(),
+  sandbox: z
+    .object({
+      image: z
+        .discriminatedUnion("kind", [
+          z.object({ kind: z.literal("oci"), reference: z.string() }),
+          z.object({
+            kind: z.literal("dockerfile"),
+            path: z.string(),
+            content: z.string(),
+            digest: z.string(),
+          }),
+        ])
+        .optional(),
+      containers: z.boolean().optional(),
+      egress: EgressSchema.optional(),
+      setupEgress: EgressSchema.optional(),
+      volumes: z
+        .array(
+          z.object({
+            name: z.string().regex(VOLUME_NAME_PATTERN),
+            key: z.string().regex(VOLUME_KEY_PATTERN),
+            path: z.string(),
+            exclusive: z.boolean().optional(),
+            sizeMb: z.number().int().positive().optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  approvals: z.object({ waitMinutes: z.number() }).optional(),
 });
+
+/** What an Allocation's sandbox is given (ADR 0176), fixed at admission. */
+export interface EnvironmentSandbox {
+  image?: SandboxImage;
+  containers?: boolean;
+  egress?: SandboxEgress;
+  /**
+   * What the sandbox reaches while its Environment's setup runs (ADR
+   * 0257): the setup's hosts alone. Present only for a restricted
+   * Environment whose setup names a network.
+   */
+  setupEgress?: SandboxEgress;
+  /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
+  volumes?: readonly EnvironmentSandboxVolume[];
+}
+
+/**
+ * One volume an Allocation's sandbox mounts (ADR 0208): the Environment's
+ * name for it, and the machine-unique key of the owner's copy.
+ */
+export interface EnvironmentSandboxVolume {
+  name: string;
+  key: string;
+  path: string;
+  exclusive?: boolean;
+  sizeMb?: number;
+}
 
 export interface EnvironmentAllocationPolicy {
   binding: EnvironmentBinding;
   requirements: EnvironmentRequirements;
   connections?: readonly ResolvedConnectionBinding[];
   workflowEnablementId?: string;
+  sandbox?: EnvironmentSandbox;
+  /** How long unattended escalations wait for a person (ADR 0176). */
+  approvals?: { waitMinutes: number };
 }
 
 export interface ExecutionAllocation {
@@ -79,9 +165,29 @@ export interface ExecutionAllocation {
   workerNodeId: string | null;
   policy: EnvironmentAllocationPolicy;
   status: "active" | "released";
+  /** Why it was released; see {@link AllocationReleaseReason}. */
+  releaseReason: AllocationReleaseReason | null;
   createdAt: string;
   releasedAt: string | null;
 }
+
+/**
+ * Why an Allocation ended. `idle`: a chat or durable workflow gave its
+ * workspace back while waiting (ADRs 0173, 0289). `node_lost`: its machine stopped for good and the
+ * workload moved on (ADR 0190). `connection_ended`: a member's machine
+ * connected again, and its earlier connection's workspace is gone (ADR
+ * 0192). `retired`: the workload ended. A chat is admitted again on its
+ * next turn after any release. A parked workflow gets a fresh Allocation
+ * when its next compute is runnable; work moved off a lost machine uses
+ * the same admission and runtime lifecycle.
+ */
+export type AllocationReleaseReason =
+  | "idle"
+  | "node_lost"
+  | "connection_ended"
+  | "retired"
+  /** A rollback gave the workspace back, to be rebuilt at an earlier commit (ADR 0197). */
+  | "rollback";
 
 export class ExecutionAllocationConflictError extends Error {
   constructor(readonly rootWorkloadId: string) {
@@ -110,6 +216,8 @@ export class ExecutionAllocationsService {
     const executor = args.transaction;
     let policy = args.policy;
     if (args.workerNodeId) {
+      // The node's row lock orders this with a machine being drained before
+      // it is removed (ADR 0258): one that is disabled takes nothing new.
       const node = await executor
         .selectFrom("worker_nodes")
         .selectAll()
@@ -179,6 +287,11 @@ export class ExecutionAllocationsService {
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      // Placed: the workload no longer waits for a machine (ADR 0258).
+      await executor
+        .deleteFrom("placement_waits")
+        .where("root_workload_id", "=", args.rootWorkloadId)
+        .execute();
       return mapAllocation(row);
     } catch (cause) {
       if (
@@ -207,11 +320,16 @@ export class ExecutionAllocationsService {
   async release(args: {
     identity: Identity;
     allocationId: string;
+    reason?: AllocationReleaseReason;
     transaction?: Transaction<DB>;
   }): Promise<ExecutionAllocation | undefined> {
     const row = await (args.transaction ?? this.db)
       .updateTable("execution_allocations")
-      .set({ status: "released", released_at: new Date() })
+      .set({
+        status: "released",
+        released_at: new Date(),
+        release_reason: args.reason ?? "retired",
+      })
       .where("tenant_id", "=", args.identity.tenantId)
       .where("id", "=", args.allocationId)
       .where("status", "=", "active")
@@ -219,6 +337,15 @@ export class ExecutionAllocationsService {
       .executeTakeFirst();
     return row ? mapAllocation(row) : undefined;
   }
+}
+
+function releaseReason(value: string | null): AllocationReleaseReason | null {
+  return value === "idle" ||
+    value === "node_lost" ||
+    value === "connection_ended" ||
+    value === "retired"
+    ? value
+    : null;
 }
 
 function mapAllocation(
@@ -235,6 +362,7 @@ function mapAllocation(
     workerNodeId: row.worker_node_id,
     policy,
     status: row.status as "active" | "released",
+    releaseReason: releaseReason(row.release_reason),
     createdAt: row.created_at.toISOString(),
     releasedAt: row.released_at?.toISOString() ?? null,
   };

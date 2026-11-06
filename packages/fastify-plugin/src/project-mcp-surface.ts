@@ -1,8 +1,15 @@
+import {
+  SET_SESSION_METADATA_DESCRIPTION,
+  sessionMetadataToolWrite,
+  setSessionMetadataInputSchema,
+} from "@catamorphic/agent-protocol";
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
-  isBuilder,
+  AgentTurnUnsettledError,
+  EVERY_ARTIFACT,
   mayUseProject,
+  parseWorkspaceRequest,
   projectAgentId,
   resolveScope,
   SESSION_ACTION_SCHEMAS,
@@ -20,8 +27,8 @@ import { sessionArtifactTool } from "./session-artifact-tools.js";
  * - documents: list / read / search / write / delete / history over the one
  *   path namespace (program + store), each narrowed to the caller's
  *   document refs by `DocumentsService` itself;
- * - skills: list / read, for anyone who may use the project (a builder, or
- *   a member with an agent ref);
+ * - skills: list / read, for anyone who may use the project (with
+ *   `program:read`, or an agent ref);
  * - agents: `ask_agent` — a synchronous chat turn with a project agent the
  *   caller may open sessions on (`AgentSessionsService` enforces the ref).
  *
@@ -446,7 +453,7 @@ export function surfaceTools(
         definition: {
           name: "list_publications",
           description:
-            "The shared URLs you may see (builders: all of the project's; members: your own).",
+            "The shared URLs you may see (all of the project's with publications:read; otherwise your own).",
           inputSchema: { type: "object", properties: {} },
           annotations: READ_ONLY,
         },
@@ -513,21 +520,27 @@ export function surfaceTools(
     const agentNames = (identity.scope ?? [])
       .filter((ref) => ref.kind === "agent" && ref.projectId === projectId)
       .map((ref) => (ref as { name: string }).name);
-    const hint = isBuilder(identity, projectId)
-      ? "any committed project agent (.catamorphic/agents/<slug>.json)"
-      : agentNames.length > 0
-        ? `one of: ${agentNames.join(", ")}`
-        : "none available to you";
+    const hint =
+      agentNames.includes(EVERY_ARTIFACT) || identity.scope === undefined
+        ? "any committed project agent (.work/agents/<slug>.json)"
+        : agentNames.length > 0
+          ? `one of: ${agentNames.join(", ")}`
+          : "none available to you";
     tools.push({
       definition: {
         name: "ask_agent",
-        description: `Ask one of the project's agents (${hint}) and get its reply — a full turn with the agent's own tools and persona. Pass sessionId to continue an earlier conversation.`,
+        description: `Ask one of the project's agents (${hint}) and get its reply — a full turn with the agent's own tools and persona. Pass sessionId to continue an earlier conversation, or environment to choose where a new one runs.`,
         inputSchema: {
           type: "object",
           properties: {
             agent: { type: "string", description: "The agent's slug" },
             message: { type: "string" },
             sessionId: { type: "string" },
+            environment: {
+              type: "string",
+              description:
+                "Environment for a new conversation (project_overview lists yours)",
+            },
           },
           required: ["agent", "message"],
         },
@@ -544,23 +557,78 @@ export function surfaceTools(
             await sessions.create(identity, projectId, {
               agentId,
               source: "mcp",
+              ...(str(args.environment)
+                ? { environment: str(args.environment) }
+                : {}),
             })
           ).id;
-        const reply = await sessions.sendMessage(
-          identity,
-          projectId,
-          sessionId,
-          message,
-        );
-        return { sessionId, reply: reply.content };
+        // Never the person's own words (ADR 0217): an agent's in Work, or
+        // the person's own assistant asking through this server.
+        const from = currentSessionId
+          ? {
+              kind: "agent" as const,
+              sessionId: currentSessionId,
+              agentId: (
+                await sessions.get(identity, projectId, currentSessionId)
+              ).agentId,
+            }
+          : {
+              kind: "assistant" as const,
+              externalUserId: identity.externalUserId,
+            };
+        try {
+          const { reply } = await sessions.sendMessage(
+            identity,
+            projectId,
+            sessionId,
+            message,
+            { from },
+          );
+          return {
+            sessionId,
+            reply: reply?.kind === "assistant_message" ? reply.text : "",
+          };
+        } catch (error) {
+          // No reply yet: the message waits for a machine, is held or
+          // cancelled, or its machine stopped. The caller reads the chat.
+          if (error instanceof AgentTurnUnsettledError)
+            return { sessionId, state: error.state, reply: error.message };
+          throw error;
+        }
       }),
     });
+
+    // A key of the calling chat's metadata (ADR 0226): bound to the
+    // session this connection serves, so there is none without one.
+    if (currentSessionId) {
+      const sessionId = currentSessionId;
+      tools.push({
+        definition: {
+          name: "set_session_metadata",
+          description: SET_SESSION_METADATA_DESCRIPTION,
+          inputSchema: z.toJSONSchema(setSessionMetadataInputSchema),
+        },
+        call: guarded(async (args) => {
+          const values = sessionMetadataToolWrite(args);
+          return {
+            metadata: values
+              ? await sessions.setMetadata({
+                  identity,
+                  projectId,
+                  sessionId,
+                  values,
+                })
+              : await sessions.metadata({ identity, projectId, sessionId }),
+          };
+        }),
+      });
+    }
 
     tools.push({
       definition: {
         name: "send_agent_message",
         description:
-          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; next_turn wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
+          "Deliver an attributed message from your current session to this or another agent session. queue (the default) wakes an idle session or runs after its active turn; steer adds it to the active turn so the agent sees it while it works; interrupt stops the active turn and runs this next; message_only records it without waking the agent. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
         inputSchema: {
           type: "object",
           properties: {
@@ -569,26 +637,39 @@ export function surfaceTools(
             message: { type: "string" },
             mode: {
               type: "string",
-              enum: ["message_only", "next_turn", "interrupt"],
+              enum: ["queue", "steer", "interrupt", "message_only"],
+              default: "queue",
             },
             attention: { type: "string", enum: ["none", "required"] },
             idempotencyKey: { type: "string" },
+            workspace: {
+              type: "object",
+              description:
+                "Move the receiving session's workspace to a ref of the project's linked remote before its next turn (a branch, tag, commit, or refs/pull/<n>/head). update: rebase (default) keeps its commits, reset discards them.",
+              properties: {
+                ref: { type: "string" },
+                update: { type: "string", enum: ["reset", "rebase"] },
+              },
+              required: ["ref"],
+              additionalProperties: false,
+            },
           },
-          required: ["toSessionId", "message", "mode"],
+          required: ["toSessionId", "message"],
         },
       },
       call: guarded(async (args) => {
         const fromSessionId = str(args.fromSessionId) ?? currentSessionId;
         const toSessionId = str(args.toSessionId);
         const message = str(args.message);
-        const mode = args.mode;
+        const mode = args.mode === undefined ? "queue" : args.mode;
         if (
           !fromSessionId ||
           !toSessionId ||
           !message ||
-          (mode !== "message_only" &&
-            mode !== "next_turn" &&
-            mode !== "interrupt")
+          (mode !== "queue" &&
+            mode !== "steer" &&
+            mode !== "interrupt" &&
+            mode !== "message_only")
         ) {
           throw new Error(
             "fromSessionId, toSessionId, message, and a valid mode are required",
@@ -613,6 +694,9 @@ export function surfaceTools(
           ...(str(args.idempotencyKey)
             ? { idempotencyKey: str(args.idempotencyKey) }
             : {}),
+          ...(args.workspace === undefined
+            ? {}
+            : { workspace: parseWorkspaceRequest(args.workspace) }),
         });
       }),
     });
@@ -625,7 +709,7 @@ export function surfaceTools(
         tools.push({
           definition: {
             name: `session_${operation}`,
-            description: `Session ${operation}. Uses the same authorized operation as workflows. Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
+            description: `Session ${operation}. Uses the same authorized operation as workflows. Name the chat by sessionId, or by the project's key for it (key, with audience "project" for the project chat). Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
             inputSchema: z.toJSONSchema(SESSION_ACTION_SCHEMAS[operation]),
           },
           call: guarded(async (args) => {
@@ -659,12 +743,18 @@ export function surfaceTools(
 
     if (core.watchers) {
       const watchers = core.watchers;
+      const eventSources = core.projectEventSources.map(
+        (source) => source.kind,
+      );
       tools.push(
         {
           definition: {
             name: "create_watcher",
-            description:
-              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .catamorphic/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
+            description: `Temporarily enable an ordinary TypeScript workflow owned by this session. To repeat a shell check (a URL, a file, a CLI), use the host's watch_command when it is offered: it runs where your commands run. For periodic monitoring with workflow IO, declare a normal schedule trigger. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .work/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated work/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.${
+              eventSources.length
+                ? ` This host can also observe outside systems that cannot reach it with a webhook: pass eventSource (${eventSources.join(", ")}) and the host polls for new events from now on and records them as Project Events shaped like the webhook deliveries the source replaces, so bind the project's trigger kinds for that webhook (for example from .work/triggers/).`
+                : ""
+            }`,
             inputSchema: {
               type: "object",
               properties: {
@@ -673,7 +763,7 @@ export function surfaceTools(
                 source: {
                   type: "string",
                   description:
-                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .catamorphic/workflows/src/artifacts/<id>.ts against the committed project origin.",
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .work/workflows/src/artifacts/<id>.ts against the committed project origin.",
                 },
                 environment: { type: "string" },
                 expiresInSeconds: {
@@ -682,6 +772,17 @@ export function surfaceTools(
                   description:
                     "Optional expiry in seconds. Omit for reminders that must survive offline time. Defaults to no expiry; completion, stop, or archive ends execution.",
                 },
+                ...(eventSources.length
+                  ? {
+                      eventSource: {
+                        type: "string",
+                        enum: eventSources,
+                        description:
+                          "A host event source to poll for this watcher, from now on.",
+                      },
+                      pollIntervalSeconds: { type: "integer", minimum: 5 },
+                    }
+                  : {}),
               },
               required: ["workflowName", "source"],
             },
@@ -695,6 +796,8 @@ export function surfaceTools(
                 "sessionId, workflowName, and source are required",
               );
             }
+            const eventSource = str(args.eventSource);
+            const pollIntervalSeconds = int(args.pollIntervalSeconds);
             return watchers.create({
               identity,
               projectId,
@@ -706,6 +809,16 @@ export function surfaceTools(
                 : {}),
               ...(int(args.expiresInSeconds) !== undefined
                 ? { expiresInSeconds: int(args.expiresInSeconds) }
+                : {}),
+              ...(eventSource
+                ? {
+                    eventSource: {
+                      kind: eventSource,
+                      ...(pollIntervalSeconds !== undefined
+                        ? { pollIntervalSeconds }
+                        : {}),
+                    },
+                  }
                 : {}),
             });
           }),
@@ -761,72 +874,6 @@ export function surfaceTools(
           }),
         },
       );
-
-      if (core.github) {
-        tools.push({
-          definition: {
-            name: "create_github_watcher",
-            description:
-              'Temporarily enable an ordinary TypeScript workflow for future GitHub repository events. Catamorphic verifies the current user\'s repository access and starts the appropriate local or remote GitHub monitor. Declare GitHub subscriptions inline with trigger(), such as triggers: [trigger("github.pull_request")]. Supported kinds are github.pull_request, github.pull_request_review, github.check_run, github.check_suite, and github.workflow_run.',
-            inputSchema: {
-              type: "object",
-              properties: {
-                sessionId: { type: "string" },
-                workflowName: { type: "string" },
-                source: {
-                  type: "string",
-                  description:
-                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .catamorphic/workflows/src/artifacts/<id>.ts against the committed project origin.",
-                },
-                environment: { type: "string" },
-                placement: {
-                  type: "string",
-                  enum: ["local", "remote", "any"],
-                },
-                expiresInSeconds: {
-                  type: "integer",
-                  minimum: 1,
-                  description:
-                    "Optional expiry in seconds. Omit for reminders that must survive offline time. Defaults to no expiry; completion, stop, or archive ends execution.",
-                },
-                pollIntervalSeconds: { type: "integer", minimum: 5 },
-              },
-              required: ["workflowName", "source"],
-            },
-          },
-          call: guarded(async (args) => {
-            const sessionId = str(args.sessionId) ?? currentSessionId;
-            const workflowName = str(args.workflowName);
-            const source = str(args.source);
-            if (!sessionId || !workflowName || !source) {
-              throw new Error(
-                "sessionId, workflowName, and source are required",
-              );
-            }
-            return watchers.createGithub({
-              identity,
-              projectId,
-              sessionId,
-              workflowName,
-              source,
-              ...(str(args.environment)
-                ? { environment: str(args.environment) }
-                : {}),
-              ...(args.placement === "local" ||
-              args.placement === "remote" ||
-              args.placement === "any"
-                ? { placement: args.placement }
-                : {}),
-              ...(int(args.expiresInSeconds) !== undefined
-                ? { expiresInSeconds: int(args.expiresInSeconds) }
-                : {}),
-              ...(int(args.pollIntervalSeconds) !== undefined
-                ? { pollIntervalSeconds: int(args.pollIntervalSeconds) }
-                : {}),
-            });
-          }),
-        });
-      }
     }
   }
 

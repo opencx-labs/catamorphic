@@ -1,4 +1,5 @@
 import { Handle, type NodeProps, Position } from "@xyflow/react";
+import { ArrowDownToLine } from "lucide-react";
 
 export function SinkNode({ data }: NodeProps) {
   const executionStatus =
@@ -16,7 +17,9 @@ export function SinkNode({ data }: NodeProps) {
           data-status={executionStatus}
         />
       )}
-      <div className="catamorphic-node-icon">⇩</div>
+      <div className="catamorphic-node-icon">
+        <ArrowDownToLine aria-hidden="true" size={18} strokeWidth={1.8} />
+      </div>
       <div className="catamorphic-node-content">
         <div className="catamorphic-node-label">Batch sink</div>
         <div className="catamorphic-node-description">

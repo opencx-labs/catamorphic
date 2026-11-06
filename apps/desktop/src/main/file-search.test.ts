@@ -64,3 +64,37 @@ it("reports bounded results and honors cancellation", async () => {
     }),
   ).rejects.toThrow();
 });
+
+it("lists folders beside files for a mention, the top level when empty", async () => {
+  await fs.mkdir(path.join(root, "src/lib"), { recursive: true });
+  await fs.writeFile(path.join(root, "src/lib/menu.ts"), "");
+  await fs.writeFile(path.join(root, "src/app.ts"), "");
+  await fs.writeFile(path.join(root, "README.md"), "");
+  expect(
+    (await searchProjectFiles({ root, mode: "paths", query: "" })).matches,
+  ).toEqual([{ path: "src/", directory: true }, { path: "README.md" }]);
+  expect(
+    (await searchProjectFiles({ root, mode: "paths", query: "lib" })).matches,
+  ).toEqual([
+    { path: "src/lib/", directory: true },
+    { path: "src/lib/menu.ts" },
+  ]);
+});
+
+it("walks a folder that is not a repository, skipping hidden and dependency folders", async () => {
+  const plain = path.join(temp, "plain");
+  await fs.mkdir(path.join(plain, "notes"), { recursive: true });
+  await fs.mkdir(path.join(plain, "node_modules/pkg"), { recursive: true });
+  await fs.mkdir(path.join(plain, ".cache"), { recursive: true });
+  await fs.writeFile(path.join(plain, "notes/plan.md"), "the plan");
+  await fs.writeFile(path.join(plain, "node_modules/pkg/plan.md"), "");
+  await fs.writeFile(path.join(plain, ".cache/plan.md"), "");
+  expect(
+    (await searchProjectFiles({ root: plain, mode: "paths", query: "plan" }))
+      .matches,
+  ).toEqual([{ path: "notes/plan.md" }]);
+  expect(
+    (await searchProjectFiles({ root: plain, mode: "files", query: "plan" }))
+      .matches,
+  ).toEqual([{ path: "notes/plan.md" }]);
+});

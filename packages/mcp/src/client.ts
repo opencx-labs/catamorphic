@@ -1,6 +1,10 @@
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
 import {
   Client,
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
   SSEClientTransport,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
@@ -13,6 +17,8 @@ import {
 
 /** Extra behavior a caller can wire into a connection. */
 export interface ConnectMcpOpts {
+  /** Cancels connection setup and the requests made through this client. */
+  signal?: AbortSignal;
   /**
    * How to answer `elicitation/create` requests — a form or a URL the
    * server needs the user to complete (OAuth handoffs, config). Declaring
@@ -69,9 +75,16 @@ function iconScore(icon: McpIcon): number {
 
 export interface McpToolInfo {
   name: string;
+  /** The tool's display name, when it declares one. */
+  title?: string;
   description: string;
   /** JSON Schema for the tool's arguments. */
   inputSchema: Record<string, unknown>;
+  /**
+   * JSON Schema of the tool's `structuredContent`, when it declares one:
+   * harnesses type the tool's results from it (ADR 0225).
+   */
+  outputSchema?: Record<string, unknown>;
   /** The tool's `_meta`, when present (MCP Apps ui linkage lives here). */
   meta?: Record<string, unknown>;
   /** Spec tool annotations (hints, not guarantees) — permission defaults
@@ -99,6 +112,8 @@ export interface McpResourceContent {
 
 export interface ConnectedMcpServer {
   tools: McpToolInfo[];
+  /** Refresh the connector's current tool roster before host authorization. */
+  refreshTools?(): Promise<McpToolInfo[]>;
   /** Negotiated protocol revision (e.g. "2026-07-28"), when known. */
   protocolVersion?: string;
   /** Call a tool; the result is flattened to model-readable text. */
@@ -171,9 +186,20 @@ async function connectTransport(
   opts?: ConnectMcpOpts,
 ) {
   const connect = async (transport: Parameters<Client["connect"]>[0]) => {
+    opts?.signal?.throwIfAborted();
     const client = buildClient(opts);
+    const abort = () => {
+      void client.close().catch(() => {});
+    };
+    opts?.signal?.addEventListener("abort", abort, { once: true });
+    const close = client.close.bind(client);
+    client.close = async () => {
+      opts?.signal?.removeEventListener("abort", abort);
+      return close();
+    };
     try {
-      await client.connect(transport);
+      await client.connect(transport, { signal: opts?.signal });
+      opts?.signal?.throwIfAborted();
       return client;
     } catch (error) {
       await client.close().catch(() => {});
@@ -233,6 +259,33 @@ function pickAnnotations(raw: Record<string, unknown>): McpToolAnnotations {
   };
 }
 
+/**
+ * The JSON-RPC error a server answered a request with, when that is what
+ * failed: a forwarding host passes it on as the server sent it.
+ */
+export function mcpServerError(
+  error: unknown,
+): { code: number; message: string } | undefined {
+  return ProtocolError.isInstance(error)
+    ? { code: error.code, message: error.message }
+    : undefined;
+}
+
+/**
+ * Whether a request failed because the connection to the server is gone,
+ * so a pooled client should be dropped and the next use reconnect. Errors
+ * the server sent, invalid results and timeouts leave the client in use.
+ */
+export function mcpConnectionLost(error: unknown): boolean {
+  if (SdkError.isInstance(error))
+    return (
+      error.code === SdkErrorCode.NotConnected ||
+      error.code === SdkErrorCode.ConnectionClosed ||
+      error.code === SdkErrorCode.SendFailed
+    );
+  return SdkHttpError.isInstance(error) || error instanceof TypeError;
+}
+
 /** Result content flattened to text the model (or a settings pane) can read. */
 export function flattenToolResult(result: {
   content?: Array<Record<string, unknown>>;
@@ -263,35 +316,50 @@ export async function connectMcpServer(
 ): Promise<ConnectedMcpServer> {
   const client = await connectTransport(config, opts);
   try {
-    const listed = await client.listTools();
-    const tools: McpToolInfo[] = listed.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description ?? "",
-      inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
-        string,
-        unknown
-      >,
-      ...((tool as { _meta?: Record<string, unknown> })._meta
-        ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
-        : {}),
-      ...(tool.annotations
-        ? { annotations: pickAnnotations(tool.annotations) }
-        : {}),
-    }));
+    const listTools = async (): Promise<McpToolInfo[]> => {
+      const listed = await client.listTools(undefined, {
+        signal: opts?.signal,
+      });
+      return listed.tools.map((tool) => ({
+        name: tool.name,
+        ...(tool.title ? { title: tool.title } : {}),
+        description: tool.description ?? "",
+        inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
+          string,
+          unknown
+        >,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+        ...((tool as { _meta?: Record<string, unknown> })._meta
+          ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
+          : {}),
+        ...(tool.annotations
+          ? { annotations: pickAnnotations(tool.annotations) }
+          : {}),
+      }));
+    };
+    const tools = await listTools();
     return {
       tools,
+      async refreshTools() {
+        const current = await listTools();
+        tools.splice(0, tools.length, ...current);
+        return current;
+      },
       protocolVersion: client.getDiscoverResult() ? "2026-07-28" : undefined,
       async callTool(name, args) {
-        const result = await client.callTool({ name, arguments: args });
+        const result = await client.callTool(
+          { name, arguments: args },
+          { signal: opts?.signal },
+        );
         return flattenToolResult(
           result as Parameters<typeof flattenToolResult>[0],
         );
       },
       async callToolRaw(name, args) {
-        return (await client.callTool({ name, arguments: args })) as Record<
-          string,
-          unknown
-        >;
+        return (await client.callTool(
+          { name, arguments: args },
+          { signal: opts?.signal },
+        )) as Record<string, unknown>;
       },
       async readResource(uri) {
         const result = await client.readResource({ uri });

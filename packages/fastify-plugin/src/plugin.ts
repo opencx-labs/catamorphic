@@ -1,10 +1,27 @@
-import type { CatamorphicCore } from "@catamorphic/core";
+import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
+  DeploymentBlockedError,
+  EnvironmentPolicyInvalidError,
+  ProjectNotFoundError,
+  ServerDraftError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
   SessionArtifactValidationError,
 } from "@catamorphic/core";
+import {
+  DraftBinaryResolutionError,
+  DraftBusyError,
+  DraftIgnoredPathError,
+  DraftPathError,
+  DraftRefNotAllowedError,
+  DraftsUnsupportedError,
+  DraftUnresolvedError,
+  InvalidBaseError,
+  InvalidRefNameError,
+  NoDraftError,
+  RefMovedError,
+} from "@catamorphic/git";
 import type { FastifyPluginAsync } from "fastify";
 import {
   serializerCompiler,
@@ -15,20 +32,25 @@ import {
   HttpIdentityError,
   type IdentityResolver,
 } from "./http-identity.js";
+import { apiErrorResponse } from "./request-logging.js";
 import { registerAgentRoutes } from "./routes/agent.js";
 import { registerAgentCapabilityRoutes } from "./routes/agent-capabilities.js";
 import { registerAppRoutes } from "./routes/apps.js";
 import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
 import { registerClientRunnerRoutes } from "./routes/client-runners.js";
+import { registerCodeHostRoutes } from "./routes/code-hosts.js";
 import { registerConnectionMcpRoutes } from "./routes/connection-mcp.js";
 import { registerConnectionRoutes } from "./routes/connections.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerEnvironmentRoutes } from "./routes/environments.js";
-import { registerGithubRoutes } from "./routes/github.js";
+import { registerGitGatewayRoutes } from "./routes/git-gateway.js";
+import { registerHttpGatewayRoutes } from "./routes/http-gateway.js";
 import { registerMeRoutes } from "./routes/me.js";
 import { registerMembershipRoutes } from "./routes/memberships.js";
+import { registerModelGatewayRoutes } from "./routes/model-gateway.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
-import { registerPlaygroundRoutes } from "./routes/playground.js";
+import { registerParseRoutes } from "./routes/parse.js";
+import { registerPersonalEnvironmentRoutes } from "./routes/personal-environment.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -36,8 +58,11 @@ import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerSessionArtifactRoutes } from "./routes/session-artifacts.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
+import { registerSessionPreviewRoutes } from "./routes/session-previews.js";
+import { registerSessionTerminalRoutes } from "./routes/session-terminals.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWatcherRoutes } from "./routes/watchers.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { registerWorkflowEnablementRoutes } from "./routes/workflow-enablements.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
@@ -49,9 +74,9 @@ export interface CatamorphicPluginOptions {
    */
   core?: CatamorphicCore;
   /**
-   * Who is calling. Runs on every request before any route; returns a full
-   * identity for a builder, a scoped identity for a viewer (an app user, a
-   * customer), or `null` for 401. Typically a few lines that read the host's
+   * Who is calling. Runs on every request before any route; returns the root
+   * identity for the host itself, a scoped identity with project permissions
+   * for a member (an admin, an app user, a customer), or `null` for 401. Typically a few lines that read the host's
    * own session and its entitlement table:
    *
    * ```ts
@@ -76,6 +101,40 @@ export interface CatamorphicPluginOptions {
    * things a host decides for everyone.
    */
   features?: Partial<HostFeatures>;
+  /**
+   * The API base outsiders reach this plugin at (e.g.
+   * `https://brain.acme.com/api`), for URLs handed to other services such
+   * as webhook URLs. Defaults to the request's own origin and mount prefix.
+   */
+  publicApiBase?: string;
+  /** Host additions to the project MCP endpoint (ADR 0166). */
+  projectMcp?: ProjectMcpHost;
+}
+
+/**
+ * What a host adds to `POST /projects/:projectId/mcp`: the name a client
+ * shows, a paragraph appended to the orientation every client receives at
+ * `initialize`, and tools the host owns (the Work server's shares). Host
+ * tools see the caller's identity and enforce their own permissions.
+ */
+export interface ProjectMcpHost {
+  serverInfo?: { name: string; title: string; version?: string };
+  instructions?: string;
+  tools?: (args: {
+    identity: Identity;
+    projectId: string;
+  }) => ProjectMcpHostTool[];
+}
+
+export interface ProjectMcpHostTool {
+  definition: {
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    annotations?: Record<string, unknown>;
+  };
+  /** Returns the tool's result; a thrown error becomes a tool error. */
+  call: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** What a host enables for all callers; defaults are the most permissive. */
@@ -100,6 +159,8 @@ export const DEFAULT_HOST_FEATURES: HostFeatures = {
 export interface RouteContext {
   core?: CatamorphicCore;
   features: HostFeatures;
+  publicApiBase?: string;
+  projectMcp?: ProjectMcpHost;
 }
 
 /**
@@ -140,8 +201,54 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (err instanceof AccessDeniedError) {
       return reply.status(403).send({ error: err.message });
     }
-    app.log.error(err);
-    return reply.send(err);
+    if (err instanceof ProjectNotFoundError) {
+      return reply.status(404).send({ error: "Project not found" });
+    }
+    // The project's committed policy is invalid: its owners fix it.
+    if (err instanceof EnvironmentPolicyInvalidError) {
+      return reply
+        .status(422)
+        .send({ error: err.message, code: "environment_policy_invalid" });
+    }
+    // A normal state the person resolves (record changes first), not a fault.
+    if (
+      err instanceof DeploymentBlockedError ||
+      err instanceof ServerDraftError ||
+      err instanceof DraftBusyError ||
+      err instanceof DraftUnresolvedError ||
+      err instanceof DraftsUnsupportedError
+    ) {
+      return reply.status(409).send({ error: err.message });
+    }
+    // A publish that lost its race to another change of the project.
+    if (err instanceof RefMovedError) {
+      return reply.status(409).send({
+        error:
+          "The project changed on the server while publishing. Download its changes, then publish again.",
+      });
+    }
+    // A malformed ref or base, a path the program never holds, a text
+    // resolution for a binary file, or a change to a read-only view.
+    if (
+      err instanceof InvalidRefNameError ||
+      err instanceof InvalidBaseError ||
+      err instanceof DraftIgnoredPathError ||
+      err instanceof DraftBinaryResolutionError ||
+      err instanceof NoDraftError
+    ) {
+      return reply.status(400).send({ error: err.message });
+    }
+    // Another member's draft, or a path the draft does not hold.
+    if (
+      err instanceof DraftRefNotAllowedError ||
+      (err instanceof DraftPathError && err.code === "ENOENT")
+    ) {
+      return reply.status(404).send({ error: err.message });
+    }
+    if (err instanceof DraftPathError) {
+      return reply.status(409).send({ error: err.message });
+    }
+    return apiErrorResponse(err, _req, reply);
   });
 
   // Identity is resolved once per request, before any route runs, and
@@ -176,6 +283,10 @@ export const catamorphicPlugin: FastifyPluginAsync<
 
   const ctx: RouteContext = {
     core: opts.core,
+    ...(opts.projectMcp ? { projectMcp: opts.projectMcp } : {}),
+    ...(opts.publicApiBase
+      ? { publicApiBase: opts.publicApiBase.replace(/\/$/, "") }
+      : {}),
     // Explicit `undefined` from a host (a field computed from env) must not
     // erase the default.
     features: {
@@ -189,8 +300,12 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerMeRoutes(app, ctx);
   registerProjectRoutes(app, ctx);
   registerEnvironmentRoutes(app, ctx);
+  registerPersonalEnvironmentRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);
   registerConnectionMcpRoutes(app, ctx);
+  registerGitGatewayRoutes(app, ctx);
+  registerModelGatewayRoutes(app, ctx);
+  registerHttpGatewayRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
   registerWorkflowEnablementRoutes(app, ctx);
   registerTriggerRoutes(app, ctx);
@@ -198,17 +313,20 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAgentRoutes(app, ctx);
   registerClientRunnerRoutes(app, ctx);
   registerSessionMailboxRoutes(app, ctx);
+  registerSessionTerminalRoutes(app, ctx);
+  registerSessionPreviewRoutes(app, ctx);
   registerNotificationRoutes(app, ctx);
   registerWatcherRoutes(app, ctx);
   registerMembershipRoutes(app, ctx);
   registerDocumentRoutes(app, ctx);
   registerPublicationRoutes(app, ctx);
+  registerWebhookRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerSessionArtifactRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
   registerAgentCapabilityRoutes(app, ctx);
-  registerGithubRoutes(app, ctx);
+  registerCodeHostRoutes(app, ctx);
   registerPluginRoutes(app, ctx);
-  registerPlaygroundRoutes(app, ctx);
+  registerParseRoutes(app, ctx);
 };

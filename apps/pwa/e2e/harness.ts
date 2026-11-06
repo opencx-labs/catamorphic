@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomInt } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -41,23 +42,43 @@ export function chromeLaunchArgs({
   ];
 }
 
-export function chromeCdpStartupTimeoutMs(ci: string | undefined): number {
-  return ci === "true" ? 30_000 : 15_000;
+/**
+ * How long Chrome may take to answer on its DevTools port. The wait ends as
+ * soon as it answers; the bound is for a Chrome that never starts. Startup
+ * is CPU-bound, so a busy machine (a local merge gate beside other work, a
+ * shared CI runner) can need many times an idle one's second or two: 15 s
+ * locally failed there with "CDP never became reachable".
+ */
+export const CHROME_CDP_STARTUP_TIMEOUT_MS = 60_000;
+
+/** Whether nothing holds this port on this address. */
+function bindable(port: number, host: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(port, host, () => probe.close(() => resolve(true)));
+  });
 }
 
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address && typeof address === "object") {
-        const port = address.port;
-        server.close(() => resolve(port));
-      } else {
-        server.close(() => reject(new Error("No port")));
-      }
-    });
-  });
+/**
+ * A port for a child process to listen on once it has started. One the
+ * system picks (listening on 0) goes back, as its probe closes, to the range
+ * every connection on this machine draws from, and can be taken before a
+ * slow boot (the Work server's takes seconds) reaches its listen. Below the
+ * ephemeral ranges (49152 and up on macOS, 32768 and up on Linux) a port is
+ * only ever taken by its number.
+ */
+async function unassignedPort(taken: readonly number[]): Promise<number> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const port = 20_000 + randomInt(12_000);
+    if (
+      !taken.includes(port) &&
+      (await bindable(port, "0.0.0.0")) &&
+      (await bindable(port, "127.0.0.1"))
+    )
+      return port;
+  }
+  throw new Error("No free port below the ephemeral range");
 }
 
 interface WatchedChild {
@@ -178,8 +199,8 @@ export async function launchPwa(
   const chrome = chromeBinary();
   if (!chrome) throw new Error("No Chrome/Chromium binary found for e2e.");
 
-  const apiPort = await freePort();
-  const operatorPort = await freePort();
+  const apiPort = await unassignedPort([]);
+  const operatorPort = await unassignedPort([apiPort]);
   const backend = opts.backend?.(apiPort, operatorPort) ?? {
     command: "node",
     args: ["scripts/dev-server.mjs"],
@@ -208,7 +229,7 @@ export async function launchPwa(
       },
     );
     children.push(server);
-    const previewPort = await freePort();
+    const previewPort = await unassignedPort([apiPort, operatorPort]);
     const preview = watchChild(
       spawn(
         "bun",
@@ -250,13 +271,13 @@ export async function launchPwa(
     // Chrome keeps its network error page open instead of retrying, which
     // used to make a healthy built PWA look like a blank-screen regression.
     await waitForHttp(previewHealthUrl, {
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
       childFailure: preview.failure,
     });
     // Allocate CDP only after the backend and preview have bound their ports.
     // Otherwise either still-starting child can race this probe, claim the
     // same port, and make Chrome fall back to an IPv6-only DevTools listener.
-    const cdpPort = await freePort();
+    const cdpPort = await unassignedPort([apiPort, operatorPort, previewPort]);
     const chromeChild = watchChild(
       spawn(
         chrome,
@@ -288,7 +309,7 @@ export async function launchPwa(
       chromeChild,
       cdpPort,
       appUrl,
-      chromeCdpStartupTimeoutMs(process.env.CI),
+      CHROME_CDP_STARTUP_TIMEOUT_MS,
     );
     const client = await createClient(ws, (diagnostic) => {
       browserDiagnostics += `${diagnostic}\n`;
@@ -301,7 +322,7 @@ export async function launchPwa(
       mobile: true,
     });
     await client.waitFor("!!document.querySelector('[data-testid=screen]')", {
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
       label: "app shell rendered",
     });
     return {

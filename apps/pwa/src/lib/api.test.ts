@@ -1,3 +1,4 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const realCrypto = globalThis.crypto;
@@ -28,7 +29,7 @@ describe("PWA authenticated fetch", () => {
         accessToken: "expired-access",
         refreshToken: "refresh-1",
         accessTokenExpiresAt: "2026-08-26T11:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid offline_access",
       },
     });
@@ -83,7 +84,7 @@ describe("PWA authenticated fetch", () => {
         accessToken: "stale-access",
         refreshToken: "refresh-1",
         accessTokenExpiresAt: "2026-08-26T13:00:00.000Z",
-        tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+        tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
         scope: "openid offline_access",
       },
     });
@@ -122,7 +123,7 @@ describe("PWA authenticated fetch", () => {
       accessToken: "expired-access",
       refreshToken: "refresh-1",
       accessTokenExpiresAt: "2026-08-26T11:00:00.000Z",
-      tokenEndpoint: "https://brain.acme.dev/api/auth/mcp/token",
+      tokenEndpoint: "https://brain.acme.dev/api/auth/oauth2/token",
       scope: "openid offline_access",
     };
     const first = store.addRemoteConnection({
@@ -220,5 +221,35 @@ describe("PWA authenticated fetch", () => {
         "https://brain.acme.dev/api/me",
       ),
     ).rejects.toThrow("Sign in to this server");
+  });
+});
+
+describe("session protocol check", () => {
+  it("accepts a server on this app's session protocol", async () => {
+    const { verifySessionProtocol } = await import("./api.js");
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe("http://192.168.1.71:4756/api/me");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer device-token",
+      );
+      return Response.json({
+        agentProtocol: { session: SESSION_PROTOCOL_VERSION, runner: 3 },
+      });
+    });
+    await expect(
+      verifySessionProtocol({
+        serverUrl: "http://192.168.1.71:4756/api/",
+        accessToken: "device-token",
+        fetch: fetchImpl,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a server on another session protocol with an update message", async () => {
+    const { assertSessionProtocol } = await import("./api.js");
+    expect(() => assertSessionProtocol({})).toThrow("Update Work to continue");
+    expect(() =>
+      assertSessionProtocol({ agentProtocol: { session: 1 } }),
+    ).toThrow("Update Work to continue");
   });
 });

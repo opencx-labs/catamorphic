@@ -1,50 +1,109 @@
 import { randomUUID } from "node:crypto";
-import type { DB, Json, JsonObject } from "@catamorphic/db";
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+import { type DB, type Json, jsonbText } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import type { AgentSessionsService } from "./agent-sessions-service.js";
-import type { SessionMessageAuthor } from "./agent-turns-service.js";
+import {
+  type AgentSessionsService,
+  protocolJson,
+} from "./agent-sessions-service.js";
+import { AccessDeniedError } from "./artifact-scope.js";
+import {
+  ChatAudienceSchema,
+  ChatKeySchema,
+  keyedChatOwnerId,
+} from "./chat-delivery.js";
+import { SessionWorkspaceRequestSchema } from "./session-workspaces.js";
 import type { WatchersService } from "./watchers-service.js";
 
+/**
+ * A chat by `sessionId`, or by the project's `key` for it (ADR 0173):
+ * the caller's own keyed chat, the project chat with `audience: "project"`
+ * (the default for a project automation), or a member's.
+ */
 const target = {
-  sessionId: z.string().uuid(),
+  sessionId: z.string().uuid().optional(),
+  key: ChatKeySchema.optional(),
+  audience: ChatAudienceSchema.optional(),
   expectedStateRevision: z.number().int().nonnegative().optional(),
 };
 const mutation = { ...target, idempotencyKey: z.string().min(1).max(300) };
+function namesOneChat(value: object, context: z.RefinementCtx): void {
+  const given = (field: string) =>
+    field in value && Reflect.get(value, field) !== undefined;
+  if (Number(given("sessionId")) + Number(given("key")) !== 1)
+    context.addIssue({
+      code: "custom",
+      message: "Name the chat with exactly one of sessionId or key",
+    });
+  if (given("audience") && !given("key"))
+    context.addIssue({
+      code: "custom",
+      message: "audience applies only to a chat named by key",
+    });
+}
+function chat<Shape extends typeof target>(shape: Shape) {
+  return z.strictObject(shape).superRefine(namesOneChat);
+}
 export const SESSION_ACTION_SCHEMAS = {
-  inspect: z.strictObject(target),
+  inspect: chat(target),
   list: z.strictObject({ limit: z.number().int().min(1).max(100).optional() }),
-  history: z.strictObject({
+  /** The open chat for a key, or null. Never starts one. */
+  find: z.strictObject({
+    key: ChatKeySchema,
+    audience: ChatAudienceSchema.optional(),
+  }),
+  history: chat({
     ...target,
     limit: z.number().int().min(1).max(100).optional(),
+    /**
+     * End at this message instead of the newest: the transcript as of an
+     * event, such as a settled turn's `resultMessageId`.
+     */
+    through: z.string().uuid().optional(),
   }),
-  create: z.strictObject({
+  create: chat({
     ...mutation,
     agentId: z.string().optional(),
     title: z.string().max(500).optional(),
+    /** Start at a ref of the project's linked remote (ADR 0178). */
+    workspace: SessionWorkspaceRequestSchema.optional(),
   }),
-  fork: z.strictObject({
+  fork: chat({
     ...mutation,
     messageId: z.string().uuid().optional(),
   }),
-  spawn: z.strictObject({
+  spawn: chat({
     ...mutation,
     task: z.string().min(1),
-    routeId: z.string().optional(),
+    /** Omitted: a copy of the chat's own agent (ADR 0271). */
     agentId: z.string().optional(),
+    model: z.string().min(1).optional(),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    readOnly: z.boolean().optional(),
+    delegate: z.boolean().optional(),
     title: z.string().max(500).optional(),
     contextMode: z.enum(["fresh", "inherit"]).optional(),
   }),
-  archive: z.strictObject({ ...mutation, confirmStop: z.boolean().optional() }),
-  unarchive: z.strictObject(mutation),
-  interrupt: z.strictObject(mutation),
-  complete: z.strictObject({ ...mutation, content: z.string().min(1) }),
-  reopen: z.strictObject(mutation),
-  stopWatcher: z.strictObject({ ...mutation, watcherId: z.string().uuid() }),
+  archive: chat({ ...mutation, confirmStop: z.boolean().optional() }),
+  unarchive: chat(mutation),
+  /** The end of a chat's life: its work, workspace and key are released. */
+  close: chat(mutation),
+  interrupt: chat(mutation),
+  complete: chat({ ...mutation, content: z.string().min(1) }),
+  reopen: chat(mutation),
+  stopWatcher: chat({ ...mutation, watcherId: z.string().uuid() }),
 };
 export type SessionActionOperation = keyof typeof SESSION_ACTION_SCHEMAS;
+
+export class SessionKeyNotFoundError extends Error {
+  constructor(readonly key: string) {
+    super(`No open chat has the key ${key}`);
+    this.name = "SessionKeyNotFoundError";
+  }
+}
 const tracer = getTracer("@catamorphic/core");
 
 /** Shared host operations. Transport adapters attach identity and actor, never author code. */
@@ -56,13 +115,13 @@ export class SessionActionsService {
   ) {}
 
   async execute(input: {
+    signal?: AbortSignal;
     identity: Identity;
     projectId: string;
     operation: SessionActionOperation;
     args: unknown;
     author: SessionMessageAuthor;
     causation?: string[];
-    provenance?: JsonObject;
   }): Promise<Json> {
     return withSpan(
       {
@@ -74,30 +133,123 @@ export class SessionActionsService {
         },
       },
       async () => {
-        const args = SESSION_ACTION_SCHEMAS[input.operation].parse(input.args);
+        const parsed = SESSION_ACTION_SCHEMAS[input.operation].parse(
+          input.args,
+        );
         if (input.operation === "list")
           return json(
             await this.sessions.list(input.identity, input.projectId, {
-              limit: "limit" in args ? args.limit : 100,
+              limit: "limit" in parsed ? parsed.limit : 100,
             }),
           );
-        if (!("sessionId" in args)) throw new Error("sessionId is required");
-        const detail = await this.sessions.get(
-          input.identity,
-          input.projectId,
-          args.sessionId,
-        );
+        const keyed =
+          "key" in parsed && parsed.key !== undefined
+            ? {
+                key: parsed.key,
+                ownerId: keyedChatOwnerId({
+                  caller: input.identity,
+                  audience: "audience" in parsed ? parsed.audience : undefined,
+                }),
+              }
+            : undefined;
+        const open = keyed
+          ? await this.sessions.keyedChatId({
+              projectId: input.projectId,
+              ...keyed,
+            })
+          : "sessionId" in parsed
+            ? parsed.sessionId
+            : undefined;
+        // A key names a chat only to those who may see it: a chat the
+        // caller cannot reach answers exactly like no chat at all.
+        const read = async (sessionId: string) =>
+          this.sessions
+            .get(input.identity, input.projectId, sessionId)
+            .catch((error: unknown) => {
+              if (keyed && error instanceof AccessDeniedError) return null;
+              throw error;
+            });
+        if (input.operation === "find") {
+          const detail = open ? await read(open) : null;
+          return detail ? json(detail) : null;
+        }
+        const key =
+          "idempotencyKey" in parsed &&
+          typeof parsed.idempotencyKey === "string"
+            ? actionKey({
+                author: input.author,
+                idempotencyKey: parsed.idempotencyKey,
+              })
+            : undefined;
+        // A retried mutation whose chat is gone (closed) still answers
+        // with its recorded result.
+        const earlier =
+          !open && key !== undefined
+            ? await this.db
+                .selectFrom("session_actions")
+                .select([
+                  "operation",
+                  "input",
+                  "result",
+                  "status",
+                  "session_id",
+                ])
+                .where("project_id", "=", input.projectId)
+                .where("idempotency_key", "=", key)
+                .executeTakeFirst()
+            : undefined;
+        const retried =
+          earlier?.operation === input.operation &&
+          canonical(earlier.input) === canonical(json(parsed));
+        if (retried && earlier?.status === "completed") return earlier.result;
+        // A close that stopped after closing its chat finishes the cleanup
+        // when retried, though the key no longer names the chat.
+        const found =
+          open ??
+          (retried && input.operation === "close"
+            ? (earlier?.session_id ?? undefined)
+            : undefined);
+        // Closing a chat that is not open has nothing left to do.
+        if (!found && input.operation === "close")
+          return json({ sessionId: null, closed: false });
+        if (!found) throw new SessionKeyNotFoundError(keyed?.key ?? "");
+        // The chat as the operation sees it: named by id from here on. The
+        // action records what the caller asked for (`parsed`).
+        const {
+          key: _key,
+          audience: _audience,
+          ...rest
+        } = {
+          key: undefined,
+          audience: undefined,
+          ...parsed,
+        };
+        const args = { ...rest, sessionId: found };
+        const detail = await read(args.sessionId);
+        if (!detail) {
+          if (input.operation === "close")
+            return json({ sessionId: null, closed: false });
+          throw new SessionKeyNotFoundError(keyed?.key ?? "");
+        }
         const session = detail;
         if (input.operation === "inspect") return json(session);
-        if (input.operation === "history")
-          return json({
-            sessionId: session.id,
-            messages: session.messages.slice(
-              -("limit" in args ? (args.limit ?? 30) : 30),
-            ),
-          });
-        if (!("idempotencyKey" in args))
-          throw new Error("idempotencyKey is required");
+        if (input.operation === "history") {
+          const through =
+            "through" in args && args.through !== undefined
+              ? args.through
+              : undefined;
+          const limit = "limit" in args ? (args.limit ?? 30) : 30;
+          const messages = await this.sessions.transcript(
+            input.identity,
+            input.projectId,
+            session.id,
+            { ...(typeof through === "string" ? { through } : {}), limit },
+          );
+          if (through && !messages.some((message) => message.id === through))
+            throw new Error("No message in this chat has that id");
+          return json({ sessionId: session.id, key: session.key, messages });
+        }
+        if (key === undefined) throw new Error("idempotencyKey is required");
         // Everything past this point changes the session: settle access
         // before the action is recorded, so a denied caller leaves no trace.
         await this.sessions.assertSession(
@@ -106,7 +258,7 @@ export class SessionActionsService {
           args.sessionId,
           "change",
         );
-        const key = JSON.stringify([input.author, args.idempotencyKey]);
+        input.signal?.throwIfAborted();
         const accepted = await this.db
           .insertInto("session_actions")
           .values({
@@ -119,15 +271,19 @@ export class SessionActionsService {
                     .selectFrom("agent_turns")
                     .select("id")
                     .where("session_id", "=", args.sessionId)
-                    .where("status", "=", "running")
+                    .where("status", "in", [
+                      "preparing",
+                      "running",
+                      "waiting",
+                      "finalizing",
+                    ])
                     .limit(1)
                 : null,
             actor: json({
               ...input.author,
               causation: input.causation ?? [],
-              provenance: input.provenance ?? {},
             }),
-            input: json(args),
+            input: json(parsed),
             idempotency_key: key,
           })
           .onConflict((conflict) =>
@@ -145,18 +301,19 @@ export class SessionActionsService {
             .executeTakeFirstOrThrow());
         if (
           action.operation !== input.operation ||
-          JSON.stringify(action.input) !== JSON.stringify(json(args))
+          JSON.stringify(action.input) !== JSON.stringify(json(parsed))
         ) {
           // Compare JSON semantically below: jsonb property order is not source order.
           if (
             action.operation !== input.operation ||
-            canonical(action.input) !== canonical(json(args))
+            canonical(action.input) !== canonical(json(parsed))
           )
             throw new Error(
               "This idempotency key was already used for another action",
             );
         }
         if (action.status === "completed") return action.result;
+        input.signal?.throwIfAborted();
         if (
           "expectedStateRevision" in args &&
           args.expectedStateRevision !== undefined &&
@@ -174,22 +331,21 @@ export class SessionActionsService {
             input.projectId,
             args.sessionId,
             {
+              signal: input.signal,
               destination: {
                 hostId: session.authorityHostId,
                 revision: session.authorityRevision,
               },
-              author: input.author,
-              content: actionLabel(input.operation),
-              mode: "message_only",
-              idempotencyKey: `action:${action.id}`,
-              metadata: {
-                sessionAction: {
+              delivery: {
+                kind: "action",
+                action: {
                   operation: input.operation,
-                  args: json(args),
-                  causation: input.causation ?? [],
-                  provenance: input.provenance ?? {},
+                  args: protocolJson(args),
+                  actor: input.author,
                 },
               },
+              idempotencyKey: `action:${action.id}`,
+              causation: input.causation ?? [],
             },
           );
           return json({ delivery: "queued", ...receipt });
@@ -227,6 +383,7 @@ export class SessionActionsService {
             .catch(() => {});
         }, 30_000);
         try {
+          input.signal?.throwIfAborted();
           const sourceActionId = `action:${action.id}`;
           let result: unknown;
           switch (input.operation) {
@@ -237,6 +394,7 @@ export class SessionActionsService {
                 {
                   ...SESSION_ACTION_SCHEMAS.create.parse(args),
                   sourceActionId,
+                  signal: input.signal,
                 },
               );
               break;
@@ -245,7 +403,11 @@ export class SessionActionsService {
                 input.identity,
                 input.projectId,
                 args.sessionId,
-                { ...SESSION_ACTION_SCHEMAS.fork.parse(args), sourceActionId },
+                {
+                  ...SESSION_ACTION_SCHEMAS.fork.parse(args),
+                  sourceActionId,
+                  signal: input.signal,
+                },
               );
               break;
             case "spawn":
@@ -257,6 +419,7 @@ export class SessionActionsService {
                   ...SESSION_ACTION_SCHEMAS.spawn.parse(args),
                   sourceActionId,
                   origin: input,
+                  signal: input.signal,
                 },
               );
               break;
@@ -268,6 +431,7 @@ export class SessionActionsService {
                 {
                   ...SESSION_ACTION_SCHEMAS.archive.parse(args),
                   origin: input,
+                  signal: input.signal,
                 },
               );
               break;
@@ -276,8 +440,22 @@ export class SessionActionsService {
                 input.identity,
                 input.projectId,
                 args.sessionId,
-                { origin: input },
+                { origin: input, signal: input.signal },
               );
+              break;
+            case "close":
+              // Repeating a close finishes what an interrupted one left;
+              // only closing an open chat, or retrying that, reports it.
+              await this.sessions.close(
+                input.identity,
+                input.projectId,
+                args.sessionId,
+                { origin: input, signal: input.signal },
+              );
+              result = {
+                sessionId: args.sessionId,
+                closed: session.status !== "closed" || !accepted,
+              };
               break;
             case "interrupt":
               if (action.target_turn_id)
@@ -285,7 +463,7 @@ export class SessionActionsService {
                   input.identity,
                   input.projectId,
                   args.sessionId,
-                  { expectedTurnId: action.target_turn_id },
+                  { turnId: action.target_turn_id, signal: input.signal },
                 );
               result = { interrupted: action.target_turn_id !== null };
               break;
@@ -295,6 +473,7 @@ export class SessionActionsService {
                   identity: input.identity,
                   projectId: input.projectId,
                   sessionId: args.sessionId,
+                  signal: input.signal,
                   watcherId:
                     SESSION_ACTION_SCHEMAS.stopWatcher.parse(args).watcherId,
                 }),
@@ -318,7 +497,8 @@ export class SessionActionsService {
               .forUpdate()
               .executeTakeFirst();
             if (!owned) throw new Error("Session action lease was replaced");
-            await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.author, causation: input.causation ?? [] })}, true)`.execute(
+            input.signal?.throwIfAborted();
+            await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.author, causation: input.causation ?? [] })}, true)`.execute(
               trx,
             );
             if (
@@ -332,6 +512,7 @@ export class SessionActionsService {
                 .forUpdate()
                 .executeTakeFirstOrThrow();
               if (
+                "expectedStateRevision" in args &&
                 args.expectedStateRevision !== undefined &&
                 Number(current.state_revision) !== args.expectedStateRevision
               )
@@ -339,6 +520,7 @@ export class SessionActionsService {
                   "Session state changed; inspect it before retrying this action",
                 );
             }
+            input.signal?.throwIfAborted();
             if (input.operation === "complete" || input.operation === "reopen")
               await trx
                 .updateTable("agent_sessions")
@@ -349,13 +531,13 @@ export class SessionActionsService {
                 })
                 .where("id", "=", args.sessionId)
                 .execute();
-            await this.sessions.turns.deliver({
+            await this.sessions.recordActionWithin(trx, {
               sessionId: args.sessionId,
-              content,
-              author: input.author,
-              mode: "message_only",
-              idempotencyKey: sourceActionId,
-              metadata: {
+              actionId: action.id,
+              status: "completed",
+              actor: input.author,
+              text: content,
+              data: {
                 sessionAction: {
                   id: action.id,
                   operation: input.operation,
@@ -363,9 +545,7 @@ export class SessionActionsService {
                   result: json(result),
                 },
                 causation: input.causation ?? [],
-                provenance: input.provenance ?? {},
               },
-              transaction: trx,
             });
             await trx
               .updateTable("session_actions")
@@ -379,6 +559,7 @@ export class SessionActionsService {
               })
               .where("id", "=", action.id)
               .execute();
+            input.signal?.throwIfAborted();
           });
           return json(result);
         } catch (error) {
@@ -400,22 +581,20 @@ export class SessionActionsService {
               .returning("id")
               .executeTakeFirst();
             if (!failed) return;
-            await this.sessions.turns.deliver({
+            await this.sessions.recordActionWithin(trx, {
               sessionId: args.sessionId,
-              content: `${actionLabel(input.operation)} failed: ${message}`,
-              author: input.author,
-              mode: "message_only",
-              idempotencyKey: `action:${action.id}:failure`,
-              metadata: {
+              actionId: action.id,
+              status: "failed",
+              actor: input.author,
+              text: `${actionLabel(input.operation)} failed: ${message}`,
+              data: {
                 sessionAction: {
                   id: action.id,
                   operation: input.operation,
                   status: "failed",
                 },
                 causation: input.causation ?? [],
-                provenance: input.provenance ?? {},
               },
-              transaction: trx,
             });
           });
           throw error;
@@ -430,20 +609,51 @@ function actionLabel(operation: SessionActionOperation): string {
   return {
     inspect: "Inspected this session",
     list: "Listed sessions",
+    find: "Found a session by key",
     history: "Read session history",
     create: "Created a session",
     fork: "Forked this session",
     spawn: "Created a child session",
     archive: "Archived this session",
     unarchive: "Unarchived this session",
+    close: "Closed this chat",
     interrupt: "Interrupted this session",
     complete: "Marked work finished",
     reopen: "Reopened the work",
     stopWatcher: "Stopped a watcher",
   }[operation];
 }
+/**
+ * The key an action is recorded under: who acted and the caller's key. The
+ * only way to build it, for the record and for every lookup of it.
+ */
+function actionKey(input: {
+  author: SessionMessageAuthor;
+  idempotencyKey: string;
+}): string {
+  return JSON.stringify([actorIdentity(input.author), input.idempotencyKey]);
+}
+/**
+ * Who acted, without a workflow run's circumstances (its enablement,
+ * watcher and schedule): the run is the actor, and its actions keep the
+ * key they had before the sender carried those.
+ */
+function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
+  if (author.kind !== "workflow") return author;
+  return {
+    kind: "workflow",
+    runId: author.runId,
+    workflowName: author.workflowName,
+    ...(author.displayName ? { displayName: author.displayName } : {}),
+  };
+}
+
+/**
+ * A value as jsonb stores it, so an action compares equal to its own stored
+ * copy: half of a surrogate pair and U+0000 are U+FFFD there.
+ */
 function json(value: unknown): Json {
-  return JSON.parse(JSON.stringify(value ?? null));
+  return JSON.parse(jsonbText(value));
 }
 function canonical(value: Json): string {
   if (Array.isArray(value)) return JSON.stringify(value.map(canonical));

@@ -3,7 +3,7 @@ import type { RunPluginPayload } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import type { CapabilityRegistry } from "./capability-providers.js";
 import type { PluginsService } from "./plugins-service.js";
-import type { RunStage, SecretsService } from "./secrets-service.js";
+import type { SecretsService } from "./secrets-service.js";
 
 export interface RunPluginBundle {
   plugins: RunPluginPayload[];
@@ -20,37 +20,39 @@ export interface RunPluginBundle {
  * Produce a snapshot of the plugin files + env bindings that should be
  * materialized inside the sandbox for a single run. Decouples the
  * `PluginResolver` (I/O against disk / registry / git) from the run executor.
+ * Project secrets (`defineSecrets`) are injected whether or not the host
+ * resolves plugins; a host without a resolver simply attaches none.
  */
 export class RunPluginsLoader {
   constructor(
-    private readonly plugins: PluginsService,
     private readonly secrets: SecretsService,
-    private readonly resolver: PluginResolver,
+    private readonly pluginSupport?: {
+      plugins: PluginsService;
+      resolver: PluginResolver;
+    },
     private readonly capabilities?: CapabilityRegistry,
   ) {}
 
   async load(opts: {
     identity: Identity;
     projectId: string;
-    stage: RunStage;
     workflowName?: string;
   }): Promise<RunPluginBundle> {
-    const { identity, projectId, stage, workflowName } = opts;
-    const attached = await this.plugins.loadAttachedResolved(projectId);
+    const { identity, projectId, workflowName } = opts;
+    const attached =
+      (await this.pluginSupport?.plugins.loadAttachedResolved(projectId)) ?? [];
     const payloads = await Promise.all(
       attached.map((plugin) => this.buildPayload(plugin)),
     );
     const { values, missingRequired } = await this.secrets.loadForRun({
       identity,
       projectId,
-      stage,
     });
 
     const capabilityEnv = await this.resolveCapabilities({
       attached,
       identity,
       projectId,
-      stage,
       workflowName,
     });
 
@@ -69,7 +71,6 @@ export class RunPluginsLoader {
     attached: ResolvedPlugin[];
     identity: Identity;
     projectId: string;
-    stage: RunStage;
     workflowName?: string;
   }): Promise<Record<string, string>> {
     if (!this.capabilities) return {};
@@ -90,7 +91,6 @@ export class RunPluginsLoader {
       tenantId: args.identity.tenantId,
       externalUserId: args.identity.externalUserId,
       projectId: args.projectId,
-      stage: args.stage,
       workflowName: args.workflowName,
     });
   }
@@ -98,7 +98,9 @@ export class RunPluginsLoader {
   private async buildPayload(
     plugin: ResolvedPlugin,
   ): Promise<RunPluginPayload> {
-    const files = await this.resolver.listPluginFiles(plugin);
+    const resolver = this.pluginSupport?.resolver;
+    if (!resolver) throw new Error("Plugins are not configured");
+    const files = await resolver.listPluginFiles(plugin);
     return {
       packageName: plugin.packageName,
       files,

@@ -5,7 +5,7 @@ Headless React bindings for Catamorphic: a provider, jotai atoms for canvas/pane
 ## Install
 
 ```bash
-pnpm add @catamorphic/react @catamorphic/api-client @tanstack/react-query react react-dom
+pnpm add @catamorphic/react@alpha @catamorphic/api-client@alpha @tanstack/react-query react react-dom
 ```
 
 Peer versions: React `^18.2 || ^19`, TanStack Query `^5`.
@@ -75,7 +75,7 @@ families for boundaries or batch processing.
 - `useSubmitRunInput({ runId, pauseId })` — `mutateAsync({ idempotencyKey, value })`
 - `useRunItems({ run, workflowStepAttemptId, status?, limit?, offset?, pollInterval? })`
 - `useRunItemSteps({ run, workflowStepAttemptId, itemId, pollInterval? })`
-- `useEditorKeyboard()` — Escape-key handling for the editor's panels.
+- `useEditorKeyboard({ onEscape? })` — Escape clears the selected step after host handling.
 
 `workflowName` is optional so selection-driven screens can mount `useRuns`
 before a workflow is selected; the query remains disabled until both IDs are
@@ -93,20 +93,17 @@ polling from their parent `Run` and selected batch scope, including waiting
 scopes, instead of accepting a separate activity flag.
 
 Workflow list and detail queries share the exported `workflowKeys` hierarchy.
-File writes, deploys, commits, and branch checkouts invalidate the project
+File writes, deploys, and commits invalidate the project
 workflow prefix so both list summaries and singular workflow graphs refresh.
 
 ### Git
 
-- `useProjectGit(projectId, { pollMs? })` — repo status (branch + dirty + ahead/behind)
-- `useProjectBranches(projectId)`
+- `useProjectGit(projectId, { pollMs? })`: draft status (changed files, ahead/behind)
 - `useProjectCommits(projectId, { ref?, limit?, before? })`
 - `useProjectConflicts(projectId)`
-- `useCreateBranch(projectId)`
-- `useCheckoutBranch(projectId)`
 - `useCommitChanges(projectId)` — commit + deploy
 - `useDeployProject(projectId)`
-- `useProjectGitState({ projectId, baselineFiles })` — composite hook for multi-branch draft persistence (now reads `apiClient` from the provider; no host adapter required)
+- `useProjectGitState({ projectId, baselineFiles })` — composite hook for client-side draft persistence (now reads `apiClient` from the provider; no host adapter required)
 
 ### Plugins
 
@@ -124,10 +121,22 @@ workflow prefix so both list summaries and singular workflow graphs refresh.
 ### Agent (coding sessions)
 
 - `useAgentSessions(projectId)`
-- `useAgentSession(projectId, sessionId)`
+- `useAgentSession(projectId, sessionId)`: the live session (ADR 0197). It
+  loads the snapshot, streams the events after its sequence over SSE, folds
+  them with `@catamorphic/agent-protocol`'s reducer, resumes from the last
+  applied sequence after a dropped connection, replaces its state on a
+  `reset`, reloads the snapshot after a gap, and pages older items with
+  `loadOlder`.
+- `useAgentChat(projectId, options)`: the chat on top of it: `timeline`
+  (turns of input, work and answer, from `sessionTimeline`), `queue`,
+  `pending` (sent messages shown at once, reconciled with their items),
+  `requests`, and the commands `send`, `sendNow`, `editQueued`,
+  `holdQueued`, `cancelQueued`, `sendQueuedNow`, `interrupt`, `retry`,
+  `respond` and `rollback`. Each command carries a generated `commandId`
+  and is resent with the same id after a timeout or a server error.
 - `useCreateAgentSession(projectId)`
-- `useSendAgentMessage(projectId, sessionId)`
-- `useAgentChat(projectId, options)`
+- `sendSessionCommand({ apiClient, projectId, sessionId, command })`: one
+  command without the hook.
 - `useAcknowledgeAgentSessionAttention(projectId)`
 - `useArchiveAgentSession(projectId)`
 - `useUnarchiveAgentSession(projectId)`
@@ -191,48 +200,39 @@ The scope is idempotent — nesting one inside another reuses the ambient
 store unless you pass `isolate` to force a fresh one (useful for
 side-by-side editors that must not share selection).
 
-Atoms exposed for host chrome: `codeAtom`, `graphAtom`, `selectedNodeIdAtom`,
-`selectedNodeAtom`, `panelVisibilityAtom`, `rightPanelOpenAtom`,
-`activePanelTabAtom`, `showRunDialogAtom`, `lastTriggerDataAtom`,
-`executionStateAtom`, `reactFlowNodesAtom`,
-`reactFlowEdgesAtom`, `codeEditorReadOnlyAtom`, `aiLoadingAtom`,
-and `collapsedNodeIdsAtom`.
+Atoms exposed for host chrome: `codeAtom`, `graphAtom`, `graphParseStateAtom`,
+`selectedNodeIdAtom`, `selectedNodeAtom`, `showRunDialogAtom`,
+`lastTriggerDataAtom`, `executionStateAtom`, `reactFlowNodesAtom`,
+`reactFlowEdgesAtom`, `codeEditorReadOnlyAtom`, and `collapsedNodeIdsAtom`.
+There is no panel-visibility atom: an inspector follows `selectedNodeAtom`
+and the host decides what else it shows.
 
 ## Error envelope
 
 Every hook rejects with a typed `CatamorphicError` instead of a bare `Error`. Branch on `error.code`, never on `error.message`:
 
 ```tsx
-import {
-  CatamorphicError,
-  isCatamorphicError,
-  useDeployProject,
-} from "@catamorphic/react";
+import { CatamorphicError, useDeployProject } from "@catamorphic/react";
 
 const deploy = useDeployProject(projectId);
 
 try {
   await deploy.mutateAsync();
 } catch (err) {
-  if (isCatamorphicError(err)) {
-    switch (err.code) {
-      case "conflict":
-        return showConflictResolver(err.details);
-      case "unauthorized":
-        return redirectToLogin();
-      case "validation":
-      case "not_found":
-      case "server_error":
-      case "network":
-      case "unknown":
-        return toast(err.message);
-    }
+  if (!(err instanceof CatamorphicError)) throw err;
+  switch (err.code) {
+    case "conflict":
+      return showConflictResolver(err.details);
+    case "unauthorized":
+    case "authentication_required":
+      return redirectToLogin();
+    default:
+      return toast(err.message);
   }
-  throw err;
 }
 ```
 
-`code` is the contract; `message` is the human-readable summary; `details` carries a typed payload (e.g. conflict files for `code: "conflict"`, validation issues for `code: "validation"`).
+`code` is the contract (`unauthorized`, `forbidden`, `not_found`, `conflict`, `validation`, `rate_limited`, `sandbox_unavailable`, `authentication_required`, `network`, `unknown`); `message` is the human-readable summary; `details` is the server's raw payload (for example the conflicting files for `code: "conflict"`).
 
 ## Shared types — `@catamorphic/react/types`
 
@@ -276,8 +276,10 @@ to the public graph rather than asserting the two shapes are identical.
 returns the canonical production `Run`, which is handed to the host's
 `renderRunsPanel` slot and selected while the query cache refreshes.
 
-`useEditorKeyboard()` wires the Escape-key behaviour (close the Runs pane,
-then the detail panel). Mount it at most once per scope.
+`useEditorKeyboard({ onEscape? })` wires the Escape key: `onEscape` runs
+first (return true when it closed something, such as a Runs pane), then the
+selected step clears, which closes a selection-driven inspector. Keys typed
+into fields are ignored. Mount it at most once per scope.
 
 ## Embedding with `@catamorphic/ui`
 

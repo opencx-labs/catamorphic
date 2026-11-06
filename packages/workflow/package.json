@@ -1,6 +1,6 @@
 {
   "name": "@catamorphic/workflow",
-  "version": "0.0.3",
+  "version": "0.1.0-alpha.37",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,20 +9,47 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./project-layout": {
+      "import": "./dist/project-layout.js",
+      "types": "./dist/project-layout.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "package.json",
-    "README.md"
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
   ],
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/workflow --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.type-tests.json"
+    "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.type-tests.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/project-layout.ts"
+    ],
+    "splitting": false
   },
   "devDependencies": {
     "@types/node": "^26.1.1"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/workflow"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

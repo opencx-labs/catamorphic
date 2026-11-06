@@ -2,24 +2,31 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DB } from "@catamorphic/db";
 import type {
+  DraftChange,
   GitCredentials,
+  ProjectDraft,
   ProjectManager,
-  ProjectRepo,
+  RemoteOwnership,
 } from "@catamorphic/git";
-import { discoverLocalFolder } from "@catamorphic/git";
+import {
+  DraftContentChangedError,
+  discoverLocalFolder,
+  OriginDraftRepo,
+} from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import {
   authorFor,
   type Identity,
   mayUseProject,
+  type ProjectPermissionName,
   SYSTEM_AUTHOR,
 } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
 import {
   AccessDeniedError,
-  assertBuilder,
   assertMayManageRolePolicy,
+  assertProjectPermission,
   assertRootIdentity,
 } from "./artifact-scope.js";
 import { listLocalDocuments } from "./local-document-files.js";
@@ -35,6 +42,17 @@ export interface Project {
   name: string;
   storageType: "managed" | "remote";
   remoteUrl: string | null;
+  /**
+   * Who created the linked remote (ADR 0170): an `attached` repository only
+   * receives `work/*` branches and pull requests. `null` when unlinked.
+   */
+  remoteOwnership: RemoteOwnership | null;
+  /**
+   * Since when this project's main has not been a fast-forward of its code
+   * host's default branch (ADR 0170): accepted changes stop arriving until
+   * the two are reconciled. `null` while they converge.
+   */
+  remoteDivergedAt: string | null;
   defaultBranch: string;
   createdAt: string;
   updatedAt: string;
@@ -55,9 +73,14 @@ export interface CreateProjectInput {
   /** Adopt the folder's existing contents instead of scaffolding. */
   importExisting?: boolean;
   /**
+   * Start with no files: a local copy another authority fills (a member's
+   * copy of a server project), so nothing local competes on first sync.
+   */
+  empty?: boolean;
+  /**
    * Populate the project by cloning a network git remote instead of
    * scaffolding. Library-direct only (like `rootPath`) — HTTP callers go
-   * through the GitHub surface, which resolves credentials server-side.
+   * through the code-host surface, which resolves credentials server-side.
    */
   cloneFrom?: {
     url: string;
@@ -102,7 +125,7 @@ export class ProjectNotFoundError extends Error {
  * The one "this project exists in this tenant" check every service runs
  * before touching a project. Throws {@link ProjectNotFoundError}; says
  * nothing about what the identity may DO there — callers gate that
- * separately (assertBuilder, scope refs, …).
+ * separately (assertProjectPermission, scope refs, …).
  */
 export async function requireTenantProject(
   db: Kysely<DB> | Transaction<DB>,
@@ -263,6 +286,8 @@ export class ProjectsService {
         ...(checkout
           ? {
               remote_url: checkout.remoteUrl,
+              // An opened folder's origin existed before Work did.
+              remote_ownership: checkout.remoteUrl ? "attached" : null,
               remote_branch: checkout.remoteBranch ?? checkout.branch ?? "main",
               default_branch:
                 checkout.defaultBranch ?? checkout.branch ?? "main",
@@ -275,12 +300,13 @@ export class ProjectsService {
       // New projects get the resolved seed skills (hidden reference
       // material — the agent knows the conventions from its first session)
       // but NO visible workspace scaffold; the workspace arrives on demand
-      // via the catamorphic-projects skill (ADR 0043).
+      // via the work-projects skill (ADR 0043).
       const repo = await this.projectManager.create(tenantId, projectId, {
         name: input.name,
         initialFiles: this.seedFiles,
         rootPath: input.rootPath,
         importExisting: input.importExisting,
+        empty: input.empty,
         cloneFrom: input.cloneFrom,
       });
       await repo.dispose();
@@ -331,13 +357,20 @@ export class ProjectsService {
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    // A scoped identity lists the projects its scope names in any capacity
-    // (builder, agent, app, document…): what it may open. Metadata only —
-    // every project surface still gates on its own ref.
+    // A scoped identity lists the projects it holds anything on (an agent,
+    // an app, a document, a permission…): what it may open. Metadata only;
+    // every project surface still gates on its own grant.
     const visible =
       identity.scope === undefined
         ? null
-        : [...new Set(identity.scope.map((ref) => ref.projectId))];
+        : [
+            ...new Set([
+              ...identity.scope.map((ref) => ref.projectId),
+              ...(identity.projectPermissions ?? []).map(
+                (ref) => ref.projectId,
+              ),
+            ]),
+          ];
     if (visible && visible.length === 0) return { items: [], total: 0 };
 
     let query = this.db
@@ -360,8 +393,9 @@ export class ProjectsService {
     return { items: rows.map(mapProject), total };
   }
 
+  /** The project with its program settings (`program:read`). */
   async get(identity: Identity, projectId: string): Promise<Project> {
-    const row = await this.getRow(identity, projectId);
+    const row = await this.getRow(identity, projectId, "program:read");
     return mapProject(row);
   }
 
@@ -398,7 +432,12 @@ export class ProjectsService {
         },
       },
       async () => {
-        const existing = await this.getRow(identity, projectId);
+        // The name is everyone's: renaming publishes.
+        const existing = await this.getRow(
+          identity,
+          projectId,
+          "program:publish",
+        );
 
         const updated = await this.db
           .updateTable("projects")
@@ -428,7 +467,9 @@ export class ProjectsService {
         },
       },
       async () => {
-        const row = await this.getRow(identity, projectId);
+        // A project's lifecycle is the tenant's, like creating one.
+        assertRootIdentity(identity);
+        const row = await this.getRow(identity, projectId, "program:read");
         const project = mapProject(row);
 
         // Deprovisioning hooks run before anything is deleted: a throw aborts
@@ -471,7 +512,7 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:read");
         return this.withDev(identity, projectId, async (repo) => {
           const root = await this.projectManager.localPath({
             tenantId: identity.tenantId,
@@ -509,14 +550,15 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:read");
         return this.withDev(identity, projectId, async (repo) => {
           try {
             if (
-              await this.projectManager.localPath({
+              !(repo instanceof OriginDraftRepo) &&
+              (await this.projectManager.localPath({
                 tenantId: identity.tenantId,
                 projectId,
-              })
+              }))
             ) {
               const stat = await fs.stat(path.join(repo.repoPath, filePath));
               if (!stat.isFile() || stat.size > 2 * 1024 * 1024)
@@ -555,17 +597,18 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:read");
         return this.withDev(identity, projectId, (repo) => repo.readAllFiles());
       },
     );
   }
 
   /**
-   * Commit whatever is dirty in the caller's working copy under one message
+   * Commit whatever is dirty in the caller's local folder under one message
    * (the desktop's "Sync from server" checkpoint after materializing a remote
    * project's program files, ADR 0055). Returns the new sha, or the current
-   * HEAD when the tree was clean.
+   * HEAD when the tree was clean. A server draft has nothing to commit: its
+   * tip is returned (ADR 0191).
    */
   async commitAll(
     identity: Identity,
@@ -585,15 +628,25 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
-        const repo = await this.projectManager.openDev(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
+        await this.requireExists(identity, projectId, "program:write");
+        const repo = await this.projectManager.openDraft({
+          tenantId: identity.tenantId,
+          projectId: projectId,
+          externalUserId: identity.externalUserId,
+        });
         try {
+          // A server draft has nothing uncommitted: every write is a draft
+          // commit (ADR 0191).
+          if (repo instanceof OriginDraftRepo)
+            return await repo.resolveRef("HEAD");
           const status = await repo.status();
           if (!status.dirty) return await repo.resolveRef("HEAD");
+          // Committing a role file is changing access policy.
+          assertMayManageRolePolicy(
+            identity,
+            projectId,
+            opts?.paths ?? status.modifiedFiles,
+          );
           return await repo.commit(message, author, opts);
         } finally {
           await repo.dispose();
@@ -619,9 +672,28 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:write");
         assertMayManageRolePolicy(identity, projectId, [filePath]);
         return this.withDev(identity, projectId, async (repo) => {
+          if (repo instanceof OriginDraftRepo) {
+            // The expected content is checked in the same compare-and-swap
+            // that moves the draft, so no other replica slips in between.
+            await repo
+              .write({
+                changes: [{ path: filePath, content: input.content }],
+                message: input.commitMessage,
+                expected:
+                  input.expectedContent === undefined
+                    ? undefined
+                    : { [filePath]: input.expectedContent },
+              })
+              .catch((error: unknown) => {
+                if (error instanceof DraftContentChangedError)
+                  throw new ProjectFileConflictError();
+                throw error;
+              });
+            return input.content;
+          }
           if (
             input.expectedContent !== undefined &&
             (await repo.readFile(filePath)) !== input.expectedContent
@@ -636,6 +708,83 @@ export class ProjectsService {
             );
           }
           return input.content;
+        });
+      },
+    );
+  }
+
+  /** Remove a file from the caller's draft. */
+  async deleteFile(
+    identity: Identity,
+    projectId: string,
+    filePath: string,
+  ): Promise<void> {
+    return withSpan(
+      {
+        tracer,
+        name: "project.delete_file",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId, "program:write");
+        assertMayManageRolePolicy(identity, projectId, [filePath]);
+        await this.withDev(identity, projectId, (repo) =>
+          repo.deleteFile(filePath),
+        );
+      },
+    );
+  }
+
+  /**
+   * Apply several writes and deletes to the caller's draft at once: on a
+   * server, one draft commit that lands whole or not at all (ADR 0191).
+   */
+  async writeFiles(input: {
+    identity: Identity;
+    projectId: string;
+    changes: readonly DraftChange[];
+    message?: string;
+  }): Promise<void> {
+    const { identity, projectId } = input;
+    return withSpan(
+      {
+        tracer,
+        name: "project.write_files",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId, "program:write");
+        assertMayManageRolePolicy(
+          identity,
+          projectId,
+          input.changes.map((change) => change.path),
+        );
+        await this.withDev(identity, projectId, async (repo) => {
+          if (repo instanceof OriginDraftRepo) {
+            await repo.write({
+              changes: input.changes,
+              message: input.message,
+            });
+            return;
+          }
+          for (const change of input.changes) {
+            if ("delete" in change) await repo.deleteFile(change.path);
+            else if (typeof change.content === "string")
+              await repo.writeFile(change.path, change.content);
+            else
+              await repo.writeFile(
+                change.path,
+                new TextDecoder().decode(change.content),
+              );
+          }
         });
       },
     );
@@ -657,8 +806,9 @@ export class ProjectsService {
   private async getRow(
     identity: Identity,
     projectId: string,
+    permission: ProjectPermissionName,
   ): Promise<ProjectRow> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, permission);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -672,8 +822,9 @@ export class ProjectsService {
   private async requireExists(
     identity: Identity,
     projectId: string,
+    permission: ProjectPermissionName,
   ): Promise<void> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, permission);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -686,13 +837,13 @@ export class ProjectsService {
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {
@@ -708,8 +859,19 @@ function mapProject(row: ProjectRow): Project {
     name: row.name,
     storageType: row.storage_type as "managed" | "remote",
     remoteUrl: row.remote_url,
+    remoteOwnership: remoteOwnership(row.remote_ownership),
+    remoteDivergedAt: row.remote_diverged_at?.toISOString() ?? null,
     defaultBranch: row.default_branch,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/**
+ * A stored ownership as the type sync decides by. Anything but `owned` reads
+ * as `attached`, so an unexpected value can only make Work push less.
+ */
+export function remoteOwnership(value: string | null): RemoteOwnership | null {
+  if (value === null) return null;
+  return value === "owned" ? "owned" : "attached";
 }

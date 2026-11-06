@@ -17,6 +17,8 @@ import { ConfigFile, readConfigObject } from "./config-file.js";
  * The resolved theme is the selected preset's colors with overrides on top,
  * so a fully custom theme is just a selection with every token overridden.
  * Optional `fonts.sans` and `fonts.mono` override the desktop font stacks.
+ * Optional `backgrounds.left`, `.right` and `.chat` put a picture behind a
+ * sidebar or the chat, fading into the surface's own color (ADR 0263).
  */
 export { THEME_TOKENS, type ThemeToken } from "../shared/theme-tokens.js";
 
@@ -30,10 +32,44 @@ export interface ThemePreset {
   colors: ThemeColors;
 }
 
+/** The surfaces a theme can put a picture behind. */
+export const THEME_SURFACES = ["left", "right", "chat"] as const;
+export type ThemeSurface = (typeof THEME_SURFACES)[number];
+
+/**
+ * A picture behind a surface. It is anchored at `position` and fades into the
+ * surface's color away from it, so the rest of the surface stays readable.
+ */
+export interface ThemeBackground {
+  /** An https address (the window's CSP allows no other remote images). */
+  image: string;
+  position: "top" | "center" | "bottom";
+  /** 0 through 1. */
+  opacity: number;
+  /** Blur radius in pixels, 0 through 24. */
+  blur: number;
+  /** Pixel block size, 1 (none) through 32. */
+  pixelate: number;
+}
+
+const BACKGROUND_DEFAULTS: Omit<ThemeBackground, "image"> = {
+  position: "bottom",
+  opacity: 0.35,
+  blur: 0,
+  pixelate: 1,
+};
+
+const BACKGROUND_RANGES = {
+  opacity: [0, 1],
+  blur: [0, 24],
+  pixelate: [1, 32],
+} as const;
+
 export interface ThemeConfig {
   selection: string;
   overrides: Partial<ThemeColors>;
   fonts?: Partial<ThemeFonts>;
+  backgrounds?: Partial<Record<ThemeSurface, ThemeBackground>>;
 }
 
 export interface ResolvedTheme extends ThemeConfig {
@@ -336,6 +372,40 @@ export function isValidColor(value: unknown): value is string {
   return typeof value === "string" && COLOR_PATTERN.test(value.trim());
 }
 
+/** An https address short enough to be a picture, not a payload. */
+function isValidImageAddress(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048) return false;
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** A valid background with defaults filled, or undefined. */
+function normalizeBackground(raw: unknown): ThemeBackground | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as Record<string, unknown>;
+  if (!isValidImageAddress(record.image)) return undefined;
+  const number = (key: keyof typeof BACKGROUND_RANGES) => {
+    const value = record[key];
+    const [min, max] = BACKGROUND_RANGES[key];
+    return typeof value === "number" && value >= min && value <= max
+      ? value
+      : BACKGROUND_DEFAULTS[key];
+  };
+  return {
+    image: record.image,
+    position:
+      record.position === "top" || record.position === "center"
+        ? record.position
+        : "bottom",
+    opacity: number("opacity"),
+    blur: number("blur"),
+    pixelate: Math.round(number("pixelate")),
+  };
+}
+
 /** Keep a known preset and valid color/font overrides; drop everything else. */
 export function normalizeTheme(raw: unknown): ThemeConfig {
   const record =
@@ -371,10 +441,20 @@ export function normalizeTheme(raw: unknown): ThemeConfig {
       if (isValidFontStack(value)) fonts[token] = value.trim();
     }
   }
+  const backgrounds: Partial<Record<ThemeSurface, ThemeBackground>> = {};
+  if (typeof record.backgrounds === "object" && record.backgrounds !== null) {
+    for (const surface of THEME_SURFACES) {
+      const value = normalizeBackground(
+        Reflect.get(record.backgrounds, surface),
+      );
+      if (value) backgrounds[surface] = value;
+    }
+  }
   return {
     selection,
     overrides,
     ...(Object.keys(fonts).length > 0 ? { fonts } : {}),
+    ...(Object.keys(backgrounds).length > 0 ? { backgrounds } : {}),
   };
 }
 
@@ -391,10 +471,11 @@ export function normalizeThemeLayer(raw: unknown): Partial<ThemeConfig> {
     ...(hasSelection ? { selection: next.selection } : {}),
     overrides: next.overrides,
     ...(next.fonts ? { fonts: next.fonts } : {}),
+    ...(next.backgrounds ? { backgrounds: next.backgrounds } : {}),
   };
 }
 
-/** A selection replaces inherited color edits; token and font edits remain sparse. */
+/** A selection replaces inherited color edits; token, font and background edits remain sparse. */
 export function resolveThemeLayers(
   layers: readonly unknown[],
   systemAppearance: ThemeAppearance = "dark",
@@ -408,6 +489,7 @@ export function resolveThemeLayers(
         ...next.overrides,
       },
       fonts: { ...current.fonts, ...next.fonts },
+      backgrounds: { ...current.backgrounds, ...next.backgrounds },
     };
   }, DEFAULT_THEME);
   return resolveTheme(config, systemAppearance);
@@ -446,6 +528,9 @@ export function resolveTheme(
     overrides: config.overrides,
     colors,
     fonts: { ...DEFAULT_THEME_FONTS, ...config.fonts },
+    ...(config.backgrounds && Object.keys(config.backgrounds).length > 0
+      ? { backgrounds: config.backgrounds }
+      : {}),
     appearance: luminance !== null && luminance >= 0.5 ? "light" : "dark",
   };
 }
@@ -480,6 +565,45 @@ export function validateThemeConfig(raw: Record<string, unknown>): void {
       )
         throw new Error(`Invalid theme ${family}.${key}`);
     }
+  }
+  const backgrounds = raw.backgrounds;
+  if (backgrounds === undefined) return;
+  if (
+    !backgrounds ||
+    typeof backgrounds !== "object" ||
+    Array.isArray(backgrounds)
+  )
+    throw new Error("backgrounds must be a JSON object");
+  for (const [surface, value] of Object.entries(backgrounds)) {
+    if (!THEME_SURFACES.some((known) => known === surface))
+      throw new Error(`Unknown theme background ${surface}`);
+    const record = value as Record<string, unknown> | null;
+    if (
+      !record ||
+      typeof record !== "object" ||
+      !isValidImageAddress(record.image)
+    )
+      throw new Error(`Theme background ${surface} needs an https image`);
+    for (const key of Object.keys(
+      BACKGROUND_RANGES,
+    ) as (keyof typeof BACKGROUND_RANGES)[]) {
+      const [min, max] = BACKGROUND_RANGES[key];
+      const number = record[key];
+      if (
+        number !== undefined &&
+        !(typeof number === "number" && number >= min && number <= max)
+      )
+        throw new Error(
+          `Theme background ${surface}.${key} must be ${min} through ${max}`,
+        );
+    }
+    if (
+      record.position !== undefined &&
+      !["top", "center", "bottom"].includes(record.position as string)
+    )
+      throw new Error(
+        `Theme background ${surface}.position must be top, center or bottom`,
+      );
   }
 }
 

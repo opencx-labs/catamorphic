@@ -10,8 +10,12 @@ import { type AppHandle, launchApp } from "./harness.js";
  */
 let app: AppHandle;
 let origin: string;
-const server = http.createServer((_request, response) => {
+const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
+  if (request.url === "/background") {
+    response.end("<title>Background Lab</title>");
+    return;
+  }
   response.end(`<title>Share Lab</title><script>
     let shared = null;
     window.share = (constraints) => {
@@ -34,14 +38,16 @@ beforeAll(async () => {
   if (!address || typeof address === "string")
     throw new Error("Missing server address");
   origin = `http://127.0.0.1:${address.port}`;
-  app = await launchApp({ urls: [`${origin}/share`] });
+  // A second tab sits in the background: hidden pages paint no frames, and
+  // the picker must still list them.
+  app = await launchApp({ urls: [`${origin}/background`, `${origin}/share`] });
 });
 afterAll(async () => {
   await app?.stop();
   server.close();
 });
 
-const guest = `document.querySelector('webview')`;
+const guest = `document.querySelector('webview[src$="/share"]')`;
 const inGuest = (code: string) =>
   app.eval(`${guest}.executeJavaScript(${JSON.stringify(code)}, true)`);
 const picker = `document.querySelector('[data-testid="screen-share-picker"]')`;
@@ -70,6 +76,7 @@ describe("screen sharing", () => {
     const text = await app.eval<string>(`${picker}.textContent`);
     expect(text).toContain("Choose what to share");
     expect(text).toContain("This tab");
+    expect(text).toContain("Background Lab");
     expect(
       await app.eval(
         `document.querySelector('[data-testid="screen-share-tabs"] [data-testid="screen-share-source"]').dataset.sourceId`,
@@ -114,8 +121,8 @@ describe("screen sharing", () => {
       `!!document.querySelector('[data-testid="screen-share-tabs"] [data-testid="screen-share-source"]')`,
       { label: "tab row" },
     );
-    await click(
-      '[data-testid="screen-share-tabs"] [data-testid="screen-share-source"]',
+    await app.eval(
+      `[...document.querySelectorAll('[data-testid="screen-share-tabs"] [data-testid="screen-share-source"]')].find((row) => row.textContent.includes("This tab")).click(); true`,
     );
     await click('[data-testid="screen-share-confirm"]');
     await waitForResult("tab share result");

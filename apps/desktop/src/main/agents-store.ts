@@ -6,9 +6,25 @@ import type {
   AgentDelegationPolicy,
   AgentEnvironmentPolicy,
 } from "@catamorphic/core";
-import { AgentDelegationPolicySchema } from "@catamorphic/core";
-import type { McpToolPolicy } from "@catamorphic/sandbox";
+import {
+  AgentDelegationPolicySchema,
+  DEFAULT_DELEGATION_POLICY,
+} from "@catamorphic/core";
+import {
+  harnessPermissionIssues,
+  type McpToolPolicy,
+} from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
+import {
+  DESKTOP_DEFAULT_SANDBOXING,
+  effectiveHarnessPermissions,
+  type HarnessPermissions,
+  type Sandboxing,
+} from "../shared/agent-permissions.js";
+import {
+  credentialUnlockError,
+  requireCredentialEncryption,
+} from "./credential-encryption.js";
 
 /**
  * Per-profile AI agent roster: `<userData>/profiles/<id>/agents.json`.
@@ -21,6 +37,8 @@ import { safeStorage } from "electron";
  *  - `claude-code`: the Claude Code CLI on this machine, working directly
  *    in the project folder.
  *  - `codex`: the OpenAI Codex CLI on this machine, likewise.
+ *  - `acp`: an Agent Client Protocol agent (ADR 0241), its own command
+ *    (`hermes acp`) on its own model, memory and sign-in.
  *
  * Auth is per agent: an API key (encrypted at rest via safeStorage) or
  * `account` — for the CLIs that's their own login isolated per agent
@@ -28,16 +46,8 @@ import { safeStorage } from "electron";
  * built-in agent on OpenRouter it's the browser PKCE flow, whose scoped
  * key lands back in the config so the user never pastes one.
  */
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "acp";
 export type AgentEffortSetting = "low" | "medium" | "high" | "xhigh" | "max";
-
-/**
- * Normalized operating mode (ADR 0056), mapped per harness — Claude Code
- * permission modes (plan / acceptEdits / bypassPermissions), Codex sandbox
- * modes (read-only / workspace-write / danger-full-access). The built-in
- * agent is sandboxed with draft sync-back; mode does not apply to it.
- */
-export type AgentModeSetting = "read-only" | "edit" | "full-access";
 
 /**
  * Which skills an agent is offered (any tier — project, user, host, by
@@ -52,7 +62,10 @@ export type AgentSkillsSetting =
  * How an agent authenticates:
  *  - `local`  — the machine's existing CLI setup (~/.claude, ~/.codex): the
  *    SDK is spawned with no credential overrides, so whatever `claude
- *    login` / `codex login` established just works. The default for CLI
+ *    login` / `codex login` established just works. An Anthropic key or
+ *    token merely inherited from the shell Work started from never
+ *    outranks that sign-in (unless Claude is routed to a gateway), so a
+ *    chat and the commands it runs do not see it. The default for CLI
  *    harnesses.
  *  - `account` — a per-agent isolated login (private CLAUDE_CONFIG_DIR /
  *    CODEX_HOME, or OpenRouter's browser PKCE) for second accounts.
@@ -76,6 +89,8 @@ export interface AgentConfig {
   harness: AgentHarness;
   /** Model provider — built-in (ai-sdk) only; the CLIs imply theirs. */
   provider?: AiSdkProvider;
+  /** What an `acp` agent runs (ADR 0241); absent for every other harness. */
+  acp?: { command: string[] };
   /** Model id; empty string = the harness default. */
   model: string;
   effort: AgentEffortSetting;
@@ -85,11 +100,20 @@ export interface AgentConfig {
   /**
    * The agent's own main prompt (its persona) — prepended at the provider
    * boundary so it leads and the host playbooks follow, exactly like a
-   * project agent's `.catamorphic/agents/<slug>.md` (ADR 0056). Harness-neutral.
+   * project agent's `.work/agents/<slug>.md` (ADR 0056). Harness-neutral.
    */
   instructions?: string;
-  /** Operating mode; absent means "full-access". */
-  mode?: AgentModeSetting;
+  /**
+   * What may leave the agent's sandbox (ADR 0182); absent means "publish",
+   * the local default (ADR 0140).
+   */
+  sandboxing?: Sandboxing;
+  /**
+   * The harness's own permission mode in its native values (ADR 0182):
+   * Claude Code `permissionMode`, Codex `sandbox` and `approvals`. Absent
+   * fields take the local defaults; the built-in agent has none.
+   */
+  harnessPermissions?: HarnessPermissions;
   /** Checkout doctrine; absent means "shared-first". */
   coordination?: AgentCoordinationStrategy;
   /** Logical Environment preferences and compatibility requirements. */
@@ -102,6 +126,12 @@ export interface AgentConfig {
    * harnesses have no memory and ignore it.
    */
   memory?: boolean;
+  /**
+   * Show the chats the person runs in this agent's tool outside Work
+   * (Claude Code or Codex) in their projects' chat lists, and continue
+   * them on this agent (ADR 0233). Absent means off.
+   */
+  syncSessions?: boolean;
   /** MCP connection assignment; absent means `{ mode: "all" }`. */
   connections?: AgentConnectionsSetting;
   /** Skills assignment; absent means `{ mode: "all" }`. */
@@ -117,10 +147,37 @@ export interface AgentConfig {
   delegation?: AgentDelegationPolicy;
 }
 
+/** Safe to enumerate while a credential is locked; never usable as credentials. */
+export interface AgentMetadata extends Omit<AgentConfig, "apiKey"> {
+  hasApiKey: boolean;
+}
+
 interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
   apiKeyEncrypted?: string;
-  apiKeyPlaintext?: string;
 }
+
+const STORED_AGENT_FIELDS: Record<keyof StoredAgent, true> = {
+  id: true,
+  name: true,
+  harness: true,
+  provider: true,
+  acp: true,
+  model: true,
+  effort: true,
+  auth: true,
+  apiKeyEncrypted: true,
+  instructions: true,
+  sandboxing: true,
+  harnessPermissions: true,
+  coordination: true,
+  environment: true,
+  memory: true,
+  syncSessions: true,
+  connections: true,
+  skills: true,
+  toolPolicies: true,
+  delegation: true,
+};
 
 interface AgentsFile {
   agents: StoredAgent[];
@@ -142,22 +199,32 @@ export interface PublicAgentConfig {
   name: string;
   harness: AgentHarness;
   provider?: AiSdkProvider;
+  acp?: { command: string[] };
   model: string;
   effort: AgentEffortSetting;
   auth: AgentAuthMode;
   hasApiKey: boolean;
   apiKeyMasked: string | null;
+  /** Recovery guidance for this agent alone when its saved key cannot be unlocked. */
+  credentialError?: string;
   /** What media the chat composer may attach for this agent. */
   accepts: AgentAttachmentKind[];
   /** The agent's own main prompt ("" when none). */
   instructions: string;
-  /** Operating mode (always materialized; default "full-access"). */
-  mode: AgentModeSetting;
+  /** What may leave the agent's sandbox (always materialized). */
+  sandboxing: Sandboxing;
+  /**
+   * The harness's permission settings in effect (always materialized, only
+   * the fields this harness has; empty for the built-in agent).
+   */
+  harnessPermissions: HarnessPermissions;
   /** Checkout-coordination doctrine (always materialized). */
   coordination: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   /** Claude Code auto-memory (always materialized; opt-in, default false). */
   memory: boolean;
+  /** Imports this tool's chats from outside Work (materialized; default false). */
+  syncSessions: boolean;
   /** MCP connection assignment (always materialized; default "all"). */
   connections: AgentConnectionsSetting;
   /** Skills assignment (always materialized; default "all"). */
@@ -187,6 +254,9 @@ export function agentAccepts(config: {
       return ["image", "document"];
     case "codex":
       return ["image", "document"];
+    // ACP carries images; documents are named as not delivered.
+    case "acp":
+      return ["image"];
   }
 }
 
@@ -196,21 +266,26 @@ export const DEFAULT_AGENT_NAMES: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude",
   codex: "ChatGPT",
+  acp: "ACP agent",
 };
 
 export interface CreateAgentInput {
   name?: string;
   harness: AgentHarness;
   provider?: AiSdkProvider;
+  /** What an `acp` agent runs; required for one. */
+  acp?: { command: string[] };
   model?: string;
   effort?: AgentEffortSetting;
   auth?: AgentAuthMode;
   apiKey?: string | null;
   instructions?: string;
-  mode?: AgentModeSetting;
+  sandboxing?: Sandboxing;
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   toolPolicies?: Record<string, McpToolPolicy>;
@@ -227,10 +302,16 @@ export interface UpdateAgentInput {
   apiKey?: string | null;
   /** New instructions; "" clears them. */
   instructions?: string;
-  mode?: AgentModeSetting;
+  sandboxing?: Sandboxing;
+  /**
+   * Replace the harness's permission settings; `{}` returns to the local
+   * defaults. Fields the harness does not have are refused.
+   */
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   /** Replace the per-connection tool policies (null clears them). */
@@ -248,22 +329,77 @@ export class AgentsStore {
   private load(): AgentsFile {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, "utf-8"));
-      if (Array.isArray(raw?.agents)) return raw as AgentsFile;
-    } catch {
-      // First run.
+      if (!Array.isArray(raw?.agents))
+        throw new Error("Invalid agent settings");
+      if (
+        Object.keys(raw).some(
+          (key) =>
+            !["agents", "defaultAgentId", "projectDefaults"].includes(key),
+        ) ||
+        raw.agents.some(
+          (entry: unknown) =>
+            entry === null ||
+            typeof entry !== "object" ||
+            Array.isArray(entry) ||
+            Object.keys(entry).some(
+              (key) => !Object.hasOwn(STORED_AGENT_FIELDS, key),
+            ),
+        )
+      )
+        throw new Error("Unsupported agent settings");
+      for (const agent of raw.agents)
+        if (agent.delegation !== undefined)
+          agent.delegation = AgentDelegationPolicySchema.parse(
+            agent.delegation,
+          );
+      return raw as AgentsFile;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return { agents: [] };
+      throw new Error("Agent settings could not be opened", { cause: error });
     }
-    return { agents: [] };
   }
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(this.data, null, 2)}\n`, {
+    const temporary = `${this.file}.${randomUUID()}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify(this.data, null, 2)}\n`, {
       mode: 0o600,
+      flag: "wx",
     });
+    fs.renameSync(temporary, this.file);
   }
 
   list(): AgentConfig[] {
     return this.data.agents.map((agent) => this.decrypt(agent));
+  }
+
+  listMetadata(): AgentMetadata[] {
+    return this.data.agents.map((agent) => this.metadata(agent));
+  }
+
+  getMetadata(id: string): AgentMetadata | undefined {
+    const stored = this.data.agents.find((agent) => agent.id === id);
+    return stored ? this.metadata(stored) : undefined;
+  }
+
+  /** Keep Settings available, with a per-agent error instead of losing the roster. */
+  listPublic(): PublicAgentConfig[] {
+    return this.data.agents.map((agent) => {
+      const metadata = toPublicAgent(this.metadata(agent));
+      try {
+        this.decrypt(agent);
+        return metadata;
+      } catch (cause) {
+        return {
+          ...metadata,
+          credentialError:
+            cause instanceof Error
+              ? cause.message
+              : credentialUnlockError({ cause }).message,
+        };
+      }
+    });
   }
 
   get(id: string): AgentConfig | undefined {
@@ -342,6 +478,18 @@ export class AgentsStore {
   }
 
   create(input: CreateAgentInput): AgentConfig {
+    // From the renderer: a malformed `acp` is refused like a missing one.
+    const command = Array.isArray(input.acp?.command)
+      ? input.acp.command.filter(
+          (part): part is string => typeof part === "string" && part !== "",
+        )
+      : [];
+    if (input.harness === "acp" && command.length === 0)
+      throw new Error("An ACP agent needs the command that starts it.");
+    const harnessPermissions = checkedHarnessPermissions({
+      harness: input.harness,
+      permissions: input.harnessPermissions,
+    });
     const stored: StoredAgent = {
       id: randomUUID(),
       name: input.name?.trim() || DEFAULT_AGENT_NAMES[input.harness],
@@ -349,6 +497,7 @@ export class AgentsStore {
       ...(input.harness === "ai-sdk"
         ? { provider: input.provider ?? "anthropic" }
         : {}),
+      ...(input.harness === "acp" ? { acp: { command } } : {}),
       // Empty model = the harness/provider default, resolved at run time —
       // no model ids hardcoded here (OpenRouter picks its best free model).
       model: input.model?.trim() ?? "",
@@ -363,12 +512,16 @@ export class AgentsStore {
       ...(input.instructions?.trim()
         ? { instructions: input.instructions.trim() }
         : {}),
-      ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.sandboxing ? { sandboxing: input.sandboxing } : {}),
+      ...(harnessPermissions ? { harnessPermissions } : {}),
       ...(input.coordination && input.coordination !== "shared-first"
         ? { coordination: input.coordination }
         : {}),
       ...(input.environment ? { environment: input.environment } : {}),
       ...(input.memory === true ? { memory: true } : {}),
+      ...(input.syncSessions === true && syncsSessions(input.harness)
+        ? { syncSessions: true }
+        : {}),
       ...(input.connections ? { connections: input.connections } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.toolPolicies ? { toolPolicies: input.toolPolicies } : {}),
@@ -377,15 +530,21 @@ export class AgentsStore {
         : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
+    if (stored.syncSessions) this.soleSyncing(stored);
     this.data.agents.push(stored);
     this.data.defaultAgentId ??= stored.id;
     this.save();
     return this.decrypt(stored);
   }
 
-  update(id: string, patch: UpdateAgentInput): AgentConfig | undefined {
+  update(id: string, patch: UpdateAgentInput): AgentMetadata | undefined {
     const stored = this.data.agents.find((agent) => agent.id === id);
     if (!stored) return undefined;
+    // Encryption failure must leave both the saved and in-memory agent intact.
+    const key =
+      patch.apiKey === undefined
+        ? undefined
+        : this.encrypt(patch.apiKey?.trim() || null);
     if (patch.name !== undefined)
       stored.name = patch.name.trim() || stored.name;
     if (patch.provider !== undefined && stored.harness === "ai-sdk") {
@@ -399,8 +558,16 @@ export class AgentsStore {
       if (instructions) stored.instructions = instructions;
       else delete stored.instructions;
     }
-    if (patch.mode !== undefined) {
-      stored.mode = patch.mode;
+    if (patch.sandboxing !== undefined) {
+      stored.sandboxing = patch.sandboxing;
+    }
+    if (patch.harnessPermissions !== undefined) {
+      const harnessPermissions = checkedHarnessPermissions({
+        harness: stored.harness,
+        permissions: patch.harnessPermissions,
+      });
+      if (harnessPermissions) stored.harnessPermissions = harnessPermissions;
+      else delete stored.harnessPermissions;
     }
     if (patch.coordination !== undefined) {
       if (patch.coordination === "shared-first") delete stored.coordination;
@@ -413,6 +580,12 @@ export class AgentsStore {
       if (patch.memory) stored.memory = true;
       else delete stored.memory;
     }
+    if (patch.syncSessions !== undefined) {
+      if (patch.syncSessions && syncsSessions(stored.harness)) {
+        stored.syncSessions = true;
+        this.soleSyncing(stored);
+      } else delete stored.syncSessions;
+    }
     if (patch.connections !== undefined) stored.connections = patch.connections;
     if (patch.skills !== undefined) {
       if (patch.skills.mode === "all") delete stored.skills;
@@ -424,15 +597,19 @@ export class AgentsStore {
     if (patch.delegation !== undefined) {
       stored.delegation = AgentDelegationPolicySchema.parse(patch.delegation);
     }
-    if (patch.apiKey !== undefined) {
-      const { apiKeyEncrypted, apiKeyPlaintext } = this.encrypt(
-        patch.apiKey?.trim() || null,
-      );
-      stored.apiKeyEncrypted = apiKeyEncrypted;
-      stored.apiKeyPlaintext = apiKeyPlaintext;
-    }
+    if (key) stored.apiKeyEncrypted = key.apiKeyEncrypted;
     this.save();
-    return this.decrypt(stored);
+    return this.metadata(stored);
+  }
+
+  /**
+   * One agent per tool syncs its chats, and continues them (ADR 0233):
+   * turning it on for this one turns it off for the tool's others.
+   */
+  private soleSyncing(agent: StoredAgent): void {
+    for (const other of this.data.agents)
+      if (other.id !== agent.id && other.harness === agent.harness)
+        delete other.syncSessions;
   }
 
   remove(id: string): boolean {
@@ -453,62 +630,101 @@ export class AgentsStore {
 
   private encrypt(apiKey: string | null): {
     apiKeyEncrypted?: string;
-    apiKeyPlaintext?: string;
   } {
     if (!apiKey) return {};
-    if (safeStorage.isEncryptionAvailable()) {
-      return {
-        apiKeyEncrypted: safeStorage.encryptString(apiKey).toString("base64"),
-      };
-    }
-    console.warn(
-      "[desktop] OS keychain encryption unavailable; storing API key in plaintext.",
-    );
-    return { apiKeyPlaintext: apiKey };
+    requireCredentialEncryption();
+    return {
+      apiKeyEncrypted: safeStorage.encryptString(apiKey).toString("base64"),
+    };
   }
 
   private decrypt(stored: StoredAgent): AgentConfig {
-    const { apiKeyEncrypted, apiKeyPlaintext, ...rest } = stored;
+    const { apiKeyEncrypted, ...rest } = stored;
     let apiKey: string | null = null;
-    if (apiKeyEncrypted) {
+    // Native local/account modes use their explicit CLI account. A key saved
+    // for another mode is unrelated to this operation and stays sealed.
+    if (
+      apiKeyEncrypted !== undefined &&
+      (rest.auth === "api-key" || rest.harness === "ai-sdk")
+    ) {
+      requireCredentialEncryption();
       try {
+        if (typeof apiKeyEncrypted !== "string" || !apiKeyEncrypted)
+          throw new Error("Invalid saved encrypted credential");
         apiKey = safeStorage.decryptString(
           Buffer.from(apiKeyEncrypted, "base64"),
         );
-      } catch {
-        apiKey = null;
+        if (!apiKey) throw new Error("Empty saved credential");
+      } catch (cause) {
+        throw credentialUnlockError({ cause });
       }
-    } else {
-      apiKey = apiKeyPlaintext ?? null;
     }
     return { ...rest, apiKey };
   }
+
+  private metadata(stored: StoredAgent): AgentMetadata {
+    const { apiKeyEncrypted, ...rest } = stored;
+    return { ...rest, hasApiKey: apiKeyEncrypted !== undefined };
+  }
 }
 
-export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
-  const { apiKey, ...rest } = agent;
+/** Only Claude Code and Codex keep sessions Work can import (ADR 0233). */
+function syncsSessions(harness: AgentHarness): boolean {
+  return harness === "claude-code" || harness === "codex";
+}
+
+/**
+ * Permission settings this harness has, without unset fields; undefined when
+ * none are set. Throws on a field another harness owns.
+ */
+function checkedHarnessPermissions(args: {
+  harness: AgentHarness;
+  permissions: HarnessPermissions | undefined;
+}): HarnessPermissions | undefined {
+  if (!args.permissions) return undefined;
+  const issue = harnessPermissionIssues({
+    kind: args.harness === "ai-sdk" ? "builtin" : args.harness,
+    permissions: args.permissions,
+  })[0];
+  if (issue) throw new Error(issue.message);
+  const { permissionMode, sandbox, approvals } = args.permissions;
+  const kept: HarnessPermissions = {
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(sandbox ? { sandbox } : {}),
+    ...(approvals ? { approvals } : {}),
+  };
+  return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
+export function toPublicAgent(
+  agent: AgentConfig | AgentMetadata,
+): PublicAgentConfig {
+  const hasApiKey = "apiKey" in agent ? agent.apiKey !== null : agent.hasApiKey;
   return {
-    ...rest,
-    hasApiKey: apiKey !== null,
-    apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
+    id: agent.id,
+    name: agent.name,
+    harness: agent.harness,
+    ...(agent.provider ? { provider: agent.provider } : {}),
+    ...(agent.acp ? { acp: agent.acp } : {}),
+    model: agent.model,
+    effort: agent.effort,
+    auth: agent.auth,
+    ...(agent.environment ? { environment: agent.environment } : {}),
+    hasApiKey,
+    apiKeyMasked: hasApiKey ? "••••••••" : null,
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
-    mode: agent.mode ?? "full-access",
+    sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
+    harnessPermissions: effectiveHarnessPermissions({
+      harness: agent.harness,
+      permissions: agent.harnessPermissions,
+    }),
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
+    syncSessions: agent.syncSessions === true,
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},
-    delegation: agent.delegation ?? {
-      enabled: true,
-      maxConcurrentChildren: 10,
-      routes: [
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ],
-    },
+    delegation: agent.delegation ?? DEFAULT_DELEGATION_POLICY,
   };
 }

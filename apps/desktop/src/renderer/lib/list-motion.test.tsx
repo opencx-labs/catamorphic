@@ -5,9 +5,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useListMotion } from "./list-motion";
 
-function MotionList({ ids }: { ids: string[] }) {
+function MotionList({
+  ids,
+  enabled = true,
+}: {
+  ids: string[];
+  enabled?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  useListMotion(ref, ids, { enterOnFirstPass: true });
+  useListMotion(ref, ids, { enterOnFirstPass: true, enabled });
   return (
     <div ref={ref}>
       {ids.map((id) => (
@@ -57,5 +63,23 @@ describe("useListMotion", () => {
     expect(row?.style.transition).toBe("");
     expect(row?.style.transform).toBe("");
     expect(row?.style.opacity).toBe("");
+  });
+
+  it("does no layout reads while closed, and takes fresh positions when reopened", () => {
+    const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    try {
+      act(() => root.render(<MotionList ids={["one"]} enabled={false} />));
+      act(() =>
+        root.render(<MotionList ids={["one", "two"]} enabled={false} />),
+      );
+      expect(measure).not.toHaveBeenCalled();
+      act(() => root.render(<MotionList ids={["one", "two"]} />));
+      expect(measure).toHaveBeenCalled();
+      measure.mockClear();
+      act(() => root.render(<MotionList ids={["two"]} enabled={false} />));
+      expect(measure).not.toHaveBeenCalled();
+    } finally {
+      measure.mockRestore();
+    }
   });
 });

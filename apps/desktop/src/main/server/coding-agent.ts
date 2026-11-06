@@ -1,16 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
-import type { ElicitHandler } from "@catamorphic/mcp";
-import type {
-  AgentMcpServerConfig,
-  ExtraTool,
-  ExtraToolContext,
-  McpServersSource,
-  McpToolPolicyLayers,
-  SandboxProvider,
-  ToolPermissionHandler,
-} from "@catamorphic/sandbox";
+import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
+import { createAiSdkAdapter } from "@catamorphic/ai-sdk";
 import type { AgentConfig } from "../agents-store.js";
 
 const INSTRUCTIONS = `You are the Work assistant, an interactive agent built into the Work desktop app. A project is a folder that can hold any kind of work: documents, notes, data, plans, code, automations, apps, or a mix. You help users with whatever their project actually is: look at what's in it before assuming what kind of work it holds. Use the instructions below and the tools available to you to assist the user.
@@ -19,12 +10,12 @@ Many of your users are not programmers. They describe outcomes ("every Monday, p
 
 # What you can do
 - Work with any files in the project: draft, edit, and organize documents; analyze data; answer questions about what's there; debug failures.
-- Create, edit, and fix workflows (automations): exported TypeScript functions in the project's .catamorphic/workflows package. The visual workflow graph in the app is generated from this code, so well-named steps with clear JSDoc descriptions make the graph readable for the user.
-- Build user-facing apps in the project's .catamorphic/apps/ directory that call workflows through the project's typed app API.
+- Create, edit, and fix workflows (automations): exported TypeScript functions in the project's .work/workflows package. The visual workflow graph in the app is generated from this code, so well-named steps with clear JSDoc descriptions make the graph readable for the user.
+- Build user-facing apps in the project's .work/apps/ directory that call workflows through the project's typed app API.
 - Access the web: use websearch for up-to-date information (API documentation, current events, anything outside the project) and webfetch to read specific pages or URLs the user shares. Prefer searching over guessing when working with external services.
 
 # How your changes reach the user
-You work directly in the selected project folder. Read AGENTS.md and the project's existing instructions before editing. Use its existing development commands and toolchain. Local files are saved on this device; uploading documents, recording changes in Git, and publishing are separate actions that require a user request. Do not commit merely because a turn ended. Files under .catamorphic/app-data/store/ are private working documents until selected for upload. Never upload other files while sharing one document. Report what was saved, recorded, or uploaded and where. Changes to workflows and apps are ready to review until explicitly published.
+You work directly in the selected project folder. Read AGENTS.md and the project's existing instructions before editing. Use its existing development commands and toolchain. Local files are saved on this device; uploading documents, recording changes in Git, and publishing are separate actions that require a user request. Do not commit merely because a turn ended. Files under .work/app-data/store/ are private working documents until selected for upload. Never upload other files while sharing one document. Report what was saved, recorded, or uploaded and where. Changes to workflows and apps are ready to review until explicitly published.
 
 # Doing tasks
 - Before building or changing something, make sure you understand the goal. If the request is ambiguous in a way that changes the result (which data source, what schedule, which audience a document is for), ask a short clarifying question. Otherwise make a reasonable choice and state it plainly when you report back.
@@ -48,68 +39,33 @@ You work directly in the selected project folder. Read AGENTS.md and the project
 - Never use placeholders or guess missing parameters in tool calls.`;
 
 /**
- * Build the built-in agent (sandboxed AI-SDK tool loop) from a profile
- * agent config. Returns undefined until the config has an API key and a
- * resolved model id (OpenRouter's default arrives from the live catalog).
+ * The built-in agent (the AI SDK tool loop, ADR 0198) for a profile agent
+ * config: its provider, key and model, the Work assistant's instructions,
+ * and per-attempt model switches (the host binds provider and key).
+ * Undefined until the config has an API key and a resolved model id
+ * (OpenRouter's default arrives from the live catalog).
  */
-export interface BuildAiSdkAgentOpts {
-  config: AgentConfig;
-  sandboxProvider: Pick<
-    SandboxProvider,
-    "executeCommand" | "uploadFiles" | "downloadFile"
-  >;
-  pluginDirectory?: string;
-  modelId: string;
-  extraTools?: ExtraTool[];
-  mcpServers?: McpServersSource;
-  mcpServersForSession?: (
-    context: ExtraToolContext,
-  ) => Record<string, AgentMcpServerConfig>;
-  onElicit?: ElicitHandler;
-  /** Per-server tool policy layers + the prompt for `ask` tools. */
-  mcpPolicies?:
-    | Record<string, McpToolPolicyLayers>
-    | (() => Record<string, McpToolPolicyLayers>);
-  onToolPermission?: ToolPermissionHandler;
-}
-
-export function buildAiSdkAgent({
+export function buildAiSdkAdapter({
   config,
-  sandboxProvider,
-  pluginDirectory,
   modelId,
-  extraTools,
-  mcpServers,
-  mcpServersForSession,
-  onElicit,
-  mcpPolicies,
-  onToolPermission,
-}: BuildAiSdkAgentOpts): AiSdkCodingAgent | undefined {
+}: {
+  config: Pick<AgentConfig, "apiKey" | "provider" | "effort">;
+  modelId: string;
+}): HarnessAdapter | undefined {
   if (!config.apiKey || !modelId) return undefined;
+  const apiKey = config.apiKey;
   const provider = config.provider ?? "anthropic";
   const resolveModel = (id: string) =>
     provider === "anthropic"
-      ? createAnthropic({ apiKey: config.apiKey ?? "" })(id)
+      ? createAnthropic({ apiKey })(id)
       : provider === "openrouter"
         ? // OpenRouter speaks the OpenAI chat API; only the base URL differs.
-          createOpenAI({
-            apiKey: config.apiKey ?? "",
-            baseURL: "https://openrouter.ai/api/v1",
-          })(id)
-        : createOpenAI({ apiKey: config.apiKey ?? "" })(id);
-  return new AiSdkCodingAgent({
+          createOpenAI({ apiKey, baseURL: "https://openrouter.ai/api/v1" })(id)
+        : createOpenAI({ apiKey })(id);
+  return createAiSdkAdapter({
     model: resolveModel(modelId),
-    sandboxProvider,
-    pluginDirectory,
-    instructions: INSTRUCTIONS,
-    effort: config.effort,
-    // Model switches arrive per turn, so live sessions survive them.
     resolveModel,
-    extraTools,
-    mcpServers,
-    mcpServersForSession,
-    ...(onElicit ? { onElicit } : {}),
-    ...(mcpPolicies ? { mcpPolicies } : {}),
-    ...(onToolPermission ? { onToolPermission } : {}),
+    effort: config.effort,
+    instructions: INSTRUCTIONS,
   });
 }

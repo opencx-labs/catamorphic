@@ -21,7 +21,10 @@ export function testEnvironmentProvider(
     ...(sandboxProvider ? { sandboxProvider } : {}),
   };
   return {
-    get: ({ bindingId }) =>
-      bindingId === binding.descriptor.id ? binding : undefined,
+    get: ({ allocationBindingId, pool }) =>
+      (!allocationBindingId || allocationBindingId === binding.descriptor.id) &&
+      Object.keys(pool).length === 0
+        ? binding
+        : undefined,
   };
 }

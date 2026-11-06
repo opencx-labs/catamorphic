@@ -14,6 +14,7 @@ import type {
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
 import type { RetentionService } from "./retention-service.js";
+import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -28,6 +29,12 @@ export interface ExecutionWorkerOptions {
   claimLimit?: number;
   leaseSeconds?: number;
   pollIntervalMs?: number;
+  /**
+   * How long a loop with nothing to do waits after a poll when no job is
+   * due sooner and no hint from this process came (ADR 0229). Defaults to
+   * the host's `idlePollMs`; without either it waits `pollIntervalMs`.
+   */
+  idlePollIntervalMs?: number;
   kinds?: readonly ExecutionJobKind[];
 }
 
@@ -95,10 +102,17 @@ export type ClaimedJobDisposition =
   | { outcome: "failed"; error: string; exhausted: boolean };
 
 export class ExecutionWorkerService {
+  /** Replica memory (c): job handlers the host registers at boot. */
   private readonly handlers = new Map<ExecutionJobKind, ExecutionJobHandler>();
+  /**
+   * Replica memory (a): the poll loops this process runs; each job is
+   * claimed in Postgres.
+   */
   private readonly workers = new Map<string, WorkerGroup>();
   // Shared across loops so N concurrent loops still sweep once per interval.
   private lastRetentionSweepAt = 0;
+  private allocationMaintenance?: (args: { runId?: string }) => Promise<void>;
+
   private exhaustedHandler?: (args: {
     job: ExecutionJob;
     error: string;
@@ -109,6 +123,11 @@ export class ExecutionWorkerService {
     private readonly retention?: RetentionService,
     /** The Kysely instance behind {@link jobs}, for the pool-size check. */
     private readonly db?: object,
+    /** Idle pacing and this process's job hints (ADR 0229). */
+    private readonly pacing: {
+      wakeups?: WorkWakeups;
+      idlePollMs?: number;
+    } = {},
   ) {}
 
   registerHandler(args: {
@@ -116,6 +135,12 @@ export class ExecutionWorkerService {
     handler: ExecutionJobHandler;
   }): void {
     this.handlers.set(args.kind, args.handler);
+  }
+
+  registerAllocationMaintenance(args: {
+    handler: (args: { runId?: string }) => Promise<void>;
+  }): void {
+    this.allocationMaintenance = args.handler;
   }
 
   registerExhaustedHandler(
@@ -158,6 +183,8 @@ export class ExecutionWorkerService {
         claimLimit,
         leaseSeconds: options.leaseSeconds ?? 60,
         pollIntervalMs: options.pollIntervalMs ?? 500,
+        idlePollIntervalMs:
+          options.idlePollIntervalMs ?? this.pacing.idlePollMs,
         kinds: options.kinds ?? ALL_JOB_KINDS,
       }),
     );
@@ -192,14 +219,22 @@ export class ExecutionWorkerService {
     claimLimit: number;
     leaseSeconds: number;
     pollIntervalMs: number;
+    idlePollIntervalMs?: number;
     kinds: readonly ExecutionJobKind[];
   }): Promise<void> {
     const { signal } = args.controller;
     const swept = { at: 0 };
+    const pacer = new PollPacer({
+      quickMs: args.pollIntervalMs,
+      idleMs: args.idlePollIntervalMs,
+      signal,
+      wakeups: this.pacing.wakeups,
+      topic: "execution",
+    });
     let consecutiveFailures = 0;
     while (!signal.aborted) {
       try {
-        await this.pollOnce({ ...args, swept });
+        await this.pollOnce({ ...args, swept, pacer });
         consecutiveFailures = 0;
       } catch (error) {
         // The database is reachable only intermittently during a failover or
@@ -246,6 +281,7 @@ export class ExecutionWorkerService {
       args.swept.at = now;
       await this.jobs.requeueExpired({ limit: 100 });
       await this.drainExhausted();
+      await this.allocationMaintenance?.({});
     }
     await this.sweepRetention(now);
   }
@@ -305,9 +341,11 @@ export class ExecutionWorkerService {
     pollIntervalMs: number;
     kinds: readonly ExecutionJobKind[];
     swept: { at: number };
+    pacer: PollPacer;
   }): Promise<void> {
     const { signal } = args.controller;
     await this.sweepMaintenance({ swept: args.swept });
+    const claimedAt = performance.now();
     const claimed = await this.jobs.claim({
       workerId: args.workerId,
       kinds: args.kinds,
@@ -315,9 +353,17 @@ export class ExecutionWorkerService {
       leaseSeconds: args.leaseSeconds,
     });
     if (claimed.length === 0) {
-      await abortableDelay({ milliseconds: args.pollIntervalMs, signal });
+      // Idle: sleep until the soonest job is due (or its lease lapses), a
+      // hint from this process, or the idle poll, whichever comes first.
+      const due = args.pacer.quick
+        ? undefined
+        : await this.jobs
+            .nextDueAt({ kinds: args.kinds })
+            .catch(() => undefined);
+      await args.pacer.wait({ until: due?.getTime() });
       return;
     }
+    args.pacer.busy();
     for (const job of claimed) {
       if (signal.aborted) {
         await this.jobs.release({
@@ -333,6 +379,7 @@ export class ExecutionWorkerService {
         job,
         workerId: args.workerId,
         leaseSeconds: args.leaseSeconds,
+        claimedAt,
         signal,
       });
     }
@@ -342,6 +389,7 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    claimedAt: number;
     signal: AbortSignal;
   }): Promise<void> {
     await this.runClaimedJob(args).catch(() => undefined);
@@ -357,6 +405,11 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    /**
+     * `performance.now()` when the claim was sent: the lease runs from
+     * then, not from when this job's turn in a claimed batch came.
+     */
+    claimedAt?: number;
     signal: AbortSignal;
   }): Promise<ClaimedJobDisposition> {
     // A telemetry lookup failure must not prevent execution or leak a caller's scope.
@@ -367,6 +420,17 @@ export class ExecutionWorkerService {
     return withTelemetryContext({ attributes, reset: true }, () =>
       withSpan({ tracer, name: "queue.process", attributes }, async (span) => {
         const disposition = await this.runClaimedJobInner(args);
+        // The handler and its lease have settled before idle capacity may go.
+        // A failed reconciliation is retried by maintenance and cannot turn a
+        // committed job outcome into a second execution.
+        await this.allocationMaintenance?.({
+          runId: args.job.workflowRunId,
+        }).catch((error: unknown) =>
+          console.warn(
+            "[catamorphic] Workflow capacity reconciliation failed",
+            error,
+          ),
+        );
         span.setAttribute("catamorphic.queue.job.outcome", disposition.outcome);
         if (disposition.outcome === "failed") {
           markSpanError({ span, errorType: "job_failed" });
@@ -392,6 +456,7 @@ export class ExecutionWorkerService {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
+    claimedAt?: number;
     signal: AbortSignal;
   }): Promise<ClaimedJobDisposition> {
     const handler = this.handlers.get(args.job.kind);
@@ -411,9 +476,25 @@ export class ExecutionWorkerService {
     }
     const jobController = new AbortController();
     const abortJob = () => jobController.abort();
+    if (args.signal.aborted) abortJob();
     args.signal.addEventListener("abort", abortJob, { once: true });
+    // Stop the step before its lease could have lapsed, measured from when
+    // the last renewal that landed was sent. A process frozen past its lease
+    // (a paused VM, a stalled host) wakes to this deadline before it can act
+    // on the sandbox again, since another worker may own the job by then.
+    const leaseMs = args.leaseSeconds * 1_000;
+    const safeLeaseMs = leaseMs - Math.max(1_000, Math.floor(leaseMs / 6));
+    let fence = setTimeout(
+      abortJob,
+      Math.max(
+        0,
+        safeLeaseMs -
+          (performance.now() - (args.claimedAt ?? performance.now())),
+      ),
+    );
     const heartbeat = setInterval(
       () => {
+        const sentAt = performance.now();
         void this.jobs
           .heartbeat({
             jobId: args.job.id,
@@ -423,13 +504,22 @@ export class ExecutionWorkerService {
             leaseSeconds: args.leaseSeconds,
           })
           .then((owned) => {
-            if (!owned) jobController.abort();
+            if (!owned) {
+              jobController.abort();
+              return;
+            }
+            clearTimeout(fence);
+            fence = setTimeout(
+              abortJob,
+              Math.max(0, safeLeaseMs - (performance.now() - sentAt)),
+            );
           })
           .catch(() => jobController.abort());
       },
-      Math.max(1_000, Math.floor((args.leaseSeconds * 1_000) / 3)),
+      Math.max(1_000, Math.floor(leaseMs / 3)),
     );
     try {
+      jobController.signal.throwIfAborted();
       await handler({ job: args.job, signal: jobController.signal });
       if (jobController.signal.aborted) {
         await this.jobs.release({
@@ -490,6 +580,7 @@ export class ExecutionWorkerService {
       };
     } finally {
       clearInterval(heartbeat);
+      clearTimeout(fence);
       args.signal.removeEventListener("abort", abortJob);
     }
   }

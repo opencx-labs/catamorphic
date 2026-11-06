@@ -1,0 +1,944 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { nativeGit, shellQuote } from "@catamorphic/git";
+import {
+  MODEL_GRANT_READER,
+  readConnectionGrant,
+  type SandboxProvider,
+} from "@catamorphic/sandbox";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  advertisedDefaultBranch,
+  FLUSH_PKT,
+  isValidRefName,
+  normalizeRepositoryPath,
+  parseReceivePackCommands,
+  pktLine,
+  readPktSection,
+  receivePackRefusal,
+  refMatches,
+  repositoryBelow,
+  reviewPush,
+} from "../services/git-gateway.js";
+import {
+  configureSandboxGateway,
+  ensureSandboxBaseline,
+  removeSandboxGateway,
+} from "../services/sandbox-git.js";
+import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
+import { parseSnapshot, unquoteCPath } from "../services/sandbox-sync.js";
+import { workspaceMoveNote } from "../services/session-workspaces.js";
+
+const execute = promisify(execFile);
+const A = "a".repeat(40);
+const B = "b".repeat(40);
+const ZERO = "0".repeat(40);
+const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+function pushBody(
+  commands: Array<[string, string, string]>,
+  capabilities = "report-status side-band-64k",
+): Uint8Array {
+  const lines = commands.map(([oldId, newId, ref], index) =>
+    pktLine(
+      index === 0
+        ? `${oldId} ${newId} ${ref}\0${capabilities}\n`
+        : `${oldId} ${newId} ${ref}\n`,
+    ),
+  );
+  const pack = new TextEncoder().encode("PACK....");
+  const parts = [...lines, FLUSH_PKT, pack];
+  const out = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+describe("Git gateway protocol (ADR 0175)", () => {
+  it("reads receive-pack commands up to the flush and leaves the pack", () => {
+    const body = pushBody([
+      [A, B, "refs/heads/work/fix"],
+      [B, ZERO, "refs/heads/old"],
+    ]);
+    const section = readPktSection(body);
+    expect(section).not.toBeNull();
+    expect(decode(body.subarray(section?.end))).toBe("PACK....");
+    expect(parseReceivePackCommands(section?.lines ?? [])).toEqual({
+      commands: [
+        { oldId: A, newId: B, ref: "refs/heads/work/fix" },
+        { oldId: B, newId: ZERO, ref: "refs/heads/old" },
+      ],
+      capabilities: ["report-status", "side-band-64k"],
+    });
+    // An incomplete buffer has no section yet.
+    expect(readPktSection(body.subarray(0, 20))).toBeNull();
+  });
+
+  it("passes a shallow client's shallow lines and refuses certificates", () => {
+    const encode = (text: string) => new TextEncoder().encode(text);
+    expect(
+      parseReceivePackCommands([
+        encode(`shallow ${A}\n`),
+        encode(`${A} ${B} refs/heads/work/x\0report-status\n`),
+      ]),
+    ).toEqual({
+      commands: [{ oldId: A, newId: B, ref: "refs/heads/work/x" }],
+      capabilities: ["report-status"],
+    });
+    expect(() =>
+      parseReceivePackCommands([encode("push-cert\0report-status\n")]),
+    ).toThrow(/cannot read/);
+  });
+
+  it("refuses a later command whose ref Git would end at a NUL", () => {
+    // Git reads `refs/heads/main` here; the gateway must not review
+    // `refs/heads/main\0...` against `*` or `work/*/done` and let it through.
+    for (const smuggled of [
+      "refs/heads/main\0",
+      "refs/heads/work/x\0/done",
+      "refs/heads/main\0report-status",
+    ]) {
+      const body = pushBody([
+        [A, B, "refs/heads/work/fix"],
+        [A, B, smuggled],
+      ]);
+      const section = readPktSection(body);
+      expect(() => parseReceivePackCommands(section?.lines ?? [])).toThrow(
+        /cannot read/,
+      );
+    }
+    // The first command's capabilities still follow its NUL.
+    const first = readPktSection(
+      pushBody([[A, B, "refs/heads/work/fix"]], "report-status"),
+    );
+    expect(parseReceivePackCommands(first?.lines ?? []).commands[0]?.ref).toBe(
+      "refs/heads/work/fix",
+    );
+  });
+
+  it("accepts only ref names Git would accept as written", () => {
+    for (const ref of [
+      "refs/heads/work/fix",
+      "refs/heads/work/a-b_c.d",
+      "refs/tags/v1.2.3",
+    ])
+      expect(isValidRefName(ref)).toBe(true);
+    for (const ref of [
+      "main",
+      "HEAD",
+      "refs/heads/main\0",
+      "refs/heads/a b",
+      "refs/heads/a\tb",
+      "refs/heads/..",
+      "refs/heads/a..b",
+      "refs/heads/.hidden",
+      "refs/heads/a.lock",
+      "refs/heads/a/",
+      "refs/heads//a",
+      "refs/heads/a.",
+      "refs/heads/a@{1}",
+      "refs/heads/a~1",
+      "refs/heads/a^",
+      "refs/heads/a:b",
+      "refs/heads/a?",
+      "refs/heads/a*",
+      "refs/heads/a[b",
+      "refs/heads/a\\b",
+      "refs/heads/a\u007f",
+    ])
+      expect(isValidRefName(ref), JSON.stringify(ref)).toBe(false);
+    const encode = (text: string) => new TextEncoder().encode(text);
+    expect(() =>
+      parseReceivePackCommands([
+        encode(`${A} ${B} refs/heads/work/x\0report-status\n`),
+        encode(`${A} ${B} refs/heads/work/../main\n`),
+      ]),
+    ).toThrow(/cannot read/);
+  });
+
+  it("refuses every push when the remote names no default branch", () => {
+    const refused = reviewPush({
+      commands: [{ oldId: A, newId: B, ref: "refs/heads/work/fix" }],
+      patterns: ["*"],
+      defaultBranch: null,
+    });
+    expect(refused?.get("refs/heads/work/fix")).toMatch(/no default branch/);
+    // An advertisement without symref=HEAD names none.
+    const bare = new Uint8Array([
+      ...pktLine("# service=git-upload-pack\n"),
+      ...FLUSH_PKT,
+      ...pktLine(`${A} refs/heads/main\0report-status\n`),
+      ...FLUSH_PKT,
+    ]);
+    expect(advertisedDefaultBranch(bare)).toBeNull();
+  });
+
+  it("allows work/ branches and named patterns, never the default branch or deletes", () => {
+    expect(refMatches("refs/heads/work/fix", "work/*")).toBe(true);
+    expect(refMatches("refs/heads/work/a/b", "work/*")).toBe(true);
+    expect(refMatches("refs/heads/main", "work/*")).toBe(false);
+    expect(refMatches("refs/tags/v1.2", "refs/tags/v*")).toBe(true);
+    expect(refMatches("refs/heads/workshop", "work/*")).toBe(false);
+    expect(
+      reviewPush({
+        commands: [{ oldId: A, newId: B, ref: "refs/heads/work/fix" }],
+        patterns: ["work/*"],
+        defaultBranch: "refs/heads/main",
+      }),
+    ).toBeNull();
+    const refused = reviewPush({
+      commands: [
+        { oldId: A, newId: B, ref: "refs/heads/main" },
+        { oldId: A, newId: ZERO, ref: "refs/heads/work/old" },
+        { oldId: A, newId: B, ref: "refs/heads/feature" },
+      ],
+      patterns: ["work/*", "main"],
+      defaultBranch: "refs/heads/main",
+    });
+    expect(refused?.get("refs/heads/main")).toMatch(/default branch/);
+    expect(refused?.get("refs/heads/work/old")).toMatch(/delete/);
+    expect(refused?.get("refs/heads/feature")).toMatch(/may push only/);
+  });
+
+  it("answers a refusal as report-status over side-band so git prints it", () => {
+    const answer = receivePackRefusal({
+      commands: [{ oldId: A, newId: B, ref: "refs/heads/main" }],
+      capabilities: ["report-status", "side-band-64k"],
+      reasons: new Map([["refs/heads/main", "not allowed"]]),
+    });
+    const text = decode(answer);
+    expect(text).toContain("\u0002not allowed\n");
+    expect(text).toContain("unpack ok\n");
+    expect(text).toContain("ng refs/heads/main not allowed\n");
+    expect(text.endsWith("0000")).toBe(true);
+    const plain = decode(
+      receivePackRefusal({
+        commands: [{ oldId: A, newId: B, ref: "refs/heads/main" }],
+        capabilities: ["report-status"],
+        reasons: new Map([["refs/heads/main", "not allowed"]]),
+      }),
+    );
+    expect(plain).toBe(
+      "000eunpack ok\n0023ng refs/heads/main not allowed\n0000",
+    );
+  });
+
+  it("finds the default branch in an upload-pack advertisement", () => {
+    const encoder = new TextEncoder();
+    const parts = [
+      pktLine("# service=git-upload-pack\n"),
+      FLUSH_PKT,
+      pktLine(
+        `${A} HEAD\0multi_ack symref=HEAD:refs/heads/trunk agent=git/2\n`,
+      ),
+      pktLine(`${A} refs/heads/trunk\n`),
+      FLUSH_PKT,
+    ];
+    const body = encoder.encode(parts.map((part) => decode(part)).join(""));
+    expect(advertisedDefaultBranch(body)).toBe("refs/heads/trunk");
+  });
+
+  it("normalizes repository paths and refuses traversal", () => {
+    expect(normalizeRepositoryPath("/org/repo.git/")).toBe("org/repo");
+    expect(() => normalizeRepositoryPath("org/../x")).toThrow();
+    expect(() => normalizeRepositoryPath("")).toThrow();
+    expect(
+      repositoryBelow("https://github.com/org/repo.git", "https://github.com/"),
+    ).toBe("org/repo");
+    expect(
+      repositoryBelow("https://gitlab.com/org/repo", "https://github.com/"),
+    ).toBeNull();
+  });
+});
+
+describe("sandbox sync snapshots", () => {
+  it("reads name-status lines and unquotes unusual paths", () => {
+    expect(
+      parseSnapshot(
+        `${A}\nM\tapp.ts\nD\t"tab\\there.ts"\nA\t"caf\\303\\251.md"\n`,
+      ),
+    ).toEqual({
+      tree: A,
+      changes: [
+        { path: "app.ts", kind: "modified" },
+        { path: "tab\there.ts", kind: "deleted" },
+        { path: "café.md", kind: "modified" },
+      ],
+    });
+    expect(unquoteCPath("plain.ts")).toBe("plain.ts");
+    expect(parseSnapshot("not a tree")).toBeNull();
+  });
+});
+
+describe("workspace move notes (ADR 0178)", () => {
+  it("tells the agent the old and new heads and what changed", () => {
+    const note = workspaceMoveNote({
+      from: { ref: "refs/pull/4/head", commit: A },
+      to: { ref: "refs/pull/4/head", commit: B },
+      update: "rebase",
+      outcome: { status: "moved", head: B },
+      changed: { files: ["a.ts", "b.ts"], total: 5 },
+    });
+    expect(note).toContain(`from refs/pull/4/head at ${A.slice(0, 12)}`);
+    expect(note).toContain(`to refs/pull/4/head at ${B.slice(0, 12)}`);
+    expect(note).toContain("a.ts, b.ts and 3 more");
+    expect(
+      workspaceMoveNote({
+        from: { ref: "main", commit: A },
+        to: { ref: "main", commit: B },
+        update: "rebase",
+        outcome: { status: "conflict", head: A, files: ["x.ts"] },
+        changed: null,
+      }),
+    ).toMatch(/conflicts in x\.ts.*refs\/work\/base/s);
+  });
+});
+
+/** A sandbox that is a directory on this machine, like local-process. */
+function directorySandbox(
+  root: string,
+  environment: Record<string, string> = {},
+): SandboxProvider {
+  const real = (virtual: string) =>
+    path.join(root, virtual.replace(/^\/workspace/, "workspace"));
+  const unused = () => {
+    throw new Error("unused");
+  };
+  return {
+    workspaceRoot: "/workspace",
+    createSandbox: unused,
+    startSandbox: unused,
+    stopSandbox: unused,
+    destroySandbox: unused,
+    getSandboxStatus: unused,
+    gitClone: unused,
+    gitCheckout: unused,
+    async executeCommand(_id, command, opts) {
+      try {
+        const { stdout } = await execute("/bin/bash", ["-c", command], {
+          cwd: real(opts?.cwd ?? "/workspace"),
+          env: {
+            PATH: process.env.PATH ?? "",
+            HOME: path.join(root, "home"),
+            ...environment,
+          },
+        });
+        return { exitCode: 0, result: stdout };
+      } catch (error) {
+        const failure = error as {
+          code?: number;
+          stdout?: string;
+          stderr?: string;
+        };
+        return {
+          exitCode: failure.code ?? 1,
+          result: `${failure.stdout ?? ""}${failure.stderr ?? ""}`,
+        };
+      }
+    },
+    async uploadFiles(_id, files, basePath) {
+      for (const [name, content] of Object.entries(files)) {
+        const target = path.join(real(basePath), name);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, content);
+      }
+    },
+    async downloadFile(_id, filePath) {
+      return fs.readFile(real(filePath), "utf8");
+    },
+  };
+}
+
+describe("sandbox Git (ADRs 0175, 0178)", () => {
+  let root: string;
+  let provider: SandboxProvider;
+  const project = () => path.join(root, "workspace", "project");
+
+  beforeEach(async () => {
+    // A data directory like "Application Support": spaces and a `#`.
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "work sandbox #git-"));
+    await fs.mkdir(path.join(root, "home"), { recursive: true });
+    await fs.mkdir(project(), { recursive: true });
+    await fs.writeFile(path.join(project(), "app.ts"), "one\n");
+    provider = directorySandbox(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("snapshots changes the agent committed as well as uncommitted ones", async () => {
+    await ensureSandboxBaseline({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+      originUrl: "https://git.example.test/org/repo.git",
+    });
+    expect(
+      (await nativeGit(project(), ["remote", "get-url", "origin"])).trim(),
+    ).toBe("https://git.example.test/org/repo.git");
+    await fs.writeFile(path.join(project(), "app.ts"), "two\n");
+    await nativeGit(project(), [
+      "-c",
+      "user.name=A",
+      "-c",
+      "user.email=a@example.test",
+      "commit",
+      "-qam",
+      "agent commit",
+    ]);
+    await fs.writeFile(path.join(project(), "new.ts"), "x\n");
+    const snapshot = await provider.executeCommand(
+      "s",
+      [
+        "git_dir=$(git rev-parse --git-dir)",
+        'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
+        'base=$(git rev-parse -q --verify "refs/work/synced^{tree}")',
+        "git add -A",
+        "tree=$(git write-tree)",
+        'printf "%s\\n" "$tree"',
+        'git -c core.quotePath=false diff-tree -r --no-renames --name-status "$base" "$tree"',
+      ].join(" && "),
+      { cwd: "/workspace/project" },
+    );
+    const parsed = parseSnapshot(snapshot.result);
+    expect(parsed?.changes).toEqual([
+      { path: "app.ts", kind: "modified" },
+      { path: "new.ts", kind: "modified" },
+    ]);
+    // The agent's own index and branch are untouched by the snapshot.
+    expect((await nativeGit(project(), ["status", "--porcelain"])).trim()).toBe(
+      "?? new.ts",
+    );
+  });
+
+  it("configures the gateway with a credential helper that answers with the grant", async () => {
+    await ensureSandboxBaseline({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+      originUrl: null,
+    });
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [{ alias: "code", grant: "grant-one", publicationRevision: "1" }],
+      gitAliases: [
+        { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+    });
+    const env = { PATH: process.env.PATH ?? "", HOME: path.join(root, "home") };
+    const rewritten = await execute(
+      "git",
+      ["ls-remote", "--get-url", "https://git.example.test/org/repo.git"],
+      { cwd: project(), env },
+    );
+    expect(rewritten.stdout.trim()).toBe(
+      "http://127.0.0.1:9/api/gateway/git/code/org/repo.git",
+    );
+    const fill = () =>
+      new Promise<string>((resolve, reject) => {
+        const child = execFile(
+          "git",
+          ["credential", "fill"],
+          { cwd: project(), env: { ...env, GIT_TERMINAL_PROMPT: "0" } },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        );
+        child.stdin?.end(
+          "protocol=http\nhost=127.0.0.1:9\npath=api/gateway/git/code/org/repo.git\n\n",
+        );
+      });
+    expect(await fill()).toContain("password=grant-one");
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [{ alias: "code", grant: "grant-two", publicationRevision: "2" }],
+      gitAliases: [
+        { alias: "code", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+      renewOnly: true,
+    });
+    expect(await fill()).toContain("password=grant-two");
+    // A later turn without Git aliases no longer rewrites remotes.
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-three",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+    });
+    expect(
+      await readConnectionGrant({
+        directory: path.join(
+          root,
+          "workspace",
+          ".work-session",
+          "model-grants",
+          "attempt-one",
+          "model",
+        ),
+      }),
+    ).toBe("grant-three");
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-next",
+          publicationRevision: "4",
+          modelAttemptId: "attempt-two",
+        },
+      ],
+      gitAliases: [],
+    });
+    // A late old publication retries its own immutable model revision.
+    await configureSandboxGateway({
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "model",
+          grant: "grant-three",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+      renewOnly: true,
+    });
+    expect(
+      await readConnectionGrant({
+        directory: path.join(
+          root,
+          "workspace",
+          ".work-session",
+          "model-grants",
+          "attempt-two",
+          "model",
+        ),
+      }),
+    ).toBe("grant-next");
+    const plain = await execute(
+      "git",
+      ["ls-remote", "--get-url", "https://git.example.test/org/repo.git"],
+      { cwd: project(), env },
+    );
+    expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
+  });
+
+  it("retries identical immutable revisions concurrently without replacing them", async () => {
+    const config = {
+      provider,
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [
+        {
+          alias: "mixed",
+          grant: "persisted-bearer",
+          publicationRevision: "3",
+          modelAttemptId: "attempt-one",
+        },
+      ],
+      gitAliases: [],
+      renewOnly: true,
+    };
+    await configureSandboxGateway(config);
+    await Promise.all([
+      configureSandboxGateway(config),
+      configureSandboxGateway(config),
+    ]);
+    const session = path.join(root, "workspace", ".work-session");
+    for (const directory of [
+      path.join(session, "grants", "mixed"),
+      path.join(session, "model-grants", "attempt-one", "mixed"),
+    ]) {
+      expect(await fs.readdir(directory)).toEqual(["3"]);
+      expect(await readConnectionGrant({ directory })).toBe("persisted-bearer");
+    }
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+
+    // A revision belongs to one persisted bearer, even if a caller misuses it.
+    await expect(
+      configureSandboxGateway({
+        ...config,
+        grants: config.grants.map((grant) => ({
+          ...grant,
+          grant: "conflicting-bearer",
+        })),
+      }),
+    ).rejects.toThrow("Could not publish immutable grant grants/mixed/3");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "grants", "mixed"),
+      }),
+    ).toBe("persisted-bearer");
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
+  it("reports a failed immutable publication when the destination is absent", async () => {
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "ln"), "#!/bin/sh\nexit 13\n", {
+      mode: 0o700,
+    });
+    await expect(
+      configureSandboxGateway({
+        provider: directorySandbox(root, {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        }),
+        sandboxId: "s",
+        gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+        grants: [{ alias: "mixed", grant: "bearer", publicationRevision: "3" }],
+        gitAliases: [],
+        renewOnly: true,
+      }),
+    ).rejects.toThrow("Could not publish immutable grant grants/mixed/3");
+    const session = path.join(root, "workspace", ".work-session");
+    expect(await fs.readdir(path.join(session, "grants", "mixed"))).toEqual([]);
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
+  it("does not publish an older upload after a newer model, Git and HTTP grant", async () => {
+    let markBlocked = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      markBlocked = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: SandboxProvider = {
+      ...provider,
+      uploadFiles: async (id, files, base) => {
+        markBlocked();
+        await released;
+        await provider.uploadFiles(id, files, base);
+      },
+    };
+    const config = {
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      gitAliases: [
+        { alias: "mixed", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+      httpAliases: [
+        { alias: "mixed", url: "http://127.0.0.1:9/api/gateway/http/mixed" },
+      ],
+    };
+    const old = configureSandboxGateway({
+      ...config,
+      provider: slow,
+      renewOnly: true,
+      grants: [
+        {
+          alias: "mixed",
+          grant: "revoked-old",
+          publicationRevision: "20",
+          modelAttemptId: "surviving-attempt",
+        },
+      ],
+    });
+    await blocked;
+    await configureSandboxGateway({
+      ...config,
+      provider,
+      grants: [
+        {
+          alias: "mixed",
+          grant: "live-new",
+          publicationRevision: "21",
+          modelAttemptId: "surviving-attempt",
+        },
+      ],
+    });
+    release();
+    await old;
+    const session = path.join(root, "workspace", ".work-session");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "grants", "mixed"),
+      }),
+    ).toBe("live-new");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(
+          session,
+          "model-grants",
+          "surviving-attempt",
+          "mixed",
+        ),
+      }),
+    ).toBe("live-new");
+
+    const readHttp = await provider.executeCommand(
+      "s",
+      `${sandboxSecretsPrelude()}; "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_MIXED_GRANT_DIRECTORY"`,
+      { cwd: "/workspace/project" },
+    );
+    expect(readHttp.result).toBe("live-new");
+  });
+
+  it("stages metadata privately during overlapping initial publications and retries Git's config lock", async () => {
+    const session = path.join(root, "workspace", ".work-session");
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    const git = (await execute("sh", ["-c", "command -v git"])).stdout.trim();
+    await fs.writeFile(
+      path.join(bin, "git"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = config ] && [ "$2" = --global ] && [ "$3" = --fixed-value ] && [ ! -f "$PUBLISH_GATE/allow" ]; then',
+        '  : > "$PUBLISH_GATE/git-writer-$PUBLISHER"',
+        "  exit 4",
+        "fi",
+        `exec ${shellQuote(git)} "$@"`,
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    const controlled = (label: string): SandboxProvider => {
+      const base = directorySandbox(root, {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PUBLISH_GATE: root,
+        PUBLISHER: label,
+      });
+      return {
+        ...base,
+        executeCommand: (id, command, options) =>
+          base.executeCommand(
+            id,
+            command.replace(
+              "while IFS= read -r line;",
+              [
+                `: > ${shellQuote(path.join(root, `metadata-ready-${label}`))}`,
+                `while [ ! -f ${shellQuote(path.join(root, `metadata-go-${label}`))} ]; do sleep 0.01; done`,
+                "while IFS= read -r line;",
+              ].join("\n"),
+            ),
+            options,
+          ),
+      };
+    };
+    const waitFor = async (name: string) => {
+      await expect
+        .poll(
+          () =>
+            fs.stat(path.join(root, name)).then(
+              () => true,
+              () => false,
+            ),
+          { timeout: 5_000 },
+        )
+        .toBe(true);
+    };
+    const config = {
+      sandboxId: "s",
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      gitAliases: [
+        { alias: "mixed", remoteBaseUrls: ["https://git.example.test/"] },
+      ],
+      httpAliases: [
+        { alias: "mixed", url: "http://127.0.0.1:9/api/gateway/http/mixed" },
+      ],
+    };
+    const first = configureSandboxGateway({
+      ...config,
+      provider: controlled("a"),
+      grants: [
+        {
+          alias: "mixed",
+          grant: "first",
+          publicationRevision: "30",
+          modelAttemptId: "attempt",
+        },
+      ],
+    });
+    await waitFor("metadata-ready-a");
+    const second = configureSandboxGateway({
+      ...config,
+      provider: controlled("b"),
+      grants: [
+        {
+          alias: "mixed",
+          grant: "second",
+          publicationRevision: "31",
+          modelAttemptId: "attempt",
+        },
+      ],
+    });
+    await waitFor("metadata-ready-b");
+    // Both initial publications uploaded templates. A consumes first while B
+    // still waits; neither may delete or render the other's template/output.
+    await fs.writeFile(path.join(root, "metadata-go-a"), "go");
+    await waitFor("git-writer-a");
+    await fs.writeFile(path.join(root, "metadata-go-b"), "go");
+    await waitFor("git-writer-b");
+    // Both writers first fail on the existing Git serialization boundary.
+    await fs.writeFile(path.join(root, "allow"), "go");
+    await Promise.all([first, second]);
+    const env = { PATH: process.env.PATH ?? "", HOME: path.join(root, "home") };
+    const realSession = await fs.realpath(session);
+    const includes = (
+      await execute(
+        "git",
+        ["config", "--global", "--get-all", "include.path"],
+        { env },
+      )
+    ).stdout
+      .trim()
+      .split("\n");
+    expect(
+      includes.filter((value) => value === path.join(realSession, "gitconfig")),
+    ).toHaveLength(1);
+    expect(
+      (
+        await execute(
+          "git",
+          ["ls-remote", "--get-url", "https://git.example.test/repo.git"],
+          { cwd: project(), env },
+        )
+      ).stdout.trim(),
+    ).toBe("http://127.0.0.1:9/api/gateway/git/mixed/repo.git");
+    const credential = await provider.executeCommand(
+      "s",
+      "./git-credential-work mixed get </dev/null",
+      { cwd: "/workspace/.work-session" },
+    );
+    expect(credential.result).toContain("password=second");
+    const http = await provider.executeCommand(
+      "s",
+      `${sandboxSecretsPrelude()}; "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_MIXED_GRANT_DIRECTORY"`,
+      { cwd: "/workspace/project" },
+    );
+    expect(http.result).toBe("second");
+    const model = await provider.executeCommand(
+      "s",
+      `WORK_MODEL_GRANT_DIRECTORY=${shellQuote(path.join(session, "model-grants", "attempt", "mixed"))}; ${MODEL_GRANT_READER}`,
+      { cwd: "/workspace/project" },
+    );
+    expect(model.result).toBe("second");
+    expect(
+      await readConnectionGrant({
+        directory: path.join(session, "model-grants", "attempt", "mixed"),
+      }),
+    ).toBe("second");
+    expect(await fs.readdir(path.join(session, "env"))).toEqual(["gateway.sh"]);
+    expect(await fs.readdir(path.join(session, "grant-staging"))).toEqual([]);
+  });
+
+  it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0212)", async () => {
+    const session = path.join(root, "workspace", ".work-session");
+    const file = path.join(session, "env", "gateway.sh");
+    const gateway = "http://127.0.0.1:9/api/gateway";
+    const configure = (input: {
+      grants: { alias: string; grant: string; publicationRevision: string }[];
+      http: string[];
+      git?: boolean;
+      renewOnly?: boolean;
+    }) =>
+      configureSandboxGateway({
+        provider,
+        sandboxId: "s",
+        gatewayGitUrl: `${gateway}/git`,
+        grants: input.grants,
+        gitAliases: input.git
+          ? [{ alias: "code", remoteBaseUrls: ["https://git.example.test/"] }]
+          : [],
+        httpAliases: input.http.map((alias) => ({
+          alias,
+          url: `${gateway}/http/${alias}`,
+        })),
+        ...(input.renewOnly ? { renewOnly: true } : {}),
+      });
+    /** What a command started in the project folder sees, as setup does. */
+    const seen = async () =>
+      (
+        await provider.executeCommand(
+          "s",
+          `${sandboxSecretsPrelude()}; printf '%s|%s|%s|%s' "\${WORK_HTTP_LOGS_EU:-unset}" "\${WORK_HTTP_LOGS_EU_GRANT_DIRECTORY:-unset}" "\${WORK_HTTP_BILLING:-unset}" "$(if [ -n "\${WORK_HTTP_LOGS_EU_GRANT_DIRECTORY:-}" ]; then "$WORK_GATEWAY_READ_GRANT" "$WORK_HTTP_LOGS_EU_GRANT_DIRECTORY"; fi)"`,
+          { cwd: "/workspace/project" },
+        )
+      ).result;
+
+    await configure({
+      grants: [
+        { alias: "code", grant: "grant-code", publicationRevision: "6" },
+        { alias: "logs-eu", grant: "grant-logs", publicationRevision: "7" },
+        { alias: "logs_eu", grant: "grant-other", publicationRevision: "8" },
+        { alias: "billing", grant: "grant-billing", publicationRevision: "9" },
+      ],
+      // `logs_eu` would share `logs-eu`'s names, so it gets none.
+      http: ["logs-eu", "logs_eu", "billing"],
+      git: true,
+    });
+    // Not secret: readable, beside the grants it names.
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o644);
+    const real = await fs.realpath(session);
+    expect(await seen()).toBe(
+      `${gateway}/http/logs-eu|${real}/grants/logs-eu|${gateway}/http/billing|grant-logs`,
+    );
+    const text = await fs.readFile(file, "utf8");
+    expect(text).not.toContain("grant-");
+    expect(text).not.toContain("logs_eu");
+    expect(await fs.readdir(path.join(session, "env"))).toEqual(["gateway.sh"]);
+
+    // Renewing replaces the grants; the file names the same paths.
+    await configure({
+      grants: [
+        { alias: "logs-eu", grant: "grant-renewed", publicationRevision: "10" },
+      ],
+      http: ["logs-eu"],
+      renewOnly: true,
+    });
+    expect(await seen()).toBe(
+      `${gateway}/http/logs-eu|${real}/grants/logs-eu|${gateway}/http/billing|grant-renewed`,
+    );
+
+    // A later turn without HTTP aliases leaves no variables behind.
+    await configure({
+      grants: [
+        { alias: "model", grant: "grant-model", publicationRevision: "11" },
+      ],
+      http: [],
+    });
+    await expect(fs.stat(file)).rejects.toThrow();
+    expect(await seen()).toBe("unset|unset|unset|");
+
+    // Given back with the workspace, the grants and the file go.
+    await configure({
+      grants: [
+        { alias: "logs-eu", grant: "grant-again", publicationRevision: "12" },
+      ],
+      http: ["logs-eu"],
+    });
+    await removeSandboxGateway({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    await removeSandboxGateway({
+      provider,
+      sandboxId: "s",
+      projectDir: "/workspace/project",
+    });
+    await expect(fs.stat(file)).rejects.toThrow();
+    await expect(fs.stat(path.join(session, "grants"))).rejects.toThrow();
+  });
+});

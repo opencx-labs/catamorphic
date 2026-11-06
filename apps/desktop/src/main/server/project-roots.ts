@@ -14,7 +14,7 @@ export class ProjectRootsStore {
    * In-memory mirror of the table, warmed at init and maintained by
    * set/delete. Exists for {@link getSync}: the coding-agent registry's
    * `get(id)` is synchronous (core contract) but project-agent resolution
-   * needs the project's folder to read `.catamorphic/agents/<slug>.json`.
+   * needs the project's folder to read `.work/agents/<slug>.json`.
    */
   private readonly cache = new Map<string, string>();
   private readonly automaticCheckpoints = new Set<string>();
@@ -90,14 +90,17 @@ export class ProjectRootsStore {
             return input.reopen(id);
         }
       }
+      let rootExisted = true;
       if (!input.existing) {
         const entries = await fs.readdir(root).catch((error: unknown) => {
           if (
             error instanceof Error &&
             "code" in error &&
             error.code === "ENOENT"
-          )
+          ) {
+            rootExisted = false;
             return [];
+          }
           throw error;
         });
         if (entries.length > 0)
@@ -118,6 +121,19 @@ export class ProjectRootsStore {
         return await input.create(id, canonical);
       } catch (error) {
         await this.delete(id);
+        // The folder was empty or absent: take back what this attempt wrote
+        // so choosing the same place again works.
+        if (!input.existing) {
+          if (!rootExisted) {
+            await fs.rm(canonical, { recursive: true, force: true });
+          } else {
+            for (const entry of await fs.readdir(canonical).catch(() => []))
+              await fs.rm(path.join(canonical, entry), {
+                recursive: true,
+                force: true,
+              });
+          }
+        }
         throw error;
       }
     } finally {
@@ -131,6 +147,11 @@ export class ProjectRootsStore {
       [projectId],
     );
     return result.rows[0]?.root_path ?? null;
+  }
+
+  /** Every registered project with a folder. */
+  projectIds(): string[] {
+    return [...this.cache.keys()];
   }
 
   /** Cached lookup for synchronous callers (complete once init() ran). */

@@ -1,3 +1,8 @@
+import { useRef } from "react";
+import { CLOSING_MS, useClosingItems } from "../lib/closing-items.js";
+import { AccessRequest } from "./access-request.js";
+import { transitionPlaying } from "./catamorphic/activity-text.js";
+import { Collapsible } from "./collapsible.js";
 import type { SidebarStatus } from "./sidebar-contribution.js";
 
 /** Three quiet placeholder rows shown before a section's first result. */
@@ -17,10 +22,14 @@ export function SidebarSkeleton() {
   );
 }
 
+/** An empty section's sentence: its config's, else its source's. */
+export const emptySentence = (configured?: string, fromSource?: string) =>
+  configured ?? fromSource ?? "Nothing here yet.";
+
 /**
  * The one status presentation every sidebar section shares: skeleton rows
  * while loading, a muted sentence when empty, the error with Retry when a
- * read failed. Ready and refreshing draw nothing here; the header spinner
+ * read failed, and Work's request when its module wants more access. Ready and refreshing draw nothing here; the header spinner
  * covers refreshing while the rows stay on screen.
  */
 export function SidebarStatusBody({
@@ -32,7 +41,45 @@ export function SidebarStatusBody({
   empty?: string;
   retry?: () => unknown;
 }) {
-  if (status.state === "loading") return <SidebarSkeleton />;
+  const message = statusMessage({ status, empty, retry });
+  const messageBody = useRef<HTMLDivElement>(null);
+  const messages = useClosingItems(
+    message ? [{ id: "status", content: message }] : [],
+    CLOSING_MS,
+    () =>
+      transitionPlaying(
+        messageBody.current?.closest("[data-collapsible]"),
+        "opacity",
+      ),
+  );
+  return (
+    <>
+      <Collapsible open={status.state === "loading"}>
+        <SidebarSkeleton />
+      </Collapsible>
+      <Collapsible open={message !== null}>
+        <div ref={messageBody}>{messages[0]?.item.content}</div>
+      </Collapsible>
+    </>
+  );
+}
+
+function statusMessage({
+  status,
+  empty,
+  retry,
+}: {
+  status: SidebarStatus;
+  empty?: string;
+  retry?: () => unknown;
+}) {
+  if (status.state === "access" && status.access)
+    return (
+      <AccessRequest
+        request={status.access.request}
+        allow={status.access.allow}
+      />
+    );
   if (status.state === "error")
     return (
       <div role="alert" className="sidebar-empty-state">
@@ -50,10 +97,12 @@ export function SidebarStatusBody({
         )}
       </div>
     );
-  if (status.state === "empty")
+  // A list that takes drops draws its empty sentence itself, as the place
+  // to drop the first row.
+  if (status.state === "empty" && !status.droppable)
     return (
       <p className="sidebar-empty-state">
-        {empty ?? status.empty ?? "Nothing here yet."}
+        {emptySentence(empty, status.empty)}
       </p>
     );
   return null;

@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { LoginFieldKind } from "../../shared/login-fields.js";
+import type { PasskeyChoice } from "../../shared/passkeys.js";
 import { desktopApi, type SavedCredential } from "../lib/desktop-api.js";
 import { MaskedPassword } from "./password-editor.js";
 import { SiteFavicon } from "./site-favicon.js";
@@ -31,7 +32,15 @@ interface Rect {
 
 type Item =
   | { kind: "credential"; credential: SavedCredential }
+  | { kind: "passkey"; passkey: PasskeyChoice; requestId: string }
   | { kind: "generated"; password: string };
+
+const itemKey = (item: Item) =>
+  item.kind === "credential"
+    ? item.credential.id
+    : item.kind === "passkey"
+      ? `passkey:${item.passkey.id}`
+      : "generated";
 
 interface Suggestions {
   fieldId: string;
@@ -47,6 +56,8 @@ interface Suggestions {
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 380;
 const GAP = 4;
+/** How long a page's blur waits for the press on the list that caused it. */
+const BLUR_CLOSE_GRACE_MS = 250;
 
 function isRect(value: unknown): value is Rect {
   if (!value || typeof value !== "object") return false;
@@ -72,17 +83,21 @@ function visibleItems(suggestions: Suggestions): Item[] {
     return suggestions.items;
   }
   const typed = suggestions.value.toLocaleLowerCase();
-  return suggestions.items.filter(
-    (item) =>
-      item.kind !== "credential" ||
-      item.credential.username.toLocaleLowerCase().startsWith(typed),
+  return suggestions.items.filter((item) =>
+    item.kind === "credential"
+      ? item.credential.username.toLocaleLowerCase().startsWith(typed)
+      : item.kind === "passkey"
+        ? item.passkey.username.toLocaleLowerCase().startsWith(typed)
+        : true,
   );
 }
 
 /**
  * Chrome's autofill dropdown for a browser tab: saved logins under a
- * username or password field when the user clicks it, a generated
- * password under a new-password field. The guest page reports the field
+ * username or password field when the user clicks it, passkeys first
+ * when the page is waiting for one (a field marked "webauthn" with an
+ * autofill request pending, ADR 0201), a generated password under a
+ * new-password field. The guest page reports the field
  * and forwards the keys the list owns (arrows, Enter on a highlighted
  * row, Escape); main fills the chosen login, so secrets never pass
  * through here, except the suggested password shown to be read.
@@ -116,14 +131,26 @@ export function usePasswordAutofill({
   const highlightRef = useRef(highlight);
   highlightRef.current = highlight;
   // Pressing the list moves focus out of the page, which blurs its field
-  // before the click lands; that blur must not close the list.
+  // before the click lands; that blur must not close the list. The page's
+  // report of the blur and the press race each other (on macOS the report
+  // can arrive first), so a blur closes the list only if no press on it
+  // follows within a moment.
   const pressingList = useRef(false);
+  const blurClose = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const cancelBlurClose = useCallback(() => {
+    clearTimeout(blurClose.current);
+    blurClose.current = undefined;
+  }, []);
 
   const close = useCallback(() => {
+    cancelBlurClose();
     sequence.current++;
     setOpen(false);
     setHighlight(-1);
-  }, []);
+  }, [cancelBlurClose]);
+  useEffect(() => cancelBlurClose, [cancelBlurClose]);
 
   // The page owns its keys again once the list closes, and Enter only
   // while a row is highlighted (otherwise Enter submits the form).
@@ -141,7 +168,7 @@ export function usePasswordAutofill({
   const show = useCallback(
     async (payload: Record<string, unknown>) => {
       const guest = guestRef.current;
-      const { fieldId, kind, rect, value } = payload;
+      const { fieldId, kind, rect, value, webauthn } = payload;
       if (
         !guest ||
         typeof fieldId !== "string" ||
@@ -160,6 +187,9 @@ export function usePasswordAutofill({
         width: rect.width * zoom,
         height: rect.height * zoom,
       };
+      // A field that shows after another blurred (Tab to the next field)
+      // keeps its list.
+      cancelBlurClose();
       const current = ++sequence.current;
       let items: Item[];
       if (kind === "new-password") {
@@ -173,11 +203,26 @@ export function usePasswordAutofill({
           ? [{ kind: "generated", password: suggestion.password }]
           : [];
       } else {
-        const credentials = await desktopApi.vaultList({ profileId, origin });
-        items = credentials.map((credential) => ({
-          kind: "credential",
-          credential,
-        }));
+        const [credentials, autofill] = await Promise.all([
+          desktopApi.vaultList({ profileId, origin }),
+          webauthn === true
+            ? desktopApi
+                .passkeyAutofill({ guestId: guest.getWebContentsId() })
+                .catch(() => null)
+            : null,
+        ]);
+        items = [
+          ...(autofill?.passkeys ?? []).map(
+            (passkey): Item => ({
+              kind: "passkey",
+              passkey,
+              requestId: autofill?.requestId ?? "",
+            }),
+          ),
+          ...credentials.map(
+            (credential): Item => ({ kind: "credential", credential }),
+          ),
+        ];
       }
       if (current !== sequence.current) return;
       const next: Suggestions = {
@@ -193,7 +238,7 @@ export function usePasswordAutofill({
       setHighlight(-1);
       setOpen(true);
     },
-    [profileId, guestRef, close],
+    [profileId, guestRef, close, cancelBlurClose],
   );
 
   // A press anywhere else in the app closes the list, as a press in the
@@ -229,6 +274,19 @@ export function usePasswordAutofill({
         });
         return;
       }
+      // The page signs in with the passkey once Touch ID confirms it.
+      if (item.kind === "passkey") {
+        void desktopApi
+          .passkeyAutofillUse({
+            guestId,
+            requestId: item.requestId,
+            passkeyId: item.passkey.id,
+          })
+          // A refused Touch ID leaves the page waiting; the field offers
+          // the passkey again on its next click.
+          .catch(() => undefined);
+        return;
+      }
       void desktopApi.browserCredentialFill({
         profileId,
         guestId,
@@ -251,7 +309,13 @@ export function usePasswordAutofill({
           void show(payload).catch(() => close());
           return true;
         case "catamorphic:autofill-hide":
-          if (payload.reason !== "blur" || !pressingList.current) close();
+          if (payload.reason !== "blur") close();
+          else if (!pressingList.current) {
+            cancelBlurClose();
+            blurClose.current = setTimeout(() => {
+              if (!pressingList.current) close();
+            }, BLUR_CLOSE_GRACE_MS);
+          }
           return true;
         case "catamorphic:autofill-input": {
           const current = suggestionsRef.current;
@@ -290,7 +354,7 @@ export function usePasswordAutofill({
           return false;
       }
     },
-    [show, close, pick],
+    [show, close, pick, cancelBlurClose],
   );
 
   const overlay = suggestions ? (
@@ -304,6 +368,7 @@ export function usePasswordAutofill({
       onPick={pick}
       onPress={(pressing) => {
         pressingList.current = pressing;
+        if (pressing) cancelBlurClose();
       }}
       onManage={
         onManage
@@ -393,14 +458,16 @@ function SuggestionList({
         const active = index === highlight;
         return (
           <div
-            key={item.kind === "credential" ? item.credential.id : "generated"}
+            key={itemKey(item)}
             role="option"
             tabIndex={-1}
             aria-selected={active}
             data-testid={
               item.kind === "credential"
                 ? "password-suggestion"
-                : "password-suggestion-generated"
+                : item.kind === "passkey"
+                  ? "passkey-suggestion"
+                  : "password-suggestion-generated"
             }
             onMouseEnter={() => onHighlight(index)}
             onMouseLeave={() => onHighlight(-1)}
@@ -422,6 +489,23 @@ function SuggestionList({
                     {item.credential.username || "No username"}
                   </span>
                   <MaskedPassword className="mt-1 text-fg-faint" />
+                </span>
+              </>
+            ) : item.kind === "passkey" ? (
+              <>
+                <SiteFavicon
+                  url={suggestions.origin}
+                  faviconUrl={faviconUrl}
+                  className="size-4"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-fg">
+                    {item.passkey.username || "No username"}
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px] leading-4 text-fg-muted">
+                    <KeyRound className="size-3 shrink-0" />
+                    Passkey
+                  </span>
                 </span>
               </>
             ) : (

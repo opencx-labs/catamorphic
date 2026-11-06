@@ -12,7 +12,9 @@ vi.mock("../lib/desktop-api.js", () => ({
     updateState: vi.fn(),
     updateDownload: vi.fn(),
     updateInstall: vi.fn(),
+    updateMove: vi.fn(),
     updateCheck: vi.fn(),
+    updateDismiss: vi.fn(),
     onUpdateStateChanged: vi.fn(() => () => {}),
   },
 }));
@@ -56,6 +58,22 @@ describe("UpdateBanner", () => {
     expect(container.textContent).not.toContain("Restart to update");
   });
 
+  it("asks to move Work to Applications, even after a background check", async () => {
+    const container = await mount({
+      phase: "move-required",
+      currentVersion: "0.1.0-alpha.1",
+      channel: "preview",
+      manual: false,
+    });
+    expect(container.textContent).toContain("Move Work to Applications");
+    expect(container.textContent).not.toContain("Restart to update");
+    const button = [...container.querySelectorAll("button")].find(
+      (element) => element.textContent === "Move to Applications",
+    );
+    await act(async () => button?.click());
+    expect(desktopApi.updateMove).toHaveBeenCalledTimes(1);
+  });
+
   it("does not overwrite an update event with a stale initial snapshot", async () => {
     const initial: DesktopUpdateState = {
       phase: "idle",
@@ -97,7 +115,7 @@ describe("UpdateBanner", () => {
     expect(desktopApi.updateDownload).toHaveBeenCalledOnce();
   });
 
-  it("holds restart while agents or terminals are active", async () => {
+  it("restarts while agents or terminals are active, saying what becomes of them", async () => {
     const container = await mount(
       {
         phase: "downloaded",
@@ -110,12 +128,14 @@ describe("UpdateBanner", () => {
     );
 
     expect(container.textContent).toContain(
-      "Finish active agents and terminals before restarting.",
+      "Working agents pick up where they left off, and open terminals close.",
     );
     const restart = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent === "Restart to update",
     );
-    expect(restart?.disabled).toBe(true);
+    expect(restart?.disabled).toBe(false);
+    act(() => restart?.click());
+    expect(desktopApi.updateInstall).toHaveBeenCalledOnce();
   });
 });
 
@@ -153,6 +173,50 @@ it("keeps a dismissed download quiet through progress events and reveals readine
     expect(container.textContent).toContain("Downloading Work 2");
     act(() => receive?.({ ...state, phase: "downloaded" }));
     expect(container.textContent).toContain("Update ready");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("closes a banner when another window dismisses it and keeps new windows quiet", async () => {
+  vi.useFakeTimers();
+  const state: DesktopUpdateState = {
+    phase: "up-to-date",
+    currentVersion: "1",
+    channel: "stable",
+    manual: true,
+    manualCheckId: 1,
+  };
+  try {
+    const first = await mount(state);
+    const second = await mount(state);
+    act(() =>
+      first
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Dismiss update message"]',
+        )
+        ?.click(),
+    );
+    expect(desktopApi.updateDismiss).toHaveBeenCalledWith(
+      "stable:up-to-date:1:1",
+    );
+    const receive = vi
+      .mocked(desktopApi.onUpdateStateChanged)
+      .mock.calls.at(-1)?.[0];
+    act(() => receive?.({ ...state, dismissed: true }));
+    expect(second.querySelector('[data-state="closing"]')).not.toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(
+      second.querySelector('[data-testid="desktop-update-banner"]'),
+    ).toBeNull();
+    const third = await mount({ ...state, dismissed: true });
+    expect(
+      third.querySelector('[data-testid="desktop-update-banner"]'),
+    ).toBeNull();
+    act(() => receive?.({ ...state, manualCheckId: 2 }));
+    expect(second.textContent).toContain("Work is up to date");
   } finally {
     vi.useRealTimers();
   }

@@ -2,41 +2,40 @@ import { describe, expect, it } from "vitest";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 
 describe("project Environment policy", () => {
-  it("defaults a legacy manifest without Environments to local", () => {
+  it("defaults a manifest without Environments to one that selects nothing", () => {
     expect(parseProjectEnvironmentPolicy({ name: "legacy-project" })).toEqual({
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       environments: {
-        local: {
-          binding: "local",
-          description: "Run on this machine",
+        default: {
+          description: "Run where this host places work",
           workloads: ["agent", "workflow"],
         },
       },
       entries: [
         {
-          name: "local",
+          name: "default",
           definition: {
-            binding: "local",
-            description: "Run on this machine",
+            description: "Run where this host places work",
             workloads: ["agent", "workflow"],
           },
         },
       ],
+      secrets: {},
     });
   });
 
-  it("parses a default and preserves per-Environment policy", () => {
+  it("parses pools, member devices, and per-Environment requirements", () => {
     expect(
       parseProjectEnvironmentPolicy({
         environments: {
-          local: {
-            binding: "local",
-            description: "Run on this desktop",
+          default: {
+            description: "Anywhere",
             workloads: ["agent", "workflow"],
           },
-          company: {
-            binding: "managed-standard",
-            workloads: ["agent", "workflow"],
+          gpu: {
+            workloads: ["agent"],
+            pool: { class: "gpu" },
+            strict: true,
             requirements: {
               trust: "managed",
               isolation: "sandbox",
@@ -44,21 +43,24 @@ describe("project Environment policy", () => {
               resources: { memoryMb: 8192 },
             },
           },
+          mine: { workloads: ["agent"], device: "member" },
         },
-        defaultEnvironment: "local",
+        defaultEnvironment: "default",
       }),
     ).toMatchObject({
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       environments: {
-        local: { binding: "local" },
-        company: {
-          binding: "managed-standard",
+        default: { workloads: ["agent", "workflow"] },
+        gpu: {
+          pool: { class: "gpu" },
+          strict: true,
           requirements: {
             trust: "managed",
             isolation: "sandbox",
             resources: { memoryMb: 8192 },
           },
         },
+        mine: { device: "member" },
       },
     });
   });
@@ -66,30 +68,55 @@ describe("project Environment policy", () => {
   it.each([
     [
       "invalid name",
-      {
-        environments: {
-          "not allowed": { binding: "local", workloads: ["agent"] },
-        },
-      },
+      { environments: { "not allowed": { workloads: ["agent"] } } },
       "Invalid Environment name",
     ],
     [
-      "missing binding",
-      { environments: { local: { workloads: ["agent"] } } },
+      "a retired binding",
+      { environments: { local: { binding: "local", workloads: ["agent"] } } },
       "binding",
     ],
     [
-      "unsupported workload",
+      "a device and a pool",
       {
         environments: {
-          local: { binding: "local", workloads: ["container"] },
+          both: { workloads: ["agent"], device: "member", pool: { a: "b" } },
         },
       },
+      "not both",
+    ],
+    [
+      "an invalid label name",
+      {
+        environments: { x: { workloads: ["agent"], pool: { "Big Key": "v" } } },
+      },
+      "pool",
+    ],
+    [
+      "unsupported workload",
+      { environments: { local: { workloads: ["container"] } } },
       "expected one of",
     ],
   ])("reports %s without hiding other entries", (_name, manifest, message) => {
     const parsed = parseProjectEnvironmentPolicy(manifest);
     expect(parsed.entries[0]?.invalid?.error).toContain(message);
+  });
+
+  it("parses personalCredentials; the implicit default does not allow them (ADR 0184)", () => {
+    const policy = parseProjectEnvironmentPolicy({
+      environments: {
+        dev: { workloads: ["agent"], personalCredentials: true },
+        bad: { workloads: ["agent"], personalCredentials: "yes" },
+      },
+    });
+    expect(policy.environments.dev?.personalCredentials).toBe(true);
+    expect(
+      policy.entries.find((entry) => entry.name === "bad")?.invalid,
+    ).toBeDefined();
+    expect(
+      parseProjectEnvironmentPolicy({}).environments.default
+        ?.personalCredentials,
+    ).toBeUndefined();
   });
 
   it("rejects a malformed Environments container", () => {
@@ -99,11 +126,252 @@ describe("project Environment policy", () => {
 
   it("rejects an unknown default Environment", () => {
     const parsed = parseProjectEnvironmentPolicy({
-      environments: {
-        local: { binding: "local", workloads: ["agent"] },
-      },
+      environments: { default: { workloads: ["agent"] } },
       defaultEnvironment: "company",
     });
     expect(parsed.invalid?.error).toContain("defaultEnvironment");
+  });
+
+  it("parses committed connection bindings (ADR 0172)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          pool: { pool: "review" },
+          connections: {
+            github: {
+              provider: "github",
+              principal: "service",
+              service: "github",
+              capabilities: ["get", "post"],
+            },
+            prod: {
+              provider: "prod-replica",
+              principal: "service",
+              service: "prod-replica",
+              capabilities: ["query", "explain", "schema"],
+            },
+            mail: { provider: "mail", principal: "member" },
+            docs: { provider: "docs", principal: "either", service: "docs" },
+          },
+        },
+        default: { workloads: ["agent", "workflow"] },
+      },
+    });
+    expect(parsed.invalid).toBeUndefined();
+    expect(parsed.environments.review?.connections).toEqual({
+      github: {
+        provider: "github",
+        principal: "service",
+        service: "github",
+        capabilities: ["get", "post"],
+      },
+      prod: {
+        provider: "prod-replica",
+        principal: "service",
+        service: "prod-replica",
+        capabilities: ["query", "explain", "schema"],
+      },
+      mail: { provider: "mail", principal: "member" },
+      docs: { provider: "docs", principal: "either", service: "docs" },
+    });
+    expect(parsed.environments.default?.connections).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "a service binding without a service",
+      { provider: "github", principal: "service" },
+      "names its service connection",
+    ],
+    [
+      "a member binding naming a service",
+      { provider: "mail", principal: "member", service: "mail" },
+      "does not name a service connection",
+    ],
+    [
+      "an unknown principal",
+      { provider: "mail", principal: "robot" },
+      "principal",
+    ],
+    [
+      "an unknown field",
+      { provider: "mail", principal: "member", token: "secret" },
+      "token",
+    ],
+    [
+      "an invalid service name",
+      { provider: "db", principal: "service", service: "Prod DB" },
+      "service",
+    ],
+  ])("reports %s as an invalid Environment", (_name, binding, message) => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: { workloads: ["agent"], connections: { alias: binding } },
+        default: { workloads: ["agent"] },
+      },
+    });
+    const review = parsed.entries.find((entry) => entry.name === "review");
+    expect(review?.invalid?.error).toContain(message);
+    expect(parsed.environments.default).toBeDefined();
+  });
+
+  it("rejects an invalid connection alias", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          connections: {
+            "not an alias": { provider: "x", principal: "member" },
+          },
+        },
+      },
+    });
+    expect(parsed.entries[0]?.invalid).toBeDefined();
+  });
+
+  it("parses secrets, setup and volumes (ADRs 0206, 0208, 0257)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      secrets: {
+        CLICKHOUSE_API_KEY: { description: "Your ClickHouse key" },
+        SENTRY_DSN: {},
+      },
+      environments: {
+        dev: {
+          workloads: ["agent"],
+          secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
+          setup: {
+            command: "pnpm install --frozen-lockfile",
+            timeoutMinutes: 45,
+          },
+          volumes: {
+            pnpm: "~/.local/share/pnpm/store",
+            docker: { path: "/var/lib/docker", exclusive: true, sizeMb: 20480 },
+          },
+        },
+      },
+    });
+    expect(parsed.invalid).toBeUndefined();
+    expect(parsed.secrets).toEqual({
+      CLICKHOUSE_API_KEY: { description: "Your ClickHouse key" },
+      SENTRY_DSN: {},
+    });
+    expect(parsed.environments.dev).toMatchObject({
+      secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
+      setup: { command: "pnpm install --frozen-lockfile", timeoutMinutes: 45 },
+      volumes: {
+        pnpm: { path: "~/.local/share/pnpm/store" },
+        docker: { path: "/var/lib/docker", exclusive: true, sizeMb: 20480 },
+      },
+    });
+  });
+
+  it("parses a setup with its own network and the secrets it names (ADR 0257)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      secrets: { NPM_TOKEN: {}, DATABASE_URL: {} },
+      environments: {
+        review: {
+          workloads: ["agent"],
+          network: { egress: "gateway" },
+          secrets: ["NPM_TOKEN", "DATABASE_URL"],
+          setup: {
+            command: "pnpm install --frozen-lockfile",
+            network: { allow: ["Registry.npmjs.org", "npm.pkg.github.com"] },
+            secrets: ["NPM_TOKEN"],
+          },
+        },
+      },
+    });
+    expect(parsed.entries[0]?.invalid).toBeUndefined();
+    expect(parsed.environments.review?.setup).toEqual({
+      command: "pnpm install --frozen-lockfile",
+      network: { allow: ["registry.npmjs.org", "npm.pkg.github.com"] },
+      secrets: ["NPM_TOKEN"],
+    });
+  });
+
+  it.each([
+    ["a lowercase secret", { secrets: ["api_key"] }, "secrets"],
+    ["a reserved secret prefix", { secrets: ["WORK_TOKEN"] }, "secrets"],
+    [
+      "a relative volume path",
+      { volumes: { cache: "node_modules" } },
+      "volumes",
+    ],
+    [
+      "a volume path that climbs",
+      { volumes: { cache: "~/../etc" } },
+      "volumes",
+    ],
+    ["an invalid volume name", { volumes: { Cache: "~/.cache" } }, "volumes"],
+    ["setup as a bare command", { setup: "pnpm install" }, "setup"],
+    [
+      "the setup timeout beside setup",
+      { setup: { command: "pnpm install" }, setupTimeoutMinutes: 45 },
+      "setupTimeoutMinutes",
+    ],
+    [
+      "a setup network entry that is no host",
+      {
+        network: { egress: "gateway" },
+        setup: { command: "pnpm install", network: { allow: ["not a host"] } },
+      },
+      "setup.network.allow",
+    ],
+    [
+      "a setup network with open egress",
+      {
+        network: { egress: "open" },
+        setup: { command: "pnpm install", network: { allow: ["npmjs.org"] } },
+      },
+      "setup.network: Open egress has nothing to widen: setup.network needs the Environment's network to be gateway or allowlist",
+    ],
+    [
+      "a setup network without a network",
+      { setup: { command: "pnpm install", network: { allow: ["npmjs.org"] } } },
+      "setup.network: Open egress has nothing to widen",
+    ],
+    [
+      "volumes beside a setup network",
+      {
+        network: { egress: "gateway" },
+        setup: { command: "pnpm install", network: { allow: ["npmjs.org"] } },
+        volumes: { pnpm: "~/.local/share/pnpm/store" },
+      },
+      "volumes: A volume would carry what agents wrote into the next setup's wider network",
+    ],
+    [
+      "setup secrets the Environment does not list",
+      {
+        network: { egress: "gateway" },
+        secrets: ["NPM_TOKEN"],
+        setup: {
+          command: "pnpm install",
+          network: { allow: ["npmjs.org"] },
+          secrets: ["DATABASE_URL"],
+        },
+      },
+      "setup.secrets",
+    ],
+    [
+      "setup secrets without a setup network",
+      {
+        secrets: ["NPM_TOKEN"],
+        setup: { command: "pnpm install", secrets: ["NPM_TOKEN"] },
+      },
+      "setup.secrets",
+    ],
+  ])("reports %s as an invalid Environment", (_name, extra, message) => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: { dev: { workloads: ["agent"], ...extra } },
+    });
+    expect(parsed.entries[0]?.invalid?.error).toContain(message);
+  });
+
+  it("reports invalid secret declarations for the whole manifest", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      secrets: { "not-a-name": {} },
+    });
+    expect(parsed.invalid?.error).toContain("secrets");
   });
 });

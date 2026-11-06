@@ -281,6 +281,63 @@ export const child = defineWorkflow(({ defineBoundary }) => ({
     );
   });
 
+  it("keeps a call's { state } beside the child metadata (ADR 0260)", () => {
+    const prepared = prepareWorkflowExecution({
+      workflowName: "parent",
+      files: {
+        "src/parent.ts": `
+export const parent = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, callWorkflow }) =>
+        callWorkflow(child, { input, state: { turn: input.turn } }),
+    }),
+  ],
+}));
+`,
+        "src/child.ts": `
+export const child = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }) => input })],
+}));
+`,
+      },
+    });
+    const transformed = prepared?.files["src/parent.ts"] ?? "";
+    expect(transformed).toMatch(
+      /callWorkflow\(child, \{ input, state: \{ turn: input\.turn \} \}, \{"callSiteId"/,
+    );
+  });
+
+  it("passes the child target when the boundary calls context.callWorkflow", () => {
+    const prepared = prepareWorkflowExecution({
+      workflowName: "parent",
+      files: {
+        "src/parent.ts": `
+export const parent = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: (context) => context.callWorkflow(child, { input: context.input }),
+    }),
+  ],
+}));
+`,
+        "src/child.ts": `
+export const child = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input }) => finish({ value: input.value }),
+    }),
+  ],
+}));
+`,
+      },
+    });
+    const transformed = prepared?.files["src/parent.ts"] ?? "";
+
+    expect(transformed).toContain('"exportName":"child"');
+    expect(transformed).toContain('"modulePath":"src/child.ts"');
+  });
+
   it("prepares the complete project identically for parent and child targets", () => {
     const files = {
       "src/parent.ts": `

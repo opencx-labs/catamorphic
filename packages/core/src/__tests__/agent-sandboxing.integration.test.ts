@@ -1,0 +1,446 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createDatabase, migrateToLatest } from "@catamorphic/db";
+import { FsBackend, ProjectManager } from "@catamorphic/git";
+import type { SandboxProvider } from "@catamorphic/sandbox";
+import { sql } from "kysely";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+import type { Identity } from "../identity.js";
+import {
+  AgentCapabilitiesService,
+  defineAgentCapability,
+} from "../services/agent-capabilities-service.js";
+import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import type { CodingAgentRegistry } from "../services/coding-agent-registry.js";
+import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
+import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
+import { ProjectsService } from "../services/projects-service.js";
+import { RecordingAdapter } from "./recording-adapter.js";
+import { testEnvironmentProvider } from "./test-environment.js";
+
+/**
+ * ADR 0176, ADR 0182: a committed definition's sandboxing and tool policies
+ * hold on any host, enforced by core rather than by the harness; its
+ * harness permission mode reaches the harness as a turn default.
+ */
+
+const connectionString = process.env.DATABASE_URL ?? "";
+const describeIf = connectionString ? describe : describe.skip;
+const schema = `catamorphic_agent_sandboxing_${crypto.randomUUID().replaceAll("-", "")}`;
+const db = connectionString
+  ? createDatabase({ connectionString, schema, poolSize: 4 })
+  : undefined;
+
+const root: Identity = {
+  tenantId: crypto.randomUUID(),
+  externalUserId: "root",
+};
+
+const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
+  get(_target, prop) {
+    if (prop === "workspaceRoot") return "/unused";
+    return () => {
+      throw new Error(`SandboxProvider.${String(prop)} must not be called`);
+    };
+  },
+});
+
+describeIf("agent sandboxing and definition policies (ADR 0182)", () => {
+  let tmpDir: string;
+  let sessions: AgentSessionsService;
+  /** The same services over another host's agent registry. */
+  let sessionsWith: (registry: CodingAgentRegistry) => AgentSessionsService;
+  const services: AgentSessionsService[] = [];
+  let capabilities: AgentCapabilitiesService;
+  let projectId: string;
+  const adapter = new RecordingAdapter();
+  const executed: string[] = [];
+
+  beforeAll(async () => {
+    if (!db) throw new Error("unreachable");
+    await migrateToLatest({ db, schema });
+    tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "catamorphic-sandboxing-"),
+    );
+    const projectManager = new ProjectManager(
+      new FsBackend(path.join(tmpDir, "projects")),
+    );
+    const projects = new ProjectsService(db, projectManager);
+    const rootPath = path.join(tmpDir, "checkout");
+    await fs.mkdir(rootPath, { recursive: true });
+    projectId = (await projects.create(root, { name: "sandboxing" })).id;
+    const repo = await projectManager.open(root.tenantId, projectId);
+    try {
+      await repo.writeFile(
+        ".work/agents/reviewer.json",
+        JSON.stringify({
+          version: 1,
+          name: "Reviewer",
+          kind: "builtin",
+          sandboxing: "contained",
+          toolPolicies: {
+            prod: { default: "ask", tools: { query: "allow" } },
+            catamorphic: { default: "deny" },
+          },
+        }),
+      );
+      await repo.writeFile(
+        ".work/agents/editor.json",
+        JSON.stringify({
+          version: 1,
+          name: "Editor",
+          kind: "builtin",
+          sandboxing: "propose",
+        }),
+      );
+      await repo.writeFile(
+        ".work/agents/publisher.json",
+        JSON.stringify({
+          version: 1,
+          name: "Publisher",
+          kind: "claude-code",
+          sandboxing: "publish",
+          harnessPermissions: { permissionMode: "bypassPermissions" },
+        }),
+      );
+      // May start any agent no wider than itself.
+      await repo.writeFile(
+        ".work/agents/lead.json",
+        JSON.stringify({
+          version: 1,
+          name: "Lead",
+          kind: "builtin",
+          sandboxing: "propose",
+          delegation: { agents: [{ agent: "*" }] },
+        }),
+      );
+      await repo.commit("Add agents", {
+        name: "root",
+        email: "root@example.com",
+      });
+    } finally {
+      await repo.dispose();
+    }
+    const registry: CodingAgentRegistry = {
+      defaultAgentId: () => undefined,
+      get: () => undefined,
+      list: () => [],
+      // The host declares neither sandboxing nor policies: core applies
+      // both. Delegation is the host's to carry, as Work's does.
+      projectAgent: ({ id, entry }) => ({
+        id,
+        ...(entry.definition?.name ? { name: entry.definition.name } : {}),
+        harness: { placement: "host", adapter },
+        topology: "native",
+        ...(entry.definition?.delegation
+          ? { delegation: entry.definition.delegation }
+          : {}),
+      }),
+    };
+    const executionAllocations = new ExecutionAllocationsService(db);
+    const executionEnvironments = new ExecutionEnvironmentsService(
+      new ProjectEnvironmentsService(db, projectManager),
+      testEnvironmentProvider(unusedSandboxProvider),
+    );
+    sessionsWith = (codingAgents) => {
+      const service = new AgentSessionsService(db, {
+        hostId: "sandboxing-test-host",
+        projectManager,
+        codingAgents,
+        executionEnvironments,
+        executionAllocations,
+        nativeAgentCheckout: {
+          resolve: () => ({ path: rootPath, owned: false }),
+        },
+      });
+      services.push(service);
+      return service;
+    };
+    sessions = sessionsWith(registry);
+    const capability = (
+      name: string,
+      effect: "read" | "write",
+      sandboxing?: "publish",
+      description = name,
+    ) =>
+      defineAgentCapability({
+        revision: "1",
+        name,
+        description,
+        effect,
+        ...(sandboxing ? { sandboxing } : {}),
+        inputSchema: z.object({}).strict(),
+        outputSchema: z.object({ ok: z.boolean() }),
+        authorize: () => true,
+        execute: async () => {
+          executed.push(name);
+          return { ok: true };
+        },
+      });
+    capabilities = new AgentCapabilitiesService({
+      db,
+      allocations: executionAllocations,
+      environments: executionEnvironments,
+      options: {
+        capabilities: [
+          capability("test.read", "read"),
+          capability("test.propose", "write"),
+          capability("test.deploy", "write", "publish"),
+          capability(
+            "test.browser_act",
+            "read",
+            undefined,
+            "Act on a browser tab",
+          ),
+          capability(
+            "test.terminal_write",
+            "read",
+            undefined,
+            "Type into a terminal",
+          ),
+          capability(
+            "test.surface_control",
+            "read",
+            undefined,
+            "Release or close a browser tab or terminal",
+          ),
+        ],
+      },
+      sessionSandboxing: (args) => sessions.agentSandboxing(args),
+    });
+  }, 120_000);
+
+  afterAll(async () => {
+    // Subsessions' turns end before the schema they write to is dropped.
+    await Promise.all(
+      services.map((service) => service.stopLocalTurns({ timeoutMs: 2_000 })),
+    );
+    if (db) {
+      await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
+      await db.destroy();
+    }
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("layers a definition's tool policies with the caller's on the server", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:reviewer`,
+    });
+    await sessions.sendMessage(root, projectId, session.id, "review");
+    const start = adapter.attempts.at(-1);
+    expect(start?.toolPolicies?.connection_prod).toEqual([
+      { default: "ask", tools: { query: "allow" } },
+    ]);
+    expect(start?.toolPolicies?.catamorphic).toEqual([{ default: "deny" }]);
+    expect(
+      await sessions.agentSandboxing({ projectId, sessionId: session.id }),
+    ).toBe("contained");
+    expect(adapter.attempts.at(-1)?.permissions).toEqual({});
+  });
+
+  it("hands the definition's harness permission mode to the harness per turn", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    await sessions.sendMessage(root, projectId, session.id, "ship it");
+    expect(adapter.attempts.at(-1)?.permissions).toEqual({
+      permissionMode: "bypassPermissions",
+    });
+    expect(
+      await sessions.agentSandboxing({ projectId, sessionId: session.id }),
+    ).toBe("publish");
+  });
+
+  it("lists the project's agents by name to an agent that may start any", async () => {
+    const lead = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:lead`,
+    });
+    const refusal = await sessions
+      .createSubsession(root, projectId, lead.id, {
+        agentId: "nobody",
+        task: "Look",
+      })
+      .then(
+        () => "",
+        (error: unknown) => String(error),
+      );
+    expect(refusal).toContain("There is no agent nobody you may start.");
+    expect(refusal).toContain(`project:${projectId}:reviewer (Reviewer)`);
+    expect(refusal).toContain(`project:${projectId}:editor (Editor)`);
+    // Wider than the lead: not among its choices.
+    expect(refusal).not.toContain("Publisher");
+    // `*` admits what it lists, a copy of the lead included.
+    const reviewer = await sessions.createSubsession(root, projectId, lead.id, {
+      agentId: "project:reviewer",
+      task: "Review",
+    });
+    expect(reviewer.grant).toBe("*");
+    expect(reviewer.session.agentId).toBe(`project:${projectId}:reviewer`);
+    const copy = await sessions.createSubsession(root, projectId, lead.id, {
+      task: "The same again",
+    });
+    expect(copy.grant).toBe("*");
+    expect(copy.session.agentId).toBe(`project:${projectId}:lead`);
+  });
+
+  it("lists them too where the host resolves project agents by id, leaving out one that cannot run", async () => {
+    // Like Work's desktop: no factory, project agents come from get(). Like
+    // the Work server, a listed built-in is served by its project id too.
+    const builtIn = {
+      id: "assistant",
+      name: "Assistant",
+      harness: { placement: "host" as const, adapter },
+      topology: "native" as const,
+      sandboxing: "contained" as const,
+    };
+    const byId = sessionsWith({
+      defaultAgentId: () => undefined,
+      get: (id) => {
+        if (id === "assistant") return builtIn;
+        const slug = id.split(":").at(-1);
+        if (!id.startsWith("project:") || !slug) return undefined;
+        return {
+          id,
+          harness: { placement: "host", adapter },
+          topology: "native",
+          sandboxing: slug === "lead" ? "propose" : "contained",
+          ...(slug === "lead"
+            ? {
+                delegation: {
+                  enabled: true,
+                  maxConcurrentChildren: 10,
+                  agents: [
+                    { agent: "*", model: "any", effort: "any", delegate: true },
+                  ],
+                },
+              }
+            : {}),
+          ...(slug === "editor" ? { unavailable: "Needs approval" } : {}),
+        };
+      },
+      list: () => [builtIn],
+    });
+    const lead = await byId.create(root, projectId, {
+      agentId: `project:${projectId}:lead`,
+    });
+    const refusal = await byId
+      .createSubsession(root, projectId, lead.id, {
+        agentId: "nobody",
+        task: "Look",
+      })
+      .then(
+        () => "",
+        (error: unknown) => String(error),
+      );
+    expect(refusal).toContain(`project:${projectId}:reviewer (Reviewer)`);
+    expect(refusal).not.toContain("Editor");
+    // The built-in, once, by the project's id; and `*` reaches it so.
+    expect(refusal).toContain(`project:${projectId}:assistant (Assistant)`);
+    expect(refusal).not.toMatch(/(: |, )assistant \(Assistant\)/);
+    const builtInChild = await byId.createSubsession(root, projectId, lead.id, {
+      agentId: `project:${projectId}:assistant`,
+      task: "Help",
+    });
+    expect(builtInChild.grant).toBe("*");
+  });
+
+  it("refuses capabilities above the agent's sandboxing with a readable reason", async () => {
+    const invoke = (sessionId: string, name: string) =>
+      capabilities
+        .forSession({ identity: root, projectId, sessionId })
+        .invoke({ name, input: {}, requestId: crypto.randomUUID() });
+    const reviewer = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:reviewer`,
+    });
+    await expect(invoke(reviewer.id, "test.read")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(invoke(reviewer.id, "test.propose")).rejects.toThrow(
+      "This agent's sandboxing is contained",
+    );
+    const editor = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:editor`,
+    });
+    await expect(invoke(editor.id, "test.propose")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(invoke(editor.id, "test.deploy")).rejects.toThrow(
+      "This agent's sandboxing is propose",
+    );
+    const publisher = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    await expect(invoke(publisher.id, "test.deploy")).resolves.toEqual({
+      ok: true,
+    });
+    expect(executed).toEqual(["test.read", "test.propose", "test.deploy"]);
+  });
+
+  it("ranks discovery by the words a capability matches, its name counting double", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    const discover = async (query: string) =>
+      (
+        await capabilities
+          .forSession({ identity: root, projectId, sessionId: session.id })
+          .discover({ query })
+      ).items.map((item) => item.name);
+    // Requiring every word found only the one capability that mentions both.
+    expect(await discover("browser terminal")).toEqual([
+      "test.browser_act",
+      "test.surface_control",
+      "test.terminal_write",
+    ]);
+    expect(await discover("terminal")).toEqual([
+      "test.terminal_write",
+      "test.surface_control",
+    ]);
+    const first = await capabilities
+      .forSession({ identity: root, projectId, sessionId: session.id })
+      .discover({ query: "test", limit: 2 });
+    expect(first.nextCursor).toBe(first.items[1]?.name);
+    const next = await capabilities
+      .forSession({ identity: root, projectId, sessionId: session.id })
+      .discover({ query: "test", limit: 2, cursor: first.nextCursor });
+    expect(next.items.map((item) => item.name)).not.toContain(
+      first.items[0]?.name,
+    );
+    // A cursor from another query is refused, not read as the first page.
+    await expect(
+      capabilities
+        .forSession({ identity: root, projectId, sessionId: session.id })
+        .discover({ query: "terminal", cursor: "test.deploy" }),
+    ).rejects.toThrow("discover again");
+    // Short words match nearly everything; they do not rank.
+    expect(await discover("a terminal")).toEqual(await discover("terminal"));
+  });
+
+  it("names the capability, the place of its fields and its schema for invalid input", async () => {
+    const session = await sessions.create(root, projectId, {
+      agentId: `project:${projectId}:publisher`,
+    });
+    const gateway = capabilities.forSession({
+      identity: root,
+      projectId,
+      sessionId: session.id,
+    });
+    // A request id only marks a retry; a call without one runs.
+    await expect(gateway.invoke({ name: "test.read" })).resolves.toEqual({
+      ok: true,
+    });
+    const error = await gateway
+      .invoke({ name: "test.read", input: { key: "browser:1" } })
+      .then(
+        () => null,
+        (cause: unknown) => (cause instanceof Error ? cause.message : ""),
+      );
+    expect(error).toContain("Invalid input for test.read");
+    expect(error).toContain('inside "input"');
+    expect(error).toContain('"additionalProperties":false');
+  });
+});

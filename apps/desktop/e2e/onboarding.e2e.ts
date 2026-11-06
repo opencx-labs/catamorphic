@@ -28,6 +28,16 @@ const helpers = `
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  // The imported shell renders before its workspace and dock registration
+  // settle. The dock's + needs the ready project's ID to create its chat.
+  const projectReady = async () => {
+    const runtime = $('[data-project-runtime][data-workspace-visible="true"]');
+    const projectId = runtime?.dataset.projectRuntime;
+    if (!projectId || projectId === 'initial' || !runtime.querySelector('[data-workspace-ready]'))
+      return false;
+    const snapshot = await window.catamorphicDesktop.dockSnapshot();
+    return snapshot.activeProjectId === projectId;
+  };
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
@@ -53,9 +63,9 @@ const until = async (
   timeoutMs: number,
   label: string,
 ): Promise<void> => {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   let lastError: unknown;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     try {
       if (fn()) return;
       lastError = undefined;
@@ -145,16 +155,26 @@ describe("agent-first onboarding", () => {
 
     const createdDir = path.join(projectsDir, "default-project-2");
     const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(createdDir, ".catamorphic/project.json"),
-        "utf-8",
-      ),
+      fs.readFileSync(path.join(createdDir, ".work/project.json"), "utf-8"),
     ) as { name: string };
     expect(manifest.name).toBe("Default Project");
     expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf-8")).toBe(
       "leave me alone\n",
     );
 
+    expect(
+      await run(`
+      return ['claude-code', 'codex', 'free', 'hermes', 'api-key'].map(id =>
+        $('[data-testid="agent-wizard-' + id + '"] [data-harness-icon]')?.dataset.harnessIcon);
+    `),
+    ).toEqual(["claude", "openai", "openrouter", "default", "default"]);
+
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "agent-wizard-choices.png",
+      ),
+    );
     // Both detected-login branches must fit inside a narrow dialog. In
     // the old shared row, the long labels wrapped outside 32px buttons.
     for (const provider of ["codex", "claude-code"]) {
@@ -164,6 +184,18 @@ describe("agent-first onboarding", () => {
       `);
       await runWait(
         `return $$('[data-testid="agent-wizard-back"]').some(el => !el.closest('[inert]'));`,
+      );
+      expect(await run(`return $('input[name="agentName"]').value;`)).toBe(
+        provider === "codex" ? "ChatGPT" : "Claude",
+      );
+      await app.waitFor(
+        `!document.getAnimations().some(animation => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity)`,
+      );
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+          `agent-wizard-${provider}-name.png`,
+        ),
       );
       for (const width of [440, 280]) {
         const fits = await run<boolean>(`
@@ -234,7 +266,7 @@ describe("agent-first onboarding", () => {
 });
 
 describe("initial workspace recovery", () => {
-  it("retries Default Project creation without leaving a blank startup", async () => {
+  it("keeps startup failures within their profile and retries when returning", async () => {
     const userDataDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "work-startup-retry-"),
     );
@@ -245,13 +277,46 @@ describe("initial workspace recovery", () => {
       await recoveryApp.waitFor(
         `!!document.querySelector('[data-testid="project-load-error"]')`,
       );
+      const failedProfileId = await recoveryApp.eval<string>(
+        "window.catamorphicDesktop.windowProfile()",
+      );
       fs.unlinkSync(projectsDir);
+      const otherProfile = await recoveryApp.eval<{ id: string }>(
+        "window.catamorphicDesktop.profilesCreate('Independent startup')",
+      );
+      await recoveryApp.eval(
+        `window.catamorphicDesktop.windowSetProfile(${JSON.stringify(otherProfile.id)})`,
+      );
+      const otherProjectId = await recoveryApp.waitFor<string>(
+        `(() => { const runtime = document.querySelector('[data-workspace-visible=true]'); return runtime?.querySelector('[data-workspace-ready]') && runtime.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && runtime.dataset.projectRuntime; })()`,
+        {
+          label:
+            "another profile initializes independently of the failed profile",
+        },
+      );
+      expect(
+        await recoveryApp.eval(
+          "!!document.querySelector('[data-testid=project-load-error]')",
+        ),
+      ).toBe(false);
+      await recoveryApp.eval(
+        `window.catamorphicDesktop.windowSetProfile(${JSON.stringify(failedProfileId)})`,
+      );
+      await recoveryApp.waitFor(
+        "!!document.querySelector('[data-testid=project-load-error]')",
+        { label: "the failed profile retains its retry action" },
+      );
       await recoveryApp.eval(
         `[...document.querySelectorAll('button')].find(button => button.textContent.includes('Retry loading projects')).click()`,
       );
       await recoveryApp.waitFor(
         `!document.querySelector('[data-testid="project-load-error"]') && !!document.querySelector('[data-testid="onboarding"]') && document.querySelector('[aria-label="Switch project"]')?.textContent.includes('Default Project') && !!document.querySelector('[data-dock-host] [data-dock-rail]')`,
       );
+      expect(
+        await recoveryApp.eval(
+          "document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime",
+        ),
+      ).not.toBe(otherProjectId);
       expect(recoveryApp.getRendererErrors()).toEqual([]);
     } finally {
       await recoveryApp.stop();
@@ -279,17 +344,14 @@ describe("blank project onboarding", () => {
 
     // The manifest names the project (ADR 0043).
     const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(projectDir, ".catamorphic/project.json"),
-        "utf-8",
-      ),
+      fs.readFileSync(path.join(projectDir, ".work/project.json"), "utf-8"),
     ) as { name: string };
     expect(manifest.name).toBe("onboard-blank");
 
     // Seed skills: reference material plus the scaffold's support files.
     for (const file of [
-      ".catamorphic/skills/catamorphic-projects/SKILL.md",
-      ".catamorphic/skills/catamorphic-projects/files/package.json",
+      ".work/skills/work-projects/SKILL.md",
+      ".work/skills/work-projects/files/package.json",
     ]) {
       expect(fs.existsSync(path.join(projectDir, file)), file).toBe(true);
     }
@@ -301,7 +363,7 @@ describe("blank project onboarding", () => {
     }
 
     // One commit, and everything (dot-dirs included) is IN it — a dirty
-    // status here would mean the .catamorphic/.agents allowlist regressed.
+    // status here would mean the .work/.agents allowlist regressed.
     await until(
       () => git(projectDir, "status", "--porcelain") === "",
       10_000,
@@ -332,11 +394,9 @@ describe("blank project onboarding", () => {
       () =>
         git(projectDir, "log", "--format=%an|%s")
           .split("\n")
-          .some((line) =>
-            line.startsWith("Catamorphic Agent|Agent: edit a file"),
-          ),
+          .some((line) => line.startsWith("Work Agent|Agent: edit a file")),
       15_000,
-      "checkpoint commit by Catamorphic Agent",
+      "checkpoint commit by Work Agent",
     );
     await until(
       () => git(projectDir, "status", "--porcelain") === "",
@@ -426,8 +486,9 @@ describe.each([false, true])(
         { label: "import submit enabled" },
       );
       await runWait(
-        `return !!byText('[role="tab"], button', 'New Tab') &&
-              !!$('textarea[placeholder*="Search or ask"]');`,
+        `return (async () => await projectReady() &&
+              !!byText('[role="tab"], button', 'New Tab') &&
+              !!$('textarea[placeholder*="Search or ask"]'))();`,
         { timeoutMs: 60_000, label: "workspace after import" },
       );
 
@@ -439,9 +500,9 @@ describe.each([false, true])(
         fs.readFileSync(path.join(importDir, "nested", "data.txt"), "utf-8"),
       ).toBe(DATA);
 
-      expect(
-        fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
-      ).toBe(false);
+      expect(fs.existsSync(path.join(importDir, ".work/project.json"))).toBe(
+        false,
+      );
       if (versioned) {
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
         expect(git(importDir, "branch", "--show-current")).toBe("feature");
@@ -456,7 +517,16 @@ describe.each([false, true])(
       }
     });
     it("lets the agent edit without initializing or committing the imported folder", async () => {
-      await run(`pressKey('n', { metaKey: true }); return true;`);
+      // A floating chat stays over the surfaces the next tests open; the
+      // dock's + floats it (Cmd+N would take the New Tab in front).
+      await runWait(
+        `return (async () => await projectReady() &&
+          !!$('[data-dock-rail] button[aria-label="New chat"]'))();`,
+        { timeoutMs: 60_000, label: "the ready project's dock +" },
+      );
+      await run(
+        `$('[data-dock-rail] button[aria-label="New chat"]').click(); return true;`,
+      );
       await runWait(`return !!visibleDock();`);
       await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
@@ -477,14 +547,14 @@ describe.each([false, true])(
         fs.readFileSync(path.join(importDir, "HELLO.md"), "utf8"),
       ).toContain("hello from the fake agent");
       expect(fs.existsSync(path.join(importDir, ".agents"))).toBe(false);
-      expect(
-        fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
-      ).toBe(false);
+      expect(fs.existsSync(path.join(importDir, ".work/project.json"))).toBe(
+        false,
+      );
       if (versioned)
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
       else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
     });
-    it("adds capabilities inside .catamorphic while keeping the imported root and Git unchanged", async () => {
+    it("adds capabilities inside .work while keeping the imported root and Git unchanged", async () => {
       const before = fs.readdirSync(importDir).sort();
       const existingPackage =
         '{"name":"existing","packageManager":"pnpm@10.0.0"}\n';
@@ -502,7 +572,7 @@ describe.each([false, true])(
       await until(
         () =>
           fs.existsSync(
-            path.join(importDir, ".catamorphic/app-data/catalog/items.json"),
+            path.join(importDir, ".work/app-data/catalog/items.json"),
           ),
         15_000,
         "contained app data",
@@ -513,18 +583,14 @@ describe.each([false, true])(
       expect(
         fs
           .readdirSync(importDir)
-          .filter((name) => name !== ".catamorphic" && name !== "package.json")
+          .filter((name) => name !== ".work" && name !== "package.json")
           .sort(),
       ).toEqual(before);
       expect(
-        fs.existsSync(
-          path.join(importDir, ".catamorphic/workflows/src/catalog.ts"),
-        ),
+        fs.existsSync(path.join(importDir, ".work/workflows/src/catalog.ts")),
       ).toBe(true);
       expect(
-        fs.existsSync(
-          path.join(importDir, ".catamorphic/apps/catalog/package.json"),
-        ),
+        fs.existsSync(path.join(importDir, ".work/apps/catalog/package.json")),
       ).toBe(true);
       await runWait(
         `const button = document.querySelector('[role="tree"][aria-label="Apps"] button'); if (!button) return false; button.click(); return true;`,
@@ -537,12 +603,8 @@ describe.each([false, true])(
       if (versioned) {
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
         expect(
-          git(
-            importDir,
-            "check-ignore",
-            ".catamorphic/app-data/catalog/items.json",
-          ),
-        ).toBe(".catamorphic/app-data/catalog/items.json");
+          git(importDir, "check-ignore", ".work/app-data/catalog/items.json"),
+        ).toBe(".work/app-data/catalog/items.json");
       } else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
     });
     it("builds contained apps and persists workflow data across runs", async () => {
@@ -580,15 +642,19 @@ describe.each([false, true])(
         `return $('[data-testid="workflow-runs"]')?.textContent.includes('store/inventory.txt');`,
         { label: "ordinary root store file is recordable" },
       );
-      await clickWorkflowButton("Record changes in Git");
-      await clickWorkflowButton("Publish project version");
+      // One action records the saved changes and publishes them.
+      await clickWorkflowButton("Publish");
+      await runWait(
+        `return !$('[data-testid="workflow-publish"]') && $('[data-testid="workflow-runs"]')?.textContent.includes('published version');`,
+        { timeoutMs: 60_000, label: "workflow published" },
+      );
       expect(fs.existsSync(path.join(importDir, ".git"))).toBe(true);
       for (const count of [1, 2]) {
         await clickWorkflowButton("Start run");
         await until(
           () =>
             fs.readFileSync(
-              path.join(importDir, ".catamorphic/app-data/catalog/runs.txt"),
+              path.join(importDir, ".work/app-data/catalog/runs.txt"),
               "utf8",
             ) === String(count),
           60_000,

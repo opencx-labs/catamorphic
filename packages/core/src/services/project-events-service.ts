@@ -1,6 +1,7 @@
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type { Kysely, Selectable } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import type { WorkWakeups } from "./work-wakeups.js";
 
 type ProjectEventRow = Selectable<DB["project_events"]>;
 
@@ -19,8 +20,17 @@ export interface ProjectEvent {
 const tracer = getTracer("@catamorphic/core");
 
 export class ProjectEventsService {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    /** Tells this process's dispatcher an event may be waiting (ADR 0229). */
+    private readonly wakeups?: WorkWakeups,
+  ) {}
 
+  /**
+   * Record one event for a project, once per `externalId`. Pass the
+   * `transaction` that records the change it describes, so the event
+   * exists exactly when the change does.
+   */
   async append(input: {
     projectId: string;
     source: string;
@@ -28,6 +38,7 @@ export class ProjectEventsService {
     externalId: string;
     occurredAt: string;
     payload: JsonObject;
+    transaction?: Transaction<DB>;
   }): Promise<{ event: ProjectEvent; created: boolean }> {
     return withSpan(
       {
@@ -40,7 +51,8 @@ export class ProjectEventsService {
         },
       },
       async () => {
-        const inserted = await this.db
+        const db = input.transaction ?? this.db;
+        const inserted = await db
           .insertInto("project_events")
           .values({
             project_id: input.projectId,
@@ -59,14 +71,89 @@ export class ProjectEventsService {
           .executeTakeFirst();
         const row =
           inserted ??
-          (await this.db
+          (await db
             .selectFrom("project_events")
             .selectAll()
             .where("project_id", "=", input.projectId)
             .where("source", "=", input.source)
             .where("external_id", "=", input.externalId)
             .executeTakeFirstOrThrow());
+        if (inserted) this.wakeups?.notify("events");
         return { event: mapProjectEvent(row), created: Boolean(inserted) };
+      },
+    );
+  }
+
+  /**
+   * Record an event that concerns a whole tenant rather than one project,
+   * such as a member joining the directory (ADR 0210), in every project of
+   * the tenant with an active activation of its kind. Projects that do not
+   * listen store nothing. Each project's copy is idempotent by
+   * `externalId`, and the dispatcher delivers it like any project event.
+   */
+  async appendToSubscribers(input: {
+    tenantId: string;
+    source: string;
+    kind: string;
+    externalId: string;
+    occurredAt: string;
+    payload: JsonObject;
+    transaction?: Transaction<DB>;
+  }): Promise<{ events: ProjectEvent[] }> {
+    return withSpan(
+      {
+        tracer,
+        name: "project.event.append_to_subscribers",
+        attributes: {
+          "catamorphic.tenant.id": input.tenantId,
+          "catamorphic.event.source": input.source,
+          "catamorphic.event.kind": input.kind,
+        },
+      },
+      async (span) => {
+        const db = input.transaction ?? this.db;
+        // The activations the dispatcher delivers to.
+        const projects = await db
+          .selectFrom("workflow_enablement_triggers as activation")
+          .innerJoin(
+            "workflow_enablements as enablement",
+            "enablement.id",
+            "activation.enablement_id",
+          )
+          .innerJoin(
+            "trigger_definitions as definition",
+            "definition.id",
+            "activation.trigger_definition_id",
+          )
+          .select("enablement.project_id")
+          .distinct()
+          .where("enablement.tenant_id", "=", input.tenantId)
+          .where("definition.trigger_kind", "=", input.kind)
+          .where("activation.status", "=", "active")
+          .where("enablement.status", "=", "active")
+          .where(({ or, eb }) =>
+            or([
+              eb("enablement.expires_at", "is", null),
+              eb("enablement.expires_at", ">", sql<Date>`now()`),
+            ]),
+          )
+          .orderBy("enablement.project_id")
+          .execute();
+        span.setAttribute("catamorphic.event.project_count", projects.length);
+        const events: ProjectEvent[] = [];
+        for (const { project_id: projectId } of projects) {
+          const { event } = await this.append({
+            projectId,
+            source: input.source,
+            kind: input.kind,
+            externalId: input.externalId,
+            occurredAt: input.occurredAt,
+            payload: input.payload,
+            ...(input.transaction ? { transaction: input.transaction } : {}),
+          });
+          events.push(event);
+        }
+        return { events };
       },
     );
   }

@@ -221,7 +221,6 @@ describe("disposable Postgres", () => {
         CLOUDFLARE_ARTIFACTS_NAMESPACE: "namespace",
         CLOUDFLARE_SANDBOX_API_KEY: "sandbox-key",
         CLOUDFLARE_SANDBOX_API_URL: "https://sandbox.example",
-        DAYTONA_API_KEY: "daytona",
         OPENAI_API_KEY: "openai",
         OPENROUTER_API_KEY: "openrouter",
         S3_ACCESS_KEY_ID: "access",

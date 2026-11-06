@@ -4,14 +4,21 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const encryption = vi.hoisted(() => ({
+  available: true,
   encrypt: vi.fn<(value: string) => Promise<Buffer>>(),
+  decrypt:
+    vi.fn<
+      (value: Buffer) => Promise<{ result: string; shouldReEncrypt: boolean }>
+    >(),
 }));
 
 vi.mock("electron", () => ({
   safeStorage: {
+    getSelectedStorageBackend: () => "gnome_libsecret",
     isEncryptionAvailable: () => true,
+    isAsyncEncryptionAvailable: async () => encryption.available,
     encryptStringAsync: encryption.encrypt,
-    decryptStringAsync: vi.fn(),
+    decryptStringAsync: encryption.decrypt,
   },
   systemPreferences: {
     canPromptTouchID: () => false,
@@ -22,12 +29,66 @@ const directories: string[] = [];
 
 afterEach(() => {
   encryption.encrypt.mockReset();
+  encryption.decrypt.mockReset();
+  encryption.available = true;
   for (const directory of directories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
 describe("PasswordVault", () => {
+  it("reports unavailable OS storage with guidance before creating a vault", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cat-browser-vault-"),
+    );
+    directories.push(directory);
+    encryption.available = false;
+    const { PasswordVault } = await import("./browser-vault.js");
+    await expect(new PasswordVault(directory).list("profile")).rejects.toThrow(
+      "Unlock your operating system's keychain",
+    );
+    expect(encryption.encrypt).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(directory, "profile/vault.key"))).toBe(
+      false,
+    );
+  });
+
+  it("preserves saved passwords on async keychain failure and retries after unlock", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "cat-browser-vault-"),
+    );
+    directories.push(directory);
+    encryption.encrypt.mockResolvedValue(Buffer.from("sealed-key"));
+    const { PasswordVault } = await import("./browser-vault.js");
+    const vault = new PasswordVault(directory);
+    await vault.save("profile", {
+      origin: "https://example.test",
+      username: "alice",
+      password: "saved-password",
+    });
+    const key = encryption.encrypt.mock.calls[0]?.[0];
+    if (!key) throw new Error("Test vault key missing");
+    const keyFile = path.join(directory, "profile/vault.key");
+    const vaultFile = path.join(directory, "profile/vault.kdbx");
+    const savedKey = fs.readFileSync(keyFile);
+    const savedVault = fs.readFileSync(vaultFile);
+    vault.releaseProfile("profile");
+    encryption.decrypt.mockRejectedValueOnce(
+      new Error("Provider failure with private detail"),
+    );
+    await expect(vault.list("profile")).rejects.toThrow(
+      "Work could not unlock the saved credential",
+    );
+    expect(fs.readFileSync(keyFile)).toEqual(savedKey);
+    expect(fs.readFileSync(vaultFile)).toEqual(savedVault);
+    encryption.decrypt.mockResolvedValue({
+      result: key,
+      shouldReEncrypt: false,
+    });
+    await expect(vault.list("profile")).resolves.toMatchObject([
+      { username: "alice" },
+    ]);
+  });
   it("coalesces concurrent profile unlocks into one Keychain access", async () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "cat-browser-vault-"),

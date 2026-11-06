@@ -1,10 +1,21 @@
 import { createHash } from "node:crypto";
 import type { DB } from "@catamorphic/db";
-import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
-import type { EnvironmentRequirements } from "@catamorphic/sandbox";
+import type { ProjectDraft, ProjectManager } from "@catamorphic/git";
+import {
+  AGENT_EFFORT_LEVELS,
+  CLAUDE_CODE_PERMISSION_MODES,
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  type EnvironmentRequirements,
+  type HarnessPermissions,
+  harnessPermissionIssues,
+  SANDBOXING_LEVELS,
+  type Sandboxing,
+} from "@catamorphic/sandbox";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import { type Identity, isBuilder } from "../identity.js";
+import { hasProjectPermission, type Identity } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   CONNECTION_ALIAS_PATTERN,
@@ -13,16 +24,15 @@ import {
 import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
-/**
- * Directory (relative to the project root) where committed project agent
- * definitions live:
+/*
+ * Committed project agent definitions live in `PROJECT_AGENTS_DIR`:
  *
  * ```
- * .catamorphic/agents/<slug>.json   # the definition (schema below)
- * .catamorphic/agents/<slug>.md     # optional persona / system-prompt file, same slug
+ * .work/agents/<slug>.json   # the definition (schema below)
+ * .work/agents/<slug>.md     # optional persona / system-prompt file, same slug
  * ```
  *
- * Inside the Catamorphic workspace, project agents are
+ * Inside the project workspace, project agents are
  * work products the team authors and reviews, and in the lazy spirit of
  * ADR 0043 the directory exists only once someone creates an agent — a
  * project without agents carries nothing.
@@ -31,7 +41,6 @@ import { requireTenantProject } from "./projects-service.js";
  * one against a user's personal credentials without that user's explicit,
  * definition-hash-bound consent (see {@link definitionHash} and ADR 0050).
  */
-export const AGENT_DEFINITIONS_DIR = ".catamorphic/agents";
 
 /**
  * Registry id of a project agent. Core's registry contract is id-only
@@ -51,7 +60,7 @@ export function projectAgentId(projectId: string, slug: string): string {
 
 /**
  * Same slug alphabet the definitions service accepts. Doubles as
- * path-traversal protection: the slug becomes a filename under `.catamorphic/agents/`,
+ * path-traversal protection: the slug becomes a filename under `.work/agents/`,
  * and this pattern admits no separators and no leading dot.
  */
 const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -78,9 +87,12 @@ export function parseProjectAgentId(
  * Harness kinds a project agent may declare:
  *  - `claude-code` / `codex`: the CLI harnesses, host execution.
  *  - `builtin`: the embedder's built-in sandboxed agent.
- *  - `acp`: an Agent Client Protocol harness (local command or remote
- *    endpoint). Validates today, resolves to an "unsupported yet" registry
- *    entry — designed in, built later (see TODO.md "ACP harness").
+ *  - `acp`: an Agent Client Protocol agent (ADR 0241). The desktop runs
+ *    `acp.command` through `@catamorphic/acp` on the agent's own
+ *    configuration; a Work server runs it in the chat's sandbox on a
+ *    `connection` model, reached through the gateway (ADR 0255). The
+ *    remote `acp.endpoint` validates but is not built yet (see TODO.md
+ *    "ACP harness").
  *  - `e2e-fake`: the desktop e2e scripted harness. Only accepted when the
  *    host passes `allowE2eFake` (the desktop gates it on
  *    CATAMORPHIC_E2E_FAKE_AGENT=1), mirroring the pick-folder e2e seam —
@@ -119,14 +131,41 @@ export type AgentCoordinationStrategy =
  *    The mode for shared/remote deployments.
  *  - `local`: the machine's existing CLI login (`claude login` /
  *    `codex login`), no credential overrides. Personal too → consent.
+ *  - `connection`: a model connection the agent's Environment binds under
+ *    the alias `connection` (ADR 0180). The harness (Claude Code, Codex,
+ *    or an ACP agent's command, ADR 0255) runs in the session's sandbox
+ *    and reaches the model through the gateway with its session grant;
+ *    the key stays on the control plane. The mode for servers.
+ *  - `personal`: on a server, the chat owner's own harness login, sent
+ *    by their desktop and delivered into their own chats' sandboxes in
+ *    Environments that allow personal credentials (ADR 0184).
  */
 export const AgentDefinitionCredentialsSchema = z
   .object({
-    source: z.enum(["profile", "secret", "local"]).default("profile"),
+    source: z
+      .enum(["profile", "secret", "local", "connection", "personal"])
+      .default("profile"),
     /** Project-secret name holding the API key (source: "secret" only). */
     secret: z.string().min(1).optional(),
+    /** Environment binding alias of the model connection (source: "connection"). */
+    connection: z.string().regex(CONNECTION_ALIAS_PATTERN).optional(),
   })
   .superRefine((value, ctx) => {
+    if (value.source === "connection" && !value.connection) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["connection"],
+        message:
+          'credentials.source "connection" requires a "connection" alias',
+      });
+    }
+    if (value.source !== "connection" && value.connection) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["connection"],
+        message: `"connection" is only valid with credentials.source "connection"`,
+      });
+    }
     if (value.source === "secret" && !value.secret) {
       ctx.addIssue({
         code: "custom",
@@ -162,7 +201,7 @@ const AgentEnvironmentPolicySchema = z
             memoryMb: z.number().int().positive().optional(),
             storageMb: z.number().int().positive().optional(),
             gpu: z.boolean().optional(),
-            timeoutSeconds: z.number().int().positive().optional(),
+            commandTimeoutSeconds: z.number().int().positive().optional(),
             maxConcurrency: z.number().int().positive().optional(),
           })
           .optional(),
@@ -200,49 +239,59 @@ export interface AgentEnvironmentPolicy {
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
 }
 
-export const AgentDelegationRouteSchema = z.object({
-  /** Stable name exposed to the model when it chooses a route. */
-  id: z.string().min(1).max(100),
-  /** `self`, `*`, an exact agent id, or `project:<slug>` in project files. */
-  target: z.string().min(1),
+/**
+ * Who an agent may start as a subsession, and what it may choose for them
+ * (ADR 0271). Omitted settings mean `any`: a parent picks the child's model
+ * and effort freely within what the child's harness offers.
+ */
+export const AgentDelegationGrantSchema = z.object({
+  /** `self`, an exact agent id, `project:<slug>` in project files, or `*`. */
+  agent: z.string().min(1),
+  /** Shown to the agent beside the grant. */
   description: z.string().max(500).optional(),
-  /** This edge may explicitly remove onward delegation from the child. */
-  allowFurtherDelegation: z.boolean().default(true),
+  /** `any` model the target's harness offers, `fixed` (none), or a list. */
+  model: z
+    .union([
+      z.enum(["any", "fixed"]),
+      z.array(z.string().min(1)).min(1).max(50),
+    ])
+    .default("any"),
+  /**
+   * `any` effort, `fixed` (none), `at-most-parent` (no higher than the
+   * parent chat's), or a list.
+   */
+  effort: z
+    .union([
+      z.enum(["any", "fixed", "at-most-parent"]),
+      z.array(z.enum(AGENT_EFFORT_LEVELS)).min(1),
+    ])
+    .default("any"),
+  /** Whether the child may start subsessions of its own. */
+  delegate: z.boolean().default(true),
 });
 
-export const AgentDelegationPolicySchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
-    routes: z
-      .array(AgentDelegationRouteSchema)
-      .max(100)
-      .default([
-        {
-          id: "same-agent",
-          target: "self",
-          allowFurtherDelegation: true,
-        },
-      ]),
-  })
-  .superRefine((policy, context) => {
-    const ids = new Set<string>();
-    for (const [index, route] of policy.routes.entries()) {
-      if (ids.has(route.id)) {
-        context.addIssue({
-          code: "custom",
-          message: `Duplicate delegation route id '${route.id}'`,
-          path: ["routes", index, "id"],
-        });
-      }
-      ids.add(route.id);
-    }
-  });
+export type AgentDelegationGrant = z.infer<typeof AgentDelegationGrantSchema>;
+
+export const AgentDelegationPolicySchema = z.object({
+  enabled: z.boolean().default(true),
+  maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
+  agents: z
+    .array(AgentDelegationGrantSchema)
+    .max(100)
+    .default([{ agent: "self", model: "any", effort: "any", delegate: true }]),
+  /** Replaced by `agents`: a definition still naming routes is refused. */
+  routes: z
+    .never({
+      error:
+        "delegation.routes was replaced by delegation.agents (ADR 0271): list the agents this one may start, with their model and effort choices",
+    })
+    .optional(),
+});
 
 export type AgentDelegationPolicy = z.infer<typeof AgentDelegationPolicySchema>;
 
 /**
- * The committed `.catamorphic/agents/<slug>.json` schema, version 1. Unknown top-level
+ * The committed `.work/agents/<slug>.json` schema, version 1. Unknown top-level
  * keys are stripped (forward compatibility inside a version); a bumped
  * `version` is reported as an invalid entry with a clear error rather
  * than half-parsed.
@@ -251,80 +300,104 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
   const kinds = opts?.allowE2eFake
     ? ([...AGENT_DEFINITION_KINDS, "e2e-fake"] as const)
     : AGENT_DEFINITION_KINDS;
-  return z.object({
-    version: z.literal(1),
-    /** Display name. */
-    name: z.string().min(1),
-    kind: z.enum(kinds as readonly [string, ...string[]]),
-    model: z.string().min(1).optional(),
-    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
-    /**
-     * Normalized operating mode (ADR 0056), mapped per harness: Claude
-     * Code plan/acceptEdits/bypassPermissions, Codex sandbox read-only/
-     * workspace-write/danger-full-access. Absent = "edit". Sensitive —
-     * part of the consent hash: widening what an agent may touch must
-     * re-earn consent.
-     */
-    mode: z.enum(["read-only", "edit", "full-access"]).optional(),
-    /** Checkout-coordination doctrine. Absent = "shared-first". */
-    coordination: z.enum(AGENT_COORDINATION_STRATEGIES).optional(),
-    /**
-     * Claude Code auto-memory. Absent = OFF — memory is opt-in
-     * (ADR 0056): accumulated memories change an agent's behavior over
-     * time without users seeing it happen. `true` enables it.
-     */
-    memory: z.boolean().optional(),
-    description: z.string().optional(),
-    credentials: AgentDefinitionCredentialsSchema.optional(),
-    environment: AgentEnvironmentPolicySchema.optional(),
-    /**
-     * Environment connection bindings this project agent requires. Project
-     * agents never inherit the running member's desktop profile connectors.
-     */
-    connections: z
-      .array(
-        z.union([
-          z.string().regex(CONNECTION_ALIAS_PATTERN),
+  return z
+    .object({
+      version: z.literal(1),
+      /** Display name. */
+      name: z.string().min(1),
+      kind: z.enum(kinds as readonly [string, ...string[]]),
+      model: z.string().min(1).optional(),
+      effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+      /**
+       * What may leave the agent's sandbox (ADR 0182): `contained`,
+       * `propose`, or `publish`. Absent = the host's default (`propose` on a
+       * Work server). Sensitive: part of the consent hash.
+       */
+      sandboxing: z.enum(SANDBOXING_LEVELS).optional(),
+      /**
+       * The harness's own permission mode, in its native values (ADR 0182):
+       * Claude Code `permissionMode`; Codex `sandbox` and `approvals`. Other
+       * kinds take none. Absent fields keep the host's default. Sensitive:
+       * part of the consent hash.
+       */
+      harnessPermissions: z
+        .strictObject({
+          permissionMode: z.enum(CLAUDE_CODE_PERMISSION_MODES).optional(),
+          sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+          approvals: z.enum(CODEX_APPROVAL_POLICIES).optional(),
+        })
+        .optional(),
+      /** Checkout-coordination doctrine. Absent = "shared-first". */
+      coordination: z.enum(AGENT_COORDINATION_STRATEGIES).optional(),
+      /**
+       * Claude Code auto-memory. Absent = OFF — memory is opt-in
+       * (ADR 0056): accumulated memories change an agent's behavior over
+       * time without users seeing it happen. `true` enables it.
+       */
+      memory: z.boolean().optional(),
+      description: z.string().optional(),
+      credentials: AgentDefinitionCredentialsSchema.optional(),
+      environment: AgentEnvironmentPolicySchema.optional(),
+      /**
+       * Environment connection bindings this project agent requires. Project
+       * agents never inherit the running member's desktop profile connectors.
+       */
+      connections: z
+        .array(
+          z.union([
+            z.string().regex(CONNECTION_ALIAS_PATTERN),
+            z.object({
+              alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
+              principal: z.enum(["member", "service", "either"]).optional(),
+              capabilities: z.array(z.string().min(1)).optional(),
+              optional: z.boolean().optional(),
+            }),
+          ]),
+        )
+        .optional(),
+      /**
+       * Skill names this agent is offered (any tier — project, user,
+       * host). Absent = all. Narrowing only, like toolPolicies: outside
+       * the consent hash.
+       */
+      skills: z.array(z.string().min(1)).optional(),
+      /**
+       * Per-connection tool policies keyed by binding alias. These can narrow
+       * what the Environment broker exposes, never widen it.
+       */
+      toolPolicies: z
+        .record(
+          z.string().min(1),
           z.object({
-            alias: z.string().regex(CONNECTION_ALIAS_PATTERN),
-            principal: z.enum(["member", "service", "either"]).optional(),
-            capabilities: z.array(z.string().min(1)).optional(),
-            optional: z.boolean().optional(),
+            default: z.enum(["allow", "ask", "deny", "auto"]).optional(),
+            tools: z
+              .record(z.string(), z.enum(["allow", "ask", "deny"]))
+              .optional(),
           }),
-        ]),
-      )
-      .optional(),
-    /**
-     * Skill names this agent is offered (any tier — project, user,
-     * host). Absent = all. Narrowing only, like toolPolicies: outside
-     * the consent hash.
-     */
-    skills: z.array(z.string().min(1)).optional(),
-    /**
-     * Per-connection tool policies keyed by binding alias. These can narrow
-     * what the Environment broker exposes, never widen it.
-     */
-    toolPolicies: z
-      .record(
-        z.string().min(1),
-        z.object({
-          default: z.enum(["allow", "ask", "deny", "auto"]).optional(),
-          tools: z
-            .record(z.string(), z.enum(["allow", "ask", "deny"]))
-            .optional(),
-        }),
-      )
-      .optional(),
-    /** Which agents this agent may create as first-class subsessions. */
-    delegation: AgentDelegationPolicySchema.optional(),
-    /** Reserved for kind "acp": how to reach the agent. */
-    acp: z
-      .object({
-        endpoint: z.string().min(1).optional(),
-        command: z.array(z.string().min(1)).optional(),
-      })
-      .optional(),
-  });
+        )
+        .optional(),
+      /** Which agents this agent may create as first-class subsessions. */
+      delegation: AgentDelegationPolicySchema.optional(),
+      /** For kind "acp": the command that starts the agent, or its endpoint. */
+      acp: z
+        .object({
+          endpoint: z.string().min(1).optional(),
+          command: z.array(z.string().min(1)).optional(),
+        })
+        .optional(),
+    })
+    .superRefine((definition, ctx) => {
+      for (const issue of harnessPermissionIssues({
+        kind: definition.kind,
+        permissions: definition.harnessPermissions ?? {},
+      })) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["harnessPermissions", issue.field],
+          message: issue.message,
+        });
+      }
+    });
 }
 
 export const AgentDefinitionSchema = agentDefinitionSchema();
@@ -335,7 +408,8 @@ export interface AgentDefinition {
   kind: AgentDefinitionKind;
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
-  mode?: "read-only" | "edit" | "full-access";
+  sandboxing?: Sandboxing;
+  harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
   description?: string;
@@ -359,7 +433,7 @@ export interface ProjectAgentEntry {
   slug: string;
   /** Present when the file parsed and validated. */
   definition?: AgentDefinition;
-  /** Content of the sibling `.catamorphic/agents/<slug>.md` persona file, if present. */
+  /** Content of the sibling `.work/agents/<slug>.md` persona file, if present. */
   promptFile?: string;
   /** Present instead of `definition` when the file could not be used. */
   invalid?: { error: string };
@@ -401,8 +475,9 @@ export function validateAgentDefinition(
  * Deliberately NOT covered: name and description, which are display concerns,
  * plus skills and toolPolicies, which can only narrow what the member's own
  * profile allows. Environment and connection requirements are covered because
- * they select execution and brokered authority. `mode` is covered because
- * widening what the agent may do to the member's machine must re-earn consent.
+ * they select execution and brokered authority. `sandboxing` and
+ * `harnessPermissions` are covered because widening what the agent may do,
+ * inside its harness or past its sandbox, must re-earn consent.
  */
 export function definitionHash(
   definition: AgentDefinition,
@@ -412,11 +487,20 @@ export function definitionHash(
   const sensitive = {
     kind: definition.kind,
     model: definition.model ?? null,
-    // The host chooses its default. Omission and an explicit mode are distinct.
-    mode: definition.mode ?? null,
+    // The host chooses its defaults. Omission and an explicit value are distinct.
+    sandboxing: definition.sandboxing ?? null,
+    harnessPermissions: definition.harnessPermissions
+      ? {
+          permissionMode: definition.harnessPermissions.permissionMode ?? null,
+          sandbox: definition.harnessPermissions.sandbox ?? null,
+          approvals: definition.harnessPermissions.approvals ?? null,
+        }
+      : null,
     credentials: {
       source: credentials.source,
       secret: credentials.secret ?? null,
+      // Only when named, so existing consent hashes stay valid.
+      ...(credentials.connection ? { connection: credentials.connection } : {}),
     },
     environment: definition.environment ?? null,
     connections: (definition.connections ?? []).map((connection) =>
@@ -441,10 +525,10 @@ export function definitionHash(
 }
 
 /**
- * Read-only view over a project's committed `.catamorphic/agents/` directory. Writes go
+ * Read-only view over a project's committed `.work/agents/` directory. Writes go
  * through the normal project file APIs (definitions are just files in the
- * repo). Mirrors {@link SkillsService}: reads the caller's dev working copy
- * so uncommitted edits are visible, and NEVER throws on a bad file — each
+ * repo). Mirrors {@link SkillsService}: reads the caller's draft
+ * so unpublished edits are visible, and NEVER throws on a bad file — each
  * unusable definition is reported as an invalid entry so one typo can't
  * take down the whole roster.
  */
@@ -462,9 +546,9 @@ export class AgentDefinitionsService {
     await this.requireProject(identity, projectId);
     return this.withDev(identity, projectId, async (repo) => {
       const files = await repo.listFiles({
-        prefix: `${AGENT_DEFINITIONS_DIR}/`,
+        prefix: `${PROJECT_AGENTS_DIR}/`,
       });
-      const prefix = `${AGENT_DEFINITIONS_DIR}/`;
+      const prefix = `${PROJECT_AGENTS_DIR}/`;
       const definitionFiles = files.filter(
         (file) =>
           file.startsWith(prefix) &&
@@ -541,12 +625,17 @@ export class AgentDefinitionsService {
         const files = await readProgramFiles(
           repo,
           ref,
-          `${AGENT_DEFINITIONS_DIR}/`,
+          `${PROJECT_AGENTS_DIR}/`,
         );
         return Object.entries(files)
-          .filter(([path]) => /^\.catamorphic\/agents\/[^/]+\.json$/.test(path))
+          .filter(
+            ([path]) =>
+              path.startsWith(`${PROJECT_AGENTS_DIR}/`) &&
+              path.endsWith(".json") &&
+              !path.slice(PROJECT_AGENTS_DIR.length + 1).includes("/"),
+          )
           .map(([path, content]) => {
-            const slug = path.slice(AGENT_DEFINITIONS_DIR.length + 1, -5);
+            const slug = path.slice(PROJECT_AGENTS_DIR.length + 1, -5);
             if (!SLUG_PATTERN.test(slug))
               return { slug, invalid: { error: "Invalid agent file name" } };
             try {
@@ -559,7 +648,7 @@ export class AgentDefinitionsService {
                 : {
                     slug,
                     definition: result.definition,
-                    promptFile: files[`.catamorphic/agents/${slug}.md`],
+                    promptFile: files[`${PROJECT_AGENTS_DIR}/${slug}.md`],
                   };
             } catch {
               return {
@@ -574,20 +663,21 @@ export class AgentDefinitionsService {
   }
 
   private requireProject(identity: Identity, projectId: string) {
-    if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
+    if (!hasProjectPermission(identity, projectId, "program:read"))
+      throw new AccessDeniedError();
     return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 
   private async withDev<T>(
     identity: Identity,
     projectId: string,
-    fn: (repo: ProjectRepo) => Promise<T>,
+    fn: (repo: ProjectDraft) => Promise<T>,
   ): Promise<T> {
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await this.projectManager.openDraft({
+      tenantId: identity.tenantId,
+      projectId: projectId,
+      externalUserId: identity.externalUserId,
+    });
     try {
       return await fn(repo);
     } finally {

@@ -6,6 +6,7 @@ import {
   setReactValueJs,
   workspaceDomHelpersJs,
 } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
  * Recovery flows: the app dies mid-agent-turn (crash, quit, dev restart)
@@ -37,7 +38,7 @@ const helpers = `
       el.textContent.trim(),
     );
   const activityLines = () =>
-    $$('[role="log"] .animate-pulse').map((el) => el.textContent.trim());
+    $$('[role="log"] [data-testid="activity-text"]').map((el) => el.textContent.trim());
   const spinnersOn = () => $$('svg.animate-spin').filter((el) => {
     let node = el, opacity = 1;
     while (node && node !== document.body) {
@@ -78,6 +79,8 @@ describe("interrupted turn recovery", () => {
       timeoutMs: 60_000,
       label: "workspace ready",
     });
+    // The relaunch reopens the chat from a sidebar list of chats.
+    await addSidebarSections(app, [CHATS_SECTION]);
 
     // Start a slow turn and kill the app while the agent is mid-flight.
     await run(`pressKey('n', { metaKey: true }); return true;`);
@@ -108,26 +111,38 @@ describe("interrupted turn recovery", () => {
               window.catamorphicDesktop.getServerState().then((s) => !!s.url);`,
       { timeoutMs: 60_000, label: "embedded server ready after relaunch" },
     );
-    await runWait(
-      `const chat = document.querySelector('aside [data-session-id="${sessionId}"] [data-tree-primary]');
-       if (!chat) return false; chat.focus(); return document.activeElement === chat;`,
-      { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
-    );
     // Explicitly open the dock through Chromium input and verify it is visible.
     // A click alone is not evidence of reopening during startup; the later
-    // orphan notification can render a transcript in a minimized dock.
-    await app.press("Enter", 1); // Alt+Enter opens floating on both platforms.
-    await runWait(
-      `return !!visibleDock()?.querySelector('[data-composer-input]');`,
-      { label: "orphaned session opened for continuation" },
-    );
+    // orphan notification can render a transcript in a minimized dock. A key
+    // pressed while the window is still starting can be lost (once on the
+    // macOS runner): the row takes focus and the key again until it opens.
+    for (let attempt = 0; ; attempt += 1) {
+      await runWait(
+        `const chat = document.querySelector('aside [data-session-id="${sessionId}"] [data-tree-primary]');
+         if (!chat) return false; chat.focus(); return document.activeElement === chat;`,
+        { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
+      );
+      await app.press("Enter", 1); // Alt+Enter opens floating on both platforms.
+      try {
+        await runWait(
+          `return !!visibleDock()?.querySelector('[data-composer-input]');`,
+          {
+            label: "orphaned session opened for continuation",
+            timeoutMs: attempt < 2 ? 5_000 : 15_000,
+          },
+        );
+        break;
+      } catch (cause) {
+        if (attempt >= 2) throw cause;
+      }
+    }
 
     // The dead turn reads as a finished, interrupted message — not an
     // eternal "Thinking..." spinner.
     // Durable turns keep a 60-second worker lease across process death.
     // Recovery must wait for that lease to expire before declaring it orphaned.
     await runWait(
-      `return timelineMessages().some((m) => m.includes('interrupted before it finished'));`,
+      `return timelineMessages().some((m) => m.includes('stopped before it finished'));`,
       {
         timeoutMs: 90_000,
         label: "interrupted message after the worker lease expires",

@@ -24,7 +24,8 @@ type JsonIncompatibleKeys<Value extends object> = {
     : Key;
 }[keyof Value];
 
-type IsJsonCompatibleMember<Value> = [Value] extends [JsonPrimitive]
+// Distributes over a union, so `Item | null` checks `Item` and `null` apart.
+type IsJsonCompatibleMember<Value> = Value extends JsonPrimitive
   ? true
   : Value extends readonly (infer Item)[]
     ? IsJsonCompatible<Item>

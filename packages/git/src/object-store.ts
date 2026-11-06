@@ -5,8 +5,9 @@
  * Semantics implementations must honor:
  * - `put` with `ifNoneMatch: "*"` fails with {@link PreconditionFailedError}
  *   when the key already exists.
- * - `put` with `ifMatch` fails with {@link PreconditionFailedError} when the
- *   key is missing or its ETag differs. ETags are opaque — callers only pass
+ * - `put` and `delete` with `ifMatch` fail with
+ *   {@link PreconditionFailedError} when the key is missing or its ETag
+ *   differs. ETags are opaque — callers only pass
  *   back values previously returned by `get`.
  */
 export interface ObjectStore {
@@ -21,8 +22,12 @@ export interface ObjectStore {
   ): Promise<void>;
   /** List full keys under a prefix. */
   list(prefix: string): Promise<string[]>;
-  /** Delete exactly one key; a missing key is a no-op. */
-  delete(key: string): Promise<void>;
+  /**
+   * Delete exactly one key; a missing key is a no-op. With `ifMatch`, fails
+   * with {@link PreconditionFailedError} when the key is missing or its ETag
+   * differs.
+   */
+  delete(key: string, opts?: { ifMatch?: string }): Promise<void>;
   /** Delete every object under a prefix. */
   deletePrefix(prefix: string): Promise<void>;
 }

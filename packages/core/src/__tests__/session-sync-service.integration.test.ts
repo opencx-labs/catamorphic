@@ -37,7 +37,6 @@ describe("durable session sync", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
         authority_host_id: "desktop-1",
         authority_revision: 3,
       })
@@ -51,26 +50,25 @@ describe("durable session sync", () => {
 
   beforeEach(async () => {
     await db.deleteFrom("session_sync_intents").execute();
-    await db.deleteFrom("agent_messages").execute();
+    await db
+      .updateTable("agent_sessions")
+      .set({ event_sequence: 0 })
+      .where("id", "=", sessionId)
+      .execute();
   });
 
-  it("coalesces newer transcript watermarks without losing retry state", async () => {
+  it("coalesces newer log watermarks without losing retry state", async () => {
     await sync.enqueue({
       identity,
       projectId,
       sessionId,
       destinationKey: "server-a:project-b",
     });
+    // The session logged one event since.
     await db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "user",
-        content: "hello",
-        author_kind: "user",
-        author_payload: {},
-        delivery_mode: "next_turn",
-      })
+      .updateTable("agent_sessions")
+      .set({ event_sequence: 1 })
+      .where("id", "=", sessionId)
       .execute();
     await sync.enqueue({
       identity,
@@ -87,23 +85,18 @@ describe("durable session sync", () => {
     expect(claimed).toHaveLength(1);
     expect(claimed[0]).toMatchObject({
       authorityRevision: 3,
-      messageCount: 1,
+      sequence: 1,
       destinationKey: "server-a:project-b",
       attemptCount: 1,
     });
   });
 
   it("requires the lease owner and exact destination receipt to acknowledge", async () => {
+    // The session logged one event since.
     await db
-      .insertInto("agent_messages")
-      .values({
-        session_id: sessionId,
-        role: "user",
-        content: "hello",
-        author_kind: "user",
-        author_payload: {},
-        delivery_mode: "next_turn",
-      })
+      .updateTable("agent_sessions")
+      .set({ event_sequence: 1 })
+      .where("id", "=", sessionId)
       .execute();
     await sync.enqueue({
       identity,
@@ -123,7 +116,7 @@ describe("durable session sync", () => {
         intentId: intent!.id,
         workerId: "worker-2",
         authorityRevision: 3,
-        messageCount: 1,
+        sequence: 1,
       }),
     ).rejects.toThrow("lease");
     await expect(
@@ -131,7 +124,7 @@ describe("durable session sync", () => {
         intentId: intent!.id,
         workerId: "worker-1",
         authorityRevision: 3,
-        messageCount: 0,
+        sequence: 0,
       }),
     ).rejects.toThrow("watermark");
 
@@ -139,7 +132,7 @@ describe("durable session sync", () => {
       intentId: intent!.id,
       workerId: "worker-1",
       authorityRevision: 3,
-      messageCount: 1,
+      sequence: 1,
     });
     expect(
       await sync.status({
@@ -151,7 +144,7 @@ describe("durable session sync", () => {
     ).toMatchObject({
       state: "acknowledged",
       acknowledgedAuthorityRevision: 3,
-      acknowledgedMessageCount: 1,
+      acknowledgedSequence: 1,
     });
   });
 

@@ -2,6 +2,8 @@ import {
   ProjectNotFoundError,
   RunCapabilityError,
   RunResumeConflictError,
+  RunSignalInvalidError,
+  RunSignalLimitError,
   RunSignalNotFoundError,
   WorkflowNotFoundError,
 } from "@catamorphic/core";
@@ -19,6 +21,7 @@ import {
   RefQuerySchema,
   RunCallOutcomeSchema,
   RunSchema,
+  RunSignalReceiptSchema,
   RunsQuerySchema,
   SignalRunSchema,
   TriggerRunSchema,
@@ -242,7 +245,9 @@ export function registerWorkflowRoutes(
       params: WorkflowNameParamsSchema,
       body: SignalRunSchema,
       response: {
-        200: RunSchema,
+        200: RunSignalReceiptSchema,
+        400: ErrorSchema,
+        429: ErrorSchema,
         404: ErrorSchema,
         409: ErrorSchema,
         503: ErrorSchema,
@@ -258,6 +263,7 @@ export function registerWorkflowRoutes(
             projectId: request.params.projectId,
             workflowName: request.params.name,
             correlationKey: request.body.correlationKey,
+            runId: request.body.runId,
             signal: request.body.signal,
             idempotencyKey: request.body.idempotencyKey,
             value: request.body.value,
@@ -270,9 +276,10 @@ export function registerWorkflowRoutes(
         if (err instanceof RunSignalNotFoundError) {
           return reply.status(404).send({ error: err.message });
         }
-        // The pause can time out or be cancelled between resolving it and
-        // resuming it, which is a conflict the caller can retry against — not
-        // a server fault.
+        if (err instanceof RunSignalInvalidError)
+          return reply.status(400).send({ error: err.message });
+        if (err instanceof RunSignalLimitError)
+          return reply.status(429).send({ error: err.message });
         if (
           err instanceof RunResumeConflictError ||
           err instanceof RunCapabilityError

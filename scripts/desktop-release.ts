@@ -33,9 +33,11 @@ export function desktopReleaseKind(version: string): DesktopReleaseKind {
   if (!RELEASE_VERSION.test(version)) {
     throw new Error(`Desktop release version must be valid SemVer: ${version}`);
   }
-  const prerelease = version.split("-")[1];
+  const prerelease = version.includes("-")
+    ? version.slice(version.indexOf("-") + 1)
+    : undefined;
   if (!prerelease) return "stable";
-  if (prerelease.split(".")[0] !== "alpha") {
+  if (!/^alpha\.(0|[1-9]\d*)$/.test(prerelease)) {
     throw new Error(
       `Desktop preview versions must use the alpha prerelease channel: ${version}`,
     );

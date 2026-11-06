@@ -22,7 +22,7 @@ export type TriggerValidationResult =
  * `defineTriggerKind`; hosts may also hand-roll one.
  *
  * The JSON Schemas serve double duty: runtime metadata for HTTP surfaces,
- * and the source for the generated `catamorphic-triggers.d.ts` that project
+ * and the source for the generated `work-triggers.d.ts` that project
  * workspaces type-check `trigger()` calls against.
  */
 export interface TriggerKindRuntime {
@@ -48,10 +48,21 @@ export interface TriggerKindRuntime {
   outputJsonSchema?: Json;
   validatePayload(value: Json): TriggerValidationResult;
   validateConfig(value: Json): TriggerValidationResult;
-  /** Pure selector over validated binding config and event payload. */
+  /**
+   * Pure selector over validated binding config and event payload, both in
+   * their stored form (a NUL or half an emoji as U+FFFD), so every replica
+   * matches alike; the run still gets the payload as sent.
+   */
   matches?(input: { config: Json; payload: Json }): boolean;
   /** Derives an enrollment correlation key from the payload (ADR 0027). */
   correlationKey?(payload: Json): string | undefined;
+  /**
+   * Project permissions (ADR 0158) a workflow must declare to bind this
+   * kind, because its events disclose what only they may read: directory
+   * events name people, so they need `memberships:read` (ADR 0210). The
+   * deploy scan and each project's check refuse a binding without them.
+   */
+  requiredPermissions?: readonly string[];
 }
 
 /** Static kind metadata, safe to serve over HTTP (no functions). */
@@ -63,6 +74,7 @@ export interface TriggerKindInfo {
   payloadJsonSchema: Json;
   configJsonSchema: Json;
   outputJsonSchema?: Json;
+  requiredPermissions?: readonly string[];
 }
 
 export function triggerKindInfo(kind: TriggerKindRuntime): TriggerKindInfo {
@@ -75,6 +87,9 @@ export function triggerKindInfo(kind: TriggerKindRuntime): TriggerKindInfo {
     configJsonSchema: kind.configJsonSchema,
     ...(kind.outputJsonSchema !== undefined
       ? { outputJsonSchema: kind.outputJsonSchema }
+      : {}),
+    ...(kind.requiredPermissions?.length
+      ? { requiredPermissions: kind.requiredPermissions }
       : {}),
   };
 }

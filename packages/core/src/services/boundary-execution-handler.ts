@@ -4,6 +4,7 @@ import type {
   WorkflowExecutionDescriptor,
 } from "@catamorphic/parser";
 import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
+import { MAX_CARRIED_STATE_BYTES } from "@catamorphic/workflow";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import { ConnectionUnavailableError } from "./connections-service.js";
@@ -17,6 +18,11 @@ import type {
   RateLimit,
   RateReservationsService,
 } from "./rate-reservations-service.js";
+import {
+  BoundaryAttemptTimeoutError,
+  requireAttemptTime,
+  runAbortable,
+} from "./run-abortable.js";
 import {
   jsonColumn,
   jsonRecord,
@@ -77,6 +83,7 @@ export class BoundaryExecutionHandler {
         input: unknown;
         attempt: number;
         signal?: AbortSignal;
+        deadlineAt: string;
       }): Promise<RuntimeInvocationReceipt>;
       resolveChild(args: {
         identity: Identity;
@@ -86,12 +93,16 @@ export class BoundaryExecutionHandler {
       }): Promise<{
         capabilities: WorkflowCapabilities;
         execution: WorkflowExecutionDescriptor;
+        permissions: readonly string[];
+        displayName?: string;
       }>;
       /**
        * Execute a host call transition (ADR 0055) as the run's caller. The
        * documents capability and the registry's `calls` both live here.
        */
       callHost(args: {
+        signal: AbortSignal;
+        deadlineAt: string;
         caller: Identity;
         projectId: string;
         runId: string;
@@ -101,6 +112,8 @@ export class BoundaryExecutionHandler {
         args: unknown;
       }): Promise<unknown>;
       callConnection?(args: {
+        signal: AbortSignal;
+        deadlineAt: string;
         caller: Identity;
         allocationId: string;
         alias: string;
@@ -162,29 +175,97 @@ export class BoundaryExecutionHandler {
       return;
     }
 
+    const deadlineAt = await this.deps.coordinator.boundaryDeadline({
+      job: args.job,
+    });
+    if (!deadlineAt) return;
+    const deadline = new AbortController();
+    const timeoutError = new BoundaryAttemptTimeoutError();
+    const remaining = Date.parse(deadlineAt) - Date.now();
+    if (remaining <= 0) deadline.abort(timeoutError);
+    const timer = setTimeout(
+      () => deadline.abort(timeoutError),
+      Math.max(0, remaining),
+    );
+    const signal = AbortSignal.any([args.signal, deadline.signal]);
+    try {
+      signal.throwIfAborted();
+      await this.executeAttempt({
+        ...args,
+        context,
+        invocationId,
+        deadlineAt,
+        signal,
+      });
+    } catch (error) {
+      if (
+        signal.reason !== timeoutError &&
+        !(error instanceof BoundaryAttemptTimeoutError)
+      )
+        throw error;
+      deadline.abort(timeoutError);
+      await this.deps.coordinator.failStep({
+        workflowStepAttemptId: context.workflowStepAttemptId,
+        job: args.job,
+        error: timeoutError.message,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async requireDispatch(args: {
+    job: ExecutionJob;
+    signal: AbortSignal;
+    deadlineAt: string;
+  }): Promise<void> {
+    requireAttemptTime(args);
+    if (!(await this.deps.coordinator.boundaryDeadline({ job: args.job }))) {
+      throw new Error(
+        "Boundary call lost its active attempt or execution lease",
+      );
+    }
+    requireAttemptTime(args);
+  }
+
+  private async executeAttempt(args: {
+    job: ExecutionJob;
+    signal: AbortSignal;
+    context: BoundaryRuntimeContext;
+    invocationId: string;
+    deadlineAt: string;
+  }): Promise<void> {
+    const { context, invocationId } = args;
     const receipt: RuntimeInvocationReceipt =
       await this.deps.coordinator.invokeRuntime({
         job: args.job,
         invocationId,
         invoke: () =>
-          this.deps.invokeRuntime({
-            ...context,
-            invocationId,
-            kind: "durable-boundary",
-            // The caller rides beside the input (never inside it — input is
-            // author-typed) so the boundary can read `context.caller`.
-            input: {
-              value: context.input,
-              caller: {
-                externalUserId: context.caller.externalUserId,
-                ...(context.caller.scope
-                  ? { scope: toJson(context.caller.scope) }
-                  : {}),
-              },
-            },
+          runAbortable({
             signal: args.signal,
+            deadlineAt: args.deadlineAt,
+            operation: () =>
+              this.deps.invokeRuntime({
+                ...context,
+                invocationId,
+                kind: "durable-boundary",
+                // The caller rides beside the input (never inside it — input is
+                // author-typed) so the boundary can read `context.caller`.
+                input: {
+                  value: context.input,
+                  caller: {
+                    externalUserId: context.caller.externalUserId,
+                    ...(context.caller.scope
+                      ? { scope: toJson(context.caller.scope) }
+                      : {}),
+                  },
+                },
+                signal: args.signal,
+                deadlineAt: args.deadlineAt,
+              }),
           }),
       });
+    requireAttemptTime(args);
     if (receipt.terminal.status === "rate_limited") {
       // The provider is the authority on its own limits, so its answer blocks
       // every workflow sharing these buckets, not just this run.
@@ -208,6 +289,18 @@ export class BoundaryExecutionHandler {
       return;
     }
     const result = jsonRecord(receipt.terminal.result);
+    // State rides with the call (ADR 0260); refuse it before the call runs,
+    // so nothing is done that its step could not then record.
+    const carriedBytes = stateBytes(jsonRecord(result.transition));
+    if (carriedBytes > MAX_CARRIED_STATE_BYTES) {
+      await this.deps.coordinator.failStep({
+        workflowStepAttemptId: context.workflowStepAttemptId,
+        job: args.job,
+        error: `A call's state is ${carriedBytes} bytes; at most ${MAX_CARRIED_STATE_BYTES} ride with it`,
+        allowBoundaryRetry: false,
+      });
+      return;
+    }
     if (result.type === "completed") {
       await this.deps.coordinator.completeStep({
         workflowStepAttemptId: context.workflowStepAttemptId,
@@ -243,7 +336,7 @@ export class BoundaryExecutionHandler {
         commitSha: context.commitSha,
         workflowName,
       });
-      args.signal.throwIfAborted();
+      requireAttemptTime(args);
       await this.deps.coordinator.suspendForChild({
         workflowStepAttemptId: context.workflowStepAttemptId,
         job: args.job,
@@ -251,8 +344,13 @@ export class BoundaryExecutionHandler {
           workflowName,
           capabilities: child.capabilities,
           execution: child.execution,
+          permissions: child.permissions,
+          ...(child.displayName ? { displayName: child.displayName } : {}),
           input: toJson(transition.input),
         },
+        ...(transition.statePresent === true
+          ? { state: { value: toJson(transition.state ?? null) } }
+          : {}),
       });
       return;
     }
@@ -273,16 +371,25 @@ export class BoundaryExecutionHandler {
       // A throw fails the step; the step's retry policy re-runs the call.
       let output: unknown;
       try {
-        output = await this.deps.callHost({
-          caller: context.caller,
-          projectId: context.projectId,
-          runId: context.runId,
-          workflowName: context.workflowName,
-          capability,
-          fn,
-          args: transition.args,
+        await this.requireDispatch(args);
+        output = await runAbortable({
+          signal: args.signal,
+          deadlineAt: args.deadlineAt,
+          operation: () =>
+            this.deps.callHost({
+              signal: args.signal,
+              deadlineAt: args.deadlineAt,
+              caller: context.caller,
+              projectId: context.projectId,
+              runId: context.runId,
+              workflowName: context.workflowName,
+              capability,
+              fn,
+              args: transition.args,
+            }),
         });
       } catch (error) {
+        requireAttemptTime(args);
         await this.deps.coordinator.failStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           job: args.job,
@@ -292,11 +399,14 @@ export class BoundaryExecutionHandler {
         });
         return;
       }
-      args.signal.throwIfAborted();
+      requireAttemptTime(args);
       await this.deps.coordinator.completeStep({
         workflowStepAttemptId: context.workflowStepAttemptId,
         job: args.job,
-        output: toJson(output === undefined ? null : output),
+        output: carried({
+          transition,
+          output: toJson(output === undefined ? null : output),
+        }),
       });
       return;
     }
@@ -317,20 +427,32 @@ export class BoundaryExecutionHandler {
         });
         return;
       }
+      const allocationId = context.allocationId;
+      const callConnection = this.deps.callConnection;
       try {
-        const output = await this.deps.callConnection({
-          caller: context.caller,
-          allocationId: context.allocationId,
-          alias,
-          action,
-          input: toJson(transition.args),
+        await this.requireDispatch(args);
+        const output = await runAbortable({
+          signal: args.signal,
+          deadlineAt: args.deadlineAt,
+          operation: () =>
+            callConnection({
+              signal: args.signal,
+              deadlineAt: args.deadlineAt,
+              caller: context.caller,
+              allocationId,
+              alias,
+              action,
+              input: toJson(transition.args),
+            }),
         });
+        requireAttemptTime(args);
         await this.deps.coordinator.completeStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           job: args.job,
-          output,
+          output: carried({ transition, output }),
         });
       } catch (error) {
+        requireAttemptTime(args);
         if (
           error instanceof ConnectionUnavailableError &&
           error.connectionId &&
@@ -466,6 +588,7 @@ export class BoundaryExecutionHandler {
         "workflow_runs.caller_scope",
         "workflow_runs.caller_execution_scope",
         "workflow_runs.caller_connection_scope",
+        "workflow_runs.caller_project_permissions",
         "workflow_runs.allocation_id",
         "workflow_runs.status",
         "workflow_runs.deployment_artifact_id",
@@ -507,6 +630,13 @@ export class BoundaryExecutionHandler {
           ? {
               connectionScope:
                 row.caller_connection_scope as unknown as Identity["connectionScope"],
+            }
+          : {}),
+        // What the caller held of the workflow's declared permissions.
+        ...(Array.isArray(row.caller_project_permissions)
+          ? {
+              projectPermissions:
+                row.caller_project_permissions as unknown as Identity["projectPermissions"],
             }
           : {}),
       },
@@ -554,4 +684,24 @@ function readRateLimits(policy: Json): readonly RateLimit[] {
       },
     ];
   });
+}
+
+/**
+ * A call's result as the next step receives it (ADR 0260): beside the
+ * state the boundary handed the call, or alone when it handed none.
+ */
+function carried(args: {
+  transition: Record<string, unknown>;
+  output: Json;
+}): Json {
+  return args.transition.statePresent === true
+    ? toJson({ result: args.output, state: args.transition.state ?? null })
+    : args.output;
+}
+
+/** The size of the state a transition carries, serialized; 0 without. */
+function stateBytes(transition: Record<string, unknown>): number {
+  return transition.statePresent === true
+    ? Buffer.byteLength(JSON.stringify(transition.state ?? null) ?? "null")
+    : 0;
 }

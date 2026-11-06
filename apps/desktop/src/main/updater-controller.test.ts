@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopUpdateState } from "../shared/update.js";
+import { type DesktopUpdateState, updateMessageKey } from "../shared/update.js";
 import {
   DesktopUpdaterController,
   type ProgressInfoLike,
@@ -84,7 +84,19 @@ class FakeUpdater implements UpdaterAdapter {
   }
 }
 
-function setup() {
+function setup(
+  options: Partial<
+    Pick<
+      ConstructorParameters<typeof DesktopUpdaterController>[0],
+      | "installedInPlace"
+      | "moveToApplications"
+      | "prepareInstall"
+      | "cancelInstall"
+      | "downloaded"
+      | "checkTimeoutMs"
+    >
+  > = {},
+) {
   const updater = new FakeUpdater();
   const states: DesktopUpdateState[] = [];
   const controller = new DesktopUpdaterController({
@@ -94,6 +106,7 @@ function setup() {
     updater,
     broadcast: (state) => states.push(state),
     logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    ...options,
   });
   return { updater, states, controller };
 }
@@ -232,6 +245,21 @@ describe("DesktopUpdaterController", () => {
     });
   });
 
+  it("reports whether the feed answered, and fails a check that never settles", async () => {
+    const { controller, updater } = setup({ checkTimeoutMs: 20 });
+    expect(await controller.check(false)).toBe(true);
+
+    updater.checkForUpdates.mockImplementationOnce(() => new Promise(() => {}));
+    const abandoned = vi.fn();
+    Object.assign(updater, { abandonCheck: abandoned });
+    expect(await controller.check(false)).toBe(false);
+    expect(abandoned).toHaveBeenCalledOnce();
+    expect(controller.current().phase).toBe("idle");
+    // The stuck request no longer holds later checks.
+    expect(await controller.check(true)).toBe(true);
+    expect(updater.checkForUpdates).toHaveBeenCalledTimes(3);
+  });
+
   it("does not let manual checks replace a download or pending installation", async () => {
     const { controller, updater } = setup();
     updater.available("0.1.0-alpha.2");
@@ -267,6 +295,68 @@ describe("DesktopUpdaterController", () => {
     expect(updater.quitAndInstall).toHaveBeenCalledTimes(2);
   });
 
+  it("asks to move Work to Applications instead of downloading an update it cannot install", async () => {
+    const moveToApplications = vi.fn(async () => true);
+    const { controller, updater } = setup({
+      installedInPlace: () => false,
+      moveToApplications,
+    });
+    await controller.check(false);
+    expect(updater.checkForUpdates).not.toHaveBeenCalled();
+    expect(controller.current()).toMatchObject({ phase: "move-required" });
+    await controller.move();
+    expect(moveToApplications).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns Squirrel's read-only volume refusal into the move request", async () => {
+    const { controller, updater } = setup({
+      prepareInstall: async () => {
+        throw new Error(
+          "Cannot update while running on a read-only volume. The application is on a read-only volume. Please move the application and try again.",
+        );
+      },
+    });
+    updater.downloaded("0.1.0-alpha.2");
+    await controller.install();
+    expect(controller.current()).toMatchObject({
+      phase: "move-required",
+      manual: true,
+    });
+    expect(controller.current().message).toBeUndefined();
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("releases prepared workspace state when native installation throws, then permits a retry", async () => {
+    const prepareInstall = vi.fn(async () => {});
+    const cancelInstall = vi.fn();
+    const { controller, updater } = setup({ prepareInstall, cancelInstall });
+    updater.downloaded("0.1.0-alpha.2");
+    updater.quitAndInstall.mockImplementationOnce(() => {
+      throw new Error("Native installation failed");
+    });
+    await controller.install();
+    expect(cancelInstall).toHaveBeenCalledOnce();
+    expect(controller.current().phase).toBe("downloaded");
+    await controller.install();
+    expect(prepareInstall).toHaveBeenCalledTimes(2);
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps Work where it is when the person declines the move", async () => {
+    const moveToApplications = vi.fn(async () => false);
+    const { controller } = setup({
+      installedInPlace: () => false,
+      moveToApplications,
+    });
+    await controller.check(true);
+    await controller.move();
+    expect(moveToApplications).toHaveBeenCalledTimes(1);
+    expect(controller.current()).toMatchObject({
+      phase: "move-required",
+      message: expect.stringMatching(/stayed where it is/),
+    });
+  });
+
   it("holds channel selection while the current feed is being checked", async () => {
     const { controller, updater } = setup();
     let finish = () => {};
@@ -284,28 +374,93 @@ describe("DesktopUpdaterController", () => {
   });
 });
 
-it("checks active work again after preparation and requires another restart click", async () => {
-  const updater = new FakeUpdater();
-  let activeWork = false;
-  const controller = new DesktopUpdaterController({
-    currentVersion: "1",
-    channel: "preview",
-    supported: true,
-    updater,
-    broadcast: () => {},
-    logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    canInstall: async () => !activeWork,
-    prepareInstall: async () => {
-      activeWork = true;
+it("offers Restart, not Download, for a release downloaded before Work last quit", async () => {
+  let remembered: string | undefined;
+  const downloaded = {
+    load: () => remembered,
+    save: (version: string | undefined) => {
+      remembered = version;
+    },
+  };
+  const first = setup({ downloaded });
+  const checking = first.controller.check(false);
+  first.updater.available("0.1.0-alpha.2");
+  await checking;
+  const downloading = first.controller.download();
+  first.updater.downloaded("0.1.0-alpha.2");
+  await downloading;
+  expect(remembered).toBe("0.1.0-alpha.2");
+
+  // Work quit without restarting; the next launch finds the release again.
+  const next = setup({ downloaded });
+  const found = next.controller.check(false);
+  next.updater.available("0.1.0-alpha.2");
+  await found;
+  expect(next.updater.downloadUpdate).toHaveBeenCalledOnce();
+  next.updater.downloaded("0.1.0-alpha.2");
+  expect(next.states.map((state) => state.phase)).not.toContain("available");
+  expect(next.controller.current()).toMatchObject({
+    phase: "downloaded",
+    version: "0.1.0-alpha.2",
+  });
+
+  // A newer release than the one downloaded is offered as usual.
+  const newer = setup({ downloaded });
+  const checked = newer.controller.check(false);
+  newer.updater.available("0.1.0-alpha.3");
+  await checked;
+  expect(newer.updater.downloadUpdate).not.toHaveBeenCalled();
+  expect(newer.controller.current().phase).toBe("available");
+});
+
+it("offers the download again when the remembered one cannot be had", async () => {
+  const { controller, updater } = setup({
+    downloaded: { load: () => "0.1.0-alpha.2", save: () => {} },
+  });
+  updater.downloadUpdate.mockRejectedValueOnce(new Error("offline"));
+  const checking = controller.check(false);
+  updater.available("0.1.0-alpha.2");
+  await checking;
+  await vi.waitFor(() =>
+    expect(controller.current()).toMatchObject({
+      phase: "available",
+      version: "0.1.0-alpha.2",
+    }),
+  );
+});
+
+it("holds the channel while a remembered release is verified again", async () => {
+  const { controller, updater } = setup({
+    downloaded: { load: () => "0.1.0-alpha.2", save: () => {} },
+  });
+  let verified = () => {};
+  updater.downloadUpdate.mockReturnValueOnce(
+    new Promise<undefined>((resolve) => {
+      verified = () => resolve(undefined);
+    }),
+  );
+  const checking = controller.check(false);
+  updater.available("0.1.0-alpha.2");
+  await checking;
+  expect(controller.setChannel("stable")).toBe(false);
+  expect(await controller.check(true)).toBe(true);
+  expect(updater.checkForUpdates).toHaveBeenCalledOnce();
+  verified();
+  updater.downloaded("0.1.0-alpha.2");
+  expect(controller.current().phase).toBe("downloaded");
+});
+
+it("forgets the downloaded release once it is the one running", () => {
+  let remembered: string | undefined = "0.1.0-alpha.1";
+  setup({
+    downloaded: {
+      load: () => remembered,
+      save: (version) => {
+        remembered = version;
+      },
     },
   });
-  updater.downloaded("2");
-  await controller.install();
-  expect(updater.quitAndInstall).not.toHaveBeenCalled();
-  expect(controller.current()).toMatchObject({
-    phase: "downloaded",
-    message: expect.stringContaining("Work started"),
-  });
+  expect(remembered).toBeUndefined();
 });
 
 it("distinguishes an explicit status request from background progress", async () => {
@@ -318,4 +473,25 @@ it("distinguishes an explicit status request from background progress", async ()
   expect(controller.current().manualCheckId).toBe(first);
   await controller.check(true);
   expect(controller.current().manualCheckId).toBe((first ?? 0) + 1);
+});
+
+it("shares dismissal with every window and new snapshots, keeping progress quiet", async () => {
+  const { controller, updater, states } = setup();
+  updater.available("0.1.0-alpha.2");
+  await controller.download();
+  const key = updateMessageKey(controller.current());
+  controller.dismiss(key);
+  expect(states.at(-1)?.dismissed).toBe(true);
+  expect(controller.current().dismissed).toBe(true);
+  updater.progress(40);
+  expect(states.at(-1)).toMatchObject({ percent: 40, dismissed: true });
+  updater.downloaded("0.1.0-alpha.2");
+  expect(controller.current().dismissed).not.toBe(true);
+  // A click from the old phase cannot hide the readiness notification.
+  controller.dismiss(key);
+  expect(controller.current().dismissed).not.toBe(true);
+  controller.dismiss(updateMessageKey(controller.current()));
+  expect(controller.current().dismissed).toBe(true);
+  await controller.check(true);
+  expect(controller.current().dismissed).not.toBe(true);
 });

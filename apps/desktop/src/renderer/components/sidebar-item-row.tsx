@@ -4,22 +4,42 @@ import { ChevronRight, LoaderCircle, MoreHorizontal } from "lucide-react";
 import {
   type CSSProperties,
   type ReactNode,
-  type RefObject,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import {
+  dangerLast,
+  isMenuSeparator,
+  type MenuSeparator,
+  menuGroups,
+} from "../../shared/menu.js";
 import {
   OPEN_ACTIONS,
   type OpenMode,
   openModeForAction,
   openModeFromEvent,
 } from "../../shared/open-mode.js";
+import type {
+  SidebarActivity,
+  SidebarBadge,
+  SidebarSignal,
+  SidebarTrend,
+} from "../../shared/sidebar.js";
+import { appIsMovingFocus } from "../lib/app-focus.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
+import { TONE_TEXT } from "../lib/tones.js";
+import { AnimatedTitle } from "./animated-title.js";
+import { ACTIVITY_LABELS, SignalBadge, SignalGlyph } from "./chat-signals.js";
+import {
+  type ContextMenuEntry,
+  type MenuAt,
+  MenuPortal,
+  menuAtControl,
+  menuAtPointer,
+} from "./menu.js";
 import { ShortcutHint } from "./shortcut-hint";
 import {
   sidebarItemPresentation,
@@ -30,17 +50,7 @@ import {
   type SidebarPreviewAnchor,
   SidebarPreviewPopover,
 } from "./sidebar-preview.js";
-
-export interface ContextMenuEntry {
-  label: string;
-  action: string;
-  danger?: boolean;
-  icon?: string;
-  url?: string;
-  disabledReason?: string;
-  /** The entry currently in force, in a menu that picks one of several. */
-  checked?: boolean;
-}
+import { Sparkline } from "./sparkline.js";
 
 export function SidebarIcon({ name }: { name?: string }) {
   const Icon = lucideIcon(name) ?? icons.Circle;
@@ -68,7 +78,7 @@ function TitleHint({
  * hover that opens a menu. One button, not a row of them — stacked icon
  * buttons get unreadable fast and every new capability made it worse.
  *
- * The menu is data (`SidebarMenuEntry[]`, from sidebar.js) and the row is
+ * The menu is data (`SidebarMenuEntry[]`, from workspace.js) and the row is
  * generic, so custom config-defined items and built-in bookmarks share
  * exactly the same interaction.
  */
@@ -80,13 +90,18 @@ export function SidebarItemRow<
   contextMenu,
   actions,
   description,
+  keepDescription = false,
   badges,
   progress,
+  trend,
+  signal,
+  activity,
   presentation = "row",
   expanded,
   resource = false,
   defaultOpenMode = "replace",
   label,
+  pointKey,
   title,
   icon,
   menu,
@@ -109,19 +124,36 @@ export function SidebarItemRow<
   contextMenu?: readonly TMenuEntry[];
   actions?: readonly TMenuEntry[];
   description?: string;
-  badges?: readonly string[];
+  /**
+   * A short identifier (a pull request's number) stays whole and the label
+   * gives way instead; a long description (a path) shrinks first.
+   */
+  keepDescription?: boolean;
+  badges?: readonly (string | SidebarBadge)[];
   progress?: number;
+  /** A reading's recent history, drawn as a sparkline (ADR 0266). */
+  trend?: SidebarTrend;
+  /** What the row is doing, drawn the same everywhere (ADR 0234). */
+  signal?: SidebarSignal;
+  /** Its icon's lower corner; without it, a `working` signal spins there. */
+  activity?: SidebarActivity;
   presentation?: "row" | "tile";
   expanded?: boolean;
   resource?: boolean;
   defaultOpenMode?: OpenMode;
   label: string;
+  /**
+   * What an agent points at to reach this row: "sidebar:<label>", or the
+   * tab key of the open tab the row stands for.
+   */
+  pointKey?: string;
   /** Tooltip; usually the URL. */
   title?: string;
   /** lucide-react icon name, or a node to render directly. */
   icon?: string | ReactNode;
   menu?: readonly TMenuEntry[];
-  defaultMenu?: readonly TMenuEntry[];
+  /** The row's own menu when no configuration replaces it; may hold rules. */
+  defaultMenu?: readonly (TMenuEntry | MenuSeparator)[];
   preview?: SidebarPreview | false;
   /** Rich inspector body for built-in resources; uses the same hover shell. */
   previewContent?: ReactNode;
@@ -138,9 +170,7 @@ export function SidebarItemRow<
   onRenameCancel?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(
-    null,
-  );
+  const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
@@ -154,37 +184,52 @@ export function SidebarItemRow<
   const { error: actionError, pending, run: runItemAction } = useItemActions();
   const configuredContext = overrides.contextMenu ?? contextMenu;
   const configuredActions = overrides.actions ?? actions ?? [];
-  const available = (entries: readonly ContextMenuEntry[]) =>
-    entries.map((entry) => ({
-      ...entry,
-      disabledReason:
-        entry.disabledReason ??
-        (entry.url ||
-        (resource &&
-          (openModeForAction(entry.action) || entry.action === "open")) ||
-        (supportedActions
-          ? supportedActions.includes(entry.action)
-          : [
-              ...(defaultMenu ?? []),
-              ...(menu ?? []),
-              ...(contextMenu ?? []),
-              ...(actions ?? []),
-            ].some((original) => original.action === entry.action)) ||
-        (["refresh", "search", "new-chat", "new-workflow"].includes(
-          entry.action,
-        ) &&
-          contribution?.commands?.has(entry.action))
-          ? undefined
-          : "This item does not support this action"),
-    }));
+  // Every entry this row was given, the ones it can actually run.
+  const ownEntries = [
+    ...(defaultMenu ?? []).filter(
+      (entry): entry is TMenuEntry => !isMenuSeparator(entry),
+    ),
+    ...(menu ?? []),
+    ...(contextMenu ?? []),
+    ...(actions ?? []),
+  ];
+  const supports = (entry: ContextMenuEntry) =>
+    Boolean(entry.url) ||
+    (resource &&
+      (Boolean(openModeForAction(entry.action)) || entry.action === "open")) ||
+    (supportedActions
+      ? supportedActions.includes(entry.action)
+      : ownEntries.some((original) => original.action === entry.action)) ||
+    (["refresh", "search"].includes(entry.action) &&
+      Boolean(contribution?.commands?.has(entry.action)));
+  const available = (
+    entries: readonly (ContextMenuEntry | MenuSeparator)[],
+  ): (ContextMenuEntry | MenuSeparator)[] =>
+    entries.map((entry) =>
+      isMenuSeparator(entry)
+        ? entry
+        : {
+            ...entry,
+            disabledReason:
+              entry.disabledReason ??
+              (supports(entry)
+                ? undefined
+                : "This item does not support this action"),
+          },
+    );
   const resolvedMenu = available(
     overrides.menu ??
       (menu === undefined
-        ? [...(resource ? OPEN_ACTIONS : []), ...(defaultMenu ?? [])]
+        ? menuGroups<ContextMenuEntry>(
+            resource ? OPEN_ACTIONS : [],
+            dangerLast(defaultMenu ?? []),
+          )
         : menu),
   );
   const resolvedContext = available(configuredContext ?? resolvedMenu);
-  const inlineActions = available(configuredActions);
+  const inlineActions = available(configuredActions).filter(
+    (entry): entry is ContextMenuEntry => !isMenuSeparator(entry),
+  );
   const activeMenu = menuKind === "context" ? resolvedContext : resolvedMenu;
   const invoke = (entry: ContextMenuEntry) =>
     runItemAction({
@@ -201,12 +246,9 @@ export function SidebarItemRow<
         else if (resource && (mode || entry.action === "open"))
           onOpen(mode ?? overrides.open ?? defaultOpenMode);
         else {
-          const original = [
-            ...(defaultMenu ?? []),
-            ...(menu ?? []),
-            ...(contextMenu ?? []),
-            ...(actions ?? []),
-          ].find((candidate) => candidate.action === entry.action);
+          const original = ownEntries.find(
+            (candidate) => candidate.action === entry.action,
+          );
           if (original) await onAction(original);
           else if (contribution?.command)
             await contribution.command(entry.action);
@@ -221,6 +263,10 @@ export function SidebarItemRow<
   description = overrides.description ?? description;
   badges = overrides.badges ?? badges;
   progress = overrides.progress ?? progress;
+  trend = overrides.trend ?? trend;
+  signal = overrides.signal ?? signal;
+  activity = overrides.activity ?? activity;
+  const mark = activity ?? (signal === "working" ? "working" : undefined);
   preview = overrides.preview ?? preview;
   if (preview === false) previewContent = undefined;
   defaultOpenMode = overrides.open ?? defaultOpenMode;
@@ -272,41 +318,6 @@ export function SidebarItemRow<
     }, SIDEBAR_PREVIEW_DELAY_MS);
   };
 
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: Event) => {
-      // Clicks inside the portal menu handle themselves.
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-sidebar-menu]")
-      ) {
-        return;
-      }
-      if (
-        event.target instanceof Node &&
-        buttonRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", onKeyDown);
-    // Any scroll would detach the fixed-position menu from its row.
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", dismiss, true);
-    };
-  }, [open]);
-
   useEffect(() => () => clearTimeout(previewTimerRef.current), []);
 
   useEffect(() => {
@@ -323,11 +334,19 @@ export function SidebarItemRow<
       clearTimeout(previewTimerRef.current);
       setPreviewOpen(false);
     };
+    // A drag carries the row away from its hint; the card would otherwise
+    // float over the drop targets until the drag ends.
+    const dismissForDrag = () => {
+      clearTimeout(previewTimerRef.current);
+      setPreviewOpen(false);
+    };
     window.addEventListener("keydown", dismiss);
+    window.addEventListener("dragstart", dismissForDrag, true);
     // Scrolling invalidates the fixed anchor coordinates.
     window.addEventListener("scroll", dismiss, true);
     return () => {
       window.removeEventListener("keydown", dismiss);
+      window.removeEventListener("dragstart", dismissForDrag, true);
       window.removeEventListener("scroll", dismiss, true);
     };
   }, [previewOpen]);
@@ -356,7 +375,7 @@ export function SidebarItemRow<
       className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
-      data-point-key={`sidebar:${label}`}
+      data-point-key={pointKey ?? `sidebar:${label}`}
       onMouseEnter={() => {
         rowHoveredRef.current = true;
         armPreview();
@@ -367,7 +386,15 @@ export function SidebarItemRow<
       }}
       onFocusCapture={() => {
         rowFocusedRef.current = true;
-        armPreview();
+        // Keyboard focus previews the row. Focus a click or a dismissed menu
+        // hands back does not: the pointer's own hover already does that.
+        // Nor does focus the app moves (an opening sidebar's, onto what is
+        // already in front).
+        if (
+          document.documentElement.dataset.focusModality !== "pointer" &&
+          !appIsMovingFocus()
+        )
+          armPreview();
       }}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
@@ -383,7 +410,7 @@ export function SidebarItemRow<
               if (pendingActionRef.current) return;
               disarmPreview();
               setMenuKind("context");
-              setPosition({ x: event.clientX, y: event.clientY });
+              setMenuAt(menuAtPointer(event));
               setOpen(true);
             }
           : contextMenu || overrides.contextMenu
@@ -397,10 +424,9 @@ export function SidebarItemRow<
           resolvedContext.length
         ) {
           event.preventDefault();
-          const rect = rowRef.current?.getBoundingClientRect();
-          if (rect) {
+          if (rowRef.current) {
             setMenuKind("context");
-            setPosition({ x: rect.left, y: rect.bottom });
+            setMenuAt(menuAtControl(rowRef.current));
             setOpen(true);
           }
         }
@@ -424,19 +450,6 @@ export function SidebarItemRow<
         />
       ) : (
         <>
-          {disclosure && (
-            <button
-              type="button"
-              onClick={disclosure.onToggle}
-              className="ml-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
-              aria-label={`${disclosure.open ? "Collapse" : "Expand"} ${label}`}
-              aria-expanded={disclosure.open}
-            >
-              <ChevronRight
-                className={`size-3 transition-transform duration-150 ${disclosure.open ? "rotate-90" : ""}`}
-              />
-            </button>
-          )}
           <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
@@ -454,7 +467,7 @@ export function SidebarItemRow<
                 disarmPreview();
                 onOpen(openModeFromEvent(event, defaultOpenMode));
               }}
-              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
               aria-expanded={disclosure?.open ?? expanded}
@@ -463,31 +476,57 @@ export function SidebarItemRow<
                 previewEnabled && previewOpen ? previewId : undefined
               }
             >
-              {IconComponent ? (
-                <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
-              ) : (
-                icon
-              )}
+              <SignalGlyph activity={mark} className="size-3.5">
+                {IconComponent ? (
+                  <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
+                ) : (
+                  icon
+                )}
+              </SignalGlyph>
               {presentation === "tile" ? (
                 <span className="sr-only">{label}</span>
               ) : (
                 (labelContent ?? (
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  // The label is what people read: it keeps its width and the
+                  // description gives way first when the row is narrow. A
+                  // renamed row says so (a chat its agent titled).
+                  <AnimatedTitle text={label} className="min-w-0 flex-auto" />
                 ))
               )}
               {description && (
-                <span className="max-w-32 truncate text-[11px] text-fg-faint">
+                <span
+                  className={`text-[11px] text-fg-faint ${
+                    keepDescription
+                      ? "shrink-0 whitespace-nowrap"
+                      : "min-w-0 max-w-32 shrink-[3] truncate"
+                  }`}
+                >
                   {description}
                 </span>
               )}
-              {badges?.map((badge) => (
-                <span
-                  key={badge}
-                  className="rounded bg-bg-inset px-1 text-[10px] text-fg-muted"
-                >
-                  {badge}
-                </span>
-              ))}
+              {badges?.map((badge) => {
+                const text = typeof badge === "string" ? badge : badge.label;
+                const BadgeIcon =
+                  typeof badge === "string"
+                    ? undefined
+                    : lucideIcon(badge.icon);
+                const tone = typeof badge === "string" ? undefined : badge.tone;
+                return (
+                  <span
+                    key={text}
+                    data-tone={tone}
+                    className={`flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1 text-[10px] transition-colors duration-150 ${tone ? TONE_TEXT[tone] : "text-fg-muted"}`}
+                  >
+                    {BadgeIcon && (
+                      <BadgeIcon
+                        className="size-2.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span className="truncate">{text}</span>
+                  </span>
+                );
+              })}
               {progress !== undefined && (
                 <progress
                   aria-label={`${label} progress`}
@@ -496,11 +535,55 @@ export function SidebarItemRow<
                   className="h-1 w-12 accent-accent"
                 />
               )}
+              {trend && presentation !== "tile" && <Sparkline trend={trend} />}
+              {(signal === "attention" || signal === "unread") && (
+                <span
+                  data-signal={signal}
+                  className="grid size-3 shrink-0 place-items-center"
+                >
+                  <SignalBadge
+                    signals={{
+                      attention: signal === "attention",
+                      unread: signal === "unread",
+                    }}
+                    size="sm"
+                  />
+                  <span className="sr-only">
+                    {signal === "attention" ? "Ready for you" : "Unread"}
+                  </span>
+                </span>
+              )}
+              {mark && (
+                <span
+                  data-signal={mark === "working" ? "working" : undefined}
+                  data-activity={mark}
+                  className="sr-only"
+                >
+                  {ACTIVITY_LABELS[mark]}
+                </span>
+              )}
               {end}
             </button>
           </TitleHint>
-          {inlineActions.map((entry) => {
+          {/* Before the row's controls, so its last stays at its end. */}
+          {actionError && (
+            <ShortcutHint label={actionError}>
+              <span
+                role="alert"
+                className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
+              >
+                <icons.CircleAlert aria-hidden="true" className="size-3" />
+                Failed<span className="sr-only">: {actionError}</span>
+              </span>
+            </ShortcutHint>
+          )}
+          {inlineActions.map((entry, index) => {
             const Icon = lucideIcon(entry.icon) ?? icons.Circle;
+            // The row's last control sits where ⋯ or the chevron would.
+            const last =
+              index === inlineActions.length - 1 &&
+              !disclosure &&
+              (resolvedMenu.length === 0 || presentation === "tile");
             return (
               <ShortcutHint
                 key={`${entry.action}:${entry.label}`}
@@ -516,7 +599,10 @@ export function SidebarItemRow<
                   }
                   aria-busy={pending === entry.action}
                   onClick={() => void invoke(entry)}
-                  className="grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40"
+                  // Row buttons show with the row's hover or focus, as ⋯ does.
+                  className={`grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40 ${
+                    last ? "mr-0.5" : ""
+                  } ${pending === entry.action ? "" : "row-reveal"}`}
                 >
                   {pending === entry.action ? (
                     <LoaderCircle
@@ -534,19 +620,16 @@ export function SidebarItemRow<
             <button
               ref={buttonRef}
               type="button"
-              onClick={(_event) => {
-                if (pendingActionRef.current) return;
+              onClick={() => {
+                if (pendingActionRef.current || !buttonRef.current) return;
                 disarmPreview();
-                const rect = buttonRef.current?.getBoundingClientRect();
-                if (rect) {
-                  setPosition({ x: rect.right, y: rect.bottom + 4 });
-                }
+                setMenuAt(menuAtControl(buttonRef.current));
                 setMenuKind("overflow");
-                setOpen((value) => !value);
+                setOpen(true);
               }}
-              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg mr-1 ${
-                open ? "" : "row-reveal"
-              }`}
+              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
+                disclosure ? "" : "mr-0.5"
+              } ${open ? "" : "row-reveal"}`}
               aria-label={`More actions for ${label}`}
               aria-haspopup="menu"
               aria-expanded={open}
@@ -554,13 +637,33 @@ export function SidebarItemRow<
               <MoreHorizontal className="size-3.5" />
             </button>
           )}
+          {/* The disclosure ends the row, as it ends a section's header:
+              every row's icon starts at the same place, so only a child's
+              indent reads as belonging to the row above. The row's last
+              control (this, or ⋯) is centered under the header's chevron. */}
+          {disclosure && (
+            <button
+              type="button"
+              onClick={disclosure.onToggle}
+              className="mr-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
+              aria-label={`${disclosure.open ? "Collapse" : "Expand"} ${label}`}
+              aria-expanded={disclosure.open}
+              data-row-disclosure=""
+            >
+              <ChevronRight
+                className={`size-3 transition-transform duration-150 ease-standard ${disclosure.open ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
         </>
       )}
 
-      {position && (
+      {menuAt && (
         <MenuPortal
           open={open}
-          position={position}
+          at={menuAt}
+          anchor={rowRef}
+          label={`Actions for ${label}`}
           entries={activeMenu}
           onDismiss={() => setOpen(false)}
           onPick={(entry) => {
@@ -568,7 +671,7 @@ export function SidebarItemRow<
             setOpen(false);
           }}
           onExited={() => {
-            setPosition(null);
+            setMenuAt(null);
             const pendingAction = pendingActionRef.current;
             pendingActionRef.current = null;
             if (pendingAction) void invoke(pendingAction);
@@ -578,17 +681,6 @@ export function SidebarItemRow<
                 ?.focus({ preventScroll: true });
           }}
         />
-      )}
-      {actionError && (
-        <ShortcutHint label={actionError}>
-          <span
-            role="alert"
-            className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
-          >
-            <icons.CircleAlert aria-hidden="true" className="size-3" />
-            Failed<span className="sr-only">: {actionError}</span>
-          </span>
-        </ShortcutHint>
       )}
       {previewEnabled && previewAnchor && (
         <SidebarPreviewPopover
@@ -611,156 +703,4 @@ export function SidebarItemRow<
       )}
     </div>
   );
-}
-
-/**
- * Portal-rendered so the sidebar's scroll container can't clip it — the
- * same lesson ShortcutHint learned (DOM checks pass while pixels clip).
- * Shared with other sidebar rows and dock bubbles that need the same menu.
- */
-export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
-  open,
-  position,
-  entries,
-  onPick,
-  onDismiss,
-  onExited,
-}: {
-  open: boolean;
-  position: { x: number; y: number };
-  entries: readonly TMenuEntry[];
-  onPick: (entry: TMenuEntry) => void;
-  onDismiss?: () => void;
-  onExited: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const frozenEntriesRef = useRef(entries);
-  const [adjusted, setAdjusted] = useState(position);
-  if (open) frozenEntriesRef.current = entries;
-  const visibleEntries = open ? entries : frozenEntriesRef.current;
-
-  useEffect(() => {
-    if (open) {
-      menuButtons(ref)[0]?.focus();
-      return;
-    }
-    const activeElement = document.activeElement;
-    if (
-      activeElement instanceof HTMLElement &&
-      ref.current?.contains(activeElement)
-    ) {
-      activeElement.blur();
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (open) return;
-    const timer = window.setTimeout(onExited, 180);
-    return () => window.clearTimeout(timer);
-  }, [open, onExited]);
-
-  // Flip above / pull inside the viewport when near an edge.
-  useLayoutEffect(() => {
-    const rect = ref.current?.getBoundingClientRect();
-    if (!rect) return;
-    const next = {
-      x: Math.max(
-        8,
-        Math.min(position.x - rect.width, window.innerWidth - rect.width - 8),
-      ),
-      y: Math.max(
-        8,
-        Math.min(
-          position.y + rect.height > window.innerHeight - 8
-            ? position.y - rect.height - 8
-            : position.y,
-          window.innerHeight - rect.height - 8,
-        ),
-      ),
-    };
-    if (next.x !== adjusted.x || next.y !== adjusted.y) setAdjusted(next);
-  }, [position, adjusted.x, adjusted.y]);
-
-  return createPortal(
-    <div
-      ref={ref}
-      data-sidebar-menu
-      role="menu"
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && onDismiss) {
-          event.preventDefault();
-          event.stopPropagation();
-          onDismiss();
-          return;
-        }
-        const buttons = menuButtons(ref);
-        const activeElement = document.activeElement;
-        const current =
-          activeElement instanceof HTMLButtonElement
-            ? buttons.indexOf(activeElement)
-            : -1;
-        const moveTo = (index: number) => {
-          event.preventDefault();
-          buttons[index]?.focus();
-        };
-        if (event.key === "ArrowDown") {
-          moveTo((current + 1) % buttons.length);
-        } else if (event.key === "ArrowUp") {
-          moveTo((current - 1 + buttons.length) % buttons.length);
-        } else if (event.key === "Home") {
-          moveTo(0);
-        } else if (event.key === "End") {
-          moveTo(buttons.length - 1);
-        }
-      }}
-      style={{ left: adjusted.x, top: adjusted.y }}
-      className={`fixed z-[140] max-h-[calc(100dvh-16px)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto ${open ? "" : "pointer-events-none"}`}
-    >
-      <div
-        onAnimationEnd={(event) => {
-          if (event.animationName === "pop-out" && !open) onExited();
-        }}
-        className={`w-full origin-top-right rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl ${
-          open ? "animate-pop-in" : "animate-pop-out"
-        }`}
-      >
-        {visibleEntries.map((entry) => (
-          <button
-            key={`${entry.action}:${entry.label}`}
-            type="button"
-            {...(entry.checked === undefined
-              ? { role: "menuitem" }
-              : { role: "menuitemradio", "aria-checked": entry.checked })}
-            tabIndex={open ? 0 : -1}
-            disabled={Boolean(entry.disabledReason)}
-            data-disabled-reason={entry.disabledReason}
-            onClick={() => onPick(entry)}
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-              entry.danger
-                ? "text-danger hover:bg-danger/10"
-                : entry.checked
-                  ? "text-fg hover:bg-bg-raised"
-                  : "text-fg-muted hover:bg-bg-raised hover:text-fg"
-            }`}
-          >
-            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-            {entry.checked && (
-              <icons.Check className="size-3.5 shrink-0" aria-hidden="true" />
-            )}
-          </button>
-        ))}
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-function menuButtons(
-  ref: RefObject<HTMLDivElement | null>,
-): HTMLButtonElement[] {
-  return [
-    ...(ref.current?.querySelectorAll<HTMLButtonElement>(
-      "[role=menuitem]:not(:disabled), [role=menuitemradio]:not(:disabled)",
-    ) ?? []),
-  ];
 }

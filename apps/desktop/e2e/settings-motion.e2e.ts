@@ -4,12 +4,13 @@ import {
   createProjectWorkspace,
   launchApp,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 let app: AppHandle;
 const run = <T>(body: string) =>
   app.eval<T>(`(async () => {
-  const $ = (selector) => document.querySelector(selector);
+  ${workspaceDomHelpersJs}
   const navigate = (label) => [...document.querySelectorAll('nav[aria-label="Settings categories"] button')]
     .find(button => button.textContent.trim() === label).click();
   ${setReactValueJs}
@@ -35,7 +36,7 @@ afterAll(async () => {
   await app?.stop();
 });
 
-it("animates category navigation while preserving the forms and settling at the destination", async () => {
+it("animates category content while the navigation stays still and the forms keep their identity", async () => {
   const motion = await run<{
     duration: number;
     easing: string;
@@ -43,21 +44,26 @@ it("animates category navigation while preserving the forms and settling at the 
     end: string;
     preserved: boolean;
     top: number;
+    stationary: boolean;
   }>(`
     const root = $('[data-settings-scroll]');
+    const content = $('[data-settings-content]');
+    const nav = $('nav[aria-label="Settings categories"]');
+
     const input = $('select[name="tabPlacement"]');
     if (!input) throw new Error('Workspace form is not ready');
     root.scrollTop = 0;
-    const original = root.animate;
+    const original = content.animate;
     return new Promise(resolve => {
-      root.animate = function(...args) {
-        root.animate = original;
+      content.animate = function(...args) {
+        content.animate = original;
         const animation = original.apply(this, args);
         const timing = animation.effect.getTiming();
-        const start = getComputedStyle(root).transform;
+        const start = getComputedStyle(content).transform;
+        const stationary = !this.contains(nav) && getComputedStyle(root).transform === 'none' && getComputedStyle(root).opacity === '1';
         animation.finished.then(() => resolve({
           duration: timing.duration, easing: timing.easing, start,
-          end: getComputedStyle(root).transform,
+          end: getComputedStyle(content).transform, stationary,
           preserved: input === $('select[name="tabPlacement"]'),
           top: $('#settings-shortcuts').getBoundingClientRect().top - root.getBoundingClientRect().top,
         }));
@@ -71,6 +77,7 @@ it("animates category navigation while preserving the forms and settling at the 
   expect(motion.start).not.toBe("none");
   expect(motion.end).toBe("none");
   expect(motion.preserved).toBe(true);
+  expect(motion.stationary).toBe(true);
   expect(Math.abs(motion.top)).toBeLessThan(12);
 });
 
@@ -85,7 +92,7 @@ it("honors reduced motion and the last rapid category choice, including the comp
     );
     expect(
       await app.eval(
-        `document.querySelector('[data-settings-scroll]').getAnimations().length`,
+        `document.querySelector('[data-settings-content]').getAnimations().length`,
       ),
     ).toBe(0);
     await app.eval(`window.catamorphicDesktop.devWindow('setSize', 900, 600)`);
@@ -101,7 +108,7 @@ it("honors reduced motion and the last rapid category choice, including the comp
     })()`);
     expect(
       await app.eval(
-        `document.querySelector('[data-settings-scroll]').getAnimations().length`,
+        `document.querySelector('[data-settings-content]').getAnimations().length`,
       ),
     ).toBe(0);
     expect(app.getRendererErrors()).toEqual([]);
@@ -137,7 +144,7 @@ it.each([1300, 900])(
       `);
       await app.waitFor(`(() => {
         const root = document.querySelector('[data-settings-scroll]');
-        return root.scrollTop > 0 && root.getAnimations().length === 0;
+        return root.scrollTop > 0 && document.querySelector('[data-settings-content]').getAnimations().length === 0;
       })()`);
       expect(
         await run(`return $('[aria-label="Settings category"]').value;`),

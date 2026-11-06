@@ -33,9 +33,8 @@ export function removeWorkflowPackageDependency(args: {
 }
 
 /**
- * Strips locally-provided packages from a package.json so `bun install` does
- * not try (and fail) to resolve them from the registry; their payloads are
- * uploaded into node_modules instead.
+ * Strips host-supplied packages before `bun install`. Their exact payloads
+ * are uploaded into node_modules as part of the sandbox build.
  */
 export function removePackageDependencies(args: {
   packageJson: string;
@@ -67,7 +66,7 @@ export function removePackageDependencies(args: {
 /**
  * The @catamorphic/app runtime for in-sandbox app builds, read from the local
  * install the same way the workflow fallback is. Uploaded into node_modules
- * because the package is not published to a registry.
+ * so the build receives the host's exact runtime payload.
  */
 export async function loadAppPackagePayload(): Promise<PluginPayload> {
   const require = createRequire(import.meta.url);

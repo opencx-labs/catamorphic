@@ -14,7 +14,8 @@ UI work. Every interaction matters; this is a polished product, not a demo.
   front door.
 - A **dev shell** (ADR 0045): Claude Code runs at full fidelity (preset
   system prompt, CLAUDE.md/`.claude` settings sources), worktrees are
-  discovered and diffable, Monaco diff tabs, sidebar Changes/PRs sections,
+  discovered and diffable, Monaco diff tabs, changes and pull requests as
+  sidebar sources (`work:git`, `work:prs`),
   ghostty/PTY terminals with OSC 133 shell integration.
 - An embedder like any other: it boots the server in-process
   (`src/main/server/boot.ts`) on pglite + microsandbox + filesystem
@@ -23,21 +24,29 @@ UI work. Every interaction matters; this is a polished product, not a demo.
 Main-process map (`src/main/`): `server/` embeds core (boot, agent
 registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `agent-bridge.ts` connects agent sessions to renderer surfaces;
+`extensions/` hosts Chrome extensions (ADR 0203);
 `terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY
-stack; `git-view.ts` is the system-git read surface (worktrees, status,
+stack (`remote-terminal.ts` puts a remote chat's shell behind the same
+sessions, and `remote-previews.ts` gives each of its previews a loopback
+host of its own, `p-<id>.localhost`, ADRs 0209 and 0211); `git-view.ts` is the system-git read surface (worktrees, status,
 diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
-`mcp-apps.ts`, `sidebar-config.ts`, `project-manifest.ts`, and
+`mcp-apps.ts`, `workspace-config.ts`, `project-manifest.ts`, and
 `shared/project-experience.ts` cover browser, profiles, connectors, MCP apps,
-sidebar layers, project starting actions, and capability targeting.
+workspace layers (sidebars, palette modes), project starting actions, and capability targeting.
 `harness-components.ts` installs the exact integrity-pinned Claude Code and
 Codex platform executable on first use; never import downloaded JavaScript
-into Electron or float those release pins. `mobile-pairing.ts` is "Continue on
+into Electron or float those release pins. A person's own native Claude Code
+at or above `CLAUDE_CODE_MIN_VERSION` runs instead (`installed-claude-code.ts`,
+ADR 0196); `scripts/harness-bump.ts` and its scheduled workflow move both
+harnesses' pins. `mobile-pairing.ts` is "Continue on
 mobile" (ADR 0060) — the QR palette action's LAN listener that serves
 the built `apps/pwa` bundle, exchanges single-use codes for device
 tokens (SHA-256 hashes + persisted port in
 `<userData>/mobile-pairing.json`), and proxies `/api/*` to the loopback
-embedded server with bearer auth. The embedded server itself stays
-loopback-only and auth-free — never expose it directly. The pairing
+embedded server with bearer auth. The embedded server itself stays loopback-only;
+admitted shell frames receive a per-launch API token in main. Guest documents
+never receive it. Never expose the embedded server directly. See
+[security boundaries](docs/security.md). The pairing
 claim carries the profile's remote-project links + a
 localProjectId→remote mirror map, and the focused chat's context, so
 the phone deep-links into the open conversation and can fall back to a
@@ -73,8 +82,10 @@ bun run --cwd apps/desktop test:e2e
 
 The complete Electron suite is required before a commit. Suite membership lives in
 [vitest.e2e.config.ts](vitest.e2e.config.ts), not a manually copied list here.
-Build changed packages first; desktop resolves them through `dist`. Main-process
-changes require a relaunch; renderer changes hot-reload.
+The Docker e2e builds workspace packages inside its image. Native launches (the
+dev app, film scripts) resolve packages through `dist`, so build changed
+packages first there. Main-process changes require a relaunch; renderer changes
+hot-reload.
 
 E2E uses isolated temporary data and a prompt-keyed fake agent, with no provider
 calls. Extend [e2e-fakes.ts](src/main/server/e2e-fakes.ts) for deterministic failure
@@ -109,9 +120,17 @@ UI changes also require inspecting the running app:
 ```sh
 bun run dev:desktop
 # Use the CDP port printed by the orchestrator:
-CDP_PORT="<port>" bun apps/desktop/scripts/drive.mjs window maximize
-CDP_PORT="<port>" bun apps/desktop/scripts/drive.mjs shot /tmp/app.png
+# CDP_TARGET=main picks the workspace window, never the detached dock.
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs shot /tmp/app.png
+# A region, sharp at 2x; a GIF of a region while steps run (header of drive.mjs):
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs clip /tmp/pr/after.png 0 0 320 400 2
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs record /tmp/pr/motion.gif 0 0 320 400 @steps.json
 ```
+
+The pull request then shows those captures: screenshots of visual changes,
+GIFs of anything that moves (root `AGENTS.md`, "Pull requests that change
+UI").
 
 For credential-free manual checks, use `CATAMORPHIC_E2E_FAKE_AGENT=1` when launching.
 The root runner unsets `ELECTRON_RUN_AS_NODE`. Never reset user data to prepare a
@@ -126,12 +145,16 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Delivery and embedding | [Chat state](docs/chat-state.md) | `packages/react` hook/reducer, registry source |
 | Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
 | Browser control and native computer use | [Computer use](docs/computer-use.md) | `main/browser-driver.ts`, `packages/codex` |
+| Chrome extensions | [Browser extensions](docs/browser-extensions.md) | `main/extensions/`, `preload/session.ts` (also the passkey bridge, `preload/passkeys.ts`), `renderer/components/extensions/` |
 | Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
 | Loading buttons and modal stability | [Button contract](DESIGN.md#buttons) | `@catamorphic/ui` PendingButton, reserved status space |
 | Dropdowns and checkboxes | [Control contract](DESIGN.md#dropdowns-and-checkboxes) | `renderer/form-controls.css`, semantic select/checkbox HTML |
+| Switches (on/off at once) | [Switches](DESIGN.md#switches) | `<input type="checkbox" role="switch">`, `renderer/form-controls.css`, design lint |
+| Focus rings | [Focus rings](DESIGN.md#focus-rings) | ring tokens in `styles.css`, `lib/focus-modality.ts`, design lint |
 
-All desktop dropdowns and checkboxes use the app's shared control styling, never
-OS-native dropdown menus or browser-default checkboxes. Read the linked control
+All desktop dropdowns, checkboxes and switches use the app's shared control
+styling, never OS-native dropdown menus, browser-default checkboxes or custom
+switch components. Read the linked control
 contract before changing a form. Onboarding and Settings reuse the same import
 and default-browser actions.
 
@@ -155,10 +178,17 @@ cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
 native title tooltips. When editing a failure-prone picker, preserve an actionable
 error/retry state and diagnostics that distinguish request failure from no matches.
 
-Sidebar built-ins and custom sources follow ADR 0132. Keep the validated contract
-and project agent examples in `src/main/sidebar-authoring.ts` synchronized with
-changes; the settings skill and default configuration consume that single guide.
-Inline actions, overflow menus, and right-click menus are independent placements.
+Every sidebar list is a source (ADR 0234): Work's lists (`src/renderer/sources/`)
+and a person's modules implement one contract, and `source-section.tsx` draws all
+of them. Never add a section type, a renderer branch on a source's name, or a verb
+only Work's lists can use; grow the shared row, action or `work` contract instead,
+so a person's source gets it too ([sidebar sources](docs/sidebar-sources.md)).
+Keep the validated contract and examples in `src/main/workspace-authoring.ts`
+synchronized with changes; every `workspace.js`, the configuring skill and the
+default layout consume that single guide. A chat's chips are a source on the same
+contract (ADR 0239): grow the shared row rather than giving chips a model of their
+own, and keep Work's chips (`renderer/lib/chips.ts`) passable through a module. Inline actions, overflow menus, and
+right-click menus are independent placements.
 
 ## Agent tool admission
 
@@ -166,16 +196,22 @@ Follow ADR 0133 and [Agent tool surface](docs/agent-tools.md). Prefer native
 files/code and skills for ordinary work. Host-owned operations enter the existing
 capability registry. A permanent tool needs evidence of an interaction benefit,
 an explicit exposure policy, and scenario coverage; do not mount another broad
-MCP catalog into project sessions. Keep recipes in skills and preserve native
-execution, live authorization, media, and user takeover across projections.
+MCP catalog into project sessions. The exception is profile connectors for a
+harness with tool search: each is its own MCP server, and its endpoint decides
+every call (ADR 0225, `src/main/server/connector-mcp.ts`). Keep recipes in skills
+and preserve native execution, live authorization, media, and user takeover
+across projections.
 
 ## Workflow authoring
 
 The desktop owns workflow details, source editing, draft protection, and run or
-automation actions in `screens/workflow-screen.tsx`. Compose the scoped canvas
-and headless hooks; do not move the inspector back into `@catamorphic/ui`
-(ADR 0097). Keep the canvas mounted through inspector changes and preserve the
-last valid preview while code is incomplete. The visible
+automation actions in `screens/workflow-screen.tsx` (ADR 0097, 0157). The tab
+names the workflow; the surface never repeats it. State and actions float in the
+canvas corner through `components/workflow-status.tsx`, and the side panel opens
+only for a subject (selection, code, run, automatic runs, change request) with a
+close button. Do not add a panel toggle or header back. Compose the scoped
+canvas and headless hooks; keep the canvas mounted through panel changes and
+preserve the last valid preview while code is incomplete. The visible
 `e2e/workflows.e2e.ts` suite covers live source polling, graph transitions,
 source access, draft restoration and conflicts, and contextual agent editing.
 

@@ -59,6 +59,7 @@ describe("run route contracts", () => {
     ["GET", `/api/durable-runs/${RUN_ID}`],
     ["POST", `/api/runs/${RUN_ID}/report`],
     ["POST", "/api/playground/run"],
+    ["POST", "/api/playground/parse"],
   ] as const)("does not register legacy %s %s", async (method, url) => {
     const app = createTestApp();
     apps.push(app);

@@ -48,10 +48,6 @@
   caret-color: var(--color-accent);
 }
 
-.cat-mdedit .ProseMirror ::selection {
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
-}
-
 /* Content is never a drag source — dragging starts only from the handle
    (paired with the dragstart guard in editorProps). */
 .cat-mdedit .ProseMirror,
@@ -151,6 +147,77 @@
   border-radius: 4px;
   padding: 0.1em 0.35em;
 }
+/* A markdown image, named rather than fetched (image.ts). */
+.cat-mdedit .ProseMirror .cat-mdedit-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  max-width: 100%;
+  vertical-align: baseline;
+  font-size: 0.9em;
+  color: var(--color-fg-muted);
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.05em 0.45em;
+  user-select: none;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image::before {
+  content: "";
+  flex: none;
+  width: 1em;
+  height: 1em;
+  background: currentColor;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image.ProseMirror-selectednode {
+  border-color: var(--color-accent);
+}
+/* While its source loads the chip waits a moment before showing, so a
+   quick load goes straight to the image. */
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="loading"] {
+  animation: fade-in 150ms cubic-bezier(0.2, 0, 0, 1) 300ms both;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="failed"] {
+  border-style: dashed;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="failed"]::before {
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M10.41 10.41a2 2 0 1 1-2.83-2.83'/%3E%3Cpath d='M13.5 13.5 6 21'/%3E%3Cpath d='m18 12 3 3'/%3E%3Cpath d='M3.59 3.59A2 2 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.05-.22 1.41-.59'/%3E%3Cpath d='M21 15V5a2 2 0 0 0-2-2H9'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="loaded"] {
+  display: inline-block;
+  vertical-align: middle;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  line-height: 0;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="loaded"]::before {
+  content: none;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: inherit;
+}
+/* A picked image: a selection mark, not a focus ring. */
+.cat-mdedit .ProseMirror .cat-mdedit-image.ProseMirror-selectednode img {
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 4px var(--color-accent);
+}
 .cat-mdedit .ProseMirror pre {
   background: var(--color-bg-inset);
   border: 1px solid var(--color-border);
@@ -179,10 +246,35 @@
   cursor: pointer;
 }
 
+/* A rule is a 1.5em box with its 1px line drawn through the middle: the
+   whole box is a hover and drag target (ProseMirror resolves every point
+   in it to the rule), and its center is the line, where the drag handle
+   centers. The negative margin returns the height the old 1px rule did
+   not take, so beside a paragraph, list, quote or code block the line
+   sits exactly where it did (0.75em plus half a pixel from each). */
 .cat-mdedit .ProseMirror hr {
+  height: 1.5em;
+  margin: calc(0.5px - 0.5em) 0;
   border: none;
-  border-top: 1px solid var(--color-border);
-  margin: 0.75em 0;
+  border-radius: 4px;
+  background:
+    linear-gradient(var(--color-border), var(--color-border)) center / 100% 1px
+    no-repeat;
+}
+/* A heading's top margin is larger than the old rule's 0.75em, so it alone
+   set the distance to the line; the taller box adds 3.5px there (its half
+   height plus negative margin, 0.25em + 0.5px, against the old line's half
+   pixel). Take it back. */
+.cat-mdedit .ProseMirror hr + :is(h1, h2, h3, h4) {
+  margin-top: calc(1em - 3.5px);
+}
+/* Clicked (or reached with the arrow keys) a rule is node-selected: the
+   line takes the accent and the box a faint accent wash. */
+.cat-mdedit .ProseMirror hr.ProseMirror-selectednode {
+  background:
+    linear-gradient(var(--color-accent), var(--color-accent)) center / 100% 1px
+    no-repeat,
+    color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 /* Tables: rounded raised card with hairline internal dividers. */
@@ -362,22 +454,34 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
-/* --- Drag handle (extension-owned chrome; classes managed by motion.ts) --- */
+/* --- Drag handle (extension-owned chrome; classes managed by motion.ts).
+       The extension places the box; the grip inside glides on transform
+       (installHandleMotion), never the box on left/top. --- */
 .cat-mdedit-handle {
   display: grid;
-  place-content: center;
   width: 20px;
   height: 24px;
-  border-radius: 6px;
-  color: var(--color-fg-faint);
   cursor: grab;
   transition:
-    background 150ms var(--ease-standard),
-    color 150ms var(--ease-standard),
     opacity 160ms var(--ease-standard),
     transform 160ms var(--ease-standard);
 }
-.cat-mdedit-handle:hover {
+.cat-mdedit-handle.settled {
+  transition:
+    opacity 160ms var(--ease-standard),
+    transform 160ms var(--ease-standard),
+    translate 140ms var(--ease-standard);
+}
+.cat-mdedit-handle-grip {
+  display: grid;
+  place-content: center;
+  border-radius: 6px;
+  color: var(--color-fg-faint);
+  transition:
+    background 150ms var(--ease-standard),
+    color 150ms var(--ease-standard);
+}
+.cat-mdedit-handle:hover > .cat-mdedit-handle-grip {
   background: color-mix(in srgb, var(--color-fg) 8%, transparent);
   color: var(--color-fg-muted);
 }
@@ -388,28 +492,28 @@
   opacity: 0;
   transform: scale(0.9);
 }
-.cat-mdedit-handle.glide {
-  transition:
-    top 140ms var(--ease-standard),
-    left 140ms var(--ease-standard),
-    translate 140ms var(--ease-standard),
-    opacity 160ms var(--ease-standard),
-    transform 160ms var(--ease-standard),
-    background 150ms var(--ease-standard),
-    color 150ms var(--ease-standard);
-}
 /* On marker-bearing list items the handle sits just left of the bullet/
    number (translate, not transform — must compose with the appear scale). */
 .cat-mdedit-handle.for-list-item {
   translate: -4px 0;
 }
 
-/* --- Bubble menu: overlay surface, marks-only formatting --- */
-.cat-mdedit-bubble {
+/* --- Bubble menu: overlay surface, marks-only formatting. The extension
+       shows, places and detaches the anchor; the bar inside is what shows,
+       by its own data-state (motion.ts, createBubbleMotion), so a leaving
+       bar stays visible inside an anchor the extension already hid. --- */
+.cat-mdedit-bubble-anchor {
   position: absolute;
   top: 0;
   left: 0; /* pinned so its static position never adds overflow */
   z-index: 50;
+  pointer-events: none;
+  /* biome-ignore lint/complexity/noImportantStyles: the extension fades its element to 0 on hide, which would cut the bar's exit short */
+  opacity: 1 !important;
+}
+.cat-mdedit-bubble {
+  visibility: hidden;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -422,11 +526,15 @@
 [data-theme="light"] .cat-mdedit-bubble {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
 }
-/* While the mouse is down (drag-selecting) the menu stays hidden even if
-   the extension shows it; it appears on mouse lift instead. */
-.cat-mdedit-bubble.suppressed {
-  /* biome-ignore lint/complexity/noImportantStyles: overrides the Tiptap bubble extension's inline visibility */
-  visibility: hidden !important;
+/* Shown: visible and pressable. Leaving: visible while its exit plays,
+   never pressable (it is also inert). Hidden otherwise, including while
+   the button is down in the editor: the bar arrives on mouse lift. */
+.cat-mdedit-bubble[data-state="shown"] {
+  visibility: visible;
+  pointer-events: auto;
+}
+.cat-mdedit-bubble[data-state="leaving"] {
+  visibility: visible;
 }
 .cat-mdedit-bubble button {
   appearance: none;
@@ -507,6 +615,8 @@
 /* --- Table row drag overlays --- */
 .cat-mdedit-rowgrip {
   position: absolute;
+  top: 0;
+  left: 0;
   z-index: 40;
   width: 16px;
   height: 22px;
@@ -527,8 +637,7 @@
 }
 .cat-mdedit-rowgrip.glide {
   transition:
-    top 140ms var(--ease-standard),
-    left 140ms var(--ease-standard),
+    transform 140ms var(--ease-standard),
     opacity 150ms var(--ease-standard);
 }
 .cat-mdedit-rowgrip:hover {

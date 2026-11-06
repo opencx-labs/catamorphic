@@ -1,7 +1,9 @@
 import {
   assertMayManageRolePolicy,
+  assertProjectPermission,
+  DeploymentBlockedError,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   type Project,
   ProjectFileConflictError,
   ProjectFileNotFoundError,
@@ -15,9 +17,7 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
-  BranchInfoSchema,
   CommitSchema,
-  CreateBranchSchema,
   CreateProjectSchema,
   DeployRequestSchema,
   DeployResponseSchema,
@@ -51,6 +51,8 @@ function toDto(project: Project) {
     name: project.name,
     storageType: project.storageType,
     remoteUrl: project.remoteUrl,
+    remoteOwnership: project.remoteOwnership,
+    remoteDivergedAt: project.remoteDivergedAt,
     defaultBranch: project.defaultBranch,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -369,108 +371,6 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
 
   typed.route({
     method: "GET",
-    url: "/projects/:projectId/branches",
-    schema: {
-      params: ProjectIdParamsSchema,
-      response: {
-        200: BranchInfoSchema.array(),
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      const { projectId } = request.params;
-      try {
-        await ctx.core.projects.get(identity, projectId);
-        const branches = await ctx.core.deployment.listBranches(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
-        return reply.send(branches);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/branches",
-    schema: {
-      params: ProjectIdParamsSchema,
-      body: CreateBranchSchema,
-      response: {
-        200: z.object({ branch: z.string(), created: z.boolean() }),
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      const { projectId } = request.params;
-      try {
-        await ctx.core.projects.get(identity, projectId);
-        const result = await ctx.core.deployment.ensureWorkBranch(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-        );
-        return reply.send(result);
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "POST",
-    url: "/projects/:projectId/checkout",
-    schema: {
-      params: ProjectIdParamsSchema,
-      body: z.object({ ref: z.string().min(1) }),
-      response: {
-        200: RepoStatusSchema,
-        404: ErrorSchema,
-        503: ErrorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!ctx.core)
-        return reply.status(503).send({ error: "Service not configured" });
-      const identity = resolveIdentity(request);
-      const { projectId } = request.params;
-      try {
-        await ctx.core.projects.get(identity, projectId);
-        const status = await ctx.core.deployment.checkoutBranch(
-          identity.tenantId,
-          projectId,
-          identity.externalUserId,
-          request.body.ref,
-        );
-        return reply.send({ ...status, remoteHeadTimestamp: null });
-      } catch (err) {
-        if (err instanceof ProjectNotFoundError) {
-          return reply.status(404).send({ error: "Project not found" });
-        }
-        throw err;
-      }
-    },
-  });
-
-  typed.route({
-    method: "GET",
     url: "/projects/:projectId/workdir",
     schema: {
       params: ProjectIdParamsSchema,
@@ -559,17 +459,35 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const identity = resolveIdentity(request);
       const { projectId } = request.params;
       try {
-        await ctx.core.projects.get(identity, projectId);
-        assertMayManageRolePolicy(
-          identity,
-          projectId,
-          Object.keys(request.body.files ?? {}),
-        );
+        const project = await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:publish");
+        // A repository that existed before Work publishes through its own
+        // default branch (ADR 0170): a server project attached to it takes
+        // changes as pull requests, never as direct deploys that would fork
+        // its main from the code host's.
+        if (
+          project.remoteUrl &&
+          project.remoteOwnership !== "owned" &&
+          !(await ctx.core.projectManager.localPath({
+            tenantId: identity.tenantId,
+            projectId,
+          }))
+        )
+          throw new DeploymentBlockedError(
+            `This project's program is published from ${project.remoteUrl}. Open a pull request there, or propose the change.`,
+          );
         const result = await ctx.core.deployment.deploy(
           identity.tenantId,
           projectId,
           identity.externalUserId,
-          { message: request.body.message, files: request.body.files },
+          {
+            message: request.body.message,
+            files: request.body.files,
+            base: request.body.base,
+            // Role files change only with `roles:write`, whoever edited them.
+            guardPublishedPaths: (paths) =>
+              assertMayManageRolePolicy(identity, projectId, paths),
+          },
         );
         return reply.send(result);
       } catch (err) {
@@ -600,6 +518,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.pullFromRemote(
           identity.tenantId,
           projectId,
@@ -634,6 +553,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.discardDraft(
           identity.tenantId,
           projectId,
@@ -668,6 +588,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.resolveConflicts(
           identity.tenantId,
           projectId,
@@ -711,6 +632,11 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       },
     },
     handler: async (request, reply) => {
+      assertProjectPermission(
+        resolveIdentity(request),
+        request.params.projectId,
+        "program:write",
+      );
       // Stub: naive "prefer theirs" resolution until Codex-backed resolver lands.
       // Falls back to ours if theirs is null (file deleted upstream we want to keep).
       const resolutions: Record<string, string> = {};
@@ -772,7 +698,8 @@ async function safeListWorkflows(
 }> {
   try {
     const workflows = await core.workflows.list({ identity, projectId });
-    if (!isBuilder(identity, projectId)) return { workflows, files: [] };
+    if (!hasProjectPermission(identity, projectId, "program:read"))
+      return { workflows, files: [] };
     const allFiles = await core.projects.readAllFiles(identity, projectId);
     return { workflows, files: Object.keys(allFiles) };
   } catch {

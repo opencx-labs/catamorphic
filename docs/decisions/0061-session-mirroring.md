@@ -1,6 +1,6 @@
 # 0061 — Session mirroring: local-first chats, continued on the server
 
-Status: Accepted (2026-08-21)
+Status: Superseded by [0197](0197-agent-sessions-are-an-event-log-of-turns.md): a mirror replicates the session's event log by sequence
 
 ## Context
 

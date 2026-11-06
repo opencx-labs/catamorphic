@@ -105,6 +105,36 @@ describe("Modal focus containment", () => {
 
     expect(document.activeElement).toBe(newerControl);
   });
+
+  it("keeps a field that focused itself, and returns focus to the opener on close", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    containers.push(opener);
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const render = (open: boolean) =>
+      act(() => {
+        root.render(
+          <Modal open={open} onClose={() => {}}>
+            {/* biome-ignore lint/a11y/noAutofocus: the case under test */}
+            <input aria-label="Password" autoFocus />
+          </Modal>,
+        );
+      });
+    render(false);
+    opener.focus();
+
+    render(true);
+    expect(document.activeElement).toBe(
+      document.body.querySelector('input[aria-label="Password"]'),
+    );
+
+    render(false);
+    expect(document.activeElement).toBe(opener);
+  });
 });
 
 it("does not mount closed contents and removes them after the exit animation", () => {

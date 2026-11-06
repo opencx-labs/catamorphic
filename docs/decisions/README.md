@@ -16,11 +16,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0001](0001-code-is-the-source-of-truth.md) | Code is the source of truth for workflows and apps | Accepted (expanded by 0026) |
 | [0002](0002-embeddable-library-architecture.md) | Embeddable library architecture (server-sdk / fastify-plugin / react) | Accepted (updated by 0026) |
 | [0003](0003-postgres-schema-scoped-storage.md) | Postgres with schema-scoped tables, host-provided connection | Accepted |
-| [0004](0004-cloudflare-first-infrastructure.md) | Cloudflare-first infrastructure (Sandbox now, Artifacts next) | Accepted (updated by 0008, 0012) |
+| [0004](0004-cloudflare-first-infrastructure.md) | Cloudflare-first infrastructure (Sandbox now, Artifacts next) | Accepted (updated by 0008, 0012; Daytona fallback removed by 0231) |
 | [0005](0005-opentelemetry-api-only-instrumentation.md) | OpenTelemetry instrumentation via `@opentelemetry/api` only | Accepted |
 | [0006](0006-postgres-backed-queue-and-scheduling.md) | Postgres-backed job queue and scheduling | Accepted; execution queue implemented by 0014, 0016, 0023-0026; claim fairness updated by 0028 |
 | [0007](0007-bun-and-unrestricted-workflow-runtime.md) | Bun runtime; workflows run as regular, unrestricted code | Accepted |
-| [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted |
+| [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted (Daytona package removed by 0231) |
 | [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Superseded by 0018 |
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo | Accepted; paths superseded by 0142 |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
@@ -32,11 +32,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted (expanded by 0020, 0026) |
 | [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090; paths superseded by 0142 |
 | [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |
-| [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026) |
+| [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026, 0260) |
 | [0021](0021-durable-workflow-visualization.md) | Persisted workflow visualization | Accepted (updated by 0026) |
 | [0022](0022-workflow-cancellation-semantics.md) | Workflow cancellation is a host run control | Accepted (implemented by 0025; updated by 0026) |
 | [0023](0023-postgres-durable-boundary-execution.md) | Postgres boundary execution | Accepted (updated by 0026) |
-| [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026) |
+| [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026, 0260) |
 | [0025](0025-durable-cancellation-state-machine.md) | Persisted cancellation state machine | Accepted (updated by 0026) |
 | [0026](0026-unified-workflows-runs-and-batch-scopes.md) | Unified workflows, runs, and batch scopes | Accepted |
 | [0027](0027-correlation-keys-and-external-signals.md) | Correlation keys and named external signals | Accepted |
@@ -51,42 +51,42 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053); paths superseded by 0142 |
 | [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053); paths superseded by 0142 |
 | [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted (runtime contract refined by 0067; topology model superseded by 0067) |
-| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted; paths superseded by 0142 |
+| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted; paths superseded by 0142; project kinds and filters by 0171 |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
 | [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted; paths superseded by 0142 |
-| [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted |
+| [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted (refined by 0171) |
 | [0043](0043-general-purpose-projects.md) | Projects are general-purpose; the workflow workspace is scaffolded on demand | Accepted; paths superseded by 0142 |
-| [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted |
-| [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted |
+| [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted (push policy refined by 0170; GitHub code host superseded by 0177) |
+| [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted (refined by 0215: a chat's own worktree is set up; amended by 0277) |
 | [0046](0046-plugin-activation-planes.md) | Plugin activation planes: capability providers and project lifecycle hooks | Accepted |
-| [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted (provider selection refined by 0064) |
+| [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted (provider selection refined by 0064; container sandboxes by 0204) |
 | [0048](0048-app-feel-is-the-embedders.md) | An app's feel is entirely the embedder's: neutral kit defaults, host feel tokens | Accepted |
 | [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted (templates part superseded by 0051); paths superseded by 0142 |
 | [0050](0050-project-agent-definitions.md) | Project agent definitions: committed definitions, consent-bound credentials | Accepted; paths superseded by 0142 |
 | [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted; paths superseded by 0142 |
-| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142 |
+| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142, composer menu by 0270, then 0274 |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
-| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067) |
-| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142 |
-| [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142 |
-| [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
+| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067; server-side definition policies by 0176) |
+| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142; the builder flag superseded by 0158; the loopback API guard by 0211 |
+| [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142; normalized `mode` superseded by 0182 |
+| [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted; composer context ring removed 2026-10-21 |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
-| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099); paths superseded by 0142 |
-| [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted |
-| [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
+| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099); paths superseded by 0142; one file by 0261 |
+| [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted (the loopback API guard by 0211) |
+| [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Superseded by 0197 |
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted (admin-token usage route superseded by 0072) |
-| [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted |
+| [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted (refined by 0215: the person chooses too) |
 | [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted (agent placement model superseded by 0067; missing project policy refined by 0070) |
-| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066 and 0068) |
+| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066, 0068, and 0172; MCP results pass through by 0225) |
 | [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted (service-only unattended rule superseded by 0068) |
-| [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) | Long-lived agent runtimes and a unified capability gateway | Accepted |
+| [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) | Long-lived agent runtimes and a unified capability gateway | Superseded by 0198 |
 | [0068](0068-personal-artifacts-and-workflow-enablement.md) | Local personal artifacts and explicit workflow enablement | Accepted |
 | [0069](0069-host-owned-processes-watches-and-schedules.md) | Host-owned processes, watches, wakeups, and schedules | Accepted |
-| [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted |
+| [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted (the default is named `default` and selects no pool, 0167) |
 | [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
-| [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted; paths superseded by 0142 |
-| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted; paths superseded by 0142 |
-| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139) |
+| [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted; paths superseded by 0142; permission names superseded by 0158 |
+| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted; paths superseded by 0142; CLI credential destination superseded by 0177 |
+| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139; GitHub monitor superseded by 0177; delivery modes amended by 0197; inputs typed by author by 0217) |
 | [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |
 | [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted (lifetime and placement superseded by 0139) |
 | [0077](0077-explicit-session-handoff-push-and-schedules.md) | Explicit session handoff, durable push, and schedule triggers | Accepted |
@@ -99,23 +99,23 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0084](0084-first-release-database-baseline.md) | First-release database schema baseline | Accepted |
 | [0085](0085-desktop-stable-and-preview-channels.md) | Desktop Stable and Preview release channels | Accepted |
 | [0086](0086-provider-neutral-workflow-enablement-connections.md) | Provider-neutral workflow enablement connections | Accepted |
-| [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Accepted |
+| [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a workflow's chat reaches) |
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
-| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted |
+| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202, 0271; causation is a typed delivery field by 0219) |
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
-| [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted |
-| [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted |
+| [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted (`when.builder` superseded by 0158) |
+| [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted (PATH amended by 0202) |
 | [0094](0094-durable-agent-reconnects.md) | Durable agent reconnects and unexpected-stop visibility | Accepted |
-| [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |
+| [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted (turn execution superseded by 0197, 0198) |
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
-| [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted |
-| [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted |
-| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted |
-| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
+| [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
+| [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted (`this-machine` binding is `device: "member"`, 0167; terminals and previews by 0209) |
+| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164; replica working state superseded by 0190; member drafts leave instance disks per 0191) |
+| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173; container usage by 0176) |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
-| [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted |
+| [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted (connectors for harnesses with tool search by 0225) |
 | [0104](0104-local-checkouts-and-explicit-file-sharing.md) | Local checkouts and explicit file sharing | Accepted |
 | [0105](0105-configurable-desktop-browser-layout.md) | Configurable desktop browser layout, light surfaces, bookmark tiles and folders | Accepted |
 | [0106](0106-profile-terminal-macros.md) | Profile-owned terminal macros and configurable floating dismissal | Accepted |
@@ -124,49 +124,191 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0109](0109-desktop-state-and-settings-contracts.md) | Desktop transitions and scoped settings | Accepted |
 | [0110](0110-discoverable-desktop-settings.md) | Discoverable desktop settings | Agent tools superseded by 0111 |
 | [0111](0111-direct-desktop-configuration.md) | Direct desktop configuration editing | Accepted |
-| [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted |
-| [0113](0113-desktop-workspace-frame-and-local-pr-access.md) | Configurable workspace frame and local PR access | Accepted |
+| [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted (amended by 0202) |
+| [0113](0113-desktop-workspace-frame-and-local-pr-access.md) | Configurable workspace frame and local PR access | Accepted (PR access refined by 0177) |
 | [0114](0114-focused-pull-request-review.md) | Focused pull request review | Accepted |
 | [0115](0115-native-review-conversation.md) | Native review conversation | Accepted |
 | [0116](0116-bookmark-library-and-pins.md) | Bookmark library and pins | Accepted |
-| [0117](0117-optional-github-cli-connection.md) | Optional GitHub CLI connection | Accepted |
+| [0117](0117-optional-github-cli-connection.md) | Optional GitHub CLI connection | Accepted (refined by 0177) |
 | [0118](0118-review-navigation-and-code-rendering.md) | Review navigation and code rendering | Accepted |
 | [0119](0119-three-signal-observability.md) | Three-signal observability | Accepted |
 | [0120](0120-telemetry-correlation-context.md) | Telemetry correlation context | Accepted |
 | [0121](0121-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |
-| [0122](0122-blocking-and-nonblocking-agent-questions.md) | Blocking and non-blocking agent questions | Accepted |
+| [0122](0122-blocking-and-nonblocking-agent-questions.md) | Blocking and non-blocking agent questions | Accepted (chat replies and closing by 0195) |
 | [0123](0123-desktop-consent-search-and-resource-links.md) | Desktop consent, search and resource links | Accepted |
 | [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126; publication refined by 0135 |
 | [0125](0125-canonical-app-icons.md) | Canonical semantic app icons | Accepted |
-| [0126](0126-installable-component-packs.md) | Installable component packs | Accepted |
+| [0126](0126-installable-component-packs.md) | Installable component packs | Accepted (recipes and `registry.read` by 0262) |
 | [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
 | [0128](0128-durable-manual-development-data.md) | Durable manual development data | Accepted |
 | [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0131 |
 | [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
 | [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
-| [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
-| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |
+| [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted (amended by 0234) |
+| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted (eager surface amended by 0202; connectors for harnesses with tool search by 0225) |
 | [0134](0134-consent-and-collection-lifecycle.md) | Consent binding and collection lifecycle | Accepted |
 | [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |
 | [0136](0136-local-work-and-project-proposals.md) | Local work and project proposals | Accepted |
 | [0137](0137-sign-in-recovery.md) | Sign-in recovery stays with the active attempt | Accepted |
 | [0138](0138-session-workflow-triggers-and-actions.md) | Session workflow triggers and actions | Accepted |
 | [0139](0139-session-reminder-lifetime-and-attention.md) | Session reminder lifetime and message attention | Accepted |
-
-| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted |
+| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted (amended by 0234, 0277) |
 | [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |
-
-| [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted |
+| [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted; folder name superseded by 0169 |
 | [0143](0143-profile-history-and-browser-import.md) | Profile history and shared browser import | Accepted |
 | [0144](0144-desktop-controls-and-default-browser.md) | App-styled controls and default browser | Accepted |
 | [0145](0145-work-product-identity.md) | Work is the home for the end-user experiences | Accepted |
-| [0146](0146-work-application-identity.md) | Work application identity | Accepted |
-| [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted |
-| [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
+| [0146](0146-work-application-identity.md) | Work application identity | Accepted; project paths superseded by 0169 |
+| [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted (amended by 0234) |
+| [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted (amended by 0277) |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
-| [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |
-| [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted |
+| [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted (amended by 0235) |
+| [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted (amended by 0201) |
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
-| [0155](0155-tab-onboarding-and-theme-picker.md) | Tab onboarding and one shared theme picker | Accepted |
+| [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted (refined by 0174; wakes are task notifications by 0217; terminals end with their command by 0223) |
+| [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171; keys and chat placement by 0173) |
+| [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
+| [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted (directory events by 0210) |
+| [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
+| [0160](0160-work-server-package.md) | The Work server is a package with typed hooks | Accepted (config as typed data by 0183; your own image by 0261) |
+| [0161](0161-company-identity-and-deprovisioning.md) | Company identity: Google Workspace sign-in and deprovisioning | Accepted (directory events by 0210) |
+| [0162](0162-connection-gateway-guards-and-sealed-secrets.md) | The connection gateway: guards, sealed secrets, separate vault keys | Accepted (limits refined by 0172; guards are host code by 0183; amended by 0184, 0206; HTTP APIs for code in sandboxes by 0212) |
+| [0163](0163-database-gateway-and-reviewed-queries.md) | Production databases through the gateway, with reviewed queries | Accepted (file-declared guards removed by 0183) |
+| [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted (placement refined by 0167; processes by 0174; transport by 0187; lease holder superseded by 0192; sandbox backends by 0204; sealed operations by 0207; machine classes and pools by 0205) |
+| [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
+| [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted (drafts are origin refs per 0191) |
+| [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted (project access and chat placement refined by 0173; classes, pools and retention by 0205; container sandboxes by 0204) |
+| [0168](0168-keyboard-led-focus-rings-and-continuous-sidebar-motion.md) | Keyboard-led focus rings and continuous sidebar motion | Accepted (amended by 0238) |
+| [0169](0169-work-project-workspace.md) | The project workspace is `.work/`, and what lands in repositories is named Work | Accepted |
+| [0170](0170-attached-repositories-receive-pull-requests.md) | Attached repositories receive pull requests, never pushes | Accepted (publishing through connections refined by 0177) |
+| [0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md) | Project-defined trigger kinds and declarative webhook ingress | Accepted (GitHub host kinds removed by 0177; `$prefix` leaf in 0181; directory events by 0210) |
+| [0172](0172-committed-connection-bindings-and-named-service-connections.md) | Committed connection bindings, named service connections, organization administrators | Accepted (refined by 0177, 0179, 0181) |
+| [0173](0173-keyed-chat-lifecycle-and-chat-placement.md) | Keyed chats: project keys, close, idle release, and their own placement | Accepted (project chat connections refined by 0181; idle release on any replica by 0192; setup and volumes by 0208) |
+| [0174](0174-background-processes-as-a-sandbox-capability.md) | Background processes are a sandbox capability | Accepted (amended by 0198; terminals and previews by 0209; Daytona follow-up dropped by 0231) |
+| [0175](0175-grants-reach-sandboxes.md) | Grants reach sandboxes; credentials never do | Accepted (Git implementation notes; workspaces at a ref in 0178; models and harnesses in 0180; amended by 0184, 0206; HTTP APIs for code in 0212) |
+| [0176](0176-environment-images-containers-egress-and-modes.md) | Environments choose images, containers, egress, and what agents may change | Accepted (`mode` renamed sandboxing by 0182; container sandboxes by 0204; setup and volumes by 0208; amended by 0277) |
+| [0177](0177-github-is-a-connection.md) | GitHub is a connection | Accepted |
+| [0178](0178-session-workspaces-at-a-ref.md) | Session workspaces at a ref of the project's remote | Accepted (member drafts are origin refs per 0191) |
+| [0179](0179-integrations-from-project-code-slack.md) | Integrations from project code: named HTTP operations and declared delivery ids | Accepted (session event keys in 0181; the `slack-threads` pack by 0262) |
+| [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md) | Harnesses run in the sandbox; models through the gateway | Accepted (control loop superseded by 0198; amended by 0184, 0199, 0256) |
+| [0181](0181-project-chats-use-their-environments-bindings.md) | Project chats use their Environment's bindings; session events carry keys | Accepted (the `pull-request-reviews` pack by 0262) |
+| [0182](0182-sandboxing-and-permission-modes-are-different-settings.md) | Sandboxing and permission modes are different settings | Accepted |
+| [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
+| [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted (logins superseded by 0199; amended by 0206; container sandboxes by 0204; sealed operations by 0207; setup and volumes by 0208) |
+| [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted (amended by 0201, 0220) |
+| [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted (amended by 0234) |
+| [0187](0187-remote-executors-ride-out-transient-failures.md) | Remote executors ride out transient failures on one operation queue | Accepted (sessions are worker epochs by 0192; runners by 0198; sealed operations by 0207) |
+| [0188](0188-back-and-forward-between-surfaces.md) | Back and forward move between surfaces, and tabs keep their way back | Accepted |
+| [0189](0189-sign-in-limits-shared-and-keyed-by-the-proxied-client.md) | Sign-in limits are shared in Postgres and keyed by the proxied client | Accepted |
+| [0190](0190-disposable-control-plane-replicas.md) | Disposable control-plane replicas: a node per process, recovery from lost nodes | Accepted (amended by 0198) |
+| [0191](0191-member-drafts-are-refs-in-the-project-origin.md) | Member drafts are refs in the project origin | Accepted |
+| [0192](0192-workers-own-their-lease.md) | Workers own their lease: any replica runs any worker's turns | Accepted (turn status and guards from Postgres by 0193; sealed operations by 0207) |
+| [0193](0193-no-cross-replica-state-in-replica-memory.md) | No cross-replica state in replica memory: turn status, singleton work, caches | Accepted (amended by 0197, 0198; machine classes and pools by 0205; sealed operations by 0207) |
+| [0194](0194-browser-tabs-load-like-chrome-and-sleep-when-unused.md) | Browser tabs load like Chrome's and sleep when unused | Accepted (amended by 0203) |
+| [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted (amended by 0197; Other answers return by 0244) |
+| [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
+| [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217) |
+| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0276: a chat can switch harnesses; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls; by 0245: a lost thread is replaced, handed the conversation; by 0275: a resumed Claude Code keeps its sign-in) |
+| [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
+| [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
+| [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
+| [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093) |
+| [0203](0203-work-runs-chrome-extensions-from-the-web-store.md) | Work runs Chrome extensions from the Chrome Web Store: a host-owned `chrome.*` API on Electron, verified store installs, Chrome's toolbar, popups, side panel and dialogs | Accepted (amends 0194; amended by 0235) |
+| [0204](0204-sandboxes-on-any-linux-machine.md) | Sandboxes on any Linux machine: the container backend | Accepted |
+| [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted (machines on demand by 0258) |
+| [0206](0206-project-secrets-reach-environments-per-member.md) | Project secrets reach Environments, with a value per member | Accepted (amends 0162, 0175, 0184; refined by 0212; directory events by 0210) |
+| [0207](0207-operations-are-sealed-to-their-executor.md) | Operations are sealed to their executor; worker credentials rotate | Accepted (terminals and previews by 0209) |
+| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree; amended by 0257: setup is an object with its own network, and runs again when the base moves) |
+| [0209](0209-people-reach-their-sandboxes.md) | People reach their sandboxes: terminals and previews | Accepted (the loopback API guard by 0211) |
+| [0210](0210-directory-events-start-workflows.md) | Directory events start workflows; workflows set members' secrets | Accepted |
+| [0211](0211-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
+| [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md) | HTTP APIs reach code in sandboxes through the gateway | Accepted (refines 0162, 0175, 0206; renewal overlap by 0255) |
+| [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199) |
+| [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Superseded by 0276 |
+| [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
+| [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217; amended by 0236, 0265, 0267, 0268, 0271) |
+| [0217](0217-only-people-write-user-messages.md) | Only people write user messages: inbound messages and task notifications | Accepted (amends 0074, 0155, 0197, 0216; delivery fields typed by 0219) |
+| [0218](0218-one-chat-timeline.md) | One chat timeline: the registry, installed as copies | Accepted |
+| [0219](0219-typed-deliveries.md) | Deliveries are typed: no free-form input metadata, mailbox inputs or actions | Accepted (amends 0090, 0199, 0217) |
+| [0220](0220-sign-in-popups-answer-passkeys.md) | Sign-in popups answer passkeys in a sheet of their own | Accepted (amends 0201, 0185) |
+| [0221](0221-menus-hold-the-window-and-pages-get-work-menus.md) | Menus hold the window, and pages get Work's menus | Accepted (amends 0121, 0203) |
+| [0222](0222-desktop-harnesses-stay-warm-between-turns.md) | Desktop harnesses stay warm between turns | Accepted (amends 0198) |
+| [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155; bash marks its commands, amended by 0230) |
+| [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |
+| [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0103, 0133, 0198) |
+| [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215; amended by 0234) |
+| [0227](0227-pages-ask-through-works-dialogs.md) | Pages ask through Work's dialogs: alerts, Leave site? and sign-ins over their tab | Accepted (amends 0150, 0151, 0194, 0202) |
+| [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222; amended by 0269; diagnosis corrected by 0275) |
+| [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
+| [0230](0230-agent-terminals-mark-commands-in-bash-too.md) | Agent terminals mark commands in bash too | Accepted (amends 0223) |
+| [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
+| [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |
+| [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |
+| [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226; row activity added by 0273; amended by 0277) |
+| [0235](0235-pages-find-chromes-window-chrome.md) | Pages find Chrome's `window.chrome`; a daily check watches Google's sign-in | Accepted (amends 0150, 0203) |
+| [0236](0236-voice-hears-the-person-and-dictates-anywhere.md) | Voice hears the person, dictates anywhere, and its keys tap or hold | Accepted (amends 0216; amended by 0265, 0268) |
+| [0237](0237-lists-fade-where-they-continue.md) | Lists fade where they continue: one overflow hint, the sidebar thumb a section's choice | Accepted (refines 0218, 0234; amended by 0248) |
+| [0238](0238-one-ring-per-list-and-sidebar-focus.md) | One ring per list; an opened sidebar focuses what is in front | Accepted (amends 0168) |
+| [0239](0239-chips-are-a-source.md) | A chat's chips are a source, and agents attach chips by metadata | Accepted (builds on 0226, 0234; amended by 0277) |
+| [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) | A message sent while the agent works reaches it at its next step, and can stop it to be read now | Accepted (amends 0197, 0217) |
+| [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245; on the Work server by 0255; amended by 0277) |
+| [0244](0244-each-question-takes-its-own-answer-with-pills.md) | Each question takes its own answer, pills and all | Accepted (amends 0195) |
+| [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241) |
+| [0246](0246-a-restart-never-waits-on-work.md) | A restart never waits on work: working agents continue after it, a downloaded update stays downloaded | Accepted (amends 0083, 0198) |
+| [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md) | A person names a chat from its menu, and it keeps the name | Accepted (amends 0202) |
+| [0248](0248-sidebar-thumbs-take-lanes.md) | Sidebar thumbs take lanes, hidden at rest: the sidebar's own on its edge, a section's one lane in | Accepted (amends 0237) |
+| [0249](0249-a-window-coming-back-reads-only-what-it-missed.md) | A window coming back reads only what it missed: no refetch on focus, one catch-up for a hidden window | Accepted (refines 0229) |
+| [0250](0250-a-message-from-another-agent-reaches-a-working-agent.md) | A message from another agent reaches a working agent at its next step; a subagent's always reaches its parent | Accepted (extends 0240) |
+| [0255](0255-acp-agents-run-on-the-work-server.md) | ACP agents run on the Work server, their model through the gateway on loopback | Accepted (builds on 0180, 0198, 0241; amends 0212) |
+| [0256](0256-the-gateway-rewrites-model-requests.md) | The gateway rewrites model requests: host rewrites, then a connection's override and paths, before policy, failing closed | Accepted (amends 0180; amended by 0261) |
+| [0257](0257-setup-has-its-own-network.md) | Setup has its own network: the base checkout alone, widened for a while, narrow before the session's work arrives | Accepted (amends 0208) |
+| [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
+| [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
+| [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
+| [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Superseded by 0294 |
+| [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181) |
+| [0263](0263-theme-pictures-behind-sidebars-and-chat.md) | A theme can put a picture behind the sidebars and the chat | Accepted |
+| [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
+| [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person, and keeps what they saw as they spoke | Accepted (amends 0216, 0236; amended by 0267) |
+| [0266](0266-resources-list-what-work-runs.md) | Resources lists what Work runs, by who it runs for: CPU and memory per chat, tab, terminal and module, with End | Accepted (builds on 0102, 0140, 0234) |
+| [0267](0267-voice-waits-for-the-person-to-finish.md) | Voice waits for the person to finish: 0.8 s of silence ends a turn, and a reply ready while they talk plays after them | Accepted (amends 0216, 0265) |
+| [0268](0268-voice-lowers-other-audio-and-reads-replies-aloud.md) | Voice lowers other apps' audio while it listens, and any reply can be read aloud from its button | Accepted (amends 0216, 0236) |
+| [0269](0269-a-turn-that-failed-on-sign-in-while-away-runs-again-on-return.md) | A turn that failed on its sign-in while the person was away runs again when they return; a chat's own task's turns too | Accepted (amends 0228; diagnosis corrected by 0275) |
+| [0270](0270-skills-live-in-the-palette.md) | Skills live in the palette: "/" opens them from a chat, Enter applies one here, ⌘↵ in a new chat | Accepted (supersedes 0052's composer menu; builds on 0186; the composer's "/" superseded by 0274) |
+| [0271](0271-agents-delegate-by-naming-an-agent-and-its-settings.md) | Agents delegate by naming an agent and its settings (model, effort, read-only); grants decide, and copies of yourself with any model are the default | Accepted (amends 0090, 0216) |
+| [0272](0272-profiles-share-settings-with-another-profile.md) | Profiles share settings with another profile, once or kept in sync: appearance, workspace, macros, shortcuts and notifications use the owner's files | Accepted |
+| [0273](0273-a-chat-icon-says-what-it-is-doing-and-what-needs-you.md) | A chat's icon says what it is doing and what needs you, at once: two corners, rows gain `activity` | Accepted (amends 0234's row `signal`) |
+| [0274](0274-composer-menus-for-skills-and-mentions.md) | The composer's "/" and "@" menus: skills and mentions go in the message as pills | Accepted (supersedes 0270's composer "/"; builds on 0052, 0186, 0123) |
+| [0275](0275-a-resumed-claude-code-keeps-its-sign-in.md) | A resumed Claude Code keeps its sign-in: the CLI's credential store stays the sign-in's own home, not the SDK's temporary resume home | Accepted (amends 0198, 0228, 0269) |
+| [0276](0276-a-chat-can-switch-agents-and-harnesses.md) | A chat can switch agents and harnesses | Accepted (supersedes 0214; amends 0233) |
+| [0277](0277-agents-reach-trusted-hosts-code-runs-confined-commands-run-as-approved.md) | What agents write reaches only trusted hosts, project code runs confined and declares what it reaches, and commands run as approved | Accepted (amends 0045, 0140, 0148, 0176, 0234, 0239, 0241) |
+| [0278](0278-subagent-updates-reach-the-turn-and-read-as-activity.md) | Subagent updates reach the working turn and read as compact activity | Accepted (extends 0240; replaces 0250's parent delivery rule) |
+| [0279](0279-public-pull-request-status-needs-no-sign-in.md) | Public pull request status needs no sign-in | Accepted (extends 0239) |
+| [0280](0280-terminals-use-the-project-theme-and-chat-workspace.md) | Terminals use the project theme and chat workspace | Accepted (builds on 0209, 0215) |
+| [0281](0281-secret-storage-has-one-encrypted-format.md) | Secret storage has one encrypted format | Accepted (amends 0162, 0206) |
+| [0283](0283-linux-modules-use-namespaces-and-seccomp.md) | Linux modules use namespaces and seccomp | Accepted (extends 0277) |
+| [0284](0284-workspace-windows-restore-as-one-saved-set.md) | Workspace windows restore as one saved set | Accepted |
+| [0285](0285-one-version-for-work-and-the-framework.md) | One version for Work and the framework | Accepted (extends 0082, 0085, 0159) |
+| [0286](0286-agents-request-chip-refresh-from-the-owning-chat.md) | Agents request chip refresh from the owning chat | Accepted (extends 0239) |
+| [0287](0287-better-auth-17-preserves-work-grants.md) | Better Auth 1.7 preserves Work's OAuth grants | Accepted (implements 0055, 0161; runtime compatibility superseded by 0296) |
+| [0288](0288-discard-plain-carets-when-their-text-disappears.md) | Discard plain carets when their text disappears | Accepted |
+| [0289](0289-workflow-waits-give-back-physical-capacity.md) | Workflow waits give back physical capacity through Allocation retirement and fresh admission | Accepted (extends 0100, 0173, 0190) |
+| [0290](0290-restarts-commit-cancellation-and-replacement-together.md) | Restarts commit cancellation and replacement together | Accepted (amends 0027) |
+| [0291](0291-named-signals-buffer-within-a-run-generation.md) | Named signals buffer within one run generation | Accepted (amends 0027) |
+| [0292](0292-review-publication-is-serialized-application-code.md) | Review publication is serialized application code | Accepted |
+| [0293](0293-model-grants-end-with-their-turn-attempt.md) | Model grants end with their turn attempt | Accepted (amends 0180, 0255) |
+| [0294](0294-work-server-deployments-compose-libraries-and-workflows.md) | Work server deployments compose libraries and workflows; no stock image | Accepted (supersedes 0261; amends 0059, 0159, 0160, 0285) |
+| [0295](0295-boundary-attempts-bound-host-and-connection-calls.md) | Boundary attempts bound host and connection calls | Accepted |
+| [0296](0296-one-oauth-token-endpoint.md) | One OAuth token endpoint | Accepted (supersedes 0287's runtime compatibility provisions) |
+| [0297](0297-voice-capture-follows-listening-intent.md) | Voice capture follows listening intent | Accepted (amends 0236, 0268) |
+| [0298](0298-provider-retries-are-turn-state.md) | Provider retries are turn state | Accepted (extends 0197, 0198) |
+| [0299](0299-expanded-steps-share-the-timeline-window.md) | Expanded steps share the timeline window | Accepted |
+| [0300](0300-electron-trust-boundaries.md) | Electron trust belongs to native-created documents | Accepted (refines 0079, 0211, 0220, 0277) |
+| [0301](0301-internal-origin-storage-starts-clean.md) | Internal-origin storage starts clean | Accepted (supersedes legacy local-storage import in 0300) |
+| [0302](0302-work-opens-files-from-finder.md) | Work opens files from Finder | Accepted (extends 0153) |
+| [0303](0303-incognito-browser-tabs.md) | Incognito browser tabs | Accepted |
+| [0304](0304-closing-a-folded-tab-group-closes-its-tabs.md) | Closing a folded tab group closes its tabs | Accepted |
+| [0305](0305-completed-work-folds-toward-the-latest-answer.md) | Completed work folds toward the latest answer | Accepted (amends 0278) |
+| [0306](0306-work-tutorial-and-theme-picker.md) | Tab onboarding and one shared theme picker | Accepted |

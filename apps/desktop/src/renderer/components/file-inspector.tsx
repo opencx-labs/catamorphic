@@ -1,8 +1,16 @@
+import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 import { useQuery } from "@tanstack/react-query";
-import { CircleDot, FileText, FolderOpen, LoaderCircle } from "lucide-react";
+import {
+  CircleDot,
+  FileText,
+  FolderOpen,
+  LoaderCircle,
+  PencilLine,
+} from "lucide-react";
 import { useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { localEditorPath } from "../lib/local-project-files.js";
+import { InspectorFact } from "./inspector-fact.js";
 import { ResourceInspector } from "./resource-inspector.js";
 
 /** File lifecycle uses the same status and actions surface as chat. */
@@ -12,6 +20,7 @@ export function FileInspector({
   dirty,
   saving,
   onSave,
+  onRename,
   onPublish,
   onPropose,
   onSharePersonal,
@@ -21,6 +30,7 @@ export function FileInspector({
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
+  onRename?: () => void;
   onPublish?: () => Promise<void>;
   onPropose?: () => Promise<void>;
   onSharePersonal?: (intent: "publish" | "propose") => Promise<void>;
@@ -31,13 +41,15 @@ export function FileInspector({
     queryFn: () => localEditorPath(projectId, filePath),
   });
   const personal =
-    filePath.startsWith(".catamorphic/personal/") ||
-    filePath.includes("/.catamorphic/personal/");
+    filePath.startsWith(`${PROJECT_PERSONAL_DIR}/`) ||
+    filePath.includes(`/${PROJECT_PERSONAL_DIR}/`);
   const status = saving
     ? "Saving"
     : dirty
       ? "Unsaved changes"
       : "Saved on this device";
+  const visibility = personal ? "Local only" : "Project file (local copy)";
+  const where = location.data ?? filePath;
   const run = async (action: () => Promise<void>) => {
     setError(null);
     try {
@@ -61,14 +73,19 @@ export function FileInspector({
             </h2>
           </header>
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
-            <dt className="text-fg-faint">Status</dt>
-            <dd className="text-fg">{status}</dd>
-            <dt className="text-fg-faint">Visibility</dt>
-            <dd className="text-fg">
-              {personal ? "Local only" : "Project file (local copy)"}
-            </dd>
-            <dt className="text-fg-faint">Location</dt>
-            <dd className="break-all text-fg">{location.data ?? filePath}</dd>
+            <InspectorFact term="Status" copy={status}>
+              {status}
+            </InspectorFact>
+            <InspectorFact term="Visibility" copy={visibility}>
+              {visibility}
+            </InspectorFact>
+            <InspectorFact
+              term="Location"
+              copy={where}
+              copyLabel="Copy file path"
+            >
+              <span className="break-all">{where}</span>
+            </InspectorFact>
           </dl>
           <p className="pb-3 text-[11px] leading-4 text-fg-muted">
             {personal
@@ -98,6 +115,19 @@ export function FileInspector({
                   Your agent will prepare this file for sharing.
                 </p>
               </>
+            )}
+            {onRename && (
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={saving}
+                onClick={onRename}
+              >
+                <span className="flex items-center gap-2">
+                  <PencilLine className="size-3.5" />
+                  Rename…
+                </span>
+              </button>
             )}
             <button
               type="button"

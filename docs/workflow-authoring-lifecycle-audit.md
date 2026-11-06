@@ -13,7 +13,7 @@ remains replaceable through `standingAgentPrompt`.
 
 | Request | Source | Lifecycle |
 | --- | --- | --- |
-| Temporary session check | Source passed to the watcher tool, committed on `catamorphic/watchers/<id>` from an isolated origin checkout | Expiring session-owned enablement; stopped by explicit stop, expiry, or session close/archive |
+| Temporary session check | Source passed to the watcher tool, committed on `work/watchers/<id>` from an isolated origin checkout | Expiring session-owned enablement; stopped by explicit stop, expiry, or session close/archive |
 | Reusable project workflow | Exported `defineWorkflow` under `workflows/src/` | Ordinary checkpoint/review/sync, followed separately by deployment and optional enablement |
 | Run shared code for one user | Existing reviewed project source | Member-owned enablement with that user's exact connections and consent |
 | Save privately for later reuse | Host-provided private artifact capability | The stock desktop's discovery, invocation, and private schedules are not implemented |

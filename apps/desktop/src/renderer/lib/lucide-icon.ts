@@ -16,7 +16,7 @@ const BY_NAME: ReadonlyMap<string, lucide.LucideIcon> = new Map(
 );
 
 /**
- * A Lucide icon by the name an agent wrote (sidebar.js, a command, a tab).
+ * A Lucide icon by the name an agent wrote (workspace.js, a command, a tab).
  * Unknown names resolve to nothing so callers fall back to their own default
  * glyph — a name must never reach the screen as text, and a name must never
  * render something that is not an icon.

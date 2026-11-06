@@ -1,7 +1,6 @@
 {
   "name": "@catamorphic/plugins",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0-alpha.37",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,16 +12,42 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/plugins --config ../../vitest.config.ts",
     "test:watch": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/plugins --watch",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ]
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/plugins"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*",
+    "!**/*.spec.*",
+    "!**/__tests__/**",
+    "!**/__fixtures__/**",
+    "!**/fixtures/**"
+  ]
 }

@@ -1,3 +1,7 @@
+import packageJson from "../package.json" with { type: "json" };
+
+export const APP_PACKAGE_VERSION = packageJson.version;
+
 export {
   type AppClientOptions,
   createClient,
@@ -14,6 +18,7 @@ export {
   type CollectionChange,
   type CollectionItem,
   type CollectionPage,
+  type CollectionRefresh,
   type CollectionSource,
   type CollectionStatus,
   createCollection,

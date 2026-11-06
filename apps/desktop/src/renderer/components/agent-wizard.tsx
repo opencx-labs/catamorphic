@@ -1,22 +1,16 @@
-import {
-  ArrowLeft,
-  Bot,
-  Check,
-  ChevronRight,
-  Copy,
-  KeyRound,
-  Sparkles,
-} from "lucide-react";
+import { ArrowLeft, Bot, ChevronRight } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { HERMES } from "../../shared/acp-agents.js";
 import {
   type AgentConnectionsSetting,
   type ConnectionInfo,
   desktopApi,
 } from "../lib/desktop-api.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
+import { CopyButton } from "./copy-button.js";
+import { HarnessIcon } from "./harness-icon.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
-import { ShortcutHint } from "./shortcut-hint.js";
 
 /**
  * Agent setup wizard — the one place agents are added. Shown as a full tab
@@ -26,23 +20,24 @@ import { ShortcutHint } from "./shortcut-hint.js";
  * existing sign-in when `agentSetupStatus` detects one.
  */
 
-type Step = "choose" | "claude-code" | "codex" | "api-key";
+type Step = "choose" | "claude-code" | "codex" | "hermes" | "api-key";
 /** One create-and-sign-in path; "-account" = a separate, per-agent login. */
 type Flow =
   | "claude-code"
   | "claude-code-account"
   | "codex"
   | "codex-account"
+  | "hermes"
   | "free";
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
 
 const primaryActionClass =
-  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
 const secondaryActionClass =
-  "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
 
 const OPTIONS: Array<{
-  id: "claude-code" | "codex" | "api-key" | "free";
+  id: "claude-code" | "codex" | "hermes" | "api-key" | "free";
   title: string;
   description: string;
 }> = [
@@ -55,6 +50,11 @@ const OPTIONS: Array<{
     id: "codex",
     title: "ChatGPT",
     description: "Your ChatGPT account, via the Codex CLI.",
+  },
+  {
+    id: "hermes",
+    title: "Hermes",
+    description: "Your own Hermes Agent, with its model and memory.",
   },
   {
     id: "api-key",
@@ -78,7 +78,8 @@ export function AgentWizard({
   variant: "tab" | "modal";
   open?: boolean;
   onClose: () => void;
-  onDone: () => void;
+  /** The agent set up, when one flow finished with one. */
+  onDone: (agentId: string | null) => void;
   /** True while the user is inside a flow (a detail step, or a sign-in in
    * flight). The host must not close the wizard from under them then —
    * a sign-in creates its agent before it finishes. */
@@ -88,6 +89,7 @@ export function AgentWizard({
   const [status, setStatus] = useState<{
     claudeCode: boolean;
     codex: boolean;
+    hermes: string | null;
   } | null>(null);
   const [busy, setBusy] = useState(false);
   // Which flow the busy state belongs to, so only the clicked button of a
@@ -95,8 +97,7 @@ export function AgentWizard({
   const [busyFlow, setBusyFlow] = useState<Flow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Optional custom agent name, shared by the detail steps (each step
-  // resets it on entry via goto).
+  // Each detail step starts with an editable name, submitted as shown.
   const [name, setName] = useState("");
 
   // Which of the profile's MCP connections the new agent gets: all current
@@ -118,7 +119,6 @@ export function AgentWizard({
   // Claude Code terminal sign-in.
   const [ccCommand, setCcCommand] = useState<string | null>(null);
   const [ccStarted, setCcStarted] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   // First-use harness download behind a sign-in (0–100, null = not known).
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
@@ -135,8 +135,35 @@ export function AgentWizard({
   // creating a duplicate.
   const createdRef = useRef<Partial<Record<Flow, string>>>({});
   const waitingRef = useRef<{ agentId: string; flow: Flow } | null>(null);
+  // The flow whose terminal sign-in is under way (its Continue finishes it).
+  const terminalFlowRef = useRef<Flow | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+
+  /**
+   * Done with the agent a flow set up (`null`: one made outside the flows,
+   * an API key's, which comes as `created`). A sign-in creates its agent before it finishes, so other
+   * flows may have left agents on the way: those that never signed in go,
+   * and none stays behind as the default. One whose sign-in landed after
+   * all (in a terminal, with the wizard closed) stays.
+   */
+  const finish = (flow: Flow | null, created: string | null = null) => {
+    const kept = flow ? (createdRef.current[flow] ?? null) : created;
+    const others = Object.entries(createdRef.current).flatMap(([other, id]) =>
+      other !== flow && id ? [id] : [],
+    );
+    createdRef.current = {};
+    void Promise.all(
+      others.map(async (id) => {
+        const signedIn = await desktopApi
+          .agentLoginStatus(id)
+          .catch(() => true);
+        if (!signedIn) await desktopApi.agentsRemove(id).catch(() => false);
+      }),
+    ).finally(() => onDoneRef.current(kept));
+  };
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
 
   useEffect(() => {
     void desktopApi.agentSetupStatus().then(setStatus);
@@ -168,7 +195,7 @@ export function AgentWizard({
       setWaitingFlow(null);
       setBusy(false);
       setBusyFlow(null);
-      if (ok) onDoneRef.current();
+      if (ok) finishRef.current(waiting.flow);
       else setError("Sign-in did not complete. Try again.");
     });
   }, []);
@@ -209,7 +236,17 @@ export function AgentWizard({
     setError(null);
     setBusy(false);
     setBusyFlow(null);
-    setName("");
+    setName(
+      next === "claude-code"
+        ? "Claude"
+        : next === "codex"
+          ? "ChatGPT"
+          : next === "hermes"
+            ? HERMES.name
+            : next === "api-key"
+              ? "Built-in"
+              : "",
+    );
     setConnections({ mode: "all" });
     setCcCommand(null);
     setCcStarted(false);
@@ -246,24 +283,34 @@ export function AgentWizard({
                 connections,
                 ...customName,
               })
-            : await desktopApi.agentsCreate({
-                harness: flow,
-                auth: "local",
-                connections,
-                ...customName,
-              });
+            : flow === "hermes"
+              ? // Hermes is an ACP agent of the person's own (ADR 0241).
+                await desktopApi.agentsCreate({
+                  name: HERMES.name,
+                  harness: "acp",
+                  acp: { command: [...HERMES.command] },
+                  auth: "local",
+                  connections,
+                  ...customName,
+                })
+              : await desktopApi.agentsCreate({
+                  harness: flow,
+                  auth: "local",
+                  connections,
+                  ...customName,
+                });
     createdRef.current[flow] = agent.id;
     return agent.id;
   };
 
   /** "Already set up here" path: create the local-auth agent and finish. */
-  const addExistingSetup = async (flow: "claude-code" | "codex") => {
+  const addExistingSetup = async (flow: "claude-code" | "codex" | "hermes") => {
     setError(null);
     setBusy(true);
     setBusyFlow(flow);
     try {
       await ensureAgent(flow);
-      onDone();
+      finish(flow);
     } catch (cause) {
       setBusy(false);
       setBusyFlow(null);
@@ -298,7 +345,7 @@ export function AgentWizard({
         // Nothing to start: the harness is already signed in.
         waitingRef.current = null;
         setWaitingFlow(null);
-        onDone();
+        finish(flow);
       }
     } catch (cause) {
       waitingRef.current = null;
@@ -324,6 +371,7 @@ export function AgentWizard({
         setError(result.error);
       } else {
         setCcStarted(true);
+        terminalFlowRef.current = flow;
         if (result.command) setCcCommand(result.command);
         // Main watches the credentials: the wizard finishes by itself the
         // moment the terminal sign-in lands (Continue stays as the manual
@@ -345,7 +393,7 @@ export function AgentWizard({
     setError(null);
     setBusy(true);
     try {
-      await desktopApi.agentsCreate({
+      const agent = await desktopApi.agentsCreate({
         harness: "ai-sdk",
         provider,
         auth: "api-key",
@@ -353,21 +401,15 @@ export function AgentWizard({
         connections,
         ...(name.trim() ? { name: name.trim() } : {}),
       });
-      onDone();
+      finish(null, agent.id);
     } catch (cause) {
       setBusy(false);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
-  const copyCommand = (command: string) => {
-    void navigator.clipboard.writeText(command);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
-  };
-
-  /** Optional agent name, offered on every detail step. */
-  const nameField = (placeholder: string) => (
+  /** Editable agent name, offered on every detail step. */
+  const nameField = () => (
     <label className="flex flex-col gap-1 text-xs text-fg-muted">
       Name
       <input
@@ -375,7 +417,6 @@ export function AgentWizard({
         name="agentName"
         value={name}
         onChange={(event) => setName(event.target.value)}
-        placeholder={placeholder}
         autoComplete="off"
         className="field h-9 min-w-0 px-2 text-sm text-fg placeholder:text-fg-faint max-sm:text-base"
       />
@@ -397,24 +438,11 @@ export function AgentWizard({
   /** The terminal sign-in command block (Claude Code flows). */
   const commandBlock = ccCommand && (
     <div className="mt-3 flex flex-col gap-1.5">
-      <div className="flex items-center gap-1.5">
+      <div data-copyable className="flex items-center gap-1.5">
         <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
           {ccCommand}
         </code>
-        <ShortcutHint label="Copy command">
-          <button
-            type="button"
-            onClick={() => copyCommand(ccCommand)}
-            className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
-            aria-label="Copy sign-in command"
-          >
-            {copied ? (
-              <Check className="size-3 text-success" />
-            ) : (
-              <Copy className="size-3" />
-            )}
-          </button>
-        </ShortcutHint>
+        <CopyButton value={ccCommand} label="Copy sign-in command" />
       </div>
       <p className="text-[11px] text-fg-faint">
         Finish sign-in in your terminal. This closes by itself when you're
@@ -453,13 +481,12 @@ export function AgentWizard({
                     className="group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-border bg-bg-raised px-3 py-2.5 text-left transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay disabled:cursor-default disabled:opacity-60"
                   >
                     <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border bg-bg-overlay text-fg-muted">
-                      {option.id === "free" ? (
-                        <Sparkles className="size-3.5" />
-                      ) : option.id === "api-key" ? (
-                        <KeyRound className="size-3.5" />
-                      ) : (
-                        <Bot className="size-3.5" />
-                      )}
+                      <HarnessIcon
+                        harness={option.id}
+                        provider={
+                          option.id === "free" ? "openrouter" : undefined
+                        }
+                      />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px] font-medium text-fg">
@@ -513,13 +540,13 @@ export function AgentWizard({
                   Claude Code is already set up on this machine. Use that
                   account, or sign in with another account for this agent.
                 </p>
-                <div className="mt-3">{nameField("Claude")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 {commandBlock}
                 {ccStarted ? (
                   <button
                     type="button"
-                    onClick={onDone}
+                    onClick={() => finish(terminalFlowRef.current)}
                     className={`mt-4 ${primaryActionClass}`}
                   >
                     Continue
@@ -563,14 +590,14 @@ export function AgentWizard({
                   it here, finish it there, and you're set on this machine for
                   good.
                 </p>
-                <div className="mt-3">{nameField("Claude")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 {commandBlock}
                 <div className="mt-4 flex flex-col gap-2">
                   {ccStarted ? (
                     <button
                       type="button"
-                      onClick={onDone}
+                      onClick={() => finish(terminalFlowRef.current)}
                       className={primaryActionClass}
                     >
                       Continue
@@ -607,7 +634,7 @@ export function AgentWizard({
                   Codex is already signed in on this machine. Use that account,
                   or sign in with another ChatGPT account for this agent.
                 </p>
-                <div className="mt-3">{nameField("ChatGPT")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 <div className="mt-4 flex flex-col gap-2">
                   <PendingButton
@@ -648,7 +675,7 @@ export function AgentWizard({
                   Codex runs locally via the Codex CLI and signs in with your
                   ChatGPT account in the browser.
                 </p>
-                <div className="mt-3">{nameField("ChatGPT")}</div>
+                <div className="mt-3">{nameField()}</div>
                 {connectionsField}
                 <PendingButton
                   type="button"
@@ -667,12 +694,85 @@ export function AgentWizard({
               </>
             ))}
 
+          {step === "hermes" &&
+            (status?.hermes ? (
+              <>
+                <h2 className="text-balance text-base font-semibold">
+                  Use your Hermes
+                </h2>
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
+                  Hermes is installed on this machine. Work runs it as an agent,
+                  with its own model, memory and sign-in.
+                </p>
+                <p
+                  className="mt-1 truncate font-mono text-[11px] text-fg-faint"
+                  data-testid="agent-wizard-hermes-path"
+                >
+                  {status.hermes}
+                </p>
+                <div className="mt-3">{nameField()}</div>
+                {connectionsField}
+                <PendingButton
+                  type="button"
+                  pending={busy && busyFlow === "hermes"}
+                  pendingLabel="Adding…"
+                  disabled={busy}
+                  data-disabled-reason="Wait for the current action to finish"
+                  onClick={() => void addExistingSetup("hermes")}
+                  className={`mt-4 ${primaryActionClass}`}
+                  data-testid="agent-wizard-hermes-use"
+                >
+                  Use Hermes
+                </PendingButton>
+              </>
+            ) : (
+              <>
+                <h2 className="text-balance text-base font-semibold">
+                  Install Hermes
+                </h2>
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
+                  Hermes Agent by Nous Research is not on this machine yet.
+                  Install it in a terminal, choose its model, then check again.
+                </p>
+                <div className="mt-3 flex flex-col gap-1.5">
+                  {[HERMES.install, HERMES.setup].map((command) => (
+                    <div
+                      key={command}
+                      data-copyable
+                      className="flex items-center gap-1.5"
+                    >
+                      <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
+                        {command}
+                      </code>
+                      <CopyButton value={command} label="Copy command" />
+                    </div>
+                  ))}
+                </div>
+                <PendingButton
+                  type="button"
+                  pending={busy}
+                  pendingLabel="Checking…"
+                  onClick={() => {
+                    setBusy(true);
+                    void desktopApi
+                      .agentSetupStatus()
+                      .then(setStatus)
+                      .finally(() => setBusy(false));
+                  }}
+                  className={`mt-4 ${primaryActionClass}`}
+                  data-testid="agent-wizard-hermes-recheck"
+                >
+                  Check again
+                </PendingButton>
+              </>
+            ))}
+
           {step === "api-key" && (
             <form onSubmit={submitApiKey} className="flex flex-col gap-3">
               <h2 className="text-balance text-base font-semibold">
                 Bring an API key
               </h2>
-              {nameField("Built-in")}
+              {nameField()}
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Provider
                 <select

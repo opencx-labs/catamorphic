@@ -1,6 +1,6 @@
 # 0093: Session model overrides and the desktop toolchain
 
-- **Status:** Accepted
+- **Status:** Accepted (the desktop adopts the login shell PATH, amended by [0202](0202-agents-see-the-browser-subagents-and-their-path.md))
 - **Date:** 2026-09-06
 
 ## Context

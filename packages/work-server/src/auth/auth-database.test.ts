@@ -1,0 +1,199 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { type BetterAuthOptions, betterAuth } from "better-auth";
+import { Kysely, sql } from "kysely";
+import { Pool } from "pg";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { openWorkAuthDatabase } from "./auth-database.js";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function createDataDirectory(): string {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "work-server-auth-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+function optionsFor(
+  database: BetterAuthOptions["database"],
+): BetterAuthOptions {
+  return {
+    baseURL: "http://127.0.0.1:4700",
+    secret: "work-auth-database-test-secret-at-least-32-characters",
+    database,
+    emailAndPassword: { enabled: true },
+    // The Work server counts sign-in limits in its auth schema.
+    rateLimit: { enabled: true, storage: "database" },
+  };
+}
+
+describe("openWorkAuthDatabase", () => {
+  it("migrates PGlite idempotently and persists Better Auth users", async () => {
+    const dataDir = createDataDirectory();
+    const first = await openWorkAuthDatabase({ dataDir });
+    const firstOptions = optionsFor(first.database);
+
+    await first.migrate({ options: firstOptions });
+    await first.migrate({ options: firstOptions });
+
+    const firstAuth = betterAuth(firstOptions);
+    const created = await firstAuth.api.signUpEmail({
+      body: {
+        email: "ada@local.invalid",
+        name: "Ada",
+        password: "correct horse battery staple",
+      },
+    });
+    await first.close();
+
+    const reopened = await openWorkAuthDatabase({ dataDir });
+    const reopenedOptions = optionsFor(reopened.database);
+    await reopened.migrate({ options: reopenedOptions });
+    const reopenedAuth = betterAuth(reopenedOptions);
+    const signedIn = await reopenedAuth.api.signInEmail({
+      body: {
+        email: "ada@local.invalid",
+        password: "correct horse battery staple",
+      },
+    });
+
+    expect(signedIn.user.id).toBe(created.user.id);
+    expect(signedIn.token).toBeTruthy();
+    await reopened.close();
+  });
+});
+
+const databaseUrl = process.env.DATABASE_URL;
+const describePostgres = databaseUrl ? describe : describe.skip;
+
+describePostgres("openWorkAuthDatabase with Postgres", () => {
+  it("migrates into the selected auth schema and nowhere else", async () => {
+    if (!databaseUrl) throw new Error("DATABASE_URL is required");
+    const schema = `catamorphic_auth_test_${Date.now()}`;
+    const admin = new Pool({ connectionString: databaseUrl });
+    const database = await openWorkAuthDatabase({
+      dataDir: createDataDirectory(),
+      databaseUrl,
+      authSchema: schema,
+    });
+
+    try {
+      const authOptions = optionsFor(database.database);
+      await database.migrate({ options: authOptions });
+      await database.migrate({ options: authOptions });
+      const tables = await admin.query<{ present: boolean }>(
+        `SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables
+          WHERE table_schema = $1 AND table_name = 'user'
+        ) AS present`,
+        [schema],
+      );
+      expect(tables.rows[0]?.present).toBe(true);
+      const limits = await admin.query<{ schema: string }>(
+        `SELECT table_schema AS schema FROM information_schema.tables
+         WHERE table_name = 'rateLimit' AND table_schema = $1`,
+        [schema],
+      );
+      expect(limits.rows).toEqual([{ schema }]);
+    } finally {
+      await database.close();
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await admin.end();
+    }
+  });
+
+  it("survives the server ending an idle auth connection, and keeps serving", async () => {
+    if (!databaseUrl) throw new Error("DATABASE_URL is required");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const schema = `catamorphic_auth_idle_${randomUUID().replaceAll("-", "")}`;
+    const admin = new Pool({ connectionString: databaseUrl });
+    const database = await openWorkAuthDatabase({
+      dataDir: createDataDirectory(),
+      databaseUrl,
+      authSchema: schema,
+    });
+    try {
+      const { database: config } = database;
+      if (!("dialect" in config)) throw new Error("Expected a Kysely dialect");
+      const db = new Kysely<Record<string, never>>({ dialect: config.dialect });
+      const backend = () =>
+        sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`
+          .execute(db)
+          .then((result) => result.rows[0]?.pid);
+      const pid = await backend();
+      expect(pid).toBeTypeOf("number");
+      // As a restart or a forced database drop would: 57P01. Unheard, it is
+      // an unhandled 'error' event that fails the run.
+      await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+      await vi.waitFor(
+        () =>
+          expect(warn).toHaveBeenCalledWith(
+            expect.stringContaining("An idle auth database connection closed"),
+          ),
+        { timeout: 10_000, interval: 20 },
+      );
+      expect(await backend()).not.toBe(pid);
+    } finally {
+      warn.mockRestore();
+      await database.close();
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await admin.end();
+    }
+  });
+
+  it("ignores unrelated schemas that disappear during auth introspection", async () => {
+    if (!databaseUrl) throw new Error("DATABASE_URL is required");
+    const suffix = randomUUID().replaceAll("-", "");
+    const authSchema = `catamorphic_auth_race_${suffix}`;
+    const unrelatedSchemas = Array.from(
+      { length: 16 },
+      (_, index) => `catamorphic_auth_noise_${suffix}_${index}`,
+    );
+    const admin = new Pool({ connectionString: databaseUrl });
+    const serialColumns = Array.from(
+      { length: 32 },
+      (_, index) => `"value_${index}" serial`,
+    ).join(", ");
+
+    for (const schema of unrelatedSchemas) {
+      await admin.query(`CREATE SCHEMA "${schema}"`);
+      await admin.query(`CREATE TABLE "${schema}"."noise" (${serialColumns})`);
+    }
+    const database = await openWorkAuthDatabase({
+      dataDir: createDataDirectory(),
+      databaseUrl,
+      authSchema,
+    });
+
+    try {
+      const migration = database.migrate({
+        options: optionsFor(database.database),
+      });
+      const schemaChurn = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        for (const schema of unrelatedSchemas) {
+          await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+      })();
+
+      await expect(
+        Promise.all([migration, schemaChurn]),
+      ).resolves.toBeDefined();
+    } finally {
+      await database.close();
+      for (const schema of unrelatedSchemas) {
+        await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      }
+      await admin.query(`DROP SCHEMA IF EXISTS "${authSchema}" CASCADE`);
+      await admin.end();
+    }
+  });
+});

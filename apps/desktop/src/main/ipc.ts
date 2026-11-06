@@ -1,24 +1,22 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   definitionHash,
   formatProjectAgentId,
   isProjectDataPath,
   normalizeDocumentPath,
+  PROJECT_PERMISSIONS,
   type ProjectAgentEntry,
+  ProjectNotFoundError,
 } from "@catamorphic/core";
 import { isPersonalFile } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubApi,
-  GithubAuthError,
-  pollDeviceToken,
   repoFullNameFromUrl,
-  requestDeviceCode,
 } from "@catamorphic/github";
 import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
@@ -26,23 +24,37 @@ import {
   app,
   autoUpdater,
   BrowserWindow,
+  ClipboardItem,
+  clipboard,
   dialog,
-  ipcMain,
   nativeImage,
   shell,
   type WebContents,
 } from "electron";
+import { z } from "zod";
+import { HERMES } from "../shared/acp-agents.js";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
+import type {
+  HarnessPermissions,
+  Sandboxing,
+} from "../shared/agent-permissions.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import type { PersonalEnvironmentView } from "../shared/personal-environment.js";
 import {
   prCommentInputSchema,
   prDecisionInputSchema,
 } from "../shared/pr-details.js";
+import type { ProfileConnection } from "../shared/profile-connections.js";
+import { writesProgram } from "../shared/project-experience.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
+import { rosterAgentId } from "../shared/voice.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
+import { readAgentCredentials } from "./agent-credentials.js";
+import { findOnAgentPath } from "./agent-path.js";
 import {
   type AgentsStore,
   type CreateAgentInput,
@@ -60,7 +72,8 @@ import {
   continueAuthorizationInBrowser,
   trackAuthorization,
 } from "./authorization-recovery.js";
-import { saveComposerFile } from "./composer-files.js";
+import { throughCodeHost } from "./code-host-fallback.js";
+import { removeComposerFiles, saveComposerFile } from "./composer-files.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -68,9 +81,15 @@ import {
   type UpdateConnectionInput,
 } from "./connections-store.js";
 import type { ConnectorsService } from "./connectors.js";
+import { CredentialStorageError } from "./credential-encryption.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
-import { readEditorFile, writeEditorFile } from "./editor-files.js";
-import { readFilePreview } from "./file-preview.js";
+import {
+  readEditorFile,
+  renameEditorFile,
+  writeEditorFile,
+} from "./editor-files.js";
+import { copyFileToClipboard, runAppleScript } from "./file-clipboard.js";
+import { readFilePreview, readProjectImage } from "./file-preview.js";
 import { searchProjectFiles } from "./file-search.js";
 import { registerGitOverviewSubscriptions } from "./git-overview-ipc.js";
 import {
@@ -92,6 +111,7 @@ import {
 import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
+import { McpAppOpenSchema } from "./mcp-app-view-authorization.js";
 import type { McpAppsService } from "./mcp-apps.js";
 import type { MobilePairingService, PairingContext } from "./mobile-pairing.js";
 import {
@@ -99,7 +119,19 @@ import {
   fetchOpenRouterModels,
   openRouterPkceLogin,
 } from "./openrouter.js";
-import { listPersonalFiles } from "./personal-files.js";
+import {
+  ensurePersonalEnvironmentConfig,
+  PERSONAL_ENVIRONMENT_PATH,
+  type PersonalEnvironmentConfig,
+  projectRelativePath,
+  updatePersonalEnvironmentConfig,
+} from "./personal-environment-config.js";
+import { createPersonalFile, listPersonalFiles } from "./personal-files.js";
+import {
+  e2ePullRequestStatus,
+  pullRequestAddress,
+  readPullRequestStatus,
+} from "./pr-status.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import {
@@ -109,7 +141,15 @@ import {
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
 import { createReservedProject } from "./project-path.js";
+import { remoteMachinesRequest } from "./remote-api.js";
 import { probeRemoteConnection } from "./remote-connection-status.js";
+import {
+  beginCodexSignIn,
+  cancelCodexSignIn,
+  codexSignInStatus,
+  listRemoteMachines,
+  signOutOfCodex,
+} from "./remote-machines.js";
 import {
   authorizeRemoteServer,
   type RemoteOAuthCredentials,
@@ -124,6 +164,7 @@ import {
   ensureRemoteProjectAccess,
   httpDocumentsClient,
   localStatus,
+  publishProgramFromFolder,
   type RemoteMe,
   shipRemoteProject,
   storeOnlyDocumentsClient,
@@ -137,15 +178,19 @@ import {
   listAgentModels,
   type ModelCatalogAgent,
 } from "./server/harness-models.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
+import { shellQuote } from "./shell-integration.js";
+import { shellIpcMain as ipcMain, shellSurfaceFor } from "./shell-ipc.js";
 import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
+import { voiceMenuPrefsPatchSchema } from "./voice/voice-bubble.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
-const execFileAsync = promisify(execFile);
+/** A remote root holds every permission; `/me` lists projects only for members. */
 const ROOT_REMOTE_PROJECT_PERMISSIONS: RemoteMe["projects"][number]["permissions"] =
-  ["memberships:manage", "roles:manage"];
+  [...PROJECT_PERMISSIONS];
 
 export interface ServerState {
   current: EmbeddedServer | null;
@@ -175,8 +220,10 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-  /** Normalized operating mode (ADR 0056); null = the local desktop default (full access). */
-  mode: "read-only" | "edit" | "full-access" | null;
+  /** What may leave its sandbox (ADR 0182); null = the local default (publish). */
+  sandboxing: Sandboxing | null;
+  /** The harness's own permission settings; null = the local defaults. */
+  harnessPermissions: HarnessPermissions | null;
   coordination:
     | "shared-first"
     | "isolate-on-contention"
@@ -184,7 +231,7 @@ export interface ProjectAgentInfo {
     | null;
   /** Claude Code auto-memory; null = the definition doesn't say (off). */
   memory: boolean | null;
-  credentialsSource: "profile" | "secret" | "local";
+  credentialsSource: "profile" | "secret" | "local" | "connection" | "personal";
   secretName: string | null;
   /** Declared connector names — enforced by name match (ADR 0056). */
   connections: string[];
@@ -193,6 +240,10 @@ export interface ProjectAgentInfo {
   delegation: import("@catamorphic/core").AgentDelegationPolicy | null;
   /** First lines of the persona file, for the consent dialog. */
   promptPreview: string | null;
+  /** The command an ACP agent runs on this machine once approved. */
+  command: string[] | null;
+  /** The definition as listed, which approving binds and nothing else. */
+  definitionHash: string | null;
   /**
    * Consent state for THIS profile: `not-required` (secret-credentialed),
    * `none` (never approved), `stale` (definition changed since approval),
@@ -207,7 +258,7 @@ export interface ProjectAgentsData {
   agents: ProjectAgentInfo[];
   /**
    * The project's committed default agent slug (`defaultAgent` in
-   * `.catamorphic/project.json`), when it declares one.
+   * `.work/project.json`), when it declares one.
    */
   projectDefaultSlug: string | null;
 }
@@ -296,6 +347,10 @@ export function registerIpcHandlers(
   mcpApps?: McpAppsService,
   mobilePairing?: MobilePairingService,
   incognitoSessions?: IncognitoSessionsStore,
+  workspaceLifecycle?: {
+    prepareQuit: () => Promise<void>;
+    forgetProject: (projectId: string) => void;
+  },
 ): void {
   registerGitOverviewSubscriptions({
     resolve: async (input) => {
@@ -303,18 +358,14 @@ export function registerIpcHandlers(
       if (!server) throw new Error("The local server is unavailable.");
       const root = await server.projectRoots.get(input.projectId);
       if (!root) throw new Error("The project folder is unavailable.");
-      const paths =
-        input.paths ??
-        (input.sessionId
-          ? [
-              (
-                await server.sessionCheckouts.describe({
-                  projectId: input.projectId,
-                  sessionId: input.sessionId,
-                })
-              ).path,
-            ]
-          : undefined);
+      const checkout =
+        input.paths === undefined && input.sessionId
+          ? await server.sessionCheckouts.resolve({
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
+          : undefined;
+      const paths = input.paths ?? (checkout ? [checkout] : undefined);
       return { root, paths };
     },
   });
@@ -376,7 +427,6 @@ export function registerIpcHandlers(
       const capabilities = remote?.link.capabilities;
       return projectStartingActions(root, {
         root: !remote,
-        builder: !remote || capabilities?.builder === true,
         permissions: capabilities?.permissions ?? [],
       }).map((action) => ({
         label: action.label,
@@ -427,22 +477,20 @@ export function registerIpcHandlers(
 
   // In-place switch (empty workspace): rebind the window, then the renderer
   // refetches all profile-scoped state under its full-surface fade.
-  ipcMain.handle(
-    "catamorphic:window-set-profile",
-    (event, profileId: string) => {
-      cancelAuthorization(event.sender);
-      windows.assign(event.sender, profileId);
-      return windows.profileFor(event.sender);
-    },
-  );
+  ipcMain.handle("catamorphic:window-set-profile", (event, raw: unknown) => {
+    const profileId = z.string().min(1).max(256).parse(raw);
+    if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+    cancelAuthorization(event.sender);
+    windows.assign(event.sender, profileId);
+    return windows.profileFor(event.sender);
+  });
 
   // Occupied workspace: the profile opens in its own window instead.
-  ipcMain.handle(
-    "catamorphic:open-profile-window",
-    (_event, profileId: string) => {
-      windows.openWindow(profileId);
-    },
-  );
+  ipcMain.handle("catamorphic:open-profile-window", (_event, raw: unknown) => {
+    const profileId = z.string().min(1).max(256).parse(raw);
+    if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+    windows.openWindow(profileId);
+  });
 
   // --- per-profile config (theme, keybindings) ---
 
@@ -526,7 +574,11 @@ export function registerIpcHandlers(
   // windows (same live-reload contract as keybindings).
   ipcMain.handle("catamorphic:prefs-set", (event, patch: unknown) =>
     storesFor(event).prefs.save(
-      typeof patch === "object" && patch !== null ? patch : {},
+      shellSurfaceFor(event.sender) === "voice"
+        ? voiceMenuPrefsPatchSchema.parse(patch)
+        : typeof patch === "object" && patch !== null
+          ? patch
+          : {},
     ),
   );
 
@@ -612,16 +664,6 @@ export function registerIpcHandlers(
     window.focus();
   });
 
-  ipcMain.handle(
-    "catamorphic:window-controls-visible",
-    (event, visible: unknown) => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (process.platform === "darwin" && typeof visible === "boolean") {
-        window?.setWindowButtonVisibility(visible);
-      }
-    },
-  );
-
   const sidebarEdgeWatchers = new Map<number, () => void>();
   ipcMain.handle(
     "catamorphic:sidebar-edge-enabled",
@@ -651,7 +693,7 @@ export function registerIpcHandlers(
   // --- per-profile agents ---
 
   const agentsSnapshot = (store: AgentsStore): AgentsSnapshot => ({
-    agents: store.list().map(toPublicAgent),
+    agents: store.listPublic(),
     defaultAgentId: store.defaultAgentId() ?? null,
     projectDefaults: store.projectDefaults(),
   });
@@ -667,6 +709,8 @@ export function registerIpcHandlers(
         agentsSnapshot(store),
       );
     }
+    // An agent may have turned importing chats from its tool on or off.
+    state.current?.refreshExternalSessions();
     // Chat affordances across all windows key off "any agent configured".
     state.broadcast("catamorphic:server-changed", {
       url: state.current?.url ?? null,
@@ -692,9 +736,36 @@ export function registerIpcHandlers(
     "catamorphic:agents-update",
     (event, id: string, patch: UpdateAgentInput) => {
       const store = storesFor(event).agents;
+      const before = store.getMetadata(id);
       const agent = store.update(id, patch);
       agentsChanged(event, store);
+      // A new key or sign-in mode: chats that failed on the old one run
+      // again, as the auth card promises (ADR 0228).
+      if (
+        agent &&
+        before &&
+        ((typeof patch.apiKey === "string" && patch.apiKey.length > 0) ||
+          agent.auth !== before.auth)
+      )
+        void state.current?.signInRecovery.signedIn(id);
       return agent ? toPublicAgent(agent) : null;
+    },
+  );
+
+  // A chat shows a turn that failed on its agent's sign-in (one from before
+  // this run, say): it runs again once the sign-in works (ADR 0228).
+  ipcMain.handle(
+    "catamorphic:agent-auth-failure-shown",
+    (
+      _event,
+      failure: {
+        projectId: string;
+        sessionId: string;
+        turnId: string;
+        agentId: string;
+      },
+    ) => {
+      state.current?.signInRecovery.failed(failure);
     },
   );
 
@@ -722,7 +793,7 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- project agents (committed .catamorphic/agents/<slug>.json definitions, ADR 0050) ---
+  // --- project agents (committed .work/agents/<slug>.json definitions, ADR 0050) ---
 
   const kindHarness = (kind: string): "ai-sdk" | "claude-code" | "codex" =>
     kind === "claude-code"
@@ -737,11 +808,23 @@ export function registerIpcHandlers(
   ): ProjectAgentInfo => {
     const owning = profileConfig.forProject(projectId);
     const definition = entry.definition;
-    const source = definition?.credentials?.source ?? "profile";
+    // An ACP agent always needs its member's approval (ADR 0241).
+    const source =
+      definition?.kind === "acp"
+        ? "profile"
+        : (definition?.credentials?.source ?? "profile");
+    const hash = definition
+      ? definitionHash(definition, entry.promptFile)
+      : null;
     let consent: ProjectAgentInfo["consent"] = "not-required";
-    if (definition && definition.kind !== "e2e-fake" && source !== "secret") {
-      const binding = owning.agentBindings.get(projectId, entry.slug);
-      const hash = definitionHash(definition, entry.promptFile);
+    // A connection-credentialed agent uses no personal credential (ADR 0180).
+    if (
+      definition &&
+      definition.kind !== "e2e-fake" &&
+      source !== "secret" &&
+      source !== "connection"
+    ) {
+      const binding = owning.agentBindings.getMetadata(projectId, entry.slug);
       consent = !binding
         ? "none"
         : binding.consentHash === hash
@@ -760,7 +843,8 @@ export function registerIpcHandlers(
       description: definition?.description ?? null,
       model: definition?.model ?? null,
       effort: definition?.effort ?? null,
-      mode: definition?.mode ?? null,
+      sandboxing: definition?.sandboxing ?? null,
+      harnessPermissions: definition?.harnessPermissions ?? null,
       coordination: definition?.coordination ?? null,
       memory: definition?.memory ?? null,
       credentialsSource: source,
@@ -772,6 +856,11 @@ export function registerIpcHandlers(
       skills: definition?.skills ?? null,
       delegation: definition?.delegation ?? null,
       promptPreview,
+      command:
+        definition?.kind === "acp" && definition.acp?.command?.length
+          ? definition.acp.command
+          : null,
+      definitionHash: hash,
       consent,
       invalid: entry.invalid?.error ?? null,
     };
@@ -802,7 +891,7 @@ export function registerIpcHandlers(
   );
 
   // The project's committed default (ADR 0056 layer 2): a slug into the
-  // project's own agents/, written to `.catamorphic/project.json` — a
+  // project's own agents/, written to `.work/project.json` — a
   // work product every collaborator receives, not a personal preference.
   ipcMain.handle(
     "catamorphic:project-agents-set-default",
@@ -826,6 +915,8 @@ export function registerIpcHandlers(
       _event,
       projectId: string,
       slug: string,
+      /** The definition the person reviewed (`ProjectAgentInfo.definitionHash`). */
+      reviewedHash: string,
     ): Promise<{ ok: boolean; error?: string }> => {
       const server = state.current;
       if (!server) return { ok: false, error: "Server not running" };
@@ -838,21 +929,40 @@ export function registerIpcHandlers(
         return { ok: false, error: entry?.invalid?.error ?? "Agent not found" };
       }
       const definition = entry.definition;
-      const source = definition.credentials?.source ?? "profile";
-      if (source === "secret") {
-        // Nothing personal to consent to; the secret is the authorization.
+      const hash = definitionHash(definition, entry.promptFile);
+      // Approval binds what the person reviewed: a definition changed since
+      // (a sync, another chat's edit) is reviewed again first.
+      if (hash !== reviewedHash)
+        return {
+          ok: false,
+          error:
+            "This agent's definition changed while you were reviewing it. Review it again before approving.",
+        };
+      const source =
+        definition.kind === "acp"
+          ? "profile"
+          : (definition.credentials?.source ?? "profile");
+      if (source === "secret" || source === "connection") {
+        // Nothing personal to consent to; the secret or the Environment's
+        // model connection is the authorization.
         return { ok: true };
       }
       const owning = profileConfig.forProject(projectId);
       const harness = kindHarness(definition.kind);
       const match = owning.agents
-        .list()
+        .listMetadata()
         .find((agent) => agent.harness === harness);
       let auth: BindingAuth;
-      if (definition.kind === "e2e-fake") {
+      // An ACP agent signs in on its own (ADR 0241): nothing of ours to bind.
+      if (definition.kind === "e2e-fake" || definition.kind === "acp") {
         auth = { mode: "local" };
-      } else if (match?.auth === "api-key" && match.apiKey) {
-        auth = { mode: "api-key", apiKey: match.apiKey };
+      } else if (match?.auth === "api-key") {
+        const key = owning.agents.get(match.id)?.apiKey;
+        if (!key)
+          throw new Error(
+            "This agent's API key is unavailable. Unlock your system keychain or update its key in Settings, then approve again.",
+          );
+        auth = { mode: "api-key", apiKey: key };
       } else if (harness === "ai-sdk") {
         // The built-in harness only speaks API keys; without one on the
         // roster there is nothing safe to bind.
@@ -864,10 +974,7 @@ export function registerIpcHandlers(
       } else {
         auth = { mode: "local" };
       }
-      owning.agentBindings.bind(projectId, slug, {
-        consentHash: definitionHash(definition, entry.promptFile),
-        auth,
-      });
+      owning.agentBindings.bind(projectId, slug, { consentHash: hash, auth });
       return { ok: true };
     },
   );
@@ -889,6 +996,17 @@ export function registerIpcHandlers(
 
   ipcMain.handle("catamorphic:connections-list", (event) =>
     storesFor(event).connections.list().map(toPublicConnection),
+  );
+
+  // A profile's connections for its preview card: read for any profile,
+  // not only the calling window's (ProfileConfigManager.connectionPreviews).
+  ipcMain.handle(
+    "catamorphic:profile-connections",
+    (_event, raw: unknown): ProfileConnection[] => {
+      const profileId = z.string().min(1).max(256).parse(raw);
+      if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+      return profileConfig.connectionPreviews(profileId);
+    },
   );
 
   ipcMain.handle(
@@ -917,15 +1035,16 @@ export function registerIpcHandlers(
 
   // The project's workflow-tools MCP server, listed for the agent-policy
   // editor (which workflows an agent may run). Same endpoint agents mount
-  // per session; the embedded server's URL is local, so no auth rides it.
+  // per session; the embedded server answers this run's token (ADR 0211).
   ipcMain.handle(
     "catamorphic:project-workflow-tools",
     async (_event, projectId: string) => {
-      const base = state.current?.url;
-      if (!base) return [];
+      const server = state.current;
+      if (!server) return [];
       const probe = await probeMcpServer({
         transport: "http",
-        url: `${base}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+        url: `${server.url}/api/projects/${encodeURIComponent(String(projectId))}/mcp`,
+        headers: { [DESKTOP_API_TOKEN_HEADER]: server.apiToken },
       });
       return probe.ok ? (probe.tools ?? []) : [];
     },
@@ -1067,38 +1186,39 @@ export function registerIpcHandlers(
     }
   });
 
+  ipcMain.handle("catamorphic:mcp-apps-view", async (event, input: unknown) => {
+    const server = state.current;
+    if (!server?.mcpAppViews) throw new Error("MCP apps are unavailable");
+    const app = McpAppOpenSchema.parse(input);
+    const view = await server.mcpAppViews.open({
+      ownerId: event.sender.id,
+      profileId: windows.profileFor(event.sender),
+      app,
+    });
+    return { ...view, url: server.mcpAppViewUrl(view.mountId) };
+  });
+
   ipcMain.handle(
-    "catamorphic:mcp-apps-view",
-    async (event, toolKey: string) => {
-      if (!mcpApps) throw new Error("MCP apps are unavailable");
-      const profileId = windows.profileFor(event.sender);
-      const view = await mcpApps.view(profileId, String(toolKey));
-      // The renderer's iframe navigates to the served document (its own
-      // CSP); the embedded server must therefore be up.
-      const base = state.current?.url;
-      if (!base) throw new Error("The embedded server is not ready");
-      const url = new URL("/desktop/mcp-app-view", base);
-      url.searchParams.set("profileId", profileId);
-      url.searchParams.set("toolKey", view.toolKey);
-      return { ...view, url: url.toString() };
+    "catamorphic:mcp-apps-call",
+    async (event, mountId: unknown, toolName: unknown, args: unknown) => {
+      const views = state.current?.mcpAppViews;
+      if (!views) throw new Error("MCP apps are unavailable");
+      const call = z
+        .object({
+          mountId: z.string().min(1),
+          toolName: z.string().min(1),
+          args: z.record(z.string(), z.unknown()),
+        })
+        .parse({ mountId, toolName, args });
+      return views.call({ ownerId: event.sender.id, ...call });
     },
   );
 
   ipcMain.handle(
-    "catamorphic:mcp-apps-call",
-    async (
-      event,
-      viewToolKey: string,
-      toolName: string,
-      args: Record<string, unknown>,
-    ) => {
-      if (!mcpApps) throw new Error("MCP apps are unavailable");
-      return mcpApps.callTool(
-        windows.profileFor(event.sender),
-        String(viewToolKey),
-        String(toolName),
-        args ?? {},
-      );
+    "catamorphic:mcp-apps-close",
+    async (event, mountId: unknown) => {
+      if (typeof mountId !== "string") return;
+      state.current?.mcpAppViews?.close({ ownerId: event.sender.id, mountId });
     },
   );
 
@@ -1113,11 +1233,15 @@ export function registerIpcHandlers(
   // already have a Claude Code / Codex login the `local` auth mode can
   // inherit? (E2E reports both present so wizard flows stay scripted.)
   ipcMain.handle("catamorphic:agent-setup-status", () => {
+    // Hermes (ADR 0241): the person's own install, where its agent will
+    // look for it.
+    const hermes = findOnAgentPath(HERMES.command[0]);
     if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
-      return { claudeCode: true, codex: true };
+      return { claudeCode: true, codex: true, hermes };
     }
     const home = app.getPath("home");
     return {
+      hermes,
       claudeCode: [
         path.join(home, ".claude", ".credentials.json"),
         path.join(home, ".claude.json"),
@@ -1126,12 +1250,28 @@ export function registerIpcHandlers(
     };
   });
 
+  // Which Claude Code runs (ADR 0196): the person's own install when it is
+  // new enough, else Work's pinned copy. Updating runs the install's own
+  // updater, only when the person presses Update.
+  ipcMain.handle("catamorphic:claude-code-status", () =>
+    state.current?.agentRegistry
+      ? state.current.agentRegistry.claudeCodeStatus()
+      : null,
+  );
+  ipcMain.handle("catamorphic:claude-code-update", async () => {
+    const registry = state.current?.agentRegistry;
+    if (!registry) throw new Error("Work is still starting.");
+    return registry.updateInstalledClaudeCode();
+  });
+
   // Supported models for one agent, resolved live per harness (Claude
   // Code's own catalog, Codex app-server `model/list`, provider /v1/models).
   ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {
     try {
-      let agent: ModelCatalogAgent | undefined =
-        storesFor(event).agents.get(id);
+      // An assistant lists its agent's models (ADR 0216).
+      let agent: ModelCatalogAgent | undefined = storesFor(event).agents.get(
+        rosterAgentId(id),
+      );
       const ref = parseProjectAgentId(id);
       if (!agent && ref && state.current) {
         const entries =
@@ -1175,7 +1315,9 @@ export function registerIpcHandlers(
       return {
         models: [],
         error:
-          "Could not load models. Check the agent’s sign-in and try again.",
+          cause instanceof CredentialStorageError
+            ? cause.message
+            : "Could not load models. Check the agent’s sign-in and try again.",
       };
     }
   });
@@ -1191,101 +1333,35 @@ export function registerIpcHandlers(
   };
 
   /**
-   * On macOS, Claude Code's default (~/.claude) login stores its OAuth
-   * credentials in the KEYCHAIN — there is no .credentials.json to stat.
-   * The fingerprint doubles as a change detector: the terminal /login flow
+   * Where an agent's CLI credentials live (`agent-credentials.ts`). The
+   * fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
    */
-  // Focus/wake/login probes cluster, and the 2s login watcher must still
-  // observe fresh credentials within a beat — so the keychain answer is
-  // held for 3s, never longer.
-  let keychainCache: { at: number; value: string | null } | null = null;
-  const claudeKeychainRaw = async (): Promise<string | null> => {
-    if (process.platform !== "darwin") return null;
-    if (keychainCache && Date.now() - keychainCache.at < 3000) {
-      return keychainCache.value;
-    }
-    let value: string | null;
-    try {
-      const { stdout } = await execFileAsync("security", [
-        "find-generic-password",
-        "-s",
-        "Claude Code-credentials",
-        "-w",
-      ]);
-      value = stdout;
-    } catch {
-      value = null;
-    }
-    keychainCache = { at: Date.now(), value };
-    return value;
-  };
-
-  const claudeKeychainFingerprint = (raw: string): string => {
-    try {
-      const oauth = (
-        JSON.parse(raw) as { claudeAiOauth?: { expiresAt?: number } }
-      ).claudeAiOauth;
-      return `keychain:${oauth?.expiresAt ?? raw.length}`;
-    } catch {
-      return `keychain:${raw.length}`;
-    }
-  };
-
-  /**
-   * Where an agent's CLI credentials live: presence, a change
-   * fingerprint, and the raw credential content (for the health probe).
-   */
-  const agentCredentials = async (agent: {
+  const agentCredentials = (agent: {
     harness: string;
     auth: string;
     id: string;
-  }): Promise<{
-    present: boolean;
-    fingerprint: string;
-    raw: string | null;
-  }> => {
-    const home =
-      agent.auth === "local"
-        ? agent.harness === "codex"
-          ? path.join(app.getPath("home"), ".codex")
-          : path.join(app.getPath("home"), ".claude")
-        : path.join(paths.agentHomesDir, agent.id);
-    const file =
-      agent.harness === "codex"
-        ? path.join(home, "auth.json")
-        : path.join(home, ".credentials.json");
-    try {
-      const stat = fs.statSync(file);
-      return {
-        present: true,
-        fingerprint: `file:${stat.mtimeMs}:${stat.size}`,
-        raw: fs.readFileSync(file, "utf-8"),
-      };
-    } catch {
-      // No file — the macOS keychain is the other place Claude Code keeps
-      // the default account's session.
-      if (agent.harness !== "codex" && agent.auth === "local") {
-        const raw = await claudeKeychainRaw();
-        if (raw !== null) {
-          return {
-            present: true,
-            fingerprint: claudeKeychainFingerprint(raw),
-            raw,
-          };
-        }
-      }
-      return { present: false, fingerprint: "absent", raw: null };
-    }
-  };
+  }) =>
+    readAgentCredentials(agent, {
+      homeDir: app.getPath("home"),
+      agentHomesDir: paths.agentHomesDir,
+    });
 
   ipcMain.handle(
     "catamorphic:agent-login-status",
     async (event, id: string) => {
-      const agent = storesFor(event).agents.get(id);
+      const store = storesFor(event).agents;
+      const agent = store.getMetadata(id);
       if (!agent) return false;
+      // An ACP agent signs in on its own (ADR 0241); Work never sees it.
+      if (agent.harness === "acp") return true;
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
-        return agent.apiKey !== null;
+        try {
+          return store.get(id)?.apiKey != null;
+        } catch (cause) {
+          if (cause instanceof CredentialStorageError) return false;
+          throw cause;
+        }
       }
       return (await agentCredentials(agent)).present;
     },
@@ -1297,7 +1373,8 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:agent-auth-health",
     async (event, id: string): Promise<AgentAuthHealthReport> => {
-      const agent = storesFor(event).agents.get(id);
+      const store = storesFor(event).agents;
+      const agent = store.getMetadata(id);
       // Single authority on the one-click re-login offer: `account`
       // logins (agent-scoped CLI home, incl. OpenRouter PKCE) and
       // `local` claude-code/codex logins (the machine's own CLI
@@ -1316,8 +1393,18 @@ export function registerIpcHandlers(
         return { health: forced, reauth: agent === undefined ? true : reauth };
       }
       if (!agent) return { health: "missing", reauth };
+      if (agent.harness === "acp") return { health: "ok", reauth };
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
-        return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
+        try {
+          return {
+            health: store.get(id)?.apiKey != null ? "ok" : "missing",
+            reauth,
+          };
+        } catch (cause) {
+          if (cause instanceof CredentialStorageError)
+            return { health: "missing", reauth };
+          throw cause;
+        }
       }
       const credentials = await agentCredentials(agent);
       if (agent.harness === "codex") {
@@ -1356,12 +1443,10 @@ export function registerIpcHandlers(
         const server = state.current;
         if (!server) throw new Error("The project server is not ready.");
         const workingDirectory = input.sessionId
-          ? (
-              await server.sessionCheckouts.describe({
-                projectId: input.projectId,
-                sessionId: input.sessionId,
-              })
-            ).path
+          ? await server.sessionCheckouts.resolve({
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
           : await server.projectRoots.get(input.projectId);
         if (!workingDirectory)
           throw new Error("The project folder is unavailable.");
@@ -1369,15 +1454,60 @@ export function registerIpcHandlers(
           ...input,
           workingDirectory,
         });
-      } catch {
+      } catch (cause) {
         return {
           commands: [],
           error:
-            "Could not load agent commands. Check the agent configuration and skill files, then retry.",
+            cause instanceof CredentialStorageError
+              ? cause.message
+              : "Could not load agent commands. Check the agent configuration and skill files, then retry.",
         };
       }
     },
   );
+
+  ipcMain.handle(
+    "catamorphic:agent-default-model",
+    async (
+      _event,
+      input: { projectId: string; agentId: string; sessionId?: string },
+    ): Promise<AgentDefaultModelResult> => {
+      try {
+        const server = state.current;
+        if (!server) throw new Error("The project server is not ready.");
+        const workingDirectory = input.sessionId
+          ? await server.sessionCheckouts.resolve({
+              projectId: input.projectId,
+              sessionId: input.sessionId,
+            })
+          : await server.projectRoots.get(input.projectId);
+        if (!workingDirectory)
+          throw new Error("The project folder is unavailable.");
+        return await server.agentRegistry.defaultModel({
+          projectId: input.projectId,
+          agentId: input.agentId,
+          workingDirectory,
+        });
+      } catch (cause) {
+        return {
+          model: null,
+          error:
+            cause instanceof CredentialStorageError
+              ? cause.message
+              : "Could not ask the agent which model it uses by default.",
+        };
+      }
+    },
+  );
+
+  /**
+   * A sign-in Work ran finished: windows hear it, and on success the chats
+   * that failed on that agent's sign-in run again (ADR 0228).
+   */
+  const loginFinished = (agentId: string, ok: boolean) => {
+    state.broadcast("catamorphic:agent-login-finished", { agentId, ok });
+    if (ok) void state.current?.signInRecovery.signedIn(agentId);
+  };
 
   // One watcher per agent: a repeated login replaces the previous poll.
   const loginWatchers = new Map<string, ReturnType<typeof setInterval>>();
@@ -1411,10 +1541,7 @@ export function registerIpcHandlers(
         if (!now.present || now.fingerprint === (await before)) return;
         clearInterval(timer);
         loginWatchers.delete(agent.id);
-        state.broadcast("catamorphic:agent-login-finished", {
-          agentId: agent.id,
-          ok: true,
-        });
+        loginFinished(agent.id, true);
       })().finally(() => {
         probing = false;
       });
@@ -1449,9 +1576,17 @@ export function registerIpcHandlers(
 
   ipcMain.handle("catamorphic:agent-login", async (event, id: string) => {
     const store = storesFor(event).agents;
-    const agent = store.get(id);
+    const agent = store.getMetadata(id);
     if (agent === undefined || agent.auth === "api-key") {
       return { started: false, error: "This agent authenticates with a key" };
+    }
+    // An ACP agent signs in on its own (ADR 0241), never through Work.
+    if (agent.harness === "acp") {
+      return {
+        started: false,
+        error:
+          "This agent signs in on its own. Change its sign-in in the agent itself.",
+      };
     }
 
     // E2E: logins would open browsers/terminals — stamp a fake credential
@@ -1468,10 +1603,7 @@ export function registerIpcHandlers(
       // wizard registers the pending agent) before completion lands —
       // real logins always take longer than the invoke round-trip.
       setTimeout(() => {
-        state.broadcast("catamorphic:agent-login-finished", {
-          agentId: id,
-          ok: true,
-        });
+        loginFinished(id, true);
       }, 50);
       return { started: true };
     }
@@ -1490,17 +1622,11 @@ export function registerIpcHandlers(
         .then((key) => {
           store.update(id, { apiKey: key });
           agentsChanged(event, store);
-          state.broadcast("catamorphic:agent-login-finished", {
-            agentId: id,
-            ok: true,
-          });
+          loginFinished(id, true);
         })
         .catch((cause) => {
           console.warn("[desktop] OpenRouter sign-in failed:", cause);
-          state.broadcast("catamorphic:agent-login-finished", {
-            agentId: id,
-            ok: false,
-          });
+          loginFinished(id, false);
         });
       return { started: true };
     }
@@ -1542,10 +1668,7 @@ export function registerIpcHandlers(
       child.stdout.on("data", watchForUrl);
       child.stderr.on("data", watchForUrl);
       child.on("exit", (code) => {
-        state.broadcast("catamorphic:agent-login-finished", {
-          agentId: id,
-          ok: code === 0,
-        });
+        loginFinished(id, code === 0);
       });
       return { started: true };
     }
@@ -1603,14 +1726,25 @@ export function registerIpcHandlers(
     // What Electron's autoUpdater.quitAndInstall does before installing:
     // announce the update quit, then close every window. The e2e suite
     // proves the app really exits from there (hide-on-close must yield).
-    ipcMain.handle("catamorphic:dev-update-restart", () => {
-      autoUpdater.emit("before-quit-for-update");
-      // Electron quits once the last window has closed (macOS keeps the
-      // app alive otherwise); the installer's terminate stands in for it.
-      app.once("window-all-closed", () => app.quit());
-      for (const window of BrowserWindow.getAllWindows()) window.close();
-      return true;
-    });
+    ipcMain.handle(
+      "catamorphic:dev-update-restart",
+      async (_event, options?: { abort?: boolean }) => {
+        await workspaceLifecycle?.prepareQuit();
+        autoUpdater.emit("before-quit-for-update");
+        if (options?.abort) {
+          autoUpdater.emit(
+            "error",
+            new Error("Simulated update restart failure"),
+          );
+          return true;
+        }
+        // Electron quits once the last window has closed (macOS keeps the
+        // app alive otherwise); the installer's terminate stands in for it.
+        app.once("window-all-closed", () => app.quit());
+        for (const window of BrowserWindow.getAllWindows()) window.close();
+        return true;
+      },
+    );
     ipcMain.handle(
       "catamorphic:dev-window",
       (
@@ -1621,14 +1755,34 @@ export function registerIpcHandlers(
           | "minimize"
           | "restore"
           | "setSize"
+          | "zoom"
+          | "focus"
+          | "quit"
           | "get",
         width?: number,
         height?: number,
       ) => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window) return null;
+        if (action === "quit") {
+          // The native menu's lifecycle, including a cancelled beforeunload.
+          setImmediate(() => app.quit());
+          return null;
+        }
         if (action === "get") {
           // Read-only: geometry as the OS reports it (window-state tests).
+        } else if (action === "focus") {
+          // The key window, as a person working in it has: a native click on
+          // a window that is not key only activates it (macOS).
+          if (!window.isFocused()) {
+            // Elsewhere app.focus() focuses whichever window comes first.
+            if (process.platform === "darwin") app.focus({ steal: true });
+            window.focus();
+          }
+        } else if (action === "zoom") {
+          // Films on a 1x display: a 1680x1050 window zoomed by 1.3125 lays
+          // out at 1280x800 and renders, and screencasts, at 1680x1050.
+          event.sender.setZoomFactor(width ?? 1);
         } else if (action === "setSize") {
           if (width && height) {
             if (window.isMaximized()) window.unmaximize();
@@ -1638,6 +1792,16 @@ export function registerIpcHandlers(
           window[action]();
         }
         const bounds = window.getBounds();
+        // What macOS draws, through Electron's own test accessor; null
+        // where the OS frame owns the buttons.
+        const buttonsGetter: unknown = Reflect.get(
+          window,
+          "_getWindowButtonVisibility",
+        );
+        const windowButtons: unknown =
+          process.platform === "darwin" && typeof buttonsGetter === "function"
+            ? Reflect.apply(buttonsGetter, window, [])
+            : null;
         return {
           ...bounds,
           contentBounds: window.getContentBounds(),
@@ -1646,6 +1810,8 @@ export function registerIpcHandlers(
           focused: window.isFocused(),
           focusable: window.isFocusable(),
           opacity: window.getOpacity(),
+          windowButtons:
+            typeof windowButtons === "boolean" ? windowButtons : null,
         };
       },
     );
@@ -1851,7 +2017,7 @@ export function registerIpcHandlers(
     const me = await client.me();
     const project = me.projects.find((p) => p.projectId === remoteProjectId);
     return {
-      builder: me.identity.root || (project?.builder ?? false),
+      name: project?.name,
       source: project?.source ?? null,
       permissions: me.identity.root
         ? [...ROOT_REMOTE_PROJECT_PERMISSIONS]
@@ -1859,6 +2025,10 @@ export function registerIpcHandlers(
       agents: project?.agents ?? [],
       documents: project?.documents ?? [],
       roles: project?.roles ?? [],
+      administrator:
+        me.identity.root ||
+        (me.identity.controlPlanePermissions?.includes("connections:write") ??
+          false),
       features: me.features,
     };
   };
@@ -1899,38 +2069,48 @@ export function registerIpcHandlers(
     if (!rootPath) throw new Error("Project folder not found");
     return rootPath;
   };
+  // The person's own GitHub connection reads the exact repository first; a
+  // missing or narrower one gets one chance to adopt the `gh` CLI's
+  // credential as that connection (ADR 0073), checked against the same
+  // repository before it is stored.
   const ensureGithubRepositoryAccess = async (
     server: EmbeddedServer,
     fullName: string,
     allowCli: boolean,
   ) => {
-    const github = server.catamorphic.core.github;
-    if (!github) {
-      throw new Error(`[github-required] Connect GitHub to clone ${fullName}.`);
-    }
+    const core = server.catamorphic.core;
     try {
-      await github.repository(identity, fullName);
+      await core.codeHosts.repository({
+        identity,
+        provider: server.github.kind,
+        fullName,
+      });
       return;
     } catch {
-      // A missing, stale, or narrower stored credential gets one chance to
-      // use the local GitHub CLI as a credential source.
+      // Not connected, expired, or no access to this repository.
     }
     const cliToken = allowCli ? await githubCliToken() : null;
-    if (cliToken) {
+    if (cliToken && core.connections) {
       try {
-        await github.connectForRepository(
+        await new GithubApi(cliToken, {
+          signal: AbortSignal.timeout(30_000),
+        }).getRepo(fullName);
+        await core.connections.savePersonal({
           identity,
-          {
-            accessToken: cliToken,
-            expiresAt: null,
-            refreshToken: null,
-            refreshTokenExpiresAt: null,
-          },
-          fullName,
-        );
+          providerKind: server.github.kind,
+          label: "GitHub (GitHub CLI)",
+          authorized: await server.github.authorizeUser({
+            tokens: {
+              accessToken: cliToken,
+              expiresAt: null,
+              refreshToken: null,
+              refreshTokenExpiresAt: null,
+            },
+          }),
+        });
         return;
       } catch {
-        // The shared GitHub API rejected this credential for the exact repo.
+        // GitHub rejected this credential for the exact repository.
       }
     }
     throw new Error(
@@ -1980,7 +2160,7 @@ export function registerIpcHandlers(
       const githubFullName = capabilities.source?.remoteUrl
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
-      const builderCheckout = Boolean(capabilities.builder && githubFullName);
+      const builderCheckout = isBuilderCheckout(capabilities);
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
@@ -1999,19 +2179,21 @@ export function registerIpcHandlers(
               githubFullName,
               storesFor(event).prefs.load().githubCliEnabled,
             );
-            const github = server.catamorphic.core.github;
-            if (!github) throw new Error("GitHub integration not configured");
-            return github.importRepo(identity, {
+            return server.catamorphic.core.codeHosts.importRepository({
+              identity,
+              provider: server.github.kind,
               id,
               fullName: githubFullName,
-              name: input.name,
+              name: capabilities.name ?? input.name,
               rootPath,
             });
           }
+          // The server's name, not the link's: a bare link carries none.
           return server.catamorphic.core.projects.create(identity, {
             id,
-            name: input.name,
+            name: capabilities.name ?? input.name,
             rootPath,
+            empty: true,
           });
         },
       });
@@ -2021,7 +2203,7 @@ export function registerIpcHandlers(
         connectionId: crypto.randomUUID(),
         serverUrl,
         remoteProjectId: input.remoteProjectId,
-        remoteProjectName: input.name,
+        remoteProjectName: capabilities.name ?? input.name,
         lastSyncAt: null,
       };
       writeRemoteProjectLocator(input.rootPath, remoteLink);
@@ -2067,6 +2249,30 @@ export function registerIpcHandlers(
       : null;
   });
 
+  // A remote chat's preview (ADR 0209): its own loopback address, which
+  // the browser tab opens and this desktop forwards as the member.
+  ipcMain.handle(
+    "catamorphic:remote-preview-open",
+    async (
+      event,
+      input: { projectId: string; sessionId: string; port: number },
+    ) => {
+      if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)
+        throw new Error("A port is a number from 1 to 65535");
+      if (!storesFor(event).remoteProjects.inspect(input.projectId))
+        throw new Error("This project has no server");
+      const server = state.current;
+      if (!server) throw new Error("The workspace is still starting");
+      return {
+        url: await server.openRemotePreview({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          port: input.port,
+        }),
+      };
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:remote-status",
     async (event, projectId: string) => {
@@ -2102,6 +2308,13 @@ export function registerIpcHandlers(
     },
   );
 
+  /** A folder joined as a git checkout of the project's repository. */
+  const joinedAsCheckout = (projectId: string): boolean => {
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    return !server.projectRoots.checkpointsEnabled(projectId);
+  };
+
   ipcMain.handle(
     "catamorphic:remote-sync",
     async (event, projectId: string) => {
@@ -2109,16 +2322,20 @@ export function registerIpcHandlers(
       const rootPath = await requireRoot(projectId);
       const client = storedRemoteClient(event, projectId, link);
       const capabilities = await introspect(client, link.remoteProjectId);
+      // A builder's GitHub checkout gets its program through git; every
+      // other folder, an admin's included, syncs program files here. The
+      // folder's kind was fixed when it joined, whatever roles say now.
+      const builderCheckout = joinedAsCheckout(projectId);
       const report = await syncRemoteProject(
         rootPath,
-        capabilities.builder ? storeOnlyDocumentsClient(client) : client,
+        builderCheckout ? storeOnlyDocumentsClient(client) : client,
       );
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
         capabilities,
       );
-      if (!capabilities.builder) {
+      if (!builderCheckout) {
         await checkpointProgramSync(projectId, report);
       }
       notifyGitChanged(projectId);
@@ -2227,6 +2444,48 @@ export function registerIpcHandlers(
     },
   );
 
+  // Program files leave the folder only as a proposal or, for members who
+  // may publish the program, a deploy (ADR 0055).
+  const readProgramChanges = (rootPath: string, paths: unknown) => {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 200)
+      throw new Error("Choose the project files to share");
+    const selected = [
+      ...new Set(paths.map((entry) => normalizeDocumentPath(String(entry)))),
+    ];
+    const root = fs.realpathSync(rootPath);
+    return selected.map((relative) => {
+      if (isPersonalFile(relative) || isProjectDataPath(relative))
+        throw new Error(
+          "Choose project files to share. Personal files must be prepared for sharing first.",
+        );
+      const absolute = fs.realpathSync(path.join(root, relative));
+      const contained = path.relative(root, absolute);
+      const canonical = contained.split(path.sep).join("/");
+      if (
+        isPersonalFile(canonical) ||
+        canonical === ".git" ||
+        canonical.startsWith(".git/") ||
+        isProjectDataPath(canonical)
+      )
+        throw new Error(
+          "Shared project changes cannot include a link to personal files, the store, or repository internals",
+        );
+      if (contained.startsWith("..") || path.isAbsolute(contained))
+        throw new Error("Project files must be inside the project folder");
+      if (
+        !fs.statSync(absolute).isFile() ||
+        fs.statSync(absolute).size > 1024 * 1024
+      )
+        throw new Error("Only text files up to 1 MB each can be shared");
+      return {
+        path: relative,
+        content: new TextDecoder("utf-8", { fatal: true }).decode(
+          fs.readFileSync(absolute),
+        ),
+      };
+    });
+  };
+
   // Propose (ADR 0055): the folder's edits to program files become a
   // branch/PR on the member's behalf.
   ipcMain.handle(
@@ -2241,47 +2500,10 @@ export function registerIpcHandlers(
       },
     ) => {
       const link = requireLink(event, input.projectId);
-      const rootPath = await requireRoot(input.projectId);
-      if (
-        !Array.isArray(input.paths) ||
-        input.paths.length === 0 ||
-        input.paths.length > 200
-      ) {
-        throw new Error("Choose the files to include in your proposal");
-      }
-      const selected = [...new Set(input.paths.map(normalizeDocumentPath))];
-      const root = fs.realpathSync(rootPath);
-      const changes = selected.map((relative) => {
-        if (isPersonalFile(relative) || isProjectDataPath(relative))
-          throw new Error(
-            "Choose project files for this proposal. Personal files must be prepared for sharing first.",
-          );
-        const absolute = fs.realpathSync(path.join(root, relative));
-        const contained = path.relative(root, absolute);
-        const canonical = contained.split(path.sep).join("/");
-        if (
-          isPersonalFile(canonical) ||
-          canonical === ".git" ||
-          canonical.startsWith(".git/") ||
-          isProjectDataPath(canonical)
-        )
-          throw new Error(
-            "A proposal cannot include a link to personal files, the store, or repository internals",
-          );
-        if (contained.startsWith("..") || path.isAbsolute(contained))
-          throw new Error("Proposal files must be inside the project folder");
-        if (
-          !fs.statSync(absolute).isFile() ||
-          fs.statSync(absolute).size > 1024 * 1024
-        )
-          throw new Error("Proposals support text files up to 1 MB each");
-        return {
-          path: relative,
-          content: new TextDecoder("utf-8", { fatal: true }).decode(
-            fs.readFileSync(absolute),
-          ),
-        };
-      });
+      const changes = readProgramChanges(
+        await requireRoot(input.projectId),
+        input.paths,
+      );
       return storedRemoteClient(event, input.projectId, link).propose({
         title: input.title,
         ...(input.body ? { body: input.body } : {}),
@@ -2290,9 +2512,50 @@ export function registerIpcHandlers(
     },
   );
 
+  // A member holding `program:publish` ships the folder's program edits
+  // directly; the server still guards role files and attached repositories.
+  ipcMain.handle(
+    "catamorphic:remote-publish-program",
+    async (
+      event,
+      input: { projectId: string; message: string; paths: string[] },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      const rootPath = await requireRoot(input.projectId);
+      const client = storedRemoteClient(event, input.projectId, link);
+      // Download first: a file someone else published since this folder's
+      // last sync must be reconciled here, never overwritten by a publish.
+      if (joinedAsCheckout(input.projectId))
+        throw new Error(
+          "This folder is a checkout of the project's repository. Commit and open a pull request instead.",
+        );
+      try {
+        return await publishProgramFromFolder({
+          root: rootPath,
+          client,
+          message: input.message,
+          paths: input.paths,
+          readChanges: () => readProgramChanges(rootPath, input.paths),
+        });
+      } finally {
+        notifyGitChanged(input.projectId);
+      }
+    },
+  );
+
   ipcMain.handle(
     "catamorphic:remote-disconnect",
     async (event, projectId: string) => {
+      // Leaving a server takes the member's private files with them (ADR
+      // 0184). Best effort: an unreachable server keeps its sealed copies.
+      const linked = storesFor(event).remoteProjects.get(projectId);
+      if (linked?.credentials)
+        await Promise.race([
+          storedRemoteClient(event, projectId, linked)
+            .deletePersonalEnvironment()
+            .catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, 5_000)),
+        ]);
       storesFor(event).remoteProjects.delete(projectId);
       const rootPath = await requireRoot(projectId);
       fs.rmSync(path.join(rootPath, REMOTE_PROJECT_LOCATOR_PATH), {
@@ -2398,22 +2661,313 @@ export function registerIpcHandlers(
     },
   );
 
+  // Project secrets (ADR 0206): every member reads them and sets their own
+  // value; the people listing members need `memberships:read`.
   ipcMain.handle(
-    "catamorphic:project-delete",
-    async (_event, input: { projectId: string; trashFolder?: boolean }) => {
-      const server = state.current;
-      if (!server) throw new Error("Server not running");
-      const rootPath = await server.projectRoots.get(input.projectId);
-      // Trash first: a failed trash should leave the project intact rather
-      // than half-deleted, and after the row is gone we lose the path.
-      if (input.trashFolder && rootPath) {
-        await shell.trashItem(rootPath);
-      }
-      await server.catamorphic.core.projects.delete(identity, input.projectId);
-      await server.projectRoots.delete(input.projectId);
-      await server.workspaceStates.delete(input.projectId);
+    "catamorphic:remote-secrets",
+    async (event, input: { projectId: string; members: boolean }) => {
+      const link = requireLink(event, input.projectId);
+      const client = storedRemoteClient(event, input.projectId, link);
+      const [secrets, members] = await Promise.all([
+        client.listSecrets(),
+        input.members ? client.listMembers() : Promise.resolve(null),
+      ]);
+      return { secrets, members };
     },
   );
+
+  ipcMain.handle(
+    "catamorphic:remote-secret-set",
+    async (
+      event,
+      input: {
+        projectId: string;
+        name: string;
+        value: string;
+        member?: string;
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).setSecret({
+        name: input.name,
+        value: input.value,
+        ...(input.member ? { member: input.member } : {}),
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-secret-delete",
+    async (
+      event,
+      input: { projectId: string; name: string; member?: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).deleteSecret({
+        name: input.name,
+        ...(input.member ? { member: input.member } : {}),
+      });
+    },
+  );
+
+  // The member's own machines on the project's server and Codex sign-ins
+  // there (ADR 0213). Codex's device code login runs on the machine, so
+  // only the one-time code passes through here.
+  const machinesRequest = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) =>
+    remoteMachinesRequest({
+      profiles: { forProject: () => storesFor(event) },
+      projectId,
+    });
+  ipcMain.handle("catamorphic:remote-machines", (event, projectId: string) =>
+    listRemoteMachines({ request: machinesRequest(event, projectId) }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in",
+    (event, input: { projectId: string; machineId: string }) =>
+      beginCodexSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in-status",
+    (event, input: { projectId: string; machineId: string; attempt: string }) =>
+      codexSignInStatus({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        attempt: input.attempt,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in-cancel",
+    (event, input: { projectId: string; machineId: string; attempt: string }) =>
+      cancelCodexSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        attempt: input.attempt,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-out",
+    (event, input: { projectId: string; machineId: string }) =>
+      signOutOfCodex({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+      }),
+  );
+  // The device code page opens in a browser tab of the asking window, as
+  // the project's own sign-in page does.
+  ipcMain.handle("catamorphic:open-sign-in-link", (event, url: string) => {
+    if (!URL.canParse(url) || new URL(url).protocol !== "https:")
+      throw new Error("A sign-in link starts with https://");
+    openWorkspaceUrl(event.sender, url);
+  });
+
+  // Organization service connections (ADR 0172), reached through any
+  // project linked to the server; the server refuses non-administrators.
+  ipcMain.handle(
+    "catamorphic:remote-service-connections",
+    async (event, projectId: string) => {
+      const link = requireLink(event, projectId);
+      const client = storedRemoteClient(event, projectId, link);
+      const [providers, connections] = await Promise.all([
+        client.listConnectionProviders(),
+        client.listServiceConnections(),
+      ]);
+      return {
+        providers,
+        connections: connections.filter(
+          (connection) => connection.principalKind === "tenant_service",
+        ),
+      };
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-create",
+    async (
+      event,
+      input: { projectId: string; name: string; providerKind: string },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      return storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).createServiceConnection({
+        name: input.name,
+        providerKind: input.providerKind,
+      });
+    },
+  );
+
+  // A url or device challenge opens as a browser tab in the asking window;
+  // the server's own callback finishes a url sign-in.
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-authorize",
+    async (event, input: { projectId: string; connectionId: string }) => {
+      const link = requireLink(event, input.projectId);
+      const result = await storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).authorizeServiceConnection(input.connectionId);
+      if (result.challenge.kind === "url") {
+        openWorkspaceUrl(event.sender, result.challenge.url);
+      } else if (result.challenge.kind === "device") {
+        openWorkspaceUrl(event.sender, result.challenge.verificationUrl);
+      }
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-complete",
+    async (
+      event,
+      input: {
+        projectId: string;
+        authorizationId: string;
+        callback: Record<string, string>;
+      },
+    ) => {
+      const link = requireLink(event, input.projectId);
+      return storedRemoteClient(
+        event,
+        input.projectId,
+        link,
+      ).completeConnectionAuthorization({
+        authorizationId: input.authorizationId,
+        callback: input.callback,
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:remote-service-connection-revoke",
+    async (event, input: { projectId: string; connectionId: string }) => {
+      const link = requireLink(event, input.projectId);
+      await storedRemoteClient(event, input.projectId, link).revokeConnection(
+        input.connectionId,
+      );
+    },
+  );
+
+  // Remote environment (ADR 0184): the member's own sign-ins and listed
+  // files for their sessions on the linked server. Edits change
+  // `.work/personal/environment.json`, then send at once.
+  const personalEnvironment = () => {
+    const service = state.current?.personalEnvironment;
+    if (!service) throw new Error("The local server is starting");
+    return service;
+  };
+  const personalEnvironmentTarget = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) => {
+    requireLink(event, projectId);
+    return { profileId: windows.profileFor(event.sender), projectId };
+  };
+  const editPersonalEnvironment = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    update: (config: PersonalEnvironmentConfig) => PersonalEnvironmentConfig,
+  ) => {
+    const target = personalEnvironmentTarget(event, projectId);
+    await updatePersonalEnvironmentConfig({
+      root: await requireRoot(projectId),
+      update,
+    });
+    return personalEnvironment().syncNow(target);
+  };
+  ipcMain.handle(
+    "catamorphic:personal-environment",
+    (event, projectId: string): Promise<PersonalEnvironmentView> =>
+      personalEnvironment().view(personalEnvironmentTarget(event, projectId)),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-sync",
+    (event, projectId: string): Promise<PersonalEnvironmentView> =>
+      personalEnvironment().syncNow(
+        personalEnvironmentTarget(event, projectId),
+      ),
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-add-files",
+    async (
+      event,
+      projectId: string,
+    ): Promise<PersonalEnvironmentView | null> => {
+      personalEnvironmentTarget(event, projectId);
+      const root = await requireRoot(projectId);
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window) return null;
+      const picked = await dialog.showOpenDialog(window, {
+        title: "Add files to your remote environment",
+        buttonLabel: "Add",
+        defaultPath: root,
+        properties: ["openFile", "multiSelections", "showHiddenFiles"],
+      });
+      if (picked.canceled || picked.filePaths.length === 0) return null;
+      const paths: string[] = [];
+      for (const absolute of picked.filePaths)
+        paths.push(await projectRelativePath({ root, absolute }));
+      return editPersonalEnvironment(event, projectId, (config) => ({
+        ...config,
+        files: [...new Set([...config.files, ...paths])],
+      }));
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:personal-environment-remove-file",
+    (
+      event,
+      input: { projectId: string; path: string },
+    ): Promise<PersonalEnvironmentView> =>
+      editPersonalEnvironment(event, input.projectId, (config) => ({
+        ...config,
+        files: config.files.filter((file) => file !== input.path),
+      })),
+  );
+  // Creates the file with its defaults so the editor has something to open.
+  ipcMain.handle(
+    "catamorphic:personal-environment-config-file",
+    async (event, projectId: string): Promise<string> => {
+      personalEnvironmentTarget(event, projectId);
+      await ensurePersonalEnvironmentConfig({
+        root: await requireRoot(projectId),
+      });
+      return PERSONAL_ENVIRONMENT_PATH;
+    },
+  );
+
+  ipcMain.handle("catamorphic:project-delete", async (_event, raw: unknown) => {
+    const input = z
+      .object({
+        projectId: z.string().min(1),
+        trashFolder: z.boolean().optional(),
+      })
+      .parse(raw);
+    const server = state.current;
+    if (!server) throw new Error("Server not running");
+    const rootPath = await server.projectRoots.get(input.projectId);
+    // Trash first: a failed trash should leave the project intact rather
+    // than half-deleted, and after the row is gone we lose the path.
+    if (input.trashFolder && rootPath) {
+      await shell.trashItem(rootPath);
+    }
+    await server.catamorphic.core.projects.delete(identity, input.projectId);
+    workspaceLifecycle?.forgetProject(input.projectId);
+    await server.projectRoots.delete(input.projectId);
+    await server.workspaceStates.delete(input.projectId);
+    await removeComposerFiles({
+      attachmentsDir: paths.attachmentsDir,
+      projectId: input.projectId,
+    });
+  });
 
   ipcMain.handle(
     "catamorphic:project-root",
@@ -2449,29 +3003,66 @@ export function registerIpcHandlers(
     },
   );
 
+  ipcMain.handle("catamorphic:reveal-folder", async (_event, raw: unknown) => {
+    const folderPath = z.string().min(1).max(32_768).parse(raw);
+    if (!path.isAbsolute(folderPath))
+      throw new Error("Choose an absolute file or folder path");
+    if (fs.statSync(folderPath).isDirectory()) {
+      const error = await shell.openPath(folderPath);
+      if (error) throw new Error(error);
+    } else shell.showItemInFolder(folderPath);
+  });
+
   ipcMain.handle(
-    "catamorphic:reveal-folder",
-    async (_event, folderPath: string) => {
-      if (!path.isAbsolute(folderPath))
-        throw new Error("Choose an absolute file or folder path");
-      if (fs.statSync(folderPath).isDirectory()) {
-        const error = await shell.openPath(folderPath);
-        if (error) throw new Error(error);
-      } else shell.showItemInFolder(folderPath);
+    "catamorphic:copy-file-to-clipboard",
+    async (_event, filePath: string) => {
+      if (typeof filePath !== "string") throw new Error("Choose a file");
+      await copyFileToClipboard(filePath, {
+        platform: process.platform,
+        runAppleScript,
+        writeUriList: ({ uriList, text }) =>
+          clipboard.write([
+            new ClipboardItem({ "text/uri-list": uriList, "text/plain": text }),
+          ]),
+      });
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:file-action-failed",
+    async (event, input: { message: string; detail: string }) => {
+      const options = {
+        type: "warning" as const,
+        message: String(input.message),
+        detail: String(input.detail),
+      };
+      const window = BrowserWindow.fromWebContents(event.sender);
+      await (window
+        ? dialog.showMessageBox(window, options)
+        : dialog.showMessageBox(options));
     },
   );
 
   ipcMain.handle(
     "catamorphic:composer-file-save",
-    async (
-      _event,
-      input: { projectId: string; name: string; bytes: Uint8Array },
-    ) =>
-      saveComposerFile({
-        rootPath: await requireRoot(input.projectId),
+    async (_event, raw: unknown) => {
+      const input = z
+        .object({
+          projectId: z.string().min(1).max(256),
+          name: z.string().min(1).max(1024),
+          bytes: z
+            .instanceof(Uint8Array)
+            .refine((bytes) => bytes.byteLength <= 64 * 1024 * 1024),
+        })
+        .parse(raw);
+      await requireRoot(input.projectId);
+      return saveComposerFile({
+        attachmentsDir: paths.attachmentsDir,
+        projectId: input.projectId,
         name: input.name,
         bytes: input.bytes,
-      }),
+      });
+    },
   );
 
   ipcMain.handle(
@@ -2556,9 +3147,24 @@ export function registerIpcHandlers(
     },
   );
 
+  // A markdown document's images: the project's own only (readProjectImage).
   ipcMain.handle(
-    "catamorphic:editor-file-read",
-    (_event, input: { filePath: string }) => readEditorFile(input),
+    "catamorphic:project-image",
+    async (_event, input: { projectId: string; filePath: string }) => {
+      if (
+        typeof input?.projectId !== "string" ||
+        typeof input.filePath !== "string"
+      )
+        return null;
+      const root = await requireRoot(input.projectId).catch(() => null);
+      return root ? readProjectImage({ root, filePath: input.filePath }) : null;
+    },
+  );
+
+  ipcMain.handle("catamorphic:editor-file-read", (_event, raw: unknown) =>
+    readEditorFile(
+      z.object({ filePath: z.string().min(1).max(32_768) }).parse(raw),
+    ),
   );
   const activeSearches = new Map<number, AbortController>();
   ipcMain.handle("catamorphic:file-search-cancel", (event) => {
@@ -2570,7 +3176,7 @@ export function registerIpcHandlers(
       if (
         !input ||
         typeof input.query !== "string" ||
-        !["files", "content"].includes(input.mode)
+        !["files", "content", "paths"].includes(input.mode)
       )
         throw new Error("Invalid search");
       activeSearches.get(event.sender.id)?.abort();
@@ -2615,11 +3221,38 @@ export function registerIpcHandlers(
     },
   );
   ipcMain.handle(
-    "catamorphic:editor-file-write",
-    (
-      _event,
-      input: { filePath: string; content: string; expectedContent: string },
-    ) => writeEditorFile(input),
+    "catamorphic:personal-file-create",
+    async (event, input: { projectId: string; extension: string }) => {
+      if (
+        typeof input?.projectId !== "string" ||
+        typeof input.extension !== "string"
+      )
+        throw new Error("Invalid file");
+      return createPersonalFile({
+        root: await requireRoot(input.projectId),
+        profileId: windows.profileFor(event.sender),
+        extension: input.extension,
+      });
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:editor-file-rename",
+    (_event, input: { filePath: string; name: string }) => {
+      if (typeof input?.filePath !== "string" || typeof input.name !== "string")
+        throw new Error("Invalid rename");
+      return renameEditorFile(input);
+    },
+  );
+  ipcMain.handle("catamorphic:editor-file-write", (_event, raw: unknown) =>
+    writeEditorFile(
+      z
+        .object({
+          filePath: z.string().min(1).max(32_768),
+          content: z.string().max(4 * 1024 * 1024),
+          expectedContent: z.string().max(4 * 1024 * 1024),
+        })
+        .parse(raw),
+    ),
   );
 
   ipcMain.handle(
@@ -2654,7 +3287,16 @@ export function registerIpcHandlers(
     "catamorphic:workspace-state-set",
     async (_event, projectId: string, snapshot: unknown) => {
       if (typeof projectId !== "string") return;
-      await state.current?.workspaceStates.set(projectId, snapshot);
+      const server = state.current;
+      if (!server) throw new Error("The project server is unavailable.");
+      try {
+        await server.catamorphic.core.projects.get(identity, projectId);
+      } catch (error) {
+        // A debounced save may arrive just after the project was removed.
+        if (error instanceof ProjectNotFoundError) return;
+        throw error;
+      }
+      await server.workspaceStates.set(projectId, snapshot);
     },
   );
 
@@ -2709,30 +3351,80 @@ export function registerIpcHandlers(
           paths.some((value) => typeof value !== "string"))
       )
         throw new Error("Invalid checkout scope");
-      const scopedPaths =
-        paths ??
-        (sessionId && state.current
-          ? [
-              (
-                await state.current.sessionCheckouts.describe({
-                  projectId,
-                  sessionId,
-                })
-              ).path,
-            ]
-          : undefined);
+      const checkout =
+        paths === undefined && sessionId && state.current
+          ? await state.current.sessionCheckouts.resolve({
+              projectId,
+              sessionId,
+            })
+          : undefined;
+      const scopedPaths = paths ?? (checkout ? [checkout] : undefined);
       return gitOverview(rootPath, scopedPaths);
     },
   );
 
   ipcMain.handle(
     "catamorphic:session-checkouts",
-    async (_event, projectId: string) =>
-      (await state.current?.sessionCheckouts.assigned(projectId)) ?? [],
+    async (_event, projectId: string, options?: { titles?: boolean }) => {
+      const server = state.current;
+      if (!server) return [];
+      const assigned = await server.sessionCheckouts.assigned(projectId);
+      if (!options?.titles) return assigned;
+      // Named as people know them where a checkout lists its chats: only
+      // checkouts on disk are listed there.
+      return Promise.all(
+        assigned.map(async (checkout) => {
+          if (!checkout.present) return checkout;
+          const session = await server.catamorphic.core.agentSessions
+            ?.get(identity, projectId, checkout.sessionId)
+            .catch(() => null);
+          return session
+            ? {
+                ...checkout,
+                title: session.title,
+                createdAt: session.createdAt,
+              }
+            : checkout;
+        }),
+      );
+    },
   );
+
+  /** The server, once the chat is this window's and runs no turn. */
+  const idleChatServer = async (
+    event: Electron.IpcMainInvokeEvent,
+    input: { projectId: string; sessionId: string },
+  ) => {
+    const server = state.current;
+    if (!server) throw new Error("Server is not running");
+    if (
+      profiles.profileForProject(input.projectId).id !==
+      windows.profileFor(event.sender)
+    )
+      throw new Error("Project belongs to another profile");
+    const session = await server.catamorphic.core.agentSessions?.get(
+      identity,
+      input.projectId,
+      input.sessionId,
+    );
+    if (!session) throw new Error("Chat is unavailable");
+    if (session.running)
+      throw new Error("Change the folder after the current turn finishes.");
+    return server;
+  };
 
   ipcMain.handle(
     "catamorphic:session-use-project-folder",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = await idleChatServer(event, input);
+      await server.returnSessionToProjectFolder(input);
+      notifyGitChanged(input.projectId);
+    },
+  );
+
+  // A chat's own worktree from its status popup (ADR 0215).
+  ipcMain.handle(
+    "catamorphic:session-checkout",
     async (event, input: { projectId: string; sessionId: string }) => {
       const server = state.current;
       if (!server) throw new Error("Server is not running");
@@ -2741,15 +3433,38 @@ export function registerIpcHandlers(
         windows.profileFor(event.sender)
       )
         throw new Error("Project belongs to another profile");
-      const session = await server.catamorphic.core.agentSessions?.get(
-        identity,
-        input.projectId,
-        input.sessionId,
-      );
-      if (!session) throw new Error("Chat is unavailable");
-      if (session.running)
-        throw new Error("Stop the current turn before changing its folder");
-      await server.returnSessionToProjectFolder(input);
+      return server.sessionCheckouts.detail(input);
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:project-worktrees-available",
+    async (_event, projectId: string) =>
+      (await state.current?.sessionCheckouts.worktreesAvailable(projectId)) ??
+      false,
+  );
+  ipcMain.handle(
+    "catamorphic:session-use-own-worktree",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      // A chat its first message is creating runs no turn yet.
+      const server = await idleChatServer(event, input);
+      await server.sessionCheckouts.plan(input);
+      notifyGitChanged(input.projectId);
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:session-bring-to-project-folder",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = await idleChatServer(event, input);
+      const result = await server.sessionCheckouts.bringToProjectFolder(input);
+      notifyGitChanged(input.projectId);
+      return result;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:session-discard-worktree",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = await idleChatServer(event, input);
+      await server.sessionCheckouts.discard(input);
       notifyGitChanged(input.projectId);
     },
   );
@@ -2785,6 +3500,40 @@ export function registerIpcHandlers(
       );
     }
   };
+  /**
+   * A local project's pull requests go through the code host with the
+   * person's own GitHub connection (ADR 0177) when it serves the project's
+   * origin; the optional GitHub CLI stays the fallback (ADR 0117).
+   */
+  const connectedCodeHost = async (projectId: string) => {
+    const server = state.current;
+    if (!server) return null;
+    const codeHosts = server.catamorphic.core.codeHosts;
+    return (await codeHosts.originConnected({
+      identity,
+      projectId,
+      principal: "member",
+    }))
+      ? codeHosts
+      : null;
+  };
+  /**
+   * A pull request operation through the person's connection, or `null` for
+   * the CLI path: no connection serves the origin, or it cannot reach this
+   * repository (the App is not installed on its owner) and the CLI is on.
+   */
+  const viaCodeHost = async <T>(
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    run: (
+      codeHosts: NonNullable<Awaited<ReturnType<typeof connectedCodeHost>>>,
+    ) => Promise<T>,
+  ) =>
+    throughCodeHost({
+      codeHosts: await connectedCodeHost(projectId),
+      cliEnabled: storesFor(event).prefs.load().githubCliEnabled === true,
+      run,
+    });
   ipcMain.handle("catamorphic:github-cli-status", async () => {
     const token = await githubCliToken();
     if (!token)
@@ -2816,6 +3565,16 @@ export function registerIpcHandlers(
       return storedRemoteClient(event, input.projectId, link).proposalComment(
         input,
       );
+    const viaHost = await viaCodeHost(event, input.projectId, (codeHosts) =>
+      codeHosts.commentOnPullRequest({
+        identity,
+        projectId: input.projectId,
+        number: input.number,
+        body: input.body,
+        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      }),
+    );
+    if (viaHost) return viaHost.value;
     requireGithubCli(event);
     return githubCliPrComment({
       rootPath: await requireRoot(input.projectId),
@@ -2833,12 +3592,38 @@ export function registerIpcHandlers(
       (project) => project.projectId === link?.remoteProjectId,
     );
     if (link) {
-      if (!remoteProject?.builder)
-        throw new Error("Only project builders can approve or apply proposals");
+      if (!remoteProject?.permissions.includes("program:publish"))
+        throw new Error(
+          "Approving or applying a proposal needs the program:publish permission",
+        );
       // Apply the same proposal visibility check used by the review surface.
       await storedRemoteClient(event, input.projectId, link).proposalFiles(
         input.number,
       );
+    }
+    const viaHost = link
+      ? null
+      : await viaCodeHost(event, input.projectId, (codeHosts) =>
+          input.decision === "apply"
+            ? codeHosts.mergePullRequest({
+                identity,
+                projectId: input.projectId,
+                number: input.number,
+                headSha: input.headSha,
+              })
+            : codeHosts.reviewPullRequest({
+                identity,
+                projectId: input.projectId,
+                number: input.number,
+                headSha: input.headSha,
+                decision:
+                  input.decision === "approve" ? "approve" : "request_changes",
+                body: input.body,
+              }),
+        );
+    if (viaHost) {
+      notifyGitChanged(input.projectId);
+      return { decision: input.decision };
     }
     requireGithubCli(event);
     const repository = await githubCliRepository(
@@ -2887,6 +3672,10 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalDiscussion(
           number,
         );
+      const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+        codeHosts.pullRequestDiscussion({ identity, projectId, number }),
+      );
+      if (viaHost) return viaHost.value;
       requireGithubCli(event);
       return githubCliPrDetails({
         rootPath: await requireRoot(projectId),
@@ -2909,6 +3698,32 @@ export function registerIpcHandlers(
         return storedRemoteClient(event, projectId, link).proposalReview(
           number,
         );
+      const viaHost = await viaCodeHost(event, projectId, async (codeHosts) => {
+        const before = await codeHosts.pullRequest({
+          identity,
+          projectId,
+          number,
+        });
+        const files = await codeHosts.pullRequestFiles({
+          identity,
+          projectId,
+          number,
+        });
+        const proposal = await codeHosts.pullRequest({
+          identity,
+          projectId,
+          number,
+        });
+        return { before, proposal, files };
+      });
+      if (viaHost) {
+        const { before, proposal, files } = viaHost.value;
+        if (before.headSha !== proposal.headSha)
+          throw new Error(
+            "This proposal changed while loading. Refresh to review the latest version.",
+          );
+        return { proposal, files };
+      }
       requireGithubCli(event);
       const cli = await githubCliRepository(await requireRoot(projectId));
       if (!cli)
@@ -2930,11 +3745,40 @@ export function registerIpcHandlers(
     },
   );
 
+  // Where a chat's recorded pull request stands (ADR 0239): any address,
+  // read with the person's own connection, the CLI as the fallback.
+  ipcMain.handle("catamorphic:pr-status", async (event, raw: unknown) => {
+    const url = pullRequestAddress(raw);
+    const fixture = e2ePullRequestStatus(url);
+    if (fixture !== undefined)
+      return { status: fixture, source: fixture ? "connection" : null };
+    const server = state.current;
+    return readPullRequestStatus({
+      url,
+      viaConnection: async (address) =>
+        server
+          ? server.catamorphic.core.codeHosts.pullRequestStatus({
+              identity,
+              url: address,
+            })
+          : null,
+      cliEnabled: storesFor(event).prefs.load().githubCliEnabled === true,
+    });
+  });
+
   ipcMain.handle("catamorphic:pr-list", async (event, projectId: string) => {
     const fixture = e2eReviewFixture();
     if (fixture) return fixture.prs;
     const link = storesFor(event).remoteProjects.get(projectId);
     if (link) return storedRemoteClient(event, projectId, link).listProposals();
+    const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+      codeHosts.listPullRequests({
+        identity,
+        projectId,
+        principal: "member",
+      }),
+    );
+    if (viaHost) return viaHost.value;
     requireGithubCli(event);
     const server = state.current;
     if (!server) return [];
@@ -2960,6 +3804,14 @@ export function registerIpcHandlers(
       const link = storesFor(event).remoteProjects.get(projectId);
       if (link)
         return storedRemoteClient(event, projectId, link).proposalFiles(number);
+      const viaHost = await viaCodeHost(event, projectId, (codeHosts) =>
+        codeHosts.pullRequestFiles({
+          identity,
+          projectId,
+          number: Number(number),
+        }),
+      );
+      if (viaHost) return viaHost.value;
       requireGithubCli(event);
       const server = state.current;
       if (!server) throw new Error("Server not running");
@@ -2972,81 +3824,104 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- GitHub device flow ---
-  // The flow lives in the main process: it opens a workspace browser tab and
-  // polls GitHub, while the renderer only ever sees the short user code and
-  // the final connected/failed state. Tokens go straight into the embedded
-  // server's GithubService (encrypted via safeStorage before touching disk).
+  // --- GitHub sign-in ---
+  // The person's GitHub account is their personal `github` connection
+  // (ADR 0177), authorized with the provider's device flow through core
+  // connections and kept in the credential vault like any connection. The
+  // renderer only ever sees the short user code and the final state.
   let deviceFlowGeneration = 0;
+  /** The device authorization still open, so ending it cancels it for real. */
+  let pendingAuthorization: string | undefined;
+  const cancelDeviceFlow = async () => {
+    deviceFlowGeneration += 1;
+    const authorization = pendingAuthorization;
+    pendingAuthorization = undefined;
+    if (!authorization) return;
+    await state.current?.catamorphic.core.connections
+      ?.cancelAuthorization({ identity, state: authorization })
+      .catch(() => false);
+  };
 
   ipcMain.handle("catamorphic:github-connect-start", async (event) => {
-    const grant = await requestDeviceCode(GITHUB_APP);
+    const server = state.current;
+    const connections = server?.catamorphic.core.connections;
+    if (!server || !connections) throw new Error("Server not running");
+    const started = await connections.beginPersonalAuthorization({
+      identity,
+      providerKind: server.github.kind,
+      redirectUri: `${server.url}/api/connection-authorizations/callback`,
+    });
+    const challenge = started.challenge;
+    if (challenge.kind !== "device")
+      throw new Error("GitHub sign-in did not offer a device code");
     cancelAuthorization(event.sender);
+    // A newer attempt ends the one before it, on GitHub's side too.
+    await cancelDeviceFlow();
+    pendingAuthorization = started.authorizationId;
     const generation = ++deviceFlowGeneration;
+    const expiresAt = challenge.expiresAt
+      ? Date.parse(challenge.expiresAt)
+      : Date.now() + 900_000;
     const dispose = trackAuthorization({
       sender: event.sender,
-      url: grant.verificationUri,
+      url: challenge.verificationUrl,
       label: "Connect GitHub",
-      expiresAt: Date.now() + grant.expiresIn * 1000,
+      expiresAt,
       cancel: () => {
         if (generation !== deviceFlowGeneration) return;
-        deviceFlowGeneration += 1;
+        void cancelDeviceFlow();
         if (!event.sender.isDestroyed())
           event.sender.send("catamorphic:github-connected", {
             error: "GitHub sign-in ended. Connect again when ready.",
           });
-        closeWorkspaceCallback(event.sender, grant.verificationUri);
+        closeWorkspaceCallback(event.sender, challenge.verificationUrl);
       },
     });
-    openWorkspaceUrl(event.sender, grant.verificationUri);
+    openWorkspaceUrl(event.sender, challenge.verificationUrl);
 
-    const poll = async (): Promise<void> => {
-      const started = Date.now();
-      let intervalMs = grant.interval * 1000;
-      while (Date.now() - started < grant.expiresIn * 1000) {
-        // A newer connect attempt or an app shutdown obsoletes this loop.
+    // Completing waits until the person finishes on GitHub or the code
+    // expires; a newer attempt or a cancel only silences this one.
+    void connections
+      .completeAuthorization({
+        identity,
+        state: started.authorizationId,
+        callback: {},
+      })
+      .then((connection) => {
         if (generation !== deviceFlowGeneration) return;
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        const account = connection.account;
+        state.broadcast("catamorphic:github-connected", {
+          connected: true,
+          login:
+            account &&
+            typeof account === "object" &&
+            !Array.isArray(account) &&
+            typeof account.login === "string"
+              ? account.login
+              : "",
+        });
+      })
+      .catch(() => {
         if (generation !== deviceFlowGeneration) return;
-        const server = state.current;
-        if (!server) return;
-        try {
-          const result = await pollDeviceToken(GITHUB_APP, grant.deviceCode);
-          if (generation !== deviceFlowGeneration) return;
-          if (result.tokens) {
-            const status = await server.catamorphic.core.github?.connect(
-              identity,
-              result.tokens,
-            );
-            state.broadcast("catamorphic:github-connected", status ?? null);
-            return;
-          }
-          if (result.retryAfter > 0) intervalMs = result.retryAfter * 1000;
-        } catch (cause) {
-          state.broadcast("catamorphic:github-connected", {
-            error:
-              cause instanceof GithubAuthError
-                ? cause.message
-                : "GitHub authorization failed",
-          });
-          return;
-        }
-      }
-      state.broadcast("catamorphic:github-connected", {
-        error: "The GitHub device code expired. Try connecting again",
+        state.broadcast("catamorphic:github-connected", {
+          error: "GitHub sign-in did not finish. Try connecting again",
+        });
+      })
+      .finally(() => {
+        if (pendingAuthorization === started.authorizationId)
+          pendingAuthorization = undefined;
+        dispose();
       });
-    };
-    void poll().finally(dispose);
 
     return {
-      userCode: grant.userCode,
-      verificationUri: grant.verificationUri,
+      userCode: challenge.userCode,
+      verificationUri: challenge.verificationUrl,
     };
   });
 
-  ipcMain.handle("catamorphic:github-connect-cancel", (event) => {
+  ipcMain.handle("catamorphic:github-connect-cancel", async (event) => {
     cancelAuthorization(event.sender);
-    deviceFlowGeneration += 1;
+    await cancelDeviceFlow();
   });
 
   // Repo access is granted by *installing* the GitHub App, not by the OAuth
@@ -3065,10 +3940,17 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle("catamorphic:github-disconnect", async () => {
-    deviceFlowGeneration += 1;
+    // A sign-in still in progress must not reconnect after this.
+    await cancelDeviceFlow();
     const server = state.current;
-    if (!server) return;
-    await server.catamorphic.core.github?.disconnect(identity);
+    const connections = server?.catamorphic.core.connections;
+    if (!server || !connections) return;
+    const personal = await connections.personal({
+      identity,
+      providerKind: server.github.kind,
+    });
+    if (personal)
+      await connections.revoke({ identity, connectionId: personal.id });
   });
 
   // Import runs through IPC (not HTTP) for the same reason project-create
@@ -3081,23 +3963,21 @@ export function registerIpcHandlers(
     ) => {
       const server = state.current;
       if (!server) throw new Error("Server not running");
-      if (!server.catamorphic.core.github) {
-        throw new Error("GitHub integration not configured");
-      }
       if (!path.isAbsolute(input.rootPath)) {
         throw new Error("rootPath must be an absolute path");
       }
-      const github = server.catamorphic.core.github;
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
         automaticCheckpoints: false,
         reopen: (id) => server.catamorphic.core.projects.get(identity, id),
         create: (id, rootPath) =>
-          github.importRepo(identity, {
+          server.catamorphic.core.codeHosts.importRepository({
+            identity,
+            provider: server.github.kind,
             id,
             fullName: input.fullName,
-            name: input.name,
+            ...(input.name ? { name: input.name } : {}),
             rootPath,
           }),
       });
@@ -3109,8 +3989,17 @@ export function registerIpcHandlers(
   );
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
+/** A builder of a GitHub-backed project works in a git checkout of it;
+ * everyone else's folder receives program files through remote sync. */
+function isBuilderCheckout(capabilities: {
+  permissions: readonly string[];
+  source?: { remoteUrl?: string | null } | null;
+}): boolean {
+  return Boolean(
+    writesProgram(capabilities) &&
+      capabilities.source?.remoteUrl &&
+      repoFullNameFromUrl(capabilities.source.remoteUrl),
+  );
 }
 
 /** Tell every window a project's files moved under it. */

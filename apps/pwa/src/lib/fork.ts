@@ -1,8 +1,10 @@
+import type { Item } from "@catamorphic/react";
+
 /**
- * The mirror-fork marker (ADR 0062): once a desktop session was continued
- * on its linked server, the desktop stamps its local copy with a system
- * row carrying this marker. Clients then treat the stale copy as
- * read-only history and point at the live fork.
+ * The mirror-fork notice (ADR 0062): once a desktop session was continued
+ * on its linked server, the desktop writes a `mirror_fork` notice into its
+ * local copy. Clients then treat the stale copy as read-only history and
+ * point at the live fork.
  */
 export interface MirrorForkNotice {
   serverUrl: string;
@@ -11,32 +13,17 @@ export interface MirrorForkNotice {
 }
 
 export function mirrorForkNotice(
-  messages: Array<{ role: string; metadata?: unknown }>,
+  items: readonly Item[],
 ): MirrorForkNotice | null {
-  for (const message of messages) {
-    if (message.role !== "system") continue;
-    const marker = (
-      message.metadata as {
-        marker?: {
-          kind?: string;
-          serverUrl?: string;
-          remoteProjectId?: string;
-          sessionId?: string;
-        };
-      } | null
-    )?.marker;
+  for (const item of items) {
+    if (item.kind !== "notice" || item.code !== "mirror_fork") continue;
+    const { serverUrl, remoteProjectId, sessionId } = item.data;
     if (
-      marker?.kind === "mirror_fork" &&
-      typeof marker.serverUrl === "string" &&
-      typeof marker.remoteProjectId === "string" &&
-      typeof marker.sessionId === "string"
-    ) {
-      return {
-        serverUrl: marker.serverUrl,
-        remoteProjectId: marker.remoteProjectId,
-        sessionId: marker.sessionId,
-      };
-    }
+      typeof serverUrl === "string" &&
+      typeof remoteProjectId === "string" &&
+      typeof sessionId === "string"
+    )
+      return { serverUrl, remoteProjectId, sessionId };
   }
   return null;
 }

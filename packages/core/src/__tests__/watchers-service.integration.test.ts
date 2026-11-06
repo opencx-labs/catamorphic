@@ -20,7 +20,11 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "../services/agent-sessions-service.js";
-import type { ProjectEventMonitorsService } from "../services/project-event-monitors-service.js";
+import { ProjectEventDispatcher } from "../services/project-event-dispatcher.js";
+import {
+  ProjectEventMonitorsService,
+  type ProjectEventSourceProvider,
+} from "../services/project-event-monitors-service.js";
 import { ProjectEventsService } from "../services/project-events-service.js";
 import type { RunsService } from "../services/runs-service.js";
 import { SchedulesService } from "../services/schedules-service.js";
@@ -57,6 +61,13 @@ describe("temporary watchers", () => {
   const attemptedEventIds: string[] = [];
   let failingEventId: string | null = null;
   let beforeEnablementCreate: (() => Promise<void>) | undefined;
+  let enablements: WorkflowEnablementsService;
+  let watcherDeps: ConstructorParameters<typeof WatchersService>[1];
+  /** What core's dispatchEvents does: expire watchers, then deliver. */
+  const dispatchPending = async () => {
+    await watchers.expireDue();
+    return new ProjectEventDispatcher(db, triggers, enablements).dispatch();
+  };
   const bindingKinds = new Map([
     ["watchIssue", "issue.changed"],
     ["watchRegression", "regression.changed"],
@@ -95,7 +106,6 @@ describe("temporary watchers", () => {
         id: sessionId,
         project_id: projectId,
         external_user_id: identity.externalUserId,
-        provider: "test",
         agent_id: `project:${projectId}:reviewer`,
       })
       .execute();
@@ -193,85 +203,83 @@ describe("temporary watchers", () => {
       assertSession: vi.fn(async () => undefined),
     } as unknown as AgentSessionsService;
     const monitors = {} as ProjectEventMonitorsService;
-    watchers = new WatchersService(db, {
+    enablements = {
+      preview: vi.fn(async () => ({ consentDigest: "d".repeat(64) })),
+      create: vi.fn(
+        async (input: Parameters<WorkflowEnablementsService["create"]>[0]) => {
+          await beforeEnablementCreate?.();
+          return db.transaction().execute(async (transaction) => {
+            const id = crypto.randomUUID();
+            const artifact = await transaction
+              .selectFrom("deployment_artifacts")
+              .selectAll()
+              .where("project_id", "=", projectId)
+              .where("commit_sha", "=", String(input.commitSha))
+              .executeTakeFirstOrThrow();
+            const enablement = await transaction
+              .insertInto("workflow_enablements")
+              .values({
+                id,
+                tenant_id: tenantId,
+                project_id: projectId,
+                workflow_name: String(input.workflowName),
+                deployment_artifact_id: artifact.id,
+                commit_sha: String(input.commitSha),
+                remote_branch: String(input.remoteBranch),
+                environment_name: String(input.environment ?? "default"),
+                owner_kind: "member",
+                owner_external_user_id: identity.externalUserId,
+                owner_identity: JSON.parse(JSON.stringify(input.identity)),
+                capabilities: [],
+                consent_digest: "d".repeat(64),
+                temporary: true,
+                expires_at:
+                  input.expiresAt instanceof Date ? input.expiresAt : null,
+                created_by_external_user_id: identity.externalUserId,
+              })
+              .returningAll()
+              .executeTakeFirstOrThrow();
+            await transaction
+              .insertInto("workflow_enablement_triggers")
+              .columns(["enablement_id", "trigger_definition_id"])
+              .expression((eb) =>
+                eb
+                  .selectFrom("trigger_definitions")
+                  .select([
+                    eb.val(id).as("enablement_id"),
+                    "id as trigger_definition_id",
+                  ])
+                  .where("project_id", "=", projectId)
+                  .where("commit_sha", "=", String(input.commitSha))
+                  .where("workflow_name", "=", String(input.workflowName)),
+              )
+              .execute();
+            await input.onCreate?.({ transaction, enablement });
+            return { id, environment: String(input.environment ?? "default") };
+          });
+        },
+      ),
+      revalidate: vi.fn(async ({ enablementId }: { enablementId: string }) => {
+        const row = await db
+          .selectFrom("workflow_enablements")
+          .selectAll()
+          .where("id", "=", enablementId)
+          .executeTakeFirstOrThrow();
+        if (row.status !== "active") throw new Error("Enablement disabled");
+        return { ownerIdentity: row.owner_identity };
+      }),
+      disable: disableEnablement,
+    } as unknown as WorkflowEnablementsService;
+    watcherDeps = {
       projectManager,
       runs,
       triggers,
       events,
       monitors,
       sessions,
-      workflowEnablements: {
-        preview: vi.fn(async () => ({ consentDigest: "d".repeat(64) })),
-        create: vi.fn(
-          async (
-            input: Parameters<WorkflowEnablementsService["create"]>[0],
-          ) => {
-            await beforeEnablementCreate?.();
-            return db.transaction().execute(async (transaction) => {
-              const id = crypto.randomUUID();
-              const artifact = await transaction
-                .selectFrom("deployment_artifacts")
-                .selectAll()
-                .where("project_id", "=", projectId)
-                .where("commit_sha", "=", String(input.commitSha))
-                .executeTakeFirstOrThrow();
-              const enablement = await transaction
-                .insertInto("workflow_enablements")
-                .values({
-                  id,
-                  tenant_id: tenantId,
-                  project_id: projectId,
-                  workflow_name: String(input.workflowName),
-                  deployment_artifact_id: artifact.id,
-                  commit_sha: String(input.commitSha),
-                  remote_branch: String(input.remoteBranch),
-                  environment_name: String(input.environment ?? "local"),
-                  owner_kind: "member",
-                  owner_external_user_id: identity.externalUserId,
-                  owner_identity: JSON.parse(JSON.stringify(input.identity)),
-                  capabilities: [],
-                  consent_digest: "d".repeat(64),
-                  temporary: true,
-                  expires_at:
-                    input.expiresAt instanceof Date ? input.expiresAt : null,
-                  created_by_external_user_id: identity.externalUserId,
-                })
-                .returningAll()
-                .executeTakeFirstOrThrow();
-              await transaction
-                .insertInto("workflow_enablement_triggers")
-                .columns(["enablement_id", "trigger_definition_id"])
-                .expression((eb) =>
-                  eb
-                    .selectFrom("trigger_definitions")
-                    .select([
-                      eb.val(id).as("enablement_id"),
-                      "id as trigger_definition_id",
-                    ])
-                    .where("project_id", "=", projectId)
-                    .where("commit_sha", "=", String(input.commitSha))
-                    .where("workflow_name", "=", String(input.workflowName)),
-                )
-                .execute();
-              await input.onCreate?.({ transaction, enablement });
-              return { id, environment: String(input.environment ?? "local") };
-            });
-          },
-        ),
-        revalidate: vi.fn(
-          async ({ enablementId }: { enablementId: string }) => {
-            const row = await db
-              .selectFrom("workflow_enablements")
-              .selectAll()
-              .where("id", "=", enablementId)
-              .executeTakeFirstOrThrow();
-            if (row.status !== "active") throw new Error("Enablement disabled");
-            return { ownerIdentity: row.owner_identity };
-          },
-        ),
-        disable: disableEnablement,
-      } as unknown as WorkflowEnablementsService,
-    });
+      workflowEnablements: enablements,
+    };
+    watchers = new WatchersService(db, watcherDeps);
   }, 30_000);
 
   afterAll(async () => {
@@ -281,14 +289,13 @@ describe("temporary watchers", () => {
   });
 
   it("requires the selected workflow to be exported by the supplied source", async () => {
-    const repo = await projectManager.openDev(
-      tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: tenantId,
+      projectId: projectId,
+    });
     try {
       await repo.writeFile(
-        ".catamorphic/workflows/src/existing.ts",
+        ".work/workflows/src/existing.ts",
         `
         import { defineWorkflow, trigger } from "@catamorphic/workflow";
         export const existingWorkflow = defineWorkflow(({ defineBoundary }) => ({
@@ -375,14 +382,13 @@ describe("temporary watchers", () => {
       environment: "edge",
     });
     expect(watcher.remoteBranch).toMatch(
-      new RegExp(`^catamorphic/artifacts/${watcher.id}-[0-9a-f-]{36}$`),
+      new RegExp(`^work/artifacts/${watcher.id}-[0-9a-f-]{36}$`),
     );
     expect(watcher.commitSha).toMatch(/^[0-9a-f]{40}$/);
-    const repo = await projectManager.openDev(
-      tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = await projectManager.openEphemeral({
+      tenantId: tenantId,
+      projectId: projectId,
+    });
     try {
       const remote = projectManager.remoteBackend;
       if (!remote) throw new Error("Missing test origin");
@@ -395,7 +401,7 @@ describe("temporary watchers", () => {
       });
       const files = await repo.readAllFilesAtRef(watcher.commitSha);
       const payload = await resolveWorkflowPackageFallback({
-        packageJson: files[".catamorphic/workflows/package.json"],
+        packageJson: files[".work/workflows/package.json"],
       });
       if (!payload) throw new Error("Watcher runtime dependency is missing");
       // Load the committed source with only its resolved runtime payload,
@@ -405,7 +411,7 @@ describe("temporary watchers", () => {
         ...files,
         ...Object.fromEntries(
           Object.entries(payload.files).map(([name, content]) => [
-            `.catamorphic/node_modules/${payload.packageName}/${name}`,
+            `.work/node_modules/${payload.packageName}/${name}`,
             content,
           ]),
         ),
@@ -428,7 +434,7 @@ describe("temporary watchers", () => {
     } finally {
       await repo.dispose();
     }
-    expect(await watchers.dispatchPending()).toBe(0);
+    expect(await dispatchPending()).toBe(0);
 
     const appended = await events.append({
       projectId,
@@ -438,8 +444,8 @@ describe("temporary watchers", () => {
       occurredAt: new Date().toISOString(),
       payload: { action: "updated" },
     });
-    expect(await watchers.dispatchPending()).toBe(1);
-    expect(await watchers.dispatchPending()).toBe(0);
+    expect(await dispatchPending()).toBe(1);
+    expect(await dispatchPending()).toBe(0);
     expect(triggered).toEqual([
       expect.objectContaining({
         enablementId: expect.stringMatching(/^[0-9a-f-]{36}$/),
@@ -471,7 +477,7 @@ describe("temporary watchers", () => {
       occurredAt: new Date().toISOString(),
       payload: { causation: [enablement.workflow_enablement_id] },
     });
-    expect(await watchers.dispatchPending()).toBe(0);
+    expect(await dispatchPending()).toBe(0);
     expect(
       await db
         .selectFrom("project_event_deliveries")
@@ -487,7 +493,7 @@ describe("temporary watchers", () => {
       occurredAt: new Date().toISOString(),
       payload: {},
     });
-    expect(await watchers.dispatchPending()).toBe(1);
+    expect(await dispatchPending()).toBe(1);
     const admissions = triggered.length;
     await db
       .updateTable("workflow_runs")
@@ -503,7 +509,7 @@ describe("temporary watchers", () => {
       })
       .where("event_id", "=", event.event.id)
       .execute();
-    await watchers.dispatchPending();
+    await dispatchPending();
     expect(triggered).toHaveLength(admissions);
     expect(
       await db
@@ -571,7 +577,7 @@ describe("temporary watchers", () => {
     });
     failingEventId = second.event.id;
 
-    expect(await watchers.dispatchPending()).toBe(1);
+    expect(await dispatchPending()).toBe(1);
     expect(
       (await watchers.list({ identity, projectId, sessionId })).find(
         (entry) => entry.id === watcher.id,
@@ -584,7 +590,7 @@ describe("temporary watchers", () => {
       .set({ next_attempt_at: new Date(0) })
       .where("event_id", "=", second.event.id)
       .execute();
-    expect(await watchers.dispatchPending()).toBe(1);
+    expect(await dispatchPending()).toBe(1);
     expect(attemptedEventIds.slice(-3)).toEqual([
       first.event.id,
       second.event.id,
@@ -596,7 +602,7 @@ describe("temporary watchers", () => {
     const scopedIdentity: Identity = {
       ...identity,
       scope: [{ kind: "agent", projectId, name: "reviewer" }],
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
     };
     await watchers.create({
       identity: scopedIdentity,
@@ -625,7 +631,7 @@ describe("temporary watchers", () => {
       payload: {},
     });
 
-    expect(await watchers.dispatchPending()).toBe(1);
+    expect(await dispatchPending()).toBe(1);
     expect(
       triggered.find((entry) =>
         String(entry.correlationKey).endsWith(`:${appended.event.id}`),
@@ -633,9 +639,9 @@ describe("temporary watchers", () => {
     ).toEqual(scopedIdentity);
   });
   it("does no workflow lookup while idle or for unrelated events", async () => {
-    await watchers.dispatchPending();
+    await dispatchPending();
     const lookup = vi.spyOn(triggers, "listAtCommit");
-    await watchers.dispatchPending();
+    await dispatchPending();
     expect(lookup).not.toHaveBeenCalled();
     await events.append({
       projectId,
@@ -645,10 +651,10 @@ describe("temporary watchers", () => {
       occurredAt: new Date().toISOString(),
       payload: {},
     });
-    expect(await watchers.dispatchPending()).toBe(0);
+    expect(await dispatchPending()).toBe(0);
     expect(lookup).not.toHaveBeenCalled();
     lookup.mockClear();
-    expect(await watchers.dispatchPending()).toBe(0);
+    expect(await dispatchPending()).toBe(0);
     expect(lookup).not.toHaveBeenCalled();
     lookup.mockRestore();
   });
@@ -692,7 +698,7 @@ describe("temporary watchers", () => {
     });
     expect(triggered.at(-1)).toMatchObject({
       workflowName: "periodicCheck",
-      environment: "local",
+      environment: "default",
     });
     await watchers.stop({
       identity,
@@ -748,7 +754,7 @@ describe("temporary watchers", () => {
         .where("id", "=", watcher.id)
         .execute();
       disableEnablement.mockClear();
-      await watchers.dispatchPending();
+      await dispatchPending();
       expect(disableEnablement).toHaveBeenCalledWith({
         identity,
         enablementId: watcher.workflow_enablement_id,
@@ -766,7 +772,7 @@ describe("temporary watchers", () => {
         .set({ status: "completed", completed_at: new Date() })
         .where("project_id", "=", projectId)
         .execute();
-      await watchers.dispatchPending();
+      await dispatchPending();
       expect(
         await projectManager.remoteBackend?.withOrigin(
           tenantId,
@@ -785,13 +791,13 @@ describe("temporary watchers", () => {
     {
       archived: true,
       host: "local-host",
-      environment: "local",
+      environment: "default",
       error: "Restore the session",
     },
     {
       archived: false,
       host: "remote-host",
-      environment: "local",
+      environment: "default",
       error: "authoritative host",
     },
     {
@@ -810,9 +816,8 @@ describe("temporary watchers", () => {
           id: targetId,
           project_id: projectId,
           external_user_id: identity.externalUserId,
-          provider: "test",
           authority_host_id: host,
-          environment_name: "local",
+          environment_name: "default",
         })
         .execute();
       if (archived)
@@ -856,7 +861,6 @@ describe("temporary watchers", () => {
           id: targetId,
           project_id: projectId,
           external_user_id: identity.externalUserId,
-          provider: "test",
         })
         .execute();
       beforeEnablementCreate = async () => {
@@ -961,5 +965,78 @@ describe("temporary watchers", () => {
         (item) => item.id === reminder.id,
       )?.status,
     ).toBe("stopped");
+  });
+
+  it("starts a host-registered polled event source from now on (ADR 0177)", async () => {
+    const started: Array<{ projectId: string; externalUserId: string }> = [];
+    const source: ProjectEventSourceProvider = {
+      kind: "issues-poller",
+      eventKinds: ["issue.changed"],
+      start: async (input) => {
+        started.push({
+          projectId: input.projectId,
+          externalUserId: input.identity.externalUserId,
+        });
+        return { cursor: { after: "evt-41" } };
+      },
+      poll: async ({ monitor }) => ({ cursor: monitor.cursor }),
+    };
+    const polled = new WatchersService(db, {
+      ...watcherDeps,
+      monitors: new ProjectEventMonitorsService(db),
+      eventSources: [source],
+    });
+    const workflow = (name: string, kind: string) => `
+      import { defineWorkflow, trigger } from "@catamorphic/workflow";
+      export const ${name} = defineWorkflow(({ defineBoundary }) => ({
+        triggers: [trigger("${kind}")],
+        steps: [defineBoundary({ run: async ({ input }) => input })],
+      }));
+    `;
+    await expect(
+      polled.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "watchPolledIssue",
+        source: workflow("watchPolledIssue", "issue.changed"),
+        eventSource: { kind: "missing" },
+      }),
+    ).rejects.toThrow("Unknown event source 'missing'");
+    await expect(
+      polled.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "watchPolledScope",
+        source: workflow("watchPolledScope", "scope.changed"),
+        eventSource: { kind: "issues-poller" },
+      }),
+    ).rejects.toThrow("must declare a trigger its event source fires");
+    const watcher = await polled.create({
+      identity,
+      projectId,
+      sessionId,
+      workflowName: "watchPolledIssue",
+      source: workflow("watchPolledIssue", "issue.changed"),
+      eventSource: { kind: "issues-poller", pollIntervalSeconds: 60 },
+    });
+    expect(started.at(-1)).toEqual({
+      projectId,
+      externalUserId: identity.externalUserId,
+    });
+    expect(watcher.monitorId).toBeTruthy();
+    const monitor = await db
+      .selectFrom("project_event_monitors")
+      .selectAll()
+      .where("id", "=", String(watcher.monitorId))
+      .executeTakeFirstOrThrow();
+    expect(monitor).toMatchObject({
+      source_kind: "issues-poller",
+      source_key: projectId,
+      placement: "local",
+      cursor: { after: "evt-41" },
+      poll_interval_seconds: 60,
+    });
   });
 });

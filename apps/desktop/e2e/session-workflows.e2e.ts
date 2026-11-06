@@ -8,17 +8,22 @@ import {
 } from "./harness.js";
 
 let app: AppHandle;
-const helpers = `${setReactValueJs}; ${workspaceDomHelpersJs} const button = text => $$('button').find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
+// The chat on screen: a minimized one stays mounted (hidden, inert), and
+// typing into its composer sends where nothing on screen shows the answer.
+const helpers = `${setReactValueJs}; ${workspaceDomHelpersJs} const button = text => $$('button').find(b => !b.closest('[inert]') && b.textContent.trim() === text); const composer = () => $$('[data-chat-local-id] [data-composer-input]').find(el => !el.closest('[inert]'));`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async()=>{${helpers};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helpers};${body}})()`, { timeoutMs: 90000 });
 async function send(scenario: string) {
+  // A reload or a tab the last test opened can leave the chat a bubble:
+  // it is opened, again on each check until it is, as the rail may not
+  // have its button yet.
   await wait(
-    `return !!$('[data-chat-local-id] [data-composer-input]') && !$('[data-chat-local-id] [aria-label="Stop response"]');`,
+    `const input = composer(); if (!input) { document.querySelector('[data-dock-rail] button[aria-label^="Open "]')?.click(); return false; } return !input.closest('[data-chat-local-id]').querySelector('[aria-label="Stop response"]');`,
   );
   await run(
-    `const input=$('[data-chat-local-id] [data-composer-input]'); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,
+    `const input=composer(); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,
   );
 }
 beforeAll(async () => {
@@ -35,9 +40,12 @@ beforeAll(async () => {
   await wait(
     `return $('[aria-label="Switch project"]')?.textContent.includes('Session workflows');`,
   );
-  await wait("return !!$('[aria-label=\"New chat\"]');");
-  await run(
-    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));",
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await wait("return !!$('[data-workspace-ready]');");
+  // A floating chat, which the tabs these tests open leave as a bubble:
+  // the dock's + (Cmd+N would open it in the New Tab in front).
+  await wait(
+    `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
   );
 });
 afterAll(async () => {
@@ -50,30 +58,41 @@ it("authors a temporary one-shot, wakes once, stops and links its retained sourc
   await send("wake");
   await wait("return !!$('.cat-markdown a[href^=\"artifact:\"]');");
   await wait(
-    "return document.body.textContent.includes('Scheduled follow-up received.') && document.body.textContent.includes('Stopped a watcher');",
+    // The action's line names the workflow and reads on: "… stopped a watcher".
+    "return document.body.textContent.includes('Scheduled follow-up received.') && [...document.querySelectorAll('[data-notice-code=session_action]')].some(el => / stopped a watcher$/.test(el.textContent));",
   );
+  // The workflow's delivery is its own row (ADR 0217), never the person's
+  // bubble; the session action it took is a notice naming the workflow.
   expect(
     await run(
-      "return document.querySelectorAll('[data-testid=session-attribution] a[href^=\"run:\"]').length;",
+      "return [...document.querySelectorAll('[data-testid=chat-inbound-message][data-sender-kind=workflow]')].filter(el => el.textContent.includes('Scheduled follow-up received.') && !!el.querySelector('a[href^=\"run:\"]')).length;",
     ),
-  ).toBe(2);
+  ).toBe(1);
   await run(
-    "document.querySelector('[data-testid=session-attribution] a[href^=\"run:\"]').click();",
+    "const row = [...document.querySelectorAll('[data-testid=chat-inbound-message]')].find(el => el.textContent.includes('Scheduled follow-up received.')); row.querySelector('button').click();",
   );
   await wait(
-    "return !!$('[aria-label=\"Run of sessionwake\"]') && document.body.textContent.includes('Run history');",
+    "return [...document.querySelectorAll('[data-testid=chat-inbound-message] button[aria-expanded=true]')].length > 0;",
+  );
+  await run(
+    "[...document.querySelectorAll('[data-testid=chat-inbound-message]')].find(el => el.textContent.includes('Scheduled follow-up received.')).querySelector('a[href^=\"run:\"]').click();",
+  );
+  await wait(
+    "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionwake' && document.body.textContent.includes('Run history');",
   );
   await app.waitFor(
     `(async()=>{const {url}=await window.catamorphicDesktop.getServerState(); const {items}=await (await fetch(url+'/api/projects')).json(); const state=await window.catamorphicDesktop.workspaceStateGet(items.find(p=>p.name==='Session workflows').id); return state?.tabs?.some(tab=>tab.kind==='run');})()`,
   );
   await app.reload();
-  await wait("return !!$('[aria-label=\"Run of sessionwake\"]');");
+  await wait(
+    "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionwake';",
+  );
   await wait("return !!$('.cat-markdown a[href^=\"artifact:\"]');");
   await run(
     "document.querySelector('.cat-markdown a[href^=\"artifact:\"]').click();",
   );
   await wait(
-    "return document.body.textContent.includes('.catamorphic/workflows/src/artifacts/');",
+    "return document.body.textContent.includes('.work/workflows/src/artifacts/');",
   );
   await app.screenshot("/tmp/catamorphic-session-wakeup.png");
 });
@@ -96,11 +115,13 @@ it("remains quiet on ordinary turn completion and reacts to explicit work comple
     "return [...document.querySelectorAll('[data-testid=chat-watchers]')].some(el=>el.textContent.includes('sessionmonitor') && el.textContent.includes('stopped'));",
   );
   const delivered = await run<number>(
-    "return [...document.querySelectorAll('[data-testid=session-attribution]')].filter(el=>el.parentElement.textContent.includes('Work completion observed.')).length;",
+    "return [...document.querySelectorAll('[data-testid=chat-inbound-message]')].filter(el=>el.textContent.includes('Work completion observed.')).length;",
   );
   expect(delivered).toBe(1);
   await send("reopen");
-  await wait("return document.body.textContent.includes('Reopened the work');");
+  await wait(
+    "return [...document.querySelectorAll('[data-notice-code=session_action]')].some(el => / reopened the work$/.test(el.textContent));",
+  );
   await app.screenshot("/tmp/catamorphic-session-monitor.png");
 });
 
@@ -108,18 +129,18 @@ it("keeps quiet results inspectable and exposes failed runs with a working stop 
   await send("quiet");
   await wait("return !!button('sessionquiet');");
   await wait(
-    "return button('sessionquiet').parentElement.textContent.includes('Last run: completed');",
+    "return button('sessionquiet').parentElement.textContent.includes('Last run · completed');",
   );
   await send("failure");
   await wait("return !!button('sessionfailure');");
   await wait(
-    "return button('sessionfailure').parentElement.textContent.includes('Last run: failed');",
+    "return button('sessionfailure').parentElement.textContent.includes('Last run · failed');",
   );
   await run(
     "[...button('sessionfailure').parentElement.querySelectorAll('button')].find(b=>b.textContent.includes('Last run')).click();",
   );
   await wait(
-    "return !!$('[aria-label=\"Run of sessionfailure\"]') && document.body.textContent.includes('Controlled monitor failure');",
+    "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionfailure' && document.body.textContent.includes('Controlled monitor failure');",
   );
   await run("$('[aria-label=\"Stop watcher sessionfailure\"]').click();");
   await wait(
@@ -169,7 +190,7 @@ it("delivers an attention reminder without a model turn and shows late schedule 
   );
   expect(
     await run(
-      "return [...document.querySelectorAll('[data-testid=session-attribution]')].some(el => el.textContent.includes('Attention requested') && el.textContent.includes('View run'));",
+      "return [...document.querySelectorAll('[data-testid=chat-inbound-message]')].some(el => el.textContent.includes('Attention requested') && el.querySelector('a[href^=\"run:\"]')?.textContent === 'Open run');",
     ),
   ).toBe(true);
 });
@@ -177,11 +198,18 @@ it("delivers an attention reminder without a model turn and shows late schedule 
 it("lists a seven-day reminder before archive, preserves it on cancel, and cancels it on confirmation", async () => {
   await send("longreminder");
   await wait(
-    "return !!button('sessionlongreminder') && button('sessionlongreminder').parentElement.textContent.includes('Next:');",
+    "return !!button('sessionlongreminder') && button('sessionlongreminder').parentElement.textContent.includes('Next ·');",
   );
+  // The live bubble of this session's chat, never an exiting snapshot.
+  const bubble = `[...document.querySelectorAll('[data-chat-bubble][data-session-id]')].find(el => !el.className.includes('animate-bubble-out'))?.querySelector('button')`;
   const archive = async () => {
+    // Open the menu once the turn has settled: its closing answer is what
+    // the timeline scrolls to follow, and the bubble's menu must be there.
+    await wait(
+      `return [...document.querySelectorAll('.cat-markdown a[href^="artifact:"]')].some(a => a.textContent.includes('longreminder workflow')) && !$('[data-chat-local-id] [aria-label="Stop response"]') && !!${bubble};`,
+    );
     await run(
-      `const bubble = document.querySelector('[data-chat-bubble][data-session-id] button'); if (!bubble) throw new Error('Missing chat bubble'); bubble.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }));`,
+      `${bubble}.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }));`,
     );
     await wait(
       `return [...document.querySelectorAll('[role=menuitem]')].some(item => item.textContent.trim() === 'Archive');`,
@@ -203,7 +231,7 @@ it("lists a seven-day reminder before archive, preserves it on cancel, and cance
     await run(
       "return document.querySelector('[data-testid=archive-session-confirm]').closest('[role=dialog]').textContent;",
     ),
-  ).toContain("Next:");
+  ).toContain("Next ·");
   await run("button('Cancel').click();");
   await wait(
     "return !document.querySelector('[role=dialog]:not([aria-hidden=true]) [data-testid=archive-session-confirm]');",

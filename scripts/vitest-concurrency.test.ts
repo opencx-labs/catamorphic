@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { repositoryNodePath } from "./tool-runtime.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -66,7 +67,7 @@ describe("Vitest concurrency", () => {
         }
 
         await execFileAsync(
-          path.join(repositoryRoot, "node_modules", "node", "bin", "node"),
+          repositoryNodePath({ rootPath: repositoryRoot }),
           [
             "--import",
             preloadPath,

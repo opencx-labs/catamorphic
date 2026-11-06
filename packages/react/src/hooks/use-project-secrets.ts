@@ -14,11 +14,10 @@ import type { Secret } from "../types.js";
  */
 export function useProjectSecrets(
   projectId: string | undefined,
-  stage: "test" | "production" = "production",
 ): UseQueryResult<Secret[], CatamorphicError> {
   const { apiClient } = useCatamorphic();
   return useQuery<Secret[], CatamorphicError>({
-    queryKey: ["cat", "project", projectId, "secrets", stage],
+    queryKey: ["cat", "project", projectId, "secrets"],
     queryFn: () =>
       runWithCatamorphicError(async () => {
         const result = await apiClient.GET(
@@ -26,7 +25,6 @@ export function useProjectSecrets(
           {
             params: {
               path: { projectId: projectId as string },
-              query: { stage },
             },
           },
         );

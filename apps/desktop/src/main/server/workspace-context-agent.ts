@@ -1,12 +1,5 @@
 import type { AgentCoordinationStrategy } from "@catamorphic/core";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  ProviderSession,
-  StartSessionOpts,
-  TurnContextFragment,
-  TurnOptions,
-} from "@catamorphic/sandbox";
+import type { TurnContextFragment } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 
 export interface ProjectSessionContext {
@@ -19,6 +12,8 @@ export interface ProjectSessionContext {
   checkout: {
     kind: "primary" | "managed" | "external";
     branch: string | null;
+    /** False when the folder the person assigned is gone or no longer this repository. */
+    available: boolean;
   };
 }
 
@@ -68,16 +63,9 @@ export function isolationConflictPeerSessionIds(input: {
     .map((peer) => peer.id);
 }
 
-/** Wiring for {@link WorkspaceContextAgent}. */
+/** Where a turn's workspace context comes from. */
 export interface WorkspaceContextOptions {
   bridge: WorkspaceBridge;
-  /** Whether this harness also carries the workspace toolset. */
-  hasTools: boolean;
-  /**
-   * The skills section for this harness (ADR 0049), resolved lazily so
-   * sessions started before the server finishes booting still pick it up.
-   */
-  skillsNote?: () => string | undefined;
   coordination?: AgentCoordinationContext;
   /**
    * Per-project desktop facts: where new private documents go and any
@@ -88,170 +76,224 @@ export interface WorkspaceContextOptions {
     personalFilesDirectory?: string;
     settingsErrors?: string[];
   };
-  bindTurn?: (sessionId: string, options?: TurnOptions) => () => void;
 }
 
 /**
- * Workspace awareness for every harness (ADR 0152): a short, stable Work
- * section appended to the session's system prompt, and each turn's live
- * screen, desktop facts and peers added to the turn's context fragments.
- * The harness delivers fragments beside the user's message through its own
- * channel; the message text is never touched, so neither the stored chat
- * nor the harness history mixes host context into the person's words.
+ * The stable Work section of a desktop agent's instructions (ADR 0152):
+ * the playbook, how it shares the project with other chats, and its
+ * skills (ADR 0049).
  */
-export class WorkspaceContextAgent implements CodingAgentProvider {
-  readonly name: string;
-  /** Forwarded only when the harness supports them (feature-detection). */
-  readonly interrupt?: (providerSessionId: string) => void;
-  readonly hasSession?: (providerSessionId: string) => boolean;
-  readonly retryTurn?: CodingAgentProvider["retryTurn"];
+export function workspaceInstructions({
+  hasTools,
+  strategy,
+  skillsNote,
+  assistant = false,
+}: {
+  /** Whether this harness also carries the workspace toolset. */
+  hasTools: boolean;
+  strategy: AgentCoordinationStrategy;
+  skillsNote?: string;
+  /** The assistant (ADR 0216) reaches chats with tools of its own. */
+  assistant?: boolean;
+}): string {
+  return [
+    workPlaybook({ hasTools, assistant }),
+    coordinationNote(strategy),
+    skillsNote,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
-  constructor(
-    private readonly inner: CodingAgentProvider,
-    private readonly opts: WorkspaceContextOptions,
-  ) {
-    this.name = inner.name;
-    if (inner.interrupt) {
-      this.interrupt = (providerSessionId) =>
-        inner.interrupt?.(providerSessionId);
+/**
+ * Workspace awareness for every harness (ADR 0152): each turn's live
+ * screen, desktop facts and peers, as context fragments the harness
+ * delivers beside the person's message through its own channel. The
+ * message text is never touched, so neither the stored chat nor the
+ * harness history mixes host context into the person's words. Every part
+ * is advisory: a failure drops that part, never the turn.
+ */
+export async function workspaceTurnContext({
+  bridge,
+  coordination,
+  desktopFacts,
+  projectId,
+  personProjectId,
+  spoken,
+  sessionId,
+}: WorkspaceContextOptions & {
+  projectId: string;
+  /**
+   * The project whose window the person is in, when the chat's own is no
+   * place of theirs (the assistant, ADR 0265): its screen and facts are
+   * the turn's.
+   */
+  personProjectId?: string;
+  /**
+   * The screen as the person started saying their latest message by voice
+   * (ADR 0265), in place of the screen now: it often changes while they
+   * talk and once they finish.
+   */
+  spoken?: { at: number; screen: Promise<string | null> };
+  sessionId: string;
+}): Promise<TurnContextFragment[]> {
+  const fragments: TurnContextFragment[] = [];
+  const where = personProjectId ?? projectId;
+  // The screen as they started speaking, else, when Work showed nothing
+  // for the chat then, as it is now.
+  const then = spoken
+    ? await within(spoken.screen, SPOKEN_SCREEN_WAIT_MS)
+    : null;
+  const screen =
+    then ?? (await workspaceScreen({ bridge, projectId: where, sessionId }));
+  if (screen)
+    fragments.push({
+      source: "workspace",
+      trust: "observed",
+      text: then && spoken ? `${spokenScreenLead(spoken.at)}\n${then}` : screen,
+    });
+  const desktop: string[] = [];
+  try {
+    const facts = desktopFacts?.(where);
+    if (facts?.personalFilesDirectory) {
+      desktop.push(
+        `New documents the person asks for are private by default: save them in ${facts.personalFilesDirectory} unless they choose another folder.`,
+      );
     }
-    if (inner.hasSession) {
-      this.hasSession = (providerSessionId) =>
-        inner.hasSession?.(providerSessionId) ?? true;
+    if (facts?.settingsErrors?.length) {
+      desktop.push(
+        `A Work settings file has errors, so its last valid version is still in effect: ${facts.settingsErrors.join("; ")}`,
+      );
     }
-    if (inner.retryTurn) {
-      // A retry re-runs history as-is; no fresh context to add.
-      const bindTurn = opts.bindTurn;
-      this.retryTurn = async function* (
-        session: ProviderSession,
-        turn?: TurnOptions,
-      ) {
-        const release = bindTurn?.(session.sessionId, turn);
-        try {
-          if (inner.retryTurn) yield* inner.retryTurn(session, turn);
-        } finally {
-          release?.();
-        }
-      };
-    }
+  } catch {
+    // Desktop facts are advisory.
   }
-
-  async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    return this.inner.startSession({
-      ...opts,
-      systemPrompt: [
-        opts.systemPrompt,
-        workPlaybook({ hasTools: this.opts.hasTools }),
-        coordinationNote(this.opts.coordination?.strategy ?? "shared-first"),
-        this.opts.skillsNote?.(),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
+  try {
+    const notice = await coordination?.checkoutNotice?.(projectId, sessionId);
+    if (notice) desktop.push(notice);
+  } catch {
+    // A recovery notice must not break a turn.
+  }
+  try {
+    const running = bridge
+      .backgroundCommands({ sessionId })
+      .filter((command) => command.status === "running");
+    if (running.length > 0) {
+      desktop.push(
+        [
+          "Your background commands and watches still running (they wake this chat when they finish or see what you asked for):",
+          ...running.map(
+            (command) =>
+              `- ${command.id}: ${command.description} (${command.command.replace(/\s+/g, " ").slice(0, 120)})`,
+          ),
+        ].join("\n"),
+      );
+    }
+  } catch {
+    // Advisory.
+  }
+  if (desktop.length > 0) {
+    fragments.push({
+      source: "desktop",
+      trust: "host",
+      text: desktop.join("\n"),
     });
   }
-
-  async *sendMessage(
-    session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent> {
-    const fragments = await this.turnContext(session);
-    const release = this.opts.bindTurn?.(session.sessionId, opts);
-    try {
-      yield* this.inner.sendMessage(session, message, {
-        ...opts,
-        context: [...(opts?.context ?? []), ...fragments],
-      });
-    } finally {
-      release?.();
-    }
-  }
-
-  async dispose(session: ProviderSession): Promise<void> {
-    await this.inner.dispose(session);
-  }
-
-  /** Every part is advisory: a failure drops that part, never the turn. */
-  private async turnContext(
-    session: ProviderSession,
-  ): Promise<TurnContextFragment[]> {
-    const fragments: TurnContextFragment[] = [];
-    const { bridge, coordination, desktopFacts } = this.opts;
-    try {
-      const overview = await bridge.overview(session.projectId);
-      const screen = describeScreen(overview, session.sessionId);
-      if (screen) {
-        const look = await glanceAt(bridge, session.projectId, screen.focus);
+  try {
+    if (coordination) {
+      const peers = formatProjectSessionsContext(
+        await coordination.peers(projectId, sessionId),
+      );
+      if (peers) {
         fragments.push({
-          source: "workspace",
+          source: "project_sessions",
           trust: "observed",
-          text: formatScreen(screen, look),
+          text: peers,
         });
       }
-    } catch {
-      // No window has the project open; the turn runs without a screen.
     }
-    const desktop: string[] = [];
-    try {
-      const facts = desktopFacts?.(session.projectId);
-      if (facts?.personalFilesDirectory) {
-        desktop.push(
-          `New documents the person asks for are private by default: save them in ${facts.personalFilesDirectory} unless they choose another folder.`,
-        );
-      }
-      if (facts?.settingsErrors?.length) {
-        desktop.push(
-          `A Work settings file has errors, so its last valid version is still in effect: ${facts.settingsErrors.join("; ")}`,
-        );
-      }
-    } catch {
-      // Desktop facts are advisory.
-    }
-    try {
-      const notice = await coordination?.checkoutNotice?.(
-        session.projectId,
-        session.sessionId,
-      );
-      if (notice) desktop.push(notice);
-    } catch {
-      // A recovery notice must not break a turn.
-    }
-    if (desktop.length > 0) {
-      fragments.push({
-        source: "desktop",
-        trust: "host",
-        text: desktop.join("\n"),
-      });
-    }
-    try {
-      if (coordination) {
-        const peers = formatProjectSessionsContext(
-          await coordination.peers(session.projectId, session.sessionId),
-        );
-        if (peers) {
-          fragments.push({
-            source: "project_sessions",
-            trust: "observed",
-            text: peers,
-          });
-        }
-      }
-    } catch {
-      // Coordination context is advisory.
-    }
-    return fragments;
+  } catch {
+    // Coordination context is advisory.
   }
+  return fragments;
+}
+
+/**
+ * Work's screen for a chat, as its turns describe it (ADR 0152): what the
+ * person looks at, a look inside it, where the chat sits, the other tabs.
+ * Null when no window shows the project.
+ */
+export async function workspaceScreen({
+  bridge,
+  projectId,
+  sessionId,
+}: {
+  bridge: WorkspaceBridge;
+  projectId: string;
+  sessionId?: string;
+}): Promise<string | null> {
+  try {
+    const overview = await bridge.overview(projectId);
+    const screen = describeScreen(overview, sessionId);
+    if (!screen) return null;
+    const look = await glanceAt(bridge, projectId, screen.focus);
+    return formatScreen(screen, look);
+  } catch {
+    // No window has the project open; the turn runs without a screen.
+    return null;
+  }
+}
+
+/** A screen taken as speech started is long ready by its turn. */
+const SPOKEN_SCREEN_WAIT_MS = 1_500;
+
+async function within<T>(
+  promise: Promise<T | null>,
+  ms: number,
+): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function spokenScreenLead(at: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  const ago =
+    seconds < 90
+      ? `${seconds} ${seconds === 1 ? "second" : "seconds"}`
+      : `${Math.round(seconds / 60)} minutes`;
+  return `As the person started saying their latest message, ${ago} before this turn, Work showed this. screen_when_spoken has a picture of their screen then; workspace_overview and read_tab show it now.`;
 }
 
 /**
  * The stable Work section of every desktop agent's system prompt. Kept
  * short: procedures live in the desktop-workspace skill.
  */
-export function workPlaybook({ hasTools }: { hasTools: boolean }): string {
+export function workPlaybook({
+  hasTools,
+  assistant = false,
+}: {
+  hasTools: boolean;
+  /**
+   * The assistant (ADR 0216) has its own session tools in place of Work's
+   * project-only chat tools; its instructions say so. It starts
+   * subsessions like any agent (ADR 0271).
+   */
+  assistant?: boolean;
+}): string {
+  const chats = `Subsessions are your subagents: use spawn_subsession wherever a skill or habit calls for a subagent or Task tool. Type into terminals, ${assistant ? "" : "reach other chats, "}build apps and connect services through discover_capabilities`;
   const tools = hasTools
     ? `
 
-Use your own file and shell tools for ordinary work; Bun is on PATH. Read more of what the person sees with read_tab (a page's full text, a terminal's output, another chat, an editor selection). Browser tools from elsewhere, such as a Chrome extension or MCP server, see a different browser, not Work's tabs. Control Work's browser or terminals, reach other chats, build apps and connect services through discover_capabilities; the desktop-workspace skill explains these when a task needs them.
+Use your own file and shell tools for ordinary work; Bun is on PATH. Start anything long-running (dev servers, slow builds or test runs) with run_background_command and keep working: it outlives this turn and wakes this chat when it finishes, so never wait with sleep; wait on anything else (a file, a deploy, a review) with watch_command. Describe commands plainly: the person sees it. Look before asking: read_tab reads a page, a terminal, another chat, an editor selection, or window (a screenshot of Work). Drive Work's browser (the person's signed-in tabs) with open_browser, browser_snapshot and browser_act; browser tools from elsewhere (a Chrome extension, an MCP server) see a different browser. ${chats}; the desktop-workspace skill explains these.
 
 Show results instead of describing where they are: link them in Markdown as [Title](app:<name>), [Title](workflow:<exportName>), [Title](file:<path>) or a web URL, and open the one that matters with open_surface. Use update_todo_list to show progress on multi-step work.`
     : "";
@@ -269,7 +311,7 @@ function coordinationNote(strategy: AgentCoordinationStrategy): string {
       : strategy === "isolate-on-contention"
         ? " Prefer a worktree when another active chat is likely to touch the same files."
         : "";
-  return `Other chats may be working in this project at the same time; the turn context lists them. Before editing, check whether one is changing the same files, and coordinate or wait (see the desktop-workspace skill).${rule}`;
+  return `Other chats may be working in this project at the same time; the turn context lists them. Before editing, check whether one is changing the same files, and coordinate or wait (see the desktop-workspace skill).${rule} A worktree you made with git is yours to remove, with its branch, once its pull request has merged and you need it no longer; never one with uncommitted changes, or one the person or another chat works in.`;
 }
 
 /** Other active chats in the project, as observed status data. */
@@ -285,7 +327,7 @@ export function formatProjectSessionsContext(
         ? ""
         : `, in a separate worktree${
             peer.checkout.branch ? ` (${oneLine(peer.checkout.branch)})` : ""
-          }`;
+          }${peer.checkout.available ? "" : " whose folder is unavailable"}`;
     const doing = peer.activity ?? (peer.task !== title ? peer.task : null);
     lines.push(
       `- "${title}" (${peer.running ? "working now" : "idle"}${where})${
