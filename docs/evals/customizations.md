@@ -79,6 +79,23 @@ Private capabilities use the actual capability registry and its caller-bound
 authorization, backed by a disposable PGlite database outside the agent's
 filesystem boundary.
 
+Workflow dependency installs and the ordinary workflow supervisor use the
+local provider's PATH hook to enter a separate Seatbelt boundary. The immutable
+launcher validates the canonical sandbox home and working directory before
+launching Bun. Dependency installation disables lifecycle scripts and validates
+installed links before the host writes runtime payloads. An invalid installation
+detaches its workspace before any host restoration write. Workflow module
+initialization, boundary callbacks and their children read their own sandbox
+and write only its data, home, temporary and cache directories. Source and
+runtime payloads stay read-only. Workflow installation and execution have no network access.
+They cannot reach the evaluator, its database, other sandboxes, or live Work
+listeners. Child Bun commands inherit that boundary and use the real executable
+directly. Workflow execution fails on platforms without this confinement.
+The workflow boundary also denies Mach service access and process inspection,
+task ports and signals outside that sandbox. Bun launches use an immutable
+explicit configuration; the install validator starts from its own directory
+with a clean environment and cannot load a project's startup files.
+
 Sidebar preview and grading share that real host too. `work.state` uses the
 same canonical package namespace as Work, checks the state permission both
 at process start and on every call, and keeps state across worker restarts.

@@ -16,6 +16,7 @@ import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { z } from "zod";
 import type { HarnessAdapter } from "../../../packages/agent-protocol/src/runner.js";
 import { LocalProcessSandboxProvider } from "../../../packages/local-process/src/index.js";
+import { confinedWorkflowEnvironment } from "../../../scripts/customization-eval/confinement.js";
 import type { EvalFixture } from "../../../scripts/customization-eval/fixture.js";
 import type { Grade } from "../../../scripts/customization-eval/grade.js";
 import { sourceFiles } from "../../../scripts/customization-eval/sdk.js";
@@ -47,9 +48,15 @@ export async function createPrivateCustomizationEvalHost(input: {
   const dueAt = new Date(Date.now() + 3_600_000).toISOString();
   const delivered: Array<{ title: string; owner: string }> = [];
   const sandboxes = new TestSandboxes();
+  const sandboxRoot = path.join(storage, "sandboxes");
   const provider = sandboxes.track(
     new LocalProcessSandboxProvider({
-      root: path.join(storage, "sandboxes"),
+      root: sandboxRoot,
+      env: await confinedWorkflowEnvironment({
+        directory: input.directory,
+        sandboxRoot,
+        bun: process.execPath,
+      }),
     }),
   );
   const environmentProvider: EnvironmentProvider = {
@@ -278,7 +285,7 @@ export async function createPrivateCustomizationEvalHost(input: {
       );
       await writeFile(
         path.join(input.project, "PRIVATE-WORKFLOWS.md"),
-        `Private state is versioned JSON, partitioned by the caller. Missing state has version 0.\nPrivate workflow source is retained outside project files, with a member lifetime independent of a chat.\nA source revision becomes active using private_workflow preview and activate with its consent digest.\nWorkflows are ordinary @catamorphic/workflow defineWorkflow values, for example:\n\nimport { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";\nexport const reminder = defineWorkflow(({ defineBoundary }) => ({\n  permissions: ["notifications:write"],\n  triggers: [trigger("schedule", { at: "2026-11-06T12:00:00Z" })],\n  steps: [defineBoundary({ run: ({ host }: BoundaryContext<unknown>) =>\n    host["catamorphic.notifications"].publish({ title: "A reminder", idempotencyKey: "stable-event-key" })\n  })]\n}));\n\nHost capability calls return transitions from boundaries; the ordinary run worker executes and journals them.\nNo session, sidebar process, model turn, filesystem lock, or system job is required for schedule delivery.\n`,
+        `Private state is versioned JSON, partitioned by the caller. Missing state has version 0.\nPrivate workflow source is retained outside project files, with a member lifetime independent of a chat.\nA source revision becomes active using private_workflow preview and activate with its consent digest.\nThis evaluation supplies staged SDK dependencies; workflow execution has no outbound network or install lifecycle hooks, source and runtime payloads are read-only, and sandbox data directories are writable.\nWorkflows are ordinary @catamorphic/workflow defineWorkflow values, for example:\n\nimport { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";\nexport const reminder = defineWorkflow(({ defineBoundary }) => ({\n  permissions: ["notifications:write"],\n  triggers: [trigger("schedule", { at: "2026-11-06T12:00:00Z" })],\n  steps: [defineBoundary({ run: ({ host }: BoundaryContext<unknown>) =>\n    host["catamorphic.notifications"].publish({ title: "A reminder", idempotencyKey: "stable-event-key" })\n  })]\n}));\n\nHost capability calls return transitions from boundaries; the ordinary run worker executes and journals them.\nNo session, sidebar process, model turn, filesystem lock, or system job is required for schedule delivery.\n`,
       );
     },
     invoke: async (call) => {
@@ -443,7 +450,7 @@ export async function createPrivateCustomizationEvalHost(input: {
           });
           assert(
             result.status === "completed",
-            `Reminder run ended ${result.status}`,
+            `Reminder run ended ${result.status}${result.status === "failed" ? `: ${result.error}` : ""}`,
           );
         }
         await host.core.notifications.drain("eval-after-restart");

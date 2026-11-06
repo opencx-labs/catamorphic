@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -47,7 +47,7 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await fixture?.close();
-  if (directory) await rm(directory, { recursive: true, force: true });
+  if (directory) await removeTestDirectory(directory);
 });
 
 function sourceWork(file = modulePath) {
@@ -202,8 +202,8 @@ it.skipIf(process.platform !== "darwin")(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "a real reminder evaluation exits after destroying its immutable runtime sandbox",
+it.skipIf(process.platform !== "darwin")(
+  "real reminder installs, module imports, boundaries and nested Bun stay confined and clean up",
   async () => {
     const repository = path.resolve(import.meta.dirname, "../..");
     const temporary = path.join(directory, "reminder-cleanup");
@@ -214,24 +214,48 @@ it.skipIf(process.platform === "win32")(
       `
     import fs from 'node:fs/promises';
     import path from 'node:path';
+    import http from 'node:http';
+    import {spawnSync} from 'node:child_process';
     import {createPrivateCustomizationEvalHost} from ${JSON.stringify(path.join(repository, "apps/desktop/evals/private-customization-host.ts"))};
     import {createCodexAdapter} from ${JSON.stringify(path.join(repository, "packages/codex/src/index.ts"))};
     const directory=${JSON.stringify(temporary)};const project=path.join(directory,'project');await fs.mkdir(project);
+    const hidden=path.join(directory,'hidden-grader.txt');await fs.writeFile(hidden,'unchanged');
+    const control=path.join(directory,'root-hook-control');await fs.mkdir(control);
+    await fs.writeFile(path.join(control,'package.json'),JSON.stringify({name:'root-hook-control',private:true,scripts:{postinstall:'bun hook.ts'}}));
+    await fs.writeFile(path.join(control,'hook.ts'),'import fs from "node:fs";fs.writeFileSync("hook-ran","ran")');
+    const baseline=spawnSync(process.execPath,['install','--no-save','--backend=copyfile'],{cwd:control,env:{PATH:path.dirname(process.execPath)+':/usr/bin:/bin',HOME:control,TMPDIR:control},encoding:'utf8',timeout:5000});
+    if(baseline.status!==0)throw new Error('Root lifecycle control failed: '+baseline.stderr);
+    const rootHookControl=await fs.readFile(path.join(control,'hook-ran'),'utf8');
+    const launcher=path.join(directory,'workflow-launcher','bun');
+    let connections=0;const server=http.createServer((_request,response)=>{connections++;response.end('host listener')});
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    const endpoint='http://127.0.0.1:'+server.address().port;
     const fixture=await createPrivateCustomizationEvalHost({project,directory,adapter:createCodexAdapter()});
     let closed=false;
     try{
       await fixture.seed();
       const {title,dueAt,stateKey}=JSON.parse(await fs.readFile(path.join(project,'reminder-request.json'),'utf8'));
       await fixture.invoke({name:'private_state_write',input:{key:stateKey,value:{title,dueAt},ifVersion:0}});
-      const source='import {defineWorkflow,trigger,type BoundaryContext} from "@catamorphic/workflow"; export const reminder=defineWorkflow(({defineBoundary})=>({permissions:["notifications:write"],triggers:[trigger("schedule",{at:'+JSON.stringify(dueAt)+'})],steps:[defineBoundary({run:({host}:BoundaryContext<unknown>)=>host["catamorphic.notifications"].publish({title:'+JSON.stringify(title)+',idempotencyKey:"cleanup-test"})})]}));';
-      const artifact=await fixture.invoke({name:'private_workflow',input:{action:'create',name:'reminder',source}});
+      const probe=\`
+        import fs from 'node:fs';import path from 'node:path';import {spawnSync} from 'node:child_process';
+        const hidden=\${JSON.stringify(hidden)};const launcher=\${JSON.stringify(launcher)};const hostPid=\${process.pid};
+        function denied(fn){try{fn();return false}catch(error){return ['EACCES','EPERM'].includes(error.code)}}
+        export function probe(stage){const inspect=spawnSync('/bin/ps',['-p',String(hostPid),'-o','command='],{encoding:'utf8'});const result={read:denied(()=>fs.readFileSync(hidden)),write:denied(()=>fs.writeFileSync(hidden,'tampered')),policyRead:denied(()=>fs.readFileSync(launcher)),policyWrite:denied(()=>fs.writeFileSync(launcher,'tampered')),sourceMode:denied(()=>fs.chmodSync(import.meta.path,0o600)),sourceWrite:denied(()=>fs.writeFileSync(import.meta.path,'tampered')),runtimeWrite:denied(()=>fs.writeFileSync(path.join(process.env.CATAMORPHIC_RUNTIME_ARTIFACT_ROOT,'../runtime/entry.mjs'),'tampered')),hardlink:denied(()=>fs.linkSync(hidden,path.join(process.env.HOME,'hardlink'))),hostSignal:denied(()=>process.kill(hostPid,0)),hostInspection:inspect.status!==0||!inspect.stdout.trim()};process.kill(process.pid,0);fs.writeFileSync(path.join(process.env.HOME,stage+'.json'),JSON.stringify(result));if(!Object.values(result).every(Boolean))throw new Error('Host boundary escaped at '+stage)}
+        export async function network(stage){let blocked=false;try{await fetch(\${JSON.stringify(endpoint)},{signal:AbortSignal.timeout(1000)})}catch{blocked=true}fs.writeFileSync(path.join(process.env.HOME,stage+'-network.json'),JSON.stringify({blocked}));if(!blocked)throw new Error('Host listener reachable')}
+        export async function boundary(){probe('boundary');await network('boundary');const nested=spawnSync('bun',['-e',\\\`const fs=require('node:fs');let blocked=false;try{fs.readFileSync(\\\${JSON.stringify(hidden)})}catch{blocked=true}if(!blocked)process.exit(3);process.kill(process.ppid,0);fs.writeFileSync(process.env.HOME+'/nested.json',JSON.stringify({read:blocked,parentSignal:true}));\\\`],{encoding:'utf8'});if(nested.status!==0)throw new Error('Nested Bun failed: '+nested.stderr)}
+        if(process.argv[2]==='install'){fs.writeFileSync(path.join(process.env.HOME,'install.json'),'ran');fs.unlinkSync('workflows/package.json');fs.symlinkSync(hidden,'workflows/package.json')}
+      \`;
+      const source='import {defineWorkflow,trigger,type BoundaryContext} from "@catamorphic/workflow"; import {probe,boundary,network} from "../../../probe"; probe("module"); await network("module"); export const reminder=defineWorkflow(({defineBoundary})=>({permissions:["notifications:write"],triggers:[trigger("schedule",{at:'+JSON.stringify(dueAt)+'})],steps:[defineBoundary({run:async({host}:BoundaryContext<unknown>)=>{await boundary();return host["catamorphic.notifications"].publish({title:'+JSON.stringify(title)+',idempotencyKey:"cleanup-test"})}})]}));';
+      const artifact=await fixture.invoke({name:'private_workflow',input:{action:'create',name:'reminder',source,files:{'.work/probe.ts':probe,'.work/package.json':JSON.stringify({name:'eval-install',private:true,workspaces:['contracts','workflows'],scripts:{postinstall:'bun probe.ts install'}}),'.work/bunfig.toml':'preload = ["./startup.ts"]\\n','.work/.env':'BUN_OPTIONS="--preload ./startup.ts"\\n','.work/startup.ts':'import fs from "node:fs";fs.writeFileSync('+JSON.stringify(hidden)+',"startup escaped");throw new Error("Guest startup executed")'}}});
       const preview=await fixture.invoke({name:'private_workflow',input:{action:'preview',artifactId:artifact.id,revision:artifact.revision}});
       await fixture.invoke({name:'private_workflow',input:{action:'activate',artifactId:artifact.id,revision:artifact.revision,consentDigest:preview.consentDigest}});
       const grades=await fixture.grade();
+      const sandboxes=path.join(directory,'host-state/sandboxes');const proofs={};
+      for(const name of await fs.readdir(sandboxes)){if(!name.startsWith('local-'))continue;for(const stage of ['install','module','boundary','nested','module-network','boundary-network']){try{proofs[stage]=JSON.parse(await fs.readFile(path.join(sandboxes,name,'home',stage+'.json'),'utf8'))}catch(error){if(error.code!=='ENOENT')throw error}}}
       await fixture.close();closed=true;
       const remaining=(await fs.readdir(path.join(directory,'host-state/sandboxes'))).filter(name=>name.startsWith('local-'));
-      console.log(JSON.stringify({grades,remaining}));
-    }finally{if(!closed)await fixture.close()}
+      console.log(JSON.stringify({grades,remaining,proofs,connections,rootHookControl,hidden:await fs.readFile(hidden,'utf8')}));
+    }finally{if(!closed)await fixture.close();await new Promise(resolve=>server.close(resolve))}
   `,
     );
     try {
@@ -245,9 +269,32 @@ it.skipIf(process.platform === "win32")(
       );
       expect(evidence.grades).toHaveLength(5);
       expect(
-        evidence.grades.every((grade: { passed: boolean }) => grade.passed),
-      ).toBe(true);
+        evidence.grades.filter((grade: { passed: boolean }) => !grade.passed),
+      ).toEqual([]);
       expect(evidence.remaining).toEqual([]);
+      expect(evidence.proofs.install).toBeUndefined();
+      for (const stage of ["module", "boundary"])
+        expect(evidence.proofs[stage]).toEqual({
+          read: true,
+          write: true,
+          policyRead: true,
+          policyWrite: true,
+          sourceMode: true,
+          sourceWrite: true,
+          runtimeWrite: true,
+          hardlink: true,
+          hostSignal: true,
+          hostInspection: true,
+        });
+      expect(evidence.proofs.nested).toEqual({
+        read: true,
+        parentSignal: true,
+      });
+      for (const stage of ["module-network", "boundary-network"])
+        expect(evidence.proofs[stage]).toEqual({ blocked: true });
+      expect(evidence.hidden).toBe("unchanged");
+      expect(evidence.connections).toBe(0);
+      expect(evidence.rootHookControl).toBe("ran");
     } finally {
       await settleTestProcesses({
         temporaryRoot: temporary,
