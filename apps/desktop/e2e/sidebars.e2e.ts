@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_SIDEBAR_CONFIG } from "../src/main/sidebar-config.js";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let configFile: string;
@@ -19,9 +23,11 @@ beforeAll(async () => {
   configFile = await app.eval<string>(
     "window.catamorphicDesktop.sidebarConfigFile()",
   );
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Sidebar studio',rootPath:${JSON.stringify(`${app.userDataDir}/sidebar-studio`)}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Sidebar studio",
+    rootPath: `${app.userDataDir}/sidebar-studio`,
+  });
   projectId = project.id;
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Sidebar studio')`);

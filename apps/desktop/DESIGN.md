@@ -1091,3 +1091,9 @@ New profiles start in Default Project with onboarding selected and the dock
 visible before agent setup. Initialization reuses one profile-owned project even
 when windows start together; the boot veil waits for that workspace. Existing
 profiles restore their selected project. The dock remains collapsed at startup.
+
+The dock tutorial's strip travels from the right corner to the window center as
+it expands. Its cursor follows the controls in both positions. Expanding the
+real attached dock reserves 64px beneath onboarding, moving its content and
+navigation upward with the existing 250ms padding motion. The inert tutorial
+preview never changes real workspace clearance. Reduced motion settles directly.

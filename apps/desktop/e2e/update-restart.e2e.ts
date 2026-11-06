@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 /**
  * Electron's autoUpdater.quitAndInstall announces `before-quit-for-update`
@@ -26,10 +30,11 @@ const alive = (pid: number) => {
 describe("update restart", () => {
   it("exits with a project window open once the update quit is announced", async () => {
     app = await launchApp();
-    await app.eval(`window.catamorphicDesktop.createProject({
-      name: 'update-restart',
-      rootPath: ${JSON.stringify(`${app.userDataDir}/update-restart`)}
-    })`);
+    await createProjectWorkspace({
+      app,
+      name: "update-restart",
+      rootPath: `${app.userDataDir}/update-restart`,
+    });
     await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
     const pid = app.processId;
     if (!pid) throw new Error("Missing app process id");

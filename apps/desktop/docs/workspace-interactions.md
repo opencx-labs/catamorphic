@@ -147,7 +147,10 @@ The tutorial introduces themes, agent setup, the dock, keyboard shortcuts, the
 palette, and combined browser import/default-browser setup. The agent step opens
 the existing wizard as a modal, retains the tutorial and its step, and shows a
 completed action once configured. The dock is already visible before setup; its walkthrough uses the real bubble strip and an animated
-cursor, with a static illustration under reduced motion. The palette and dock
+cursor, expanding from the right corner into the center of the window, with a
+static illustration under reduced motion. Expanding the real dock reserves bottom
+space in onboarding over 250ms so the copy and navigation remain clear; the
+preview's animation does not change that clearance. The palette and dock
 steps show effective shortcuts and the plus icon. Project creation and server
 connections stay in the normal project switcher. Done
 closes the tutorial and opens an ordinary New Tab palette, keeping other tabs.

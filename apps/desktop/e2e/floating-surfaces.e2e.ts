@@ -7,6 +7,7 @@ import {
   launchApp,
   openProjectSwitcher,
   setReactValueJs,
+  workspaceDomHelpersJs,
 } from "./harness.js";
 
 let app: AppHandle;
@@ -19,7 +20,7 @@ const server = http.createServer((request, response) => {
 });
 const run = <T>(body: string) =>
   app.eval<T>(
-    `(() => { ${setReactValueJs}\n const $=s=>document.querySelector(s); ${body} })()`,
+    `(() => { ${setReactValueJs}\n ${workspaceDomHelpersJs} ${body} })()`,
   );
 const key = (value: string, mods: Record<string, boolean> = {}) =>
   app.eval(
@@ -51,7 +52,7 @@ beforeAll(async () => {
     "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='New project')",
   );
   await run(
-    "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='New project').click()",
+    "$$('button').find(b=>b.textContent.trim()==='New project').click()",
   );
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
@@ -74,7 +75,7 @@ beforeAll(async () => {
     `setReactValue($('textarea[placeholder*="Search or ask"]'),${JSON.stringify(`${origin}/anchor`)})`,
   );
   await app.waitFor(
-    "document.querySelector('[data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
+    "document.querySelector('[data-workspace-visible=true] [data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
   );
   await run("$('textarea[placeholder*=\"Search or ask\"]').focus()");
   await app.press("Enter");
@@ -401,7 +402,7 @@ describe("floating surfaces", () => {
     );
     const sessions = await app.eval<number>("window.__terminalIds.length");
     await run(
-      "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Add macro').click()",
+      "$$('button').find(b=>b.textContent.trim()==='Add macro').click()",
     );
     await run(
       "setReactValue($('[name=macroName]'),'Working directory');setReactValue($('[name=macroCommand]'),'pwd')",

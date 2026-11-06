@@ -90,6 +90,16 @@
   min-height: 0;
   overflow: clip;
   background: var(--color-bg);
+  transition: padding-bottom 250ms var(--ease-standard);
+}
+:where(
+    [data-workspace-root]:has(
+      > [data-dock-host]:not([data-dock-native])
+        [data-dock-rail][data-dock-collapsed="false"]
+    )
+  )
+  .onboarding {
+  padding-bottom: 64px;
 }
 .onboarding-viewport {
   flex: 1;
@@ -323,17 +333,19 @@
 }
 .onboarding-dock-preview {
   position: relative;
+  container-type: inline-size;
   width: min(100%, 420px);
   height: 180px;
 }
 .onboarding-demo-cursor {
   position: absolute;
-  right: 47px;
-  bottom: 22px;
+  left: 0;
+  top: 0;
   z-index: 50;
   display: none;
-  width: 25px;
-  height: 25px;
+  width: 24px;
+  height: 24px;
+  transform-origin: 4px 4px;
   filter: drop-shadow(
     0 2px 3px color-mix(in srgb, var(--color-fg) 20%, transparent)
   );
@@ -344,8 +356,8 @@
 }
 .onboarding-demo-click {
   position: absolute;
-  top: -9px;
-  left: -9px;
+  top: -6px;
+  left: -6px;
   width: 20px;
   height: 20px;
   border: 1px solid var(--color-accent);
@@ -357,30 +369,51 @@
   0%,
   100% {
     opacity: 0;
-    transform: translate(54px, -64px);
+    transform: translate(
+      calc(var(--dock-demo-expand-x) + 54px),
+      calc(var(--dock-demo-expand-y) - 64px)
+    );
   }
-  12%,
-  62% {
+  12% {
     opacity: 1;
-    transform: translate(0, 0);
+    transform: translate(var(--dock-demo-expand-x), var(--dock-demo-expand-y));
   }
-  18%,
-  65% {
-    transform: translate(0, 0) scale(0.86);
+  18% {
+    transform: translate(var(--dock-demo-expand-x), var(--dock-demo-expand-y))
+      scale(0.86);
   }
   21%,
-  68%,
+  28%,
   80% {
     opacity: 1;
-    transform: translate(0, 0);
+    transform: translate(var(--dock-demo-expand-x), var(--dock-demo-expand-y));
   }
   35%,
   52% {
-    transform: translate(-42px, 0);
+    transform: translate(var(--dock-demo-new-x), var(--dock-demo-new-y));
+  }
+  62%,
+  68% {
+    opacity: 1;
+    transform: translate(
+      var(--dock-demo-collapse-x),
+      var(--dock-demo-collapse-y)
+    );
+  }
+  65% {
+    opacity: 1;
+    transform: translate(
+        var(--dock-demo-collapse-x),
+        var(--dock-demo-collapse-y)
+      )
+      scale(0.86);
   }
   92% {
     opacity: 0;
-    transform: translate(54px, -64px);
+    transform: translate(
+      calc(var(--dock-demo-expand-x) + 54px),
+      calc(var(--dock-demo-expand-y) - 64px)
+    );
   }
 }
 @keyframes onboarding-dock-click {

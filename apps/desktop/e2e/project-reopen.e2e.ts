@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 
@@ -39,11 +44,11 @@ describe("project loading and update access", () => {
   });
 
   it("restores the selected project and offers retry instead of onboarding on load failure", async () => {
-    await app.eval(
-      `window.catamorphicDesktop.createProject({
-      name: 'reopen-project', rootPath: ${JSON.stringify(`${app.userDataDir}/reopen-project`)}
-    })`,
-    );
+    await createProjectWorkspace({
+      app,
+      name: "reopen-project",
+      rootPath: `${app.userDataDir}/reopen-project`,
+    });
     await app.reload();
     await app.waitFor(`document.body?.innerText.includes('reopen-project')`, {
       timeoutMs: 30_000,

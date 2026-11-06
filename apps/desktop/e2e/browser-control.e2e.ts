@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   type AppHandle,
+  createProjectWorkspace,
   type FrameHandle,
   launchApp,
   setReactValueJs,
@@ -59,9 +60,11 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Browser testing',rootPath:${JSON.stringify(path.join(app.userDataDir, "browser-project"))}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Browser testing",
+    rootPath: path.join(app.userDataDir, "browser-project"),
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Browser testing')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,850)`);

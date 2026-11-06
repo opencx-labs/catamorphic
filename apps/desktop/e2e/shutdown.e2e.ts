@@ -1,7 +1,11 @@
 import { once } from "node:events";
 import { createConnection } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle | undefined;
 afterEach(async () => {
@@ -43,10 +47,11 @@ describe("terminal shutdown", () => {
     "exits cleanly with live and just-closed terminals (%i)",
     async () => {
       app = await launchApp();
-      await app.eval(`window.catamorphicDesktop.createProject({
-        name: 'shutdown-recovery',
-        rootPath: ${JSON.stringify(`${app.userDataDir}/shutdown-recovery`)}
-      })`);
+      await createProjectWorkspace({
+        app,
+        name: "shutdown-recovery",
+        rootPath: `${app.userDataDir}/shutdown-recovery`,
+      });
       const { userDataDir } = app;
       await app.kill();
       app = await launchApp({ userDataDir });

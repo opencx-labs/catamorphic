@@ -6864,6 +6864,7 @@ export function App({
           popping in. */}
       {!bootVeilGone && (
         <div
+          data-boot-veil
           className={`fixed inset-0 z-[400] bg-bg transition-opacity duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
             bootRevealed ? "pointer-events-none opacity-0" : "opacity-100"
           }`}

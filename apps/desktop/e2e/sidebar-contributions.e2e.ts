@@ -4,7 +4,11 @@ import http from "node:http";
 import path from "node:path";
 import { buildAppGuestDocument } from "@catamorphic/app";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let base: string;
@@ -62,9 +66,11 @@ beforeAll(async () => {
   })()`,
   });
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Sidebar primitives',rootPath:${JSON.stringify(path.join(app.userDataDir, "sidebar-primitives"))}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Sidebar primitives",
+    rootPath: path.join(app.userDataDir, "sidebar-primitives"),
+  });
   file = await app.eval<string>(
     "window.catamorphicDesktop.sidebarConfigFile()",
   );

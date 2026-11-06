@@ -2,7 +2,11 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let projectRoot: string;
@@ -53,9 +57,11 @@ beforeAll(async () => {
   if (!address || typeof address === "string") throw Error("No fixture port");
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   projectRoot = path.join(app.userDataDir, "live-source-project");
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Live sources',rootPath:${JSON.stringify(projectRoot)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Live sources",
+    rootPath: projectRoot,
+  });
   fs.mkdirSync(path.join(projectRoot, ".catamorphic"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, "todos.json"),

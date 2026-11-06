@@ -139,10 +139,10 @@ beforeAll(async () => {
     "$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]').click();",
   );
   await wait(
-    "return [...document.querySelectorAll('[data-sidebar=right] button')].some(b=>b.textContent.includes('Validate input before processing'));",
+    "return $$('[data-sidebar=right] button').some(b=>b.textContent.includes('Validate input before processing'));",
   );
   await run(
-    "[...document.querySelectorAll('[data-sidebar=right] button')].find(b=>b.textContent.includes('Validate input before processing')).click();",
+    "$$('[data-sidebar=right] button').find(b=>b.textContent.includes('Validate input before processing')).click();",
   );
   await wait("return !!$('[aria-label=\"Pull request details\"]');");
 });

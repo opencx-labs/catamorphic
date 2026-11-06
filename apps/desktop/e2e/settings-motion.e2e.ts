@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 const run = <T>(body: string) =>
@@ -14,9 +19,11 @@ const run = <T>(body: string) =>
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  await app.eval(
-    `window.catamorphicDesktop.createProject({name:'Settings preview',rootPath:${JSON.stringify(`${app.userDataDir}/settings-preview`)}})`,
-  );
+  await createProjectWorkspace({
+    app,
+    name: "Settings preview",
+    rootPath: `${app.userDataDir}/settings-preview`,
+  });
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Settings preview')`);
   await run(`$('[aria-label="Settings"]').click()`);

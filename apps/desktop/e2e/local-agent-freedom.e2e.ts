@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { z } from "zod";
-import { type AppHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+} from "./harness.js";
 
 let app: AppHandle;
 let projectId: string;
@@ -10,9 +14,11 @@ let agentId: string;
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Local agent capabilities',rootPath:${JSON.stringify(`${app.userDataDir}/local-agent`)}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Local agent capabilities",
+    rootPath: `${app.userDataDir}/local-agent`,
+  });
   projectId = project.id;
   const agent = await app.eval<{ id: string; mode: string; accepts: string[] }>(
     `window.catamorphicDesktop.agentsCreate({harness:'codex',auth:'local',name:'Codex audit'})`,

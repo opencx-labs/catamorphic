@@ -207,6 +207,12 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     await client.waitFor("document.hasFocus()", {
       label: "launched desktop activated",
     });
+    // IPC and DOM fixtures must start at the same composed first paint a
+    // person sees, after Default Project initialization has settled.
+    await client.waitFor(
+      `!!document.querySelector('[data-workspace-visible=true] button[aria-label="Expand right sidebar"]') && (!document.querySelector('[data-boot-veil]') || document.querySelector('[data-boot-veil]').classList.contains('pointer-events-none'))`,
+      { timeoutMs: 60_000, label: "initial workspace revealed" },
+    );
     // Most interaction suites use an explicit, stable workspace layout. The
     // tutorial/window suites opt into the real first-launch presentation.
     if (!opts.userDataDir && !opts.firstLaunch) {
@@ -666,3 +672,26 @@ export const workspaceDomHelpersJs = `
     .filter(element => !element.closest('[data-workspace-visible="false"]'));
   const $ = (selector) => $$(selector)[0] ?? null;
 `;
+
+/** Create and explicitly select a fixture project, like the project modal does.
+ * Reloading alone preserves the workspace owner that is already active. */
+export async function createProjectWorkspace({
+  app,
+  name,
+  rootPath,
+}: {
+  app: AppHandle;
+  name: string;
+  rootPath: string;
+}) {
+  const project = await app.eval<{ id: string; name: string }>(
+    `window.catamorphicDesktop.createProject(${JSON.stringify({ name, rootPath })})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId:${JSON.stringify(project.id)}})`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible=true]')?.dataset.projectRuntime === ${JSON.stringify(project.id)}`,
+  );
+  return project;
+}

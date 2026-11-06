@@ -145,6 +145,13 @@ export function OnboardingScreen({
     <Step
       key="dock"
       heading="Keep your chats handy"
+      detail={
+        <>
+          You can detach the dock to make it float independently of the Work
+          window. Right click on the dock bubble and select “Float dock in its
+          own window”.
+        </>
+      }
       description={
         <>
           The dock is where you keep AI conversations for quick access. Expand
@@ -316,11 +323,13 @@ export function OnboardingScreen({
 function Step({
   heading,
   description,
+  detail,
   hint,
   children,
 }: {
   heading: string;
   description: ReactNode;
+  detail?: ReactNode;
   hint?: string;
   children: ReactNode;
 }) {
@@ -331,6 +340,7 @@ function Step({
       <div className="onboarding-copy">
         <h1>{heading}</h1>
         <p>{description}</p>
+        {detail && <p>{detail}</p>}
         {items.slice(1)}
         {hint && <small>{hint}</small>}
       </div>
@@ -346,6 +356,7 @@ function PlusIcon() {
 
 /** The real dock, driven by a local demonstration instead of workspace state. */
 function DockPreview() {
+  const frame = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -361,6 +372,62 @@ function DockPreview() {
       setTimeout(() => setExpanded(false), 4800),
     ];
   };
+  useLayoutEffect(() => {
+    const root = frame.current;
+    if (!root) return;
+    let stale = false;
+    const measure = async () => {
+      const rail = root.querySelector("[data-dock-rail]");
+      if (!rail) return;
+      // Flush style, then measure the controls once their own motion settles.
+      // The SVG pointer's tip is at (4, 4) in its 24px view box.
+      rail.getBoundingClientRect();
+      await Promise.allSettled(
+        rail
+          .getAnimations({ subtree: true })
+          .filter(
+            (animation) =>
+              animation.effect?.getTiming().iterations !== Infinity,
+          )
+          .map((animation) => animation.finished),
+      );
+      if (stale) return;
+      const bounds = root.getBoundingClientRect();
+      const targets = expanded
+        ? [
+            { name: "collapse", selector: "[data-dock-arrows]" },
+            { name: "new", selector: 'button[aria-label="New chat"]' },
+          ]
+        : [
+            {
+              name: "expand",
+              selector: 'button[aria-label="Expand chat bubbles"]',
+            },
+          ];
+      for (const target of targets) {
+        const button = root.querySelector(target.selector);
+        if (!button) continue;
+        const rect = button.getBoundingClientRect();
+        root.style.setProperty(
+          `--dock-demo-${target.name}-x`,
+          `${rect.x + rect.width / 2 - bounds.x - 4}px`,
+        );
+        root.style.setProperty(
+          `--dock-demo-${target.name}-y`,
+          `${rect.y + rect.height / 2 - bounds.y - 4}px`,
+        );
+      }
+    };
+    void measure();
+    const observer = new ResizeObserver(() => {
+      void measure();
+    });
+    observer.observe(root);
+    return () => {
+      stale = true;
+      observer.disconnect();
+    };
+  }, [expanded]);
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => {
@@ -380,6 +447,7 @@ function DockPreview() {
   }, [clear]);
   return (
     <div
+      ref={frame}
       className="onboarding-dock-preview"
       data-animated={playing}
       role="img"
@@ -404,7 +472,7 @@ function DockPreview() {
           attention={{}}
           menus={{}}
           side="right"
-          placement="right"
+          placement="center"
           autoCollapse={!expanded}
           onToggle={noop}
           onClose={noop}

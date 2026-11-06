@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let projectId: string;
@@ -37,9 +42,11 @@ const destination = async (id: string) => {
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Settings palette',rootPath:${JSON.stringify(`${app.userDataDir}/settings-palette-project`)}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Settings palette",
+    rootPath: `${app.userDataDir}/settings-palette-project`,
+  });
   projectId = project.id;
   const profileId = await app.eval<string>(
     `window.catamorphicDesktop.profilesList().then(data => data.profiles.find(profile => profile.projectIds.includes(${JSON.stringify(projectId)}))?.id ?? data.defaultProfileId)`,

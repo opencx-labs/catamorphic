@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  createProjectWorkspace,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let projectId: string;
@@ -9,12 +14,16 @@ beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   root = `${app.userDataDir}/settings-project`;
-  const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Inherited settings',rootPath:${JSON.stringify(root)}})`,
-  );
+  const project = await createProjectWorkspace({
+    app,
+    name: "Inherited settings",
+    rootPath: root,
+  });
   projectId = project.id;
   await app.reload();
-  await app.waitFor(`document.body?.innerText.includes('Inherited settings')`);
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible=true] [aria-label="Switch project"]')?.textContent.includes('Inherited settings')`,
+  );
   await app.eval(`document.querySelector('[aria-label="Settings"]').click()`);
   await app.waitFor(`!!document.querySelector('[data-settings-layout]')`);
   await app.eval(
@@ -51,6 +60,9 @@ it("edits and resets profile and personal choices through the real Settings UI",
   await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
     `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
+  );
+  await app.waitFor(
+    `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.sources.contentFrame==='personal' && s.values.contentFrame===false)`,
   );
   expect(
     await app.eval(

@@ -298,9 +298,48 @@ describe("the Work tutorial", () => {
     await app.waitFor(
       `document.querySelector('${demo} [data-dock-rail]')?.dataset.dockCollapsed === 'false'`,
     );
+    await settled();
+    const expandedCenter = await app.eval<number>(
+      `(() => { const rect=document.querySelector('${demo} [data-dock-rail]').getBoundingClientRect(); return rect.x+rect.width/2; })()`,
+    );
+    expect(
+      Math.abs(expandedCenter - (await app.eval<number>("innerWidth/2"))),
+    ).toBeLessThan(1);
+    await app.waitFor(
+      `getComputedStyle(document.querySelector('${demo}')).getPropertyValue('--dock-demo-collapse-x') !== ''`,
+    );
+    expect(
+      await app.eval(`(() => {
+      const cursor=document.querySelector('${demo} .onboarding-demo-cursor');
+      const animation=cursor.getAnimations()[0];
+      const original=animation.currentTime;
+      animation.pause(); animation.currentTime=4680;
+      try {
+        const pointer=cursor.querySelector('svg').getBoundingClientRect();
+        const ring=cursor.querySelector('.onboarding-demo-click').getBoundingClientRect();
+        const button=document.querySelector('${demo} [data-dock-arrows]').getBoundingClientRect();
+        const tip={x:pointer.x+pointer.width/6,y:pointer.y+pointer.height/6};
+        return Math.hypot(tip.x-button.x-button.width/2,tip.y-button.y-button.height/2)<1 && Math.hypot(tip.x-ring.x-ring.width/2,tip.y-ring.y-ring.height/2)<1;
+      } finally { animation.currentTime=original; animation.play(); }
+    })()`),
+    ).toBe(true);
+
+    expect(
+      await app.eval(
+        `getComputedStyle(document.querySelector('[data-testid="onboarding"]')).paddingBottom`,
+      ),
+    ).toBe("0px");
+
     await app.waitFor(
       `document.querySelector('${demo} [data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
     );
+    await settled();
+    expect(
+      await app.eval<number>(
+        `(() => { const rect=document.querySelector('${demo} [data-dock-rail]').getBoundingClientRect(); return rect.x+rect.width/2; })()`,
+      ),
+    ).toBeGreaterThan(expandedCenter + 60);
+
     const original = await app.eval<Record<string, string>>(
       `window.catamorphicDesktop.getKeybindings()`,
     );
@@ -385,6 +424,18 @@ describe("the Work tutorial", () => {
     await app.waitFor(
       `document.querySelector('[data-dock-host] [data-dock-rail]')?.dataset.dockCollapsed === 'false'`,
     );
+    await settled();
+    expect(
+      await app.eval(
+        `getComputedStyle(document.querySelector('[data-testid="onboarding"]')).paddingBottom`,
+      ),
+    ).toBe("64px");
+    expect(
+      await app.eval(
+        `document.querySelector('.onboarding-navigation').getBoundingClientRect().bottom <= document.querySelector('[data-dock-host] [data-dock-rail]').getBoundingClientRect().top`,
+      ),
+    ).toBe(true);
+
     await click('[data-dock-host] button[aria-label="New chat"]');
     await app.waitFor(
       `!![...document.querySelectorAll('[data-composer-input]')].find(el => !el.closest('[inert]') && !el.closest('[data-testid="onboarding"]'))`,
