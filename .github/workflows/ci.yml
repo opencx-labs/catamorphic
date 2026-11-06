@@ -172,7 +172,7 @@ jobs:
         with:
           cache-suffix: module-confinement-macos
       - name: Probe native macOS confinement
-        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts src/main/sidebar-source-children.test.ts src/main/customization-processes.test.ts
       - name: Measure macOS sandbox overhead
         run: |
           mkdir -p test-results
@@ -220,7 +220,7 @@ jobs:
       - name: Probe the real Linux boundary
         env:
           CATAMORPHIC_TEST_MODULE_CONFINEMENT: "1"
-        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts
+        run: bun run --cwd apps/desktop test src/main/module-sandbox.test.ts src/main/egress-proxy.test.ts src/main/sidebar-source-children.test.ts src/main/customization-processes.test.ts
       - name: Build the desktop
         run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-desktop... --filter=catamorphic-pwa...
       - name: Verify confined modules in Electron

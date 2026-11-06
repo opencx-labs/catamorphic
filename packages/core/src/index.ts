@@ -481,6 +481,14 @@ export {
   UndeclaredSecretError,
 } from "./services/plugins-service.js";
 export {
+  PrivateStateDeleteSchema,
+  PrivateStateReadSchema,
+  PrivateStateSchema,
+  PrivateStateService,
+  PrivateStateWriteSchema,
+} from "./services/private-state-service.js";
+export { PrivateWorkflowsService } from "./services/private-workflows-service.js";
+export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
   DEFAULT_SETUP_TIMEOUT_MINUTES,
@@ -846,9 +854,11 @@ export {
 } from "./services/triggers-service.js";
 export {
   type NotificationDelivery,
+  PublishNotificationSchema,
   type PushNotificationTransport,
   type PushSubscriptionInput,
   UserNotificationsService,
+  type UserNotificationTransport,
 } from "./services/user-notifications-service.js";
 export { type Watcher, WatchersService } from "./services/watchers-service.js";
 export {

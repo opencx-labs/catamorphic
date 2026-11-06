@@ -1,9 +1,7 @@
-import { useCatamorphic } from "@catamorphic/react";
 import { useEffect } from "react";
 import { CHIPS_OWNER_ID } from "../../shared/workspace-config.js";
 import { chipsSource } from "../sources/chips.js";
 import { runRowAction } from "../sources/run.js";
-import { callProjectWorkflow } from "../sources/workflow-call.js";
 import { chipBoard } from "./chip-board.js";
 import { desktopApi } from "./desktop-api.js";
 
@@ -14,24 +12,18 @@ import { desktopApi } from "./desktop-api.js";
  * the grants and sends each call only to the window whose chips asked.
  */
 export function useAnswerChipsWork() {
-  const { apiClient } = useCatamorphic();
   useEffect(() => {
     const chips = chipsSource();
     return desktopApi.onSidebarSourceWork(
-      ({ callId, projectId, sectionId, sessionId, call }) => {
+      ({ callId, sectionId, sessionId, call }) => {
         if (sectionId !== CHIPS_OWNER_ID) return;
         const signal = new AbortController().signal;
         const session = sessionId
           ? { id: sessionId, title: null, metadata: {} }
           : undefined;
         const answer = async (): Promise<unknown> => {
-          if (call.op === "call")
-            return callProjectWorkflow({
-              apiClient,
-              projectId,
-              workflow: call.workflow,
-              input: call.input,
-            });
+          if (call.op !== "read" && call.op !== "execute")
+            throw new Error("Host operations are answered by Work's runtime.");
           if (call.source !== CHIPS_OWNER_ID)
             throw new Error("A chips module reads its chat's chips only.");
           if (call.op === "read")
@@ -49,6 +41,7 @@ export function useAnswerChipsWork() {
             row,
             itemId: call.itemId,
             action: call.action,
+            ...(call.mode ? { mode: call.mode } : {}),
             ...(call.values ? { values: call.values } : {}),
             ...(session ? { session } : {}),
             signal,
@@ -72,5 +65,5 @@ export function useAnswerChipsWork() {
         );
       },
     );
-  }, [apiClient]);
+  }, []);
 }

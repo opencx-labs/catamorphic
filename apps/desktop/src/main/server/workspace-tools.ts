@@ -286,6 +286,12 @@ export interface WorkspaceToolkit {
   setSessionVisibility(visibility: SessionVisibility): void;
   /** Late-bound: voice lives in the main process, started on demand. */
   setVoiceControl(voice: VoiceControl): void;
+  setCustomization(
+    handler: (
+      projectId: string,
+      input: Record<string, unknown>,
+    ) => Promise<unknown>,
+  ): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -362,6 +368,7 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   request_connection: write,
   read_skill: read,
   desktop_settings: read,
+  customization: checkout,
   surface_control: write,
 };
 
@@ -382,6 +389,9 @@ export function buildWorkspaceToolkit(
   let checkouts: CheckoutBridge | null = null;
   let sessionVisible: SessionVisibility = async () => true;
   let voice: VoiceControl | null = null;
+  let customization:
+    | ((projectId: string, input: Record<string, unknown>) => Promise<unknown>)
+    | undefined;
 
   const definitions: ExtraTool[] = [
     {
@@ -1371,6 +1381,32 @@ export function buildWorkspaceToolkit(
       },
     },
     {
+      name: "customization",
+      description:
+        "Read Work's installed customization reference, statically check source/layout files, or preview a source through the actual confined runtime. Preview uses the package's existing approved access and never grants itself access. Explicit file paths are relative to this project's primary folder; options can specify a load/action/move/drop request for a disposable preview.",
+      parameters: {
+        action: z.enum([
+          "reference",
+          "check",
+          "preview",
+          "state-read",
+          "state-write",
+          "process-list",
+          "process-read",
+          "process-stop",
+        ]),
+        sourcePath: z.string().optional(),
+        workspacePath: z.string().optional(),
+        kind: z.enum(["source", "workflow"]).optional(),
+        options: z.record(z.string(), z.json()).optional(),
+      },
+      execute: async (input, ctx) => {
+        if (!customization)
+          throw new Error("Work's customization runtime is not ready.");
+        return customization(ctx.projectId, input);
+      },
+    },
+    {
       name: "surface_control",
       description:
         "Manage a browser tab or terminal you control. Browser tabs you opened go back to the user by themselves when your turn ends; 'release' hands one back sooner, and you may drive it again later. 'release' on a terminal hands it over once you're done with an interactive command, until you reclaim it. 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding.",
@@ -1406,6 +1442,9 @@ export function buildWorkspaceToolkit(
 
   return {
     tools,
+    setCustomization(handler) {
+      customization = handler;
+    },
     setChatTranscriptReader(reader) {
       readChatTranscript = reader;
     },

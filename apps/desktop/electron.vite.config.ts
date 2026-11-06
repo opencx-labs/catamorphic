@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -10,6 +11,18 @@ import { dependencies } from "./package.json";
 // packages (pglite wasm, microsandbox NAPI, migrations sql) rely on.
 export default defineConfig({
   main: {
+    plugins: [
+      {
+        name: "work-customization-assets",
+        closeBundle() {
+          execFileSync(
+            process.env.CATAMORPHIC_BUN ?? "bun",
+            [path.join(import.meta.dirname, "scripts/build-authoring.ts")],
+            { stdio: "inherit" },
+          );
+        },
+      },
+    ],
     build: {
       rollupOptions: {
         // Explicit multi-entry builds must keep asset-bearing dependencies

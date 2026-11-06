@@ -56,6 +56,7 @@ function readAccess(value: unknown): ModuleAccessRequest | null {
 
 function readPage(value: unknown): CollectionPage<SidebarSourceItem> & {
   capabilities?: SidebarSourceCapabilities;
+  revision?: string;
 } {
   if (!isRecord(value) || !Array.isArray(value.items))
     throw new Error("Source returned no collection page.");
@@ -70,6 +71,7 @@ function readPage(value: unknown): CollectionPage<SidebarSourceItem> & {
     items: value.items.filter(isItem),
     ...(typeof value.cursor === "string" ? { cursor: value.cursor } : {}),
     ...(capabilities ? { capabilities } : {}),
+    ...(typeof value.revision === "string" ? { revision: value.revision } : {}),
   };
 }
 
@@ -106,6 +108,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
   };
   /** What the module asked at its last read, until the person allows it. */
   let asking: SourceAccess | null = null;
+  let loadedRevision: string | undefined;
   const request = async (
     input: Omit<SidebarSourceRequest, "projectId" | "sectionId" | "requestId">,
     signal: AbortSignal,
@@ -133,8 +136,9 @@ export function moduleSource<Name extends string = WorkSourceName>({
     title,
     empty,
     capabilities: () => capabilities,
+    revision: () => loadedRevision,
     access: () => asking,
-    load: async ({ parentId, cursor, query, session, signal }) => {
+    load: async ({ parentId, cursor, query, session, surface, signal }) => {
       const answer = await request(
         {
           method: "load",
@@ -142,6 +146,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
           cursor,
           ...(query !== undefined ? { query } : {}),
           ...(session ? { session } : {}),
+          ...(surface ? { surface } : {}),
         },
         signal,
       );
@@ -158,6 +163,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
           }
         : null;
       const page = readPage(answer);
+      if (page.revision !== undefined) loadedRevision = page.revision;
       const reported = page.capabilities;
       if (
         reported &&
@@ -173,7 +179,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
         ...(page.cursor ? { cursor: page.cursor } : {}),
       };
     },
-    subscribe: (publish, { fail, branches, session }) => {
+    subscribe: (publish, { fail, branches, session, surface }) => {
       let released = false;
       // A module that read Work's tabs (to sort them) reads again when the
       // tabs change, and so for every list it reads.
@@ -192,6 +198,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
           name,
           work.get(name).subscribe?.(changed, {
             ...(session ? { session } : {}),
+            ...(surface ? { surface } : {}),
             branches: () => [null],
             branchSize: () => 0,
             fail: () => {},
@@ -221,20 +228,30 @@ export function moduleSource<Name extends string = WorkSourceName>({
         void desktopApi.sidebarSourceUnsubscribe(leaseId);
       };
     },
-    action: async ({ itemId, action, values, session, signal }) =>
+    action: async ({
+      itemId,
+      action,
+      mode,
+      values,
+      session,
+      surface,
+      signal,
+    }) =>
       sidebarSourceEffect(
         await request(
           {
             method: "action",
             itemId,
             action,
+            ...(mode ? { mode } : {}),
             ...(values ? { values } : {}),
             ...(session ? { session } : {}),
+            ...(surface ? { surface } : {}),
           },
           signal,
         ),
       ),
-    move: async ({ itemId, parentId, beforeId, session, signal }) => {
+    move: async ({ itemId, parentId, beforeId, session, surface, signal }) => {
       await request(
         {
           method: "move",
@@ -242,11 +259,12 @@ export function moduleSource<Name extends string = WorkSourceName>({
           parentId,
           beforeId,
           ...(session ? { session } : {}),
+          ...(surface ? { surface } : {}),
         },
         signal,
       );
     },
-    drop: async ({ parentId, beforeId, payload, session, signal }) => {
+    drop: async ({ parentId, beforeId, payload, session, surface, signal }) => {
       await request(
         {
           method: "drop",
@@ -254,11 +272,12 @@ export function moduleSource<Name extends string = WorkSourceName>({
           beforeId,
           payload,
           ...(session ? { session } : {}),
+          ...(surface ? { surface } : {}),
         },
         signal,
       );
     },
-    reveal: async ({ url, after, session, signal }) => {
+    reveal: async ({ url, after, session, surface, signal }) => {
       if (!capabilities.reveal) return null;
       const row = await request(
         {
@@ -266,6 +285,7 @@ export function moduleSource<Name extends string = WorkSourceName>({
           url,
           ...(after ? { after } : {}),
           ...(session ? { session } : {}),
+          ...(surface ? { surface } : {}),
         },
         signal,
       );

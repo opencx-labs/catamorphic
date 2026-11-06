@@ -28,13 +28,27 @@ import { localFileUrl } from "../shared/surface-link.js";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
 import { macApplicationMenu } from "./app-menu.js";
+import {
+  BACKGROUND_RUNTIME_ARGUMENT,
+  backgroundRuntimeAllowed,
+  handOffBackgroundRuntime,
+  launchBackgroundRuntime,
+  serveBackgroundRuntime,
+} from "./background-runtime.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import { customizationHost } from "./customization-host.js";
 import {
   externalBrowserUrl,
   registerDefaultBrowser,
 } from "./default-browser.js";
+import {
+  type DesktopNotificationDestination,
+  desktopNotificationDestination,
+  savePendingNotification,
+  takePendingNotification,
+} from "./desktop-notifications.js";
 import { DesktopWorkspaces } from "./desktop-workspaces.js";
 import {
   desktopApplicationName,
@@ -103,6 +117,23 @@ import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 // production identity so local testing cannot poison the production item's
 // access control list and cause prompts after an update.
 const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
+const backgroundMode = process.argv.includes(BACKGROUND_RUNTIME_ARGUMENT);
+let reopenFromBackground = false;
+let backgroundFailed = false;
+let shuttingDown = false;
+let foregroundLaunchArguments = process.argv
+  .slice(1)
+  .filter((arg) => arg !== BACKGROUND_RUNTIME_ARGUMENT);
+let launchNotificationId: string | undefined;
+app.on("ready", (_event, launchInfo: unknown) => {
+  if (
+    typeof launchInfo === "object" &&
+    launchInfo !== null &&
+    "identifier" in launchInfo &&
+    typeof launchInfo.identifier === "string"
+  )
+    launchNotificationId = launchInfo.identifier;
+});
 try {
   assertProductionLaunchArguments({
     isPackaged: app.isPackaged,
@@ -197,10 +228,20 @@ if (isolatedDataDir) {
 // PGlite is single-writer: a second instance opening the same data dir
 // aborts deep in WASM ("Aborted(). Build with -sASSERTIONS"). Refuse to
 // start and surface the first instance's window instead.
-if (!isolatedDataDir && !app.requestSingleInstanceLock()) {
+const usesEngineLock = !e2eDataDir || backgroundRuntimeAllowed(process.env);
+const ownsEngineLock = !usesEngineLock || app.requestSingleInstanceLock();
+if (!ownsEngineLock) {
   app.quit();
 }
 app.on("second-instance", (_event, argv) => {
+  if (backgroundMode) {
+    reopenFromBackground = true;
+    foregroundLaunchArguments = argv
+      .slice(1)
+      .filter((arg) => arg !== BACKGROUND_RUNTIME_ARGUMENT);
+    app.quit();
+    return;
+  }
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     if (window.isMinimized()) window.restore();
@@ -217,6 +258,12 @@ app.on("second-instance", (_event, argv) => {
 if (!e2eDataDir) app.setAsDefaultProtocolClient("work");
 app.on("open-url", (event, url) => {
   event.preventDefault();
+  if (backgroundMode) {
+    reopenFromBackground = true;
+    foregroundLaunchArguments.push(url);
+    app.quit();
+    return;
+  }
   deliverExternalLink(url);
 });
 const pendingBrowserUrls = process.argv.flatMap((arg) => {
@@ -322,6 +369,11 @@ const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
 );
 
 let server: EmbeddedServer | null = null;
+let serverStarting: Promise<EmbeddedServer> | undefined;
+let backgroundControl:
+  | Awaited<ReturnType<typeof serveBackgroundRuntime>>
+  | undefined;
+let backgroundIdleTimer: ReturnType<typeof setInterval> | undefined;
 
 const state: ServerState = {
   get current() {
@@ -333,6 +385,52 @@ const state: ServerState = {
     }
   },
 };
+
+async function openDesktopNotification(input: DesktopNotificationDestination) {
+  const destination = desktopNotificationDestination(input);
+  if (backgroundMode || shuttingDown) {
+    savePendingNotification({
+      userData: app.getPath("userData"),
+      destination: input,
+    });
+    reopenFromBackground = true;
+    if (!shuttingDown) app.quit();
+    return;
+  }
+  if (!server) throw new Error("The project runtime is still starting.");
+  await server.catamorphic.core.projects.get(
+    { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+    destination.projectId,
+  );
+  const profile = profilesStore.profileForProject(destination.projectId);
+  const owner = desktopWorkspaces?.owner(destination.projectId);
+  const window = owner
+    ? BrowserWindow.fromWebContents(owner)
+    : createWindow(profile.id, false, destination.projectId);
+  if (!window) throw new Error("This project has no workspace window.");
+  const navigate = () =>
+    window.webContents.send("catamorphic:workspace-event", {
+      kind: "navigate",
+      projectId: destination.projectId,
+      ...(destination.target
+        ? {
+            surface: {
+              url: destination.target,
+              title: destination.title,
+              mode: "tab",
+              nonce: crypto.randomUUID(),
+            },
+          }
+        : {}),
+    });
+  if (window.webContents.isLoading())
+    window.webContents.once("did-finish-load", navigate);
+  else navigate();
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  app.focus({ steal: true });
+}
 
 /**
  * Which profile each window shows. Windows are born with a profile (theme
@@ -737,6 +835,103 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!ownsEngineLock) return;
+  if (backgroundMode) {
+    if (!backgroundRuntimeAllowed(process.env)) {
+      app.exit(1);
+      return;
+    }
+    app.dock?.hide();
+    if (
+      !app.isPackaged &&
+      shouldUseE2ePlainTextEncryption({
+        e2eDataDir,
+        platform: process.platform,
+      })
+    )
+      safeStorage.setUsePlainTextEncryption(true);
+    const connectors = new ConnectorsService({
+      connectorsDirFor: (profileId) =>
+        path.join(paths.profilesDir, profileId, "connectors"),
+      connectionsFor: (profileId) =>
+        profileConfig.forProfile(profileId).connections,
+      ...(e2eDataDir
+        ? { catalogFetch: async () => new Response(null, { status: 404 }) }
+        : {}),
+    });
+    disposeProfileResources = async () => {
+      connectors.dispose();
+    };
+    try {
+      await loginPathAdopted;
+      serverStarting = startEmbeddedServer(
+        paths,
+        profilesStore,
+        profileConfig,
+        undefined,
+        connectors,
+        undefined,
+        new IncognitoSessionsStore(
+          path.join(paths.root, "..", "incognito-sessions.json"),
+        ),
+        [desktopProfileMcpProvider],
+        undefined,
+        { openNotification: openDesktopNotification, launchNotificationId },
+      );
+      server = await serverStarting;
+      if (!(await server.hasBackgroundWork())) {
+        app.quit();
+        return;
+      }
+      if (shuttingDown) return;
+      backgroundControl = await serveBackgroundRuntime({
+        userData: app.getPath("userData"),
+        inspect: async () => ({
+          pid: process.pid,
+          windows: BrowserWindow.getAllWindows().length,
+          running: (await server?.hasBackgroundWork()) ?? false,
+          processes: server?.customizationProcesses.inspect() ?? [],
+        }),
+        shutdown: () => app.quit(),
+      });
+      if (shuttingDown) {
+        await backgroundControl.close();
+        backgroundControl = undefined;
+        return;
+      }
+      let inspecting = false;
+      backgroundIdleTimer = setInterval(() => {
+        if (inspecting || !server) return;
+        inspecting = true;
+        void server
+          .hasBackgroundWork()
+          .then((enabled) => {
+            if (!enabled) app.quit();
+          })
+          .catch((error) =>
+            console.warn(
+              "[desktop] Background work could not be inspected:",
+              error,
+            ),
+          )
+          .finally(() => {
+            inspecting = false;
+          });
+      }, 15_000);
+      powerMonitor.on("suspend", () => void server?.suspendExecution());
+      powerMonitor.on("resume", () => server?.resumeExecution());
+      app.on("activate", () => {
+        reopenFromBackground = true;
+        app.quit();
+      });
+      console.info(`[desktop] Background runtime ready (${process.pid})`);
+    } catch (error) {
+      backgroundFailed = true;
+      console.error("[desktop] Background runtime failed:", error);
+      app.quit();
+    }
+    return;
+  }
   const rendererRoot = path.join(import.meta.dirname, "../renderer");
   serveShellDocuments({ root: rendererRoot });
   guestDocuments = new GuestDocuments({
@@ -967,6 +1162,13 @@ app.whenReady().then(async () => {
       (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     (window) => desktopWorkspaces?.isDock(window) ?? false,
     {
+      hostCall: customizationHost(() => server),
+      targetFor: (projectId) => desktopWorkspaces?.target(projectId),
+      sourceStopped: (owner) => {
+        return (
+          server?.customizationProcesses.release(owner) ?? Promise.resolve()
+        );
+      },
       // Ordinary Docker UI suites cannot create nested /proc mounts. A
       // dedicated native Linux lane verifies the real boundary (ADR 0283).
       unconfined:
@@ -1012,7 +1214,19 @@ app.whenReady().then(async () => {
       profileFor: (sender) => windows.profileFor(sender),
     },
   );
-  registerResourceSupport();
+  registerResourceSupport({
+    stopOwned: async (ancestors) => {
+      const manager = server?.customizationProcesses;
+      const service = manager
+        ?.inspect()
+        .find(
+          (entry) => entry.pid !== undefined && ancestors.includes(entry.pid),
+        );
+      if (!manager || !service) return false;
+      await manager.stopByProcessId({ processId: service.processId });
+      return true;
+    },
+  });
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
@@ -1110,7 +1324,7 @@ app.whenReady().then(async () => {
       );
     }
     await loginPathAdopted;
-    server = await startEmbeddedServer(
+    serverStarting = startEmbeddedServer(
       paths,
       profilesStore,
       profileConfig,
@@ -1125,7 +1339,19 @@ app.whenReady().then(async () => {
           ? windows.profileFor(contents)
           : undefined;
       },
+      { openNotification: openDesktopNotification, launchNotificationId },
     );
+    server = await serverStarting;
+    if (browserSupport)
+      server.agentRegistry.workspaceToolkit?.setCustomization(
+        browserSupport.customization,
+      );
+    try {
+      const pending = takePendingNotification(app.getPath("userData"));
+      if (pending) await openDesktopNotification(pending);
+    } catch (error) {
+      console.warn("[desktop] A pending notification could not open:", error);
+    }
     versionBackup.markBootSuccessful();
     // The app's own windows (the default session; browser tabs have their
     // profiles' sessions) carry this run's token to the embedded API, which
@@ -1228,42 +1454,85 @@ let guestDocuments: GuestDocuments | null = null;
 registerDesktopShutdown({
   app,
   shutdown: async () => {
-    await shutdownDesktopServices({
-      steps: [
-        // A relaunch hands working agents back before anything they use
-        // stops, and the next launch continues them; terminals and the
-        // rest simply end (ADR 0246).
-        {
-          name: "agent turns",
-          dispose: () =>
-            desktopUpdater?.restarting()
-              ? server?.catamorphic.handBackTurns()
-              : undefined,
-        },
-        { name: "profile clients", dispose: () => disposeProfileResources?.() },
-        { name: "profile settings", dispose: () => profileConfig.dispose() },
-        { name: "browser", dispose: () => browserSupport?.dispose() },
-        { name: "terminals", dispose: () => terminalSupport?.dispose() },
-        { name: "voice", dispose: () => voiceSupport?.dispose() },
-        { name: "agent bridge", dispose: () => agentBridge?.dispose() },
-        { name: "updater", dispose: () => desktopUpdater?.dispose() },
-        {
-          name: "server and database",
-          dispose: async () => {
-            await server?.shutdown();
-            server = null;
-          },
-        },
-        {
-          name: "telemetry",
-          dispose: async () => {
-            emitLog({ scope: "catamorphic-desktop", body: "Desktop stopped" });
-            await telemetry.shutdown();
-          },
-        },
-      ],
+    shuttingDown = true;
+    // Quit can arrive while boot is still opening storage. Never hand its
+    // database to another process before that boot and its cleanup settle.
+    if (serverStarting && !server) server = await serverStarting;
+    const keepBackground =
+      !backgroundMode &&
+      !desktopUpdater?.restarting() &&
+      (await server?.hasBackgroundWork()) === true;
+    await handOffBackgroundRuntime({
+      enabled: keepBackground,
+      allowed: backgroundRuntimeAllowed(process.env),
+      releaseLock: () => app.releaseSingleInstanceLock(),
+      launch: () =>
+        launchBackgroundRuntime({
+          executable: process.execPath,
+          args: app.isPackaged
+            ? process.argv.slice(1)
+            : [app.getAppPath(), ...process.argv.slice(2)],
+          userData: app.getPath("userData"),
+        }),
+      shutdown: () =>
+        shutdownDesktopServices({
+          steps: [
+            {
+              name: "background control",
+              dispose: async () => {
+                clearInterval(backgroundIdleTimer);
+                await backgroundControl?.close();
+              },
+            },
+            // A relaunch hands working agents back before anything they use
+            // stops, and the next launch continues them; terminals and the
+            // rest simply end (ADR 0246).
+            {
+              name: "agent turns",
+              dispose: () =>
+                desktopUpdater?.restarting()
+                  ? server?.catamorphic.handBackTurns()
+                  : undefined,
+            },
+            {
+              name: "profile clients",
+              dispose: () => disposeProfileResources?.(),
+            },
+            {
+              name: "profile settings",
+              dispose: () => profileConfig.dispose(),
+            },
+            { name: "browser", dispose: () => browserSupport?.dispose() },
+            { name: "terminals", dispose: () => terminalSupport?.dispose() },
+            { name: "voice", dispose: () => voiceSupport?.dispose() },
+            { name: "agent bridge", dispose: () => agentBridge?.dispose() },
+            { name: "updater", dispose: () => desktopUpdater?.dispose() },
+            {
+              name: "server and database",
+              dispose: async () => {
+                await server?.shutdown();
+                server = null;
+              },
+            },
+            {
+              name: "telemetry",
+              dispose: async () => {
+                emitLog({
+                  scope: "catamorphic-desktop",
+                  body: "Desktop stopped",
+                });
+                await telemetry.shutdown();
+              },
+            },
+          ],
+        }),
     });
     server = null;
+    if (reopenFromBackground) app.relaunch({ args: foregroundLaunchArguments });
+    if (backgroundFailed)
+      throw new Error(
+        "The background runtime failed to start. Check background-runtime.log.",
+      );
   },
   onError: (error) => console.error("[desktop] shutdown failed:", error),
   openWindows: () =>

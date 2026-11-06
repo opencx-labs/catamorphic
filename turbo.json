@@ -134,6 +134,7 @@
     }
   },
   "globalPassThroughEnv": [
+    "CATAMORPHIC_DESKTOP_TEST_SHARDS",
     "CATAMORPHIC_E2E_ARTIFACTS_DIR",
     "CATAMORPHIC_REUSE_TESTS"
   ],

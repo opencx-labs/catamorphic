@@ -1,7 +1,41 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
+import { z } from "zod";
 import type { Identity } from "../identity.js";
+import { assertProjectPermission } from "./artifact-scope.js";
+import { requireTenantProject } from "./projects-service.js";
+
+export const PublishNotificationSchema = z.object({
+  title: z.string().min(1).max(200),
+  body: z.string().max(4000).default(""),
+  route: z
+    .string()
+    .max(2048)
+    .startsWith("/")
+    .refine(
+      (route) =>
+        !route.startsWith("//") &&
+        !route.includes("\\") &&
+        [...route].every((character) => character.charCodeAt(0) >= 32),
+      "Route must be a local path",
+    )
+    .optional(),
+  idempotencyKey: z.string().min(1).max(300),
+});
+
+export interface UserNotificationTransport {
+  /** An event id is stable across retries; the transport can deduplicate it. */
+  send(input: {
+    eventId: string;
+    kind: string;
+    identity: Identity;
+    title: string;
+    body: string;
+    route: string;
+    projectId: string | null;
+  }): Promise<void>;
+}
 
 export interface PushSubscriptionInput {
   endpoint: string;
@@ -38,6 +72,7 @@ export class UserNotificationsService {
   constructor(
     private readonly db: Kysely<DB>,
     readonly transport?: PushNotificationTransport,
+    readonly hostTransport?: UserNotificationTransport,
   ) {}
 
   get pushConfig(): { enabled: boolean; publicKey: string | null } {
@@ -94,6 +129,37 @@ export class UserNotificationsService {
       .execute();
   }
 
+  async notify(input: {
+    identity: Identity;
+    projectId: string;
+    title: string;
+    body?: string;
+    route?: string;
+    idempotencyKey: string;
+    signal?: AbortSignal;
+  }): Promise<{ published: true }> {
+    input.signal?.throwIfAborted();
+    assertProjectPermission(
+      input.identity,
+      input.projectId,
+      "notifications:write",
+    );
+    await requireTenantProject(
+      this.db,
+      input.identity.tenantId,
+      input.projectId,
+    );
+    const parsed = PublishNotificationSchema.parse(input);
+    await this.publish({
+      ...input,
+      ...parsed,
+      route: parsed.route ?? `/?project=${encodeURIComponent(input.projectId)}`,
+      kind: "customization",
+      collapseKey: `customization:${input.projectId}:${parsed.idempotencyKey}`,
+    });
+    return { published: true };
+  }
+
   async publish(args: {
     identity: Identity;
     kind: string;
@@ -142,6 +208,12 @@ export class UserNotificationsService {
           .where("external_user_id", "=", args.identity.externalUserId)
           .where("collapse_key", "=", args.collapseKey)
           .executeTakeFirstOrThrow());
+      if (this.hostTransport)
+        await transaction
+          .insertInto("notification_host_deliveries")
+          .values({ event_id: event.id })
+          .onConflict((conflict) => conflict.doNothing())
+          .execute();
       if (subscriptions.length === 0) return;
       await transaction
         .insertInto("notification_deliveries")
@@ -412,8 +484,100 @@ export class UserNotificationsService {
     });
   }
 
+  private async drainHost(workerId: string): Promise<number> {
+    const transport = this.hostTransport;
+    const leaseOwner = `${workerId}:${randomUUID()}`;
+    if (!transport) return 0;
+    const rows = await this.db.transaction().execute(async (transaction) => {
+      const due = await transaction
+        .selectFrom("notification_host_deliveries as delivery")
+        .innerJoin(
+          "user_notification_events as event",
+          "event.id",
+          "delivery.event_id",
+        )
+        .where(({ or, and, eb }) =>
+          or([
+            and([
+              eb("delivery.status", "=", "pending"),
+              eb("delivery.next_attempt_at", "<=", new Date()),
+            ]),
+            and([
+              eb("delivery.status", "=", "leased"),
+              eb("delivery.lease_expires_at", "<=", new Date()),
+            ]),
+          ]),
+        )
+        .selectAll("event")
+        .forUpdate("delivery")
+        .skipLocked()
+        .limit(25)
+        .execute();
+      for (const event of due)
+        await transaction
+          .updateTable("notification_host_deliveries")
+          .set(({ eb }) => ({
+            status: "leased",
+            lease_owner: leaseOwner,
+            lease_expires_at: new Date(Date.now() + 30_000),
+            attempt_count: eb("attempt_count", "+", 1),
+          }))
+          .where("event_id", "=", event.id)
+          .execute();
+      return due;
+    });
+    await Promise.all(
+      rows.map(async (event) => {
+        try {
+          await transport.send({
+            eventId: event.id,
+            kind: event.kind,
+            identity: {
+              tenantId: event.tenant_id,
+              externalUserId: event.external_user_id,
+            },
+            title: event.title,
+            body: event.body,
+            route: event.route,
+            projectId: event.project_id,
+          });
+          await this.db
+            .updateTable("notification_host_deliveries")
+            .set({
+              status: "delivered",
+              delivered_at: new Date(),
+              lease_owner: null,
+              lease_expires_at: null,
+              last_error: null,
+            })
+            .where("event_id", "=", event.id)
+            .where("lease_owner", "=", leaseOwner)
+            .where("status", "=", "leased")
+            .execute();
+        } catch (error) {
+          await this.db
+            .updateTable("notification_host_deliveries")
+            .set({
+              status: "pending",
+              next_attempt_at: new Date(Date.now() + 30_000),
+              lease_owner: null,
+              lease_expires_at: null,
+              last_error:
+                error instanceof Error ? error.message : String(error),
+            })
+            .where("event_id", "=", event.id)
+            .where("lease_owner", "=", leaseOwner)
+            .where("status", "=", "leased")
+            .execute();
+        }
+      }),
+    );
+    return rows.length;
+  }
+
   async drain(workerId: string): Promise<number> {
-    if (!this.transport) return 0;
+    const hostCount = await this.drainHost(workerId);
+    if (!this.transport) return hostCount;
     const deliveries = await this.claimDue({ workerId });
     await Promise.all(
       deliveries.map(async (delivery) => {
@@ -439,7 +603,7 @@ export class UserNotificationsService {
         }
       }),
     );
-    return deliveries.length;
+    return deliveries.length + hostCount;
   }
 }
 

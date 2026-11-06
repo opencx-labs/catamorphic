@@ -191,6 +191,34 @@ describe("WorkflowEnablementsService", () => {
     ).rejects.toBeInstanceOf(AccessDeniedError);
   });
 
+  it("preserves administrative access to published member automations", async () => {
+    const preview = await service.preview({
+      identity: memberB,
+      projectId,
+      workflowName: "watchInbox",
+    });
+    const created = await service.create({
+      identity: memberB,
+      projectId,
+      workflowName: "watchInbox",
+      consentDigest: preview.consentDigest,
+    });
+    const admin: Identity = {
+      tenantId,
+      externalUserId: "foreign-admin",
+      ...projectAdmin(projectId),
+    };
+    expect(
+      await service.get({ identity: admin, enablementId: created.id }),
+    ).toMatchObject({ id: created.id });
+    expect(
+      await service.list({ identity: admin, projectId, includeAll: true }),
+    ).toContainEqual(expect.objectContaining({ id: created.id }));
+    expect(
+      await service.disable({ identity: admin, enablementId: created.id }),
+    ).toMatchObject({ status: "disabled" });
+  });
+
   it("keeps the pinned revision until a freshly consented update", async () => {
     const [created] = await service.list({ identity: memberA, projectId });
     expect(created?.commitSha).toBe("a".repeat(40));

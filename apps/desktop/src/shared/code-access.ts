@@ -1,24 +1,28 @@
-/**
- * What code Work runs by itself may reach (ADR 0277), declared beside the
- * code as `catamorphic.access` in its package.json, the shape an app's
- * access has (ADR 0148). Nothing else leaves: the code runs confined, so
- * this declaration is the whole of its reach, and the person approves it
- * when it grows.
- */
-export interface CodeAccess {
-  /** Work's lists it reads and acts on (`chats`, `tabs`, `chips`). */
-  lists?: string[];
-  /** Project workflows it calls. */
-  workflows?: string[];
-  /** Hosts it reaches: `api.linear.app`, `*.example.com`, `localhost:11434`. */
-  hosts?: string[];
-  /** Files and folders outside the project it reads (absolute or `~/`). */
-  reads?: string[];
-  /** Files and folders it changes: in the project unless absolute or `~/`. */
-  writes?: string[];
-}
+import {
+  CODE_PERMISSIONS,
+  type CodeAccess,
+  privateWorkflowAddress,
+} from "@catamorphic/work-customization";
 
-const KEYS = ["lists", "workflows", "hosts", "reads", "writes"] as const;
+export {
+  CODE_PERMISSIONS,
+  type CodeAccess,
+} from "@catamorphic/work-customization";
+
+const PERMISSION_WORDS: Readonly<Record<string, string>> = {
+  state: "Read and change this package's private state",
+  notifications: "Send you notifications",
+  processes: "Start and control confined processes for this package",
+  background: "Keep this package's services running after Work quits",
+};
+const KEYS = [
+  "lists",
+  "workflows",
+  "hosts",
+  "reads",
+  "writes",
+  "permissions",
+] as const;
 type AccessKey = (typeof KEYS)[number];
 
 const LIST = /^[a-z][a-z0-9-]{0,39}$/;
@@ -44,8 +48,17 @@ export function parseHost(
 }
 
 function validEntry(key: AccessKey, entry: string): boolean {
+  if (key === "permissions")
+    return CODE_PERMISSIONS.some((permission) => permission === entry);
   if (key === "lists") return LIST.test(entry);
-  if (key === "workflows") return WORKFLOW.test(entry);
+  if (key === "workflows") {
+    if (WORKFLOW.test(entry)) return true;
+    try {
+      return privateWorkflowAddress(entry) !== null;
+    } catch {
+      return false;
+    }
+  }
   if (key === "hosts") return parseHost(entry) !== null;
   if (entry.length === 0 || entry.length > 1024 || entry.includes("\0"))
     return false;
@@ -56,8 +69,10 @@ function validEntry(key: AccessKey, entry: string): boolean {
 }
 
 const ENTRY_HELP: Record<AccessKey, string> = {
+  permissions: "permissions are state, notifications, processes or background",
   lists: "lists name Work's lists (chats, tabs, files, chips)",
-  workflows: "workflows name the project's workflows",
+  workflows:
+    "workflows name the project's workflows or private:<artifactId>:<revision>",
   hosts:
     "hosts are names like api.example.com, *.example.com or localhost:3000",
   reads:
@@ -231,6 +246,9 @@ function writeWords(path: string): string {
  */
 export function describeAccess(access: CodeAccess): string[] {
   return [
+    ...(access.permissions ?? []).map(
+      (permission) => PERMISSION_WORDS[permission] ?? `Use ${permission}`,
+    ),
     ...(access.lists ?? []).map(
       (list) => `Read and act on ${LIST_WORDS[list] ?? `Work's ${list} list`}`,
     ),

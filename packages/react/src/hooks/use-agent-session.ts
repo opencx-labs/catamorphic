@@ -112,7 +112,7 @@ export function reconnectDelayMs(failures: number): number {
  * replaces the state; a gap (the reducer marks the state stale) reloads
  * the snapshot and streams again from its sequence. A refusal (a 4xx other
  * than 408 or 429) stops the stream and is reported as `error`. Every
- * mounted reader of a session shares one cache entry.
+ * mounted reader of a session shares one cache entry and event stream.
  */
 export function useAgentSession(
   projectId: string | undefined,
@@ -126,7 +126,7 @@ export function useAgentSession(
   const live = options.live ?? true;
   const pollIntervalMs = options.pollIntervalMs ?? 1_500;
   const awaitSequence = options.awaitSequence;
-  // Whether this reader holds a stream; one past the limit polls instead.
+  // Whether this session cache has a stream; one past the limit polls instead.
   const [streaming, setStreaming] = useState(false);
   const query = useQuery<AgentSessionData, CatamorphicError>({
     queryKey,
@@ -227,13 +227,101 @@ export function useAgentSession(
   };
 }
 
-/**
- * Keep a session's cache entry current from its event stream while `live`
- * and the snapshot is loaded (ADR 0197): a dropped stream resumes from the
- * last applied sequence with backoff, a gap reloads the snapshot first, a
- * refusal stops it and is reported. Past the client's stream limit it
- * waits for a slot, `setStreaming(false)` meanwhile so the caller polls.
- */
+interface SessionStreamStatus {
+  connection: AgentSessionConnection;
+  streamError: CatamorphicError | null;
+  streaming: boolean;
+}
+
+interface SharedSessionStream {
+  subscribe: (
+    listener: (status: SessionStreamStatus) => void,
+    live: boolean,
+  ) => () => void;
+}
+
+const IDLE_STREAM: SessionStreamStatus = {
+  connection: "idle",
+  streamError: null,
+  streaming: false,
+};
+
+// A cache entry has one event reader, regardless of how many views select it.
+// API client identity preserves the host's fetch/auth boundary within that cache.
+const sessionStreams = new WeakMap<
+  QueryClient,
+  WeakMap<CatamorphicApiClient, Map<string, SharedSessionStream>>
+>();
+
+function sharedSessionStream({
+  apiClient,
+  queryClient,
+  projectId,
+  sessionId,
+}: {
+  apiClient: CatamorphicApiClient;
+  queryClient: QueryClient;
+  projectId: string;
+  sessionId: string;
+}): SharedSessionStream {
+  let clients = sessionStreams.get(queryClient);
+  if (!clients) {
+    clients = new WeakMap();
+    sessionStreams.set(queryClient, clients);
+  }
+  let sessions = clients.get(apiClient);
+  if (!sessions) {
+    sessions = new Map();
+    clients.set(apiClient, sessions);
+  }
+  const id = JSON.stringify([projectId, sessionId]);
+  const existing = sessions.get(id);
+  if (existing) return existing;
+  const ownedSessions = sessions;
+  const listeners = new Set<(status: SessionStreamStatus) => void>();
+  let demand = 0;
+  let status = IDLE_STREAM;
+  let stop: (() => void) | undefined;
+  const publish = (change: Partial<SessionStreamStatus>) => {
+    const next = { ...status, ...change };
+    if (
+      next.connection === status.connection &&
+      next.streamError === status.streamError &&
+      next.streaming === status.streaming
+    )
+      return;
+    status = next;
+    for (const listener of listeners) listener(status);
+  };
+  const shared: SharedSessionStream = {
+    subscribe: (listener, live) => {
+      listeners.add(listener);
+      if (live && demand++ === 0) {
+        stop = streamSessionEvents({
+          apiClient,
+          queryClient,
+          projectId,
+          sessionId,
+          publish,
+        });
+      }
+      listener(status);
+      return () => {
+        listeners.delete(listener);
+        if (live && --demand === 0) {
+          stop?.();
+          stop = undefined;
+          publish(IDLE_STREAM);
+        }
+        if (listeners.size === 0) ownedSessions.delete(id);
+      };
+    },
+  };
+  ownedSessions.set(id, shared);
+  return shared;
+}
+
+/** Every loaded selector observes stream health; live selectors hold its lease. */
 function useSessionEventStream({
   projectId,
   sessionId,
@@ -252,135 +340,146 @@ function useSessionEventStream({
 } {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  const [connection, setConnection] = useState<AgentSessionConnection>("idle");
-  // Why the stream stopped for good (the session is gone, access removed).
-  const [streamError, setStreamError] = useState<CatamorphicError | null>(null);
-  const slotKey = streamSlotKey(apiClient.baseUrl);
-
+  const [status, setStatus] = useState(IDLE_STREAM);
   useEffect(() => {
-    setStreamError(null);
-    if (!live || !loaded || !projectId || !sessionId) {
-      setConnection("idle");
+    if (!loaded || !projectId || !sessionId) {
+      setStatus(IDLE_STREAM);
       setStreaming(false);
       return;
     }
-    const controller = new AbortController();
-    const key = agentSessionQueryKey(projectId, sessionId);
-    let failures = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let slot: StreamSlot | undefined;
-    const current = () =>
-      queryClient.getQueryData<AgentSessionData>(key)?.state;
-    const retryLater = () => {
-      failures += 1;
-      if (failures > 1) setConnection("reconnecting");
-      timer = setTimeout(connect, reconnectDelayMs(failures));
-    };
-    const stop = (error: CatamorphicError) => {
-      // Reconnecting would be refused the same way: say why instead.
-      slot?.release();
-      setStreaming(false);
-      setConnection("idle");
-      setStreamError(error);
-    };
-    const start = () => {
-      if (controller.signal.aborted) return;
-      slot = acquireStreamSlot(slotKey, () => {
-        // A slot passed to this reader: catch up, then stream from there.
-        void queryClient
-          .invalidateQueries({ queryKey: key, exact: true })
-          .finally(() => {
-            if (controller.signal.aborted) return;
-            setStreaming(true);
-            connect();
-          });
-      });
-      if (!slot.held) {
-        setStreaming(false);
-        setConnection("idle");
-        return;
-      }
-      setStreaming(true);
-      connect();
-    };
-    const connect = () => {
-      const state = current();
-      if (!state || controller.signal.aborted) return;
-      if (state.stale) {
-        // A gap: load a fresh snapshot, then stream from its sequence, so
-        // events sent while it loaded arrive again instead of being lost.
-        void queryClient
-          .invalidateQueries({ queryKey: key, exact: true })
-          .finally(() => {
-            if (controller.signal.aborted) return;
-            if (current()?.stale !== false) retryLater();
-            else connect();
-          });
-        return;
-      }
-      // One quick retry is not news; a second failure is.
-      setConnection(
-        failures === 0 ? "connecting" : failures > 1 ? "reconnecting" : "live",
-      );
-      const reading = new AbortController();
-      const signal = AbortSignal.any([controller.signal, reading.signal]);
-      let resync = false;
-      void readSessionStream({
-        apiClient,
-        projectId,
-        sessionId,
-        after: state.sequence,
-        signal,
-        onOpen: () => setConnection("live"),
-        onMessage: (message) => {
-          if (resync) return;
-          failures = 0;
-          setConnection("live");
-          applyStreamMessage({ queryClient, key, message });
-          if (current()?.stale) {
-            resync = true;
-            reading.abort();
-          }
-        },
-      })
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        )
-        .then((error) => {
-          if (controller.signal.aborted) return;
-          if (resync) {
-            connect();
-            return;
-          }
-          if (isPermanentFailure(error)) {
-            stop(toCatamorphicError({ cause: error }));
-            return;
-          }
-          // A clean end (the server closed a slow reader) resumes soon.
-          retryLater();
-        });
-    };
-    start();
-    return () => {
-      controller.abort();
-      if (timer) clearTimeout(timer);
-      slot?.release();
-      // The next reader resumes from the last applied event sequence. A
-      // tab departure needs no full snapshot; an actual gap resyncs above.
-      setStreaming(false);
-    };
+    return sharedSessionStream({
+      apiClient,
+      queryClient,
+      projectId,
+      sessionId,
+    }).subscribe((next) => {
+      setStatus(next);
+      setStreaming(next.streaming);
+    }, live);
   }, [
     live,
     loaded,
     projectId,
     sessionId,
     apiClient,
-    slotKey,
     queryClient,
     setStreaming,
   ]);
-  return { connection, streamError };
+  return { connection: status.connection, streamError: status.streamError };
+}
+
+/** One physical stream, retaining the existing slot, retry and resync semantics. */
+function streamSessionEvents({
+  apiClient,
+  queryClient,
+  projectId,
+  sessionId,
+  publish: publishStatus,
+}: {
+  apiClient: CatamorphicApiClient;
+  queryClient: QueryClient;
+  projectId: string;
+  sessionId: string;
+  publish: (change: Partial<SessionStreamStatus>) => void;
+}): () => void {
+  const controller = new AbortController();
+  const publish = (change: Partial<SessionStreamStatus>) => {
+    if (!controller.signal.aborted) publishStatus(change);
+  };
+  const key = agentSessionQueryKey(projectId, sessionId);
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let slot: StreamSlot | undefined;
+  const current = () => queryClient.getQueryData<AgentSessionData>(key)?.state;
+  const retryLater = () => {
+    failures += 1;
+    if (failures > 1) publish({ connection: "reconnecting" });
+    timer = setTimeout(connect, reconnectDelayMs(failures));
+  };
+  const stop = (error: CatamorphicError) => {
+    slot?.release();
+    publish({ streaming: false, connection: "idle", streamError: error });
+  };
+  const start = () => {
+    if (controller.signal.aborted) return;
+    slot = acquireStreamSlot(streamSlotKey(apiClient.baseUrl), () => {
+      // A genuinely queued session catches up before taking its first stream.
+      void queryClient
+        .invalidateQueries({ queryKey: key, exact: true })
+        .finally(() => {
+          if (controller.signal.aborted) return;
+          publish({ streaming: true });
+          connect();
+        });
+    });
+    if (!slot.held) {
+      publish({ streaming: false, connection: "idle", streamError: null });
+      return;
+    }
+    publish({ streaming: true, streamError: null });
+    connect();
+  };
+  const connect = () => {
+    const state = current();
+    if (!state || controller.signal.aborted) return;
+    if (state.stale) {
+      void queryClient
+        .invalidateQueries({ queryKey: key, exact: true })
+        .finally(() => {
+          if (controller.signal.aborted) return;
+          if (current()?.stale !== false) retryLater();
+          else connect();
+        });
+      return;
+    }
+    publish({
+      connection:
+        failures === 0 ? "connecting" : failures > 1 ? "reconnecting" : "live",
+    });
+    const reading = new AbortController();
+    const signal = AbortSignal.any([controller.signal, reading.signal]);
+    let resync = false;
+    void readSessionStream({
+      apiClient,
+      projectId,
+      sessionId,
+      after: state.sequence,
+      signal,
+      onOpen: () => publish({ connection: "live" }),
+      onMessage: (message) => {
+        if (resync) return;
+        failures = 0;
+        publish({ connection: "live" });
+        applyStreamMessage({ queryClient, key, message });
+        if (current()?.stale) {
+          resync = true;
+          reading.abort();
+        }
+      },
+    })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      .then((error) => {
+        if (controller.signal.aborted) return;
+        if (resync) {
+          connect();
+          return;
+        }
+        if (isPermanentFailure(error)) {
+          stop(toCatamorphicError({ cause: error }));
+          return;
+        }
+        retryLater();
+      });
+  };
+  start();
+  return () => {
+    controller.abort();
+    if (timer) clearTimeout(timer);
+    slot?.release();
+  };
 }
 
 /**

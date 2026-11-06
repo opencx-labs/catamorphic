@@ -1,0 +1,51 @@
+{
+  "name": "@catamorphic/work-customization",
+  "version": "0.1.0-alpha.37",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json",
+    "./package-payload": {
+      "import": "./dist/package-payload.js",
+      "types": "./dist/package-payload.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "!**/*.test.*"
+  ],
+  "scripts": {
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && bun ../../scripts/build-package-payload.ts",
+    "dev": "bun ../../scripts/build-package.ts --watch",
+    "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.type-tests.json",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/work-customization --config ../../vitest.config.ts"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ],
+    "splitting": false
+  },
+  "dependencies": {
+    "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/app": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencx-labs/catamorphic.git",
+    "directory": "packages/work-customization"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

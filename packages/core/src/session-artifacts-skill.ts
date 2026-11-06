@@ -45,6 +45,10 @@ and component libraries take precedence over these defaults.
   Existing watcher activations stay pinned when source changes; stop and recreate
   the watcher to activate a new revision.
 
+Member-owned private workflows have a separate lifetime through the discovered
+private.workflow capability. They retain source outside project files and Git;
+workflow-lifecycle describes their explicit activation and versioned private state.
+
 ## Lifetime and saving
 
 Closing a tab or finishing a turn does not discard the result. Artifacts remain

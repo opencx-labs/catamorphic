@@ -309,3 +309,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0301](0301-internal-origin-storage-starts-clean.md) | Internal-origin storage starts clean | Accepted (supersedes legacy local-storage import in 0300) |
 | [0302](0302-work-opens-files-from-finder.md) | Work opens files from Finder | Accepted (extends 0153) |
 | [0303](0303-incognito-browser-tabs.md) | Incognito browser tabs | Accepted |
+| [0306](0306-typed-private-work-customizations.md) | Typed private Work customizations | Accepted (amends 0069, 0134, 0139, 0234, 0239, 0277) |

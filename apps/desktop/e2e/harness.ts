@@ -131,6 +131,8 @@ export interface AppHandle {
   userDataDir: string;
   stop: (opts?: {
     preserveUserData?: boolean;
+    /** A background engine transfer also waits for its new process to boot. */
+    shutdownTimeoutMs?: number;
     /** Skip compositor work when testing an immediate Quit boundary. */
     captureFinalFrame?: boolean;
   }) => Promise<void>;
@@ -357,7 +359,10 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ws.close();
         try {
           if (!killedForRecovery)
-            await terminate(child, { sampleTo: artifactDirectory });
+            await terminate(child, {
+              sampleTo: artifactDirectory,
+              timeoutMs: opts?.shutdownTimeoutMs,
+            });
         } catch (error) {
           throw new Error(
             `${String(error)}${mainProcessErrors(output)
@@ -788,7 +793,7 @@ export function mainProcessErrors(output: string): string[] {
 
 export async function terminate(
   child: ChildProcess,
-  options: { sampleTo?: string } = {},
+  options: { sampleTo?: string; timeoutMs?: number } = {},
 ): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
@@ -800,7 +805,7 @@ export async function terminate(
       if (child.exitCode !== null || child.signalCode !== null) return;
       sampleHung(child, options.sampleTo);
       child.kill("SIGKILL");
-    }, 15_000);
+    }, options.timeoutMs ?? 15_000);
     try {
       child.kill("SIGTERM");
       await exited;

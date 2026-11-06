@@ -125,10 +125,6 @@ export function sidebarItemPresentation({
   id?: string;
 }): SidebarItemPresentation {
   return {
-    open: section?.open,
-    menu: section?.menu,
-    contextMenu: section?.contextMenu,
-    actions: section?.actions,
     ...section?.itemDefaults,
     ...(id ? section?.itemOverrides?.[id] : undefined),
   };

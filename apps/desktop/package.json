@@ -20,7 +20,7 @@
     "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun scripts/verify-build.ts && bun --bun electron-builder --publish never",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ../../vitest.config.ts --pool=forks",
     "test:e2e": "bun ../../scripts/desktop-test.ts",
-    "test:eval": "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
+    "test:eval": "bun ../../scripts/customization-eval.ts",
     "test:e2e:ci": "bun ../../scripts/desktop-test.ts --native"
   },
   "dependencies": {
@@ -48,6 +48,7 @@
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
     "@catamorphic/ui": "workspace:*",
+    "@catamorphic/work-customization": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
     "@fastify/cors": "^11.3.0",

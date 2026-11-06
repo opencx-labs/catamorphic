@@ -172,7 +172,7 @@ export function gitSource(deps: WorkSourceDeps): SectionSource {
         stop();
       };
     },
-    action: async ({ itemId, action }) => {
+    action: async ({ itemId, action, mode }) => {
       // A notice row opens nothing.
       if (itemId.endsWith(":more") && isOpen(action)) return undefined;
       const diff = diffs.get(itemId);
@@ -192,7 +192,7 @@ export function gitSource(deps: WorkSourceDeps): SectionSource {
             baseRef: diff.baseRef,
           },
         },
-        openModeForAction(action),
+        openModeForAction(action) ?? mode,
       );
       return undefined;
     },
@@ -277,10 +277,10 @@ export function prsSource(deps: WorkSourceDeps): SectionSource {
         window.removeEventListener("focus", refresh);
       };
     },
-    action: async ({ itemId, action }) => {
+    action: async ({ itemId, action, mode }) => {
       if (!isOpen(action))
         throw new Error("This pull request does not support that action");
-      const mode = openModeForAction(action);
+      const requestedMode = openModeForAction(action) ?? mode;
       if (itemId === "connect-github") {
         deps.host().openTab(
           {
@@ -289,7 +289,7 @@ export function prsSource(deps: WorkSourceDeps): SectionSource {
             label: "Settings",
             destination: { id: "github-cli", requestId: crypto.randomUUID() },
           },
-          mode,
+          requestedMode,
         );
         return undefined;
       }
@@ -303,7 +303,7 @@ export function prsSource(deps: WorkSourceDeps): SectionSource {
           projectId: deps.projectId,
           source: { type: "review", prNumber: number },
         },
-        mode,
+        requestedMode,
       );
       return undefined;
     },

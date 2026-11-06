@@ -49,12 +49,30 @@ Use \`durable-workflows\` for retry, cancellation and external-effect limits.
 | Save reusable automation for the project | Use \`.work/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
 | Run a reviewed workflow for one member | Reuse committed project source. | A member-owned enablement uses that member's authorized connections and Environment. |
 | Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone with \`automations:write\`, runs as the project with shared connections and the permissions consented to. Its chats are project chats. |
-| Keep workflow source private | Use a private artifact capability only if this host provides one. | Follow that capability's execution support. An unpushed branch or incognito chat is not private source storage. |
+| Keep a private workflow independent of its creating chat | Discover \`private.workflow\`. It retains self-contained TypeScript and explicit files in a member-owned immutable artifact outside project files and Git. | Create saves source; run invokes once; preview and activate enable its ordinary triggers. Stop disables activation and cancels its active runs. |
 
-Personal execution does not make source private. The desktop reserves
-\`.work/personal/<profile-id>/workflows/\`, but private workflow discovery,
-invocation, and schedules are not supplied by that directory. Do not fabricate
-an id or claim that saving there creates a runnable private workflow.
+Personal execution alone does not make project source private. Member-owned
+private artifacts use the ordinary workflow engine, scheduler, Environment and
+connection checks, with lifetime independent of a chat. Updates compare the
+artifact revision; an active workflow retains its old source pin until explicit
+activation of the new revision. Private source is self-contained: project files
+and uncommitted helpers are not implicitly captured. Private artifacts and state
+stay on the hosting authority; linking a server does not upload them.
+
+## Private state and direct notifications
+
+\`private.state.read({ key })\` returns this member's JSON value and version.
+\`private.state.write({ key, value, ifVersion })\` uses the read version, or 0
+for new state. A stale write returns a conflict. Deletion preserves the version.
+State uses the existing versioned document journal in a member partition; it is
+outside project files and ordinary project sync. Access requires
+\`private-state:read\` or \`private-state:write\`.
+
+Workflows return \`host["catamorphic.privateState"].read/write/delete(...)\` or
+\`host["catamorphic.notifications"].publish({ title, body?, idempotencyKey })\`
+from a boundary. Notifications are durable host operations and need no model
+turn. Declare \`notifications:write\` for notification calls; retries deduplicate
+by the supplied key. Delivery uses the host's configured native or push transport.
 
 ## Session-owned source
 

@@ -18,11 +18,7 @@ import {
   WORK_SOURCES,
   workSourceName,
 } from "../shared/sidebar.js";
-import {
-  asOpenMode,
-  sanitizeMenu,
-  sanitizePresentation,
-} from "../shared/source-rows.js";
+import { sanitizeMenu, sanitizePresentation } from "../shared/source-rows.js";
 import {
   CHIPS_OWNER_ID,
   type ChipsConfig,
@@ -255,7 +251,7 @@ function sanitizeItems(
   return raw.flatMap((entry): SidebarItem[] => {
     if (!isRecord(entry)) return [];
     const when = sanitizeSidebarWhen(entry.when);
-    if (when === null) return [];
+    if (when === null) throw new Error("Item has an invalid when condition.");
     const url = typeof entry.url === "string" ? entry.url : undefined;
     const id =
       typeof entry.id === "string"
@@ -352,6 +348,13 @@ function sanitizeSection(
   if (!isRecord(raw) || !stableId(raw.id) || sectionIds.has(raw.id))
     throw new Error("Each section needs a unique id.");
   const where = `Section ${raw.id}`;
+  const redundant = ["menu", "contextMenu", "actions", "open"].filter(
+    (key) => raw[key] !== undefined,
+  );
+  if (redundant.length)
+    throw new Error(
+      `${where}: move ${redundant.join(", ")} into itemDefaults; headerActions belongs to the section.`,
+    );
   if ("type" in raw)
     throw new Error(
       `${where}: sections have no type (ADR 0234). Name a source ("work:chats" or a module path), items, app or note.`,
@@ -365,7 +368,7 @@ function sanitizeSection(
       `${where} needs exactly one of source, items, app or note.`,
     );
   const when = sanitizeSidebarWhen(raw.when);
-  if (when === null) return [];
+  if (when === null) throw new Error(`${where}: invalid when condition.`);
   const source =
     raw.source === undefined
       ? undefined
@@ -424,10 +427,7 @@ function sanitizeSection(
             ),
           }
         : {}),
-      contextMenu: sanitizeMenu(raw.contextMenu),
-      actions: sanitizeMenu(raw.actions),
       headerActions: sanitizeMenu(raw.headerActions),
-      menu: sanitizeMenu(raw.menu),
       ...(typeof raw.rowHeight === "number" && Number.isFinite(raw.rowHeight)
         ? { rowHeight: Math.max(28, Math.min(160, raw.rowHeight)) }
         : {}),
@@ -440,7 +440,6 @@ function sanitizeSection(
         ? { hideEmpty: raw.hideEmpty }
         : {}),
       ...(typeof raw.empty === "string" ? { empty: raw.empty } : {}),
-      ...(asOpenMode(raw.open) ? { open: asOpenMode(raw.open) } : {}),
       ...(when ? { when } : {}),
     },
   ];
@@ -474,11 +473,13 @@ function sanitizeTabs({
         sanitizeSection(section, sectionIds),
       );
       const when = sanitizeSidebarWhen(tab.when);
+      if (when === null)
+        throw new Error(`Tab ${tab.id}: invalid when condition.`);
       return {
         id: tab.id,
         title: tab.title,
         icon: typeof tab.icon === "string" ? tab.icon : undefined,
-        sections: when === null ? [] : sections,
+        sections,
         when: when ?? undefined,
       };
     })
@@ -696,6 +697,17 @@ function evaluateWorkspaceModule(source: string, filename: string): unknown {
     { timeout: 250 },
   );
   return typeof json === "string" ? JSON.parse(json) : undefined;
+}
+
+/** The same data-only evaluator and validator used by the live layout loader. */
+export function validateWorkspaceSource({
+  source,
+  filename,
+}: {
+  source: string;
+  filename: string;
+}): WorkspaceConfig {
+  return sanitize(evaluateWorkspaceModule(source, filename));
 }
 
 /** Replace a file whole: a crash leaves the old one or the new one. */

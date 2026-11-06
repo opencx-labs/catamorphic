@@ -1371,3 +1371,52 @@ logical `store/...` API addresses, backed locally by
 enforced. Per-user app view preferences, credentials, and conversation state
 remain in the host's database or private data directory. Database export and
 restore are not provided.
+
+
+## Private member workflows and state
+
+`client.sessionArtifacts.create({ projectId, lifetime: "member", kind: "workflow", name, source, files? })`
+retains self-contained workflow source in the existing immutable artifact revision
+journal. It does not initialize Git, write project files, capture project helpers,
+or upload the source to a linked server. The existing `commitSha` field holds the
+private snapshot's SHA-256 source pin; `remoteBranch` is its opaque source address.
+`client.privateWorkflows.preview/activate` uses the ordinary consent, enablement,
+trigger and scheduler services. Source updates require the artifact revision and
+leave an activation pinned until explicitly updated. `stop` disables triggers and
+cancels active root runs. Archiving the creating chat has no effect.
+Enablement details, trigger configuration, connection aliases and controls for
+retained private source have the source owner's private audience at every pin.
+
+`client.privateState.read({ projectId, key })` returns `{ key, value, version }`.
+`write({ projectId, key, value, ifVersion })` and `delete` use mandatory version
+checks, with a typed 409 conflict on stale versions. State uses the existing
+document version journal in an explicit member partition, with no project file
+projection or ordinary remote sync. Scoped identities need `private-state:read`
+or `private-state:write`; the member owner always comes from host identity.
+
+Workflows return `host["catamorphic.privateState"].read/write/delete(...)` or
+`host["catamorphic.notifications"].publish({ title, body?, idempotencyKey })`.
+Notification publication requires `notifications:write`, records the existing
+durable user notification event, and uses native and Web Push delivery outboxes.
+It does not start a model turn. An embedder can inject
+`notificationTransport: { send({ eventId, kind, identity, title, body, route, projectId }) }`
+and call `core.notifications.drain(workerId)` from its existing worker loop.
+Delivery is at least once; transports may deduplicate the stable event id.
+The host owns worker placement and whether that loop survives its UI quitting.
+
+Agents discover these same operations as `private.workflow`,
+`private.state.read/write/delete`, and `notifications.publish`. HTTP and the bound
+server SDK delegate to the same authorized services. Scoped workflow calls check
+live member/enablement authority and intersect the run's pinned permission grant.
+Host providers can reuse `core.authorizeWorkflowHostCall(context)` to obtain the
+live authorized identity immediately before an effect. It checks run, retained
+source and enablement liveness; operation-specific permission checks belong to
+the provider.
+Caller-facing trigger firing checks the sender's workflow and private source
+access before enrollment and before returning a run or sync result. The host's
+scheduler and event dispatcher use `core.triggers.dispatchAtCommit` for one exact
+consented enablement, deriving its current owner rather than the event sender.
+Enrollment retains the authorized source pin, consent digest and revision in
+the run insertion transaction; a concurrent enablement change rejects dispatch.
+Private state and source synchronization is a separate explicit host operation;
+connecting a server alone never uploads either.

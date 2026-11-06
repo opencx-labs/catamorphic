@@ -1,11 +1,14 @@
-import { createApiClient } from "@catamorphic/api-client";
+import {
+  type CatamorphicApiClient,
+  createApiClient,
+} from "@catamorphic/api-client";
 import {
   CatamorphicProvider,
   SESSION_PROTOCOL_MISMATCH_MESSAGE,
   speaksSessionProtocol,
   useCatamorphic,
 } from "@catamorphic/react";
-import { useQuery } from "@tanstack/react-query";
+import { type QueryClient, useQuery } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
@@ -45,6 +48,39 @@ export function useRemoteProject(projectId: string | undefined): boolean {
 }
 const authorityCaches = remoteQueryClients;
 const authorityUsers = remoteQueryClientUsers;
+
+// Sibling authority providers share their cache and its authenticated transport.
+// Distinct local clients may hold different middleware even with identical fetch.
+const authorityApiClients = new WeakMap<
+  QueryClient,
+  WeakMap<CatamorphicApiClient, Map<string, CatamorphicApiClient>>
+>();
+
+function authorityApiClient({
+  queries,
+  local,
+  baseUrl,
+}: {
+  queries: QueryClient;
+  local: CatamorphicApiClient;
+  baseUrl: string;
+}): CatamorphicApiClient {
+  let transports = authorityApiClients.get(queries);
+  if (!transports) {
+    transports = new WeakMap();
+    authorityApiClients.set(queries, transports);
+  }
+  let addresses = transports.get(local);
+  if (!addresses) {
+    addresses = new Map();
+    transports.set(local, addresses);
+  }
+  const existing = addresses.get(baseUrl);
+  if (existing) return existing;
+  const client = createApiClient({ baseUrl, fetch: local.fetch });
+  addresses.set(baseUrl, client);
+  return client;
+}
 
 /**
  * Fetch a remote project's agent catalog again wherever it is shown, as
@@ -104,9 +140,13 @@ export function ProjectAuthorityProvider({
     const baseUrl = `${local.apiClient.baseUrl.replace(/\/+$/, "")}/desktop/projects/${encodeURIComponent(projectId)}/remote-api`;
     return {
       queries,
-      apiClient: createApiClient({ baseUrl, fetch: local.apiClient.fetch }),
+      apiClient: authorityApiClient({
+        queries,
+        local: local.apiClient,
+        baseUrl,
+      }),
     };
-  }, [remote, projectId, local.apiClient.baseUrl, local.apiClient.fetch]);
+  }, [remote, projectId, local.apiClient]);
   useEffect(() => {
     if (!context || !remote) return;
     const { queries } = context;

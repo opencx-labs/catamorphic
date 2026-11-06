@@ -34,6 +34,8 @@ const PUBLIC_RUNTIME_READS = [
   "/Library/Apple",
   "/Library/Developer/CommandLineTools",
   "/private/var/db/dyld",
+  // Public ICU and timezone data are symlinked here from /usr/share on macOS.
+  "/private/var/db/timezone",
 ];
 const PUBLIC_RUNTIME_FILES = [
   // Directory entries only; Bun needs a root descriptor to initialize.
@@ -83,6 +85,8 @@ function literal(value: string): string {
  * data; writes reach the scratch folder and what the module declares. No
  * system services (so no opening addresses in a browser, no clipboard, no
  * keychain), no Apple events to other apps, no signals to other processes.
+ * Native macOS workloads cannot fork: an exec replacement keeps the host's
+ * session leader PID, so descendants cannot escape cleanup with setsid.
  */
 export function moduleProfile({
   projectRoot,
@@ -104,6 +108,7 @@ export function moduleProfile({
   return [
     "(version 1)",
     "(allow default)",
+    "(deny process-fork)",
     "(deny network*)",
     ...(proxyPort === null
       ? []

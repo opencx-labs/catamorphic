@@ -6,6 +6,8 @@ import path from "node:path";
 for (const entry of [
   "main/index.js",
   "main/sidebar-source-worker.js",
+  "main/customization-tool.mjs",
+  "main/authoring-assets.json",
   "preload/index.cjs",
   "preload/webview.cjs",
   "preload/session.cjs",

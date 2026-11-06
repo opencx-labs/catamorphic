@@ -193,7 +193,7 @@ export class ProjectEventDispatcher {
               : existing
                 ? [existing.id]
                 : (
-                    await this.triggers.fireAtCommit({
+                    await this.triggers.dispatchAtCommit({
                       identity,
                       projectId: row.project_id,
                       commitSha: row.commit_sha,

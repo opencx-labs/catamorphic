@@ -207,6 +207,17 @@ export function sanitizePresentation(
     label: typeof record.label === "string" ? record.label : undefined,
     description:
       typeof record.description === "string" ? record.description : undefined,
+    descriptionVisibility:
+      record.descriptionVisibility === "always" ||
+      record.descriptionVisibility === "hover"
+        ? record.descriptionVisibility
+        : undefined,
+    contextualIndicator:
+      record.contextualIndicator === "row" ||
+      record.contextualIndicator === "icon" ||
+      record.contextualIndicator === "none"
+        ? record.contextualIndicator
+        : undefined,
     keywords: Array.isArray(record.keywords)
       ? record.keywords
           .filter((word): word is string => typeof word === "string")

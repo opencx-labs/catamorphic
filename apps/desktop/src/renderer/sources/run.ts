@@ -1,17 +1,13 @@
 import { type OpenMode, openModeForAction } from "../../shared/open-mode.js";
-import type { SidebarSourceEffect } from "../../shared/sidebar.js";
+import type {
+  SidebarSourceEffect,
+  SidebarSurface,
+} from "../../shared/sidebar.js";
 import type {
   SidebarSourceItem,
   SidebarSourceSession,
 } from "../../shared/sidebar-source.js";
 import type { SectionSource } from "./contract.js";
-
-const VERB_FOR_MODE: Record<OpenMode, string> = {
-  replace: "open-here",
-  tab: "open-tab",
-  side: "open-side",
-  floating: "open-floating",
-};
 
 /** The verbs that open a row, by the mode each one opens in. */
 export const isOpenAction = (action: string) =>
@@ -32,6 +28,7 @@ export async function runRowAction({
   values,
   mode,
   session,
+  surface,
   signal,
   open,
 }: {
@@ -44,6 +41,7 @@ export async function runRowAction({
   /** How "open" opens (a click's modifiers); other verbs name their own. */
   mode?: OpenMode;
   session?: SidebarSourceSession;
+  surface?: SidebarSurface;
   signal: AbortSignal;
   /** Open a workspace target as this place opens links. */
   open: (url: string, mode: OpenMode) => unknown;
@@ -64,12 +62,23 @@ export async function runRowAction({
     throw new Error("This list does not support that action.");
   const effect = await source.action({
     itemId,
-    // A plain open passes the mode it was asked in as its verb.
-    action: action === "open" && mode ? VERB_FOR_MODE[mode] : action,
+    action: isOpenAction(action) ? "open" : action,
+    ...(isOpenAction(action)
+      ? { mode: openModeForAction(action) ?? mode ?? row?.open ?? "replace" }
+      : {}),
     ...(values ? { values } : {}),
     ...(session ? { session } : {}),
+    ...(surface ? { surface } : {}),
     signal,
   });
-  if (effect?.open) await open(effect.open, effect.mode ?? "replace");
+  if (effect?.open)
+    await open(
+      effect.open,
+      effect.mode ??
+        (isOpenAction(action)
+          ? (openModeForAction(action) ?? mode ?? row?.open)
+          : undefined) ??
+        "replace",
+    );
   return effect;
 }
